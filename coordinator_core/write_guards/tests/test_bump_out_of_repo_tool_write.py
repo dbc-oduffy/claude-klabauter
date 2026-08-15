@@ -255,21 +255,35 @@ def test_target_sited_marker_clears_only_the_target_it_was_made_for(tmp_path):
 
 
 def test_advertised_clear_line_names_the_target_gitdir_not_the_anchor(tmp_path):
+    """Marker-siting invariant, proved BEHAVIOURALLY (2026-08-13, C4d --
+    no renderer in `_write_bump_message` prints a clear line on any
+    channel any more, so this can no longer be read off the deny message
+    text). The ADVERTISED (narrowed, per-target) location is the target's
+    own gitdir -- same idiom as
+    `test_target_sited_marker_clears_only_the_target_it_was_made_for`:
+    touching it clears this exact write.
+
+    The anchor's own gitdir is a separate, GRANDFATHERED clear location
+    (pre-narrowing behaviour, kept for compatibility) -- that fact is
+    pinned on its own by `test_marker_locations_split_advertised_from_
+    grandfathered` against `guard._marker_locations` directly, so this
+    test does not re-assert "the anchor's marker does NOT clear" (it
+    does, deliberately, via the legacy leg `check()` also consults)."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-clear-line-target"
     session_start.write_session_start_record(session_id, launch_cwd=str(own))
     assert applicability.bump_applies(session_id, cwd=str(own)) is True
 
-    reason = _assert_denies(
-        _payload("Edit", str(foreign / "x.txt"), session_id, str(own))
-    )
+    payload = _payload("Edit", str(foreign / "x.txt"), session_id, str(own))
+    _assert_denies(payload)
 
     target_gitdir = marker.resolve_gitdir(str(foreign))
     own_gitdir = marker.resolve_gitdir(str(own))
     assert target_gitdir is not None and own_gitdir is not None
-    assert marker.marker_path(target_gitdir, session_id).as_posix() in reason
-    assert marker.marker_path(own_gitdir, session_id).as_posix() not in reason
+
+    (target_gitdir / marker.marker_basename(session_id)).touch()
+    assert guard.check(payload) is None
 
 
 def test_marker_falls_back_to_anchor_when_target_is_in_no_repo(tmp_path, monkeypatch):
@@ -297,11 +311,14 @@ def test_marker_falls_back_to_anchor_when_target_is_in_no_repo(tmp_path, monkeyp
     assert applicability.bump_applies(session_id, cwd=str(own)) is True
 
     payload = _payload("Write", str(loose / "x.txt"), session_id, str(own))
-    reason = _assert_denies(payload)
+    _assert_denies(payload)
 
+    # Marker-siting invariant proved behaviourally, not via message text
+    # (2026-08-13, C4d -- no renderer prints a clear line any more): the
+    # fallback marker lives at the ANCHOR's own gitdir when the target has
+    # no gitdir to narrow into, so touching it clears this write.
     own_gitdir = marker.resolve_gitdir(str(own))
     assert own_gitdir is not None
-    assert marker.marker_path(own_gitdir, session_id).as_posix() in reason
 
     (own_gitdir / marker.marker_basename(session_id)).touch()
     assert guard.check(payload) is None
@@ -451,6 +468,99 @@ def test_outside_any_repo_anchor_registered_target_still_bumps(tmp_path, monkeyp
     scaffold.mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
     session_id = "sess-scaffold-registered-target"
+
+    payload = _payload("Write", str(registered / "f.txt"), session_id, str(scaffold))
+
+    result = guard.check(payload)
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
+# 2026-08-15). `resolve_gitdir(anchor)` returning `None` is ambiguous
+# between "the anchor genuinely sits in no git repo" and "the `git rev-parse
+# --git-dir` SPAWN failed" (timeout, missing binary, transient error --
+# expected under this box's documented load norm, `docs/wiki/machine-load-
+# norm.md`). `check()` now disambiguates via `path_has_git_ancestor`
+# (`_write_bump_marker.py`, filesystem-only, no subprocess) before ever
+# reaching `_verdict_bumps`. These tests reproduce the spawn failure
+# directly by patching `guard.resolve_gitdir` to return `None` ONLY for the
+# anchor's own cwd, leaving every other call (the target's own resolution)
+# untouched -- exactly the shape a real transient `git` failure has.
+# ---------------------------------------------------------------------------
+
+
+def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
+    real_resolve_gitdir = guard.resolve_gitdir
+    failing_abs = os.path.abspath(str(failing_cwd))
+
+    def _flaky_resolve_gitdir(cwd=None):
+        if cwd is not None and os.path.abspath(str(cwd)) == failing_abs:
+            return None  # simulated transient `git rev-parse --git-dir` spawn failure
+        return real_resolve_gitdir(cwd)
+
+    monkeypatch.setattr(guard, "resolve_gitdir", _flaky_resolve_gitdir)
+
+
+def test_transient_anchor_gitdir_spawn_failure_does_not_bump_a_same_repo_write(tmp_path, monkeypatch):
+    """The anchor's `.git` entry is real and present on disk, so
+    `path_has_git_ancestor` still finds it even while `resolve_gitdir` is
+    patched to simulate the failed spawn -- a write squarely inside the
+    session's own repo must ALLOW, not deny on a mis-read 'no repo here'."""
+    own = _init_repo(tmp_path, "own-repo")
+    session_id = "sess-transient-anchor-spawn-failure"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    _patch_resolve_gitdir_to_fail_for(monkeypatch, str(own))
+
+    (own / "nested").mkdir()
+    payload = _payload("Write", str(own / "nested" / "file.txt"), session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_transient_anchor_gitdir_spawn_failure_still_allows_a_registered_foreign_target(tmp_path, monkeypatch):
+    """Same simulated spawn failure, but the target is a DIFFERENT,
+    registered repo. Before the fix, `own_gitdir is None` fell straight into
+    `_verdict_bumps`'s repo-less-anchor branch, where a registered target
+    bumps unconditionally -- exactly the misfire reproduced live (the EM's
+    repro target and the session's own anchor were the SAME repo). After
+    the fix, `path_has_git_ancestor(anchor)` finds the anchor's real `.git`
+    and this guard treats resolution as UNRESOLVED, allowing here too,
+    never reaching that branch at all."""
+    own = _init_repo(tmp_path, "own-repo")
+    reg_dir = tmp_path / "registry"
+    registered = _init_repo(tmp_path, "registered-foreign-repo")
+    _write_registry(reg_dir, some_repo=str(registered))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    session_id = "sess-transient-anchor-spawn-failure-registered-target"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    _patch_resolve_gitdir_to_fail_for(monkeypatch, str(own))
+
+    payload = _payload("Write", str(registered / "f.txt"), session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_genuinely_repo_less_anchor_still_bumps_registered_target_after_the_fix(tmp_path, monkeypatch):
+    """Companion pin for the 2026-08-10 PM ruling `path_has_git_ancestor`
+    must NOT touch: when the anchor truly has no `.git` ancestor anywhere
+    (not merely a failed spawn), a REGISTERED target still bumps
+    unconditionally -- same shape as `test_outside_any_repo_anchor_
+    registered_target_still_bumps` above, pinned again here, side by side
+    with the two UNRESOLVED-allows tests immediately above, so a future edit
+    cannot collapse the two behaviours back together without a visible test
+    failure in this same section."""
+    reg_dir = tmp_path / "registry"
+    registered = _init_repo(tmp_path, "registered-repo-2")
+    _write_registry(reg_dir, some_repo=str(registered))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    scaffold = tmp_path / "Documents" / "another-new-project"
+    scaffold.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-scaffold-registered-target-2"
+
+    assert marker.path_has_git_ancestor(str(scaffold)) is False
 
     payload = _payload("Write", str(registered / "f.txt"), session_id, str(scaffold))
 

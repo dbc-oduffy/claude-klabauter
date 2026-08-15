@@ -71,7 +71,7 @@ from typing import Any, Optional
 # generator_provenance.py reserves for MUTATES rather than GENERATES.
 MUTATES = ["state/ceremony/**/*.json"]
 
-from coordinator_core.engine_version import resolve_engine_sha
+from coordinator_core.engine_version import resolve_engine_dirty, resolve_engine_sha
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.ops.ceremony.receipt_schema import (
     CEREMONY_RECEIPT_DIR,
@@ -336,6 +336,10 @@ def emit_receipt(
 
     # --- resolve engine self-version (C2) — None when unresolvable, graceful-absent ---
     engine_sha = resolve_engine_sha()
+    # engine_sha alone does not prove the code that ran matches that commit's
+    # tree (this working tree is dirty essentially continuously) — resolve the
+    # dirty discriminator alongside it so a receipt can carry both.
+    engine_dirty = resolve_engine_dirty()
 
     # --- build receipt dict ---
     receipt = make_receipt(
@@ -361,6 +365,11 @@ def emit_receipt(
         # copy that produced them.  None (unresolvable) is graceful-absent —
         # make_receipt only sets the key when engine_sha is truthy.
         engine_sha=engine_sha,
+        # thread the resolved engine dirty-flag through so both phase-1 and
+        # phase-2 receipts carry it.  None (unresolvable) is graceful-absent —
+        # make_receipt only sets the key when engine_dirty is not None
+        # (False is a meaningful, real finding and must still be emitted).
+        engine_dirty=engine_dirty,
         # C3 — thread the C1 scoping verdict through so both phase-1 and
         # phase-2 receipts carry it; phase-2's ctx is rebuilt via
         # PipelineContext.from_dict(), which round-trips these fields, so the

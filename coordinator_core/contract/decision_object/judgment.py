@@ -187,3 +187,57 @@ def build_untrusted_gate_judgment_point(
         revalidate_at_dispatch=revalidate_at_dispatch,
         round_trip=round_trip,
     )
+
+
+def partition_reportable(
+    judgment_points: Sequence[Mapping[str, Any]],
+    directives: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Returns (asked, reported). A point is `reported` when no disposition
+    names a directive id present in `directives`.
+
+    A point whose id is named in ANY directive's `depends_on` is NEVER
+    classified `reported`, even when no disposition names a live directive
+    id -- `contract/apply_base.py` fails open on a `depends_on` naming an
+    absent judgment point, so demoting such a point would silently unblock
+    its dependents. General-case guard, not a fix for a known instance.
+
+    A phantom `resolves` id (naming a directive absent from the envelope
+    entirely) is out of this predicate's vocabulary -- that is
+    `ceremony_common/phantom_resolves_sweep.py`'s jurisdiction, and this
+    function must not classify it as `reported`.
+
+    This function does not attempt to distinguish a phantom `resolves` id
+    from a deliberate absent-directive one (e.g. `jp-coverage-verdict`'s
+    back-compat `d-write-trail` reference) -- both are, structurally,
+    "names no directive id present in `directives`" from this predicate's
+    point of view. `phantom_resolves_sweep.py` is what keeps an accidental
+    one from ever reaching this function in a shipped envelope; duplicating
+    that check here would be a second, competing mechanism for the same
+    fact, which is exactly what this function must not become.
+    """
+    # Function-local: keeps `apply_base` off every brief-path import of this
+    # shape module. `depends_on` is legally a bare string, so the canonical
+    # normalizer is the only safe read -- iterating the raw value walks it
+    # character by character and the precondition guard below fails open.
+    from coordinator_core.contract.apply_base import normalize_depends_on
+
+    directive_ids = {d.get("id") for d in directives}
+    depended_on_ids: set[Any] = set()
+    for directive in directives:
+        depended_on_ids.update(normalize_depends_on(directive.get("depends_on")))
+
+    asked: list[dict[str, Any]] = []
+    reported: list[dict[str, Any]] = []
+    for point in judgment_points:
+        point_id = point.get("id")
+        if point_id in depended_on_ids:
+            asked.append(dict(point))
+            continue
+        gates_something = any(
+            resolves_id in directive_ids
+            for disposition in (point.get("dispositions") or [])
+            for resolves_id in (disposition.get("resolves") or [])
+        )
+        (asked if gates_something else reported).append(dict(point))
+    return asked, reported

@@ -116,6 +116,7 @@ from coordinator_core.contract.decision_object.envelope import (
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
+    partition_reportable,
 )
 from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ops.emit.envelope import resolve_context
@@ -893,6 +894,32 @@ def _build_judgment_points(
     return points
 
 
+def _reported_narration_suffix(reported_judgment_points: list[dict[str, Any]]) -> str:
+    """Spec: docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
+    being-questions.md. A point `partition_reportable`
+    classified as `reported` (gates no directive present on this envelope)
+    is demoted out of `judgment_points[]` but must not go silent -- its
+    question and its recommendation's `rationale` (when it carries one) are
+    folded into `narration` instead, so the EM still sees the fact without
+    being asked to answer a question that cannot change anything. No
+    envelope key is added for this -- `narration` is already free-form.
+    """
+    if not reported_judgment_points:
+        return ""
+    reported_bits = []
+    for point in reported_judgment_points:
+        recommendation = point.get("recommendation") or {}
+        rationale = recommendation.get("rationale")
+        bit = f"{point.get('id')} ({point.get('question')})"
+        if rationale:
+            bit += f" -- {rationale}"
+        reported_bits.append(bit)
+    return (
+        f" {len(reported_judgment_points)} point(s) gate nothing on this run and are reported, "
+        f"not asked: {'; '.join(reported_bits)}."
+    )
+
+
 def brief(
     *,
     decisions: Optional[dict[str, Any]] = None,
@@ -976,6 +1003,22 @@ def brief(
         judgment_points = _build_judgment_points(
             open_day_goals, dirty_tree_verdict, for_date=for_date
         )
+        # Scoped to recommendation-carrying points: a Tier-3 point
+        # (`recommendation=None`, reason `insufficient-evidence` or
+        # `pm-scoped-tradeoff`) is a question the engine deliberately must not
+        # answer. Its `resolves` names a directive that is not always emitted,
+        # so an unscoped partition would demote it out of `judgment_points[]`
+        # on exactly the runs where nothing else raises it.
+        recommendation_carrying = [
+            point for point in judgment_points if point.get("recommendation") is not None
+        ]
+        _, reported_judgment_points = partition_reportable(
+            recommendation_carrying, directives
+        )
+        reported_ids = {point.get("id") for point in reported_judgment_points}
+        judgment_points = [
+            point for point in judgment_points if point.get("id") not in reported_ids
+        ]
     except Exception as exc:  # noqa: BLE001 - never fail the ceremony
         return int(WorkdayExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
@@ -993,7 +1036,8 @@ def brief(
             "member but is invoked by the Step 4c strategic-observer dispatch, "
             "not the assembler, so it is also never a directives[] entry — "
             "see this module's negative-spec."
-        ),
+        )
+        + _reported_narration_suffix(reported_judgment_points),
         next_move="resolve open judgment_points, then dispatch apply()",
     )
     emit(envelope)

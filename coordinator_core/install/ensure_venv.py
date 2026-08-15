@@ -70,9 +70,17 @@ Negative-spec:
     ``maximalist.py``) ever runs that install — it is hand-installed machine
     state, not a reproducible contract. The hook path already has its own
     resolution rung for this exact need: ``_engine_root.py``'s
-    ``resolve_claude_klabauter_root()`` + ``sys.path.insert(0, root)``
-    (coordinator-claude repo, ~line 840), which resolves against the LIVE
-    working tree every hook fire rather than a pinned editable install. This
+    ``resolve_claude_klabauter_root_with_class()`` ladder plus the ``sys.path.insert(0,
+    root)`` each hook script does in its own ``main()`` (coordinator-claude
+    repo), which re-resolves every hook fire rather than pinning an editable
+    install. (Corrected 2026-08-15: this block previously named
+    ``resolve_claude_klabauter_root()`` "at ~line 840" as that rung. No such
+    function exists in DoE-claude — verified by repo-wide grep; the only real
+    ``_resolve_claude_klabauter_root`` is in the published MIRROR's
+    ``cc_invoke.py`` and resolves the mirror, not the live tree. The
+    negative-spec's conclusion is unaffected; only its cited mechanism was
+    wrong. Sibling copy of the same error fixed in
+    ``docs/reference/shared-fleet-venv-contract.md`` § 1.) This
     repo's engine is meant to execute from that live tree (project CLAUDE.md
     § "What this repo is"), so an editable ``.pth`` baked into the venv would
     itself be a latent bug the moment this repo's checkout path moves —

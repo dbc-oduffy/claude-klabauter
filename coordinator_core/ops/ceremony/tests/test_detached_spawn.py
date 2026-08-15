@@ -213,3 +213,97 @@ def test_clear_failures_log_truncates(repo_root: str) -> None:
 
 def test_clear_failures_log_missing_file_never_raises(repo_root: str) -> None:
     detached_spawn.clear_failures_log(repo_root)  # must not raise on an absent log
+
+
+# ---------------------------------------------------------------------------
+# drain-then-retain: clear_failures_log appends to the archive before truncating
+# ---------------------------------------------------------------------------
+
+
+def test_clear_appends_content_to_archive_and_empties_live_log(repo_root: str) -> None:
+    detached_spawn.record_child_failure(repo_root, "/x.py", exit_code=1)
+    live_content = detached_spawn.read_failures_log(repo_root)
+
+    detached_spawn.clear_failures_log(repo_root)
+
+    assert detached_spawn.read_failures_log(repo_root) == ""
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    assert archive_path == Path(repo_root, "state", "housekeeping-failures.archive.log")
+    archive_content = archive_path.read_text(encoding="utf-8")
+    assert live_content.strip() in archive_content
+
+
+def test_clear_archive_block_has_drained_header(repo_root: str) -> None:
+    detached_spawn.record_child_failure(repo_root, "/x.py", exit_code=1)
+
+    detached_spawn.clear_failures_log(repo_root)
+
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    archive_content = archive_path.read_text(encoding="utf-8")
+    assert "--- drained " in archive_content
+    assert archive_content.startswith("--- drained ")
+
+
+def test_clear_twice_accumulates_both_records_in_archive(repo_root: str) -> None:
+    detached_spawn.record_child_failure(repo_root, "/first.py", exit_code=1)
+    detached_spawn.clear_failures_log(repo_root)
+
+    detached_spawn.record_child_failure(repo_root, "/second.py", exit_code=2)
+    detached_spawn.clear_failures_log(repo_root)
+
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    archive_content = archive_path.read_text(encoding="utf-8")
+    assert archive_content.count("--- drained ") == 2
+    assert "first.py" in archive_content
+    assert "second.py" in archive_content
+
+
+def test_clear_empty_or_whitespace_log_writes_nothing_to_archive(repo_root: str) -> None:
+    log_path = detached_spawn.housekeeping_failures_log_path(repo_root)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("   \n\n  ", encoding="utf-8")
+
+    detached_spawn.clear_failures_log(repo_root)
+
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    assert not archive_path.exists()
+    assert detached_spawn.read_failures_log(repo_root) == ""
+
+
+def test_clear_missing_live_log_does_not_raise_and_no_archive_written(repo_root: str) -> None:
+    detached_spawn.clear_failures_log(repo_root)  # must not raise
+
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    assert not archive_path.exists()
+
+
+def test_archive_cap_trims_and_always_starts_on_a_drained_header(
+    repo_root: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(detached_spawn, "_FAILURES_ARCHIVE_MAX_BYTES", 200)
+
+    for i in range(10):
+        detached_spawn.record_child_failure(repo_root, f"/script{i}.py", exit_code=1)
+        detached_spawn.clear_failures_log(repo_root)
+
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    archive_content = archive_path.read_text(encoding="utf-8")
+    assert len(archive_content.encode("utf-8")) <= 200 + len("--- drained YYYY-MM-DDTHH:MM:SSZ ---\n") + 200
+    assert archive_content.startswith("--- drained ")
+    # No mid-record fragment: the content up to the first header boundary is
+    # itself a complete header line.
+    first_line = archive_content.splitlines()[0]
+    assert first_line.startswith("--- drained ") and first_line.endswith("---")
+
+
+def test_clear_never_raises_when_archive_path_is_a_directory(repo_root: str) -> None:
+    detached_spawn.record_child_failure(repo_root, "/x.py", exit_code=1)
+    assert detached_spawn.read_failures_log(repo_root) != ""
+
+    archive_path = detached_spawn.housekeeping_failures_archive_path(repo_root)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.mkdir()  # archive path itself is a directory -> unwritable as a file
+
+    detached_spawn.clear_failures_log(repo_root)  # must not raise
+
+    assert detached_spawn.read_failures_log(repo_root) == ""

@@ -252,6 +252,11 @@ from coordinator_core.ceremony_common.apply_halt import (
     assert_disjoint_dependency_namespaces,
     build_ceremony_halt_exit_codes,
 )
+from coordinator_core.ceremony_common.cli_rejection import (
+    CliExitClass,
+    classify_cli_exit,
+    describe_exit_class,
+)
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
@@ -375,7 +380,7 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     return module
 
 
-def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str]:
+def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str, CliExitClass]:
     """Invokes `module.main` in-process (never a subprocess) — accepts
     either an `argv`-taking `main(argv)` or a zero-arg `main()`. Returns
     `(exit_code, stdout, stderr)`: the resolved integer exit code (`main`'s
@@ -414,7 +419,17 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
     reached `report["results"]`/`report["failed"]` — the one place a
     caller (the skill, the EM) could read it back. `_dispatch_directive`
     re-emits it onto apply's own stderr afterward, mirroring the stdout
-    re-emission, so live console visibility is unchanged."""
+    re-emission, so live console visibility is unchanged.
+
+    The fourth return value is `ceremony_common.cli_rejection.
+    classify_cli_exit`'s verdict over this invocation: `CliExitClass.
+    ARGV_REJECTED` when the callee raised `SystemExit(2)` with
+    argparse-shaped stderr (the argv itself was rejected before any
+    op-level code ran), else `CliExitClass.RETURNED` — including every
+    zero-arg trampoline's own raised, semantic exit. This does not change
+    `exit_code` itself or what a ceremony reports upward; it only names,
+    for the caller, whether the exit code above actually means something
+    the callee decided."""
     main_fn: Optional[Callable[..., Any]] = getattr(module, "main", None)
     if main_fn is None:
         raise UnrecognizedDirective(
@@ -427,6 +442,7 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
+    raised = False
     with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
         try:
             if params:
@@ -439,12 +455,17 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
                 finally:
                     sys.argv = saved_argv
         except SystemExit as exc:
+            raised = True
             code = exc.code
             exit_code = int(code) if isinstance(code, int) else (0 if code is None else 1)
-            return exit_code, stdout_buf.getvalue(), stderr_buf.getvalue()
+            stderr_text = stderr_buf.getvalue()
+            exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
+            return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
 
     exit_code = int(result) if isinstance(result, int) else 0
-    return exit_code, stdout_buf.getvalue(), stderr_buf.getvalue()
+    stderr_text = stderr_buf.getvalue()
+    exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
+    return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
 
 
 #: Matches the three inter-directive token shapes this manifest emits, all
@@ -614,7 +635,7 @@ def _dispatch_directive(
     print to the ceremony run's console goes silent."""
     module = _load_cli_module(directive["cli"])
     effective_args = directive.get("args", []) if args is None else args
-    exit_code, stdout_text, stderr_text = _invoke_cli_main(module, effective_args)
+    exit_code, stdout_text, stderr_text, exit_class = _invoke_cli_main(module, effective_args)
     if stdout_text:
         sys.stdout.write(stdout_text)
     if stderr_text:
@@ -626,6 +647,7 @@ def _dispatch_directive(
         "exit_code": exit_code,
         "stdout": stdout_text,
         "stderr": stderr_text,
+        "exit_class": exit_class.value,
     }
 
 
@@ -931,6 +953,11 @@ def _execute_directives(
         )
         if result.get("exit_code", 0) != 0:
             error = f"{directive['cli']} exited {result['exit_code']} (args={result.get('args', [])})"
+            exit_class_note = describe_exit_class(
+                CliExitClass(result.get("exit_class", CliExitClass.RETURNED.value))
+            )
+            if exit_class_note:
+                error = f"{error} — {exit_class_note}"
             captured_stderr = (result.get("stderr") or "").strip()
             if captured_stderr:
                 error = f"{error} — stderr: {captured_stderr}"

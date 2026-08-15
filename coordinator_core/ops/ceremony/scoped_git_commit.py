@@ -1408,6 +1408,14 @@ def _classify_uncommitted(
     benign already-committed no-op. Returns
     ``(commit_failed, diagnostics, empty_commit_set)``.
 
+    AC10 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
+    failed.md): on the non-reclassified (real-failure) return path only,
+    `result.commit.stdout_diagnostic` -- when non-empty -- is appended to
+    `diagnostics`, since a commit-step failure diagnosed on stdout otherwise
+    reaches the caller with `stderr`'s bare `exit_code=N` and nothing else.
+    The benign no-op `return False, [], True` above is untouched by this --
+    `diagnostics` stays `[]` there, unconditionally.
+
     The pipeline classifies EVERY non-zero `git commit` exit as
     `commit_failed`, including the "nothing to commit" exit 1 its own
     in-branch comment names -- so a re-invocation over paths a previous call
@@ -1513,6 +1521,28 @@ def _classify_uncommitted(
     )
     if reclassifiable and _commit_paths_are_clean(worktree_root, paths):
         return False, [], True
+
+    # AC10 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
+    # failed.md): `commit_pipeline.CommitOutcome.stdout_diagnostic` carries a
+    # condensed diagnosis of the commit STEP's stdout, populated unconditionally
+    # whenever that step failed -- but `CommitOutcome.stderr` stays bare
+    # `exit_code=N` for two matched downstream consumers (this function's own
+    # `reclassifiable` shape check above, and `coordinator/bin/scoped-git-
+    # commit`'s renderer), so a real failure whose diagnosis landed on stdout
+    # would otherwise be reported with no diagnostic text at all. Appended only
+    # on THIS fall-through (real-failure) branch, never on the benign no-op
+    # `return` above -- that branch's `diagnostics=[]` must stay untouched, or
+    # the 2026-08-03 cry-wolf incident this module's docstring documents comes
+    # back. Guarded for `result.commit is None` (a gate or staging failure never
+    # reaches the commit step, so there is no `stdout_diagnostic` to read) and
+    # for an empty/falsy value (nothing to add). Never gated on `stderr`'s bare
+    # shape -- a real failure diagnosed only on stdout ALSO leaves `stderr`
+    # bare, so that discriminator would suppress exactly the case this exists
+    # to surface; `_commit_paths_are_clean()`'s porcelain probe above is the
+    # only valid discriminator between "benign" and "real failure" here.
+    stdout_diagnostic = getattr(result.commit, "stdout_diagnostic", "") if result.commit is not None else ""
+    if stdout_diagnostic:
+        diagnostics = diagnostics + [stdout_diagnostic]
 
     return commit_failed, diagnostics, not diagnostics and not commit_failed
 

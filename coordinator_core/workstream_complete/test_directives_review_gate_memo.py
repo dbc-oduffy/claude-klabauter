@@ -41,6 +41,7 @@ from typing import Any, Callable
 import pytest
 
 from coordinator_core.workstream_complete import apply as ws_apply
+from coordinator_core.workstream_complete import build_write_trail_directives
 from coordinator_core.workstream_complete.directives_review import (
     build_chain_coverage_gate_directive,
     build_review_brightline_gate_directive,
@@ -448,3 +449,116 @@ def test_read_only_preview_build_records_nothing(tmp_path: Path) -> None:
         assert preview["already_satisfied"] is False
     preview = build_review_brightline_gate_directive("sid-1", repo_root=tmp_path)
     assert preview["already_satisfied"] is False
+
+
+# ---------------------------------------------------------------------------
+# C4 (AC7) — the write-trail directive opts into the same memo mechanism.
+# `_LIVE_GATE_MEMO_DIRECTIVE_IDS` is a frozenset of exact strings and cannot
+# match `d-write-trail-<index>` by membership; `record_gate_verdict_if_
+# passed` additionally checks `_is_write_trail_directive_id`, a prefix
+# test, alongside it.
+# ---------------------------------------------------------------------------
+
+_SINGLE_REVIEW = {
+    "sha_range": f"{_FLOOR_SHA}..{_TIP_SHA}",
+    "reviewer": "the Staff Engineer",
+    "scope": "chain",
+    "verdict": "PASS",
+    "diff_loc": 42,
+}
+
+
+def test_write_trail_directive_omits_session_id_and_repo_root_stays_byte_identical(tmp_path: Path) -> None:
+    d1 = build_write_trail_directives(_SINGLE_REVIEW)
+    d2 = build_write_trail_directives(_SINGLE_REVIEW)
+    assert d1 == d2
+    assert "_gate_memo_key_parts" not in d1[0]
+    assert d1[0]["already_satisfied"] is False
+
+
+def test_write_trail_directive_build_alone_never_writes_a_memo(tmp_path: Path) -> None:
+    for _ in range(3):
+        build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-1", repo_root=tmp_path)
+    memo_dir = tmp_path / "state" / "ceremony" / "wsc-gate-verdict-memo"
+    assert not memo_dir.exists() or list(memo_dir.iterdir()) == []
+
+
+def test_write_trail_directive_build_sees_an_execution_time_hit(tmp_path: Path) -> None:
+    record_gate_memo(tmp_path, "d-write-trail", "sid-1", _SINGLE_REVIEW["sha_range"])
+    directive = build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-1", repo_root=tmp_path)[0]
+    assert directive["already_satisfied"] is True
+
+
+def test_write_trail_directive_hit_is_session_and_range_specific(tmp_path: Path) -> None:
+    record_gate_memo(tmp_path, "d-write-trail", "sid-1", _SINGLE_REVIEW["sha_range"])
+    other_session = build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-2", repo_root=tmp_path)[0]
+    assert other_session["already_satisfied"] is False
+
+    other_range = dict(_SINGLE_REVIEW, sha_range=f"{_TIP_SHA}..{_FLOOR_SHA}")
+    other_range_directive = build_write_trail_directives(other_range, session_id="sid-1", repo_root=tmp_path)[0]
+    assert other_range_directive["already_satisfied"] is False
+
+
+def test_write_trail_directive_list_shape_indexed_ids_key_on_sha_range_not_index(tmp_path: Path) -> None:
+    entry_a = dict(_SINGLE_REVIEW, sha_range=f"{_FLOOR_SHA}..{_TIP_SHA}")
+    entry_b = dict(_SINGLE_REVIEW, sha_range=f"{_TIP_SHA}..{_FLOOR_SHA}")
+    directives = build_write_trail_directives([entry_a, entry_b], session_id="sid-1", repo_root=tmp_path)
+    assert [d["id"] for d in directives] == ["d-write-trail-0", "d-write-trail-1"]
+    assert all(d["already_satisfied"] is False for d in directives)
+
+    record_gate_memo(tmp_path, "d-write-trail", "sid-1", entry_b["sha_range"])
+    directives_2 = build_write_trail_directives([entry_a, entry_b], session_id="sid-1", repo_root=tmp_path)
+    assert directives_2[0]["already_satisfied"] is False  # entry_a's range untouched
+    assert directives_2[1]["already_satisfied"] is True  # entry_b's range hit
+
+
+def test_record_gate_verdict_records_write_trail_single_dict_shape_on_pass(tmp_path: Path) -> None:
+    directive = build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-1", repo_root=tmp_path)[0]
+    record_gate_verdict_if_passed(tmp_path, directive, 0, "")
+    assert gate_memo_hit(tmp_path, "d-write-trail", "sid-1", _SINGLE_REVIEW["sha_range"]) is True
+
+
+def test_record_gate_verdict_records_write_trail_indexed_shape_on_pass(tmp_path: Path) -> None:
+    entry = dict(_SINGLE_REVIEW, sha_range=f"{_FLOOR_SHA}..{_TIP_SHA}")
+    directive = build_write_trail_directives([entry], session_id="sid-1", repo_root=tmp_path)[0]
+    assert directive["id"] == "d-write-trail-0"
+    record_gate_verdict_if_passed(tmp_path, directive, 0, "")
+    assert gate_memo_hit(tmp_path, "d-write-trail", "sid-1", entry["sha_range"]) is True
+
+
+def test_record_gate_verdict_does_not_record_write_trail_on_nonzero_exit(tmp_path: Path) -> None:
+    directive = build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-1", repo_root=tmp_path)[0]
+    record_gate_verdict_if_passed(tmp_path, directive, 1, "")
+    assert gate_memo_hit(tmp_path, "d-write-trail", "sid-1", _SINGLE_REVIEW["sha_range"]) is False
+
+
+def test_record_gate_verdict_write_trail_without_key_parts_is_a_noop(tmp_path: Path) -> None:
+    """A hand-built directive (e.g. an existing pre-C4 test) that never went
+    through `build_write_trail_directives`'s opt-in carries no
+    `_gate_memo_key_parts` — must not raise and must not write."""
+    directive = {"id": "d-write-trail", "cli": "wsc-coverage-gate-runner", "args": ["write-trail"]}
+    record_gate_verdict_if_passed(tmp_path, directive, 0, "")
+    memo_dir = tmp_path / "state" / "ceremony" / "wsc-gate-verdict-memo"
+    assert not memo_dir.exists() or list(memo_dir.iterdir()) == []
+
+
+def test_execute_directives_write_trail_skip_on_second_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dispatch_count = {"n": 0}
+
+    def write_trail_main(argv: list[str]) -> int:
+        dispatch_count["n"] += 1
+        return 0
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: _fake_module(write_trail_main))
+
+    directive = build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-1", repo_root=tmp_path)[0]
+    assert directive["already_satisfied"] is False
+    report = ws_apply._execute_directives([directive], [], {}, repo_root=tmp_path)[1]
+    assert report["landed"] == [directive["id"]]
+    assert dispatch_count["n"] == 1
+
+    directive_2 = build_write_trail_directives(_SINGLE_REVIEW, session_id="sid-1", repo_root=tmp_path)[0]
+    assert directive_2["already_satisfied"] is True
+    report_2 = ws_apply._execute_directives([directive_2], [], {}, repo_root=tmp_path)[1]
+    assert report_2["landed"] == [directive_2["id"]]
+    assert dispatch_count["n"] == 1  # not dispatched again

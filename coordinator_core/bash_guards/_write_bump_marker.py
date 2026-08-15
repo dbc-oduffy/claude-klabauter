@@ -374,6 +374,74 @@ def _resolve_gitdir_uncached(cwd: Optional[str]) -> Optional[Path]:
     return git_dir
 
 
+def path_has_git_ancestor(path: Optional[str]) -> bool:
+    """Pure filesystem ancestor walk for a `.git` entry (a directory, OR a
+    plain FILE -- a linked worktree's/submodule's `.git` is a `gitdir: ...`
+    pointer file, not a directory) at or above `path`. NO subprocess spawn.
+
+    EXISTS TO DISAMBIGUATE `resolve_gitdir(path) is None`, which collapses
+    two different facts into one `None` -- (a) `path` genuinely sits in no
+    git repo at all, and (b) the `git rev-parse --git-dir` spawn itself
+    failed (this fleet's documented load norm is 50-70 concurrent LLMs,
+    `docs/wiki/machine-load-norm.md` -- a 2.0s `git` timeout under that load
+    is an expected transient, not an anomaly). `resolve_gitdir`'s own
+    fail-open-to-`None` contract is correct for its OWN callers, which only
+    ever want "can I resolve a gitdir here, yes or no" -- but a caller that
+    treats `None` as POSITIVE EVIDENCE of "no repo here" (rather than
+    "unresolved") turns a transient spawn failure into a wrong verdict. This
+    function gives such a caller a second, spawn-free signal to tell the two
+    apart: a `.git` entry found here means resolution was UNRESOLVED, not
+    that the path is actually repo-less.
+
+    Best-effort and deliberately loose, matching this package's existing
+    fail-open direction: a `.git` entry present does not itself guarantee
+    `git rev-parse` would have succeeded (a corrupted repo, a `.git` that is
+    neither a valid directory nor a readable gitlink file) -- this function
+    only answers "is there a `.git`-shaped entry that could explain a spawn
+    failure", not "would git have resolved it". A false positive here only
+    ever widens the UNRESOLVED classification (the fail-open direction a
+    caller like `bump_out_of_repo_tool_write.check` already treats as
+    ALLOW); a false negative (a real repo whose `.git` this walk somehow
+    misses) simply falls back to whatever verdict the caller already had
+    before consulting this function.
+
+    Never raises: any `OSError` walking the filesystem, or an empty/`None`
+    `path`, is swallowed and treated as "no evidence found" (`False`).
+
+    DOES NOT DELEGATE TO `coordinator_core.git.repo_root` even though that
+    module already owns a walk-based `.git` lookup (`git_dir()`/its private
+    `_walk_for_dot_git()`) -- deliberately, not an oversight. That module's
+    walk-hit path is spawn-free and would have been the obvious reuse, but
+    its walk-MISS path falls back to a real `git rev-parse --git-dir` spawn
+    (see that module's own docstring, "Non-spawning parent-walk vs spawn,
+    honestly per form"). This function is consulted ONLY on the branch where
+    the caller's own spawn-based `resolve_gitdir()` already returned `None`
+    -- when THIS walk also finds nothing, that is exactly case (a) above
+    ("genuinely no repo"), the one answer this function does not need a
+    second opinion on, so paying for `repo_root.git_dir()`'s fallback spawn
+    there would be a second git spawn purely on the branch that needs it
+    least. A small, mirrored walk kept local here is cheaper than importing
+    a private underscore name across the package boundary and avoids that
+    wasted spawn.
+    """
+    if not path:
+        return False
+    try:
+        candidate = os.path.normpath(path)
+        seen = set()
+        while candidate not in seen:
+            seen.add(candidate)
+            if os.path.exists(os.path.join(candidate, ".git")):
+                return True
+            parent = os.path.dirname(candidate)
+            if parent == candidate:
+                return False
+            candidate = parent
+    except OSError:
+        return False
+    return False
+
+
 def marker_gitdir_is_writable(gitdir: Path) -> bool:
     """True iff `gitdir` is a real, listable directory this process can
     plausibly write a marker into -- checked via `Path.is_dir()` then

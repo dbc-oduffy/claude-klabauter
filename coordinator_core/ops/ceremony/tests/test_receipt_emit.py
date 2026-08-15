@@ -248,6 +248,69 @@ def test_emit_omits_engine_sha_when_resolver_returns_none(
 
 
 # ---------------------------------------------------------------------------
+# engine_dirty — emitted receipt carries the resolved dirty discriminator
+# ---------------------------------------------------------------------------
+
+
+def test_emit_persists_engine_dirty_when_resolver_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """emit_receipt threads resolve_engine_dirty()'s False result through.
+
+    False is a meaningful, real finding ("engine source clean") and must
+    still be emitted — not treated as falsy-omit like engine_sha.
+    """
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_dirty",
+        lambda: False,
+    )
+    ctx = _make_ctx(nodes=[make_d_node("step-0")])
+    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
+    receipt = read_receipt(path)
+
+    assert "engine_dirty" in receipt
+    assert receipt["engine_dirty"] is False
+
+    errors = validate(receipt)
+    assert errors == [], f"Unexpected validation errors: {errors}"
+
+
+def test_emit_persists_engine_dirty_when_resolver_returns_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_dirty",
+        lambda: True,
+    )
+    ctx = _make_ctx(nodes=[make_d_node("step-0")])
+    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
+    receipt = read_receipt(path)
+
+    assert "engine_dirty" in receipt
+    assert receipt["engine_dirty"] is True
+
+    errors = validate(receipt)
+    assert errors == [], f"Unexpected validation errors: {errors}"
+
+
+def test_emit_omits_engine_dirty_when_resolver_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_dirty",
+        lambda: None,
+    )
+    ctx = _make_ctx(nodes=[make_d_node("step-0")])
+    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
+    receipt = read_receipt(path)
+
+    assert "engine_dirty" not in receipt
+
+    errors = validate(receipt)
+    assert errors == [], f"Unexpected validation errors: {errors}"
+
+
+# ---------------------------------------------------------------------------
 # (b) absent_tolerance — missing file → NOT_YET_RUN_SENTINEL
 # ---------------------------------------------------------------------------
 

@@ -857,7 +857,9 @@ def _build_legacy_coverage_and_trail_directives(
             coverage_directive["already_satisfied"] = True
         directives.append(coverage_directive)
 
-    directives.extend(build_write_trail_directives(decisions.get("review")))
+    directives.extend(
+        build_write_trail_directives(decisions.get("review"), session_id=gate.sid, repo_root=repo_root)
+    )
 
     return directives
 
@@ -881,7 +883,9 @@ def _build_write_trail_args(review: dict[str, Any]) -> list[str]:
     return args
 
 
-def build_write_trail_directives(review: Any) -> list[dict[str, Any]]:
+def build_write_trail_directives(
+    review: Any, *, session_id: str = "", repo_root: Optional[Path] = None
+) -> list[dict[str, Any]]:
     """`decisions["review"]` -> zero, one, or many `d-write-trail*`
     directives, each a mechanical `wsc-coverage-gate-runner.py write-trail`
     call over `coordinator_core.ops.review_trail_write`'s single-record
@@ -925,6 +929,21 @@ def build_write_trail_directives(review: Any) -> list[dict[str, Any]]:
     of such dicts} -- a caller-supplied `review` nested one key deeper than
     either accepted shape now fails loud here instead of silently
     contributing zero directives.
+
+    `session_id`/`repo_root` (C4, AC7, docs/plans/2026-08-15-the-ceremony-
+    tail-stops-lying-about-why-it-failed.md): when BOTH are supplied,
+    consults the gate verdict memo (READ-ONLY, via `directives_review.
+    gate_memo_hit`) keyed on `(session_id, sha_range)` -- the SAME identity
+    C3 gave the on-disk trail record itself -- and sets `already_satisfied
+    =True` on a hit, so a reconcile-and-re-run whose trail record already
+    exists no longer re-fires the write. Omitting either (every pre-C4
+    caller) reproduces today's byte-identical directives -- no memo lookup,
+    `already_satisfied` stays its `_directive` default of `False`. This
+    function NEVER WRITES the memo itself, same division as the sibling
+    `d-coverage-gate` memo above: the write happens exactly once, from
+    `apply.py::_execute_directives`'s `directives_review.
+    record_gate_verdict_if_passed`, after the directive actually dispatched
+    and exited 0 this pass.
     """
     directives_commit_tail.validate_review_shape(review)
     if not review:
@@ -932,17 +951,48 @@ def build_write_trail_directives(review: Any) -> list[dict[str, Any]]:
     if isinstance(review, dict):
         if not all(review.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS):
             return []
-        return [_directive("d-write-trail", "wsc-coverage-gate-runner", _build_write_trail_args(review))]
+        directive = _directive("d-write-trail", "wsc-coverage-gate-runner", _build_write_trail_args(review))
+        _apply_write_trail_gate_memo(directive, session_id, review["sha_range"], repo_root)
+        return [directive]
     directives: list[dict[str, Any]] = []
     for index, entry in enumerate(review):
         if not isinstance(entry, dict):
             continue
         if not all(entry.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS):
             continue
-        directives.append(
-            _directive(f"d-write-trail-{index}", "wsc-coverage-gate-runner", _build_write_trail_args(entry))
+        directive = _directive(
+            f"d-write-trail-{index}", "wsc-coverage-gate-runner", _build_write_trail_args(entry)
         )
+        _apply_write_trail_gate_memo(directive, session_id, entry["sha_range"], repo_root)
+        directives.append(directive)
     return directives
+
+
+def _apply_write_trail_gate_memo(
+    directive: dict[str, Any], session_id: str, sha_range: Any, repo_root: Optional[Path]
+) -> None:
+    """C4 (AC7): shared opt-in for both `build_write_trail_directives`
+    shapes. Stamps `_gate_memo_key_parts` on `directive` unconditionally
+    when both inputs are present -- so `directives_review.
+    record_gate_verdict_if_passed` can record under the SAME `(session_id,
+    sha_range)` key this function just checked -- and additionally sets
+    `already_satisfied=True` on a hit. The key is `(session_id, sha_range)`
+    regardless of the directive's own id (`d-write-trail` vs the indexed
+    `d-write-trail-<n>` shape): the underlying trail-record identity C3
+    established does not vary with directive index, only the CLI dispatch
+    does. No-op (directive left exactly as `_directive` built it) when
+    either `session_id` or `repo_root` is falsy/`None` -- every pre-C4
+    caller of `build_write_trail_directives` supplies neither."""
+    if not session_id or repo_root is None:
+        return
+    key_parts = [session_id, str(sha_range)]
+    directive["_gate_memo_key_parts"] = key_parts
+    # "d-write-trail" here is the memo's fixed gate-id tag, matching
+    # `directives_review._WRITE_TRAIL_DIRECTIVE_ID_PREFIX` -- NOT this
+    # directive's own (possibly indexed) `id`; see that constant's
+    # docstring comment for why the two must not be conflated.
+    if directives_review.gate_memo_hit(repo_root, "d-write-trail", *key_parts):
+        directive["already_satisfied"] = True
 
 
 def build_deletion_blocks_check_directive(msg_file: Optional[str]) -> Optional[dict[str, Any]]:

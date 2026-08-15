@@ -90,6 +90,11 @@ from coordinator_core.ceremony_common.apply_halt import (
     _directive_gate_open,
     build_ceremony_halt_exit_codes,
 )
+from coordinator_core.ceremony_common.cli_rejection import (
+    CliExitClass,
+    classify_cli_exit,
+    describe_exit_class,
+)
 from coordinator_core.workday_complete.brief import CONSUMES_MANIFEST, brief
 
 # ---------------------------------------------------------------------------
@@ -161,7 +166,7 @@ def _load_cli_module(cli_name: str) -> ModuleType:
 
 def _invoke_cli_main(
     module: ModuleType, args: list[str], *, stdin_text: Optional[str] = None
-) -> tuple[int, str, str]:
+) -> tuple[int, str, str, CliExitClass]:
     """Invokes `module.main` in-process (never a subprocess) — accepts
     either an `argv`-taking `main(argv)` or a zero-arg `main()` (the C1
     manifest's `workday-complete-step2_5-dirty-tree` script exposes the
@@ -170,6 +175,15 @@ def _invoke_cli_main(
     it returns one, else the code a `SystemExit` it raises carries, else `0`
     on a clean fallthrough) paired with everything the call printed to
     stdout and, separately, to stderr.
+
+    The fourth return value is `ceremony_common.cli_rejection.classify_cli_exit`'s
+    verdict over this invocation: `CliExitClass.ARGV_REJECTED` when the
+    callee raised `SystemExit(2)` with argparse-shaped stderr (the argv
+    itself was rejected before any op-level code ran), else
+    `CliExitClass.RETURNED` — including every zero-arg trampoline's own
+    raised, semantic exit. This does not change `exit_code` itself or what
+    a ceremony reports upward; it only names, for the caller, whether the
+    exit code above actually means something the callee decided.
 
     Zero-arg `main()` trampolines (~16 consumes-manifest scripts, per the
     2026-07-26 arg-mismatch audit) are `def main() -> None` wrappers whose
@@ -224,6 +238,7 @@ def _invoke_cli_main(
     saved_stdin = sys.stdin
     if stdin_text is not None:
         sys.stdin = io.StringIO(stdin_text)
+    raised = False
     try:
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
             try:
@@ -237,13 +252,16 @@ def _invoke_cli_main(
                     finally:
                         sys.argv = saved_argv
             except SystemExit as exc:
+                raised = True
                 code = exc.code
                 result = int(code) if isinstance(code, int) else (0 if code is None else 1)
     finally:
         sys.stdin = saved_stdin
 
     exit_code = int(result) if isinstance(result, int) else 0
-    return exit_code, stdout_buf.getvalue(), stderr_buf.getvalue()
+    stderr_text = stderr_buf.getvalue()
+    exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
+    return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
 
 
 def _dispatch_directive(
@@ -259,7 +277,7 @@ def _dispatch_directive(
     own stdout/stderr here (see `_invoke_cli_main`'s docstring) so nothing
     that used to print to the ceremony run's console goes silent."""
     module = _load_cli_module(directive["cli"])
-    exit_code, stdout_text, stderr_text = _invoke_cli_main(
+    exit_code, stdout_text, stderr_text, exit_class = _invoke_cli_main(
         module, directive.get("args", []), stdin_text=stdin_text
     )
     if stdout_text:
@@ -273,6 +291,7 @@ def _dispatch_directive(
         "exit_code": exit_code,
         "stdout": stdout_text,
         "stderr": stderr_text,
+        "exit_class": exit_class.value,
     }
 
 
@@ -396,6 +415,11 @@ def _execute_directives(
                 f"{directive['cli']} exited {result['exit_code']} "
                 f"(args={result.get('args', [])})"
             )
+            exit_class_note = describe_exit_class(
+                CliExitClass(result.get("exit_class", CliExitClass.RETURNED.value))
+            )
+            if exit_class_note:
+                error = f"{error} — {exit_class_note}"
             stderr_text = (result.get("stderr") or "").strip()
             if stderr_text:
                 error = f"{error} — stderr: {stderr_text}"

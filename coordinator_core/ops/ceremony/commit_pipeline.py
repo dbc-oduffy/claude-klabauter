@@ -1286,6 +1286,45 @@ class CommitOutcome:
             `stage_patch` is not supplied, or every named path was covered by
             the patch. Mirrors `worktree_excluded`'s own never-a-silent-drop
             posture -- never inferred by a caller from absence.
+        stdout_diagnostic -- AC10 (docs/plans/2026-08-15-the-ceremony-tail-
+            stops-lying-about-why-it-failed.md, C6): `condense_git_
+            diagnostic(result.stdout)` on the `not result.ok` branch,
+            populated UNCONDITIONALLY (both for the genuine "nothing to
+            commit" no-op and for a real refusal whose diagnosis happens to
+            land on stdout rather than stderr -- `git commit -F ... --
+            paths` is confirmed to sometimes leave `stderr` empty with the
+            real diagnosis on `stdout` instead, see the 2026-08-03 comment at
+            this class's own `commit()` call site). "" on every other
+            outcome, including success.
+
+            Deliberately ADDITIVE, never folded into `stderr`: `stderr` is a
+            MATCHED field two consumers key off in its exact bare
+            `exit_code=N` shape (`coordinator/bin/scoped-git-commit`'s
+            `_BARE_EXIT_CODE_RE`, and `scoped_git_commit.py::
+            _classify_uncommitted`'s `_BARE_EXIT_CODE_STDERR_RE` conjunct of
+            `reclassifiable`) to render/reclassify the ordinary already-
+            committed no-op quietly; folding stdout text into `stderr` would
+            insert git's own no-op vocabulary into that matched shape and
+            flip the most common benign outcome into a loud refusal at the
+            op layer. This field carries the same information through a
+            separate channel instead, for a caller to surface once it has
+            independently determined the outcome is NOT the benign no-op.
+
+            NOT YET THREADED into `PipelineResult.diagnostics` by
+            `run_commit_pipeline` (see that function's own AC10-STOP comment,
+            same call site): only `scoped_git_commit.py::_classify_
+            uncommitted`'s `git status --porcelain` probe can distinguish the
+            benign no-op from a real failure whose diagnosis happens to land
+            on stdout, and `PipelineResult.diagnostics` has a SECOND raw
+            reader that never reaches that probe -- `wsc_tail.py`'s own
+            commit step extends its own diagnostics from `pipeline_result.
+            diagnostics` unconditionally, no reclassifier in between. This
+            field exists and is populated (AC10's first half) so a future,
+            reclassification-aware consumer-side chunk (touching
+            `scoped_git_commit.py` and/or `wsc_tail.py`) can surface it
+            without a `commit_pipeline.py` change; wiring that surfacing is
+            explicitly out of THIS chunk's scope (its `writes:` names only
+            `commit_pipeline.py` and its own test file).
     """
 
     exit_code: int
@@ -1295,6 +1334,7 @@ class CommitOutcome:
     worktree_excluded: Tuple[str, ...] = ()
     reason: str = ""
     unprovenanced_paths: Tuple[str, ...] = ()
+    stdout_diagnostic: str = ""
 
 
 def _write_commit_message_tempfile(
@@ -1629,6 +1669,13 @@ def commit(
             # actually-cited bug) is safe to fix because its `failed` entries
             # are always prefixed `"git add: {reason}"`, never bare -- this
             # call site has no such prefix, so bare is the load-bearing shape.
+            #
+            # AC10 (C6, same plan): `stdout_diagnostic` carries whatever
+            # `result.stdout` actually said, unconditionally -- an ADDITIVE
+            # field, never folded into `stderr` above (see `CommitOutcome.
+            # stdout_diagnostic`'s own docstring for why: `stderr` stays
+            # exactly bare `exit_code=N` here on purpose, the matched shape
+            # both downstream consumers key off).
             return CommitOutcome(
                 exit_code=result.returncode or 1,
                 stderr=(
@@ -1637,6 +1684,7 @@ def commit(
                 ),
                 reason=_classify_commit_scoped_failure_reason(result),
                 unprovenanced_paths=unprovenanced_paths,
+                stdout_diagnostic=condense_git_diagnostic(result.stdout),
             )
 
         stdout = result.stdout.strip()
@@ -2897,6 +2945,12 @@ def run_commit_pipeline(
     # bare/directory pathspec -- so a peer EM's own concurrently-staged
     # work outside this set is never touched by the rollback.
     staged_this_call: List[str] = []
+    #: Paths whose committed content comes from `stage_patch`'s private
+    #: index rather than the worktree -- see the `dirty_tree_gate` scoping
+    #: note below for why that distinction is load-bearing. Empty whenever
+    #: `stage_patch` is None, which keeps every pre-stage-patch caller's
+    #: gate scope byte-identical.
+    patch_covered: List[str] = []
     landed = False
     try:
         if stage_patch is not None:
@@ -2927,7 +2981,7 @@ def run_commit_pipeline(
             # path-key drift has already caused a live incident here (a
             # C-quoted path never matching its key, silently exempting a
             # guard).
-            patch_covered = [
+            patch_covered[:] = [
                 p for p in stage_paths if git_native._normalize_path_key(p) in patch_touched
             ]
             remainder = [p for p in stage_paths if p not in patch_covered]
@@ -3051,7 +3105,26 @@ def run_commit_pipeline(
         )
 
         deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
-        dirty_gate = dirty_tree_gate(root, gate_paths)
+        # A `stage_patch`-covered path is scoped OUT of the dirty-tree gate,
+        # and only out of that one gate. That gate's whole question is "can
+        # this call attribute the WORKTREE edit it is about to commit" -- and
+        # for a covered path it is not committing the worktree at all:
+        # `stage_from_patch()` seeds a process-private index from `read-tree
+        # HEAD`, applies the patch into it, and `commit()` commits the blob
+        # THAT produced, never reading index or worktree for that path
+        # (provenance by construction; `stage_from_patch_cas_refusal` covers
+        # the peer-committed-underneath case separately). Leaving covered
+        # paths in scope made `--stage-patch` refuse its single most valuable
+        # case -- committing your own hunks out of a file a peer is
+        # concurrently editing, which on a box whose declared norm is 50-70
+        # concurrent sessions is the ordinary condition, not the exception.
+        # NOT a relaxation of the 2026-07-07 auto-adopt refusal that motivated
+        # this gate: nothing here adopts an unattributable worktree edit -- a
+        # covered path's worktree content is simply never what lands. Every
+        # other gate keeps the full `gate_paths`: they answer questions
+        # (message-declared deletions, carry, op scope) that stay valid for a
+        # covered path.
+        dirty_gate = dirty_tree_gate(root, [p for p in gate_paths if p not in patch_covered])
         carry_outcome = carry_gate(root, gate_paths)
         op_scope_outcome = op_scope_coverage_gate(root, gate_paths)
 
@@ -3111,6 +3184,28 @@ def run_commit_pipeline(
                 # `test_scoped_git_commit_cli.py::TestRefusalReporting` for
                 # the loud-vs-quiet rendering contract this must not
                 # regress).
+                #
+                # AC10 STOP (C6, docs/plans/2026-08-15-the-ceremony-tail-
+                # stops-lying-about-why-it-failed.md): `commit_outcome.
+                # stdout_diagnostic` (see that field's own docstring) is
+                # deliberately NOT appended to `diagnostics` here.
+                # `scoped_git_commit.py::_handler` is not this list's only
+                # reader -- `wsc_tail.py`'s own commit step
+                # (`diagnostics.extend(pipeline_result.diagnostics)`, its own
+                # call site, unconditional, no porcelain-probe reclassifier
+                # in between) reads `PipelineResult.diagnostics` RAW on the
+                # benign already-committed no-op path too. Appending here
+                # would decorate that no-op's diagnostics with git's own
+                # "nothing to commit" text in wsc_tail's ceremony trail as
+                # well as the CLI, which only `scoped_git_commit.py::
+                # _classify_uncommitted`'s `git status --porcelain` probe can
+                # tell apart from a real failure -- see that function's own
+                # docstring for why a stderr-shape discriminator here cannot
+                # substitute for it. Surfacing `stdout_diagnostic` therefore
+                # needs a reclassification-aware consumer-side change (in
+                # `scoped_git_commit.py` and/or `wsc_tail.py`, both outside
+                # this chunk's `writes:`) -- flagged to the EM rather than
+                # guessed at here.
                 diagnostics.append(commit_outcome.stderr)
                 return PipelineResult(
                     stage=stage,

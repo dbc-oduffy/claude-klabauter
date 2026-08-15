@@ -3491,6 +3491,159 @@ def test_commit_failure_bare_exit_code_preserved_for_downstream_quiet_rendering(
     assert outcome.stderr == "exit_code=1"
 
 
+def test_commit_failure_populates_stdout_diagnostic_without_touching_bare_stderr(
+    tmp_path, monkeypatch
+):
+    """AC10 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-
+    it-failed.md, C6): the diagnosis git left on `stdout` -- silently
+    discarded by the old bare `stderr=(condense_git_diagnostic(result.stderr)
+    or f"exit_code={result.returncode}")` composition -- now reaches
+    `CommitOutcome.stdout_diagnostic`, additively. AC11 (same chunk):
+    `CommitOutcome.stderr` itself stays exactly the bare `exit_code=N` shape
+    `coordinator/bin/scoped-git-commit`'s `_BARE_EXIT_CODE_RE` and
+    `scoped_git_commit.py::_classify_uncommitted`'s
+    `_BARE_EXIT_CODE_STDERR_RE` both match -- the new field is a second,
+    independent channel, never a replacement for the matched one."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    real_commit_scoped = git_native.commit_scoped
+
+    def _fake_commit_scoped(paths, msg_file, cwd, **kwargs):
+        return git_native.GitResult(
+            returncode=1,
+            stdout="nothing to commit, working tree clean\nOn branch work/x",
+            stderr="",
+        )
+
+    monkeypatch.setattr(git_native, "commit_scoped", _fake_commit_scoped)
+    try:
+        outcome = commit(repo, message="test", commit_paths=["README.md"])
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert outcome.exit_code != 0
+    # AC11 -- the matched shape is untouched.
+    assert outcome.stderr == "exit_code=1"
+    # AC10 -- the stdout diagnosis is no longer captured-and-discarded.
+    assert outcome.stdout_diagnostic == "nothing to commit, working tree clean\nOn branch work/x"
+
+
+def test_commit_success_never_populates_stdout_diagnostic(tmp_path):
+    """`stdout_diagnostic` is additive to the FAILURE branch only -- a landed
+    commit must not carry stray text into a field named for a failure
+    diagnosis."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "README.md", "changed")
+    outcome = commit(repo, message="second commit", commit_paths=["README.md"])
+
+    assert outcome.exit_code == 0
+    assert outcome.stdout_diagnostic == ""
+
+
+def test_pipeline_diagnostics_unaffected_when_stdout_diagnostic_empty(
+    tmp_path, monkeypatch
+):
+    """`run_commit_pipeline()`'s own `diagnostics` list is byte-identical to
+    pre-C6 behaviour whenever `stdout_diagnostic` is empty (the real
+    diagnosis already landed on `stderr`, the common shape) -- `commit_
+    outcome.stdout_diagnostic` is populated (AC10's first half) but NOT
+    threaded into `PipelineResult.diagnostics` by this chunk (see `run_
+    commit_pipeline`'s own AC10-STOP comment at this call site): a second
+    raw reader of `PipelineResult.diagnostics`, `wsc_tail.py`'s own commit
+    step, extends its own diagnostics unconditionally with no porcelain-probe
+    reclassifier in between -- only `scoped_git_commit.py::
+    _classify_uncommitted` has that probe, and it is not the only reader.
+    Surfacing `stdout_diagnostic` needs a reclassification-aware consumer
+    change outside this chunk's `writes:`."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    real_commit_scoped = git_native.commit_scoped
+
+    def _fake_commit_scoped(paths, msg_file, cwd, **kwargs):
+        return git_native.GitResult(
+            returncode=1,
+            stdout="",
+            stderr="hook 'pre-commit' rejected: lint failure on README.md",
+        )
+
+    _seed_file(repo, "README.md", "changed")
+    monkeypatch.setattr(git_native, "commit_scoped", _fake_commit_scoped)
+    try:
+        result = run_commit_pipeline(
+            repo,
+            session_id=_unique_session_id(),
+            subject="test: hook rejection, stderr-only diagnosis",
+            stage_paths=["README.md"],
+            caller_paths={"README.md"},
+        )
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert result.commit_failed is True
+    assert result.diagnostics == ["hook 'pre-commit' rejected: lint failure on README.md"]
+
+
+def test_pipeline_diagnostics_still_bare_when_stderr_silent_stdout_carries_diagnosis(
+    tmp_path, monkeypatch
+):
+    """The AC10 scenario end to end: `stderr` empty, the real diagnosis on
+    `stdout`. `commit_outcome.stdout_diagnostic` DOES capture it (asserted
+    directly), but `PipelineResult.diagnostics` stays exactly the pre-C6
+    single bare `exit_code=N` entry -- `run_commit_pipeline` deliberately
+    does not thread `stdout_diagnostic` into `diagnostics` (see this
+    function's own AC10-STOP comment): `wsc_tail.py`'s own commit step reads
+    `PipelineResult.diagnostics` raw, unconditionally, with no porcelain-
+    probe reclassifier -- appending it here would decorate a benign
+    already-committed no-op's ceremony-tail diagnostics with git's own
+    no-op vocabulary too, not just the CLI's."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    real_commit_scoped = git_native.commit_scoped
+
+    def _fake_commit_scoped(paths, msg_file, cwd, **kwargs):
+        return git_native.GitResult(
+            returncode=1,
+            stdout="hook 'pre-commit' rejected: lint failure on README.md",
+            stderr="",
+        )
+
+    _seed_file(repo, "README.md", "changed")
+    monkeypatch.setattr(git_native, "commit_scoped", _fake_commit_scoped)
+    try:
+        result = run_commit_pipeline(
+            repo,
+            session_id=_unique_session_id(),
+            subject="test: hook rejection, stdout-only diagnosis",
+            stage_paths=["README.md"],
+            caller_paths={"README.md"},
+        )
+    finally:
+        monkeypatch.setattr(git_native, "commit_scoped", real_commit_scoped)
+
+    assert result.commit_failed is True
+    assert result.commit.stdout_diagnostic == "hook 'pre-commit' rejected: lint failure on README.md"
+    assert result.diagnostics == ["exit_code=1"]
+
+
 def test_ends_with_trailer_block_false_for_subject_only_type_text_message():
     """A subject-only `type: text` message ("fix: a thing\\n") is "Key:
     value" shaped but is the message's FIRST (and only) paragraph, never a
@@ -4780,3 +4933,76 @@ def test_op_reports_empty_commit_set_reason_unaffected_by_ac7(tmp_path):
 
     assert result["committed"] is False
     assert result.get("reason") == "empty-commit-set"
+
+
+def test_stage_patch_covered_path_commits_despite_unattributable_worktree_edit(tmp_path):
+    """A `--stage-patch`-covered path whose WORKTREE also carries an edit this
+    call cannot attribute still commits, and lands ONLY the patch's content.
+
+    Regression guard for the interaction that made `--stage-patch` unusable for
+    the one case it exists to serve: an EM committing its own hunks out of a
+    file a peer session is concurrently editing. `patch_covered` entries flow
+    into `stage.staged_paths` -> `gate_paths`, and `dirty_tree_gate` classified
+    the path's unattributable WORKTREE edit as case-(c) and refused the whole
+    commit -- even though `stage_from_patch()` builds the committed blob in a
+    process-private index seeded from `read-tree HEAD`, so the worktree content
+    is never what lands.
+
+    Asserts the peer's worktree hunk is neither committed NOR reverted: it must
+    survive as an uncommitted worktree edit after the call. On a box whose
+    declared norm is 50-70 concurrent sessions this is the ordinary shape of a
+    shared-branch commit, not an exotic one.
+    """
+    repo = _init_repo(tmp_path)
+    # newline="\n" on every write below: `Path.write_text` otherwise translates
+    # to CRLF on Windows, and a LF-context patch then fails to apply against a
+    # CRLF blob -- an artifact of this test's own file authoring, not of the
+    # behaviour under test.
+    (repo / "shared.py").write_text(
+        "line1\nline2\nline3\n", encoding="utf-8", newline="\n"
+    )
+    _git(["add", "--", "shared.py"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # This call's own change, expressed ONLY as a patch against HEAD -- never
+    # written to the worktree, which is the whole point of --stage-patch.
+    patch = tmp_path / "mine.patch"
+    patch.write_text(
+        "--- a/shared.py\n"
+        "+++ b/shared.py\n"
+        "@@ -1,3 +1,3 @@\n"
+        "-line1\n"
+        "+line1-MINE\n"
+        " line2\n"
+        " line3\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    # A peer's uncommitted worktree edit to the SAME file, unattributable to
+    # this call, and deliberately a DIFFERENT hunk than the patch carries.
+    (repo / "shared.py").write_text(
+        "line1\nline2\nline3-PEER\n", encoding="utf-8", newline="\n"
+    )
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="scoped: commit only my own hunk",
+        stage_paths=["shared.py"],
+        caller_paths={"shared.py"},
+        stage_patch=str(patch),
+    )
+
+    assert result.commit_failed is False, result.diagnostics
+    assert result.committed_sha is not None
+
+    committed = subprocess.run(
+        ["git", "show", "HEAD:shared.py"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert committed.replace("\r\n", "\n") == "line1-MINE\nline2\nline3\n", committed
+    assert "PEER" not in committed
+
+    # The peer's hunk is untouched: neither swept into the commit nor reverted.
+    assert "PEER" in (repo / "shared.py").read_text(encoding="utf-8")

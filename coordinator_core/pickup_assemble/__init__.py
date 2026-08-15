@@ -100,6 +100,10 @@ from coordinator_core.shipped_in_tokens import (
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
 )
 from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
+from coordinator_core.contract.decision_object.judgment import (
+    build_judgment_point as _shared_build_judgment_point,
+    build_untrusted_gate_judgment_point as _shared_build_untrusted_gate_judgment_point,
+)
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import (
     canonical_body_sha as _shared_canonical_body_sha,
@@ -6494,6 +6498,15 @@ def build_judgment_point(
     use `build_untrusted_gate_judgment_point` instead — that constructor has
     no `recommendation` parameter at all, closing off the call shape rather
     than trusting every caller to pass `None`.
+
+    Composes `contract/decision_object/judgment.py::build_judgment_point`
+    (the shared seam) for the actual dict construction and the
+    `{disposition, rationale}`-shape/extra-field check on a non-null
+    `recommendation` (`_RECOMMENDATION_FIELDS` there is the same set as
+    this module's own) -- this wrapper keeps only the `reason`-enum check
+    the shared seam has no vocabulary for (2026-08-15 judgment-points plan,
+    C6: brings this module's fork under the same census as every other
+    assembler rather than leaving it duplicated).
     """
     if recommendation is None:
         if reason not in _NULL_RECOMMENDATION_REASONS:
@@ -6501,25 +6514,18 @@ def build_judgment_point(
                 "build_judgment_point: a null recommendation requires reason "
                 f"'insufficient-evidence' or 'recommendation-forbidden', got {reason!r}"
             )
-    else:
-        if reason is not None:
-            raise ValueError("build_judgment_point: reason only accompanies a null recommendation")
-        extra = set(recommendation) - _RECOMMENDATION_FIELDS
-        if extra:
-            raise ValueError(
-                f"build_judgment_point: recommendation carries unexpected field(s) {sorted(extra)!r} "
-                "— only 'disposition'/'rationale' are permitted"
-            )
-    return {
-        "id": id,
-        "question": question,
-        "evidence": evidence,
-        "dispositions": dispositions,
-        "round_trip": round_trip,
-        "revalidate_at_dispatch": revalidate_at_dispatch,
-        "recommendation": recommendation,
-        "reason": reason,
-    }
+    elif reason is not None:
+        raise ValueError("build_judgment_point: reason only accompanies a null recommendation")
+    return _shared_build_judgment_point(
+        recommendation,
+        id=id,
+        question=question,
+        dispositions=dispositions,
+        evidence=evidence,
+        reason=reason,
+        revalidate_at_dispatch=revalidate_at_dispatch,
+        round_trip=round_trip,
+    )
 
 
 def build_untrusted_gate_judgment_point(
@@ -6544,17 +6550,21 @@ def build_untrusted_gate_judgment_point(
     mistake, a type-level guarantee rather than a runtime assertion on one
     gate. Always emits `recommendation: None`, `reason:
     "recommendation-forbidden"`.
+
+    Composes the shared seam's own `build_untrusted_gate_judgment_point`
+    (C6, see `build_judgment_point` above) for the dict construction --
+    this module's positional signature and default `revalidate_at_dispatch`
+    are preserved by this wrapper, not by a second implementation.
     """
-    return {
-        "id": id,
-        "question": question,
-        "evidence": evidence,
-        "dispositions": dispositions,
-        "round_trip": round_trip,
-        "revalidate_at_dispatch": revalidate_at_dispatch,
-        "recommendation": None,
-        "reason": "recommendation-forbidden",
-    }
+    return _shared_build_untrusted_gate_judgment_point(
+        id=id,
+        question=question,
+        dispositions=dispositions,
+        evidence=evidence,
+        reason="recommendation-forbidden",
+        revalidate_at_dispatch=revalidate_at_dispatch,
+        round_trip=round_trip,
+    )
 
 
 def build_liveness_judgment_point(liveness_signal_fired: bool, evidence_pointer: str, resolves: list[str]) -> Optional[dict[str, Any]]:

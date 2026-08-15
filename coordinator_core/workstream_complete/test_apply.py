@@ -31,6 +31,7 @@ from typing import Any, Callable, Optional
 import pytest
 
 from coordinator_core.ceremony_common.apply_halt import UnrecognizedDirective
+from coordinator_core.ceremony_common.cli_rejection import CliExitClass
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure
 
 # Real git spawn is load-bearing: the no-commit-row guard's commit-coverage
@@ -133,7 +134,9 @@ def test_invoke_cli_main_calls_argv_taking_main_with_args() -> None:
         seen["argv"] = argv
         return 0
 
-    exit_code, stdout_text, stderr_text = ws_apply._invoke_cli_main(_fake_module(main_fn), ["--flag", "value"])
+    exit_code, stdout_text, stderr_text, _exit_class = ws_apply._invoke_cli_main(
+        _fake_module(main_fn), ["--flag", "value"]
+    )
     assert exit_code == 0
     assert stdout_text == ""
     assert stderr_text == ""
@@ -151,7 +154,9 @@ def test_invoke_cli_main_splices_args_into_sys_argv_for_zero_arg_main() -> None:
         seen["argv"] = list(sys.argv)
         return 0
 
-    exit_code, stdout_text, stderr_text = ws_apply._invoke_cli_main(_fake_module(main_fn), ["--mode", "pending"])
+    exit_code, stdout_text, stderr_text, _exit_class = ws_apply._invoke_cli_main(
+        _fake_module(main_fn), ["--mode", "pending"]
+    )
     assert exit_code == 0
     assert stdout_text == ""
     assert stderr_text == ""
@@ -174,8 +179,10 @@ def test_invoke_cli_main_resolves_system_exit_int_code() -> None:
     def main_fn(argv: list[str]) -> None:
         raise SystemExit(7)
 
-    exit_code, _stdout_text, _stderr_text = ws_apply._invoke_cli_main(_fake_module(main_fn), [])
+    exit_code, _stdout_text, _stderr_text, exit_class = ws_apply._invoke_cli_main(_fake_module(main_fn), [])
     assert exit_code == 7
+    # code != 2 — never argv_rejected regardless of raise/stderr shape.
+    assert exit_class is CliExitClass.RETURNED
 
 
 def test_invoke_cli_main_captures_stdout() -> None:
@@ -183,7 +190,7 @@ def test_invoke_cli_main_captures_stdout() -> None:
         print("hello-from-cli")
         return 0
 
-    exit_code, stdout_text, stderr_text = ws_apply._invoke_cli_main(_fake_module(main_fn), [])
+    exit_code, stdout_text, stderr_text, _exit_class = ws_apply._invoke_cli_main(_fake_module(main_fn), [])
     assert exit_code == 0
     assert stdout_text == "hello-from-cli\n"
     assert stderr_text == ""
@@ -202,10 +209,30 @@ def test_invoke_cli_main_captures_stderr() -> None:
         print("diagnostic detail", file=_sys.stderr)
         return 2
 
-    exit_code, stdout_text, stderr_text = ws_apply._invoke_cli_main(_fake_module(main_fn), [])
+    exit_code, stdout_text, stderr_text, exit_class = ws_apply._invoke_cli_main(_fake_module(main_fn), [])
     assert exit_code == 2
     assert stdout_text == ""
     assert stderr_text == "diagnostic detail\n"
+    # main() RETURNED 2 rather than raising — never argv_rejected.
+    assert exit_class is CliExitClass.RETURNED
+
+
+def test_invoke_cli_main_argparse_rejection_classifies_argv_rejected() -> None:
+    """A callee that raises `SystemExit(2)` with argparse-shaped stderr
+    (`usage: ...` plus `: error: ...`) classifies `ARGV_REJECTED` — the
+    argv was rejected before any op-level code ran, distinct from a
+    zero-arg trampoline's own raised, semantic exit-2."""
+
+    def main_fn(argv: list[str]) -> None:
+        print("usage: fake_cli [-h] --sid SID", file=sys.stderr)
+        print("fake_cli: error: unrecognized arguments: --bogus", file=sys.stderr)
+        raise SystemExit(2)
+
+    exit_code, _stdout_text, _stderr_text, exit_class = ws_apply._invoke_cli_main(
+        _fake_module(main_fn), []
+    )
+    assert exit_code == 2
+    assert exit_class is CliExitClass.ARGV_REJECTED
 
 
 def test_invoke_cli_main_no_main_raises_unrecognized_directive() -> None:

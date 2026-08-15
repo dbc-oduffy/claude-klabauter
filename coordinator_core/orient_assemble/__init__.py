@@ -61,6 +61,7 @@ from coordinator_core.contract.decision_object.envelope import (
     extend_exit_codes,
     _emit as _envelope_emit,
 )
+from coordinator_core.contract.decision_object.judgment import partition_reportable
 from coordinator_core.orient_assemble import (
     readers_branch_reconcile,
     readers_clean_ops,
@@ -167,6 +168,42 @@ def brief(cadence: str) -> dict[str, Any]:
         _assert_null_recommendation_reason_legal(jp) for jp in judgment_points
     ]
 
+    # Partition at this seam only, over the FULL concatenated directive set
+    # (see module docstring's "Reported-point demotion" note): a point is
+    # `reported` when it gates no live directive and is not depended on by
+    # one. Asked points stay in `judgment_points[]`; reported points are
+    # demoted into narration prose so the drift is still visible without
+    # asking the EM to answer for something that gates nothing.
+    # Scoped to recommendation-carrying points: a Tier-3 point
+    # (`recommendation=None`, reason `recommendation-forbidden` or
+    # `insufficient-evidence`) is a question the engine deliberately must not
+    # answer, so it keeps asking however few directives it gates --
+    # `j-session-day-review-due` is the live instance, and demoting it would
+    # silence a due review rather than de-noise a settled one.
+    recommendation_carrying = [
+        jp for jp in judgment_points if jp.get("recommendation") is not None
+    ]
+    _, reported_points = partition_reportable(recommendation_carrying, directives)
+    reported_ids = {jp.get("id") for jp in reported_points}
+    total_found = len(judgment_points)
+    judgment_points = [
+        jp for jp in judgment_points if jp.get("id") not in reported_ids
+    ]
+
+    narration = (
+        f"orient-assemble brief --cadence {cadence}: "
+        f"{len(directives)} directive(s), {len(judgment_points)} "
+        f"judgment point(s) asked across four reader families "
+        f"({total_found} found total)."
+    )
+    if reported_points:
+        reported_fragments = "; ".join(
+            f"{point.get('question', '')} — "
+            f"{(point.get('recommendation') or {}).get('rationale', '')}"
+            for point in reported_points
+        )
+        narration += f" Reported (gate nothing, not asked): {reported_fragments}."
+
     envelope = build_envelope(
         artifact={"cadence": cadence},
         preflight={},
@@ -174,11 +211,7 @@ def brief(cadence: str) -> dict[str, Any]:
         directives=directives,
         judgment_points=judgment_points,
         decisions={},
-        narration=(
-            f"orient-assemble brief --cadence {cadence}: "
-            f"{len(directives)} directive(s), {len(judgment_points)} "
-            "judgment point(s) across four reader families."
-        ),
+        narration=narration,
         next_move=(
             "Review directives[] and judgment_points[] below."
             if (directives or judgment_points)

@@ -130,6 +130,72 @@ def test_resolve_gitdir_submodule_resolves_to_file_backed_dotgit(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# path_has_git_ancestor -- pure filesystem walk, no subprocess. Exists to
+# disambiguate `resolve_gitdir(path) is None` between "genuinely no repo"
+# and "the git rev-parse spawn failed" -- see its own docstring and
+# `write_guards.bump_out_of_repo_tool_write`'s "UNRESOLVED IS NOT THE SAME
+# FACT AS REPO-LESS" for the defect this closes.
+# ---------------------------------------------------------------------------
+
+
+def test_path_has_git_ancestor_true_for_plain_repo_root(tmp_path):
+    root = _init_repo(tmp_path)
+    assert marker.path_has_git_ancestor(str(root)) is True
+
+
+def test_path_has_git_ancestor_true_for_nested_subdirectory(tmp_path):
+    root = _init_repo(tmp_path)
+    nested = root / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+    assert marker.path_has_git_ancestor(str(nested)) is True
+
+
+def test_path_has_git_ancestor_true_for_not_yet_created_nested_path(tmp_path):
+    # A write TARGET is very often a path that does not exist yet -- this
+    # function must not require the leaf itself to exist, matching
+    # `nearest_existing_ancestor`'s own reasoning in
+    # `_write_bump_sink_shapes.py`.
+    root = _init_repo(tmp_path)
+    not_yet_created = str(root / "newdir" / "file.txt")
+    assert marker.path_has_git_ancestor(not_yet_created) is True
+
+
+def test_path_has_git_ancestor_false_for_genuinely_repo_less_path(tmp_path):
+    scratch = tmp_path / "not-a-repo"
+    scratch.mkdir()
+    assert marker.path_has_git_ancestor(str(scratch)) is False
+
+
+def test_path_has_git_ancestor_true_for_worktree_file_backed_dotgit(tmp_path):
+    # A linked worktree's `.git` is a plain FILE (a `gitdir:` pointer), not
+    # a directory -- this function must recognize either shape, matching
+    # `resolve_gitdir`'s own worktree/submodule handling.
+    root = _init_repo(tmp_path)
+    wt = tmp_path / "wt"
+    _git(str(root), "worktree", "add", "-q", str(wt), "-b", "wt-branch")
+    assert (wt / ".git").is_file()
+    assert marker.path_has_git_ancestor(str(wt)) is True
+
+
+def test_path_has_git_ancestor_false_for_empty_or_none_path():
+    assert marker.path_has_git_ancestor("") is False
+    assert marker.path_has_git_ancestor(None) is False
+
+
+def test_path_has_git_ancestor_never_spawns_a_subprocess(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path)
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("path_has_git_ancestor must not spawn a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", _fail)
+    assert marker.path_has_git_ancestor(str(root)) is True
+    scratch = tmp_path / "not-a-repo-either"
+    scratch.mkdir()
+    assert marker.path_has_git_ancestor(str(scratch)) is False
+
+
+# ---------------------------------------------------------------------------
 # marker_present -- prefix matching, absence re-bumps, unwritable gitdir
 # ---------------------------------------------------------------------------
 
@@ -589,8 +655,18 @@ def test_ac5_unwritable_target_gitdir_allows_matching_unresolvable_precedent(tmp
 
 
 def test_ac5_clear_line_executed_verbatim_clears_the_target(tmp_path, monkeypatch):
-    """AC5 -- execute the advertised clear line in-test, verbatim, and
-    confirm it actually clears this exact target."""
+    """AC5 -- clearing THIS exact target's marker (the same file
+    `clear_line()` would name) actually clears the bump.
+
+    Reworked 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
+    handing-agents-the-keys.md AC-2): no deny message on any channel prints
+    a pasteable `touch` line any more (see `_write_bump_message`'s own "NO
+    PASTEABLE CLEAR RECIPE ON THIS CHANNEL"), so this test can no longer
+    parse one out of the reason text. It instead composes the same marker
+    path `clear_line()` itself would have named -- `marker.marker_path`,
+    the exact function the message module used to call -- and touches it
+    directly, which is the one property AC5 actually needs: that clearing
+    THIS target's marker file clears THIS target's bump."""
     session_id = "sess-ac5-clear-verbatim"
     root = _end_to_end_setup(tmp_path, monkeypatch, session_id)
     foreign = _init_repo(tmp_path, "foreign")
@@ -601,9 +677,9 @@ def test_ac5_clear_line_executed_verbatim_clears_the_target(tmp_path, monkeypatc
     result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
     assert result is not None, "guard must actually fire for this test to mean anything"
 
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    clear_line = next(line.strip() for line in reason.split("\n") if line.strip().startswith("touch "))
-    subprocess.run(clear_line.split(" ", 1), check=True)
+    foreign_gitdir = marker.resolve_gitdir(str(foreign))
+    assert foreign_gitdir is not None
+    marker.marker_path(foreign_gitdir, session_id).touch()
 
     result2 = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
     assert result2 is None
@@ -639,14 +715,19 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
     assert "confinement_deny" not in reason
 
     # The marker itself is a bare, forgeable `touch` of an ordinary file --
-    # no unforgeability machinery, no creation guard.
-    clear_line = next(
-        line.strip()
-        for line in result["hookSpecificOutput"]["permissionDecisionReason"].split("\n")
-        if line.strip().startswith("touch ")
-    )
-    marker_path_str = clear_line[len("touch "):]
-    assert Path(marker_path_str).name.startswith(marker.MARKER_PREFIX)
+    # no unforgeability machinery, no creation guard. Proved directly
+    # against the marker module rather than parsed out of the deny message
+    # (2026-08-13, C4d -- no renderer prints a `touch ` line on any channel
+    # any more; see `test_ac5_clear_line_executed_verbatim_clears_the_
+    # target`'s own note): compose the same marker path `clear_line()`
+    # would have named, and confirm its basename still carries no more than
+    # the ordinary marker prefix -- no expiry/identity suffix, nothing an
+    # ordinary `touch` couldn't forge.
+    foreign_gitdir = marker.resolve_gitdir(str(foreign))
+    assert foreign_gitdir is not None
+    marker_path = marker.marker_path(foreign_gitdir, session_id)
+    assert marker_path.name.startswith(marker.MARKER_PREFIX)
+    assert marker_path.name == f"{marker.MARKER_PREFIX}{session_id}"
 
 
 def test_ac6_outside_repo_bump_still_clearable_by_single_anchor_gitdir_touch(tmp_path, monkeypatch):

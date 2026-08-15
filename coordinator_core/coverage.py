@@ -4204,6 +4204,119 @@ _OPEN_LOOP_GAP_BEHIND_FRONTIER = "gap-behind-frontier"
 _OPEN_LOOP_NOTE_PREFIX = "coverage: open-review-loop="
 
 
+def _build_chain_seed_parent_map(
+    cwd: str, chain_set: Set[str]
+) -> Optional[Dict[str, List[str]]]:
+    """DAG mode's zero-`graph_range` counterpart to `_build_parent_map`: ONE
+    `git rev-list --parents --stdin` walk seeded on every full-SHA `chain_set`
+    member, to FULL ancestry (no `..` upper bound — DAG mode has no single
+    contiguous range to bound it with). Same primitive `_dag_frontier_ancestry`
+    already spends on `reviewed_in_chain`; here the seeds are `chain_set`
+    itself, fed via stdin (not argv) so a large chain cannot hit Windows' 32K
+    command-line ceiling.
+
+    Because every `chain_set` member is itself a seed, every one of them is
+    guaranteed to appear as a `parent_map` key (git emits the seed's own line
+    even when it has no parents) — so `_resolve_dag_endpoint`'s "not a
+    parent_map key" case is never a chain member sitting outside an arbitrary
+    window (there is no window), only a commit unrelated to the chain's own
+    ancestry, i.e. genuinely FOREIGN. That collapses flat mode's three-way
+    OUT_OF_WINDOW / FOREIGN / in-window split to two: in-map, or FOREIGN.
+
+    Returns None on a git failure or an empty/no-full-SHA seed set (degrades
+    to the per-range fan-out, same as a flat-mode graph-build failure).
+
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3
+    """
+    tips = sorted(sha for sha in chain_set if _FULL_SHA.match(sha))
+    if not tips:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--parents", "--stdin"],
+            input="\n".join(tips) + "\n",
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
+        )
+        if result.returncode != 0:
+            return None
+    except Exception:
+        return None
+    parent_map: Dict[str, List[str]] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if parts:
+            parent_map[parts[0]] = parts[1:]
+    return parent_map or None
+
+
+def _resolve_dag_endpoint(
+    token: str,
+    parent_map: Dict[str, List[str]],
+    cwd: str,
+    symref_cache: Dict[str, Any],
+) -> Any:
+    """DAG-mode counterpart to `_resolve_endpoint`, for a `parent_map` built by
+    `_build_chain_seed_parent_map` (unbounded ancestry, no `graph_base`). No
+    OUT_OF_WINDOW/ancestor-of-base classification is needed — see that
+    function's docstring: absence from `parent_map` here always means
+    genuinely FOREIGN, never "below a window base", so this returns only the
+    in-map SHA, `_ENDPOINT_FOREIGN`, or `_ENDPOINT_UNRESOLVED` (bad ref).
+
+    Walking below the unbounded map's own root (a `~N`/`^N` op with nowhere
+    left to go) also returns `_ENDPOINT_FOREIGN` rather than an OUT_OF_WINDOW
+    ∅-collapse: that shape requires walking to a genuine graft/root boundary,
+    is rare, and FOREIGN's one-spawn-per-range fallback computes the exact
+    answer for that one record rather than guessing ∅. Conservative, not
+    unsafe — the same direction flat mode's own FOREIGN branch takes.
+
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3
+    """
+    m = _ENDPOINT_SUFFIX.match(token)
+    base = m.group(1) if m else token
+    suffix = m.group(2) if m else ""
+    if _HEX_TOKEN.match(base):
+        b = base.lower()
+        matches = [k for k in parent_map if k.startswith(b)]
+        if len(matches) == 1:
+            cur: Any = matches[0]
+        else:
+            rc, out, _ = _run(["git", "rev-parse", "--verify", "--quiet", base], cwd=cwd)
+            if rc != 0 or not out:
+                return _ENDPOINT_UNRESOLVED
+            cur = out if out in parent_map else _ENDPOINT_FOREIGN
+    else:
+        if base not in symref_cache:
+            rc, out, _ = _run(["git", "rev-parse", "--verify", "--quiet", base], cwd=cwd)
+            symref_cache[base] = out if (rc == 0 and out) else None
+        full = symref_cache[base]
+        if full is None:
+            return _ENDPOINT_UNRESOLVED
+        cur = full if full in parent_map else _ENDPOINT_FOREIGN
+    if cur is _ENDPOINT_FOREIGN:
+        return cur
+    for op in re.findall(r"[~^][0-9]*", suffix):
+        if cur not in parent_map:
+            return _ENDPOINT_FOREIGN
+        parents = parent_map[cur]
+        kind, num = op[0], op[1:]
+        n = int(num) if num else 1
+        if kind == "^":
+            if n == 0:
+                continue
+            if n > len(parents):
+                return _ENDPOINT_UNRESOLVED
+            cur = parents[n - 1]
+        else:  # "~N"
+            for _ in range(n):
+                if cur not in parent_map or not parent_map[cur]:
+                    return _ENDPOINT_FOREIGN
+                cur = parent_map[cur][0]
+    return cur
+
+
 def _make_chain_range_resolver(
     cwd: str,
     chain_set: Set[str],
@@ -4214,26 +4327,36 @@ def _make_chain_range_resolver(
     sha_range to its CHAIN-RESTRICTED SHA set, for injection into
     `review_coverage_core.classify_pending_records` as its `resolve_range`.
 
-    At most ONE `git rev-list --parents <graph_range>` spawn, built LAZILY on
-    the first range actually resolved — a corpus with no pending record at all
-    (every corpus predating § C1's freeze-time emission) short-circuits inside
-    `classify_pending_records` before asking for a single range, and must not
-    pay for a graph it never reads. After the build, resolution is the same
-    machinery `_reviewed_via_graph_walk` credits with (`_resolve_endpoint` +
-    `_reach_chain`, per-range set math, zero further spawns).
+    At most ONE graph-build spawn, built LAZILY on the first range actually
+    resolved — a corpus with no pending record at all (every corpus predating
+    § C1's freeze-time emission) short-circuits inside `classify_pending_records`
+    before asking for a single range, and must not pay for a graph it never
+    reads. After the build, resolution is set math, zero further spawns.
+
+    Flat mode (`graph_range` present) builds the graph with ONE
+    `git rev-list --parents <graph_range>` (`_build_parent_map`) and resolves
+    endpoints with `_resolve_endpoint` + `_reach_chain` — the same machinery
+    `_reviewed_via_graph_walk` credits with. DAG mode (`graph_range` absent —
+    chain_set is derived from a segment fixpoint, so there is no single
+    contiguous range) builds the graph with ONE
+    `git rev-list --parents --stdin` seeded on `chain_set` itself
+    (`_build_chain_seed_parent_map`) and resolves endpoints with
+    `_resolve_dag_endpoint`. Both modes pay at most one graph-build spawn;
+    neither mode falls back to `classify_pending_records`' corpus-scaled
+    per-range default resolver anymore. A graph BUILD failure in either mode
+    degrades the same way, per-range and in-place, rather than reporting
+    every record unresolvable.
 
     Injecting this is the point: `classify_pending_records`' DEFAULT resolver
     shells out one `git rev-list` per DISTINCT range across the whole trail
-    corpus (60+ records on a real corpus), which this gate's spawn-per-call
-    budget cannot absorb.
+    corpus (2,300+ spawns on a real corpus — 96% of a coverage-gate
+    invocation's git spawns), which this gate's spawn-per-call budget cannot
+    absorb.
 
-    Returns None only when there is no window to walk at all — no `graph_range`
-    (DAG mode derives chain_set from a segment fixpoint, so there is no single
-    contiguous range). The caller then passes `resolve_range=None` and accepts
-    the default per-range resolver, matching what the crediting path itself
-    already does in that mode (`build_reviewed_set` Strategy B, the per-range
-    fan-out). A graph BUILD failure degrades the same way, per-range and
-    in-place, rather than reporting every record unresolvable.
+    Returns None only when there is truly nothing to walk — an empty
+    `chain_set` (DAG mode with no full-SHA chain member at all) alongside no
+    `graph_range`. That is the one case with no window of any shape to build,
+    and the caller falls back to `classify_pending_records`' default resolver.
 
     Negative-spec:
         - The returned sets are intersected with `chain_set`, exactly as the
@@ -4259,10 +4382,11 @@ def _make_chain_range_resolver(
 
     Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3
     """
-    if not graph_range or not SAFE_RANGE.match(graph_range):
+    dag_mode = not graph_range or not SAFE_RANGE.match(graph_range)
+    if dag_mode and not chain_set:
         return None
 
-    graph_base = _range_base(graph_range)
+    graph_base = _range_base(graph_range) if not dag_mode else None
     oow_cache = _OutOfWindowCache()
     symref_cache: Dict[str, Any] = {}
     memo: Dict[str, Optional[Set[str]]] = {}
@@ -4270,7 +4394,10 @@ def _make_chain_range_resolver(
 
     def parent_map() -> Optional[Dict[str, List[str]]]:
         if "map" not in graph:
-            built = _build_parent_map(cwd, graph_range)
+            if dag_mode:
+                built = _build_chain_seed_parent_map(cwd, chain_set)
+            else:
+                built = _build_parent_map(cwd, graph_range)
             graph["map"] = built
             # Batched out-of-window pre-scan, the exact counterpart of
             # `_reviewed_via_graph_walk`'s (see `_out_of_window_hex_tokens`):
@@ -4281,8 +4408,10 @@ def _make_chain_range_resolver(
             # time so the "corpus with no pending record spawns nothing at all"
             # laziness this function's docstring promises survives — the map and
             # the pre-scan are built together, on the first range actually asked
-            # for, or never.
-            if built is not None and prescan_ranges:
+            # for, or never. Flat-mode only: DAG mode's unbounded map has no
+            # out-of-window concept (`_resolve_dag_endpoint`'s docstring) — an
+            # unmatched hex token there is resolved inline, on demand, per token.
+            if built is not None and prescan_ranges and not dag_mode:
                 needs_probe = _out_of_window_hex_tokens(prescan_ranges, built)
                 if needs_probe:
                     oow_cache.preload_hex_tokens(needs_probe, cwd)
@@ -4305,12 +4434,16 @@ def _make_chain_range_resolver(
             result = resolve_via_fanout(sha_range)
         elif sep in sha_range:
             left, right = sha_range.split(sep, 1)
-            l_sha = _resolve_endpoint(
-                left, pmap, cwd, "skip", symref_cache, graph_base, oow_cache
-            )
-            r_sha = _resolve_endpoint(
-                right, pmap, cwd, "skip", symref_cache, graph_base, oow_cache
-            )
+            if dag_mode:
+                l_sha = _resolve_dag_endpoint(left, pmap, cwd, symref_cache)
+                r_sha = _resolve_dag_endpoint(right, pmap, cwd, symref_cache)
+            else:
+                l_sha = _resolve_endpoint(
+                    left, pmap, cwd, "skip", symref_cache, graph_base, oow_cache
+                )
+                r_sha = _resolve_endpoint(
+                    right, pmap, cwd, "skip", symref_cache, graph_base, oow_cache
+                )
             unusable = (_ENDPOINT_UNRESOLVED, _ENDPOINT_FOREIGN)
             if l_sha is _ENDPOINT_FOREIGN or r_sha is _ENDPOINT_FOREIGN:
                 # The in-window graph cannot compute reach for a foreign
@@ -5367,10 +5500,17 @@ def run_coverage_gate(
     # ratio=0.67. Gating on WARN alone left that exact band, the one this
     # diagnostic exists to police, silently undiagnosed. Firing whenever
     # `uncovered_shas` is non-empty catches it while a genuinely clean run
-    # (uncovered_shas empty) still pays nothing — same spawn-cost bound as
-    # before: at most one lazy graph-build spawn (the injected resolver)
-    # plus DAG mode's one lazy frontier-ancestry spawn, ceiling two. Only a
-    # COVERED-with-uncovered-commits run newly pays that cost.
+    # (uncovered_shas empty) still pays nothing — spawn-cost bound, ENFORCED
+    # (not just asserted here) by `test_coverage_gate_spawn_bound.py`'s
+    # `spawn_count_budget`: at most one lazy graph-build spawn from the
+    # injected `_make_chain_range_resolver` — flat mode's one
+    # `git rev-list --parents <graph_range>`, OR DAG mode's one
+    # `git rev-list --parents --stdin` seeded on chain_set
+    # (`_build_chain_seed_parent_map`); both modes now get the same
+    # one-spawn resolver, so `classify_pending_records`' corpus-scaled
+    # per-range default is never reached from here — plus DAG mode's one
+    # lazy frontier-ancestry spawn (`_dag_frontier_ancestry`), ceiling two.
+    # Only a COVERED-with-uncovered-commits run newly pays that cost.
     # `verdict == "WARN"` is deliberately NOT part of this predicate: WARN is
     # only ever assigned in the `else` branch above, which itself requires
     # `uncovered_shas` truthy — so `verdict == "WARN"` implies `uncovered_shas`

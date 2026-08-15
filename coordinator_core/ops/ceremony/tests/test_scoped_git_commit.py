@@ -2304,3 +2304,76 @@ def test_classify_uncommitted_hook_rejection_with_clean_tree_stays_failed(tmp_pa
     assert commit_failed is True
     assert diagnostics == ["hook 'pre-commit' rejected: lint failure on README.md"]
     assert empty_commit_set is False
+
+
+def test_classify_uncommitted_surfaces_stdout_diagnostic_on_real_failure(tmp_path):
+    """AC10 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
+    failed.md): a real commit-step failure whose diagnosis landed on stdout
+    (`CommitOutcome.stdout_diagnostic`) must surface that text in the returned
+    `diagnostics` -- `stderr` alone stays the bare `exit_code=N` shape two
+    other consumers match on, so without this the operator sees nothing at
+    all explaining the refusal. The dirty tree here (a real uncommitted
+    modification under the pathspec) keeps this off the benign-no-op branch
+    via `_commit_paths_are_clean()`, independent of `stderr`'s bare shape.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "README.md", "still dirty -- never landed")
+
+    commit_outcome = SimpleNamespace(
+        exit_code=1,
+        stderr="exit_code=1",
+        stdout_diagnostic="error: gpg failed to sign the data",
+    )
+    result = SimpleNamespace(
+        commit_failed=True,
+        diagnostics=["exit_code=1"],
+        committed_sha=None,
+        commit=commit_outcome,
+    )
+
+    commit_failed, diagnostics, empty_commit_set = scoped_git_commit._classify_uncommitted(
+        str(repo), ["README.md"], result
+    )
+
+    assert commit_failed is True
+    assert diagnostics == ["exit_code=1", "error: gpg failed to sign the data"]
+    assert empty_commit_set is False
+
+
+def test_classify_uncommitted_benign_noop_diagnostics_stay_empty_regardless_of_stdout_diagnostic(
+    tmp_path,
+):
+    """The benign already-committed no-op's `diagnostics` must stay `[]`
+    byte-identical to before, even when `CommitOutcome.stdout_diagnostic` is
+    populated (it is populated UNCONDITIONALLY on the `not result.ok` branch
+    per its own docstring, so a genuine no-op can carry one too) -- the
+    2026-08-03 cry-wolf incident this module's docstring documents is exactly
+    what re-surfacing anything on this branch would reintroduce.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    commit_outcome = SimpleNamespace(
+        exit_code=1,
+        stderr="exit_code=1",
+        stdout_diagnostic="nothing to commit, working tree clean",
+    )
+    result = SimpleNamespace(
+        commit_failed=True,
+        diagnostics=["exit_code=1"],
+        committed_sha=None,
+        commit=commit_outcome,
+    )
+
+    commit_failed, diagnostics, empty_commit_set = scoped_git_commit._classify_uncommitted(
+        str(repo), ["README.md"], result
+    )
+
+    assert commit_failed is False
+    assert diagnostics == []
+    assert empty_commit_set is True

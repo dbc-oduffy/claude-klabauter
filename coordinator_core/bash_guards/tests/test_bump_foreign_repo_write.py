@@ -1374,7 +1374,18 @@ def test_ac3_publish_destination_write_renders_publish_class_copy_naming_owner(r
 
 def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkeypatch):
     """No publish-mirror registry entry for this target -- destination_class
-    stays DESTINATION_FOREIGN and the copy is unchanged from today's."""
+    stays DESTINATION_FOREIGN and the copy is unchanged from today's.
+
+    Agent-class assertion updated 2026-08-15 (`d385e2ed3`, "review
+    integration: close the fail-open seam and the marker-name guess B8 leg
+    (c) inherited", AC-3): `resolve_agent_class` now reads an empty
+    `payload` (the literal `{}` this test passes) as subagent-class rather
+    than EM-class -- a deliberate fail-open inversion, not a regression --
+    so the `{}` payload this test has always passed now renders the
+    FOREIGN/subagent template, not FOREIGN/em. This test's own subject is
+    the destination-class axis (FOREIGN vs PUBLISH), not the agent-class
+    axis, so the fix keeps that same axis under test against whichever
+    template the current contract actually selects for this payload."""
     _set_anchor(monkeypatch, repos, "sess-ac1-foreign-class")
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
@@ -1382,7 +1393,7 @@ def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkey
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "cross-repo-memo is the sanctioned channel" in reason
+    assert "report to the EM that dispatched you" in reason
     assert "is publish mirror" not in reason
 
 
@@ -1712,6 +1723,128 @@ def test_ac4_unregistered_foreign_repo_still_bumps_alongside_claude_home_carveou
 #: `test_bump_out_of_repo_tool_write.py::test_ac4_registered_repo_
 #: destination_still_bumps`) and on C5 (`bump_outside_repo_write.py`),
 #: where the registry membership actually changes the verdict.
+
+
+# ---------------------------------------------------------------------------
+# ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
+# 2026-08-15) -- see module docstring, "UNRESOLVED IS NOT THE SAME FACT AS
+# REPO-LESS". `resolve_gitdir(anchor)` returning `None` from a transient
+# `git rev-parse --git-dir` spawn failure must not be read as "the anchor
+# has no repo": `_evaluate_foreign_repo_candidate`'s no-repo-anchor branch
+# bumps a REGISTERED target unconditionally, so without the fix, a
+# transient spawn failure could deny a write into the session's OWN repo
+# whenever that repo happens to be registered -- exactly the shape needed
+# to make the defect observable (an unregistered target inside the anchor's
+# own subtree already never bumped, registry membership or not).
+# ---------------------------------------------------------------------------
+
+
+def _write_repos_registry(reg_dir: Path, **repos: str) -> None:
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    lines = ["[repos]"]
+    for key, val in repos.items():
+        escaped = str(val).replace("\\", "\\\\")
+        lines.append(f'{key} = "{escaped}"')
+    (reg_dir / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
+    import os as _os
+
+    real_resolve_gitdir = guard.resolve_gitdir
+    failing_abs = _os.path.abspath(str(failing_cwd))
+
+    def _flaky_resolve_gitdir(cwd=None):
+        if cwd is not None and _os.path.abspath(str(cwd)) == failing_abs:
+            return None  # simulated transient `git rev-parse --git-dir` spawn failure
+        return real_resolve_gitdir(cwd)
+
+    monkeypatch.setattr(guard, "resolve_gitdir", _flaky_resolve_gitdir)
+
+
+def test_transient_anchor_gitdir_spawn_failure_does_not_bump_a_write_into_the_anchors_own_registered_repo(
+    repos, monkeypatch, tmp_path
+):
+    """Reproduces the defect directly: the anchor is a REAL repo, registered
+    in the machine registry, and its `.git` entry is present on disk -- so
+    `path_has_git_ancestor` still finds it even while `resolve_gitdir` is
+    patched to simulate the failed spawn. A write squarely inside the
+    session's own (registered) repo must ALLOW, not deny on a mis-read 'no
+    repo here'."""
+    reg_dir = tmp_path / "registry"
+    _write_repos_registry(reg_dir, some_repo=str(repos["anchor"]))
+    _set_anchor(
+        monkeypatch,
+        repos,
+        "sess-transient-anchor-own-repo",
+        extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)},
+    )
+    _patch_resolve_gitdir_to_fail_for(monkeypatch, str(repos["anchor"]))
+
+    cmd = f"echo hi > {_posix(repos['anchor'] / 'note.txt')}"
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-transient-anchor-own-repo", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_transient_anchor_gitdir_spawn_failure_still_allows_a_registered_foreign_target(
+    repos, monkeypatch, tmp_path
+):
+    """Same simulated spawn failure, but the write targets a DIFFERENT,
+    registered repo. Before the fix, `anchor_has_repo = False` fell straight
+    into the no-repo-anchor branch, where a registered target bumps
+    unconditionally regardless of which repo it is. After the fix,
+    `path_has_git_ancestor(anchor)` finds the anchor's real `.git` and this
+    guard treats resolution as UNRESOLVED, allowing here too, never
+    reaching that branch at all."""
+    reg_dir = tmp_path / "registry"
+    _write_repos_registry(reg_dir, foreign_repo=str(repos["foreign"]))
+    _set_anchor(
+        monkeypatch,
+        repos,
+        "sess-transient-anchor-foreign-registered",
+        extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)},
+    )
+    _patch_resolve_gitdir_to_fail_for(monkeypatch, str(repos["anchor"]))
+
+    cmd = f"echo hi > {_posix(repos['foreign'] / 'note.txt')}"
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-transient-anchor-foreign-registered", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_genuinely_repo_less_anchor_still_bumps_registered_target_after_the_fix(
+    monkeypatch, tmp_path
+):
+    """Companion pin for the 2026-08-10 PM ruling `path_has_git_ancestor`
+    must NOT touch: when the anchor truly has no `.git` ancestor anywhere
+    (not merely a failed spawn), a REGISTERED target still bumps
+    unconditionally. Anchored via `CLAUDE_PROJECT_DIR` rather than
+    `_set_anchor`'s `write_session_start_record` -- that helper requires a
+    git root to write its record against, which a genuinely rootless anchor
+    does not have (same fallback `test_bump_out_of_repo_tool_write.py`'s own
+    rootless-anchor tests use)."""
+    reg_dir = tmp_path / "registry"
+    registered = _init_repo(tmp_path, "registered-repo")
+    _write_repos_registry(reg_dir, some_repo=str(registered))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    scaffold = tmp_path / "Documents" / "new-project"
+    scaffold.mkdir(parents=True)
+    home = tmp_path / "home-rootless"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-scaffold-registered-target"
+
+    cmd = f"echo hi > {_posix(registered / 'note.txt')}"
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(scaffold), {})
+
+    assert result is not None
 
 
 # ---------------------------------------------------------------------------

@@ -409,6 +409,7 @@ from coordinator_core.chain_ancestry_waivers import chain_waiver_dir
 from coordinator_core.git.divergence import diverging_paths
 from coordinator_core.hooks import auto_push
 from coordinator_core.ipc import get_op_handler, register_op
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.ceremony import consumed_handoff_stamp, tail_ops
 from coordinator_core.ops.ceremony import post_commit_tail
 from coordinator_core.ops.ceremony.commit_message import SweptRenameError, parse_swept_rename
@@ -1746,14 +1747,26 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # actually landed the work, rather than emit a broken
             # `archive-stamp-cli ship-handoff <path> None`.
             reason = _commit_gap_reason(commit_failed, sha_unverified)
-            for p, _fm in initial_consumed:
-                tail_results["consumed_handoff_stamp"]["failed"].append(
-                    f"never-evaluated:{p}: stamp step did not run ({reason}) -- "
-                    "baton is still `deployment_state: in_flight`. Remediate via "
-                    f"`archive-stamp-cli ship-handoff {p} <sha-of-the-commit-"
-                    "that-actually-landed-the-work>` once you have confirmed "
-                    "what that sha is."
-                )
+            for p, fm in initial_consumed:
+                # No key at all is semantically `in_flight`, same reading
+                # `handoff_stamp.py`'s terminal-state doc comment uses
+                # ("carry `in_flight` or no deployment_state key at all --
+                # both non-terminal").
+                state = fm.get("deployment_state") or "in_flight"
+                if state in HANDOFF_TERMINAL_DEPLOYMENT:
+                    tail_results["consumed_handoff_stamp"]["failed"].append(
+                        f"never-evaluated:{p}: stamp step did not run ({reason}) -- "
+                        f"step-1 resolve observed `deployment_state: {state}` "
+                        "(already terminal); no remediation needed."
+                    )
+                else:
+                    tail_results["consumed_handoff_stamp"]["failed"].append(
+                        f"never-evaluated:{p}: stamp step did not run ({reason}) -- "
+                        f"step-1 resolve observed `deployment_state: {state}`. "
+                        f"Remediate via `archive-stamp-cli ship-handoff {p} <sha-of-the-commit-"
+                        "that-actually-landed-the-work>` once you have confirmed "
+                        "what that sha is."
+                    )
     elif not chain_terminal:
         # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-doe-claude-em-wsc-
         # tail-silent-noop-and-gate-rewalk.md finding 1): the block above

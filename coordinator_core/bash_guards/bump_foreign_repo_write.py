@@ -109,6 +109,28 @@ READS NEVER BUMP. Only a git WRITE subcommand (i.e. a MEMBER of
 ever a candidate at all -- see `_iter_write_sink_candidates`. An
 unrecognised git verb is not a write and does not bump.
 
+UNRESOLVED IS NOT THE SAME FACT AS REPO-LESS (bug `2026-08-15-anchor-
+resolution-misfire`, reproduced live on this guard's tool-surface twin,
+`write_guards/bump_out_of_repo_tool_write.py`). Both this guard's Bash body
+and its PowerShell leg used to read `anchor_gitdir is None` (i.e.
+`anchor_has_repo = False`) as proof the session anchor sits in no git repo
+-- but `resolve_gitdir` returns `None` for that fact AND for a `git
+rev-parse --git-dir` spawn that simply failed (timeout, missing binary,
+transient error), an expected outcome under this box's documented load norm
+(50-70 concurrent LLMs, `docs/wiki/machine-load-norm.md`), not an anomaly.
+`anchor_has_repo = False` falls into `_evaluate_foreign_repo_candidate`'s
+own no-repo-anchor branch, where a REGISTERED target bumps unconditionally
+-- so a transient spawn failure could deny a write into the session's OWN
+repo whenever that repo happens to be registered. Both call sites now call
+`path_has_git_ancestor(anchor)` (`_write_bump_marker.py`, a pure filesystem
+walk, no subprocess) immediately after computing `anchor_has_repo`: a
+`.git` entry found on that walk is evidence of the SECOND fact, not the
+first, and the guard returns `None` (allow) before ever reaching the
+candidate loop. A genuinely repo-less anchor (no `.git` entry either) is
+unaffected -- it falls through exactly as before, so the 2026-08-10 PM
+ruling ("a REGISTERED target still bumps unconditionally from a repo-less
+anchor") stays untouched.
+
 Negative-spec:
   - Does NOT add fail-closed behaviour anywhere -- see § Design posture.
   - Does NOT add unforgeability machinery to the marker -- consumes C3's
@@ -121,6 +143,12 @@ Negative-spec:
     resolved not composed).
   - Does NOT resolve applicability from the live payload `cwd` -- see
     "WHAT COUNTS AS..." above.
+  - Does NOT treat `anchor_has_repo is False` as proof the session anchor is
+    repo-less without first consulting `path_has_git_ancestor(anchor)` --
+    see "UNRESOLVED IS NOT THE SAME FACT AS REPO-LESS" above, both call
+    sites. Do not revert either early return back to falling straight into
+    `_evaluate_foreign_repo_candidate`'s no-repo-anchor branch; that
+    re-opens the exact misfire this fix closes.
 """
 
 from __future__ import annotations
@@ -158,6 +186,7 @@ from coordinator_core.bash_guards._write_bump_marker import (
     bump_is_cleared,
     effective_session_id,
     marker_gitdir_is_writable,
+    path_has_git_ancestor,
     resolve_gitdir,
 )
 from coordinator_core.bash_guards._write_bump_message import (
@@ -1682,6 +1711,24 @@ def check_bump_foreign_repo_write(
         return None
     anchor_gitdir = resolve_gitdir(anchor)
     anchor_has_repo = anchor_gitdir is not None
+    if not anchor_has_repo and path_has_git_ancestor(anchor):
+        # UNRESOLVED, not repo-less -- `resolve_gitdir` returning `None`
+        # here is ambiguous between "the anchor genuinely sits in no git
+        # repo" (the branch `_evaluate_foreign_repo_candidate`'s own
+        # `else` clause below still bumps a REGISTERED target for,
+        # unconditionally, per the 2026-08-10 PM ruling) and "the `git
+        # rev-parse --git-dir` spawn itself failed" -- an expected
+        # transient under this box's documented load norm (50-70
+        # concurrent LLMs, `docs/wiki/machine-load-norm.md`), not an
+        # anomaly. `path_has_git_ancestor` (`_write_bump_marker.py`, a
+        # pure filesystem walk, no subprocess) finding a `.git` entry
+        # at/above `anchor` is evidence for the SECOND fact, not the
+        # first -- treated as UNRESOLVED and allowed, matching this
+        # guard's own fail-open contract ("never bump on a path this
+        # guard could not resolve"). A genuinely repo-less anchor (no
+        # `.git` entry either) falls through unchanged, preserving the
+        # 2026-08-10 ruling exactly.
+        return None
     # AC14 -- the COMMON-dir form (worktree-safe), not `anchor_gitdir`'s
     # per-worktree private form, is what `_same_repo_root` compares on.
     # `anchor_root` -- the SESSION's own resolved root, resolved ONCE here
@@ -1811,6 +1858,14 @@ def _check_bump_foreign_repo_write_powershell(
         return None
     anchor_gitdir = resolve_gitdir(anchor)
     anchor_has_repo = anchor_gitdir is not None
+    if not anchor_has_repo and path_has_git_ancestor(anchor):
+        # UNRESOLVED, not repo-less -- see the Bash body's own identical
+        # guard above for the full reasoning (`resolve_gitdir(anchor)`
+        # returning `None` from a transient spawn failure must not be read
+        # as "no repo here"); mirrored here rather than factored out since
+        # the two legs' surrounding control flow already diverges (dialect
+        # gate, segment tokenization) before either reaches this point.
+        return None
     # `anchor_root` -- see the Bash body's own identical assignment above
     # (AC7 fix): the SESSION's own resolved root, threaded to every
     # candidate rather than re-derived from the TARGET's root inside

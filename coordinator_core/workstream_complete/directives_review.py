@@ -628,6 +628,31 @@ def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
 #: `d-run-chain-coverage-gate`).
 _LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate", "d-coverage-gate"})
 
+#: C4 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
+#: failed.md): `__init__.py::build_write_trail_directives` emits ONE
+#: `d-write-trail` directive for the single-dict `review` shape, or N
+#: `d-write-trail-<index>` directives (index = position in the ORIGINAL
+#: list, not a count of qualifying entries) for the list shape — see that
+#: function's own docstring. `_LIVE_GATE_MEMO_DIRECTIVE_IDS` is a frozenset
+#: of exact strings and therefore CANNOT match the indexed shape by simple
+#: membership, so eligibility for a write-trail directive is a prefix test
+#: (`_is_write_trail_directive_id`) checked ALONGSIDE, never inside, the
+#: frozenset — see `record_gate_verdict_if_passed`'s combined check.
+_WRITE_TRAIL_DIRECTIVE_ID_PREFIX = "d-write-trail"
+
+
+def _is_write_trail_directive_id(gate_id: Optional[str]) -> bool:
+    """True for the single-dict id (`d-write-trail`) and every indexed id
+    (`d-write-trail-0`, `d-write-trail-1`, ...) `build_write_trail_
+    directives` can emit. `gate_id` may be `None` (a directive missing its
+    `id` key) — never raises, degrades to False like every other predicate
+    in this module."""
+    if not gate_id:
+        return False
+    return gate_id == _WRITE_TRAIL_DIRECTIVE_ID_PREFIX or gate_id.startswith(
+        _WRITE_TRAIL_DIRECTIVE_ID_PREFIX + "-"
+    )
+
 #: The verdict token `wsc-coverage-gate-runner.py::cmd_coverage_gate` prints
 #: on its own `VERDICT=...` stdout line when the underlying gate resolved
 #: below the code-partition coverage-ratio threshold. `cmd_coverage_gate`
@@ -744,7 +769,24 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
     the same division of responsibility `record_gate_memo` already
     documents for its own callers."""
     gate_id = directive.get("id")
-    if gate_id not in _LIVE_GATE_MEMO_DIRECTIVE_IDS or exit_code != 0:
+    write_trail = _is_write_trail_directive_id(gate_id)
+    if (gate_id not in _LIVE_GATE_MEMO_DIRECTIVE_IDS and not write_trail) or exit_code != 0:
+        return
+    if write_trail:
+        # C4: the write-trail memo key is (session_id, sha_range) — the
+        # SAME identity C3 gave the on-disk trail record itself
+        # (`ops/review_trail_write.py`) — never the directive's own id,
+        # which differs per index for the list shape while the underlying
+        # record identity does not. `_gate_memo_key_parts` is set only by
+        # `__init__.py::build_write_trail_directives` (never by a bare
+        # `_directive(...)` call elsewhere) — an absent/malformed value
+        # means the caller didn't opt this directive in (no `session_id`/
+        # `repo_root` supplied at build time), so there is nothing to
+        # record.
+        key_parts = directive.get("_gate_memo_key_parts")
+        if not isinstance(key_parts, (list, tuple)) or len(key_parts) != 2:
+            return
+        record_gate_memo(repo_root, _WRITE_TRAIL_DIRECTIVE_ID_PREFIX, *[str(p) for p in key_parts])
         return
     args = list(directive.get("args") or [])
     if gate_id == "d-run-review-brightline-gate":

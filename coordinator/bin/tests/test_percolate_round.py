@@ -246,7 +246,7 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
                 check_ignore_stdout="", check_ignore_returncode=1,
                 ls_files_returncode=0, toplevel_stdout=None,
                 toplevel_returncode=0, invocation_authorized=False,
-                stdin_isatty=True):
+                stdin_isatty=True, dry_run_first=True):
     dest = tmp_path / "dest"
     dest.mkdir()
     if ci_exists:
@@ -290,6 +290,8 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
 
     parser = _mod._build_parser()
     argv = ["alpha", "--percolate-root", str(percolate_root)]
+    if dry_run_first:
+        argv.append("--dry-run-first")
     if yes:
         argv.append("--yes")
     if no_publish:
@@ -794,7 +796,7 @@ def test_dryrun_step_failure_returns_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
 
     parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes", "--dry-run-first"])
     rc = _mod._cmd_round(args)
 
     assert rc == _mod._EXIT_FAIL
@@ -821,7 +823,7 @@ def test_parse_dryrun_pass1_failure_returns_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
 
     parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes", "--dry-run-first"])
     rc = _mod._cmd_round(args)
 
     assert rc == _mod._EXIT_FAIL
@@ -1120,7 +1122,7 @@ def test_noop_dryrun_reports_pass_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
 
     parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes", "--dry-run-first"])
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -1719,7 +1721,7 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
 
     parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes", "--dry-run-first"])
 
     out_buf = io.StringIO()
     err_buf = io.StringIO()
@@ -2072,7 +2074,7 @@ def test_dryrun_noop_with_unpushed_dest_commits_still_publishes(tmp_path, monkey
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
 
     parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes", "--dry-run-first"])
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -2628,3 +2630,125 @@ def test_step4_inherited_lock_token_uses_producer_own_pid(tmp_path, monkeypatch)
     # parent (`_cmd_round`'s own, i.e. this test process's) os.environ.
     assert _mod._INHERITED_LOCK_ROOTS_ENV not in os.environ
     assert os.environ == orig_environ
+
+
+# ---------------------------------------------------------------------------
+# PM ruling, 2026-08-15: the dry run is optional, not default. `_run_round`'s
+# own default (`dry_run_first=True`) keeps every test above pinned to the old
+# `--dry-run-first` code path unchanged; the tests below cover the NEW
+# default (no dry run at all) and the flag that restores the old order.
+# ---------------------------------------------------------------------------
+
+def test_default_never_invokes_publish_with_dry_run_flag(tmp_path, monkeypatch):
+    """Without `--dry-run-first`, `publish.py` is invoked exactly once
+    (the real run) -- `--dry-run` never appears in any `_PUBLISH` call."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, dry_run_first=False)
+
+    assert rc == _mod._EXIT_OK
+    publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
+    assert len(publish_calls) == 1
+    assert "--dry-run" not in publish_calls[0]
+    assert "Step 1: real run (sync)" in out
+    assert "Step 2: content-leakage scan" in out
+    assert "Step 2b: inverse-drift detection" in out
+
+
+def test_dry_run_first_flag_restores_old_step_order(tmp_path, monkeypatch):
+    """`--dry-run-first` still runs a `--dry-run` publish.py leg before the
+    real one -- two `_PUBLISH` calls total, dry run first."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, dry_run_first=True)
+
+    assert rc == _mod._EXIT_OK
+    publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
+    assert len(publish_calls) == 2
+    assert "--dry-run" in publish_calls[0]
+    assert "--dry-run" not in publish_calls[1]
+    assert "Step 2: dry run" in out
+
+
+def test_default_gate_fires_evidence_sourced_from_real_run(tmp_path, monkeypatch):
+    """Default mode: the Step 3 gate still fires on the same evidence, and
+    the printed change summary/first-10-paths come from the (single) real
+    run's own change lines -- never a second materialization."""
+    input_calls = []
+    monkeypatch.setattr("builtins.input", lambda *a, **k: input_calls.append(1) or "n")
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, dry_run_first=False, gate_fires=True, yes=True,
+    )
+
+    assert rc == _mod._EXIT_OK
+    assert input_calls == []
+    assert "Step 3 gate fired: 1 medium hit(s)" in out
+    assert "added-file.md" in out  # from _real_stdout(), not _dryrun_stdout()
+    assert "dryrun-only-file.md" not in out
+
+    publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
+    assert len(publish_calls) == 1
+
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+
+
+def test_default_gate_fires_declined_leaves_synced_but_uncommitted(tmp_path, monkeypatch):
+    """Default mode, gate fires, operator declines: the round already
+    materialized the sync (revertible), so it must NOT re-run publish.py a
+    second time and must NOT commit -- but the real run itself already
+    happened before the decline (unlike the old --dry-run-first order)."""
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, dry_run_first=False, gate_fires=True, yes=False,
+    )
+
+    assert rc == _mod._EXIT_OK
+    assert "Publish cancelled." in out
+
+    publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
+    assert len(publish_calls) == 1  # the sync already happened
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert commit_calls == []
+
+
+def test_default_no_op_reports_pass_noop_from_single_real_run(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout="",
+        real_stdout="",
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        dest_ahead_stdout="# branch.ab +0 -0\n",
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    out = buf.getvalue()
+    assert rc == _mod._EXIT_OK
+    assert "nothing to commit" in out
+    assert "already in sync with its upstream" in out
+
+    publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
+    assert len(publish_calls) == 1
+    assert "--dry-run" not in publish_calls[0]
+
+
+def test_default_flag_help_text_cites_pm_ruling(tmp_path, monkeypatch):
+    parser = _mod._build_parser()
+    help_text = parser.format_help()
+    assert "--dry-run-first" in help_text
+    assert "2026-08-15" in help_text

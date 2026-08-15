@@ -32,6 +32,7 @@ from typing import Any, Callable, Optional
 
 import pytest
 
+from coordinator_core.ceremony_common.cli_rejection import CliExitClass
 from coordinator_core.workday_complete import apply as wc_apply
 
 
@@ -75,7 +76,7 @@ def test_invoke_cli_main_feeds_declared_stdin_to_argv_taking_main() -> None:
         seen["stdin"] = sys.stdin.read()
         return 0
 
-    exit_code, stdout_text, stderr_text = wc_apply._invoke_cli_main(
+    exit_code, stdout_text, stderr_text, _exit_class = wc_apply._invoke_cli_main(
         _fake_module(main_fn), [], stdin_text="row1\trow2\n"
     )
     assert exit_code == 0
@@ -93,7 +94,7 @@ def test_invoke_cli_main_feeds_declared_stdin_to_zero_arg_main() -> None:
     def main_fn() -> None:
         seen["stdin"] = sys.stdin.read()
 
-    exit_code, _, _ = wc_apply._invoke_cli_main(
+    exit_code, _, _, _exit_class = wc_apply._invoke_cli_main(
         _fake_module(main_fn), ["--flag"], stdin_text="gap-row\n"
     )
     assert exit_code == 0
@@ -112,7 +113,7 @@ def test_invoke_cli_main_leaves_stdin_untouched_when_none_declared() -> None:
         seen["stdin_during_call"] = sys.stdin
         return 0
 
-    exit_code, _, _ = wc_apply._invoke_cli_main(_fake_module(main_fn), [], stdin_text=None)
+    exit_code, _, _, _exit_class = wc_apply._invoke_cli_main(_fake_module(main_fn), [], stdin_text=None)
     assert exit_code == 0
     assert seen["stdin_during_call"] is sentinel
     assert sys.stdin is sentinel
@@ -123,7 +124,7 @@ def test_invoke_cli_main_captures_stdout_for_downstream_consumption() -> None:
         print("2026-07-19\t3\tbase\ttip")
         return 0
 
-    exit_code, stdout_text, stderr_text = wc_apply._invoke_cli_main(_fake_module(main_fn), [])
+    exit_code, stdout_text, stderr_text, _exit_class = wc_apply._invoke_cli_main(_fake_module(main_fn), [])
     assert exit_code == 0
     assert stdout_text == "2026-07-19\t3\tbase\ttip\n"
     assert stderr_text == ""
@@ -141,10 +142,30 @@ def test_invoke_cli_main_captures_stderr() -> None:
         print("diagnostic detail", file=sys.stderr)
         return 2
 
-    exit_code, stdout_text, stderr_text = wc_apply._invoke_cli_main(_fake_module(main_fn), [])
+    exit_code, stdout_text, stderr_text, exit_class = wc_apply._invoke_cli_main(_fake_module(main_fn), [])
     assert exit_code == 2
     assert stdout_text == ""
     assert stderr_text == "diagnostic detail\n"
+    # main() RETURNED 2 rather than raising — never argv_rejected.
+    assert exit_class is CliExitClass.RETURNED
+
+
+def test_invoke_cli_main_argparse_rejection_classifies_argv_rejected() -> None:
+    """A callee that raises `SystemExit(2)` with argparse-shaped stderr
+    (`usage: ...` plus `: error: ...`) classifies `ARGV_REJECTED` — the
+    argv was rejected before any op-level code ran, distinct from a
+    zero-arg trampoline's own raised, semantic exit-2."""
+
+    def main_fn(argv: list[str]) -> None:
+        print("usage: fake_cli [-h] --sid SID", file=sys.stderr)
+        print("fake_cli: error: unrecognized arguments: --bogus", file=sys.stderr)
+        raise SystemExit(2)
+
+    exit_code, _stdout_text, _stderr_text, exit_class = wc_apply._invoke_cli_main(
+        _fake_module(main_fn), []
+    )
+    assert exit_code == 2
+    assert exit_class is CliExitClass.ARGV_REJECTED
 
 
 def test_invoke_cli_main_restores_stdin_after_exception() -> None:

@@ -87,6 +87,7 @@ from coordinator_core.contract.decision_object.envelope import (
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
+    partition_reportable,
 )
 from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -851,6 +852,28 @@ def _build_judgment_points(
     ] + doc_staleness_points + doc_verify_points
 
 
+def _reported_narration(reported_points: list[dict[str, Any]]) -> str:
+    """Renders each `reported`-partition judgment point (see
+    `partition_reportable`) as a `narration` sentence: the question plus its
+    recommendation's `rationale`, so the EM still sees the fact without being
+    asked to answer a question that gates no directive. Returns `""` when
+    `reported_points` is empty -- callers must not append a stray separator
+    in that case. Only ever called with recommendation-carrying points (see
+    `brief()`), so `recommendation` is never `None` here in practice, but a
+    missing key still degrades to an empty rationale rather than raising --
+    this is narration prose, not a control-flow input, and must never fail
+    the ceremony over a formatting concern."""
+    lines = []
+    for point in reported_points:
+        recommendation = point.get("recommendation") or {}
+        rationale = recommendation.get("rationale", "")
+        lines.append(
+            f"{point.get('id')} reports (not asked -- gates no directive): "
+            f"{point.get('question')} Recommendation rationale: {rationale}"
+        )
+    return " ".join(lines)
+
+
 def brief(
     *, decisions: Optional[dict[str, Any]] = None, env: Optional[dict[str, str]] = None
 ) -> tuple[int, dict[str, Any]]:
@@ -872,7 +895,32 @@ def brief(
     stale_docs = _stale_doc_entries(_compute_doc_staleness_report())
     doc_verify_findings_by_doc = _verify_findings_by_doc(_compute_doc_verify_findings())
     directives = _build_directives(stale_docs, doc_verify_findings_by_doc)
-    judgment_points = _build_judgment_points(stale_docs, doc_verify_findings_by_doc)
+    all_judgment_points = _build_judgment_points(stale_docs, doc_verify_findings_by_doc)
+
+    # Partitioned via the shared predicate, scoped to recommendation-carrying
+    # points only -- `partition_reportable` itself has no recommendation carve-out,
+    # but this plan's premise (and this module's Tier-2/Tier-3 docstring
+    # split above) is specifically about recommendation-carrying points; the
+    # Tier-3 `recommendation=None` points (PM-authority, irreversible-action,
+    # pm-scoped-tradeoff without a recommendation) stay asked unconditionally
+    # and are never fed to the predicate.
+    recommendation_carrying = [
+        point for point in all_judgment_points if point.get("recommendation") is not None
+    ]
+    _, reported_points = partition_reportable(recommendation_carrying, directives)
+    reported_ids = {point.get("id") for point in reported_points}
+    judgment_points = [
+        point for point in all_judgment_points if point.get("id") not in reported_ids
+    ]
+
+    narration = (
+        "`scc`, `node run.js`, and `gh release` have no consumes-manifest "
+        "project script and are NOT represented as directives[] entries "
+        "— see this module's negative-spec."
+    )
+    reported_narration = _reported_narration(reported_points)
+    if reported_narration:
+        narration = f"{narration} {reported_narration}"
 
     envelope = build_envelope(
         artifact={"kind": "ceremony", "name": "workweek-complete"},
@@ -881,11 +929,7 @@ def brief(
         directives=directives,
         judgment_points=judgment_points,
         decisions=decisions if decisions is not None else {},
-        narration=(
-            "`scc`, `node run.js`, and `gh release` have no consumes-manifest "
-            "project script and are NOT represented as directives[] entries "
-            "— see this module's negative-spec."
-        ),
+        narration=narration,
         next_move="resolve open judgment_points, then dispatch apply()",
     )
     emit(envelope)

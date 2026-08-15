@@ -181,3 +181,127 @@ def test_out_of_window_endpoint_probing_does_not_spawn_per_record(
         f"batched into one `git cat-file --batch-check`. See "
         f"coverage._out_of_window_hex_tokens. Spawns: {rev_parse}"
     )
+
+
+# ---------------------------------------------------------------------------
+# DAG mode (`graph_range=None`) — `_make_chain_range_resolver`'s own resolver,
+# not the default corpus-scaled fallback `classify_pending_records` used to
+# receive on this path. See coverage.py's `_diagnose_open_review_loop` call
+# site comment ("ceiling two") and `_build_chain_seed_parent_map`.
+#
+# 2026-08-15 audit (state/audits/2026-08-15-wsc-close-time-attribution.md):
+# `_make_chain_range_resolver` returned None whenever `graph_range` was absent
+# (exactly DAG mode, the mode WSC's chain-end gate runs in), so
+# `classify_pending_records` fell back to its DEFAULT resolver — one
+# `git rev-list` per DISTINCT range across the WHOLE trail corpus (2,328
+# spawns / 96.3% of a gate invocation's git spawns, measured). This test
+# exercises `_make_chain_range_resolver` + `classify_pending_records`
+# directly, in DAG mode, over a pending-record corpus that scales — proving
+# the spawn count does not.
+# ---------------------------------------------------------------------------
+
+from coordinator_core.benchmarks import budget
+from coordinator_core.ops.review_coverage_core import classify_pending_records
+
+#: Distinct pending trail records in the DAG-mode fixture corpus. Comfortably
+#: larger than the manifest's `spawn_count_budget` for this test to
+#: discriminate the fixed one-graph-build-spawn resolver from the
+#: corpus-scaled per-range default at all.
+_DAG_PENDING_RECORDS = 30
+
+
+@pytest.fixture()
+def dag_corpus_repo(tmp_path: Path) -> Tuple[Path, List[str], List[str]]:
+    """A linear repo whose DAG-mode `chain_set` is a handful of commits, but
+    whose pending trail corpus cites `_DAG_PENDING_RECORDS` DISTINCT ranges —
+    each `<ancestor>^..<ancestor>` for a commit inside the same linear
+    history, so every endpoint is resolvable from the ONE
+    `git rev-list --parents --stdin` walk `_build_chain_seed_parent_map`
+    seeds on `chain_set`, with zero further spawns.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(["init", "-b", "main"], repo)
+    _git(["config", "user.email", "test@example.com"], repo)
+    _git(["config", "user.name", "Test"], repo)
+
+    _commit(repo, "root")
+    shas = [_commit(repo, f"c{i}") for i in range(_DAG_PENDING_RECORDS)]
+    # chain_set: the newest 5 commits — small, deliberately not the whole
+    # history, so the fixture cannot pass merely because chain_set == corpus.
+    chain_set = shas[-5:]
+    return repo, chain_set, shas
+
+
+def test_dag_mode_resolver_does_not_spawn_per_pending_record(
+    dag_corpus_repo: Tuple[Path, List[str], List[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DAG mode's `_make_chain_range_resolver` (graph_range=None) costs a
+    CONSTANT git-spawn count regardless of how many distinct pending-record
+    ranges the trail corpus cites — the manifest's
+    `coverage.diagnose_open_review_loop_dag_mode.spawn_count_budget.
+    many_pending_records`, enforced here at exact equality.
+
+    Fails on the pre-fix code (`_make_chain_range_resolver` returning None in
+    DAG mode) with `_DAG_PENDING_RECORDS` `git rev-list` spawns — one per
+    distinct range, from `classify_pending_records`' default resolver.
+    """
+    repo, chain_set, shas = dag_corpus_repo
+    cwd = str(repo)
+
+    all_records: List[Tuple[str, dict]] = [
+        (
+            "trail.jsonl",
+            {
+                "sha_range": f"{sha}^..{sha}",
+                "reviewer": "code-reviewer",
+                "scope": "session",
+                "scope_kind": "diff",
+                "verdict": "pending",
+                "diff_loc": 1,
+                "session_id": "00000000-0000-0000-0000-000000000001",
+            },
+        )
+        for sha in shas
+    ]
+
+    spawned: List[Tuple[str, ...]] = []
+    real_run = coverage._run
+    real_subprocess_run = coverage.subprocess.run
+
+    def counting_run(cmd, cwd=None, input_text=None):
+        spawned.append(tuple(str(c) for c in cmd))
+        return real_run(cmd, cwd=cwd, input_text=input_text)
+
+    def counting_subprocess_run(cmd, *a, **kw):
+        spawned.append(tuple(str(c) for c in cmd))
+        return real_subprocess_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(coverage, "_run", counting_run)
+    monkeypatch.setattr(coverage.subprocess, "run", counting_subprocess_run)
+
+    resolver = coverage._make_chain_range_resolver(
+        cwd,
+        set(chain_set),
+        graph_range=None,
+        prescan_ranges={rec["sha_range"] for _p, rec in all_records},
+    )
+    assert resolver is not None, "non-empty chain_set must yield a DAG-mode resolver"
+
+    pending_entries = classify_pending_records(all_records, resolve_range=resolver, cwd=cwd)
+    assert len(pending_entries) == _DAG_PENDING_RECORDS, (
+        "fixture must actually classify every pending record"
+    )
+
+    git_spawns = [cmd for cmd in spawned if cmd[:1] == ("git",)]
+    manifest = budget.load_manifest()
+    budgeted = manifest["overrides"]["coverage.diagnose_open_review_loop_dag_mode"][
+        "spawn_count_budget"
+    ]["many_pending_records"]
+    assert len(git_spawns) == budgeted, (
+        f"{len(git_spawns)} git spawns resolving {_DAG_PENDING_RECORDS} DAG-mode "
+        f"pending records (manifest budgets {budgeted}) — DAG mode's resolver is "
+        f"scaling with the review-trail corpus again. See "
+        f"coverage._make_chain_range_resolver / _build_chain_seed_parent_map. "
+        f"Spawns: {git_spawns}"
+    )

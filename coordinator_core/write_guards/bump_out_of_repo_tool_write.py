@@ -234,6 +234,27 @@ cannot be trusted as an anchor) and the write's TARGET resolved git-dir (via
     below) never bumps. A target resolving to NO git-dir, or to a
     DIFFERENT one, bumps.
 
+UNRESOLVED IS NOT THE SAME FACT AS REPO-LESS (bug `2026-08-15-anchor-
+resolution-misfire`, verified live in-session). `own_gitdir is None` used to
+be read, unconditionally, as "the session anchor sits in no git repo" --
+but `resolve_gitdir` returns `None` for that fact AND for a `git rev-parse
+--git-dir` spawn that simply failed (timeout, missing binary, transient
+error), and this guard's own `check()` cannot tell them apart from the
+return value alone. Under this box's documented load norm (50-70 concurrent
+LLMs, `docs/wiki/machine-load-norm.md`) a 2.0s git-spawn timeout is an
+expected transient, not an anomaly -- so treating it as "no repo" turned a
+transient spawn failure into a hard deny for a write landing squarely
+inside the session's OWN registered repo (`target_is_registered_repo`
+matches unconditionally in that branch, per the ruling below). `check()`
+now calls `path_has_git_ancestor(anchor)` (`_write_bump_marker.py`, a pure
+filesystem walk, no subprocess) immediately after `own_gitdir` resolves to
+`None`: a `.git` entry found on that walk is evidence of fact (b), not (a),
+so `check()` treats the anchor as UNRESOLVED and allows, before
+`_verdict_bumps` ever runs. A genuinely repo-less anchor (no `.git` entry
+either) is unaffected -- it falls through to `_verdict_bumps` exactly as
+before, so the 2026-08-10 PM ruling ("a REGISTERED target still bumps
+unconditionally from a repo-less anchor") stays untouched.
+
 Both branches are gated first by `bump_applies()` (the `~/.claude`
 fleet-recovery hatch and the unresolvable-anchor case), exactly as both Bash
 guards are.
@@ -443,6 +464,11 @@ Negative-spec:
     parity gap named above -- that module was mid-edit by a concurrent
     session when this exemption was added; the gap is reported, not papered
     over from this file.
+  - Does NOT treat `own_gitdir is None` as proof the session anchor is
+    repo-less without first consulting `path_has_git_ancestor(anchor)` --
+    see "UNRESOLVED IS NOT THE SAME FACT AS REPO-LESS" above. Do not revert
+    `check()`'s early return on that path back to falling straight into
+    `_verdict_bumps`; that re-opens the exact misfire this fix closes.
 """
 
 from __future__ import annotations
@@ -468,6 +494,7 @@ from coordinator_core.bash_guards._write_bump_marker import (
     effective_session_id,
     marker_gitdir_is_writable,
     marker_present,
+    path_has_git_ancestor,
     resolve_gitdir,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
@@ -960,6 +987,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         own_gitdir = resolve_gitdir(anchor)
+        if own_gitdir is None and path_has_git_ancestor(anchor):
+            # UNRESOLVED, not repo-less -- see module docstring, "VERDICT
+            # LOGIC" is a fact-of-the-anchor question, and `resolve_gitdir`
+            # returning `None` here is ambiguous between "the anchor
+            # genuinely sits in no git repo" (the branch `_verdict_bumps`
+            # below still bumps a REGISTERED target for, unconditionally,
+            # per the 2026-08-10 PM ruling) and "the `git rev-parse
+            # --git-dir` spawn itself failed" -- a real, expected outcome
+            # under this box's documented load norm (50-70 concurrent LLMs,
+            # `docs/wiki/machine-load-norm.md`), not an anomaly. A
+            # filesystem-only ancestor walk (`path_has_git_ancestor`, no
+            # subprocess) that finds a `.git` entry at/above `anchor` is
+            # positive evidence for the SECOND fact, not the first --
+            # treated as UNRESOLVED and allowed, matching this module's own
+            # unconditional fail-open contract ("never bump on a path this
+            # guard could not resolve"). A genuinely repo-less anchor (no
+            # `.git` entry on the walk either) falls through unchanged into
+            # `_verdict_bumps` below, preserving the 2026-08-10 ruling
+            # exactly.
+            return None
         # C4b: translate ONCE here and thread `target_dir` to every other
         # site that used to recompute `os.path.dirname(file_path) or
         # file_path` raw (`_verdict_bumps` below, and this function's own

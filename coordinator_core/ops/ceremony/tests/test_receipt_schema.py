@@ -759,6 +759,46 @@ def test_validate_engine_sha_wrong_type_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# engine_dirty — optional/additive top-level field (coordinator_core.engine_version)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_engine_dirty_true_validates_clean() -> None:
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"), engine_dirty=True)
+    assert r["engine_dirty"] is True
+    errors = validate(r)
+    assert errors == [], f"engine_dirty=True must validate clean; got {errors}"
+
+
+def test_validate_engine_dirty_false_validates_clean_and_is_emitted() -> None:
+    """engine_dirty=False is a meaningful, real finding — must still be emitted."""
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"), engine_dirty=False)
+    assert "engine_dirty" in r
+    assert r["engine_dirty"] is False
+    errors = validate(r)
+    assert errors == [], f"engine_dirty=False must validate clean; got {errors}"
+
+
+def test_validate_engine_dirty_absent_when_none_validates_clean() -> None:
+    """engine_dirty=None (default) omits the key — backward-compat, graceful-absent."""
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
+    assert "engine_dirty" not in r
+    errors = validate(r)
+    assert errors == [], (
+        f"engine_dirty absent must validate clean (backward-compat); got {errors}"
+    )
+
+
+def test_validate_engine_dirty_wrong_type_rejected() -> None:
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
+    r["engine_dirty"] = "yes"
+    errors = validate(r)
+    assert any("engine_dirty" in e for e in errors), (
+        f"wrong-type engine_dirty must be rejected by validate(); got {errors}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # (p) scoping_method — optional/additive top-level field (C2, wsc concurrent-tree
 #     race fix)
 # ---------------------------------------------------------------------------
