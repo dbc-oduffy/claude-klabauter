@@ -3734,6 +3734,67 @@ def compute_scope(
             _normalize_agent_touched_entry,
         )
 
+        # C16 — collapse this loop's git fan-out from up to 2 spawns PER
+        # agent_dir (the loop body below calls `_dirty_files_under_batch`
+        # up to twice per iteration, once for the race-dir branch OR once
+        # each for the attr/claims branches) down to ONE spawn pair for the
+        # WHOLE loop, regardless of how many agent_dirs are on disk. Census
+        # §3 rank 6: this is the row whose cost scales with how busy the
+        # machine is — `.agents` accumulates one dir per dispatched
+        # sub-agent across every session sharing this repo, on a box
+        # averaging 50-70 concurrent LLM sessions
+        # (docs/wiki/machine-load-norm.md) — and the outer loop over those
+        # dirs was uncapped. The callee (`_dirty_files_under_batch`) is
+        # already the batched, one-spawn-pair-per-call variant (see its own
+        # docstring); this fix does not touch its git shape, only how many
+        # times the loop below calls it.
+        #
+        # No cap, no truncation: a superset pre-scan (pure filesystem
+        # reads, no git spawned) reads every agent_dir's `touched.txt` ONCE,
+        # collects every directory-style entry
+        # (`_normalize_agent_touched_entry`'s trailing-"/" form) into one
+        # deduplicated, order-preserving list, and resolves ALL of them in
+        # a single `_dirty_files_under_batch` call before the main loop
+        # runs. `_dirty_files_under_batch` is a pure function of its
+        # `dir_paths` argument (git status/diff resolve each pathspec
+        # independently server-side — see its own docstring's § Anti-scope
+        # 1/2/4), so querying the union up front and slicing per-agent
+        # below is byte-for-byte identical to calling it fresh, per-agent,
+        # with the exact subset the main loop would otherwise have passed —
+        # every agent_dir the main loop below processes is still processed
+        # in full, from the SAME complete result map. Over-collecting an
+        # entry the main loop's later liveness/recency gating ends up never
+        # using is harmless (a wider git query, not a wrong one) and not a
+        # completeness gap: `all_agent_dir_entries` unions every agent_dir's
+        # touched.txt regardless of which branch below eventually reads it.
+        all_agent_dir_entries: List[str] = []
+        _seen_agent_dir_entries: set = set()
+        for _pre_entry in agent_entries:
+            _pre_agent_dir = Path(_pre_entry.path)
+            if not _pre_agent_dir.is_dir():
+                continue
+            _pre_touched = _pre_agent_dir / "touched.txt"
+            if not _pre_touched.is_file():
+                continue
+            try:
+                _pre_raw_lines = _pre_touched.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                # Unreadable here is not fatal to the pre-scan: the main
+                # loop below re-reads (and fail-closes) the same file on
+                # its own terms; this pass only widens or narrows the git
+                # query, it never decides ownership.
+                continue
+            for _pre_raw in _pre_raw_lines:
+                _pre_norm = _normalize_agent_touched_entry(_pre_raw)
+                if (
+                    _pre_norm is not None
+                    and _pre_norm.endswith("/")
+                    and _pre_norm not in _seen_agent_dir_entries
+                ):
+                    _seen_agent_dir_entries.add(_pre_norm)
+                    all_agent_dir_entries.append(_pre_norm)
+        global_dirty_by_dir = _dirty_files_under_batch(all_agent_dir_entries, cwd)
+
         for entry in agent_entries:
             agent_dir = Path(entry.path)
             if not agent_dir.is_dir():
@@ -3846,9 +3907,12 @@ def compute_scope(
                             for n in normalized_race_lines
                             if n is not None and n.endswith("/")
                         ]
-                        dirty_by_dir_race = _dirty_files_under_batch(
-                            race_dir_entries, cwd
-                        )
+                        # C16: sliced from the single pre-loop batched
+                        # call above, not a fresh spawn — see that call's
+                        # comment for why this is lossless.
+                        dirty_by_dir_race = {
+                            d: global_dirty_by_dir.get(d, []) for d in race_dir_entries
+                        }
                         contested_here: List[str] = []
                         for norm in normalized_race_lines:
                             if norm is None:
@@ -3959,7 +4023,10 @@ def compute_scope(
                     for n in normalized_attr_lines
                     if n is not None and n.endswith("/")
                 ]
-                dirty_by_dir_attr = _dirty_files_under_batch(attr_dir_entries, cwd)
+                # C16: sliced from the single pre-loop batched call above.
+                dirty_by_dir_attr = {
+                    d: global_dirty_by_dir.get(d, []) for d in attr_dir_entries
+                }
                 for norm in normalized_attr_lines:
                     if norm is None:
                         continue
@@ -4032,7 +4099,10 @@ def compute_scope(
             claim_dir_entries = [
                 n for n in normalized_claim_lines if n is not None and n.endswith("/")
             ]
-            dirty_by_dir_claims = _dirty_files_under_batch(claim_dir_entries, cwd)
+            # C16: sliced from the single pre-loop batched call above.
+            dirty_by_dir_claims = {
+                d: global_dirty_by_dir.get(d, []) for d in claim_dir_entries
+            }
             for norm in normalized_claim_lines:
                 if norm is None:
                     continue

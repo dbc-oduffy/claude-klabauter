@@ -217,6 +217,7 @@ import inspect
 import json
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from coordinator_core.win_portability import no_console_creationflags
 import sys
 from pathlib import Path
@@ -1151,71 +1152,252 @@ def _gate_reply(verdict_line: str, notes: list[str], exit_code: int, **extra: An
 # ---------------------------------------------------------------------------
 
 
-def _reverify_test_node_id(ref: str, repo_roots: Mapping[str, Path]) -> tuple[bool, str]:
-    """Re-run a pytest node id and report whether it still passes.
+#: Node-id summary line pytest emits under `-rA` ("report all") in the
+#: "short test summary info" section — one line per collected node id
+#: regardless of outcome, e.g. `PASSED tests/test_x.py::test_a` or
+#: `FAILED tests/test_x.py::test_b - AssertionError: ...`. This is the
+#: mechanism `_run_pytest_batch` relies on to keep per-consumer attribution
+#: (C14's correctness bar) when many node ids share one pytest invocation.
+_PYTEST_SUMMARY_LINE_RE = re.compile(r"^(PASSED|FAILED|ERROR)\s+(\S+)(?:\s+-\s.*)?$")
 
-    A node id alone doesn't say which repo it lives in, so this tries every
-    distinct resolved repo root in turn, using the first root whose test file
-    actually exists on disk. Any subprocess failure or timeout is a REFUSE
-    (never a silent pass) — an unreachable/errored re-run is exactly the
-    "cannot re-verify" case AC11 requires to REFUSE.
 
-    `env=pytest_child_env()`: the re-run's verdict decides a gate, and the repo
-    root can be claude-klabauter itself, whose suite asserts the op registry at import
-    time — a dispatch process's own lazy-ops setting reaching this child would
-    turn a passing node id into a collection error and the gate into a REFUSE.
+def _pytest_batch_timeout(n_refs: int) -> float:
+    """Timeout for one batched pytest invocation carrying `n_refs` node ids.
 
-    Deliberate isolation boundary — do not convert to an in-process pytest
-    invocation. Mechanism: pytest process isolation (also needs
-    `pytest_child_env()` for env isolation). See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
+    120s is the original per-ref budget (one interpreter start dominates it);
+    a batch shares that start cost, so each additional node id only needs
+    incremental headroom, not another full 120s. Capped so a large batch
+    cannot silently inherit an unbounded wait.
     """
-    file_part = ref.split("::", 1)[0]
-    for root in _dedup_roots(repo_roots):
-        candidate = root / file_part
-        if not candidate.is_file():
+    return min(120.0 + 15.0 * max(n_refs - 1, 0), 900.0)
+
+
+def _run_pytest_batch(root: Path, refs: Sequence[str]) -> dict[str, tuple[bool, str]]:
+    """Run ONE pytest invocation carrying every node id in `refs` under `root`.
+
+    `-rA` forces a PASSED/FAILED/ERROR summary line per node id regardless of
+    the batch's aggregate outcome, which `_PYTEST_SUMMARY_LINE_RE` parses back
+    into a per-ref verdict — this is what lets a batched run still answer
+    "which consumer failed" instead of collapsing to one aggregate pass/fail
+    (C14's correctness bar).
+
+    A node id pytest cannot collect at all (e.g. a typo'd or stale ref) makes
+    the WHOLE invocation abort before any summary line is printed — proven by
+    hand against this pytest version, not assumed — so no ref in `refs` gets a
+    summary line in that case. The caller (`_reverify_test_node_ids_batch`)
+    detects that (a ref present in `refs` but absent from this function's
+    return) and re-runs the affected refs individually to localize the bad
+    one(s) rather than reporting a blanket REFUSE for the whole batch.
+
+    `env=pytest_child_env()` is required — same isolation-boundary rationale
+    as the single-ref call this replaces (deliberate pytest process isolation,
+    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md);
+    batching does not change that boundary, only how many times it is crossed.
+    """
+    if not refs:
+        return {}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", *refs, "-q", "--no-header", "-rA"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=_pytest_batch_timeout(len(refs)),
+            stdin=subprocess.DEVNULL,
+            env=pytest_child_env(),
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        detail = f"re-run under {root} failed to invoke: {exc}"
+        return {ref: (False, f"test-node-id {ref!r}: {detail}") for ref in refs}
+
+    ref_set = set(refs)
+    outcomes: dict[str, tuple[bool, str]] = {}
+    for line in proc.stdout.splitlines():
+        m = _PYTEST_SUMMARY_LINE_RE.match(line.strip())
+        if not m:
             continue
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-m", "pytest", ref, "-q", "--no-header"],
-                cwd=str(root),
-                capture_output=True,
-                text=True,
-                timeout=120,
-                stdin=subprocess.DEVNULL,
-                env=pytest_child_env(),
-                **no_console_creationflags(),
+        status, nodeid = m.group(1), m.group(2)
+        if nodeid in ref_set:
+            outcomes[nodeid] = (
+                status == "PASSED",
+                f"test-node-id {nodeid!r}: "
+                f"{'PASS' if status == 'PASSED' else status} under {root} "
+                f"(pytest exit {proc.returncode})",
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return False, f"test-node-id {ref!r}: re-run under {root} failed to invoke: {exc}"
-        if proc.returncode == 0:
-            return True, f"test-node-id {ref!r}: PASS under {root}"
-        return False, f"test-node-id {ref!r}: FAIL under {root} (pytest exit {proc.returncode})"
-    return False, f"test-node-id {ref!r}: test file {file_part!r} not found under any known repo root"
+    return outcomes
+
+
+def _reverify_test_node_ids_batch(
+    refs: Iterable[str], repo_roots: Mapping[str, Path]
+) -> dict[str, tuple[bool, str]]:
+    """Re-verify MANY test-node-id refs, batching pytest invocations by root.
+
+    Grouping mirrors the single-ref lookup this replaces: each ref goes to
+    the first `_dedup_roots` root whose test file exists on disk; a ref
+    matching no root is refused without spawning anything. Distinct roots'
+    batches run CONCURRENTLY (thread pool — `subprocess.run` releases the GIL
+    while the child runs, so this is real wall-clock concurrency, not just
+    dispatch) — a single pytest invocation cannot span repo roots, so
+    one-per-root is the batching floor, and running those roots concurrently
+    is the other half of C14's mandate.
+
+    Correctness fallback: if `_run_pytest_batch` returns no outcome for some
+    ref in a root's batch (a collection error localized to a different, bad
+    ref took the whole invocation down before any summary line printed), this
+    re-runs ONLY the missing refs individually to recover per-ref attribution
+    — proportional extra cost bounded by the number of bad refs, never the
+    whole batch, and it terminates in one extra round because a single-ref
+    invocation has nothing left to localize.
+    """
+    unique_refs = list(dict.fromkeys(refs))
+    if not unique_refs:
+        return {}
+
+    roots = _dedup_roots(repo_roots)
+    by_root: dict[Path, list[str]] = {}
+    results: dict[str, tuple[bool, str]] = {}
+    for ref in unique_refs:
+        file_part = ref.split("::", 1)[0]
+        for root in roots:
+            if (root / file_part).is_file():
+                by_root.setdefault(root, []).append(ref)
+                break
+        else:
+            results[ref] = (
+                False,
+                f"test-node-id {ref!r}: test file {file_part!r} not found under any known repo root",
+            )
+
+    if not by_root:
+        return results
+
+    with ThreadPoolExecutor(max_workers=len(by_root)) as pool:
+        futures = {pool.submit(_run_pytest_batch, root, root_refs): (root, root_refs) for root, root_refs in by_root.items()}
+        for fut in futures:
+            root, root_refs = futures[fut]
+            outcomes = fut.result()
+            missing = [r for r in root_refs if r not in outcomes]
+            if missing and len(root_refs) > 1:
+                # Isolate each missing ref in its OWN single-ref invocation —
+                # re-running `missing` as one group would just repeat the
+                # same collection-wide failure. A single-ref run localizes
+                # whichever ref(s) actually break collection without paying
+                # for the whole original batch again.
+                for ref in list(missing):
+                    outcomes.update(_run_pytest_batch(root, [ref]))
+                missing = [r for r in missing if r not in outcomes]
+            for ref in missing:
+                outcomes[ref] = (
+                    False,
+                    f"test-node-id {ref!r}: no summary entry for this node id even run in "
+                    f"isolation under {root} — REFUSE (cannot re-verify)",
+                )
+            results.update(outcomes)
+
+    return results
+
+
+def _reverify_test_node_id(ref: str, repo_roots: Mapping[str, Path]) -> tuple[bool, str]:
+    """Single-ref convenience wrapper over `_reverify_test_node_ids_batch`.
+
+    Kept for callers (and tests) that verify one ref at a time; the gate's
+    own hot path calls the batch/orchestrator functions directly (C14).
+    """
+    return _reverify_test_node_ids_batch([ref], repo_roots)[ref]
+
+
+def _git_cat_file_batch_check(root: Path, shas: Sequence[str]) -> dict[str, bool]:
+    """Run `git cat-file --batch-check` for MANY shas against ONE repo root
+    in a single invocation, returning `{sha: reachable_as_commit}`.
+
+    Shared batching helper — written once here for C14
+    (`_reverify_commit_shas_batch` below) and reused as-is by C18
+    (`handoff_backfill_claim_stamp.py :: _verify_commit`); do not duplicate
+    the `--batch-check` protocol at the second call site.
+
+    Stdin carries one `<sha>^{commit}` line per input sha, mirroring the
+    `git cat-file -e <sha>^{commit}` semantics this replaces — a sha that
+    exists but names a non-commit object (a blob, a tree, a stale tag) is
+    correctly reported unreachable, not merely "exists". `git cat-file
+    --batch-check` guarantees exactly one output line per input line, in
+    input order, so the result is zipped back onto `shas` positionally
+    rather than by re-parsing the (possibly abbreviated) echoed name.
+    """
+    shas = list(shas)
+    if not shas:
+        return {}
+    stdin_text = "\n".join(f"{sha}^{{commit}}" for sha in shas) + "\n"
+    try:
+        proc = subprocess.run(
+            ["git", "--no-optional-locks", "-C", str(root), "cat-file", "--batch-check"],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {sha: False for sha in shas}
+
+    lines = proc.stdout.splitlines()
+    results: dict[str, bool] = {sha: False for sha in shas}
+    for sha, line in zip(shas, lines):
+        parts = line.split()
+        if len(parts) == 3 and parts[1] == "commit":
+            results[sha] = True
+    return results
+
+
+def _reverify_commit_shas_batch(
+    refs: Iterable[str], repo_roots: Mapping[str, Path]
+) -> dict[str, tuple[bool, str]]:
+    """Re-verify MANY commit-sha refs, one `git cat-file --batch-check` per
+    distinct repo root instead of one `git cat-file -e` per sha.
+
+    Distinct roots run CONCURRENTLY (thread pool, same rationale as
+    `_reverify_test_node_ids_batch`). Root-preference order is preserved:
+    `_dedup_roots`'s order decides which root's "reachable" verdict wins when
+    more than one root can see the same sha, matching the original
+    first-match-wins single-ref behavior.
+    """
+    unique_refs = list(dict.fromkeys(refs))
+    if not unique_refs:
+        return {}
+
+    roots = _dedup_roots(repo_roots)
+    if not roots:
+        return {
+            ref: (False, f"commit-sha {ref!r}: not reachable in any known repo root")
+            for ref in unique_refs
+        }
+
+    with ThreadPoolExecutor(max_workers=len(roots)) as pool:
+        futures = {pool.submit(_git_cat_file_batch_check, root, unique_refs): root for root in roots}
+        per_root = {futures[fut]: fut.result() for fut in futures}
+
+    results: dict[str, tuple[bool, str]] = {}
+    remaining = set(unique_refs)
+    for root in roots:
+        reachable = per_root.get(root, {})
+        for ref in list(remaining):
+            if reachable.get(ref):
+                results[ref] = (True, f"commit-sha {ref!r}: reachable in {root}")
+                remaining.discard(ref)
+        if not remaining:
+            break
+    for ref in remaining:
+        results[ref] = (False, f"commit-sha {ref!r}: not reachable in any known repo root")
+    return results
 
 
 def _reverify_commit_sha(ref: str, repo_roots: Mapping[str, Path]) -> tuple[bool, str]:
-    """Confirm `ref` is a reachable commit object in any distinct known repo root.
+    """Single-ref convenience wrapper over `_reverify_commit_shas_batch`.
 
-    Uses `git cat-file -e <sha>^{commit}` — read-only, mirrors coverage.gate's
-    affirmed-COMPUTE_ONLY git subprocess-reads precedent. A SHA reachable in
-    no known repo (rewritten history, wrong repo, typo) is a REFUSE.
+    Kept for callers (and tests) that verify one ref at a time; the gate's
+    own hot path calls the batch/orchestrator functions directly (C14).
     """
-    for root in _dedup_roots(repo_roots):
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(root), "cat-file", "-e", f"{ref}^{{commit}}"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                stdin=subprocess.DEVNULL,
-                **no_console_creationflags(),
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if proc.returncode == 0:
-            return True, f"commit-sha {ref!r}: reachable in {root}"
-    return False, f"commit-sha {ref!r}: not reachable in any known repo root"
+    return _reverify_commit_shas_batch([ref], repo_roots)[ref]
 
 
 #: Filename shape a `sibling-commitment-ref` ref must match — mirrors the
@@ -1353,6 +1535,99 @@ async def _reverify_confirmed_consumer(
     else:
         return False, f"{consumer_id}: unrecognized verified_by.kind {kind!r}"
     return ok, f"{consumer_id}: {detail}"
+
+
+async def _reverify_confirmed_consumers(
+    entries: Sequence[Mapping[str, object]],
+    repo_roots: Mapping[str, Path],
+    repo_root: Optional[Path],
+) -> list[tuple[bool, str]]:
+    """Signal-2 re-verify the WHOLE `confirmed_consumers[]` list at once (C14).
+
+    Replaces a sequential per-entry `await _reverify_confirmed_consumer(...)`
+    loop — the census's rank-3 site, 120s per consumer with no aggregate cap
+    and no concurrency — with: group by `verified_by.kind`, batch every
+    `test-node-id` ref into `_reverify_test_node_ids_batch` (one pytest
+    invocation per distinct repo root, roots concurrent) and every
+    `commit-sha` ref into `_reverify_commit_shas_batch` (one
+    `git cat-file --batch-check` per distinct repo root, roots concurrent),
+    then run those two batch calls CONCURRENTLY with each other and with the
+    per-entry `probe-op-key` / `sibling-commitment-ref` checks (already cheap
+    in-process work, nothing to batch). Returns results in the SAME ORDER as
+    `entries`, one `(ok, detail)` per entry — same shape and same per-entry
+    detail-string convention as the loop this replaces, so callers (`notes`
+    accumulation, `unverifiable` collection in `_cutover_gate`) are unchanged.
+
+    Malformed entries (no `verified_by`, unrecognized `kind`, empty `ref`)
+    are resolved immediately, same REFUSE semantics as
+    `_reverify_confirmed_consumer` — batching never changes what counts as
+    re-verified, only how many subprocesses that costs.
+    """
+    results: list[Optional[tuple[bool, str]]] = [None] * len(entries)
+    parsed: dict[int, tuple[str, str, str]] = {}  # index -> (consumer_id, kind, ref)
+    node_id_indices: list[int] = []
+    commit_sha_indices: list[int] = []
+    other_indices: list[int] = []
+
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            results[i] = (False, "<malformed entry: not a mapping>")
+            continue
+        consumer_id = str(entry.get("id", "<unknown>"))
+        verified_by = entry.get("verified_by")
+        if not isinstance(verified_by, Mapping):
+            results[i] = (False, f"{consumer_id}: verified_by is missing or malformed")
+            continue
+        kind = str(verified_by.get("kind", ""))
+        ref = str(verified_by.get("ref", ""))
+        if not ref:
+            results[i] = (False, f"{consumer_id}: verified_by.ref is empty")
+            continue
+        if kind == "test-node-id":
+            node_id_indices.append(i)
+        elif kind == "commit-sha":
+            commit_sha_indices.append(i)
+        elif kind in ("probe-op-key", "sibling-commitment-ref"):
+            other_indices.append(i)
+        else:
+            results[i] = (False, f"{consumer_id}: unrecognized verified_by.kind {kind!r}")
+            continue
+        parsed[i] = (consumer_id, kind, ref)
+
+    async def _run_node_batch() -> None:
+        refs = [parsed[i][2] for i in node_id_indices]
+        outcomes = await asyncio.to_thread(_reverify_test_node_ids_batch, refs, repo_roots)
+        for i in node_id_indices:
+            consumer_id, _, ref = parsed[i]
+            ok, detail = outcomes[ref]
+            results[i] = (ok, f"{consumer_id}: {detail}")
+
+    async def _run_sha_batch() -> None:
+        refs = [parsed[i][2] for i in commit_sha_indices]
+        outcomes = await asyncio.to_thread(_reverify_commit_shas_batch, refs, repo_roots)
+        for i in commit_sha_indices:
+            consumer_id, _, ref = parsed[i]
+            ok, detail = outcomes[ref]
+            results[i] = (ok, f"{consumer_id}: {detail}")
+
+    async def _run_other(i: int) -> None:
+        consumer_id, kind, ref = parsed[i]
+        if kind == "probe-op-key":
+            ok, detail = await _reverify_probe_op_key(ref, repo_root)
+        else:
+            ok, detail = await asyncio.to_thread(_reverify_sibling_commitment_ref, ref, repo_root)
+        results[i] = (ok, f"{consumer_id}: {detail}")
+
+    jobs = []
+    if node_id_indices:
+        jobs.append(_run_node_batch())
+    if commit_sha_indices:
+        jobs.append(_run_sha_batch())
+    jobs.extend(_run_other(i) for i in other_indices)
+    if jobs:
+        await asyncio.gather(*jobs)
+
+    return [r if r is not None else (False, "<unreachable: unclassified entry>") for r in results]
 
 
 @register_op("cutover.gate")
@@ -1671,12 +1946,14 @@ async def _cutover_gate(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     # (5) signal-2 re-verification (F7): re-check every verified_by at call
-    # time rather than trusting the stored claim.
+    # time rather than trusting the stored claim. Batched/concurrent (C14) —
+    # `_reverify_confirmed_consumers` returns one (ok, detail) per entry, in
+    # the same order, so the note/unverifiable bookkeeping below is
+    # unchanged from the sequential per-entry loop it replaces.
     unverifiable: list[str] = []
-    for entry in confirmed_consumers_raw:
-        if not isinstance(entry, Mapping):
-            continue
-        ok, detail = await _reverify_confirmed_consumer(entry, repo_roots, worktree)
+    verifiable_entries = [entry for entry in confirmed_consumers_raw if isinstance(entry, Mapping)]
+    reverify_results = await _reverify_confirmed_consumers(verifiable_entries, repo_roots, worktree)
+    for entry, (ok, detail) in zip(verifiable_entries, reverify_results):
         notes.append(f"cutover.gate: signal-2 {detail}")
         if not ok:
             unverifiable.append(str(entry.get("id", "<unknown>")))

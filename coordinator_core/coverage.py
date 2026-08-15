@@ -298,15 +298,31 @@ _NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
 # wall-clock ~= one spawn without launching an unbounded swarm of git.exe at once.
 _REVLIST_MAX_WORKERS = 16
 
+# Per-spawn `git rev-list` timeout (seconds) — same value as the
+# `_GIT_TIMEOUT` convention in machine_resolver.py / person_resolver.py.
+# A hung git.exe (e.g. an index lock held by a concurrent session on this
+# machine — docs/wiki/machine-load-norm.md) must not stall the pool forever;
+# `_run` turns a `subprocess.TimeoutExpired` into an ordinary rc!=0 failure,
+# so a timed-out range is simply skipped, never manufactures coverage.
+_GIT_TIMEOUT = 10
+
 
 def _run(
-    cmd: List[str], cwd: Optional[str] = None, input_text: Optional[str] = None
+    cmd: List[str],
+    cwd: Optional[str] = None,
+    input_text: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> Tuple[int, str, str]:
     """Run cmd; return (returncode, stdout.strip(), stderr). Never raises.
 
     `input_text`, when given, is fed to the child's stdin (used by callers
     like `git diff-tree --stdin`); otherwise stdin is DEVNULL as before — nt:
     inherited invalid stdin + CREATE_NO_WINDOW hangs _execute_child.
+
+    `timeout`, when given, bounds the spawn; a `subprocess.TimeoutExpired`
+    is caught by the blanket `except Exception` below and reported as an
+    ordinary (1, "", str(exc)) failure — same fail-closed shape as any other
+    spawn error, never raised to the caller.
     """
     try:
         result = subprocess.run(
@@ -316,6 +332,7 @@ def _run(
             cwd=cwd,
             input=input_text,
             stdin=subprocess.DEVNULL if input_text is None else None,
+            timeout=timeout,
             **_NO_CONSOLE,
         )
         return result.returncode, result.stdout.strip(), result.stderr
@@ -1021,10 +1038,23 @@ def _spec_dispatch_qualifying_code_review_shas(
     silently skipped — fail-closed: it simply cannot supply the compensating
     control, the same posture `build_reviewed_set` takes toward a malformed
     record (never manufactures coverage from a record that cannot be read).
+
+    Spawn shape mirrors `build_reviewed_set`'s Strategy B fan-out
+    (coverage.py's `_REVLIST_MAX_WORKERS` / `_GIT_TIMEOUT`): qualifying
+    records are scanned first to collect their DISTINCT `sha_range` values —
+    fleet doctrine has many records on a shared branch citing the identical
+    range, so this is a memo, not a rewrite of what gets resolved — and only
+    the distinct set is handed to one bounded `git rev-list` per range. Each
+    range is still resolved with its own spawn; ranges are never combined
+    into one multi-range `rev-list` invocation, because exclusions apply
+    globally and would silently change which commits count for a range that
+    didn't ask for that exclusion (same anti-scope as `build_segments` /
+    `classify_pending_records`).
     """
     if not code_shas:
         return frozenset()
-    covered: Set[str] = set()
+
+    qualifying_ranges: Set[str] = set()
     for path in trail_paths:
         try:
             records = _parse_trail_file(path)
@@ -1040,10 +1070,31 @@ def _spec_dispatch_qualifying_code_review_shas(
             sha_range = rec.get("sha_range", "")
             if not sha_range or not SAFE_RANGE.match(sha_range):
                 continue
-            rc, out, _err = _run(["git", "rev-list", sha_range], cwd=cwd)
-            if rc != 0 or not out:
-                continue
-            covered |= set(out.splitlines()) & code_shas
+            qualifying_ranges.add(sha_range)
+
+    if not qualifying_ranges:
+        return frozenset()
+
+    distinct_ranges = sorted(qualifying_ranges)
+
+    def _resolve(sha_range: str) -> Tuple[str, int, str]:
+        rc, out, _err = _run(
+            ["git", "rev-list", sha_range], cwd=cwd, timeout=_GIT_TIMEOUT
+        )
+        return sha_range, rc, out
+
+    max_workers = min(len(distinct_ranges), _REVLIST_MAX_WORKERS)
+    if max_workers <= 1:
+        results = [_resolve(r) for r in distinct_ranges]
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(_resolve, distinct_ranges))
+
+    covered: Set[str] = set()
+    for _sha_range, rc, out in results:
+        if rc != 0 or not out:
+            continue
+        covered |= set(out.splitlines()) & code_shas
     return frozenset(covered)
 
 
