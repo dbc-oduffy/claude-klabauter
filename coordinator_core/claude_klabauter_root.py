@@ -77,12 +77,33 @@ from coordinator_core._settings_home import machine_local_dir
 #: be far longer than a registry read and far shorter than a hook budget.
 _RUNG2_TIMEOUT_SECS = 2.0
 
+# Cross-reference: coordinator/bin/lib/cc_invoke.py defines this same literal
+# (plan pln-the-ceremony-tail-stops-lying-b58fb3 AC3b). The two rungs sit on
+# opposite sides of a declared one-way no-import boundary and cannot share a
+# symbol; the constant is duplicated deliberately and each side asserts the literal.
+_REGISTRY_READ_TIMEOUT_TOKEN = "machine-local registry read timed out"
+
 _REMEDIATION = (
     "coordinator_claude_klabauter_root: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
     "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
     "  Remediate (choose one):\n"
     "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
+    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
+)
+
+#: Rung-3 remediation text for the timeout arm — distinguishable from `_REMEDIATION`
+#: (the absent-key text) so a caller can tell "no entry" apart from "the read never
+#: finished." Names the reader timeout, not `machine-local set`: setting a registry
+#: key does nothing for a read that didn't get far enough to see it. Carries
+#: `_REGISTRY_READ_TIMEOUT_TOKEN` (AC3b).
+_TIMEOUT_REMEDIATION = (
+    "coordinator_claude_klabauter_root: cannot resolve CLAUDE_KLABAUTER_ROOT — "
+    f"{_REGISTRY_READ_TIMEOUT_TOKEN}.\n"
+    "  The `machine-local get repos.claude_klabauter` subprocess did not return within "
+    f"{_RUNG2_TIMEOUT_SECS}s.\n"
+    "  This is a hung/slow read, not a missing registry entry — re-run once the machine's "
+    "load has settled.\n"
     "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
 )
 
@@ -132,12 +153,14 @@ def coordinator_claude_klabauter_root() -> str:
             # error like any other unresolved case; not a distinct failure mode.
             result = None
         except subprocess.TimeoutExpired:
-            # Same disposition as the exec failure above: an unresolved Rung 2, not a
-            # distinct failure mode. The bound exists because this resolver is reached
-            # from PreToolUse hook paths on the interactive critical path — an
-            # unbounded wait there hangs the tool call rather than degrading to Rung
-            # 3's actionable error, and a slow answer is worth less than a prompt one.
-            result = None
+            # Distinct disposition from the exec failure above (AC4): the read never
+            # finished, so `machine-local set` remediation is actively wrong advice —
+            # there's no evidence the key is absent, only that the subprocess didn't
+            # answer in time. The bound exists because this resolver is reached from
+            # PreToolUse hook paths on the interactive critical path — an unbounded
+            # wait there hangs the tool call rather than degrading to Rung 3's
+            # actionable error, and a slow answer is worth less than a prompt one.
+            raise RuntimeError(_TIMEOUT_REMEDIATION) from None
 
         if result is not None and result.returncode == 0:
             resolved = result.stdout.strip()

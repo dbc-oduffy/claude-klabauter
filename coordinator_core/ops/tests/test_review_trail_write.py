@@ -997,16 +997,19 @@ class TestAtomicWrite:
     def test_distinct_records_at_different_timestamps_produce_separate_files(
         self, tmp_path, monkeypatch
     ):
-        """Two DISTINCT records at different timestamps land in two files
-        (additive-create).
+        """Two DISTINCT records — different ``sha_range``, i.e. a different
+        ``(session_id, sha_range)`` identity — land in two files (additive-
+        create), at different timestamps.
 
-        `diff_loc` differs deliberately: `reviewed_at` lives only in the
-        filename, never in the record body, so two writes of the same five
-        field values are byte-identical whatever their timestamps and converge
-        by design (`_reserve_unique_trail_path`'s replay convergence, the fix
-        for the `workstream_complete` PARTIAL_MUTATION duplicate-record
-        defect). This test's earlier form varied only `_timestamp` and so
-        asserted against that convergence rather than against clobbering.
+        `sha_range` differs deliberately, not `diff_loc`: identity is now
+        `(session_id, sha_range)` (P2, docs/plans/2026-08-15-the-ceremony-
+        tail-stops-lying-about-why-it-failed.md § C3), and `diff_loc` is
+        NOT one of the load-bearing fields `_reserve_unique_trail_path`
+        checks for divergence — two writes sharing an identity that differ
+        ONLY in `diff_loc` now converge (see
+        `test_non_load_bearing_field_difference_converges_on_first_writer`
+        below), which is why this test must vary `sha_range` instead to
+        prove two genuinely distinct identities still produce two files.
         """
         self._isolate_trail_root(tmp_path, monkeypatch)
 
@@ -1021,7 +1024,7 @@ class TestAtomicWrite:
             _timestamp="2026-01-15-100000",
         )
         result2 = write_review_trail_entry(
-            sha_range=_TEST_SHA_RANGE,
+            sha_range="ccc0000..ddd0000",
             reviewer="code-reviewer",
             scope="chain",
             verdict="ok",
@@ -1064,6 +1067,209 @@ class TestAtomicWrite:
 
         assert result1["out_path"] == result2["out_path"]
         assert len(list((tmp_path / "review-trail").glob("*.json"))) == 1
+
+    # -----------------------------------------------------------------
+    # AC5/AC6 — (session_id, sha_range) identity (P2, docs/plans/2026-08-15-
+    # the-ceremony-tail-stops-lying-about-why-it-failed.md § C3)
+    # -----------------------------------------------------------------
+
+    def test_non_load_bearing_field_difference_converges_on_first_writer(
+        self, tmp_path, monkeypatch
+    ):
+        """AC5: two writes with the same `(session_id, sha_range)` converge
+        to ONE record even when a non-load-bearing field (`diff_loc`, the
+        stand-in here for the reported `execution_basis`-derivation defect —
+        see `TestExecutionBasisSidecarDerivation` for the sidecar-shaped
+        version of the same convergence) differs between them. The FIRST
+        record's bytes are the one that survives on disk — converge-on-
+        first-writer, not "prefer whichever write carries more information".
+        """
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=999,  # differs — NOT load-bearing, must still converge
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] == result2["out_path"], (
+            "a non-load-bearing field difference must converge on the first "
+            "writer's path, not create a second record"
+        )
+        json_files = list((tmp_path / "review-trail").glob("*.json"))
+        assert len(json_files) == 1
+        on_disk = json.loads(json_files[0].read_text(encoding="utf-8"))
+        assert on_disk["diff_loc"] == 10, (
+            "the surviving record must be the FIRST writer's bytes — "
+            "converge-on-first-writer must never rewrite in place to "
+            "prefer the second write's value"
+        )
+
+    def test_execution_basis_only_difference_converges_on_first_writer(
+        self, tmp_path, monkeypatch
+    ):
+        """AC5, the exact reported shape: identical bytes converge; adding
+        `execution_basis` alone must NOT defeat convergence — it is a
+        derived field, not one of the load-bearing identity fields."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            execution_basis="read-only",
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] == result2["out_path"]
+        assert len(list((tmp_path / "review-trail").glob("*.json"))) == 1
+
+    def test_divergent_verdict_produces_second_record_and_never_raises(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """AC6 — the hard part. A second write sharing `(session_id,
+        sha_range)` with a DIFFERENT `verdict` must produce a SECOND on-disk
+        record plus a diagnostic naming both paths — it must never raise
+        (a same-session re-review after fixes, with a corrected verdict over
+        the same range, is legitimate) and never overwrite the first."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+        caplog.set_level(logging.WARNING, logger="coordinator_core.ops.review_trail_write")
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="blocked",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",  # corrected verdict after fixes — legitimate, must not be blocked
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] != result2["out_path"], (
+            "a divergent verdict must produce a SECOND record, never merge "
+            "into or overwrite the first"
+        )
+        json_files = list((tmp_path / "review-trail").glob("*.json"))
+        assert len(json_files) == 2
+        on_disk_verdicts = {
+            json.loads(p.read_text(encoding="utf-8"))["verdict"] for p in json_files
+        }
+        assert on_disk_verdicts == {"blocked", "ok"}, (
+            "both the original and the corrected verdict must survive on disk"
+        )
+        diagnostics = [
+            r.message for r in caplog.records
+            if "disagrees with an existing record" in r.message
+        ]
+        assert len(diagnostics) == 1, (
+            f"expected exactly one AC6 diagnostic, got {diagnostics!r}"
+        )
+        assert result1["out_path"] in diagnostics[0]
+        assert result2["out_path"] in diagnostics[0]
+
+    def test_divergent_reviewer_produces_second_record(self, tmp_path, monkeypatch):
+        """AC6's parenthetical: `reviewer` is load-bearing too, not just
+        `verdict`."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="staff-eng",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] != result2["out_path"]
+        assert len(list((tmp_path / "review-trail").glob("*.json"))) == 2
+
+    def test_different_session_id_never_converges_even_with_identical_fields(
+        self, tmp_path, monkeypatch
+    ):
+        """Identity is `(session_id, sha_range)`, not `sha_range` alone —
+        two different sessions writing an otherwise-identical record over
+        the same range must never converge onto one record (and the
+        session-scoped glob means this is enforced twice over: by the
+        identity check AND by the glob itself not crossing session_id_short
+        boundaries)."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id="ffffffff-peer-session",
+            workstream=None,
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] != result2["out_path"]
+        assert len(list((tmp_path / "review-trail").glob("*.json"))) == 2
 
 
 # ---------------------------------------------------------------------------

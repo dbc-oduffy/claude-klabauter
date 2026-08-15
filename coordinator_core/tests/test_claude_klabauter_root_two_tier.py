@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -851,6 +852,119 @@ def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkey
     captured = capsys.readouterr()
     assert "under both" not in captured.err
     assert "coordinator helper" in captured.err
+
+
+# --- C2 (this plan, pln-the-ceremony-tail-stops-lying-b58fb3): Rung 2's
+# `TimeoutExpired` arm stops reporting the same disposition as an exec
+# failure (AC4) and stops advising `machine-local set` for a read that
+# never got far enough to see the key (AC1's claude_klabauter_root half).
+
+
+@pytest.fixture
+def _rung2_fixture(tmp_path, monkeypatch):
+    """No env override, no `.claude-klabauter-root` pointer, `machine-local` present
+    on PATH — forces resolution all the way to Rung 2's subprocess call."""
+    settings_home = tmp_path / "settings-home"
+    ml_dir = settings_home / "machine-local"
+    ml_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.setattr(claude_klabauter_root.shutil, "which", lambda name: "machine-local")
+
+    return SimpleNamespace(settings_home=settings_home)
+
+
+def test_rung2_timeout_reports_distinguishably_from_exec_failure(_rung2_fixture, monkeypatch):
+    """AC4: a `TimeoutExpired` arm must raise a DIFFERENT message than the
+    `OSError` exec-failure arm's fallthrough-to-Rung-3 `_REMEDIATION`."""
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["machine-local"], timeout=claude_klabauter_root._RUNG2_TIMEOUT_SECS)
+
+    monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_timeout)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        claude_klabauter_root.coordinator_claude_klabauter_root()
+
+    assert str(excinfo.value) != claude_klabauter_root._REMEDIATION
+
+
+def test_rung2_timeout_names_reader_timeout_not_machine_local_set(_rung2_fixture, monkeypatch):
+    """AC1 (claude_klabauter_root half): the timeout arm's operator-facing text names
+    a reader timeout and does not advise `machine-local set`."""
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["machine-local"], timeout=claude_klabauter_root._RUNG2_TIMEOUT_SECS)
+
+    monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_timeout)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        claude_klabauter_root.coordinator_claude_klabauter_root()
+
+    message = str(excinfo.value)
+    assert "machine-local set" not in message
+
+
+def test_rung2_timeout_message_carries_shared_token(_rung2_fixture, monkeypatch):
+    """AC3b: the timeout text carries the literal shared discriminator
+    token, and the constant's value itself is pinned so drift fails loudly."""
+    assert claude_klabauter_root._REGISTRY_READ_TIMEOUT_TOKEN == "machine-local registry read timed out"
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["machine-local"], timeout=claude_klabauter_root._RUNG2_TIMEOUT_SECS)
+
+    monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_timeout)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        claude_klabauter_root.coordinator_claude_klabauter_root()
+
+    assert claude_klabauter_root._REGISTRY_READ_TIMEOUT_TOKEN in str(excinfo.value)
+
+
+def test_rung2_exec_failure_still_falls_through_to_absent_key_remediation(
+    _rung2_fixture, monkeypatch
+):
+    """The OSError exec-failure arm (machine-local vanished mid-race) keeps
+    its existing disposition — falls through to Rung 3's `_REMEDIATION`,
+    unlike the timeout arm above. Distinguishes the two failure modes."""
+
+    def _raise_oserror(*args, **kwargs):
+        raise OSError("exec failed")
+
+    monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_oserror)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        claude_klabauter_root.coordinator_claude_klabauter_root()
+
+    assert str(excinfo.value) == claude_klabauter_root._REMEDIATION
+
+
+def test_rung2_absent_key_remediation_text_byte_identical(_rung2_fixture, monkeypatch):
+    """AC2b: with the registry key genuinely absent (machine-local exits
+    nonzero / empty stdout, not a timeout), `_REMEDIATION`'s existing
+    `machine-local set repos.claude_klabauter` text is unchanged, byte for
+    byte — this chunk edits what the TIMEOUT arm reports, not the
+    already-shipped absent-key remediation."""
+    assert claude_klabauter_root._REMEDIATION == (
+        "coordinator_claude_klabauter_root: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
+        "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
+        "  Remediate (choose one):\n"
+        "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
+        "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
+        "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
+    )
+
+    def _fake_run(*args, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _fake_run)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        claude_klabauter_root.coordinator_claude_klabauter_root()
+
+    assert str(excinfo.value) == claude_klabauter_root._REMEDIATION
 
 
 def test_exec_cli_no_coordinator_core_import_introduced():

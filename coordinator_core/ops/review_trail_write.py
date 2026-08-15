@@ -71,6 +71,19 @@ Write semantics (DR-216 D2(i) SUPERSEDED 2026-07-27 — see incident note below)
     uniquifying the filename — not switching to JSONL append — is the fix that every
     existing reader already supports unmodified.
 
+    2026-08-15 (P2, docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
+    failed.md § C3): the ``-2``/``-3``/... suffix above is now reserved for a genuine
+    filename collision AND for a genuine identity divergence (see
+    ``_reserve_unique_trail_path``'s "Identity and convergence" section) — record
+    identity is ``(session_id, sha_range)``, not the record's serialized bytes. A retry
+    whose only difference is a derived field (``execution_basis``) converges on the
+    first-written record (a no-op skip, not a new file); a retry that disagrees on
+    ``verdict``/``reviewer``/``scope``/``reviewed_paths`` for the same identity writes a
+    genuinely new record plus a diagnostic naming both paths — it is never merged into
+    the first. This scan is session-scoped (the ``*-{session_id_short}*.json`` glob), so
+    a cross-session re-run of the "same" review does not converge — see
+    ``_reserve_unique_trail_path`` for why that scoping is kept rather than widened.
+
 MUTATING op: writes ONLY ``state/review-trail/`` (DR-216 D2(iv) noun confinement).
 NEVER writes ``state/handoffs/``, ``archive/``, or rag's relational store
 (dual-write ban, DR-208 Invariant-1 / tri-plane DD#1).
@@ -2562,53 +2575,116 @@ def _trail_dir(caller_worktree: Optional[Path]) -> Path:
 _MAX_UNIQUE_SUFFIX_ATTEMPTS = 10_000
 
 
-def _reserve_unique_trail_path(trail_dir: Path, base_filename: str, record_bytes: bytes) -> Path:
+#: The load-bearing fields AC6 names explicitly: a second write sharing this
+#: write's ``(session_id, sha_range)`` identity that disagrees on ANY of
+#: these must produce a SECOND on-disk record, never a silent merge — this
+#: is precisely the set a downstream consumer trusts to answer "was this
+#: code reviewed, by whom, at what breadth, and with what verdict". Every
+#: other field (``diff_loc``, ``workstream``, ``scope_kind``,
+#: ``execution_basis``, ...) is NOT load-bearing for identity purposes: a
+#: derived/incidental difference there converges on the first writer (see
+#: ``_reserve_unique_trail_path``'s "Identity and convergence" section).
+#: Anti-scope: do not widen this set to "everything that drifted" — that
+#: is the exact upsert this plan's AC6 forbids.
+_LOAD_BEARING_IDENTITY_FIELDS = ("verdict", "reviewer", "scope", "reviewed_paths")
+
+
+def _load_bearing_fields_diverge(existing_record: dict, new_record: dict) -> bool:
+    """True iff *existing_record* and *new_record* disagree on any of
+    ``_LOAD_BEARING_IDENTITY_FIELDS`` — see that constant's docstring.
+    """
+    return any(
+        existing_record.get(field) != new_record.get(field)
+        for field in _LOAD_BEARING_IDENTITY_FIELDS
+    )
+
+
+def _reserve_unique_trail_path(
+    trail_dir: Path,
+    base_filename: str,
+    record_bytes: bytes,
+    *,
+    session_id: str,
+    sha_range: str,
+) -> Path:
     """Atomically claim a not-yet-existing path for *base_filename* under *trail_dir*
     and write *record_bytes* into it in full — never overwriting an existing file
-    (2026-07-27 fix for the DR-216 D2(i) last-write-wins clobber defect). A record
-    whose bytes exactly match one already on disk for this session is a REPLAY, not a
-    collision — see "Replay convergence" below — and converging onto its existing
-    path (rather than uniquifying past it) is what makes a re-run of a failed
-    ``workstream_complete`` apply pass idempotent.
+    (2026-07-27 fix for the DR-216 D2(i) last-write-wins clobber defect).
 
     On the first attempt, tries ``base_filename`` verbatim — this keeps the common
     (no-collision) case's filename byte-identical to the pre-fix format, so every
     existing caller/test that depends on the bare ``{ts}-{sid}.json`` shape is
-    unaffected. Only on an actual same-timestamp+session_id_short collision does this
-    fall back to ``{stem}-2.json``, ``{stem}-3.json``, ... — appended after the
-    session_id segment, which ``_shared._validate_review_trail_file``'s
-    ``_TIME_SEG_RE`` regex already tolerates (it only anchors on the leading digit run
-    for the reviewed_at timestamp; anything after the first ``-`` is opaque to it).
+    unaffected. Only on an actual same-timestamp+session_id_short collision, or on a
+    genuine identity divergence (see below), does this fall back to ``{stem}-2.json``,
+    ``{stem}-3.json``, ... — appended after the session_id segment, which
+    ``_shared._validate_review_trail_file``'s ``_TIME_SEG_RE`` regex already tolerates
+    (it only anchors on the leading digit run for the reviewed_at timestamp; anything
+    after the first ``-`` is opaque to it). Never a ``-integration.json``-shaped suffix
+    (or any other hyphen-tailed suffix): ``example-retrieval-repo-ue-addon/bin/validate-artifact-
+    shapes.py``'s suffix glob outranks its broad ``*.json`` and would validate such a
+    file against the wrong schema — see the module docstring's filename-derivation
+    section; this function introduces no new suffix shape.
 
-    Replay convergence (fix for the workstream_complete PARTIAL_MUTATION duplicate-
-    record defect): before reserving anything, this scans existing records for one
-    whose bytes are EXACTLY equal to *record_bytes*. A byte-identical record is not a
-    collision to uniquify around — it is the SAME write happening again, because an
-    apply pass that failed on a LATER directive got re-run and this trail-write
-    directive fired a second (or third, or Nth) time. ``reviewed_at`` lives only in
-    the filename, never in the record body, so a slow retry across a second boundary
-    produces a byte-identical record under a DIFFERENT filename — a same-second
-    collision alone would miss that case, which is why this is a content scan, not a
-    filename check. Converging on the existing path makes a re-run of a failed apply
-    pass idempotent: the trail directive's second firing writes nothing new and
-    returns the same path it already wrote. This is safe because the serialized
-    record bytes already ARE the identity key — a real re-review after fixes
-    necessarily changes ``verdict`` or ``sha_range`` (and thus the bytes), so it is
-    never swallowed by this check; only a call that would have produced literally the
-    same record converges. The residual: two independent reviews in the same session
-    that happen to produce byte-identical records (same sha_range, reviewer, scope,
-    verdict, diff_loc, workstream, ...) now collapse to one record. That is intended,
-    not a bug — byte-identical means the same verdict over the same range by the same
-    reviewer, so nothing is lost by recording it once.
+    Identity and convergence (P2, docs/plans/2026-08-15-the-ceremony-tail-stops-lying-
+    about-why-it-failed.md § C3 — supersedes the prior whole-record-bytes identity):
+    record identity is ``(session_id, sha_range)``, not the serialized bytes. The
+    prior byte-identity check converged only when EVERY field matched, and
+    ``execution_basis`` is DERIVED (``_derive_execution_basis_from_sidecar`` omits it
+    entirely on ``_SidecarUndetermined``) — a retry whose sidecar resolved differently
+    the second time produced two records for what was logically one write. Before
+    reserving anything, this scans existing records sharing this write's
+    ``(session_id, sha_range)`` and applies one of two rules:
 
-    The scan is bounded to THIS session, not a full-directory scan: *base_filename*
-    has the shape ``{ts}-{session_id_short}.json``, so the session_id_short segment is
-    extracted from it and only ``*-{session_id_short}*.json`` under *trail_dir* is
-    globbed. A replay is always same-session (the directive re-runs inside the same
-    apply-pass retry), so this is correct as well as cheap: measured, a session holds
-    at most ~40 trail records even when the directory holds thousands, so this is a
-    bounded ~40-entry glob-and-compare, never an unbounded scan of the whole
-    directory.
+      - AGREE on every field in ``_LOAD_BEARING_IDENTITY_FIELDS`` (verdict, reviewer,
+        scope, reviewed_paths) — CONVERGE-ON-FIRST-WRITER: return the existing path,
+        write nothing new. This covers both the byte-identical replay case (an
+        ``apply`` pass re-firing the same directive after a later step failed) and a
+        derived-field-only difference (``execution_basis`` present on one write,
+        absent on the other) — either way this is the SAME logical write, and the
+        second call is a dedup-by-key no-op skip. The first record's bytes are NEVER
+        rewritten to prefer whichever write happens to carry ``execution_basis``: that
+        would be in-place mutation of an already-written file, which DR-216 D2's
+        additive-create bound (affirmed by ``authz/classification.py``'s
+        ``review_trail.write`` ``OP_CLASSIFICATION`` block; DR-213 §D4 does NOT govern
+        this op — it is scoped to ``queue.*`` handlers over seven named ``state/``
+        subdirs that do not include ``state/review-trail/``) forbids. A caller needing
+        a basis a first-writer record lacks derives one from a later record's
+        re-resolution, or reports absence — it does not force this write into a
+        rewrite.
+      - DISAGREE on any of those fields — DIVERGE: this is two records that disagree
+        about the answer (most commonly ``verdict``), which is strictly worse to
+        silently collapse than to duplicate. A diagnostic naming both paths is logged
+        (never raised — a same-session re-review after fixes, with a corrected verdict
+        over the same range, is a legitimate path this must not block), and the write
+        proceeds to create a genuinely new file below. This never overwrites the
+        divergent existing record.
+
+    A field OUTSIDE ``_LOAD_BEARING_IDENTITY_FIELDS`` (``diff_loc``, ``workstream``,
+    ``scope_kind``, ``execution_basis``) differing alone does not block convergence —
+    widening identity to "everything that drifted" is the exact upsert this plan's
+    anti-scope forbids (it would make a legitimate re-review with a corrected verdict
+    indistinguishable from noise on an unrelated field).
+
+    SESSION SCOPING — deliberately kept session-scoped, not widened to a
+    cross-session scan (see below the constant this function inherits from the
+    caller). The scan is bounded to THIS session: *base_filename* has the shape
+    ``{ts}-{session_id_short}.json``, so the session_id_short segment is extracted
+    from it and only ``*-{session_id_short}*.json`` under *trail_dir* is globbed.
+    Reasoned choice, not an oversight: (a) `session_id` is already half of the new
+    identity key, so a cross-session scan would still need to filter by session_id
+    after widening the glob — it buys nothing the identity check doesn't already
+    reject; (b) a cross-session glob over the full directory is the unbounded scan
+    this function's session-scoped design deliberately avoids (measured: a session
+    holds ~40 trail records even when the directory holds thousands); (c) two
+    DIFFERENT sessions independently writing the same ``(session_id, sha_range)``
+    is definitionally impossible — session_id is part of the key and is this
+    writer's own resolved session_id, never a peer's. A same-``sha_range``
+    cross-session REPLAY (the same reviewing session re-invoked under a
+    different session_id, e.g. after a coordinator restart) is NOT converged by
+    this function and produces a new record — that is an intentional, narrower
+    gap than "cross-session replay never converges" (P2's own writeup already
+    flags the glob as session-scoped): the module's docstring at the top no
+    longer implies replay-idempotence across a session boundary; only within one.
 
     Uses ``os.open`` with ``O_CREAT | O_EXCL | O_WRONLY``, not ``os.replace``: ``O_EXCL``
     fails closed with ``FileExistsError`` when the target already exists, so a race
@@ -2627,25 +2703,56 @@ def _reserve_unique_trail_path(trail_dir: Path, base_filename: str, record_bytes
     process restart) never finds a corrupt half-written record.
 
     Raises ``RuntimeError`` if ``_MAX_UNIQUE_SUFFIX_ATTEMPTS`` candidates are all taken
-    (see cap's docstring — a defensive ceiling, not an expected path).
+    (see cap's docstring — a defensive ceiling, not an expected path). Never raises on
+    a load-bearing-field divergence (AC6) — that path logs and creates a second record.
     """
     assert base_filename.endswith(".json")
     stem = base_filename[: -len(".json")]
 
-    # Replay convergence pre-check — see docstring. Bounded to this session's
-    # records only (never a full-directory scan): base_filename is
-    # "{ts}-{session_id_short}.json", and ts itself is dash-delimited
-    # ("YYYY-MM-DD-HHMMSS[ns]"), so rpartition on the LAST "-" (not the
-    # first) to recover the session_id_short suffix and glob only that
-    # session's files.
+    try:
+        new_record = json.loads(record_bytes.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        # Defensive only — record_bytes is produced by this module's own
+        # _build_json_record and is always valid JSON in practice. A future
+        # change to that function that breaks this invariant should not
+        # crash the write; it just disables identity-based convergence for
+        # this call (falls through to the plain collision-suffix path below).
+        new_record = None
+
+    # Identity-based convergence pre-check — see "Identity and convergence"
+    # above. Bounded to this session's records only (never a full-directory
+    # scan): base_filename is "{ts}-{session_id_short}.json", and ts itself
+    # is dash-delimited ("YYYY-MM-DD-HHMMSS[ns]"), so rpartition on the LAST
+    # "-" (not the first) to recover the session_id_short suffix and glob
+    # only that session's files.
+    divergent_existing: Optional[Path] = None
     _, _, session_id_short = stem.rpartition("-")
-    if session_id_short:
+    if session_id_short and new_record is not None:
         for existing in trail_dir.glob(f"*-{session_id_short}*.json"):
             try:
-                if existing.read_bytes() == record_bytes:
-                    return existing
+                existing_bytes = existing.read_bytes()
             except OSError:
                 continue
+            try:
+                existing_record = json.loads(existing_bytes.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if (
+                existing_record.get("session_id") != session_id
+                or existing_record.get("sha_range") != sha_range
+            ):
+                continue
+            if not _load_bearing_fields_diverge(existing_record, new_record):
+                # Converge-on-first-writer: same identity, no load-bearing
+                # disagreement (byte-identical replay, or a derived-field-
+                # only difference like execution_basis). No-op skip.
+                return existing
+            # AC6: divergent load-bearing field(s) on the same identity —
+            # never merge, never raise. Remember it (first one found) so the
+            # diagnostic below can name both paths against the ACTUAL final
+            # path this write reserves, not a guess at base_filename.
+            if divergent_existing is None:
+                divergent_existing = existing
 
     candidate = trail_dir / base_filename
     attempt = 1
@@ -2677,6 +2784,22 @@ def _reserve_unique_trail_path(trail_dir: Path, base_filename: str, record_bytes
                     file=sys.stderr,
                 )
             raise
+        if divergent_existing is not None:
+            # AC6 diagnostic — logged only once the real final path is known
+            # (candidate may have been suffixed past base_filename above on
+            # an unrelated same-second collision).
+            logger.warning(
+                "review_trail.write: a second record for session_id=%r "
+                "sha_range=%r disagrees with an existing record on a "
+                "load-bearing field (one of %s) — wrote a SECOND record "
+                "rather than silently discarding the disagreement. "
+                "existing=%s new=%s",
+                session_id,
+                sha_range,
+                _LOAD_BEARING_IDENTITY_FIELDS,
+                divergent_existing,
+                candidate,
+            )
         return candidate
 
 
@@ -3065,7 +3188,13 @@ def write_review_trail_entry(
     # discipline; DR-216 D2(i)'s os.replace-overwrites last-write-wins design SUPERSEDED
     # 2026-07-27 — see the module docstring's incident note for why).
     # No trailing newline — oracle uses printf '%s' (not echo).
-    out_path = _reserve_unique_trail_path(trail_dir, filename, record_bytes)
+    out_path = _reserve_unique_trail_path(
+        trail_dir,
+        filename,
+        record_bytes,
+        session_id=resolved_session_id,
+        sha_range=sha_range,
+    )
 
     result = {
         "out_path": str(out_path),
