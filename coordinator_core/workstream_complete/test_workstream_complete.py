@@ -1120,6 +1120,167 @@ def test_brief_reading_persisted_verdict_still_mutates_nothing(monkeypatch, tmp_
 
 
 # ---------------------------------------------------------------------------
+# `gates.review_scale.chain_slices` (Seam 3, C2 -> C3, this plan) -- the
+# chain-scoped review-obligation slate, read back onto the SAME record
+# `chain_partition_verdict` above already reads. Present / resolved-empty /
+# key-absent-when-unresolvable, mirroring the `commit_slices` trio above,
+# plus the negative-spec that `chain_slices` and `commit_slices` are
+# different sets that must both be able to appear independently.
+# ---------------------------------------------------------------------------
+
+_CHAIN_SLICE_ENTRY = {
+    "sha": "abc1234",
+    "sha_range": "abc1234^..abc1234",
+    "recordable": True,
+    "certifies_review": False,
+}
+
+
+def _persist_with_slices(tmp_path: Path, *, verdict: str, chain_slices) -> None:
+    chain_partition_verdict_store.write_verdict_record(
+        tmp_path,
+        session_id=_SID,
+        verdict=verdict,
+        from_handoff=_HANDOFF,
+        git_range=None,
+        basis="plan_oracle=4(...) chain_oracle=32(...) session_oracle=10(...) tier=B",
+        tier="B",
+        chain_slices=chain_slices,
+    )
+
+
+def test_brief_emits_chain_slices_present_on_disk(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
+    _persist_with_slices(tmp_path, verdict="PARTITION-MANDATORY", chain_slices=[_CHAIN_SLICE_ENTRY])
+    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+    assert "chain_slices" in review_scale
+    assert review_scale["chain_slices"] == [_CHAIN_SLICE_ENTRY]
+
+
+def test_brief_emits_chain_slices_resolved_empty(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
+    _persist_with_slices(tmp_path, verdict="single-reviewer-ok", chain_slices=[])
+    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+    assert "chain_slices" in review_scale
+    assert review_scale["chain_slices"] == []
+
+
+def test_brief_omits_chain_slices_key_when_unresolvable(monkeypatch, tmp_path):
+    """No record on disk at all -> the key is ABSENT, never defaulted to
+    `[]` (which would falsely claim the gate ran and found nothing owed)."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
+    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+    assert "chain_slices" not in review_scale
+
+
+def test_brief_omits_chain_slices_key_when_verdict_persisted_without_a_slate(monkeypatch, tmp_path):
+    """A record written by an older producer (or one that failed to persist
+    the slate) carries a verdict but no `chain_slices` key -- still absent,
+    not `[]`, on the payload."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
+    _persist(tmp_path, verdict="PARTITION-MANDATORY")  # no chain_slices kwarg
+    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+    assert "chain_slices" not in review_scale
+
+
+def test_chain_slices_and_commit_slices_are_independent_populations(monkeypatch, tmp_path):
+    """Negative-spec regression: a close can owe chain-scoped review
+    (`chain_slices` non-empty) while this session's own record-write
+    population (`commit_slices`) is empty, and vice versa -- a future
+    reader must not treat one as derivable from the other."""
+    sha = _init_repo_with_session_commit(tmp_path)
+    gate = wsc.SessionShapeGate(
+        sid=_SESSION_ID_FOR_SLICES,
+        disposition="chain-terminal",
+        consumed_handoff=_HANDOFF,
+        diagnostics=[],
+        consumed_handoff_paths=(),
+        detection={},
+    )
+    _patch_gate(monkeypatch, gate)
+    _persist_with_slices(tmp_path, verdict="single-reviewer-ok", chain_slices=[])
+
+    decision_object = wsc.brief(
+        decisions=dict(_review_scale_decisions(), stage_paths=[]), repo_root=tmp_path
+    )
+    review_scale = decision_object["gates"]["review_scale"]
+    assert review_scale["chain_slices"] == []
+    assert len(review_scale["commit_slices"]) == 1
+    assert review_scale["commit_slices"][0]["sha"] == sha
+
+
+# ---------------------------------------------------------------------------
+# AC9 -- `_build_write_trail_args` forwards `reviewer_evidence` as
+# `--reviewer-evidence`, mirroring the existing `--scope-kind` handling. A
+# review WITHOUT evidence stays byte-identical to today.
+# ---------------------------------------------------------------------------
+
+
+def test_build_write_trail_args_forwards_reviewer_evidence_when_present():
+    review = {
+        "sha_range": "a..b",
+        "reviewer": "coordinator:code-reviewer",
+        "scope": "diff",
+        "verdict": "OK",
+        "diff_loc": 10,
+        "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
+    }
+    args = wsc._build_write_trail_args(review)
+    assert args == [
+        "write-trail",
+        "--sha-range", "a..b",
+        "--reviewer", "coordinator:code-reviewer",
+        "--scope", "diff",
+        "--verdict", "OK",
+        "--diff-loc", "10",
+        "--reviewer-evidence", "state/subagent-share/sid/reviewer.md",
+    ]
+
+
+def test_build_write_trail_args_is_byte_identical_without_reviewer_evidence():
+    review = {
+        "sha_range": "a..b",
+        "reviewer": "coordinator:code-reviewer",
+        "scope": "diff",
+        "verdict": "OK",
+        "diff_loc": 10,
+    }
+    args = wsc._build_write_trail_args(review)
+    assert args == [
+        "write-trail",
+        "--sha-range", "a..b",
+        "--reviewer", "coordinator:code-reviewer",
+        "--scope", "diff",
+        "--verdict", "OK",
+        "--diff-loc", "10",
+    ]
+    assert "--reviewer-evidence" not in args
+
+
+def test_build_write_trail_directives_names_reviewer_evidence_on_the_directive():
+    """End-to-end through `build_write_trail_directives`: a `decisions
+    ["review"]` dict carrying `reviewer_evidence` produces a `d-write-trail`
+    directive whose args name `--reviewer-evidence`."""
+    review = {
+        "sha_range": "a..b",
+        "reviewer": "coordinator:code-reviewer",
+        "scope": "diff",
+        "verdict": "OK",
+        "diff_loc": 10,
+        "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
+    }
+    directives = wsc.build_write_trail_directives(review)
+    assert len(directives) == 1
+    args = directives[0]["args"]
+    assert "--reviewer-evidence" in args
+    assert args[args.index("--reviewer-evidence") + 1] == "state/subagent-share/sid/reviewer.md"
+
+
+# ---------------------------------------------------------------------------
 # d-archive-session-claim removed from the assembly (2026-07-28) -- this
 # ceremony fires once per closed workstream, but session-dir archival
 # (`scope.archive()`) is a once-per-SESSION-END operation. Emitting the

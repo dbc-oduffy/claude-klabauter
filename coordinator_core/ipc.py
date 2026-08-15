@@ -521,9 +521,19 @@ _CALLER_FACING_MESSAGE_MAX_LEN = 2000
 #       unblocks. (2026-08-07 ceremony-lock-leak audit,
 #       state/audits/2026-08-07-ceremony-lock-leak-root-cause.md — this comment
 #       previously claimed the thread WAS cancelled, which is false and was directly
-#       contradicted by invoke/__main__.py's own comments on the same path; a handler
-#       thread holding a cross-process lock across this timeout keeps holding it until
-#       invoke/__main__.py's own os._exit() tears down the whole process.)
+#       contradicted by invoke/__main__.py's own comments on the same path.)
+#
+#       The cross-process lock this paragraph used to name was ceremony_lock, deleted
+#       2026-08-08 by fa88f327b (docs/plans/2026-08-07-excise-the-ceremony-lock.md).
+#       The surviving lock surface is coordinator_core/locked_write, which is
+#       kernel-backed (fcntl.flock / msvcrt.locking) and therefore released by the OS
+#       on process death by ANY means — os._exit included. os._exit is load-bearing
+#       for termination LATENCY, not for lock reclaim: measured 1.22s vs 20.1s for
+#       sys.exit, which blocks joining the executor thread.
+#       Negative spec: do NOT infer from this that an abandoned handler thread is
+#       harmless in a long-lived process. It is harmless only because the process
+#       exits. Verified 2026-08-15:
+#       docs/research/spike-verdicts/2026-08-15-warm-engine-os-exit-and-lock-reclaim.md
 # Blocking-sync handlers NOT wrapped in asyncio.to_thread cannot be interrupted by
 # asyncio.wait_for — the event loop stalls for the full blocking duration.
 # C3 wraps all sync handlers via asyncio.to_thread to ensure the AWAIT (not the

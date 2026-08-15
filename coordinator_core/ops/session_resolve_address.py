@@ -78,6 +78,7 @@ def _session_resolve_address(params: dict, repo_root: Optional[Path] = None) -> 
     Returns:
         {"outcome": "own_session"|"reachable"|"not_reachable"|"ambiguous",
          "session_id": str|None, "address": str|None, "reason": str|None,
+         "fallback_channel": str|None,
          "candidates": [{"session_id","name","ref","address"}, ...],
          "caller_messaging_gate": {"state","requested","inbox_bound","note"}}
 
@@ -103,6 +104,22 @@ def _session_resolve_address(params: dict, repo_root: Optional[Path] = None) -> 
     reads it here instead of re-deriving it from a second registry read
     it does not have.
 
+    `fallback_channel` carries `reachability.ResolveResult.fallback_channel`
+    verbatim: `"peer_notice.send"` or `"cross-repo-memo"`
+    (`reachability.FallbackChannel`) when `reason ==
+    "peer-messaging-unavailable"`, `None` on every other reason and every
+    other outcome. Always PRESENT, never synthesized here -- same passthrough
+    discipline as `reason` (module docstring). This is the field
+    `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-session-messaging-
+    unavailable.md`'s Finding 1 asked for: a consumer-facing reader of
+    `gates.competing_claim.candidates[]`-shaped output that only ever saw
+    `"peer-messaging-unavailable"` had no path from that string to the
+    remedy without reading this module's source. `this_repo_root` is
+    threaded from this op's own `repo_root` param (the JSON-RPC dispatch's
+    per-call caller repo root) so the repo-conditional branch in
+    `reachability._fallback_channel_for` compares against the CALLING
+    session's own working tree, not an assumed one.
+
     A missing/empty `session_id` param yields `{"outcome": "not_reachable", ...}`
     rather than raising -- this op sits on advisory read paths (e.g. the
     `baton-assemble` collision warning) that must degrade, never block.
@@ -111,13 +128,15 @@ def _session_resolve_address(params: dict, repo_root: Optional[Path] = None) -> 
     if not isinstance(session_id, str):
         session_id = ""
 
-    result = reachability.resolve_address(session_id)
+    this_repo_root = str(repo_root) if repo_root else None
+    result = reachability.resolve_address(session_id, this_repo_root)
 
     return {
         "outcome": result.outcome,
         "session_id": result.session_id,
         "address": result.address,
         "reason": result.reason,
+        "fallback_channel": result.fallback_channel,
         "candidates": [_candidate_to_dict(c) for c in result.candidates],
         "caller_messaging_gate": messaging_gate.to_dict(messaging_gate.classify()),
     }

@@ -1039,6 +1039,101 @@ def test_brightline_gate_partition_mandatory_discharged_still_caps_cleanly(monke
 
 
 # ---------------------------------------------------------------------------
+# AC4/Seam 2/3 (plan 2026-08-15-chain-scope-review-gets-a-discharging-
+# artifact.md, C2): `chain_slices` — C7's slate, persisted by C2 onto the
+# SAME `chain_partition_verdict_store` record `_persist_brightline_verdict`
+# already writes. Absent-vs-`[]` is load-bearing (module docstring, "the key
+# is absent when the gate has not run for this close" — never `[]`, which
+# means resolved-and-empty): the pair below pins both sides of that split.
+# ---------------------------------------------------------------------------
+
+
+def test_brightline_gate_persists_uncapped_chain_slices_on_undischarged_close(
+    monkeypatch, tmp_path,
+):
+    """AC4 — an undischarged PARTITION-MANDATORY close persists a
+    `chain_slices` slate on the SAME record `_persist_brightline_verdict`
+    already writes: present (not absent), uncapped (survives past the
+    ten-sha `cap = 10` prose limit that renders elsewhere in this same
+    call), and carrying C7's per-entry shape
+    (`sha`/`sha_range`/`recordable`/`certifies_review`/
+    `chain_slices_caveat`)."""
+    from coordinator_core.workstream_complete.chain_partition_verdict_store import (
+        read_chain_slices,
+    )
+
+    many_shas = [f"{i:040x}" for i in range(1, 13)]  # 12 > cap = 10
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    _patch_chain_scoping(monkeypatch, chain_code_shas=many_shas)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 1  # undischarged, own_shas non-empty — HALT
+
+    slices = read_chain_slices(
+        tmp_path, session_id="test-sid-c13", expected_from_handoff="state/handoffs/x.md",
+    )
+    assert slices is not None
+    assert len(slices) == 12  # uncapped — every owed sha, not just the first 10
+    entry = slices[0]
+    assert entry["sha"] == many_shas[0]
+    assert entry["sha_range"] == f"{many_shas[0]}^..{many_shas[0]}"
+    assert entry["recordable"] is True  # own-session code commit
+    assert entry["certifies_review"] is False  # no waiver record on disk
+    assert "chain_slices_caveat" in entry
+
+
+def test_brightline_gate_persists_empty_chain_slices_on_discharged_close(monkeypatch, tmp_path):
+    """AC4 — a discharged PARTITION-MANDATORY close (a real, non-pending,
+    non-waived verdict covers every chain code commit) persists
+    `chain_slices == []`: PRESENT and empty, never absent. Absent means
+    "the gate did not compute a slate for this close"; a clean close is the
+    gate having run and resolved the owed set to nothing, which is a
+    different, honest answer that must render as such on read-back
+    (`write_verdict_record`'s own None-vs-`[]` contract)."""
+    from coordinator_core.workstream_complete.chain_partition_verdict_store import (
+        read_chain_slices,
+    )
+
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        _mod,
+        "_load_trail_records",
+        lambda: [{"verdict": "pending"}, _discharging_record("blocked")],
+    )
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 0  # tier=B is communicate-only once discharged
+
+    slices = read_chain_slices(
+        tmp_path, session_id="test-sid-c13", expected_from_handoff="state/handoffs/x.md",
+    )
+    assert slices == []
+
+
+def test_brightline_gate_chain_slices_persist_failure_is_non_fatal_and_loud(
+    monkeypatch, tmp_path, capsys,
+):
+    """The chunk brief's persist-failure contract, restated for the
+    chain_slices leg specifically: a disk-write failure while persisting
+    the slate must be reported loudly on stderr but must NEVER change the
+    gate's own verdict or return value (module docstring, "Fail-closed
+    contract" — `write_verdict_record` raises, the CALLER swallows it)."""
+    _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_mod, "write_verdict_record", _boom)
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    assert rc == 1  # unchanged — same undischarged HALT as the un-mocked case
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "disk full" in err
+    assert "HALT: brightline verdict=PARTITION-MANDATORY" in err
+
+
+# ---------------------------------------------------------------------------
 # C4b (docs/plans/2026-08-11-review-trail-carries-execution-basis.md, AC4):
 # `cmd_brightline_gate` now also calls the read-only reporting companion
 # `directives_review.chain_partition_execution_basis_report` and surfaces its
@@ -1579,7 +1674,7 @@ def test_brightline_gate_all_foreign_waived_narrates_recordable_with_per_commit_
     assert rc == 0
     err = capsys.readouterr().err
     assert "2 of these 2 commit(s) are foreign-session" in err
-    assert "ARE RECORDABLE by this session" in err
+    assert "recordable via a chain-ancestry waiver" in err
     assert 'coordinator-write-review-trail --sha-range "<sha>^..<sha>" --scope chain' in err
     assert "unrecordable by an ordinary review-trail write" not in err
 
@@ -1598,7 +1693,7 @@ def test_brightline_gate_all_foreign_unwaived_keeps_unrecordable_wording(
     assert rc == 0
     err = capsys.readouterr().err
     assert "2 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
-    assert "ARE RECORDABLE by this session" not in err
+    assert "recordable via a chain-ancestry waiver" not in err
 
 
 def test_brightline_gate_mixed_waiver_partitions_foreign_set_both_ways(
@@ -1635,7 +1730,7 @@ def test_brightline_gate_waiver_lookup_failure_degrades_to_unrecordable(
     assert rc == 0
     err = capsys.readouterr().err
     assert "1 of these 1 commit(s) are unrecordable by an ordinary review-trail write" in err
-    assert "RECORDABLE by this session" not in err
+    assert "recordable via a chain-ancestry waiver" not in err
 
 
 def test_brightline_gate_warns_when_the_mint_subprocess_failed_before_minting(

@@ -234,6 +234,7 @@ from coordinator_core.ops.list_review_trail_records import (  # noqa: E402
 from coordinator_core.workstream_complete.directives_review import (  # noqa: E402
     CHAIN_VERDICT_PARTITION_MANDATORY as _CHAIN_VERDICT_PARTITION_MANDATORY,
     EXECUTION_BASIS_NOT_RECORDED,
+    build_chain_slices,
     chain_partition_execution_basis_report,
     chain_partition_uncovered_shas,
     classify_untrusted_trail_ranges,
@@ -248,6 +249,9 @@ from coordinator_core.coverage import (  # noqa: E402
     _derive_dag_chain_set,
     _resolve_numstat_row_path,
     _spec_dispatch_exempt_planning_shas,
+)
+from coordinator_core.chain_ancestry_waivers import (  # noqa: E402
+    chain_ancestry_waiver_records,
 )
 from coordinator_core.ops.review_brightline_gate import (  # noqa: E402
     _is_prose_bearing_path,
@@ -1625,12 +1629,29 @@ def _persist_brightline_verdict(
     from_handoff: str,
     git_range: str | None,
     fields: dict,
+    chain_slices: list[dict] | None = None,
 ) -> None:
     """Write the just-computed brightline verdict to the persistence seam
     (`chain_partition_verdict_store`) so the NEXT `wsc.brief()`/`wsc.apply()`
     call can read it without an EM re-typing `decisions["chain_partition_
     verdict"]` (root cause: cross-repo/inbox/2026-08-04-example-retrieval-repo-em-
     brightline-partition-mandatory-does-not-halt.md, "mechanism 2").
+
+    `chain_slices` (AC4, Seam 2/3): C7's slate, already decorated by the
+    caller. `None` (the default) omits the key entirely — `write_verdict_
+    record`'s own contract (absent means "not computed for this call",
+    never confused with a resolved-and-empty `[]`). `cmd_brightline_gate`
+    calls this function twice for EVERY PARTITION-MANDATORY verdict that
+    reaches the point of computing an owed set — whether that set turns
+    out non-empty (undischarged) or empty (discharged/vacuous): once here,
+    unconditionally and BEFORE the owed-set is known (so tier=A and every
+    other early-return path still gets a persisted record exactly as
+    before this parameter existed), and again once the slate is resolved,
+    passing `chain_slices` — a non-empty list in the undischarged case, or
+    `[]` in the discharged case — either way the second call overwrites
+    the same on-disk record (same session-keyed path) with `chain_slices`
+    added. Both calls target the SAME record; this is not two competing
+    verdicts, only two writes of one.
 
     Best-effort and NON-FATAL: any failure (session id unresolvable, repo
     root unresolvable, disk write error) is reported loudly on stderr and
@@ -1663,6 +1684,7 @@ def _persist_brightline_verdict(
             git_range=git_range,
             basis=fields["basis"],
             tier=fields["tier"],
+            chain_slices=chain_slices,
         )
     except OSError as exc:
         print(
@@ -2060,6 +2082,32 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     trail_records, chain_code_shas, chain_dag_shas,
                     chain_planning_shas,
                 )
+                # AC4/Seam 2/3 — the recordable partition on the SAME
+                # evidence source the write guard consults
+                # (`_resolve_vouched_shas`), computed ONCE here and reused
+                # by both `build_chain_slices` below and the waived/
+                # unwaived narration further down (never re-derived a
+                # second time — the defect class this plan exists to
+                # stop). `vouched` is only resolved when there is a
+                # foreign sha to test it against; an empty `foreign_shas`
+                # needs no waiver lookup at all.
+                vouched = _resolve_vouched_shas(closing_session_id) if foreign_shas else frozenset()
+                waived_foreign = [s for s in foreign_shas if s in vouched]
+                unwaived_foreign = [s for s in foreign_shas if s not in vouched]
+                recordable_shas = frozenset(own_shas) | frozenset(waived_foreign)
+                waiver_records = (
+                    chain_ancestry_waiver_records(repo_root, closing_session_id)
+                    if repo_root and closing_session_id
+                    else {}
+                )
+                chain_slices = build_chain_slices(
+                    uncovered,
+                    recordable_shas=recordable_shas,
+                    waiver_records=waiver_records,
+                )
+                _persist_brightline_verdict(
+                    args.from_handoff, args.git_range, fields, chain_slices=chain_slices,
+                )
                 if own_shas:
                     print(
                         "HALT: brightline verdict=PARTITION-MANDATORY and "
@@ -2156,82 +2204,35 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                             file=sys.stderr,
                         )
                 if foreign_shas:
-                    # 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-
-                    # doe-claude-em-brightline-unrecordable-narration-is-
-                    # false.md): this block used to call EVERY foreign sha
-                    # unrecordable. All three premise clauses were true and
-                    # the conclusion was false — `review_trail_write.
-                    # _guard_foreign_session_range` Case 1 refuses a
-                    # foreign-trailer sha UNLESS it carries a chain-ancestry
-                    # waiver minted for this chain, and this same runner
-                    # mints exactly those waivers by default at the
-                    # `_run_review_coverage_gate` call site above. A
-                    # predecessor session in DoE-claude read the old string,
-                    # concluded its chain could not be recorded, and handed
-                    # the workstream on; the write the narration called
-                    # impossible is the write that closed their gate.
-                    # Partition on the SAME evidence source the write guard
-                    # consults (`_resolve_vouched_shas`, exact-sha set
-                    # membership as in `coverage._narrow_foreign_session_
-                    # scope`), never a second oracle. Rendering-only:
-                    # `uncovered`, `chain_code_shas`, `own_shas`, the HALT
-                    # branch, the verdict and the return code are untouched.
+                    # `waived_foreign`/`unwaived_foreign` are already
+                    # computed above (same `vouched` evidence source the
+                    # write guard consults, `_resolve_vouched_shas`) — never
+                    # re-derived here, matching Seam 2's "recordable is
+                    # supplied by the caller" contract.
                     #
-                    # Fail-safe polarity here is INVERTED from this file's
-                    # usual "degrade toward narrowing": an empty or failed
-                    # waiver lookup must never produce a false RECORDABLE
-                    # claim, so it degrades to the pre-existing unrecordable
-                    # wording (the status quo) rather than inventing
-                    # recordability. `_resolve_vouched_shas` already returns
-                    # an empty frozenset on any failure, so that degradation
-                    # is automatic: empty set ⇒ zero waived ⇒ every foreign
-                    # sha renders exactly as it did before this change.
-                    vouched = _resolve_vouched_shas(closing_session_id)
-                    waived_foreign = [s for s in foreign_shas if s in vouched]
-                    unwaived_foreign = [s for s in foreign_shas if s not in vouched]
+                    # AC5 register rewrite (docs/wiki/guard-messaging.md
+                    # § Register): the waived-foreign fact is stated once,
+                    # plus a terse alternative — no self-legitimacy
+                    # (asserting what the waiver "really" permits), no
+                    # restatement of the waiver's own mechanism, no DR
+                    # citation. The uncapped per-sha list now lives on the
+                    # persisted `chain_slices` record (this call's own
+                    # `_persist_brightline_verdict` above) instead of being
+                    # enumerated a second time in prose here.
                     if waived_foreign:
                         print(
                             f"  {len(waived_foreign)} of these "
                             f"{len(uncovered)} commit(s) are foreign-session "
-                            "(authored by a predecessor session) but ARE "
-                            "RECORDABLE by this session: each carries a "
-                            "gate-minted chain-ancestry waiver for this "
-                            "chain, which the foreign-session write guard "
-                            "honours. Write one record per commit: "
-                            "coordinator-write-review-trail --sha-range "
-                            '"<sha>^..<sha>" --scope chain. Range SHAPE '
-                            "constraint: use concrete endpoints like that — "
-                            "a stored range ending in a literal `..HEAD` is "
-                            "dropped by the stored-HEAD defense before any "
-                            "waiver is consulted "
-                            "(coverage._record_range_has_stored_head), so a "
-                            "`..HEAD` record would not discharge these even "
-                            "though a per-commit record does. The waiver "
-                            "explains why the write guard PERMITS this "
-                            "write: it relaxes the foreign-session strip "
-                            "(coverage.py::_narrow_foreign_session_scope) "
-                            "so a covering record MAY credit these "
-                            "commits. It is NOT evidence that anyone "
-                            "reviewed them (the waiver record carries "
-                            "certifies_review: false; see "
-                            "chain_ancestry_waivers._READER_NOTE and "
-                            "docs/decisions/DR-245-gate-minted-chain-"
-                            'ancestry-waivers-supersede-in.md ("The '
-                            'disclosed limit" section). Write a record '
-                            "ONLY for commits this session actually "
-                            "reviewed.",
+                            "and recordable via a chain-ancestry waiver for "
+                            "this chain — not evidence anyone reviewed them "
+                            "(see gates.review_scale.chain_slices for the "
+                            "full list). Record only commits this session "
+                            "reviewed: coordinator-write-review-trail "
+                            '--sha-range "<sha>^..<sha>" --scope chain '
+                            "(concrete endpoints only — a `..HEAD` range is "
+                            "dropped before the waiver is consulted).",
                             file=sys.stderr,
                         )
-                        for line in _annotate_already_reviewed(
-                            _describe_uncovered_shas(waived_foreign[:cap], repo_root),
-                            broadly_reviewed,
-                        ):
-                            print(f"    {line}", file=sys.stderr)
-                        if len(waived_foreign) > cap:
-                            print(
-                                _format_capped_overflow_note(len(waived_foreign), cap),
-                                file=sys.stderr,
-                            )
                     if unwaived_foreign:
                         print(
                             f"  {len(unwaived_foreign)} of these "
@@ -2297,6 +2298,18 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 )
             print(f'basis: "{basis}"', file=sys.stderr)
             return 1 if own_shas else 0
+        else:
+            # AC4/Seam 3 — the gate RAN and resolved the owed set to empty
+            # (vacuous "owes no code review", or an ordinary discharge
+            # with nothing uncovered). Persist `chain_slices=[]`
+            # explicitly rather than leaving the key absent: absent means
+            # "did not compute a slate for this close"
+            # (`write_verdict_record`'s own None-vs-`[]` contract); a
+            # clean, fully-reviewed close is the resolved-and-empty case,
+            # not the not-run case, and must render as such on read-back.
+            _persist_brightline_verdict(
+                args.from_handoff, args.git_range, fields, chain_slices=[],
+            )
 
     # tier in {B, none} — communicate loudly, never hard-stop. The EM (not
     # this script) decides reviewers_required; this only cross-checks a

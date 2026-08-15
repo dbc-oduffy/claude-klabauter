@@ -876,6 +876,8 @@ def _build_write_trail_args(review: dict[str, Any]) -> list[str]:
     ]
     if review.get("scope_kind"):
         args += ["--scope-kind", str(review["scope_kind"])]
+    if review.get("reviewer_evidence"):
+        args += ["--reviewer-evidence", str(review["reviewer_evidence"])]
     return args
 
 
@@ -3419,6 +3421,21 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             expected_from_handoff=gate.consumed_handoff or None,
         )
 
+    # Seam 3 (C2 -> C3, this plan): the chain-scoped review-obligation slate,
+    # carried OPAQUELY off the same record `chain_partition_verdict` above
+    # already reads — never inspected, validated, or re-ordered here (this
+    # would make the carrier a second oracle over C7's shape). `None` means
+    # the gate has not run for this close yet (or ran before this key
+    # existed); a resolved-but-empty list is a real, distinct answer. No
+    # `decisions[...]` override exists for this key — unlike `chain_
+    # partition_verdict`, which an EM can hand-type, `chain_slices` is a
+    # machine-computed slate with no hand-carry path to override.
+    review_scale_chain_slices = chain_partition_verdict_store.read_chain_slices(
+        root,
+        session_id=gate.sid,
+        expected_from_handoff=gate.consumed_handoff or None,
+    )
+
     # AC6/AC9 (2026-08-08-the-engine-asks-for-facts-it-already-holds, C5):
     # `gross_loc`/`commit_count`/`surface_count` are the three disk-
     # derivable row-4 brightline inputs — see
@@ -3765,6 +3782,24 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         review_scale_payload["uncommitted_code_loc"] = (
             max(0, measured_code_loc - _sliced_code_loc) if measured_code_loc is not None else None
         )
+
+    # AC4 (this plan): `chain_slices`, bolted onto the SAME payload beside
+    # `commit_slices` above. Absent key when unresolved (`review_scale_
+    # chain_slices is None`, per `read_chain_slices`'s own None-vs-`[]`
+    # contract) — never defaulted to `[]`, which would claim "resolved and
+    # empty" for a gate that has not run yet.
+    #
+    # NEGATIVE SPEC — `chain_slices` is NOT `commit_slices` and a future
+    # reader must not "reconcile" them: `chain_slices` is the chain-scoped
+    # REVIEW OBLIGATION (who owes review, decorated from `chain_partition_
+    # uncovered_shas`, sourced by C2/C7 off the DAG/session-trailer chain
+    # oracle) while `commit_slices` is the RECORD-WRITE POPULATION (this
+    # session's own trail-ready commit slices, measured above by `_measure_
+    # session_review_scale_inputs`). Different sets by design, different
+    # producers, different failure axes — one can be non-empty while the
+    # other is empty or absent, and that is not a bug.
+    if review_scale_chain_slices is not None:
+        review_scale_payload["chain_slices"] = review_scale_chain_slices
 
     envelope = build_envelope(
         artifact={"path": str(root), "classification": "workstream", "frontmatter": {}},

@@ -98,9 +98,17 @@ _MAX_HUNK_FILES = 10
 # process has no console to inherit (e.g. spawned by a scheduled task or a GUI
 # Claude Code host). POSIX: empty dict — CREATE_NO_WINDOW is a Windows-only
 # attribute, so the ternary short-circuits before touching it.
-_NO_CONSOLE_WINDOW = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-)
+# Passed as a keyword rather than splatted from a dict: splatting an untyped mapping
+# into subprocess.run defeats overload resolution. POSIX accepts creationflags=0
+# (CPython rejects only a nonzero value there).
+_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+# Sized against the machine load norm (50-70 concurrent LLM sessions): a git plumbing
+# call here is single-object work, so a breach is a wedged process, not a slow one.
+# Its absence was break-class — this module fans out ~3 spawns per tracked file, so one
+# uninterruptible git hung the whole cold-path check with no operator recourse.
+# → state/audits/2026-08-15-fleet-composed-op-spawn-census.md
+_GIT_TIMEOUT_SECS = 60.0
 
 _LIVE_WALK_EXCLUDES = {".git", "__pycache__"}
 _LIVE_WALK_SUFFIXES_EXCLUDE = {".pyc"}
@@ -118,12 +126,18 @@ def _run_git(args: list[str], *, source: Path) -> str:
     swallowing per the spec's "fail loud on git errors" constraint.
     """
     cmd = ["git", "-C", str(source)] + args
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        **_NO_CONSOLE_WINDOW,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECS,
+            creationflags=_CREATION_FLAGS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"git command timed out after {_GIT_TIMEOUT_SECS:g}s: {' '.join(cmd)}"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"git command failed (exit {result.returncode}): {' '.join(cmd)}\n"
@@ -775,16 +789,27 @@ def run(
     #     Spec backlink:
     #       docs/plans/2026-06-26-coordinator-install-update-friction-fix-slate.md § C-R2a
     if baseline_sha is not None:
-        _cat_file_result = subprocess.run(
-            ["git", "-C", str(source), "cat-file", "-e",
-             f"{baseline_sha}^{{commit}}"],
-            capture_output=True,
-            **_NO_CONSOLE_WINDOW,
-        )
-        if _cat_file_result.returncode != 0:
+        try:
+            _cat_file_result = subprocess.run(
+                ["git", "-C", str(source), "cat-file", "-e",
+                 f"{baseline_sha}^{{commit}}"],
+                capture_output=True,
+                timeout=_GIT_TIMEOUT_SECS,
+                creationflags=_CREATION_FLAGS,
+            )
+        except subprocess.TimeoutExpired:
+            # Reachability is unprovable within budget — degrade to the two-way
+            # fallback rather than hanging the check, matching the non-zero-exit path.
+            _cat_file_result = None
+        if _cat_file_result is None or _cat_file_result.returncode != 0:
+            _why = (
+                f"timed out after {_GIT_TIMEOUT_SECS:g}s"
+                if _cat_file_result is None
+                else f"exit {_cat_file_result.returncode}"
+            )
             baseline_status = (
                 f"baseline SHA {baseline_sha} unreachable in source clone "
-                f"(git cat-file -e exit {_cat_file_result.returncode}); "
+                f"(git cat-file -e {_why}); "
                 "falling back to two-way comparison"
             )
             baseline_sha = None

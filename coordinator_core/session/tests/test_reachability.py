@@ -552,6 +552,111 @@ class TestNotReachableReasonIsNamed:
         assert own.address is None
 
 
+class TestFallbackChannel:
+    """`ResolveResult.fallback_channel` -- populated only alongside
+    `MESSAGING_UNAVAILABLE`, repo-conditional per `FallbackChannel`'s own
+    docstring, never a guess toward `PEER_NOTICE` on an unconfirmed target.
+
+    Spec backlink: `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-session-
+    messaging-unavailable.md`'s EM Response, Finding 1's correction.
+    """
+
+    def test_same_working_tree_target_gets_peer_notice(self, monkeypatch, tmp_path):
+        this_repo = tmp_path / "this-repo"
+        (this_repo / "subdir").mkdir(parents=True)
+        snap = {
+            "sid-live": _record("claude-klabauter-11", None, cwd=str(this_repo / "subdir")),
+            "sid-other": _record("claude-klabauter-22", None),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-live", str(this_repo))
+        assert result.reason == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
+        assert result.fallback_channel == reachability.FallbackChannel.PEER_NOTICE
+
+    def test_cross_repo_target_gets_memo_channel(self, monkeypatch, tmp_path):
+        this_repo = tmp_path / "this-repo"
+        other_repo = tmp_path / "other-repo"
+        this_repo.mkdir()
+        other_repo.mkdir()
+        snap = {
+            "sid-live": _record("claude-klabauter-11", None, cwd=str(other_repo)),
+            "sid-other": _record("claude-klabauter-22", None),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-live", str(this_repo))
+        assert result.reason == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
+        assert result.fallback_channel == reachability.FallbackChannel.CROSS_REPO_MEMO
+
+    def test_absent_cwd_never_crashes_and_defaults_to_memo_channel(
+        self, monkeypatch, tmp_path
+    ):
+        # An unconfirmed location must not be read as "same tree" -- a
+        # wrong PEER_NOTICE pointer sends the reader down a channel that
+        # structurally cannot deliver, worse than the collapsed-reason
+        # defect this field exists to close.
+        this_repo = tmp_path / "this-repo"
+        this_repo.mkdir()
+        snap = {
+            "sid-live": _record("claude-klabauter-11", None, cwd=None),
+            "sid-other": _record("claude-klabauter-22", None),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-live", str(this_repo))
+        assert result.reason == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
+        assert result.fallback_channel == reachability.FallbackChannel.CROSS_REPO_MEMO
+
+    def test_missing_registry_record_never_crashes_and_carries_no_channel(
+        self, monkeypatch, tmp_path
+    ):
+        # NO_LIVE_RECORD: there is no target to compare a working tree
+        # against at all -- not this field's arm, no fallback_channel.
+        snap = {"sid-live": _record("claude-klabauter-11", "/sock/a.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-gone", str(tmp_path))
+        assert result.reason == reachability.NotReachableReason.NO_LIVE_RECORD
+        assert result.fallback_channel is None
+
+    def test_peer_inbox_absent_carries_no_fallback_channel(self, monkeypatch, tmp_path):
+        snap = {
+            "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
+            "sid-unbound": _record("claude-klabauter-22", None),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-unbound", str(tmp_path))
+        assert result.reason == reachability.NotReachableReason.PEER_INBOX_ABSENT
+        assert result.fallback_channel is None
+
+    def test_no_peer_name_carries_no_fallback_channel(self, monkeypatch, tmp_path):
+        snap = {"sid-nameless": _record(None, "/sock/a.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-nameless", str(tmp_path))
+        assert result.reason == reachability.NotReachableReason.NO_PEER_NAME
+        assert result.fallback_channel is None
+
+    def test_no_owner_id_carries_no_fallback_channel(self, monkeypatch):
+        def _explode():
+            raise AssertionError("snapshot() must not be read for a falsy owner id")
+
+        monkeypatch.setattr(hr, "snapshot", _explode)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("")
+        assert result.reason == reachability.NotReachableReason.NO_OWNER_ID
+        assert result.fallback_channel is None
+
+
 class TestMessagingAvailablePredicate:
     def test_false_when_no_record_carries_a_socket(self):
         snap = {

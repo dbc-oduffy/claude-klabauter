@@ -719,6 +719,125 @@ def test_enforce_cache_budget_keeps_protected_sections_intact_under_pressure():
     assert "## Housekeeping\n- [" in out  # trimmed to a marker, not dropped
 
 
+# ---------------------------------------------------------------------------
+# Hook cancellation miss-rate signal (2026-08-15) -- see
+# coordinator_core.orientation.hook_cancellation_signal and
+# docs/plans/2026-08-15-hook-cancellation-miss-rate-signal.md § C3.
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+from coordinator_core.orientation import hook_cancellation_signal as _hcs
+
+
+def _cancel_line(cwd: str, hook_name: str = "PreToolUse:Bash") -> str:
+    return _json.dumps({
+        "type": "attachment",
+        "attachment": {
+            "type": "hook_cancelled",
+            "hookName": hook_name,
+            "durationMs": 16336,
+            "timedOut": True,
+            "timeoutMs": 15000,
+        },
+        "cwd": cwd,
+    })
+
+
+def _bash_tool_use_line(cwd: str) -> str:
+    return _json.dumps({
+        "type": "assistant",
+        "cwd": cwd,
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "name": "Bash", "id": "toolu_1", "input": {"command": "ls"}}],
+        },
+    })
+
+
+def _write_fixture_transcript(project_dir: Path, name: str, repo_cwd: str, other_cwd: str) -> None:
+    # 3 PreToolUse:Bash cancellations, 5 Bash tool_use entries (denominator),
+    # plus one cancellation for a DIFFERENT hookName (must not count) and one
+    # Bash tool_use for a DIFFERENT cwd (must not count) -- pins both the
+    # numerator filter and the cwd scope in one fixture.
+    lines = [
+        _bash_tool_use_line(repo_cwd),
+        _cancel_line(repo_cwd),
+        _bash_tool_use_line(repo_cwd),
+        _cancel_line(repo_cwd),
+        _bash_tool_use_line(repo_cwd),
+        _cancel_line(repo_cwd, hook_name="Stop"),  # wrong hook -- must not count
+        _bash_tool_use_line(other_cwd),  # wrong cwd -- must not count
+        _cancel_line(repo_cwd),
+        _bash_tool_use_line(repo_cwd),
+    ]
+    (project_dir / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _seed_fixture_projects_root(tmp_path: Path, repo: Path, monkeypatch) -> Path:
+    """Build a fake `<claude-home>/projects/<encoded-repo>/` directory holding one
+    fixture transcript, and point `hook_cancellation_signal.home_dir` at it."""
+    claude_home = tmp_path / "fake-claude-home"
+    encoded = _hcs._encode_project_dir_name(repo)
+    project_dir = claude_home / ".claude" / "projects" / encoded
+    project_dir.mkdir(parents=True)
+    other_cwd = str(repo) + "-sibling"
+    _write_fixture_transcript(project_dir, "session-1.jsonl", str(repo), other_cwd)
+    monkeypatch.setattr(_hcs, "home_dir", lambda: claude_home)
+    return project_dir
+
+
+def test_scan_hook_cancellation_rate_matches_known_fixture_count(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    _seed_fixture_projects_root(tmp_path, repo, monkeypatch)
+
+    result = _hcs.scan_hook_cancellation_rate(repo)
+
+    assert result.cancelled == 3
+    assert result.denominator == 4
+    assert result.rate == pytest.approx(3 / 4)
+
+
+def test_scan_hook_cancellation_rate_missing_project_dir_yields_no_signal(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    claude_home = tmp_path / "fake-claude-home-empty"
+    monkeypatch.setattr(_hcs, "home_dir", lambda: claude_home)
+
+    result = _hcs.scan_hook_cancellation_rate(repo)
+
+    assert result.cancelled == 0
+    assert result.denominator == 0
+    assert result.rate is None
+
+
+def test_emit_hook_cancellation_rate_omitted_when_no_denominator(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    claude_home = tmp_path / "fake-claude-home-empty"
+    monkeypatch.setattr(_hcs, "home_dir", lambda: claude_home)
+
+    assert mod.emit_hook_cancellation_rate(repo) == ""
+
+
+def test_full_regen_renders_hook_cancellation_on_its_own_line_not_housekeeping(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    _seed_fixture_projects_root(tmp_path, repo, monkeypatch)
+
+    result = mod.build_cache(invoker="workday-start", repo_root=repo)
+
+    assert not result["skipped"]
+    output = result["output"]
+    assert "## Hook cancellation miss rate" in output
+    assert "75.0% cancelled (3/4" in output
+    # own section, strictly before the (absent-here) Housekeeping/Pinboard tail --
+    # and never folded into Housekeeping content (plan Anti-scope).
+    hook_idx = output.index("## Hook cancellation miss rate")
+    housekeeping_idx = output.find("## Housekeeping")
+    if housekeeping_idx != -1:
+        assert hook_idx < housekeeping_idx
+    housekeeping_section = output[housekeeping_idx:] if housekeeping_idx != -1 else ""
+    assert "cancelled" not in housekeeping_section
+
+
 def test_enforce_cache_budget_never_zeroes_an_unrecognized_section():
     """A ``## Heading`` this module has no name for (e.g. a ceremony-supplied
     section _render_cache never emits, like ``Week priorities``) is trimmable

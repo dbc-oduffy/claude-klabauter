@@ -524,6 +524,219 @@ def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path)
     assert " -- <paths>" in reason
 
 
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-15-blanket-gits-proffer-the-scoped-commit-helper.md)
+# -- the worktree-union escalation predicate that closes the `-a` hole the
+# two index-based predicates above deliberately exclude (PM Ruling 2,
+# finding 6). NARROWED per PM ruling: gated behind `_is_hazard_repo`, so
+# every row below monkeypatches that discriminator explicitly rather than
+# relying on a real fleet-registry match against a `tmp_path` repo, which
+# can never itself be a registered hazard repo.
+# ---------------------------------------------------------------------------
+
+
+def _force_hazard(monkeypatch, is_hazard: bool) -> None:
+    monkeypatch.setattr(dispatch_checks, "_is_hazard_repo", lambda git_root: is_hazard)
+
+
+def _touch_worktree(repo, name, content="worktree-edit"):
+    """Modify a TRACKED file in the worktree without staging it -- `-a`'s
+    own sweep source, invisible to any `git diff --cached` probe."""
+    path = repo / name
+    path.write_text(content)
+
+
+def test_dash_am_denies_in_a_hazard_repo_when_worktree_holds_modified_paths(
+    tmp_path, monkeypatch
+):
+    """AC1/AC2: `-am` escalates to DENY in a hazard repo when the
+    UNION of staged + worktree-modified paths is non-empty -- the shape
+    the two index-based predicates unconditionally exclude."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+    cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "deny"
+
+
+def test_dash_a_dash_m_separate_tokens_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+    cmd = 'git -C %s commit -a -m "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "deny"
+
+
+def test_bundled_dash_sam_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+    cmd = 'git -C %s commit -sam "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "deny"
+
+
+def test_dash_dash_all_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+    cmd = 'git -C %s commit --all -m "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "deny"
+
+
+def test_dash_am_with_trailing_pathspec_still_participates_in_escalation(
+    tmp_path, monkeypatch
+):
+    """AC5: `-am ... -- <paths>` is not a valid git invocation (git itself
+    rejects paths with `-a`), so this row pins the early-exit ordering
+    rather than sanctioning the shape -- `_bt_commit_has_explicit_
+    pathspec` treats `-a` as unconditionally unscoped (same sweep-all
+    check the new predicate itself inverts), so a trailing `-- <paths>`
+    here does NOT short-circuit the check to silence; the shape reaches
+    the new predicate exactly like plain `-am` and escalates identically
+    in a hazard repo, staying advisory in a non-hazard one."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    cmd = 'git -C %s commit -am "x" -- base.txt' % shlex.quote(str(repo))
+    _force_hazard(monkeypatch, True)
+    assert _verdict(cmd) == "deny"
+    _force_hazard(monkeypatch, False)
+    assert _verdict(cmd) == "advisory"
+
+
+def test_dash_c_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    """AC4: honours `-C <dir>` -- reuses `_bt_git_dash_c_value`."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+    cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "deny"
+
+
+def test_git_index_file_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    """AC4: honours a leading `GIT_INDEX_FILE=` assignment -- reuses
+    `_bt_git_index_file_env` rather than re-deriving it."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    index_file = repo / ".git" / "index"
+    _force_hazard(monkeypatch, True)
+    cmd = 'GIT_INDEX_FILE=%s git -C %s commit -am "x"' % (
+        shlex.quote(str(index_file)), shlex.quote(str(repo))
+    )
+    assert _verdict(cmd) == "deny"
+
+
+def test_piped_dash_am_segment_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+    cmd = 'echo y | git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "deny"
+
+
+def test_compound_add_then_dash_am_still_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+    """AC9 compound-shape row: a preceding scoped `git add -- mine.py` does
+    NOT make the `-a` swept set provably own -- `-a` reaches worktree paths
+    no `add` pathspec bounds. Must still escalate, unlike C7's own
+    compound-shape predicate."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    other = repo / "mine.py"
+    other.write_text("mine")
+    _force_hazard(monkeypatch, True)
+    repo_q = shlex.quote(str(repo))
+    cmd = 'git -C %s add -- mine.py && git -C %s commit -am "x"' % (repo_q, repo_q)
+    assert _verdict(cmd) == "deny"
+
+
+def test_dash_am_stays_advisory_in_a_hazard_repo_when_tree_is_clean(tmp_path, monkeypatch):
+    """Negative spec: hazard repo, but the union is empty -- stays
+    advisory, never denies on nothing to sweep."""
+    repo = _init_repo(tmp_path)
+    _force_hazard(monkeypatch, True)
+    cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "advisory"
+
+
+def test_dash_am_stays_advisory_in_a_non_hazard_repo_even_when_dirty(tmp_path, monkeypatch):
+    """The narrowing itself: a NON-hazard repo never escalates, however
+    dirty the tree -- `check_blanket_git_add` un-widened the identical
+    all-repo hazard 2026-07-31, and this predicate must not reintroduce
+    it via a different guard."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, False)
+    cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "advisory"
+
+
+def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path, monkeypatch):
+    """AC3/AC9: a budget-spent dispatch (`_run_git` returning
+    `_GIT_PROBE_BUDGET_SPENT_RC`) on `git commit -am` asserts ADVISORY,
+    never DENY."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+
+    def _spent(*args, **kwargs):
+        return (dispatch_checks._GIT_PROBE_BUDGET_SPENT_RC, "")
+
+    monkeypatch.setattr(dispatch_checks, "_run_git", _spent)
+    cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "advisory"
+
+
+def test_dash_am_probe_failure_fails_open_never_denies(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _stage(repo, "base.txt")
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    _touch_worktree(repo, "base.txt")
+    _force_hazard(monkeypatch, True)
+
+    def _boom(*args, **kwargs):
+        return (-1, "")
+
+    monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
+    cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    assert _verdict(cmd) == "advisory"
+
+
+def test_two_index_based_predicates_still_return_false_on_dash_a(tmp_path):
+    """Negative spec, called directly: the two index-based predicates keep
+    short-circuiting on `-a` bit-identically to before -- this new
+    predicate is the only one that inverts that gate."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "foreign.txt")
+    tokens = dispatch_checks._bt_tokenize_full_command(
+        'git -C %s commit -am "x"' % shlex.quote(str(repo))
+    )
+    segments = dispatch_checks._bt_segments_from_tokens_with_pipe_flag(tokens)
+    seg_tokens, _pipe = segments[0]
+    assert dispatch_checks._bt_c7_index_holds_foreign_paths(seg_tokens, segments, 0) is False
+    assert dispatch_checks._bt_solo_bare_commit_index_nonempty(seg_tokens, segments, 0) is False
+
+
 def test_solo_bare_commit_deny_fires_through_the_real_dispatcher_under_powershell(
     tmp_path,
 ):

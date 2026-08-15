@@ -1787,13 +1787,17 @@ def _range_end_sha(sha_range: str) -> Optional[str]:
     return end
 
 
-def _sha_range_is_single_commit_shaped(sha_range: str, end_sha: str) -> bool:
+def _sha_range_is_single_commit_shaped(
+    sha_range: str, end_sha: str, *, is_merge: Optional[bool] = None,
+) -> bool:
     """True iff *sha_range* is genuinely a single-commit range whose sole
-    member is *end_sha* — i.e. shaped ``<end_sha>^..<end_sha>`` (the only
-    form `write_review_trail_many`'s callers construct per-slice; see
-    `workstream_complete.__init__.py` line ~2965 and
+    member is *end_sha* — i.e. TEXTUALLY shaped ``<end_sha>^..<end_sha>``
+    (the only form `write_review_trail_many`'s callers construct per-slice;
+    see `workstream_complete.__init__.py` line ~2965 and
     `directives_review.py`'s own docstring for the two spellings, ``^..`` and
-    the equivalent-but-unused-here bare ``..`` single-parent form).
+    the equivalent-but-unused-here bare ``..`` single-parent form) AND
+    genuinely single-commit in git's own range semantics — i.e. *end_sha* is
+    not a merge commit.
 
     P2 fix (Finding 2, state/subagent-share/60a896a5-0b53-494d-b77a-
     b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md): `_range_end_sha`
@@ -1808,11 +1812,30 @@ def _sha_range_is_single_commit_shaped(sha_range: str, end_sha: str) -> bool:
     anything but this exact shape routes such a range to the original,
     fully-general per-slice `chain_attribution.bulk_commit_attribution_map`
     walk instead, which correctly examines every commit in the range.
+
+    Merge-endpoint fix (Finding 1, state/subagent-share/20a161c3-3734-4e01-
+    98db-6256978147dc/chain-review-lens1-attribution.md): the textual-shape
+    check alone is INSUFFICIENT — for a merge commit ``M``, ``M^..M`` is not
+    single-commit in git's actual range semantics. ``M^`` resolves to ``M``'s
+    FIRST parent only, so the range ``M^..M`` walks every commit reachable
+    from ``M`` but not from that first parent: the entire second-parent-side
+    lineage the merge folded in. The batched fast path only ever computes
+    attribution for ``M`` itself, so taking it for a merge endpoint would
+    silently substitute ``M``'s own attribution for that whole folded-in
+    lineage's attribution — not merely under-counting (this module's
+    documented safe direction), but answering a different question, which
+    can err either direction. *is_merge* is the caller's already-computed
+    parent-count signal for *end_sha* (sourced from the same `git log`
+    record the batched path already parsed — no extra git spawn); ``None``
+    (parent count not determined) refuses the fast path, the same safe
+    default as a genuine merge.
     """
     left, sep, right = sha_range.partition("^..")
     if not sep:
         return False
-    return left == end_sha and right == end_sha
+    if left != end_sha or right != end_sha:
+        return False
+    return is_merge is False
 
 
 def _bulk_commit_attribution_map_no_walk(
@@ -1836,14 +1859,18 @@ def _bulk_commit_attribution_map_no_walk(
     Raises `GitLogFailed` on a non-zero `git log` returncode — same
     fail-closed contract as the primitive it mirrors.
 
-    A malformed/non-hex token in `shas` simply fails to appear in `git
-    log`'s output (git resolves what it can and is silent about the rest,
-    or the whole call fails per the `GitLogFailed` contract above) — it is
-    never included in the returned map. Absence from the map already means
-    "not in the walked window" to every caller, so no separate signal for a
-    malformed token is needed. In practice this is unreachable here: the
-    sole caller (`build_batch_attribution_context`) pre-filters `shas`
-    through `_HEX_TOKEN_RE` before calling in.
+    A hex-shaped token that does not resolve to a real object (e.g. a
+    plausible-looking but nonexistent SHA) fails the WHOLE call: `git log
+    --no-walk` does not resolve what it can and stay silent about the rest —
+    it exits non-zero (`fatal: bad object <token>`) and this function raises
+    `GitLogFailed` for the whole batch, per the contract above. Verified live
+    (2026-08-15): `git log --no-walk --format=%H <real-sha> <bogus-hex-sha>`
+    returns rc 128 with no stdout, not a partial result. In practice this is
+    unreachable here anyway: the sole caller
+    (`build_batch_attribution_context`) pre-filters `shas` through
+    `_HEX_TOKEN_RE` before calling in, so a non-hex token never reaches this
+    function — but a hex-shaped, non-resolving token would still hit the
+    `GitLogFailed` branch above, not a silent per-token drop.
     """
     if not shas:
         return {}
@@ -1900,6 +1927,24 @@ def _bulk_grep_attributed_shas_no_walk(
     if rc != 0:
         return frozenset()
     return frozenset(line.strip() for line in out.splitlines() if line.strip())
+
+
+# The complete set of keys `build_batch_attribution_context` may populate —
+# every one of them advisory-only per that function's own "SECURITY
+# INVARIANT" docstring paragraph. This is the structural half of that
+# paragraph's "do not add a new key ... without first checking every
+# consumer treats it as advisory-only" guidance: the docstring alone is a
+# comment stating an invariant, not an enforcement of it, and the chain that
+# introduced this comment (a76c9fa50) is the same chain whose own P1 was
+# exactly that gap (`is_work_tree_rc` / `deliverable_id` — a comment, not a
+# guard). `_ADVISORY_ONLY_BATCH_CONTEXT_KEYS` plus the assertion at the
+# bottom of `build_batch_attribution_context` turn "check every consumer"
+# into "the set changing at all fails loudly at construction," so a future
+# edit that reintroduces a blocking-reachable key surfaces here first,
+# before it ever reaches a consumer.
+_ADVISORY_ONLY_BATCH_CONTEXT_KEYS = frozenset(
+    {"own_session_id", "attribution_window", "grep_attributed"}
+)
 
 
 def build_batch_attribution_context(
@@ -1977,6 +2022,12 @@ def build_batch_attribution_context(
         context["grep_attributed"] = _bulk_grep_attributed_shas_no_walk(
             end_shas, own_session_id, str(caller_worktree), _git_runner,
         )
+    assert context.keys() <= _ADVISORY_ONLY_BATCH_CONTEXT_KEYS, (
+        f"build_batch_attribution_context: populated key(s) outside the "
+        f"advisory-only allow-list: {sorted(context.keys() - _ADVISORY_ONLY_BATCH_CONTEXT_KEYS)} "
+        "— re-read the SECURITY INVARIANT paragraph above before adding a "
+        "new key here."
+    )
     return context
 
 
@@ -2061,7 +2112,9 @@ def _walk_range_commit_session_trailers(
             if (
                 end_sha is not None
                 and end_sha in window_all
-                and _sha_range_is_single_commit_shaped(sha_range, end_sha)
+                and _sha_range_is_single_commit_shaped(
+                    sha_range, end_sha, is_merge=window_all[end_sha].is_merge,
+                )
             ):
                 grep_attributed = batch_context.get("grep_attributed") or frozenset()
                 foreign = chain_attribution.foreign_shas_from_window(
@@ -2222,6 +2275,14 @@ def _compute_timestamp(_now_ns: Optional[int] = None) -> str:
         ns_str = str(ns_remainder).zfill(9)[:6]         # 6-digit ns prefix
         return base + ns_str                             # 23 chars total
     # macOS / Windows: second-precision (oracle falls back when %N is literal).
+    # Windows is this repo's first-class platform (CLAUDE.md) and, since
+    # write_review_trail_many's per-slice writes fire concurrently
+    # (asyncio.gather -> asyncio.to_thread, not a serialized loop), most or
+    # all slices of one batch now routinely compute an identical base
+    # filename candidate here — collision on the second is the expected case
+    # for a batch, not an edge case. `_reserve_unique_trail_path`'s O_EXCL
+    # retry loop is what carries every record to a distinct file; see
+    # `TestAtomicWrite.test_concurrent_writers_same_candidate_all_survive`.
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M%S")  # 17 chars
 
 

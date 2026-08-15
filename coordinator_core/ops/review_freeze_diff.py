@@ -54,6 +54,19 @@ Negative-spec (hard-won — do NOT reintroduce):
       VALID outcome, not an error: both files are still written, and the
       returned envelope carries ``"empty": true`` for the caller to note —
       never a die-silent-on-zero-match gate.
+    - Does NOT treat a zero-net-change diff over a >= 1-commit range as an
+      error (see negative-spec entry above) — that stays a valid ``empty:
+      true`` outcome. The ONLY refusal this op adds is a diff-shaped
+      ``range_`` (contains ``..``/``...``) that resolves to ZERO COMMITS via
+      ``git rev-list --count`` — a range mangled en route (e.g. a Windows
+      `.cmd` forwarder eating the caret in `<sha>^..<sha>`) collapsing to
+      `<sha>..<sha>`. That refusal fires BEFORE either output file is
+      written, mirroring ``review_trail_write._reject_empty_sha_range``
+      (same discriminator, same ``git rev-list --count`` check) — see that
+      function's docstring for the fuller incident history. Not copy-pasted
+      into a second home: this op owns its own check because
+      ``review_trail_write.py`` is a heavily peer-trafficked file whose own
+      call sites this fix does not touch.
 """
 
 
@@ -92,6 +105,42 @@ def _error(message: str) -> dict:
         "empty": None,
         "error": message,
     }
+
+
+def _zero_commit_range_error(range_: str, repo_root: Path) -> Optional[str]:
+    """Return an error message iff `range_` is diff-shaped (contains ``..``
+    or ``...``) and resolves to ZERO commits via ``git rev-list --count`` in
+    `repo_root`, else None (not diff-shaped, resolves to >= 1 commit, or
+    `git rev-list` itself fails to run — a resolution failure is a different
+    problem than "zero commits" and is left to `git diff` itself to surface
+    normally, same as `review_trail_write._reject_empty_sha_range`'s sibling
+    check treats an unresolvable range as its own distinct failure).
+
+    Mirrors `review_trail_write._reject_empty_sha_range`'s discriminator
+    (same `..`/`...` diff-shape test, same `git rev-list --count` check) —
+    see that function's docstring for the fuller incident history this
+    guards against. Not shared code: that module is heavily peer-trafficked
+    and its own call sites are out of scope for this fix.
+    """
+    sep = "..." if "..." in range_ else (".." if ".." in range_ else None)
+    if sep is None:
+        return None
+    result = _git(["rev-list", "--count", range_], cwd=repo_root)
+    if not result.ok:
+        return None
+    try:
+        count = int(result.stdout.strip())
+    except ValueError:
+        return None
+    if count != 0:
+        return None
+    return (
+        f"range {range_!r} resolves to ZERO commits — refusing to freeze a "
+        "diff for a range that names no commits. This is the exact shape a "
+        "caret-eating shell/shim produces from a legitimate per-commit "
+        "'<sha>^..<sha>' request (e.g. a Windows .cmd forwarder collapsing "
+        "it to '<sha>..<sha>'). Verify the range was constructed correctly."
+    )
 
 
 def freeze_diff(
@@ -136,6 +185,10 @@ def freeze_diff(
     slice_err = _validate_slice_id(slice_id)
     if slice_err is not None:
         return _error(slice_err)
+
+    zero_commit_err = _zero_commit_range_error(range_, repo_root)
+    if zero_commit_err is not None:
+        return _error(zero_commit_err)
 
     head_result = _git(["rev-parse", "HEAD"], cwd=repo_root)
     if not head_result.ok or not head_result.stdout.strip():

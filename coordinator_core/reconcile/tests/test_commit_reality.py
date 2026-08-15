@@ -1442,6 +1442,98 @@ class TestAutoShipPlanCorroborationGate:
         )
 
 
+class TestBothRoutesWireThroughPlanCorroborationChokepoint:
+    """Regression pin for chain-review-lens3-ceremony-gate finding 4
+    (state/subagent-share/20a161c3-3734-4e01-98db-6256978147dc/
+    chain-review-lens3-ceremony-gate.md): the existing gate-behavior tests
+    above pin WHAT `_apply_plan_corroboration_gate` decides; this pins that
+    BOTH routes through `evaluate_commit_reality` (the no-candidates/explicit-
+    `shipped_in` path and the three-signal candidates path) actually call
+    through that chokepoint and return its verdict, rather than short-
+    circuiting to `auto-ship` before ever reaching it -- the exact P0 shape
+    code-reviewer sidecar `coordinatorcode-reviewer-527901aa.md` found once
+    already (`_evaluate_explicit_ship_claim` returning `auto-ship` directly,
+    several hundred lines before the gate existed).
+
+    Mechanism: monkeypatch `_apply_plan_corroboration_gate` itself to
+    unconditionally force `verdict: surface` regardless of its input, using a
+    fixture that would otherwise cleanly clear straight to `auto-ship` on
+    each route with the REAL gate. If a future edit lets either route return
+    its own `auto-ship` verdict without passing it through the (now-forced)
+    gate call, the result will still read `auto-ship` and this test fails.
+    """
+
+    def test_three_signal_candidates_route_returns_gate_verdict(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sha = _commit_file(
+            repo,
+            "chokepoint_scoped_module/core.py",
+            "print('chokepoint scoped module')\n",
+            "feat: land chokepoint scoped module",
+        )
+        _write_plan(repo, "docs/plans/2026-01-01-chokepoint.md", "implemented")
+
+        handoff = _handoff(
+            "h-chokepoint-candidates",
+            [
+                "chokepoint_scoped_module/core.py",
+                "docs/plans/2026-01-01-chokepoint.md",
+            ],
+            "Chokepoint Scoped Module",
+        )
+
+        # Sanity: with the REAL gate, this fixture auto-ships (matches
+        # TestAutoShipPlanCorroborationGate.test_all_named_plans_implemented_still_auto_ships).
+        real_result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+        assert real_result["verdict"] == "auto-ship"
+        assert real_result["candidate_sha"] == sha
+
+        monkeypatch.setattr(
+            commit_reality,
+            "_apply_plan_corroboration_gate",
+            lambda result, *a, **k: {**result, "verdict": "surface"},
+        )
+
+        forced_result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert forced_result["verdict"] == "surface"
+
+    def test_explicit_shipped_in_route_returns_gate_verdict(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sha = _commit_file(
+            repo,
+            "chokepoint_stranded_module/core.py",
+            "print('chokepoint stranded module')\n",
+            "memo: seed chokepoint stranded module (mechanical, never token-matched)",
+        )
+        handoff = {
+            "id": "h-chokepoint-stranded",
+            "scope": ["chokepoint_stranded_module/core.py"],
+            "title": "Chokepoint Stranded Module",
+            "created": "2020-01-01",
+            "shipped_in": sha,
+            "shipped_in_kind": "ship-commit",
+        }
+
+        # Sanity: with the REAL gate, this fixture auto-ships (matches
+        # TestExplicitShipClaimShippedIn.test_shipped_in_reachable_deliverable_present_overlap_auto_ships).
+        real_result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+        assert real_result["verdict"] == "auto-ship"
+        assert real_result["candidate_sha"] == sha
+
+        monkeypatch.setattr(
+            commit_reality,
+            "_apply_plan_corroboration_gate",
+            lambda result, *a, **k: {**result, "verdict": "surface"},
+        )
+
+        forced_result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert forced_result["verdict"] == "surface"
+
+
 class TestDirectoryScopeContributesNoTokens:
     """2026-07-20 claude-central-em false-positive memo, Defect 2a: a bare-directory
     scope entry contributes zero subject-match tokens -- only a leaf FILE

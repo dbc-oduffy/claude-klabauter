@@ -38,7 +38,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import FrozenSet, Optional, Sequence
+from typing import FrozenSet, Mapping, Optional, Sequence
 
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.session.resolve_chain_terminal_disposition import (
@@ -133,6 +133,24 @@ _READER_NOTE = (
     '§ "The disclosed limit". An `em_disposition` of null means no EM recorded a '
     "review disposition at close — read that as 'ancestry NOT reviewed by this "
     "close', never as 'reviewed'."
+)
+
+#: `certifies_review` was, until this plan (pln-the-chain-scope-review-require-90762b
+#: § C1), a write-only field: every minted record carries `"certifies_review": False`
+#: (see `record_chain_ancestry_waiver` below) but no reader ever opened a record to
+#: look at it — `chain_ancestry_waived_shas` answers presence from the file STEM
+#: alone, never the body. `chain_ancestry_waiver_records` (below) is that field's
+#: first reader; C7 (pln-the-chain-scope-review-require-90762b § C7) consumes it to
+#: populate `gates.review_scale.chain_slices[*].certifies_review`, so a chain-slate
+#: entry can finally say "gate-derived provenance, not reviewed" from the artifact
+#: itself. This does not upgrade the artifact: per DR-245 § "The disclosed limit",
+#: quoted directly, "the minted waiver itself carries `certifies_review: false` — it
+#: was never a review attestation and this correction does not change that." Nothing
+#: in this module, or in C7, mints a record with `certifies_review: true`; a reader
+#: gains a first accessor, not a new trust basis.
+_CERTIFIES_REVIEW_HAS_A_READER_NOTE = (
+    "certifies_review has a reader (chain_ancestry_waiver_records); see DR-245 "
+    '§ "The disclosed limit" — this does not make the field a review attestation.'
 )
 
 
@@ -531,3 +549,56 @@ def chain_ancestry_waived_shas(cwd: str, chain_id: str) -> FrozenSet[str]:
     except OSError:
         return frozenset()
     return frozenset(p.stem for p in entries if p.suffix == ".json" and p.is_file())
+
+
+def chain_ancestry_waiver_records(cwd: str, chain_id: str) -> "Mapping[str, dict]":
+    """Parsed waiver bodies for one chain, keyed by commit sha.
+
+    Missing dir, unreadable file, or unparseable body => that sha is ABSENT
+    from the mapping. Never raises.
+
+    This is `certifies_review`'s first reader (see
+    `_CERTIFIES_REVIEW_HAS_A_READER_NOTE` above) — `record.get("certifies_review")`
+    is how a caller (C7) reads it. Every record on disk carries `False`
+    (`record_chain_ancestry_waiver` never mints `True`); absent and `False` must be
+    treated identically by every consumer of this mapping — both mean "ancestry not
+    reviewed". Only a literal `True` would mean otherwise, and nothing in this repo
+    mints one. Per DR-245 § "The disclosed limit", quoted directly: "the minted
+    waiver itself carries `certifies_review: false` — it was never a review
+    attestation and this correction does not change that."
+
+    Deliberate asymmetry with `chain_ancestry_waived_shas`, spelled out here so a
+    later reader does not "unify" the two into one implementation: `waived_shas` is
+    STEM-DRIVEN and PERMISSIVE — it answers presence from the filename alone, never
+    opens the file, and a body that failed to write cleanly (or that this function
+    cannot parse) still counts as waived, because `waived_shas` governs what
+    `review_trail_write._guard_foreign_session_range` PERMITS a caller to record,
+    and narrowing that on a parse failure would silently change what a close can
+    discharge (AC2). This function is BODY-DRIVEN and STRICT — a corrupt or
+    unparseable body drops that sha from the returned mapping entirely, because this
+    function governs what a reader can ASSERT about review provenance, and an
+    unreadable claim must never be read as a readable one. `waived_shas` KEEPS its
+    current stem-based implementation and current return value unchanged by this
+    function's addition (AC2) — this function is a second, read-only accessor over
+    the same on-disk artifact, not a replacement for the first.
+    """
+    chain_dir = chain_waiver_dir(cwd, chain_id)
+    if chain_dir is None:
+        return {}
+    try:
+        entries = list(chain_dir.iterdir())
+    except OSError:
+        return {}
+    records: dict[str, dict] = {}
+    for entry in entries:
+        if entry.suffix != ".json" or not entry.is_file():
+            continue
+        try:
+            with entry.open("r", encoding="utf-8") as fh:
+                body = json.load(fh)
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(body, dict):
+            continue
+        records[entry.stem] = body
+    return records

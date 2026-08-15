@@ -311,6 +311,30 @@ def _claude_home() -> str:
     return _machine_local_impl_resolver().claude_home()
 
 
+# Cross-reference: coordinator_core/claude_klabauter_root.py defines this same literal
+# (plan pln-the-ceremony-tail-stops-lying-b58fb3 AC3b). The two rungs sit on
+# opposite sides of a declared one-way no-import boundary and cannot share a
+# symbol; the constant is duplicated deliberately and each side asserts the literal.
+_REGISTRY_READ_TIMEOUT_TOKEN = "machine-local registry read timed out"
+
+_MACHINE_LOCAL_READ_TIMEOUT_SECS = 10  # bound on the subprocess.run() call below
+
+
+class _RegistryReadTimeout(RuntimeError):
+    """A machine-local registry subprocess read exceeded its bound.
+
+    Distinct from `is_timeout_error`'s IPC-engine-timeout contract: that predicate
+    matches only `_TIMEOUT_MESSAGE_PREFIX`-prefixed messages from the
+    cc_invoke()/cc_invoke_bare() transport layer (an engine timeout). This is a
+    resolver-rung subprocess timeout — `_machine_local_get` raises nothing wrong
+    happened at the engine, only that the registry read itself did not return in
+    time. Raised by `_machine_local_get`, caught and re-raised (or absorbed) by
+    `_resolve_claude_klabauter_root`, and threaded through `route()` to
+    `_state1_remediation_message` as a named outcome (AC3) — never conflated with
+    the IPC-timeout prefix/discriminator above.
+    """
+
+
 def _machine_local_get(key: str) -> str | None:
     """Read a machine-local registry key via a direct sys.executable subprocess.
 
@@ -323,6 +347,13 @@ def _machine_local_get(key: str) -> str | None:
     Returns the resolved value, or None on any failure (missing impl, non-zero
     exit, empty stdout) — a registry miss is a normal fallback state here, not
     an error; the caller decides whether that's terminal.
+
+    The one exception: a `subprocess.TimeoutExpired` on the registry-read bound
+    raises `_RegistryReadTimeout` instead of collapsing to `None`. A busy box
+    timing out a subprocess-bounded registry read is not the same fact as the
+    key genuinely being absent, and collapsing the two here is what let the
+    operator-facing ladder tell a transient reader timeout apart from a broken
+    install (see `_resolve_claude_klabauter_root` / `_state1_remediation_message`).
 
     Settings-home first (DR-210 Amendment 2026-07-24): resolves via
     machine_local_impl_resolve.machine_local_impl_path(env_override=None) —
@@ -340,11 +371,16 @@ def _machine_local_get(key: str) -> str | None:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=10,
+            timeout=_MACHINE_LOCAL_READ_TIMEOUT_SECS,
             env=child_env(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        raise _RegistryReadTimeout(
+            f"{_REGISTRY_READ_TIMEOUT_TOKEN} ({_MACHINE_LOCAL_READ_TIMEOUT_SECS}s bound, "
+            f"key={key!r})"
+        ) from None
+    except OSError:
         return None
     if result.returncode != 0 or not result.stdout.strip():
         return None
@@ -390,7 +426,11 @@ def _resolve_claude_klabauter_root() -> str:
                 this rung targets.
 
     Returns the resolved absolute path.
-    Raises RuntimeError on failure (unresolvable root).
+    Raises RuntimeError on failure (unresolvable root) — or the RuntimeError
+    subclass `_RegistryReadTimeout` specifically when the registry read at Rung
+    2+ timed out and self-location (Rung 3) also missed, so a caller wanting to
+    tell the two apart can `except _RegistryReadTimeout` before the general
+    `except RuntimeError` (see `route()`, which does exactly this).
     """
     # Rung 1: already in environment — same idempotency gate as the shell transport.
     existing = os.environ.get("CLAUDE_KLABAUTER_ROOT", "")
@@ -441,7 +481,13 @@ def _resolve_claude_klabauter_root() -> str:
         "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
     )
 
-    _candidate = _machine_local_get("repos.claude_klabauter")
+    _registry_read_timed_out = False
+    try:
+        _candidate = _machine_local_get("repos.claude_klabauter")
+    except _RegistryReadTimeout:
+        _candidate = None
+        _registry_read_timed_out = True
+
     if not _candidate or not os.path.isdir(_candidate):
         # Rung 3 (terminal): self-locate from cc_invoke's OWN __file__ before
         # raising. Reached only when env, pointer, and registry all missed —
@@ -450,6 +496,14 @@ def _resolve_claude_klabauter_root() -> str:
         _self_located = _walk_up_to_checkout(__file__)
         if _self_located:
             return _self_located
+        if _registry_read_timed_out:
+            # A transient reader timeout, not a genuinely absent/unregistered
+            # checkout — propagate the distinguishable outcome (AC1/AC3)
+            # instead of the clone/register text below, which is wrong here.
+            raise _RegistryReadTimeout(
+                f"{_REGISTRY_READ_TIMEOUT_TOKEN} ({_MACHINE_LOCAL_READ_TIMEOUT_SECS}s bound) "
+                "resolving repos.claude_klabauter, and self-location also missed."
+            )
         raise RuntimeError(_remediation)
 
     _injected = _candidate not in sys.path
@@ -1502,13 +1556,36 @@ def cc_invoke_bare(
 # actionable error instead of N different bespoke stub messages.
 # ---------------------------------------------------------------------------
 
-def _state1_remediation_message(op: str, attempted_claude_klabauter_root: str | None) -> str:
+def _state1_remediation_message(
+    op: str,
+    attempted_claude_klabauter_root: str | None,
+    *,
+    registry_read_timed_out: bool = False,
+) -> str:
     """Build the engine-install-specific remediation text for a State-1 (seam-absent) failure.
 
     Enumerates the four-rung CLAUDE_KLABAUTER_ROOT resolution ladder (mirrors
     _resolve_claude_klabauter_root's own rung order) so an operator sees exactly which
     rung to fix, instead of a bare caller-specific "no fallback wired" message.
+
+    `registry_read_timed_out` (AC1/AC3, default False so the absent-key text
+    below is unchanged byte-for-byte — AC2a): when True, `_resolve_claude_klabauter_root`
+    raised `_RegistryReadTimeout` rather than genuinely finding no candidate —
+    a transient reader timeout, not a missing/unregistered checkout. The
+    clone/register remediation below is wrong for that case, so it gets its
+    own text instead of sharing the generic one.
     """
+    if registry_read_timed_out:
+        return (
+            f"cc_invoke: native seam resolution unavailable for op={op!r} — "
+            f"{_REGISTRY_READ_TIMEOUT_TOKEN} ({_MACHINE_LOCAL_READ_TIMEOUT_SECS}s bound) "
+            "while resolving CLAUDE_KLABAUTER_ROOT via the machine-local registry, and self-location "
+            "also missed.\n"
+            "  This machine's declared load norm is 50-70 concurrent LLM sessions "
+            "(CLAUDE.md § Load norm); a subprocess-bounded registry read timing out "
+            "under that load is expected, not a sign claude-klabauter is unregistered.\n"
+            "  Retry the operation."
+        )
     root_line = (
         f"  CLAUDE_KLABAUTER_ROOT resolved to {attempted_claude_klabauter_root!r} but coordinator_core.invoke "
         "was not importable from it (broken/partial checkout).\n"
@@ -1570,8 +1647,15 @@ def route(
     # Resolve CLAUDE_KLABAUTER_ROOT; unresolvable root → treat as seam-absent (State-1).
     # Rationale: if the registry doesn't know about the engine repo, the seam is definitely absent.
     claude_klabauter_root: str | None
+    _registry_read_timed_out = False
     try:
         claude_klabauter_root = _resolve_claude_klabauter_root()
+    except _RegistryReadTimeout:
+        # Caught ahead of the general RuntimeError below (subclass) — threads the
+        # distinguishable outcome (AC1/AC3) to _state1_remediation_message instead
+        # of collapsing to the same "unresolvable root" the absent-key case gets.
+        claude_klabauter_root = None
+        _registry_read_timed_out = True
     except RuntimeError:
         claude_klabauter_root = None
 
@@ -1580,7 +1664,11 @@ def route(
         try:
             return legacy_fn()
         except Exception as exc:
-            raise RuntimeError(_state1_remediation_message(op, claude_klabauter_root)) from exc
+            raise RuntimeError(
+                _state1_remediation_message(
+                    op, claude_klabauter_root, registry_read_timed_out=_registry_read_timed_out
+                )
+            ) from exc
 
     # State-2: seam confirmed present — route native; propagate or raise.
     # HARD contract: do NOT catch exceptions and fall to legacy_fn here.

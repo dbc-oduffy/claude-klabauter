@@ -223,3 +223,139 @@ def test_second_write_for_the_same_session_overwrites_in_place(tmp_path):
 
 def test_known_verdicts_matches_the_cross_repo_wire_contract_literals():
     assert store.KNOWN_VERDICTS == frozenset({"PARTITION-MANDATORY", "single-reviewer-ok"})
+
+
+# --- chain_slices carrier (Seam 3, C2 -> C3) ---------------------------------
+
+
+def test_chain_slices_round_trips_verbatim_when_supplied(tmp_path):
+    slate = [
+        {"sha": "abc123", "sha_range": "abc123^..abc123", "recordable": True, "certifies_review": False},
+        {"sha": "def456", "sha_range": "def456^..def456", "recordable": False, "certifies_review": True},
+    ]
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-slices-1",
+        verdict="PARTITION-MANDATORY",
+        from_handoff="state/handoffs/x.md",
+        git_range=None,
+        basis="",
+        tier="B",
+        chain_slices=slate,
+    )
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-1") == slate
+    # read_verdict_record's return type is unchanged by chain_slices being present.
+    assert store.read_verdict_record(tmp_path, session_id="sid-slices-1") == "PARTITION-MANDATORY"
+
+
+def test_chain_slices_key_absent_when_not_supplied_to_write(tmp_path):
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-slices-2",
+        verdict="single-reviewer-ok",
+        from_handoff="state/handoffs/x.md",
+        git_range=None,
+        basis="",
+        tier="none",
+    )
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-2") is None
+    path = store.verdict_store_path(tmp_path, session_id="sid-slices-2")
+    body = json.loads(path.read_text(encoding="utf-8"))
+    assert "chain_slices" not in body
+
+
+def test_chain_slices_resolved_empty_list_is_distinct_from_absent(tmp_path):
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-slices-3",
+        verdict="single-reviewer-ok",
+        from_handoff="state/handoffs/x.md",
+        git_range=None,
+        basis="",
+        tier="none",
+        chain_slices=[],
+    )
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-3") == []
+
+
+def test_read_chain_slices_of_never_written_record_returns_none(tmp_path):
+    assert store.read_chain_slices(tmp_path, session_id="never-written-slices") is None
+
+
+def test_read_chain_slices_fails_closed_on_session_id_mismatch(tmp_path):
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-slices-real",
+        verdict="PARTITION-MANDATORY",
+        from_handoff="state/handoffs/z.md",
+        git_range=None,
+        basis="",
+        tier="B",
+        chain_slices=[{"sha": "abc"}],
+    )
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-imposter") is None
+
+
+def test_read_chain_slices_fails_closed_on_from_handoff_mismatch(tmp_path):
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-slices-4",
+        verdict="PARTITION-MANDATORY",
+        from_handoff="state/handoffs/z.md",
+        git_range=None,
+        basis="",
+        tier="B",
+        chain_slices=[{"sha": "abc"}],
+    )
+    assert store.read_chain_slices(
+        tmp_path, session_id="sid-slices-4", expected_from_handoff="state/handoffs/DIFFERENT.md"
+    ) is None
+    assert store.read_chain_slices(
+        tmp_path, session_id="sid-slices-4", expected_from_handoff="state/handoffs/z.md"
+    ) == [{"sha": "abc"}]
+
+
+def test_read_chain_slices_returns_none_on_corrupt_json(tmp_path):
+    path = store.verdict_store_path(tmp_path, "sid-slices-corrupt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ not json", encoding="utf-8")
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-corrupt") is None
+
+
+def test_read_chain_slices_returns_none_when_key_is_not_a_list(tmp_path):
+    path = store.verdict_store_path(tmp_path, "sid-slices-wrongtype")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": store.SCHEMA_VERSION,
+                "session_id": "sid-slices-wrongtype",
+                "verdict": "PARTITION-MANDATORY",
+                "from_handoff": "state/handoffs/x.md",
+                "git_range": None,
+                "basis": "",
+                "tier": "B",
+                "written_at": "2026-08-15T00:00:00Z",
+                "chain_slices": "not-a-list",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-wrongtype") is None
+
+
+def test_chain_slices_not_inspected_or_reordered_arbitrary_shape_passes_through(tmp_path):
+    """The carrier is opaque — it must not validate entry shape. An entry
+    missing fields C7 always includes still round-trips unchanged."""
+    odd_slate = [{"unexpected_key": 1}, {"sha": "x"}]
+    store.write_verdict_record(
+        tmp_path,
+        session_id="sid-slices-odd",
+        verdict="single-reviewer-ok",
+        from_handoff="state/handoffs/x.md",
+        git_range=None,
+        basis="",
+        tier="none",
+        chain_slices=odd_slate,
+    )
+    assert store.read_chain_slices(tmp_path, session_id="sid-slices-odd") == odd_slate

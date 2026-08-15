@@ -2155,6 +2155,75 @@ class TestZeroChainTerminalCreditDiagnostic:
             f"write, got: {zero_credit_logs}"
         )
 
+    def test_forged_batch_context_diagnostic_never_blocks_or_persists_write(
+        self, tmp_path,
+    ) -> None:
+        """Pins the `35bcd7aa6` NEGATIVE SPEC comment above the diagnostic
+        call site in `write_review_trail_entry`: `_batch_context` is
+        attacker-reachable over the wire (`ipc.py` strips no unknown params
+        keys), and this diagnostic is the one consumer of it that a forger
+        can still influence. Forging `attribution_window`/`grep_attributed`
+        to make `_diagnose_zero_chain_terminal_credit` fire for a range that
+        is GENUINELY this session's own (the real guard re-derivation still
+        passes) must change nothing about the write's disposition: the write
+        still succeeds, and the on-disk JSON record carries no trace of the
+        diagnostic — only the in-memory `result` dict does. If a future edit
+        elevates this diagnostic to gate the write or persist into the
+        record, this test starts failing the moment the forged inputs below
+        would otherwise flip a real write's outcome."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id=_GUARD_OWN_SESSION)
+        tip_sha = _make_commit_touching(
+            repo, "own.py", "genuinely own work", session_id=_GUARD_OWN_SESSION,
+        )
+        sha_range = f"{tip_sha}^..{tip_sha}"
+
+        forged_batch_context = {
+            "own_session_id": _GUARD_OWN_SESSION,
+            "attribution_window": {
+                tip_sha: rtw.chain_attribution.CommitAttribution(
+                    sha=tip_sha,
+                    trailer_session_id=_GUARD_FOREIGN_SESSION,
+                    is_merge=False,
+                    trailer_ambiguous=False,
+                ),
+            },
+            "grep_attributed": frozenset(),
+        }
+
+        result = write_review_trail_entry(
+            sha_range=sha_range,
+            reviewer="staff-eng",
+            scope="chain",
+            verdict="ok",
+            diff_loc=1,
+            scope_kind="plan",
+            session_id=_GUARD_OWN_SESSION,
+            workstream="",
+            caller_worktree=repo,
+            _batch_context=forged_batch_context,
+        )
+
+        out_path = Path(result["out_path"])
+        assert out_path.is_file(), (
+            "the write must still succeed even though the forged batch "
+            "context makes the advisory diagnostic fire"
+        )
+        assert result.get(_ZERO_CREDIT_KEY) is not None, (
+            "fixture premise failed — the forged context did not make the "
+            "diagnostic fire, so this test is not exercising the shape it "
+            "claims to"
+        )
+        on_disk = out_path.read_text(encoding="utf-8")
+        assert _ZERO_CREDIT_KEY not in on_disk, (
+            "the diagnostic must never be persisted into the on-disk "
+            "record, forged batch_context or not"
+        )
+
     def test_zero_credit_mirrored_constants_stay_in_sync(self) -> None:
         """`review_trail_write` deliberately DUPLICATES two constants that live
         in `coordinator_core.workstream_complete` / `coordinator_core.coverage`
@@ -2827,6 +2896,57 @@ class TestDeliverableIdRecoveryFallback:
         self._guard(repo, f"{base_sha}..HEAD", monkeypatch, resolved_id="")
 
 
+class TestBuildBatchAttributionContextAdvisoryKeyAllowList:
+    """Structural half of `build_batch_attribution_context`'s docstring
+    guidance ("Do not add a new key here without first checking every
+    consumer treats it as advisory-only") — pins that the function's own
+    output never carries a key outside `_ADVISORY_ONLY_BATCH_CONTEXT_KEYS`,
+    so a future edit reintroducing a blocking-reachable key (the exact
+    `is_work_tree_rc`/`deliverable_id` shape `a76c9fa50` removed) fails
+    loudly here instead of relying on a reviewer re-reading the comment."""
+
+    def test_ordinary_context_only_carries_allow_listed_keys(self, tmp_path) -> None:
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id=_GUARD_OWN_SESSION)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        sha_range = f"{foreign_sha}^..{foreign_sha}"
+
+        context = rtw.build_batch_attribution_context(repo, [sha_range])
+
+        assert context.keys() <= rtw._ADVISORY_ONLY_BATCH_CONTEXT_KEYS
+        assert "attribution_window" in context  # fixture premise: real work happened
+
+    def test_reintroducing_a_blocking_key_trips_the_assertion(self, tmp_path) -> None:
+        """Simulates the exact regression this guard exists to catch: a
+        future edit that starts populating a non-advisory key. Monkeypatches
+        the module's allow-list down to a subset that excludes a key the
+        function legitimately still produces, forcing the assertion to
+        fire — proving the check is live, not vacuous."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        sha_range = f"{foreign_sha}^..{foreign_sha}"
+
+        original = rtw._ADVISORY_ONLY_BATCH_CONTEXT_KEYS
+        rtw._ADVISORY_ONLY_BATCH_CONTEXT_KEYS = frozenset({"own_session_id"})
+        try:
+            with pytest.raises(AssertionError, match="advisory-only allow-list"):
+                rtw.build_batch_attribution_context(repo, [sha_range])
+        finally:
+            rtw._ADVISORY_ONLY_BATCH_CONTEXT_KEYS = original
+
+
 # ---------------------------------------------------------------------------
 # P1 fix regression (state/subagent-share/60a896a5-0b53-494d-b77a-
 # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1): a forged
@@ -2922,6 +3042,35 @@ class TestForgedBatchContextCannotBypassGuards:
                 },
             )
 
+    def test_forged_is_work_tree_rc_cannot_suppress_empty_range_rejection_end_to_end(
+        self, tmp_path,
+    ) -> None:
+        """Coverage hole #3 (chain-review-lens4-tests-and-claims.md § 3.3):
+        the sibling tests above call `_guard_foreign_session_range` /
+        `_reject_empty_sha_range` directly. This one drives the SAME forged
+        key through the public `write_review_trail_entry` entry point —
+        `_batch_context` end to end, not the private guard in isolation —
+        proving a forger cannot suppress the empty-range backstop by
+        reaching it via the real JSON-RPC-shaped call surface."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        sha = _make_commit(repo, "only commit", session_id=_GUARD_OWN_SESSION)
+
+        with pytest.raises(ValueError, match="ZERO commits"):
+            write_review_trail_entry(
+                sha_range=f"{sha}..{sha}",
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=1,
+                scope_kind="diff",
+                session_id=_GUARD_OWN_SESSION,
+                workstream="",
+                caller_worktree=repo,
+                _batch_context={"is_work_tree_rc": 1},
+            )
+
 
 # ---------------------------------------------------------------------------
 # P2 fix regression (Finding 2, same sidecar): `build_batch_attribution_
@@ -3007,4 +3156,52 @@ class TestMultiCommitRangeRoutesAroundBatchedFastPath:
         )
 
         assert result == {foreign_sha: True}
+
+    def test_merge_commit_endpoint_does_not_use_batched_fast_path(self, tmp_path) -> None:
+        """Finding 1 (state/subagent-share/20a161c3-3734-4e01-98db-
+        6256978147dc/chain-review-lens1-attribution.md): a merge commit `M`
+        textually matches `<M>^..<M>`, but `M^` names only `M`'s FIRST
+        parent, so the range actually spans `M`'s entire second-parent-side
+        lineage — real commits the batched endpoint-only fast path never
+        examines. A merge endpoint must fall through to the general walk.
+        """
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _make_commit(repo, "base", session_id=_GUARD_OWN_SESSION)
+
+        _git(["checkout", "-b", "side"], repo)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work on side branch", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        _git(["checkout", "main"], repo)
+        _make_commit_touching(
+            repo, "own.py", "own work on main", session_id=_GUARD_OWN_SESSION,
+        )
+        _git(
+            ["merge", "--no-ff", "-m", f"merge side\n\nSession-Id: {_GUARD_OWN_SESSION}", "side"],
+            repo,
+        )
+        merge_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo),
+            capture_output=True, encoding="utf-8", check=True,
+        ).stdout.strip()
+        sha_range = f"{merge_sha}^..{merge_sha}"
+
+        batch_context = rtw.build_batch_attribution_context(repo, [sha_range])
+        assert merge_sha in batch_context["attribution_window"]
+        assert batch_context["attribution_window"][merge_sha].is_merge is True
+
+        result = rtw._walk_range_commit_session_trailers(
+            sha_range, _GUARD_OWN_SESSION, repo, batch_context=batch_context,
+        )
+
+        assert result is not None
+        assert foreign_sha in result, (
+            "the general walk must see the second-parent lineage's foreign "
+            f"commit; the batched fast path would have reported only {{merge_sha: ...}}: {result!r}"
+        )
+        assert result[foreign_sha] is True
 

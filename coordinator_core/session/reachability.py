@@ -150,6 +150,22 @@ Negative-spec:
       unconditionally must never emit a bare UUID as though it were a real
       `SendMessage` address (Review: code-reviewer -- P3, "confidently wrong
       address" shape the spec's Anti-scope forbids).
+    - `fallback_channel` is never guessed toward `FallbackChannel.PEER_NOTICE`
+      on an unconfirmed target location -- an absent/null `cwd`, or a
+      `cwd` this call cannot prove is inside its own working tree, resolves
+      to `FallbackChannel.CROSS_REPO_MEMO` instead, same as a confirmed
+      different repo. `peer_notice.send`'s delivery is same-working-tree
+      only, so a wrong `PEER_NOTICE` sends the reader down a channel that
+      structurally cannot deliver -- worse than the collapsed-reason defect
+      this addition exists to close, because it reads as actionable
+      (`cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-session-messaging-
+      unavailable.md`'s EM Response).
+    - `fallback_channel` is set ONLY for `NotReachableReason.
+      MESSAGING_UNAVAILABLE` -- never for `NO_OWNER_ID`, `NO_LIVE_RECORD`,
+      `PEER_INBOX_ABSENT`, or `NO_PEER_NAME`. Those four have no channel
+      remedy (a different peer, or nothing at all, not a different
+      transport), and giving them one would suggest a fix that does not
+      apply.
 """
 
 from __future__ import annotations
@@ -213,6 +229,39 @@ class NotReachableReason:
     NO_PEER_NAME = "no-peer-name"
 
 
+class FallbackChannel:
+    """The two surviving channels once `SendMessage` itself is unreachable,
+    named for the field `ResolveResult.fallback_channel` carries.
+
+    Populated ONLY alongside `NotReachableReason.MESSAGING_UNAVAILABLE` --
+    the harness-wide arm, never a per-peer one (see `ResolveResult.
+    fallback_channel`'s own docstring for why). Repo-conditional by
+    construction, per `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-
+    session-messaging-unavailable.md`'s EM Response: a flat pointer is
+    wrong for roughly half its readers, since `peer_notice.send` delivery
+    is same-working-tree only (`docs/reference/peer-notice-channel.md`
+    § "Delivery is same-working-tree only").
+
+        PEER_NOTICE       — the target's `cwd` is within THIS call's own
+                             working tree. `peer_notice.send` can reach it.
+        CROSS_REPO_MEMO    — the target's `cwd` is confirmed outside this
+                             working tree, OR could not be confirmed at all
+                             (absent/null `cwd`, or no live record for the
+                             target). `peer_notice.send` cannot be trusted
+                             here -- sending a same-working-tree-only
+                             pointer to an unconfirmed or cross-repo target
+                             is the exact failure this module exists to
+                             avoid (a confidently-wrong channel is worse
+                             than none: it reads as actionable and is not).
+                             `coordinator/bin/cross-repo-memo` is the one
+                             channel that does not need to know where the
+                             target lives.
+    """
+
+    PEER_NOTICE = "peer_notice.send"
+    CROSS_REPO_MEMO = "cross-repo-memo"
+
+
 @dataclass(frozen=True)
 class Candidate:
     """One live registry record resolved to its `SendMessage` address.
@@ -256,6 +305,19 @@ class ResolveResult:
     with a `None` default: an existing caller switching on `outcome`
     alone is unaffected, and one that wants to say WHY reads this instead
     of re-deriving it from a second registry read it does not have.
+
+    `fallback_channel` is populated ONLY when `reason ==
+    NotReachableReason.MESSAGING_UNAVAILABLE` -- the harness-wide arm,
+    the one whose remedy is "use a different channel" rather than "pick a
+    different peer" (module docstring, `NotReachableReason`'s own
+    docstring). `None` on every other `not_reachable` reason (a per-peer
+    arm has no channel remedy -- see `FallbackChannel`) and on every
+    non-`not_reachable` outcome. One of `FallbackChannel`'s two constants
+    when set, never a guessed or asserted-safe default when the target's
+    repo location could not be confirmed -- see `FallbackChannel.
+    CROSS_REPO_MEMO`'s own docstring for why an unconfirmed `cwd` resolves
+    to the memo channel rather than being left `None` or defaulting to
+    `peer_notice.send`.
     """
 
     outcome: str
@@ -263,6 +325,7 @@ class ResolveResult:
     address: str | None = None
     candidates: list[Candidate] = field(default_factory=list)
     reason: str | None = None
+    fallback_channel: str | None = None
 
 
 def messaging_available(snapshot: dict) -> bool:
@@ -308,6 +371,63 @@ def messaging_available(snapshot: dict) -> bool:
     folding either into the other is the collapse that module exists to undo.
     """
     return any(record.messaging_socket_path for record in snapshot.values())
+
+
+def _normalize_path(path: str) -> str:
+    """Resolve symlinks, absolutize, and normalize-case a path for
+    working-tree containment comparison.
+
+    Deliberately mirrors `coordinator_core.session.peer_roster._normalize_
+    path` (same rationale: `realpath` resolves symlinks on both sides
+    before comparison, `normpath` cleans any residual `..`/`.` segments,
+    `normcase` is the one cross-platform-correct way to compare two
+    `cwd`-shaped strings without assuming either side's platform -- Windows
+    is first-class here, per CLAUDE.md) rather than importing that
+    module's private helper: the two modules are edited by different
+    sessions in this shared tree this session, and a cross-module import of
+    an underscore-prefixed name would couple this change to a file outside
+    its own scope for four lines of logic neither side is likely to drift
+    on independently.
+    """
+    return os.path.normcase(os.path.normpath(os.path.realpath(path)))
+
+
+def _same_working_tree(target_cwd: str | None, this_repo_root: str) -> bool:
+    """True only if `target_cwd` is confirmed to be `this_repo_root` or a
+    subdirectory of it -- never a guess.
+
+    A falsy `target_cwd` (absent/null on the registry record) returns
+    `False`, not an exception and not an optimistic `True`: an unconfirmed
+    location must resolve to the CROSS_REPO_MEMO fallback (see
+    `FallbackChannel.CROSS_REPO_MEMO`'s docstring), the same safe default a
+    confirmed-different-repo location gets, since `peer_notice.send`'s
+    same-working-tree-only delivery makes a wrong `True` here strictly
+    worse than a wrong `False`.
+    """
+    if not target_cwd:
+        return False
+    norm_target = _normalize_path(target_cwd)
+    norm_root = _normalize_path(this_repo_root)
+    return norm_target == norm_root or norm_target.startswith(norm_root + os.sep)
+
+
+def _fallback_channel_for(sid: str, snapshot: dict, this_repo_root: str) -> str:
+    """The `FallbackChannel` remedy for `sid`'s `MESSAGING_UNAVAILABLE`
+    classification -- called only from that one branch of `resolve_address`.
+
+    `this_repo_root` names THIS call's own working tree, not the target's --
+    a peer's `SendMessage` unreachability is resolved against where the
+    CALLER can act, which is the working tree `peer_notice.send` would need
+    to write into. `snapshot.get(sid)` re-reads the same record `_not_
+    reachable_reason` already inspected for `sid` (no second registry scan --
+    both draw from the one `harness_registry.snapshot()` `resolve_address`
+    already holds).
+    """
+    record = snapshot.get(sid)
+    target_cwd = record.cwd if record is not None else None
+    if _same_working_tree(target_cwd, this_repo_root):
+        return FallbackChannel.PEER_NOTICE
+    return FallbackChannel.CROSS_REPO_MEMO
 
 
 def _not_reachable_reason(sid: str, snapshot: dict) -> str:
@@ -588,7 +708,25 @@ def resolve_addresses_bulk_with_availability(session_ids: list[str]) -> tuple[di
     return addresses, messaging_available(snapshot)
 
 
-def resolve_address(owner_id: str) -> ResolveResult:
+def _not_reachable_result(sid: str, snapshot: dict, this_repo_root: str) -> ResolveResult:
+    """Build the `not_reachable` `ResolveResult` for `sid`, pairing `reason`
+    with `fallback_channel` in the one place both of `resolve_address`'s
+    `not_reachable` returns need it -- `sid` need not itself be a key in
+    `snapshot` (the "no match at all" caller passes the raw `owner_id`
+    straight through, same as `_not_reachable_reason` already accepts).
+    """
+    reason = _not_reachable_reason(sid, snapshot)
+    fallback_channel = (
+        _fallback_channel_for(sid, snapshot, this_repo_root)
+        if reason == NotReachableReason.MESSAGING_UNAVAILABLE
+        else None
+    )
+    return ResolveResult(
+        outcome="not_reachable", reason=reason, fallback_channel=fallback_channel
+    )
+
+
+def resolve_address(owner_id: str, this_repo_root: str | None = None) -> ResolveResult:
     """Resolve `owner_id` (a full session UUID) to its live `SendMessage`
     address.
 
@@ -606,6 +744,14 @@ def resolve_address(owner_id: str) -> ResolveResult:
          live: `_resolve_claude_pid_from_env()` -> `env-miss:name-mismatch`
          with `CLAUDE_PID` correctly set). See `_socket_env_self_match`.
 
+    `this_repo_root` names THIS call's own working tree, used ONLY to
+    classify `fallback_channel` when `reason == MESSAGING_UNAVAILABLE`
+    (see `FallbackChannel`). Defaults to `os.getcwd()` when omitted,
+    mirroring `peer_roster.build_roster`'s own default -- pass a caller's
+    resolved git root (e.g. the JSON-RPC dispatch's own per-call
+    `repo_root`) when one is already in hand, since it is a steadier
+    signal than a raw `cwd` that may sit in a subdirectory.
+
     Every "not_reachable" return carries a `reason` from
     `NotReachableReason` -- there is no unexplained arm. The one this
     fleet hits today is `MESSAGING_UNAVAILABLE`: the harness's
@@ -613,7 +759,10 @@ def resolve_address(owner_id: str) -> ResolveResult:
     `messaging_socket_path`, no peer has an address, and the harness's own
     peer list is empty (module docstring, § runtime capability). A caller
     must not read that as "no such session" -- the target may be live and
-    busy; nothing on this box can address it.
+    busy; nothing on this box can address it. That arm's `ResolveResult`
+    also carries `fallback_channel`, repo-conditional per `FallbackChannel`'s
+    own docstring -- the other four reasons never set it (their remedy is
+    not a channel switch).
 
     Negative-spec: an absent/empty env var, or a record with
     `messaging_socket_path is None`, never contributes a match on signal 2
@@ -642,6 +791,8 @@ def resolve_address(owner_id: str) -> ResolveResult:
             outcome="not_reachable", reason=NotReachableReason.NO_OWNER_ID
         )
 
+    root = this_repo_root if this_repo_root else os.getcwd()
+
     snapshot = harness_registry.snapshot()
 
     self_info = harness_registry.self_record()
@@ -650,10 +801,7 @@ def resolve_address(owner_id: str) -> ResolveResult:
     matches = _matching_session_ids(owner_id, snapshot)
 
     if not matches:
-        return ResolveResult(
-            outcome="not_reachable",
-            reason=_not_reachable_reason(owner_id, snapshot),
-        )
+        return _not_reachable_result(owner_id, snapshot, root)
 
     if len(matches) == 1 and (
         matches[0] == self_sid or _socket_env_self_match(matches[0], snapshot)
@@ -670,9 +818,6 @@ def resolve_address(owner_id: str) -> ResolveResult:
     sid = matches[0]
     candidate = _resolve_one(sid, snapshot)
     if candidate is None:
-        return ResolveResult(
-            outcome="not_reachable",
-            reason=_not_reachable_reason(sid, snapshot),
-        )
+        return _not_reachable_result(sid, snapshot, root)
 
     return ResolveResult(outcome="reachable", session_id=sid, address=candidate.address)

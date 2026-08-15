@@ -6919,6 +6919,88 @@ def _bt_solo_bare_commit_index_nonempty(
     return bool([ln for ln in out.splitlines() if ln])
 
 
+def _bt_sweep_all_holds_unverifiable_paths(seg_tokens: List[str]) -> bool:
+    """C1's worktree-union escalation predicate: the sweep-all (`-a`/`-am`/
+    `--all`) mirror of `_bt_solo_bare_commit_index_nonempty`, not of C7's
+    set-difference above -- `-a` supplies no pathspec of its own, so there
+    is nothing for a set-difference to subtract and nothing here provable
+    as this command's own staging.
+
+    Compound-shape decision (`git add -- mine.py && git commit -am "x"`):
+    fires REGARDLESS of any preceding `add` segment. Unlike C7, a scoped
+    `add` does not make the `-a` swept set provably own -- `-a` reaches
+    worktree paths no preceding `add` pathspec bounds. This is why this
+    signature takes only `seg_tokens`, not `segments`/`seg_index`: the
+    decision does not depend on surrounding segments.
+
+    NARROWED (PM ruling, 2026-08-15, `docs/plans/2026-08-15-blanket-gits-
+    proffer-the-scoped-commit-helper.md` § C1): gated behind
+    `_is_hazard_repo`, not a blanket deny. Escalating advisory to deny
+    removes the message from `_advisory_dedupe`'s terse-repeat path, which
+    applies to non-blocking advisories only; on a shared tree at this
+    box's documented 50-70-concurrent-LLM load norm the tree is
+    essentially never clean, so an unnarrowed deny would print its full
+    body on nearly every `git commit -am`. Narrowing to hazard repos keeps
+    identical protection wherever peers actually exist (the ~/.claude
+    meta-repo, and every repo this machine's fleet registry tracks -- see
+    `_is_hazard_repo`'s own docstring) without that cost everywhere else.
+
+    1. Fires ONLY when `_bt_commit_has_sweep_all_flag(seg_tokens)` is True
+       -- the one predicate that INVERTS that gate; the sibling C7 and
+       solo-bare predicates above keep short-circuiting on it.
+    2. Resolves cwd via `_bt_git_dash_c_value` and env via
+       `_bt_git_index_file_env` -- reused, not re-derived (AC4).
+    3. The hazard check runs against that same resolved cwd (falling back
+       to the guard process's own cwd when no `-C` was given), spending no
+       probe of its own: `_is_hazard_repo` samefile-compares against
+       already-known repo roots, it does not need a fresh `rev-parse`.
+    4. Swept set = UNION of `git diff --cached --name-only` (staged) and
+       `git diff --name-only` (tracked-modified, worktree) -- matches the
+       empirically verified semantics of `git commit -a`. Untracked paths
+       excluded: `-a` does not touch them.
+    5. Non-empty union -> True (escalate). Empty -> False.
+
+    Fails OPEN on ANY probe failure -- rc != 0 on either `git diff` call,
+    explicitly INCLUDING `_run_git` returning `_GIT_PROBE_BUDGET_SPENT_RC`
+    (127) once `_GIT_PROBE_BUDGET_SECONDS` is spent for this dispatch:
+    "a false deny blocks work on a guard-process error while a false
+    silence merely returns to today's advisory-only baseline"
+    (`docs/plans/2026-08-01-advisory-firing-shape-predicate.md`, C7). Same
+    posture as `_bt_c7_index_holds_foreign_paths` and
+    `_bt_solo_bare_commit_index_nonempty` above -- inherited, not
+    reinvented.
+
+    The `-a`/`-am`/`--all`/`--amend` short-circuit this predicate INVERTS
+    is itself provenanced from `state/lessons/2026-08-03-git-add-mine-
+    then-bare-git-commit-sweeps-70d1438f8f01.yaml` -- the fourth recorded
+    recurrence of a shared-index sweep silently mis-attributing a peer's
+    work, which is what left the two index-based predicates' unconditional
+    `-a` exclusion (and therefore this gap) in place."""
+    if not _bt_commit_has_sweep_all_flag(seg_tokens):
+        return False
+    cwd = _bt_git_dash_c_value(seg_tokens)
+    if not _is_hazard_repo(cwd or os.getcwd()):
+        return False
+    extra_env: Optional[Dict[str, str]] = None
+    index_file = _bt_git_index_file_env(seg_tokens)
+    if index_file:
+        extra_env = {"GIT_INDEX_FILE": index_file}
+    rc_staged, out_staged = _run_git(
+        ["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env
+    )
+    if rc_staged != 0:
+        return False
+    rc_worktree, out_worktree = _run_git(
+        ["diff", "--name-only"], cwd=cwd, extra_env=extra_env
+    )
+    if rc_worktree != 0:
+        return False
+    swept = {ln for ln in out_staged.splitlines() if ln} | {
+        ln for ln in out_worktree.splitlines() if ln
+    }
+    return bool(swept)
+
+
 def check_git_commit_safe_commit_advise(
     cmd: str,
     session_id: str = "",
@@ -7147,6 +7229,26 @@ def check_git_commit_safe_commit_advise(
                         "shared branch a peer's.\n\n"
                         "Use instead:\n"
                         "  git commit -m %s -- <paths>\n\n"
+                        "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
+                        "instead:\n"
+                        "  scoped-git-commit -m <same subject> -- <paths>"
+                        % (subject_operand,)
+                    )
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
+        if _bt_sweep_all_holds_unverifiable_paths(seg_tokens):
+            return _deny(
+                (
+                    "Deny: " + _amend_body
+                    if is_amend
+                    else (
+                        "Deny: this 'git commit' sweeps every modified tracked "
+                        "file from the worktree ('-a'/'--all'), not just the "
+                        "index — a peer's un-staged edits would be swept under "
+                        "your subject too.\n\n"
+                        "Use instead:\n"
+                        "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
                         "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
                         "instead:\n"
                         "  scoped-git-commit -m <same subject> -- <paths>"

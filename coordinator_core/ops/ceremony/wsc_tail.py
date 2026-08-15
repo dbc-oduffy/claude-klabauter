@@ -1406,11 +1406,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if partition_mandatory and not b_adjudication_present:
                 breach = (
                     f"{OP_NAME}: partition_mandatory with no complete review_trail record "
-                    f"-- required fields: {fields_str}. The engine's own workstream-complete "
-                    "brief already computed a per-commit slice list for this close at "
-                    "gates.review_scale.commit_slices -- fill in reviewer/scope/verdict per "
-                    "entry and supply the list as decisions['review'], or wsc-tail.py's "
-                    "--review-slice (repeatable) / discrete --review-* flags."
+                    f"-- required fields: {fields_str}. gates.review_scale.chain_slices is the "
+                    "chain-scoped review obligation (uncapped); gates.review_scale.commit_slices "
+                    "is the narrower record-write population -- different sets by design. "
+                    "The engine's own workstream-complete brief already computed a "
+                    "per-commit slice list for this close at gates.review_scale.commit_slices "
+                    "-- fill in reviewer/scope/verdict per entry and supply the list as "
+                    "decisions['review'], or wsc-tail.py's --review-slice (repeatable) / "
+                    "discrete --review-* flags."
                 )
             else:
                 breach = (

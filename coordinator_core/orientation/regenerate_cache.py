@@ -203,6 +203,7 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
 from coordinator_core.ipc import register_op
+from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
 from coordinator_core.win_portability import same_path
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
@@ -1082,6 +1083,7 @@ def _render_cache(
     capability_pointers_lines: List[str],
     fast_test_lines: List[str],
     audits_lines: List[str],
+    hook_cancellation_line: str,
     housekeeping_lines: List[str],
     pinboard_final: str,
 ) -> str:
@@ -1123,6 +1125,9 @@ def _render_cache(
 
     if audits_lines:
         parts.append("\n## Audits & censuses\n" + "\n".join(audits_lines) + "\n")
+
+    if hook_cancellation_line:
+        parts.append("\n## Hook cancellation miss rate\n" + hook_cancellation_line + "\n")
 
     if housekeeping_lines:
         parts.append("\n## Housekeeping\n" + "\n".join(housekeeping_lines) + "\n")
@@ -1204,6 +1209,7 @@ def build_cache(
     capability_pointers_lines = emit_capability_pointers(repo_root)
     fast_test_lines = emit_fast_test(repo_root)
     audits_lines = emit_audits_index(state_root)
+    hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     housekeeping_lines = _emit_housekeeping(repo_root)
 
     pinboard_final = ""
@@ -1229,6 +1235,7 @@ def build_cache(
         capability_pointers_lines,
         fast_test_lines,
         audits_lines,
+        hook_cancellation_line,
         housekeeping_lines,
         pinboard_final,
     )
@@ -1396,8 +1403,12 @@ _CACHE_PROTECTED_SECTIONS = frozenset({
 _CACHE_ELASTIC_SECTIONS = frozenset({
     "Housekeeping", "Active workstreams", "Auto-push health",
     "Recent commits", "Wiki", "Architecture atlas", "Capabilities",
-    "Fast test", "Audits & censuses",
+    "Fast test", "Audits & censuses", "Hook cancellation miss rate",
 })
+# "Hook cancellation miss rate" is elastic, not protected, on the same ground as
+# "Capabilities" above: a single informational rate line trimmed by the byte budget costs
+# an agent nothing it needed at boot (DR-310 already rules this residual out of any
+# gate/alert path) -- see coordinator_core.orientation.hook_cancellation_signal.
 # "Capabilities" is elastic, not protected, by deliberate ruling (memo
 # cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md):
 # a pointer trimmed by the byte budget costs an agent one lookup, not a wrong

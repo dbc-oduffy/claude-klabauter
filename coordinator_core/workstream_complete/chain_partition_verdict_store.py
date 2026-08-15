@@ -86,7 +86,7 @@ from coordinator_core.session import scope as session_scope
 # session-keyed file SET under a tracked directory, not a single fixed artifact.
 MUTATES = ["state/ceremony/wsc-chain-partition-verdict/*.json"]
 
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 #: Repo-relative directory this store's records live under — SIBLING to
 #: `state/ceremony/wsc/` (the unrelated ceremony-receipt shard convention),
@@ -128,6 +128,7 @@ def write_verdict_record(
     git_range: Optional[str],
     basis: str,
     tier: str,
+    chain_slices: Optional[list[dict[str, Any]]] = None,
 ) -> Path:
     """Persist the producer's already-computed brightline verdict, verbatim.
 
@@ -139,6 +140,15 @@ def write_verdict_record(
 
     `verdict` is stored verbatim, never re-derived or normalized — this
     store is a pure carrier, not a second oracle.
+
+    `chain_slices` (C7's slate, decorated by C2): carried on the record
+    exactly as given, never inspected, validated, or re-ordered — this
+    store is a carrier for this payload too. `None` (the default) OMITS
+    the `chain_slices` key from the record entirely, matching `commit_
+    slices`'s own None-vs-`[]` precedent on the `brief()` side: absent
+    means "the gate has not run for this close / this caller did not
+    compute a slate", an empty list means "the gate ran and the owed set
+    is resolved-and-empty". Never pass `[]` to mean "not computed yet".
     """
     path = verdict_store_path(repo_root, session_id)
     record: dict[str, Any] = {
@@ -151,6 +161,8 @@ def write_verdict_record(
         "tier": tier,
         "written_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if chain_slices is not None:
+        record["chain_slices"] = chain_slices
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(path, record)
     # Claim recorded only AFTER the atomic rename above completes -- a claim
@@ -163,28 +175,19 @@ def write_verdict_record(
     return path
 
 
-def read_verdict_record(
+def _load_verified_record(
     repo_root: Path,
     *,
     session_id: str,
-    expected_from_handoff: Optional[str] = None,
-) -> Optional[str]:
-    """Return the persisted verdict string for `session_id`, or `None`.
-
-    `None` on ANY of: no record at this session's path, corrupt/unreadable
-    JSON, missing/malformed required fields, a body-level `session_id` that
-    does not match the `session_id` this call was asked for (defense-in-
-    depth on top of the path already being keyed by that same id — see
-    module docstring "Keying"), a `from_handoff` mismatch when
-    `expected_from_handoff` is supplied (the caller's positive "this record
-    was computed over the close I am running" check — see module docstring
-    "Location choice" / brief()'s own provenance cross-check), or a
-    `verdict` value outside `KNOWN_VERDICTS`.
-
-    NEVER raises — every failure mode above degrades to `None`, matching
-    this module's fail-closed contract: a record this function cannot
-    positively verify is treated exactly as an absent one, never coerced
-    into a value.
+    expected_from_handoff: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Shared fail-closed load-and-verify for `read_verdict_record` and
+    `read_chain_slices` — ONE provenance check, so the two accessors can
+    never disagree about which record belongs to this close. Returns the
+    raw record dict only after every check below passes; `None` otherwise.
+    Never raises — see `read_verdict_record`'s docstring for the full list
+    of degradation cases, reproduced here verbatim since both readers share
+    them.
     """
     path = verdict_store_path(repo_root, session_id)
     try:
@@ -209,7 +212,79 @@ def read_verdict_record(
         if not isinstance(record_from_handoff, str) or record_from_handoff != expected_from_handoff:
             return None
 
-    return verdict
+    return record
+
+
+def read_verdict_record(
+    repo_root: Path,
+    *,
+    session_id: str,
+    expected_from_handoff: Optional[str] = None,
+) -> Optional[str]:
+    """Return the persisted verdict string for `session_id`, or `None`.
+
+    `None` on ANY of: no record at this session's path, corrupt/unreadable
+    JSON, missing/malformed required fields, a body-level `session_id` that
+    does not match the `session_id` this call was asked for (defense-in-
+    depth on top of the path already being keyed by that same id — see
+    module docstring "Keying"), a `from_handoff` mismatch when
+    `expected_from_handoff` is supplied (the caller's positive "this record
+    was computed over the close I am running" check — see module docstring
+    "Location choice" / brief()'s own provenance cross-check), or a
+    `verdict` value outside `KNOWN_VERDICTS`.
+
+    NEVER raises — every failure mode above degrades to `None`, matching
+    this module's fail-closed contract: a record this function cannot
+    positively verify is treated exactly as an absent one, never coerced
+    into a value.
+
+    Return type is pinned — this function returns ONLY the verdict string
+    (or `None`) and must NOT be widened to also carry `chain_slices`; see
+    `read_chain_slices` for that.
+    """
+    record = _load_verified_record(
+        repo_root, session_id=session_id, expected_from_handoff=expected_from_handoff
+    )
+    if record is None:
+        return None
+    return record["verdict"]
+
+
+def read_chain_slices(
+    repo_root: Path,
+    *,
+    session_id: str,
+    expected_from_handoff: Optional[str] = None,
+) -> Optional[list[dict[str, Any]]]:
+    """Return the persisted `chain_slices` slate for `session_id`, or `None`.
+
+    Same fail-closed posture and the same session-id + `from_handoff`
+    provenance cross-check as `read_verdict_record` (shared via
+    `_load_verified_record` — the two accessors read the same record and
+    can never disagree about whose close it belongs to).
+
+    `None` on every case `read_verdict_record` returns `None` for, PLUS:
+    the record verified fine but carries no `chain_slices` key at all (the
+    gate has not run for this close, or ran before this key existed —
+    `write_verdict_record`'s own None-vs-absent-key contract), or the key
+    is present but not a list.
+
+    A resolved-but-empty slate is returned as `[]`, distinct from `None` —
+    "the gate ran and the owed set is empty" is an honest answer, not a
+    failure (mirrors `commit_slices`'s own None-vs-`[]` precedent). The
+    returned value is passed straight through, opaquely — this function
+    does not inspect, validate, or re-order entries; that would make the
+    carrier a second oracle over C7's shape.
+    """
+    record = _load_verified_record(
+        repo_root, session_id=session_id, expected_from_handoff=expected_from_handoff
+    )
+    if record is None:
+        return None
+    chain_slices = record.get("chain_slices")
+    if not isinstance(chain_slices, list):
+        return None
+    return chain_slices
 
 
 #: `verdict_record_presence`'s three outcomes. NOT a verdict and never a

@@ -50,6 +50,8 @@ from coordinator_core.workstream_complete import directives_review, judgments
 from coordinator_core.workstream_complete.directives_review import (
     _CHAIN_VERDICT_PARTITION_MANDATORY,
     _CHAIN_VERDICT_SINGLE_REVIEWER_OK,
+    CHAIN_SLICES_CAVEAT,
+    build_chain_slices,
     decide_review_scale,
 )
 
@@ -1482,3 +1484,178 @@ def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_
         assert gross_loc == 31
         assert code_loc == 31
         assert surface_count == 1
+
+
+# ---------------------------------------------------------------------------
+# build_chain_slices -- C7, docs/plans/2026-08-15-chain-scope-review-gets-a-
+# discharging-artifact.md Pinned interfaces Seam 2 / AC4. Direct unit
+# coverage of the pure decorator over chain_partition_uncovered_shas'
+# output; no gate-runner spawn, no git.
+# ---------------------------------------------------------------------------
+
+_FAKE_SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+_FAKE_SHA_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+_FAKE_SHA_C = "c" * 40
+
+
+def test_build_chain_slices_shape_and_ordering():
+    """One entry per input sha, input order preserved, every AC4 key
+    present with the caller-supplied recordable/certifies_review values
+    threaded through untouched."""
+    uncovered = [_FAKE_SHA_A, _FAKE_SHA_B]
+    waivers = {_FAKE_SHA_A: {"certifies_review": False}}
+    slices = build_chain_slices(
+        uncovered, recordable_shas={_FAKE_SHA_A}, waiver_records=waivers
+    )
+    assert [s["sha"] for s in slices] == [_FAKE_SHA_A, _FAKE_SHA_B]
+    assert slices[0] == {
+        "sha": _FAKE_SHA_A,
+        "sha_range": f"{_FAKE_SHA_A}^..{_FAKE_SHA_A}",
+        "recordable": True,
+        "certifies_review": False,
+        "chain_slices_caveat": CHAIN_SLICES_CAVEAT,
+    }
+    assert slices[1]["recordable"] is False
+    assert slices[1]["certifies_review"] is False
+
+
+def test_build_chain_slices_empty_uncovered_returns_empty_list():
+    assert build_chain_slices([], recordable_shas=set(), waiver_records={}) == []
+
+
+def test_build_chain_slices_uncapped_more_than_ten_entries_survive():
+    """The ten-sha prose cap belongs to a downstream renderer (C2/C6), not
+    this builder -- a chain with >10 owed shas must see every one of them
+    survive build_chain_slices uncapped."""
+    uncovered = [f"{i:040x}" for i in range(1, 16)]  # 15 fake shas
+    slices = build_chain_slices(uncovered, recordable_shas=set(), waiver_records={})
+    assert len(slices) == 15
+    assert [s["sha"] for s in slices] == uncovered
+
+
+def test_build_chain_slices_recordable_is_caller_supplied_not_rederived():
+    """recordable is a plain `sha in recordable_shas` membership test -- it
+    must not be inferred from waiver_records (a second oracle over the same
+    partition is the exact defect class this plan exists to stop). A sha
+    with a certifies_review: True waiver record but ABSENT from
+    recordable_shas still reports recordable=False; a sha present in
+    recordable_shas with no waiver record at all still reports
+    recordable=True."""
+    waivers = {_FAKE_SHA_A: {"certifies_review": True}}
+    slices = build_chain_slices(
+        [_FAKE_SHA_A, _FAKE_SHA_B],
+        recordable_shas={_FAKE_SHA_B},
+        waiver_records=waivers,
+    )
+    by_sha = {s["sha"]: s for s in slices}
+    assert by_sha[_FAKE_SHA_A]["recordable"] is False
+    assert by_sha[_FAKE_SHA_A]["certifies_review"] is True
+    assert by_sha[_FAKE_SHA_B]["recordable"] is True
+    assert by_sha[_FAKE_SHA_B]["certifies_review"] is False
+
+
+def test_build_chain_slices_certifies_review_absent_and_false_collapse_identically():
+    """Pinned interfaces Seam 1: an absent waiver record and a record
+    explicitly carrying certifies_review: False must produce the SAME
+    certifies_review=False output -- a consumer must not be able to tell
+    "no waiver" apart from "waiver present, not a review attestation"."""
+    waivers = {_FAKE_SHA_B: {"certifies_review": False}}
+    slices = build_chain_slices(
+        [_FAKE_SHA_A, _FAKE_SHA_B],  # A absent from waivers, B explicitly False
+        recordable_shas={_FAKE_SHA_A, _FAKE_SHA_B},
+        waiver_records=waivers,
+    )
+    by_sha = {s["sha"]: s for s in slices}
+    assert by_sha[_FAKE_SHA_A]["certifies_review"] is False
+    assert by_sha[_FAKE_SHA_B]["certifies_review"] is False
+
+
+def test_build_chain_slices_certifies_review_true_only_on_literal_true():
+    """The one case that does NOT collapse to False -- a matched record
+    literally carrying certifies_review: True (never minted by this repo
+    today, per the module's own Anti-scope, but the reader contract is
+    symmetric)."""
+    waivers = {_FAKE_SHA_A: {"certifies_review": True}}
+    slices = build_chain_slices(
+        [_FAKE_SHA_A], recordable_shas=set(), waiver_records=waivers
+    )
+    assert slices[0]["certifies_review"] is True
+
+
+def test_build_chain_slices_sha_range_never_emits_dot_dot_head():
+    """sha_range is always the concrete-endpoint <sha>^..<sha> form -- never
+    a range ending in a literal ..HEAD, which the stored-HEAD defense drops
+    before any waiver is consulted."""
+    uncovered = [_FAKE_SHA_A, _FAKE_SHA_B, _FAKE_SHA_C]
+    slices = build_chain_slices(uncovered, recordable_shas=set(), waiver_records={})
+    for sha, s in zip(uncovered, slices):
+        assert s["sha_range"] == f"{sha}^..{sha}"
+        assert not s["sha_range"].endswith("..HEAD")
+
+
+def test_build_chain_slices_caveat_present_on_every_entry():
+    """Every entry carries the leg-(b) caveat (staff-eng Finding 3) -- see
+    build_chain_slices' own section docstring for why this repo emits the
+    single caveat string rather than a per-entry ancestry_basis:
+    _derive_dag_chain_set does not expose trailer-derived vs
+    legacy-fallback provenance per sha to this function's caller."""
+    uncovered = [_FAKE_SHA_A, _FAKE_SHA_B]
+    slices = build_chain_slices(uncovered, recordable_shas=set(), waiver_records={})
+    assert all(s["chain_slices_caveat"] == CHAIN_SLICES_CAVEAT for s in slices)
+    assert "not proof of baton ancestry" in CHAIN_SLICES_CAVEAT
+
+
+def test_build_chain_slices_slate_strictly_larger_than_commit_slices_and_commit_slices_unchanged(tmp_path):
+    """Regression pin (AC4/AC7): a multi-session chain fixture where the
+    built chain slate is strictly larger than commit_slices -- the
+    session-owned-only population _measure_session_review_scale_inputs
+    emits. This session's own commit_slices measurement is exercised
+    byte-identically to test_commit_slices_out_shape_and_ordering_two_
+    commits above (unchanged by this chunk, which never touches
+    __init__.py), pinning that build_chain_slices living beside it changes
+    nothing about that producer."""
+    _init_git_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    (tmp_path / "b.py").write_text("x = 1\n", encoding="utf-8")
+    _run_git(["add", "b.py"], str(tmp_path))
+    _commit_as(tmp_path, "first session commit", _SESSION_ID)
+    c1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    (tmp_path / "c.py").write_text("y = 1\ny2 = 2\ny3 = 3\n", encoding="utf-8")
+    _run_git(["add", "c.py"], str(tmp_path))
+    _commit_as(tmp_path, "second session commit", _SESSION_ID)
+    c2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    commit_slices: list = []
+    result = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=commit_slices
+    )
+    # Byte-identical to test_commit_slices_out_shape_and_ordering_two_commits
+    # (pre-existing, unchanged assertions) -- proves this chunk's addition
+    # left the producer untouched.
+    assert result[2] == 2  # commit_count
+    assert [s["sha"] for s in commit_slices] == [c1, c2]
+    assert commit_slices[0]["sha_range"] == f"{c1}^..{c1}"
+    assert commit_slices[1]["sha_range"] == f"{c2}^..{c2}"
+    assert commit_slices[0]["diff_loc"] == 1
+    assert commit_slices[1]["diff_loc"] == 3
+
+    # A predecessor session's ancestry commits (never trailer-matched to
+    # THIS session) are chain-owed but session-unowned -- the exact gap
+    # this plan's Problem section names. Simulated here as >10 additional
+    # fake ancestry shas alongside the two real session commits, mirroring
+    # a multi-session chain whose review obligation spans predecessors.
+    predecessor_shas = [f"{i:040x}" for i in range(1, 12)]  # 11 fake shas
+    chain_uncovered = predecessor_shas + [c1, c2]
+    chain_slices = build_chain_slices(
+        chain_uncovered, recordable_shas={c1, c2}, waiver_records={}
+    )
+
+    assert len(chain_slices) > len(commit_slices)
+    assert len(chain_slices) == 13
+    assert {s["sha"] for s in commit_slices} < {s["sha"] for s in chain_slices}

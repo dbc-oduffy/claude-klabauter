@@ -119,7 +119,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
+from typing import AbstractSet, Any, Callable, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 from coordinator_core.coverage import (
@@ -1703,6 +1703,119 @@ def chain_partition_uncovered_shas(
         chain_planning_shas=chain_planning_shas,
     )
     return [sha for sha in chain_code_shas if str(sha).lower() not in covered]
+
+
+# ---------------------------------------------------------------------------
+# build_chain_slices — the chain slate's SHAPE, decorated from
+# `chain_partition_uncovered_shas`' output (C7, docs/plans/2026-08-15-chain-
+# scope-review-gets-a-discharging-artifact.md § Pinned interfaces, Seam 2 —
+# VERBATIM signature, C2 codes against it). Split out of C3 (EM,
+# post-integration) so the slate's shape is unit-testable without spawning
+# the gate runner, and so it lives beside the oracle it decorates.
+#
+# Pure function: no I/O, no git, no subprocess — the same posture as every
+# other builder in this module. `recordable_shas` and `waiver_records` are
+# both supplied BY THE CALLER (`wsc-coverage-gate-runner.py::
+# cmd_brightline_gate`, C2) — this function re-derives neither the
+# vouched/waived partition nor the waiver bodies. A second oracle for either
+# is the exact defect class this plan exists to stop (see the plan's
+# `## Problem` finding 1: `certifies_review` as a write-only field).
+#
+# ancestry_basis vs chain_slices_caveat (staff-eng Finding 3, the plan's one
+# open shape question, settled by INSPECTION, not judgment, before this
+# function was written): does `_derive_dag_chain_set` expose, PER SHA, which
+# leg attributed it — leg (a), the Deliverable-Id-trailer-stamped commits
+# (`deliv_seg`), vs leg (b), the legacy Session-Id fallback
+# (`legacy_leg`) — to this function's caller?
+#
+# NO. Read `coordinator_core/coverage.py::_derive_dag_chain_set` (~3820):
+# `node_shas = set(deliv_seg) | set(legacy_leg)` unions both legs into ONE
+# frozenset BEFORE it is ever recorded, on `_DagNodeAttribution.shas` (one
+# set per ANCESTRY NODE, not per commit-attribution-leg) — the per-leg
+# membership that distinguished them is a local variable inside that
+# function's loop body and is discarded the moment the union is taken.
+# `_DagChainResult`/`CoverageResult.dag_node_attribution` (its only public
+# surface) carries no field that survives this union: a caller holding
+# `dag_result.node_attribution[node].shas` cannot tell a trailer-derived sha
+# from a legacy-fallback one within that set, and `cmd_brightline_gate` (the
+# only caller of both `_derive_dag_chain_set` and this function) has no
+# other path to that distinction either — it never re-derives `deliv_seg`/
+# `legacy_leg` itself. Widening `_DagNodeAttribution` to carry the split
+# would touch `coverage.py`, which this chunk's scope does not include and
+# which is anti-scoped everywhere adjacent to it in this plan.
+#
+# Answer: the distinction is NOT exposed to this function's caller. Every
+# entry therefore carries the single `chain_slices_caveat` string (leg-(b)
+# caveat, § Considered alternatives) rather than a per-entry `ancestry_basis`
+# — repeated per entry, not hoisted to a payload-level key, because this
+# function's pinned return type is a plain `list[dict]` (no wrapper object)
+# and Seam 3 persists that list verbatim as `chain_slices` on the chain
+# partition verdict store; a value that needs to survive as a JSON list must
+# live inside each element, not beside it.
+# ---------------------------------------------------------------------------
+
+#: Leg-(b) caveat text (staff-eng Finding 3, ACCEPTED) — carried on every
+#: `build_chain_slices` entry rather than a per-entry `ancestry_basis`,
+#: because `_derive_dag_chain_set` does not expose trailer-derived
+#: (leg (a)) vs legacy-fallback (leg (b)) provenance per commit to this
+#: function's caller (see the section docstring above for the inspection
+#: this rests on). States plainly what an entry IS and is NOT proof of, so
+#: a reviewer consuming the slate reads it correctly without re-deriving
+#: the caveat from this module's own history.
+CHAIN_SLICES_CAVEAT = (
+    "owed review by someone in this chain, not proof of baton ancestry"
+)
+
+
+def build_chain_slices(
+    uncovered_shas: Sequence[str],
+    *,
+    recordable_shas: AbstractSet[str],
+    waiver_records: Mapping[str, dict],
+) -> list[dict]:
+    """Decorate the chain owed-set (`chain_partition_uncovered_shas`'
+    output, oldest-first) into the `chain_slices` payload shape (AC4): a
+    list of `{sha, sha_range, recordable, certifies_review,
+    chain_slices_caveat}`, one entry per input sha, in input order.
+
+    Pure — no I/O, no git, no subprocess. Uncapped: returns exactly
+    `len(uncovered_shas)` entries; the ten-sha prose cap elsewhere (C2/C6)
+    is a rendering decision downstream of this function and must not
+    follow the data here.
+
+    `sha_range` is the concrete-endpoint form `<sha>^..<sha>` — never a
+    range ending in a literal `..HEAD`, which the stored-HEAD defense
+    (`_record_range_has_stored_head`) drops before any waiver is
+    consulted; a concrete single-commit range needs no such defense.
+
+    `recordable` is supplied BY THE CALLER via `recordable_shas` — the
+    vouched/waived partition it already computed — and is never
+    re-derived here: membership is a plain `sha in recordable_shas` test.
+
+    `certifies_review` comes from `waiver_records` (C1's
+    `chain_ancestry_waiver_records` reader output, keyed by sha). Per
+    § Pinned interfaces Seam 1, an ABSENT key and a `False` value both
+    collapse to `False` here — only a literal `True` in a matched record
+    means otherwise, and nothing in this repo mints one (see
+    `chain_ancestry_waivers.py`'s own Anti-scope).
+
+    `chain_slices_caveat` is `CHAIN_SLICES_CAVEAT`, verbatim, on every
+    entry — see the section docstring above this function for why a
+    per-entry `ancestry_basis` is not emitted instead."""
+    slices: list[dict] = []
+    for sha in uncovered_shas:
+        record = waiver_records.get(sha)
+        certifies_review = bool(record.get("certifies_review")) if record is not None else False
+        slices.append(
+            {
+                "sha": sha,
+                "sha_range": f"{sha}^..{sha}",
+                "recordable": sha in recordable_shas,
+                "certifies_review": certifies_review,
+                "chain_slices_caveat": CHAIN_SLICES_CAVEAT,
+            }
+        )
+    return slices
 
 
 #: Reporting-layer label for a discharging record whose `execution_basis`

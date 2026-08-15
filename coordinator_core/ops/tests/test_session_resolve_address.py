@@ -23,9 +23,9 @@ from coordinator_core.session import messaging_gate
 from coordinator_core.session import reachability
 
 
-def _record(name, socket):
+def _record(name, socket, cwd="/repo"):
     return hr.RegistryRecord(
-        pid=1, start_epoch=1000.0, cwd="/repo", name=name, messaging_socket_path=socket
+        pid=1, start_epoch=1000.0, cwd=cwd, name=name, messaging_socket_path=socket
     )
 
 
@@ -81,6 +81,28 @@ def test_not_reachable_reason_reaches_the_wire(monkeypatch):
     assert absent["reason"] == reachability.NotReachableReason.NO_LIVE_RECORD
 
 
+def test_fallback_channel_reaches_the_wire_and_is_repo_conditional(monkeypatch, tmp_path):
+    """The op's own `repo_root` param drives the fallback pointer -- a
+    same-tree target gets `peer_notice.send`, a cross-repo target gets the
+    memo channel, threaded through as `this_repo_root` to `reachability.
+    resolve_address` unchanged."""
+    this_repo = tmp_path / "this-repo"
+    sibling_repo = tmp_path / "sibling-repo"
+    (this_repo / "subdir").mkdir(parents=True)
+    sibling_repo.mkdir()
+
+    snap = {"sid-live": _record("claude-klabauter-57", None, cwd=str(this_repo / "subdir"))}
+    monkeypatch.setattr(hr, "snapshot", lambda: snap)
+    monkeypatch.setattr(hr, "self_record", lambda: None)
+
+    same_tree = _session_resolve_address({"session_id": "sid-live"}, repo_root=this_repo)
+    assert same_tree["reason"] == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
+    assert same_tree["fallback_channel"] == reachability.FallbackChannel.PEER_NOTICE
+
+    cross_repo = _session_resolve_address({"session_id": "sid-live"}, repo_root=sibling_repo)
+    assert cross_repo["fallback_channel"] == reachability.FallbackChannel.CROSS_REPO_MEMO
+
+
 def test_ambiguous_shape(monkeypatch):
     # `ambiguous` cannot be produced through the live seam any more
     # (harness_registry.snapshot() de-duplicates by sessionId at parse
@@ -97,7 +119,7 @@ def test_ambiguous_shape(monkeypatch):
     monkeypatch.setattr(
         mod.reachability,
         "resolve_address",
-        lambda owner_id: ResolveResult(outcome="ambiguous", candidates=candidates),
+        lambda owner_id, this_repo_root=None: ResolveResult(outcome="ambiguous", candidates=candidates),
     )
 
     result = _session_resolve_address({"session_id": "5d3d5763-aaaa"})
