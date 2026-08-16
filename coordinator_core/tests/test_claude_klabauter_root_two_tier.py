@@ -595,7 +595,11 @@ def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_
 
     root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
 
-    assert root == str(fx.published_dir)
+    # `write_registry` seeds `claude_klabauter` via `as_posix()` (forward
+    # slashes), and the resolver returns that registry value verbatim — so
+    # a WindowsPath string comparison here is spurious on Windows; compare
+    # as paths instead.
+    assert Path(root) == fx.published_dir
     assert cls == "resolved-engine"
 
 
@@ -953,7 +957,7 @@ def test_rung2_absent_key_remediation_text_byte_identical(_rung2_fixture, monkey
         "  Remediate (choose one):\n"
         "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
         "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-        "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
+        "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
     )
 
     def _fake_run(*args, **kwargs):

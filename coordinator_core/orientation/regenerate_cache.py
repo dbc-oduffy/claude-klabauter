@@ -1545,6 +1545,17 @@ def _enforce_cache_budget(text: str) -> str:
     return preamble + marker + "".join(s["raw"] for s in sections)
 
 
+_FIRST_WRITE_DEFAULT_MODE = 0o644
+"""Fixed permission bits applied to a cache file's first-ever write (no
+existing file to inherit mode bits from). Deliberately NOT derived from the
+process umask (see `_atomic_replace`'s UMASK RACE note) — reading the umask
+requires a process-wide `os.umask(0)` / restore read-modify-write, which is
+itself the security window this module exists to close. 0644 matches the
+typical umask-respecting default (0666 & ~0022) most POSIX installs would
+have produced anyway; an install with an unusually permissive umask default
+no longer gets it propagated onto this file."""
+
+
 def _atomic_replace(cache_file: Path, output: str) -> None:
     """Write *output* to *cache_file* atomically (mkstemp + os.replace — PARITY-PLUS).
 
@@ -1557,10 +1568,32 @@ def _atomic_replace(cache_file: Path, output: str) -> None:
     Permission-bit parity: ``mkstemp`` creates its temp file at mode 0600
     (Python default, tighter than the bash oracle's ``>`` redirect, which
     creates at the umask-respecting 0666 default — typically 0644). Explicitly
-    chmod the temp file to the umask-respecting default before the atomic
-    rename so an existing world/group-readable cache file's permission bits
-    are preserved across a regeneration, matching the bash oracle exactly
-    (caught by a golden-diff permission-bit check during this port).
+    fchmod the temp file's already-open fd to the umask-respecting default
+    before the atomic rename so an existing world/group-readable cache file's
+    permission bits are preserved across a regeneration, matching the bash
+    oracle exactly (caught by a golden-diff permission-bit check during this
+    port).
+
+    UMASK RACE (C10, staff-eng review finding 8): the naive way to compute
+    "umask-respecting default" is ``os.umask(0)`` (read) immediately followed
+    by ``os.umask(saved)`` (restore) — but that is a process-wide
+    READ-MODIFY-WRITE: for the two-instruction window between them, EVERY
+    thread in the process sees umask 0, so any file another op creates in
+    that window (however narrow) is unintentionally world-writable. Under
+    one-op-per-process this was harmless (nothing else runs concurrently);
+    under warm concurrent dispatch it is security-relevant. Fixed by fchmod-
+    ing the already-0600 mkstemp fd to the EXISTING cache file's own current
+    mode bits when one is present — the actual steady-state case (a
+    regeneration, not a first write) — which needs no umask read at all and
+    removes the process-wide window entirely for that path. The rare
+    first-ever-write path (no existing file to inherit bits from) no longer
+    reads/restores the process umask at all — that read-modify-write window
+    was itself a process-wide world-writable exposure under warm concurrent
+    dispatch (Review: coordinator:code-reviewer 9b8765ad finding 2 — the
+    fallback reopened exactly the race this fix exists to close, just on a
+    narrower trigger). It fchmods the fd to an explicit fixed default
+    (`_FIRST_WRITE_DEFAULT_MODE`, 0644) instead of deriving one from the
+    process umask.
 
     Size budget: *output* is passed through ``_enforce_cache_budget`` here,
     unconditionally, before any byte is written -- see that function and the
@@ -1574,9 +1607,37 @@ def _atomic_replace(cache_file: Path, output: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(output)
-        current_umask = os.umask(0)
-        os.umask(current_umask)
-        os.chmod(tmp, 0o666 & ~current_umask)
+            # fchmod the fd while it is still open -- fdopen()'s context
+            # manager closes `fd` on exit, so this must happen before the
+            # `with` block ends, not after. `os.fchmod` is POSIX-only (absent
+            # on Windows, per the `hasattr` guard below) -- Windows' own
+            # `os.chmod` only ever toggles the read-only attribute bit
+            # anyway, so the umask-parity concern this whole block exists
+            # for does not meaningfully apply there; `os.chmod(tmp, ...)` by
+            # path is an equivalent (if not fd-pinned) fallback on that
+            # platform, matching the pre-C10 behavior exactly.
+            try:
+                existing_mode: Optional[int] = cache_file.stat().st_mode & 0o777
+            except FileNotFoundError:
+                existing_mode = None
+            # Review: coordinator:code-reviewer 9b8765ad finding 4 — narrowed
+            # from a broad `except OSError` to `FileNotFoundError` only. A
+            # permission-denied or other real stat failure on an EXISTING
+            # file must not silently fall through to the first-write default
+            # mode branch below; it now propagates instead of being papered
+            # over.
+            if existing_mode is not None:
+                target_mode = existing_mode
+            else:
+                # First-ever write for this cache_file — no existing mode to
+                # inherit, and no process umask read either (see the
+                # UMASK RACE docstring note above). Explicit fixed default,
+                # not derived from a process-global.
+                target_mode = _FIRST_WRITE_DEFAULT_MODE
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, target_mode)
+            else:
+                os.chmod(tmp, target_mode)
         os.replace(tmp, cache_file)
     except Exception:
         try:

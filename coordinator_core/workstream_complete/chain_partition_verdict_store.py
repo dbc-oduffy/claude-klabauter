@@ -127,7 +127,7 @@ def write_verdict_record(
     from_handoff: str,
     git_range: Optional[str],
     basis: str,
-    tier: str,
+    tier: Optional[str] = None,
     chain_slices: Optional[list[dict[str, Any]]] = None,
 ) -> Path:
     """Persist the producer's already-computed brightline verdict, verbatim.
@@ -149,6 +149,13 @@ def write_verdict_record(
     means "the gate has not run for this close / this caller did not
     compute a slate", an empty list means "the gate ran and the owed set
     is resolved-and-empty". Never pass `[]` to mean "not computed yet".
+
+    `tier` (state/kill-ledger.md K-004, 2026-08-16): the producer
+    (review_brightline_gate.py's BRIGHTLINE line) no longer computes or
+    emits a tier value — `None` (the default) OMITS the `tier` key from
+    the record entirely, same absent-means-not-computed contract as
+    `chain_slices`. Kept as an accepted (not required) kwarg only so an
+    older or out-of-tree caller passing a literal value does not break.
     """
     path = verdict_store_path(repo_root, session_id)
     record: dict[str, Any] = {
@@ -158,9 +165,10 @@ def write_verdict_record(
         "from_handoff": from_handoff,
         "git_range": git_range,
         "basis": basis,
-        "tier": tier,
         "written_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if tier is not None:
+        record["tier"] = tier
     if chain_slices is not None:
         record["chain_slices"] = chain_slices
     path.parent.mkdir(parents=True, exist_ok=True)

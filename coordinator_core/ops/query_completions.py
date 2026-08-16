@@ -63,6 +63,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -179,19 +180,10 @@ def _detect_root(specified: Optional[str]) -> Path:
     """
     if specified:
         return Path(specified).resolve()
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
+    top = show_toplevel()
+    if not top:
         return Path.cwd()
-    if result.returncode != 0:
-        return Path.cwd()
-    return Path(result.stdout.strip())
+    return Path(top)
 
 
 def main(argv: List[str]) -> int:

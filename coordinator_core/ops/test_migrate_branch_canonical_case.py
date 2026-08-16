@@ -61,6 +61,26 @@ def _run(repo: Path, args, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
+def test_git_timeout_degrades_to_synthetic_nonzero_completed_process(monkeypatch):
+    """Review: code-reviewer (F4, P2) — `_git`'s `TimeoutExpired` -> synthetic
+    non-zero `CompletedProcess` degradation was the only spawn/timeout change
+    in this slice shipped without test coverage. Pins that a timed-out call
+    returns a `CompletedProcess` (not a raised exception) with
+    `returncode == 1`, so callers' existing `.returncode` checks see it as an
+    ordinary git failure rather than aborting mid-flight."""
+
+    def _raise_timeout(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd=["git", "status"], timeout=1.0)
+
+    monkeypatch.setattr(mbcc.subprocess, "run", _raise_timeout)
+
+    result = mbcc._git("/some/repo", "status", timeout=1.0)
+
+    assert isinstance(result, subprocess.CompletedProcess)
+    assert result.returncode == 1
+    assert "timed out" in result.stderr
+
+
 def test_unknown_argument_exits_1(tmp_path, monkeypatch, capsys):
     repo = tmp_path / "repo"
     _mkrepo(repo)

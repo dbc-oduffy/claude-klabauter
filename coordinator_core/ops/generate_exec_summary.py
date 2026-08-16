@@ -72,6 +72,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
 from coordinator_core import meta_repo_identity as _meta_repo_identity
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops._relative_link import relative_markdown_target
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.state_root import StateRootError
@@ -535,22 +536,7 @@ def _emit_file(
 # ---------------------------------------------------------------------------
 
 def _resolve_repo_root() -> Optional[str]:
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _resolve_repo_root: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if proc.returncode != 0:
-        return None
-    root = proc.stdout.strip()
+    root = show_toplevel()
     return root or None
 
 

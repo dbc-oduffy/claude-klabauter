@@ -55,6 +55,7 @@ def test_windows_backslash_path_survives_argv_parsing(tmp_path):
     # stand-in for a Windows drive-letter path's backslash separators.
     windows_shaped_name = "tools\\refresh.exe"
     fake_exe = tmp_path / windows_shaped_name
+    fake_exe.parent.mkdir(parents=True, exist_ok=True)
     fake_exe.write_text("")
     windows_shaped = str(fake_exe)
     argv = _parse_argv_command(f"{windows_shaped} --flag", "TEST_CMD", resolve_cwd=tmp_path)

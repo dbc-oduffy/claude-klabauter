@@ -135,6 +135,18 @@
       },
       "_rationale": "C8 (2026-08-11-claim-release-and-the-gate-that-cannot-clear.md), A8/A10: end-to-end git-SUBPROCESS-SPAWN COUNT (not latency -- a timing figure is noise on this repo's 50-70-concurrent-session box, see CLAUDE.md load norm) for the whole `_handler`/`run_commit_pipeline` staging+commit+push pipeline, measured via `git_native._git` -- this op's sole native-git choke point (git_native.py's own docstring). Enforced by `test_commit_e2e_spawn_budget.py`. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape; this op is NOT in `op_fixtures.COMPUTE_ONLY_FIXTURES` (it is MUTATING, not swept automatically), so the ms figure is inert/advisory -- `spawn_count_budget` is the actually-enforced invariant. Measured 2026-08-11 on this repo: green_path=12 (rename-diff status probe x2, ls-files --deleted, check-ignore stdin probe, add x2, diff --cached --name-only, --no-optional-locks status, rev-parse HEAD, commit, post-commit Commit-Token log search, remote); refusal_path_unanswerable=0 (an UNANSWERABLE path -- e.g. unverified caller identity conflicting with a live claimant -- short-circuits `_handler` before any staging spawn); directory_pathspec_expansion=13 (green_path's 12 plus the one extra pathspec-scoped `git status --porcelain -- <dir>` `_expand_directory_pathspecs` issues before the rest of the pipeline runs). A8's pre-amendment '+1' referred to the CONJUNCTION-path delta inside `_check_claim_conflicts` alone (C5's own lazy call, see test_commit_gate_budget.py), not this op-level figure -- see that test module and this chunk's run-report sidecar for the reconciliation."
     },
+    "changelog.cited_in_range_count": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "n_tokens": 1,
+        "no_tokens": 0
+      },
+      "_rationale": "2026-08-15 fleet spawn census re-verification (state/audits/2026-08-15-fleet-census-reverification-at-head.md § 'Rows surviving intact and unguarded'): `_cited_in_range_count` spawned one `git rev-parse --verify` per unique hex-looking token found via regex over a free-text changelog body -- unbounded by construction, no memo, no timeout. Fix: `_batch_resolve_commits` resolves the whole token set in ONE `git cat-file --batch-check` process (stdin-fed, `timeout=_SUBPROCESS_TIMEOUT`), each token queried as `{tok}^{commit}` to match the prior per-token `rev-parse --verify -q {tok}^{commit}` peel byte-for-byte -- the set of tokens classified as resolving to a commit is unchanged, only the spawn shape is. `target_ms`/`tolerance` satisfy `budget.py._validated_budget`'s required override shape only; `spawn_count_budget` is the enforced invariant, guarded by `coordinator_core/ops/test_changelog_cited_in_range_spawn_bound.py`. `n_tokens=1`: any nonzero number of distinct tokens costs exactly one subprocess (was N before the fix). `no_tokens=0`: an empty token set short-circuits before spawning at all."
+    },
     "coverage.diagnose_open_review_loop_dag_mode": {
       "target_ms": 300,
       "tolerance": {
@@ -145,6 +157,94 @@
         "many_pending_records": 1
       },
       "_rationale": "2026-08-15 audit (state/audits/2026-08-15-wsc-close-time-attribution.md): `coverage._make_chain_range_resolver` returned None whenever `graph_range` was absent -- exactly DAG mode, the mode WSC's chain-end gate runs in -- so `review_coverage_core.classify_pending_records` fell back to its DEFAULT resolver: one `git rev-list` per DISTINCT range across the WHOLE review-trail corpus (measured 2,328 spawns / 96.3% of a coverage-gate invocation's git spawns, paid twice per close). Fix: DAG mode now gets its own one-spawn resolver (`_build_chain_seed_parent_map`, ONE `git rev-list --parents --stdin` seeded on `chain_set`, mirroring flat mode's `_build_parent_map` over `graph_range`) via `_resolve_dag_endpoint`, so both modes take the same zero-further-spawn set-math path `_reviewed_via_graph_walk` already uses. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape -- this key is not a real op, `spawn_count_budget` is the enforced invariant. Enforced by `coordinator_core/tests/test_coverage_gate_spawn_bound.py::test_dag_mode_resolver_does_not_spawn_per_pending_record`: `many_pending_records=1` -- the single `git rev-list --parents --stdin` graph build, regardless of how many distinct pending-record ranges (fixture: 30) the corpus cites, because every fixture endpoint is a hex SHA that resolves in-memory against the built parent map with zero further spawns."
+    },
+    "percolate.functional_identifier_output_drift_in_tree": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "no_dest_publish_time": 0,
+        "with_dest_publish_time_n_files": 1
+      },
+      "_rationale": "2026-08-15 audit (state/audits/2026-08-15-fleet-census-reverification-at-head.md row 7): `find_functional_identifier_output_drift_in_tree` (coordinator_core/percolate/store.py) ran `_git_commit_epoch_time` -- one `git log -1 --format=%ct` spawn -- per candidate file whenever a caller supplied `dest_publish_time`, unbounded by construction. This op's sole non-test caller, `publish.py`'s `dispatch_end_of_run_functional_identifier_output_drift_check`, never supplies `dest_publish_time` (its own docstring: 'that branch forks one git log per file ... and is what killed two prior measurement attempts on this machine's shared, heavily-loaded tree'), so the branch is currently reachable only from tests -- `no_dest_publish_time=0` documents the production caller's actual (unchanged, already-zero) spawn count. Fix: `_git_commit_epoch_times_batch` resolves the whole candidate-file set in ONE `git log --format=%x00%ct --name-only -- <paths...>` spawn (newest-commit-first, first occurrence per path wins, matching `git log -1 --format=%ct -- path` semantics exactly) instead of one spawn per file, for any FUTURE caller that does supply `dest_publish_time` -- the set of drift triples returned is unchanged, only the spawn shape is. `target_ms`/`tolerance` satisfy `budget.py._validated_budget`'s required override shape only; `spawn_count_budget` is the enforced invariant, guarded by `coordinator_core/percolate/tests/test_functional_identifier_output_drift_spawn_budget.py`. `with_dest_publish_time_n_files=1`: any nonzero number of candidate files costs exactly one subprocess (was N before the fix) once `dest_publish_time` is supplied."
+    },
+    "bin.coordinator_harvest_deferrals_dedup_scan_root_resolution": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "resolution_calls_for_5_candidate_rows": 3,
+        "directory_scan_calls_for_5_candidate_rows": 1
+      },
+      "_rationale": "2026-08-15 audit (state/audits/2026-08-15-fleet-composed-op-spawn-census.md row 13 / state/audits/2026-08-15-fleet-census-reverification-at-head.md): `coordinator-harvest-deferrals.py::_harvest`'s per-row loop calls `_candidate_search_dirs(row)` for every candidate, which in turn calls `_repo_root()` (a `git rev-parse --show-toplevel` subprocess spawn), `_resolved_doe_root()`, and `_resolved_claude_klabauter_root()` (each capable of its own machine-local-registry/marketplace-cache subprocess spawn) FRESH per row -- 3 resolution calls x N rows for an answer invariant for the whole process's lifetime. The per-row WRITE dispatch itself (`_run_queue_append`/`_run_lesson_promote`, already timeout-bounded at `_SUBPROCESS_TIMEOUT_SECS`, and since the 2026-08-15 staff review also catches `subprocess.TimeoutExpired` and degrades it to a per-row failure) is deliberately left one-spawn-per-row -- each row's write stays isolated via the `_run_*` helpers' return-False contract, not a `try` inside `_harvest()` itself, so one row's failure or hang never blocks another's. Fix (root resolution): memoize the three resolution calls (`_repo_root_cache`/`_resolved_doe_root_cache`/`_resolved_claude_klabauter_root_cache`, first-call-wins, mirroring the pre-existing `_CLI_CMD_CACHE` pattern). Fix (directory scan, 2026-08-15 staff review Defect 2 -- the expensive half of the per-row work an earlier pass left unhoisted): `_already_harvested` re-globbed AND re-read EVERY `*.yaml` file in up to four directories (`state/improvement-queue`, `state/lessons-outbox`, in both claude-klabauter and DoE) ONCE PER CANDIDATE ROW -- `_derive_proposed_action`'s own docstring measures those corpora at 605/493 entries, i.e. O(rows x ~1100 full file reads) for a key set invariant across the loop. `_collect_evidence_lines(search_dirs)` now does that glob+read ONCE, before the loop, returning the flat list of `evidence:`-prefixed lines; `_already_harvested(key, evidence_lines)` is then an O(1)-per-row substring membership check against that pre-collected list, preserving the exact prior match semantics (line must start with `evidence:`, key checked via substring). `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape -- this key is not a real op, `spawn_count_budget` is the enforced invariant. Enforced by `coordinator/bin/tests/test_harvest_deferrals_dedup_scan_memoized.py` (`resolution_calls_for_5_candidate_rows=3` -- exactly one call each to `_repo_root()`/`_resolved_doe_root()`/`_resolved_claude_klabauter_root()` regardless of candidate-row count, fixture: 5 rows, versus 15 pre-fix) and `coordinator/bin/tests/test_harvest_deferrals_evidence_scan_hoisted.py` (`directory_scan_calls_for_5_candidate_rows=1` -- `_collect_evidence_lines`/the underlying `glob.glob`+file-read pass runs exactly once per `_harvest()` invocation regardless of candidate-row count, versus once per row pre-fix; asserts the CALL COUNT of the scan, not wall-clock)."
+    },
+    "bin.workday_complete_close_backfill_dispatch_rows": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "2026-08-15 audit (state/audits/2026-08-15-fleet-composed-op-spawn-census.md row 14): `workday-complete-close.py::cmd_backfill_dispatch_rows` dispatches ONE full composed step9-ceremony subprocess (`_dispatch_step9_row`) per gap date, up to the 14-day lookback -- deliberately left one-spawn-per-gap-date: each row's exit code is tracked independently and the loop's own contract ('one bad day should not abandon the rest of the backfill') requires row N's failure to never block row N+1's dispatch, so batching into a single invocation is NOT equivalent and was rejected. `_dispatch_step9_row`'s previously-unbounded `subprocess.run` now carries `timeout=_STEP9_ROW_DISPATCH_TIMEOUT_SECS` (120s), with a `TimeoutExpired` caught and converted to a per-row failure (rc=1) rather than crashing the whole loop, preserving per-row isolation under a timeout the same as under a subprocess failure. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape -- this key is not a real op. 2026-08-15 staff review: a prior `spawn_count_budget.spawns_per_gap_date=1` was removed here -- it was N==N (true by definition for any one-spawn-per-row implementation, bounds nothing) and its docstring wording actively forbade the correct duplicate-date dedup fix (workday-complete-close.py::cmd_backfill_dispatch_rows now skips a re-seen date rather than re-dispatching it), which would have made a 3-row input with one duplicate cost 2 spawns and broken that tautological assertion. The real invariants (timeout present on every row dispatch; a duplicated date dispatches once, not twice; one row's timeout does not abort the rest) are behavioural, not spawn-count-shaped, and are enforced directly by `coordinator/bin/tests/test_workday_complete_backfill_dispatch_timeout.py` without a manifest budget."
+    },
+    "bin.reap_integrated_review_findings.tracked_untracked_split": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "per_reap_call": 1
+      },
+      "_rationale": "2026-08-15 lower-confidence sweep candidate (state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Lower confidence, fan-out unit unconfirmed'): reap-integrated-review-findings.py::_reap_integrated_legacy spawned one 'git ls-files --error-unmatch -- <path>' per marker-bearing findings sidecar in `to_reap` to split it into tracked/untracked buckets before git rm/commit. Fix: ONE 'git ls-files -z -- <all rel paths>' call; git's own output (forward-slash, tracked-only) set-membership-checked against each candidate's relpath (normalized off os.sep for Windows) replaces the per-path --error-unmatch probe. target_ms/tolerance are carried only to satisfy budget.py._validated_budget's required override shape -- this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator/tests/test_reap_integrated_review_findings_spawn_budget.py: per_reap_call=1 -- exactly one 'git ls-files' subprocess regardless of how many marker-bearing sidecars are present."
+    },
+    "bin.workday_complete_step2_5_dirty_tree.classify_main_pass": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "per_classify_call": 2
+      },
+      "_rationale": "2026-08-15 lower-confidence sweep candidate (state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Lower confidence, fan-out unit unconfirmed'): workday_complete_step2_5_dirty_tree.py::_classify_main_pass spawned one 'git diff --quiet -- <path>' (EOL-PHANTOM probe) and one 'git ls-files --stage -- <path>' (SUBMODULE probe) per dirty status line, up to 2N spawns for N dirty paths. Fix: _batch_diff_has_content/_batch_submodule_paths each issue ONE '-z' batched git call over the whole status-line set ('git diff --name-only -z --' and 'git ls-files --stage -z --' respectively) before the classification loop runs; the loop itself is unchanged, just consulting the two precomputed membership sets instead of spawning per path. target_ms/tolerance are carried only to satisfy budget.py._validated_budget's required override shape -- this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator_core/ops/test_workday_complete_step2_5_dirty_tree_spawn_budget.py: per_classify_call=2 -- exactly the two batched git subprocesses regardless of dirty-path count (fixture: several paths across EOL/submodule/other branches)."
+    },
+    "execute_plan_assemble.dispatch_ledger_delivered": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "no_committed_rows": 0,
+        "n_committed_rows": 2
+      },
+      "_rationale": "2026-08-15 fleet-composed-op-spawn census row 18 (state/audits/2026-08-15-fleet-composed-op-spawn-census.md, reverified in state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Rows surviving intact and unguarded'): close_out_and_stamp.py::_dispatch_ledger_delivered spawned one 'git cat-file -e <sha>' plus one 'git merge-base --is-ancestor <sha> HEAD' per Dispatch Ledger row citing a committed sha -- a 20-chunk plan was 40 spawns. This is the legacy pre-spine Dispatch Ledger fallback (reached only when a plan has no '## Tasks' spine); a plan with a task-spine never reaches it. Fix: _batch_git_cat_file_check (one 'git cat-file --batch-check', stdin-fed with every distinct cited sha) and _rev_list_ancestor_shas (one 'git rev-list HEAD', membership test replaces per-sha 'merge-base --is-ancestor') -- TWO spawns total for the whole table, regardless of row count, versus 2N before. The returned (is_shipped, missing_chunk_ids, error) verdict is unchanged -- only the spawn shape is. Also added: this module's shared _run_git now carries _GIT_TIMEOUT_SECS=20.0 (previously unbounded). target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator_core/execute_plan_assemble/tests/test_dispatch_ledger_delivered_spawn_budget.py: no_committed_rows=0 (a table with zero 'committed <sha>'-shaped rows never spawns git at all); n_committed_rows=2 -- exactly the two batched subprocesses for a multi-row fixture citing several distinct shas."
+    },
+    "execute_plan_assemble.sibling_committed_chunk_ids_memo": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "second_call_identical_inputs": 0
+      },
+      "_rationale": "2026-08-15 fleet-composed-op-spawn census row 10 (state/audits/2026-08-15-fleet-composed-op-spawn-census.md, reverified in state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Rows surviving intact and unguarded'): close_out_and_stamp.py's own main routine called _sibling_committed_chunk_ids TWICE per closeout with byte-identical inputs -- once inside _determine_shipped for the real cross-repo evidence union, once again purely to surface skipped_sibling_repos for the result dict (the second call's own committed-ids return was discarded) -- doubling the per-sibling git fan-out (4-6 git spawns per sibling repo, unbounded by sibling count) for zero evidence gain. Latent-bug fix: the second call site had also silently omitted its own repo_root argument (defaulting to None), which both weakened _plan_sibling_repo_ids' containment check there AND meant the two calls' inputs never actually matched; passing repo_root there now (identical to the first call's own) is what makes the two calls' inputs identical. Fix: _SIBLING_COMMITTED_MEMO, a process-lifetime module dict keyed on the full (plan_text, deliverable_id, spine_ids, repo_root) input tuple, returns fresh set()/list() copies on a cache hit instead of re-scanning every sibling repo. The real per-sibling git cost when scope: names siblings not yet scanned this process is unchanged -- this fix removes the DUPLICATE scan, not the underlying per-sibling cost. target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator_core/execute_plan_assemble/tests/test_sibling_committed_chunk_ids_memo_spawn_budget.py: second_call_identical_inputs=0 -- a second call with the exact same arguments as a prior call spawns zero additional git subprocesses."
+    },
+    "ops.discover_working_repos": {
+      "target_ms": 120,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "per_call": 0
+      },
+      "_rationale": "2026-08-15 staff review of the fleet spawn sweep (state/audits/2026-08-15-fleet-census-reverification-at-head.md). discover_working_repos.py::_tier_a5 spawned one machine-local keys subprocess plus one machine-local get <key> per repos.* key, and ::_publish_mirror_keys independently repeated the whole pattern for publish.mirrors.*.path -- measured live at ~24 interpreter spawns per main() call (19 repos keys + 4 mirror paths), each with a 10s timeout, on a box CLAUDE.md sizes at 50-70 concurrent LLM sessions. This was not merely slow: it contradicted the standing negative spec in coordinator_core/machine_resolver.py, which forbids shelling out to that CLI, and the 2026-08-05 PM directive on de-bashing spawn amplification that it records. It was also LESS CORRECT than a direct read -- registry_get's docstring notes the CLI lives under a resettable bin directory, so the CLI working is not proof of reset-survival, while a direct file read is. Fix: _merged_flat_registry merges registry.local.toml over registry.toml via machine_resolver.load_flat_registry_file/registry_dir (direct tomllib), zero subprocesses. Concern-layer parity was verified rather than assumed: _machine_local.py::_flatten_nested documents these keys as root-namespace-only and actively drops concern-name collisions, so a flat two-file read cannot miss a repo. target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant, guarded by coordinator_core/ops/test_discover_working_repos_spawn_budget.py. per_call=0 is a real ceiling, not a per-item ratio -- any key count costs zero subprocesses, so a regression to the CLI fails at 1."
     }
   }
 }

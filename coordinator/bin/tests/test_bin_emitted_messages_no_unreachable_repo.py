@@ -44,7 +44,6 @@ BIN_ROOT = Path(__file__).resolve().parents[1]
 #: needs to match a walked path; it is listed anyway for parity with the
 #: plan's own out-of-scope enumeration.
 ALLOWLIST: dict[str, str] = {
-    "backfill-chain-ancestry-waiver-paths.py": "does not ship to the OSS mirror -- no OSS operator reaches it",
     "verify-dist-publish-repo-sync.py": "does not ship to the OSS mirror -- no OSS operator reaches it",
     "verify-publish-targets-portable-sync.py": "does not ship to the OSS mirror -- no OSS operator reaches it",
     "install-doe-claude-precommit-hook.cmd": (
@@ -470,7 +469,6 @@ def test_no_bin_script_emits_an_unreachable_repo_pointer():
 def test_allowlist_matches_plan_out_of_scope_list():
     assert set(ALLOWLIST) == {
         "install-doe-claude-precommit-hook.py",
-        "backfill-chain-ancestry-waiver-paths.py",
         "verify-dist-publish-repo-sync.py",
         "verify-publish-targets-portable-sync.py",
         "install-doe-claude-precommit-hook.cmd",

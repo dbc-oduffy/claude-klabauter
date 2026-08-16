@@ -63,6 +63,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir
+from coordinator_core.git.repo_root import show_toplevel
 
 USAGE = """Usage: probe-cwd-example-retrieval-repo-relevance.sh
 
@@ -149,25 +150,10 @@ def _resolve_effective_cwd() -> str:
         return test_pwd
 
     effective_cwd = os.environ.get("PWD", os.getcwd())
-    git_bin = shutil.which("git")
-    if git_bin:
-        try:
-            from coordinator_core.win_portability import no_console_creationflags
-
-            result = subprocess.run(
-                [git_bin, "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                check=False,
-                **no_console_creationflags(),
-            )
-            if result.returncode == 0:
-                top = result.stdout.strip()
-                if top:
-                    effective_cwd = top
-        except OSError:
-            print(f"skip: _resolve_effective_cwd: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-            pass
+    if shutil.which("git"):
+        top = show_toplevel(effective_cwd)
+        if top:
+            effective_cwd = top
     return effective_cwd
 
 

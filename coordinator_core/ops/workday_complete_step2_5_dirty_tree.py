@@ -182,6 +182,7 @@ import subprocess
 import sys
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -444,6 +445,46 @@ def _resolve_claim_context(
     return mine_paths, peer_map
 
 
+def _batch_diff_has_content(paths: List[str], repo_root: str) -> FrozenSet[str]:
+    """Batched replacement for a per-path `git diff --quiet -- <path>` probe.
+
+    Returns the subset of `paths` that have real (non-EOL-only) diff content
+    against the index — one `git diff --name-only -z --` call for the whole
+    set instead of one `git diff --quiet` per path. A path absent from the
+    returned set is EOL-PHANTOM (content-equal to index). Empty input spawns
+    nothing.
+    """
+    if not paths:
+        return frozenset()
+    res = _run_git(["diff", "--name-only", "-z", "--", *paths], cwd=repo_root)
+    if res.returncode not in (0, 1):
+        # git diff exits 1 with --name-only only on error paths this repo
+        # doesn't otherwise see; fail safe by treating every path as having
+        # content (matches the old per-path returncode!=0 -> not-EOL fallthrough).
+        return frozenset(paths)
+    return frozenset(p for p in res.stdout.split("\0") if p)
+
+
+def _batch_submodule_paths(paths: List[str], repo_root: str) -> FrozenSet[str]:
+    """Batched replacement for a per-path `git ls-files --stage -- <path>`
+    submodule probe. Returns the subset of `paths` staged at gitlink mode
+    160000 — one `git ls-files --stage -z --` call for the whole set instead
+    of one per path. Empty input spawns nothing.
+    """
+    if not paths:
+        return frozenset()
+    res = _run_git(["ls-files", "--stage", "-z", "--", *paths], cwd=repo_root)
+    submodules = set()
+    for record in res.stdout.split("\0"):
+        if not record:
+            continue
+        # Format: "<mode> <sha> <stage>\t<path>"
+        meta, _, rec_path = record.partition("\t")
+        if meta.startswith("160000") and rec_path:
+            submodules.add(rec_path)
+    return frozenset(submodules)
+
+
 def _classify_main_pass(
     status_lines: List[str],
     repo_root: str,
@@ -454,25 +495,41 @@ def _classify_main_pass(
     """Runs the main classification loop. Returns needs_pm."""
     needs_pm = False
 
+    # Pre-pass: parse every status line once and batch the two per-path git
+    # probes (EOL-PHANTOM diff check, SUBMODULE stage check) into at most two
+    # subprocess spawns total instead of up to two per dirty path.
+    parsed: List[Tuple[str, str]] = []
+    eol_check_paths: List[str] = []
+    sub_check_paths: List[str] = []
     for status_line in status_lines:
         if not status_line:
+            parsed.append(("", ""))
             continue
-
         xy = status_line[0:2]
         rest = status_line[3:]
         _rename_src, path = _split_rename(rest)
+        parsed.append((xy, path))
+        if xy != "??" and not xy.startswith("R"):
+            eol_check_paths.append(path)
+        if xy != "??":
+            sub_check_paths.append(path)
+
+    diff_has_content = _batch_diff_has_content(eol_check_paths, repo_root)
+    submodule_paths = _batch_submodule_paths(sub_check_paths, repo_root)
+
+    for status_line, (xy, path) in zip(status_lines, parsed):
+        if not status_line:
+            continue
 
         # 1. EOL-PHANTOM (skip for untracked and rename-destination lines).
         if xy != "??" and not xy.startswith("R"):
-            diff_res = _run_git(["diff", "--quiet", "--", path], cwd=repo_root)
-            if diff_res.returncode == 0:
+            if path not in diff_has_content:
                 counters.eol += 1
                 continue
 
         # 2. SUBMODULE (skip for untracked).
         if xy != "??":
-            stage_res = _run_git(["ls-files", "--stage", "--", path], cwd=repo_root)
-            if any(line.startswith("160000") for line in stage_res.stdout.splitlines()):
+            if path in submodule_paths:
                 counters.sub += 1
                 continue
 
@@ -752,22 +809,10 @@ def main(argv: List[str]) -> int:
             return 1
 
     # --- Unit 1: locate repo root ---
-    try:
-        toplevel_res = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT_SECS,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    repo_root = show_toplevel()
+    if not repo_root:
         print(f"[{_PROG}] ERROR: not inside a git repo", file=sys.stderr)
         return 1
-    if toplevel_res.returncode != 0 or not toplevel_res.stdout.strip():
-        print(f"[{_PROG}] ERROR: not inside a git repo", file=sys.stderr)
-        return 1
-    repo_root = toplevel_res.stdout.strip()
 
     # --- Unit 1: counters/accumulators ---
     counters = _Counters()

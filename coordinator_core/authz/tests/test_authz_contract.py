@@ -47,8 +47,8 @@ from coordinator_core.authz.classification import (
 
 class TestClassify:
     # Review: code-reviewer — parametrize so each op gets its own pass/fail signal; a broken
-    # "ping" classification no longer masks a simultaneously broken "coverage.gate".
-    @pytest.mark.parametrize("op_name", ["ping", "coverage.gate", "handoff.has_live_children"])
+    # "ping" classification no longer masks a simultaneously broken "cutover.gate".
+    @pytest.mark.parametrize("op_name", ["ping", "cutover.gate", "handoff.has_live_children"])
     def test_known_ops_return_correct_class(self, op_name: str) -> None:
         assert classify(op_name) is OpClass.COMPUTE_ONLY
 
@@ -59,14 +59,6 @@ class TestClassify:
         _KNOWN_UNCLASSIFIED_OPS_DEBT baseline). Pure git-log read — no write anywhere in
         coordinator_core/ops/ceremony/chunk_commits.py."""
         assert classify("ceremony.chunk_commits") is OpClass.COMPUTE_ONLY
-
-    def test_chain_ancestry_waivers_reap_is_mutating(self) -> None:
-        """2026-08-10 fix, same bug entry as above. Deletes waiver files/subdirectories
-        (coordinator_core/ops/reap_chain_ancestry_waivers.py — .unlink()/.rmdir()) — a
-        write to coordinator substrate, classified MUTATING even though the module's own
-        docstring frames deletion as fail-safe/remove-only (that property bounds the
-        DIRECTION of harm, not whether a write happens)."""
-        assert classify("chain_ancestry_waivers.reap") is OpClass.MUTATING
 
     def test_unknown_op_raises_key_error(self) -> None:
         """classify() raises KeyError on an unclassified op — fail-closed.
@@ -172,11 +164,114 @@ class TestDriftGuard:
 
     def test_known_beachhead_ops_are_present(self) -> None:
         """Confirm the three pcore-03 beachhead ops are individually registered."""
-        for op_name in ("ping", "coverage.gate", "handoff.has_live_children"):
+        for op_name in ("ping", "cutover.gate", "handoff.has_live_children"):
             assert op_name in coordinator_core.ipc._REGISTRY, (
                 f"Expected beachhead op {op_name!r} to be in _REGISTRY but it was absent. "
                 "If the op was renamed, update OP_CLASSIFICATION and this assertion."
             )
+
+
+# ---------------------------------------------------------------------------
+# Three-way registration-count reconciliation (C3,
+# docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C3)
+#
+# The plan chunk that authored this section asked whether the live _REGISTRY /
+# OP_MODULE_MAP / _OP_KEY_SCOPE counts disagree for a legitimate reason or because
+# a registration surface has an undetected hole. Re-derived at C3 integration time
+# (not trusted from any earlier prose figure, which drifts as the tree moves):
+#
+#   live _REGISTRY size                          254
+#   OP_MODULE_MAP size (ops/_registry_map.py)     252 -> 254 after this chunk
+#   _OP_KEY_SCOPE size (op_scopes.py)             254
+#   OP_CLASSIFICATION size (authz/classification.py) 245
+#
+# Disposition of each gap:
+#
+#  * OP_MODULE_MAP was short two entries — "peer_notice.send" / "peer_notice.check"
+#    were registered (present in _REGISTRY, _OP_KEY_SCOPE, OP_CLASSIFICATION) but
+#    never added to OP_MODULE_MAP. This IS the class of gap coordinator_core.authz.
+#    registration_quad.check_registration_quad() exists to catch, and it does catch
+#    it (both op_keys surface as OP_MODULE_MAP-missing QuadViolations, unfiltered by
+#    either known-debt ledger) — it was simply outstanding, not undetected. Fixed in
+#    this chunk (coordinator_core/ops/_registry_map.py); the regression test below
+#    pins it shut. Per _registry_map.py's own docstring this gap degraded silently
+#    to the eager-import fallback rather than breaking dispatch, which is why the
+#    live system stayed correct while the map itself lagged.
+#
+#  * The live-_REGISTRY-vs-OP_CLASSIFICATION gap (254 vs 245, 9 unclassified at C3
+#    time) is the SAME gap test_all_registered_ops_are_classified below already
+#    covers via a strict xfail against coordinator_core.authz.registration_quad's
+#    frozen `_KNOWN_UNCLASSIFIED_OPS_DEBT` baseline (65 entries recorded
+#    2026-07-25; most have since been individually classified without the debt
+#    entry being pruned, which is a known-shrinking-not-growing direction the
+#    baseline's own never-grows guard in test_registration_quad.py enforces — that
+#    guard, and pruning the now-stale entries, is registration_quad.py's file, not
+#    this chunk's writable scope). test_all_registered_ops_are_classified itself
+#    is NOT a hole: it is a strict xfail with a named owning debt-backlog entry
+#    (state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-
+#    52137f1ff6b9.yaml) and it xfails (not xpasses) at C3 HEAD — see
+#    `test_registry_is_non_empty`'s sibling assertions above for the vacuous-pass
+#    guard that would catch a silently-empty registry masking this.
+#
+#  * The remaining _REGISTRY vs OP_MODULE_MAP/_OP_KEY_SCOPE parity (254 == 254 for
+#    _OP_KEY_SCOPE; 254 == 254 for OP_MODULE_MAP once the peer_notice.* fix above
+#    lands) has no unexplained residue: every registered op now has one of "common_
+#    dir" / "show_top" / "none" in _OP_KEY_SCOPE and a lazy-import module path in
+#    OP_MODULE_MAP, which is what C12's MUTATING/COMPUTE_ONLY partition (downstream
+#    of OP_CLASSIFICATION, not this section) depends on being trustworthy for.
+#
+# Three residual QuadViolations found by check_registration_quad() at C3 time
+# (app_session.launch / app_session.census / app_session.teardown missing
+# OP_CLASSIFICATION) live in coordinator_core/authz/classification.py, outside
+# this chunk's writable file list — reported to the dispatching EM as a residual,
+# not fixed here.
+# ---------------------------------------------------------------------------
+
+class TestOpModuleMapRegistrationCoverage:
+    """OP_MODULE_MAP (the lazy-import performance seam) covers every op the live
+    _REGISTRY knows about — pins the peer_notice.* gap C3 found and fixed shut."""
+
+    def test_peer_notice_ops_are_in_module_map(self) -> None:
+        from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+        for op_name in ("peer_notice.send", "peer_notice.check"):
+            assert op_name in OP_MODULE_MAP, (
+                f"{op_name!r} is registered but missing from OP_MODULE_MAP "
+                "(coordinator_core/ops/_registry_map.py) — reintroduces the C3 "
+                "three-way-count reconciliation gap."
+            )
+
+    def test_registered_ops_missing_from_module_map(self) -> None:
+        """No live-registered op should be absent from OP_MODULE_MAP.
+
+        A missing entry does not break dispatch today (the module falls back to
+        importing the whole coordinator_core.ops package on a registry MISS — see
+        _registry_map.py's own docstring), but an absence here is exactly the kind
+        of silent drift C3 was asked to reconcile, so this pins the map complete
+        against whatever is live in _REGISTRY at test time.
+
+        Review: code-reviewer (P3) -- largely redundant with
+        coordinator_core.authz.registration_quad.check_registration_quad(), which is
+        itself run live and asserted green (against the frozen known-debt allowlists)
+        by test_registration_quad.py::TestKnownIncompleteRegistrationsLedger::
+        test_live_tree_is_green_after_filtering_known_debt -- that assertion would
+        already have failed loud on the peer_notice.* OP_MODULE_MAP gap this test
+        pins, since module_map misses are not among the allowlisted surfaces. Kept
+        anyway: this test isolates a single surface (OP_MODULE_MAP) with a narrower,
+        more directly actionable failure message naming the exact file to edit,
+        rather than the quad check's four-surface QuadViolation report -- a real,
+        if modest, pin the quad check doesn't provide on its own. Not deleted on a
+        guess.
+        """
+        from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+        missing = sorted(
+            name for name in coordinator_core.ipc._REGISTRY if name not in OP_MODULE_MAP
+        )
+        assert missing == [], (
+            f"Ops registered in _REGISTRY but missing from OP_MODULE_MAP: {missing}. "
+            "Add an entry in coordinator_core/ops/_registry_map.py::OP_MODULE_MAP."
+        )
 
 
 # ---------------------------------------------------------------------------

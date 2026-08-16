@@ -49,6 +49,16 @@ Negative-spec:
       resolve statically is reported `unresolved`, NEVER silently `clean`;
       an unreadable pairing counting as passing is the exact failure this
       oracle exists to prevent.
+    - A `Starred` element sitting in a flag's VALUE position (`["--flag",
+      *[str(p) for p in paths]]`) is deliberately NOT treated with the same
+      fail-safe caution as a `Starred` in flag-candidate position -- it is
+      read as that flag's `nargs="+"`-style value list and does not force
+      `unresolved`. This is a NARROW, DELIBERATE trade for coverage of the
+      common readable multi-value-flag shape, not a claim of safety: a
+      splice whose contents happen to include a dash-leading string
+      (`*["--sneaky", "x"]`) is silently unseen -- it would neither surface
+      as an emitted flag nor be flagged unresolved. If that shape is ever
+      authored in this codebase, this module will not catch it.
 """
 
 from __future__ import annotations
@@ -270,7 +280,21 @@ def _tokens_from_elts(elts: list, module_consts: dict[str, str]):
     `Starred`) forces `unresolved` -- HARD CONSTRAINT: it is never
     silently dropped, since a dynamically computed flag token sitting
     there would otherwise vanish from the emitted set and a real skew
-    would read clean.
+    would read clean. A bare `Starred` sitting in a flag's VALUE position
+    (`["--deleted-paths", *[str(p) for p in paths]]`, the `nargs="+"`-style
+    multi-value-flag shape) is DIFFERENT from a `Starred` flag candidate
+    and is NOT held to the same constraint: it is consumed as that flag's
+    value list and does not itself set `unresolved` -- argparse consumes
+    those tokens as the preceding option's values by construction, so
+    treating the splice as a possible hidden flag is over-conservative for
+    the single most common multi-value-flag shape in this codebase.
+    Scanning resumes normally after a value-position `Starred` --
+    `["--a", *xs, "--b"]` still yields BOTH `--a` and `--b`; the splice
+    consumes only its own value slot, not the rest of the list. A
+    value-position splice whose CONTENTS happen to include a dash-leading
+    string (`*["--sneaky", "x"]`) is NOT detected -- a deliberate, narrow
+    trade for coverage of the common readable shape, not a claim of
+    safety; see this module's negative-spec block.
     """
     tokens: set[str] = set()
     positionals: set[str] = set()
@@ -282,6 +306,18 @@ def _tokens_from_elts(elts: list, module_consts: dict[str, str]):
         is_starred = isinstance(el, ast.Starred)
         value = None if is_starred else _resolve_str_const(el, module_consts)
 
+        if expect_value and is_starred:
+            # A `*[str(p) for p in paths]` splice sitting in a flag's VALUE
+            # position is consumed as that flag's value list -- argparse
+            # (a `nargs="+"` option, the shape every such splice in this
+            # codebase composes for) consumes exactly those runtime tokens
+            # as the preceding flag's values by construction, so this is
+            # NOT held to the flag-candidate `Starred` constraint above.
+            # Scanning resumes normally on the NEXT element -- the splice
+            # consumes only its own value slot, not the remainder of the
+            # list, so a trailing literal flag after it is still read.
+            expect_value = False
+            continue
         if expect_value and not _looks_like_flag(value):
             expect_value = False
             continue
@@ -576,20 +612,42 @@ def declared_option_strings(script_path: Path) -> tuple[set[str], bool]:
     return declared, saw_unresolved
 
 
-def _subparser_variable_to_subcommand(tree: ast.AST) -> dict[str, str]:
-    """Maps each parser-object variable name created via
-    `<subparsers_holder>.add_parser("name", ...)` (and itself bound to a
-    `Name` target, e.g. `p_a = sub.add_parser("a")`) back to the literal
-    subcommand name it was registered under. Reuses the SAME
-    subparsers-holder discovery `_subparsers_required` performs (never
-    re-derived) so this stays in lockstep with which variables the rest of
-    the module already treats as subparsers objects.
+def _subparser_variable_to_subcommand(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
+    """`(mapping, ambiguous)` -- `mapping` maps each parser-object variable
+    name created via `<subparsers_holder>.add_parser("name", ...)` (and
+    itself bound to a `Name` target, e.g. `p_a = sub.add_parser("a")`) back
+    to the literal subcommand name it was registered under. `ambiguous` is
+    the set of variable names this walk could NOT attribute to a single
+    subcommand with confidence -- callers MUST treat an `add_argument` call
+    whose owner variable is in `ambiguous` as unresolved, never as
+    top-level-by-default or as whichever subcommand happens to be in
+    `mapping`. A name lands in `ambiguous` (and is removed from `mapping`,
+    if present) for either of two reasons, both real authoring shapes:
+
+    1. A loop-built or otherwise non-literally-named `add_parser` call
+       (`for name in names: p = sub.add_parser(name)`) -- the subcommand
+       name is a runtime value, not statically knowable, so the bound
+       variable can be registered under any subcommand depending on which
+       loop iteration produced it.
+    2. Variable-name reuse/shadowing: the SAME variable name is bound to
+       TWO (or more) `add_parser(...)` calls registering DIFFERENT literal
+       subcommand names (`p = sub.add_parser("a"); ...; p =
+       sub.add_parser("b")`) -- a plausible copy-paste/builder-loop pattern
+       for 3+ subcommands. Keying by variable-name string alone would let
+       the second assignment silently overwrite the first (last-write-wins),
+       misattributing one subcommand's required flags to the other -- the
+       exact false-positive/false-negative class the subcommand-scoping fix
+       this module implements was meant to close.
+
+    Reuses the SAME subparsers-holder discovery `_subparsers_required`
+    performs (never re-derived) so this stays in lockstep with which
+    variables the rest of the module already treats as subparsers objects.
 
     A `.add_parser(...)` call whose own return value is never bound to a
     `Name` (e.g. immediately chained: `sub.add_parser("a").add_argument(...)`)
     contributes no mapping entry -- callers must treat an `add_argument`
     call whose owner variable resolves to neither a top-level parser var nor
-    a key of this mapping as unresolved, never as "top-level", per this
+    a key of `mapping` as unresolved, never as "top-level", per this
     module's fail-safe discipline."""
     subparser_vars: set[str] = set()
     for node in ast.walk(tree):
@@ -602,20 +660,38 @@ def _subparser_variable_to_subcommand(tree: ast.AST) -> dict[str, str]:
                         subparser_vars.add(target.id)
 
     mapping: dict[str, str] = {}
+    ambiguous: set[str] = set()
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_parser"):
             continue
         if not (isinstance(node.func.value, ast.Name) and node.func.value.id in subparser_vars):
             continue
-        if not (node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        target_names = [
+            target.id
+            for assign in ast.walk(tree)
+            if isinstance(assign, ast.Assign) and assign.value is node
+            for target in assign.targets
+            if isinstance(target, ast.Name)
+        ]
+        if not target_names:
             continue
-        subcommand = node.args[0].value
-        for assign in ast.walk(tree):
-            if isinstance(assign, ast.Assign) and assign.value is node:
-                for target in assign.targets:
-                    if isinstance(target, ast.Name):
-                        mapping[target.id] = subcommand
-    return mapping
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            subcommand = node.args[0].value
+            for name in target_names:
+                if name in ambiguous:
+                    continue
+                if name in mapping and mapping[name] != subcommand:
+                    ambiguous.add(name)
+                    del mapping[name]
+                else:
+                    mapping[name] = subcommand
+        else:
+            # Non-literal subcommand name -- the bound variable(s) cannot be
+            # attributed to a single subcommand at all.
+            for name in target_names:
+                ambiguous.add(name)
+                mapping.pop(name, None)
+    return mapping, ambiguous
 
 
 def _required_flag_from_add_argument_call(node: ast.Call) -> Optional[tuple[Optional[str], bool]]:
@@ -662,7 +738,7 @@ def declared_required_option_strings(script_path: Path, subcommand: Optional[str
     tree = _own_or_trampoline_tree(script_path)
     if tree is None:
         return set(), True
-    subparser_var_to_subcommand = _subparser_variable_to_subcommand(tree)
+    subparser_var_to_subcommand, ambiguous_subparser_vars = _subparser_variable_to_subcommand(tree)
     required: set[str] = set()
     saw_unresolved = False
     for node in ast.walk(tree):
@@ -677,6 +753,13 @@ def declared_required_option_strings(script_path: Path, subcommand: Optional[str
             continue
         owner = _add_argument_owner_var(node)
         if owner is None:
+            saw_unresolved = True
+            continue
+        if owner in ambiguous_subparser_vars:
+            # A loop-built, non-literally-named, or shadowed/reused
+            # subparser variable -- cannot attribute this flag to a single
+            # subcommand (or confidently to none), so the whole aspect must
+            # read unresolved rather than fall through to "top-level".
             saw_unresolved = True
             continue
         owner_subcommand = subparser_var_to_subcommand.get(owner)
@@ -742,16 +825,47 @@ def _module_sites(module_path: Path) -> list[dict]:
 
     # Phase 2: resolve whole-arg producer-token references against sibling
     # directive ids in the SAME module -- REQUIRED, see `_PRODUCER_REF_RE`.
+    # This is a fixed-point (recursive, memoized) resolution, NOT a single
+    # pass over `sites` in list order: a 2+-hop producer chain (A refs B,
+    # B refs C) must fold C's tokens into A regardless of whether B was
+    # visited before A in `sites` -- a single pass silently under-unions
+    # whichever side of the chain happens to be resolved first, which is
+    # exactly the false-clean class this oracle exists to prevent. A cycle
+    # (including a direct self-reference) MUST terminate and resolve to
+    # `unresolved`, never loop or silently drop the cycle's own tokens.
     by_id = {s["id"]: s for s in sites if s["id"]}
-    for site in sites:
+    resolved_cache: dict[int, tuple[set, bool]] = {}
+
+    def resolve(site: dict, visiting: frozenset) -> tuple[set, bool]:
+        key = id(site)
+        cached = resolved_cache.get(key)
+        if cached is not None:
+            return cached
+        if key in visiting:
+            # Cycle/self-reference: cannot be resolved to a fixed point --
+            # never cached, since the answer here is path-dependent; the
+            # top-level caller for this site still resolves and caches its
+            # own (unresolved) result once recursion unwinds.
+            return set(), True
+        tokens = set(site["tokens"])
+        unresolved = site["unresolved"]
+        next_visiting = visiting | {key}
         for ref_id in site["producer_refs"]:
             producer = by_id.get(ref_id)
             if producer is None:
-                site["unresolved"] = True
+                unresolved = True
                 continue
-            site["tokens"] = site["tokens"] | producer["tokens"]
-            if producer["unresolved"]:
-                site["unresolved"] = True
+            producer_tokens, producer_unresolved = resolve(producer, next_visiting)
+            tokens |= producer_tokens
+            unresolved = unresolved or producer_unresolved
+        result = (tokens, unresolved)
+        resolved_cache[key] = result
+        return result
+
+    for site in sites:
+        tokens, unresolved = resolve(site, frozenset())
+        site["tokens"] = tokens
+        site["unresolved"] = unresolved
 
     return sites
 

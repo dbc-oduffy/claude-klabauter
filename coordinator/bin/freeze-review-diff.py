@@ -181,7 +181,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -196,8 +195,6 @@ from coordinator_core.ops.review_freeze_diff import (  # noqa: E402
     _validate_slice_id,
     freeze_diff,
 )
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
-
 
 def _resolve_repo_root(explicit: str) -> Path | None:
     """Resolve the repo root: --repo-root verbatim if supplied, else the git
@@ -206,21 +203,13 @@ def _resolve_repo_root(explicit: str) -> Path | None:
     idiom used across this tree's other standalone bin/*.py entrypoints)."""
     if explicit:
         return Path(explicit)
-    try:
-        proc = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"{_PROG}: failed to run `git rev-parse --show-toplevel`: {exc}", file=sys.stderr)
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
+    from coordinator_core.git.repo_root import show_toplevel
+
+    root = show_toplevel(os.getcwd())
+    if not root:
         print(f"{_PROG}: cannot resolve git repo root from {os.getcwd()}", file=sys.stderr)
         return None
-    return Path(proc.stdout.strip())
+    return Path(root)
 
 
 _PENDING_VERDICT = "pending"

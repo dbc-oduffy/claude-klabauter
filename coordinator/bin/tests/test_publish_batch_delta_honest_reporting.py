@@ -189,12 +189,12 @@ def test_delta_row_unchanged_true_when_everything_matches(tmp_path, monkeypatch)
     target = _make_target("sample", dest_repo, source_repo)
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
     )
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is True
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is True
 
 
 def test_delta_row_unchanged_false_on_signature_mismatch(tmp_path, monkeypatch):
@@ -211,14 +211,14 @@ def test_delta_row_unchanged_false_on_signature_mismatch(tmp_path, monkeypatch):
     target = _make_target("sample", dest_repo, source_repo)
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
     )
     # A different signature (store or transform code changed) must
     # invalidate the row even though source/dest are untouched.
-    assert publish.delta_row_unchanged(setup_dir, target, "sigB") is False
+    assert publish.delta_row_unchanged(setup_dir, target, "sigB", {}) is False
 
 
 def test_delta_row_unchanged_false_when_source_advances(tmp_path, monkeypatch):
@@ -235,7 +235,7 @@ def test_delta_row_unchanged_false_when_source_advances(tmp_path, monkeypatch):
     target = _make_target("sample", dest_repo, source_repo)
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
@@ -243,7 +243,7 @@ def test_delta_row_unchanged_false_when_source_advances(tmp_path, monkeypatch):
 
     (source_repo / "f.txt").write_text("payload v2", encoding="utf-8")
     _commit_all(source_repo, "source update")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
 
 
 def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch):
@@ -265,7 +265,7 @@ def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch
     target = _make_target("sample", dest_repo, source_repo, mode="manifest")
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
@@ -274,7 +274,7 @@ def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch
     # Someone edited the published tree without committing — HEAD is
     # unchanged, but the working tree is now dirty. Must NOT skip.
     (dest_repo / "f.txt").write_text("edited by hand", encoding="utf-8")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ def test_delta_row_unchanged_true_for_mirror_row_despite_dirty_tree(tmp_path, mo
     target = _make_target("sample", dest_repo, source_repo, mode="mirror")
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
@@ -316,7 +316,7 @@ def test_delta_row_unchanged_true_for_mirror_row_despite_dirty_tree(tmp_path, mo
     # exactly the permanent-drift state C5/C6 leave behind. HEAD is
     # unmoved. Must skip.
     (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is True
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is True
 
 
 def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path, monkeypatch):
@@ -336,7 +336,7 @@ def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path,
     target = _make_target("sample", dest_repo, source_repo, mode="mirror")
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
@@ -348,7 +348,7 @@ def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path,
     # skip regardless of the clean-tree exemption.
     (source_repo / "f.txt").write_text("payload v2", encoding="utf-8")
     _commit_all(source_repo, "source update")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
 
 
 def test_delta_row_unchanged_false_for_mirror_row_when_destination_head_advances(
@@ -372,7 +372,7 @@ def test_delta_row_unchanged_false_for_mirror_row_when_destination_head_advances
     target = _make_target("sample", dest_repo, source_repo, mode="mirror")
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
-    source_sha = publish._delta_row_source_sha(target)
+    source_sha = publish._delta_row_source_sha(target, {})
     dest_head = publish._git_head(dest_repo)
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
@@ -380,7 +380,7 @@ def test_delta_row_unchanged_false_for_mirror_row_when_destination_head_advances
 
     (dest_repo / "g.txt").write_text("a real commit into the mirror", encoding="utf-8")
     _commit_all(dest_repo, "dest advanced")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA") is False
+    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
 
 
 def test_delta_row_unchanged_false_when_no_prior_record(tmp_path, monkeypatch):
@@ -395,7 +395,7 @@ def test_delta_row_unchanged_false_when_no_prior_record(tmp_path, monkeypatch):
 
     target = _make_target("sample", dest_repo, source_repo)
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-    assert publish.delta_row_unchanged(tmp_path / "setup", target, "sigA") is False
+    assert publish.delta_row_unchanged(tmp_path / "setup", target, "sigA", {}) is False
 
 
 def test_compute_delta_invalidation_signature_changes_on_store_edit(tmp_path):

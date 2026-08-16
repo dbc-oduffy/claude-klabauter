@@ -115,7 +115,6 @@ coordinator/bin/generate-repomap.py
 coordinator/bin/handoff-deliverable-carry.py
 coordinator/bin/lessons-outbox-drain.py
 coordinator/bin/list-orphaned-plans.py
-coordinator/bin/migrate-branch-canonical-case.py
 coordinator/bin/orphan-branch-sweep.py
 coordinator/bin/probe-cwd-example-retrieval-repo-relevance.py
 # `query-file-attribution.py` (added 2026-08-15): its ONE in-process op reach
@@ -130,6 +129,16 @@ coordinator/bin/probe-cwd-example-retrieval-repo-relevance.py
 # permanently-empty declaration list, the same shape as the
 # `orphan-branch-sweep.py`/`day-coverage-sweep.py` pair above.
 coordinator/bin/query-file-attribution.py
+# `query-goals.py` and `query-completion-rollups.py` (added earlier, both
+# labeled "porter trampolines"): same shape as `query-routine-signals.py`
+# immediately below -- each porters an emit *section*
+# (`sections/goals.py:collect`, `rollups.collect`) that has NO registered op
+# behind it, so there is no op name for `run_op_main` to route to. Both
+# deliberately reuse `op_trampoline.resolve_repo_root_or_exit()` /
+# `resolve_claude_klabauter_root_or_exit()` only, per their own module docstrings,
+# which cite this exact reasoning and this exact sibling file.
+coordinator/bin/query-completion-rollups.py
+coordinator/bin/query-goals.py
 # `query-routine-signals.py` (added 2026-08-15): its ONE in-process op reach
 # this gate credits is `main()`'s `from coordinator_core.ops.emit.sections
 # import routine_signals` — `routine_signals.collect(ctx)` is a plain

@@ -698,24 +698,9 @@ _UNSET = "<unset>"
 
 def _repo_root() -> str | None:
     if _UNSET not in _repo_root_cache:
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.git.repo_root import show_toplevel
 
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                **no_console_creationflags(),
-            )
-        except OSError:
-            _repo_root_cache[_UNSET] = None
-        else:
-            _repo_root_cache[_UNSET] = (
-                result.stdout.strip()
-                if result.returncode == 0 and result.stdout.strip()
-                else None
-            )
+        _repo_root_cache[_UNSET] = show_toplevel()
     return _repo_root_cache[_UNSET]
 
 

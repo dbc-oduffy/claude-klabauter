@@ -1,8 +1,12 @@
 """test_checked_repo_resolver_c6.py -- C6 test surface for the near-verbatim
 copy scripts' repoint onto the C1 checked resolver: wsc-tail.py,
 query-handoff-columns.py, workday-complete-step9-append-changelog.py,
-migrate-lessons-md-to-yaml.py, standup.py, whats-next.py, and
-review-coverage-gate.py.
+standup.py, whats-next.py, and review-coverage-gate.py.
+
+migrate-lessons-md-to-yaml.py's coverage was removed here when that
+one-shot, caller-less entry point was deleted outright (see
+docs/plans/2026-08-16-a-process-per-predicate.md § C2) rather than kept
+covering a file that no longer exists.
 
 Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C6 / AC2-AC5, AC10.
@@ -18,9 +22,8 @@ silently, MISMATCH warns to stderr via the resolver's own pre-rendered
 message and still proceeds with the resolved root, UNRESOLVED never refuses
 (AC4).
 
-workday-complete-step9-append-changelog.py and migrate-lessons-md-to-yaml.py
-are WRITER (AC10 reclassification post-C8: both dispatch a real write --
-changelog_ops.append_day / output_path.write_text respectively -- reached
+workday-complete-step9-append-changelog.py is WRITER (AC10 reclassification
+post-C8: it dispatches a real write -- changelog_ops.append_day -- reached
 downstream of the checked-resolver call). A positive MISMATCH refuses BEFORE
 that write, asserted here on the absence of the write's target artifact, not
 merely on an exit code (mirrors C4's own absence-based assertion for its five
@@ -32,8 +35,6 @@ parallel-safety via test-file disjointness).
 
 from __future__ import annotations
 
-import argparse
-import glob
 import importlib.util
 import io
 import os
@@ -125,52 +126,6 @@ class TestQueryHandoffColumnsResolver(unittest.TestCase):
         ):
             with self.assertRaises(SystemExit):
                 self.module._resolve_repo_root()
-
-
-class TestMigrateLessonsDetectFromRepo(unittest.TestCase):
-    """migrate-lessons-md-to-yaml.py's `_detect_from_repo` -- called by both
-    cmd_dry_run (JSON classification report) and cmd_apply (per-entry YAML)
-    before their first write. WRITER (AC10 reclassification post-C8): a
-    MISMATCH refuses BEFORE either write, asserted here on the absence of
-    the dry-run report artifact, not merely on an exit code."""
-
-    module = _load_module("migrate-lessons-md-to-yaml.py", "c6_migrate_lessons_md_to_yaml")
-
-    def setUp(self):
-        self._old_cwd = os.getcwd()
-        self._tmp = tempfile.mkdtemp(prefix="c6-migrate-lessons-")
-        os.chdir(self._tmp)
-
-    def tearDown(self):
-        os.chdir(self._old_cwd)
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_mismatch_refuses_before_dry_run_report_write(self):
-        lessons_md = os.path.join(self._tmp, "lessons.md")
-        with open(lessons_md, "w", encoding="utf-8") as f:
-            f.write("**Some title [universal]** body text 2026-08-11.\n")
-
-        v = _verdict("MISMATCH", "/repo/mismatch")
-        with mock.patch.object(
-            self.module, "resolve_checked_repo_root", return_value=("/repo/mismatch", v)
-        ):
-            args = argparse.Namespace(input=lessons_md)
-            with self.assertRaises(SystemExit) as ctx:
-                self.module.cmd_dry_run(args)
-
-        self.assertEqual(ctx.exception.code, 1)
-        state_dir = os.path.join(self._tmp, "state")
-        report_files = glob.glob(os.path.join(state_dir, "migrate-lessons-dryrun-*.json")) if os.path.isdir(state_dir) else []
-        self.assertEqual(report_files, [], "no dry-run report must be written on MISMATCH")
-
-    def test_unresolved_with_no_root_never_refuses(self):
-        v = _verdict("UNRESOLVED", None, sid=None)
-        with mock.patch.object(
-            self.module, "resolve_checked_repo_root", return_value=(None, v)
-        ):
-            result = self.module._detect_from_repo()
-
-        self.assertEqual(result, "unknown")
 
 
 class TestWorkdayCompleteStep9Resolver(unittest.TestCase):

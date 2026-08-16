@@ -1384,9 +1384,20 @@ def _clear_normalize_latch(monkeypatch):
 
 
 class TestRenderReportCounts:
-    def test_changed_count_and_scope_count_reported_separately(self, tmp_path):
+    def test_changed_count_and_scope_count_reported_separately(self, tmp_path, monkeypatch):
+        """C5 (2026-08-15 composition-invocation-budgets) retired the
+        per-commit `git show --name-only` spawn `_commit_changed_count` used
+        to run; this pins the replacement contract — the report renders the
+        in-scope pathspec breadth with NO subprocess spawned to compute it —
+        rather than the retired "N changed (M in scope)" wording this test
+        previously pinned."""
         repo = _make_repo(tmp_path)
         sha = _landed_commit(repo, ["one.py"])
+
+        def _no_spawn(*args, **kwargs):
+            raise AssertionError("no subprocess should be spawned by _render_report")
+
+        monkeypatch.setattr(safe_commit_offer.subprocess, "run", _no_spawn)
 
         rendered = safe_commit_offer._render_report(
             _report(
@@ -1400,15 +1411,21 @@ class TestRenderReportCounts:
             str(repo),
         )
 
-        assert "1 file(s) changed (14 in scope)" in rendered
-        assert "— 14 file(s)" not in rendered, (
-            "the pathspec breadth must never appear as the commit's own "
-            "unqualified file count — that is the defect being fixed"
+        assert "14 file(s) in scope" in rendered
+        assert "changed (" not in rendered, (
+            "the retired changed-count wording must not resurface"
         )
 
-    def test_equal_counts_still_render_both_labelled(self, tmp_path):
+    def test_equal_counts_still_render_both_labelled(self, tmp_path, monkeypatch):
+        """Equal named-vs-committed path counts still render the plain
+        in-scope count sensibly, with no spawn attempted."""
         repo = _make_repo(tmp_path)
         sha = _landed_commit(repo, ["one.py", "two.py"])
+
+        def _no_spawn(*args, **kwargs):
+            raise AssertionError("no subprocess should be spawned by _render_report")
+
+        monkeypatch.setattr(safe_commit_offer.subprocess, "run", _no_spawn)
 
         rendered = safe_commit_offer._render_report(
             _report(
@@ -1422,7 +1439,8 @@ class TestRenderReportCounts:
             str(repo),
         )
 
-        assert "2 file(s) changed (2 in scope)" in rendered
+        assert "2 file(s) in scope" in rendered
+        assert "changed (" not in rendered
 
     def test_undeterminable_change_count_degrades_to_labelled_scope_only(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -1439,7 +1457,7 @@ class TestRenderReportCounts:
             str(repo),
         )
 
-        assert "2 file(s) in scope (changed-file count unavailable)" in rendered
+        assert "2 file(s) in scope" in rendered
         assert "changed (" not in rendered
 
     def test_no_worktree_root_does_not_probe_an_unknown_cwd(self, tmp_path):
@@ -1450,7 +1468,7 @@ class TestRenderReportCounts:
             _report(_group(paths=["one.py"], committed=True, sha=sha, push_state="pushed"))
         )
 
-        assert "1 file(s) in scope (changed-file count unavailable)" in rendered
+        assert "1 file(s) in scope" in rendered
 
     def test_already_committed_branch_labels_its_count_as_scope(self):
         rendered = safe_commit_offer._render_report(

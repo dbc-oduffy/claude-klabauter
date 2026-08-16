@@ -130,294 +130,6 @@ def test_claim_plan_infra_error_halts_distinctly(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# coverage-gate
-# ---------------------------------------------------------------------------
-
-def _run_gate(monkeypatch, returncode, stdout, stderr, handoff="state/handoffs/x.md"):
-    monkeypatch.setattr(
-        _mod,
-        "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (returncode, stdout, stderr),
-    )
-    return _mod.main(["coverage-gate", "--from-handoff", handoff])
-
-
-def test_coverage_gate_covered_passes(monkeypatch, capsys):
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=dag:x chain_commits=3 covered=3 uncovered=0 VERDICT=COVERED\n",
-        "",
-    )
-    assert rc == 0
-
-
-def test_coverage_gate_warn_relays_and_never_halts(monkeypatch, capsys, clean_override_env):
-    """AC16 negative case: a below-threshold run must produce visible output
-    and exit 0 through the WSC runner. Watched to fail against the
-    dead-branch state (see this module's own execution history) — the
-    runner previously matched only "VERDICT=UNCOVERED", so a VERDICT=WARN
-    line fell through to `return returncode` with no WARN-specific stderr
-    printed at all; the runner went silent."""
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=dag:x chain_commits=3 covered=1 uncovered=2 "
-        "coverage_ratio=0.33 VERDICT=WARN\n",
-        "uncovered: deadbeef some commit\n",
-    )
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "WARN: coverage gate below threshold" in err
-    assert "dispatch coordinator:review-code" in err
-    assert "uncovered: deadbeef some commit" in err
-
-
-def test_coverage_gate_warn_env_override_is_documented_noop(monkeypatch, capsys, clean_override_env):
-    monkeypatch.setenv("COORDINATOR_OVERRIDE_COVERAGE_GATE", "1")
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=dag:x chain_commits=3 covered=1 uncovered=2 "
-        "coverage_ratio=0.33 VERDICT=WARN\n",
-        "uncovered: deadbeef some commit\n",
-    )
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "NOTE: COORDINATOR_OVERRIDE_COVERAGE_GATE=1 was set but has no effect" in err
-
-
-def test_coverage_gate_indeterminate_halts(monkeypatch, capsys, clean_override_env):
-    rc = _run_gate(
-        monkeypatch, 2,
-        "range=dag:x VERDICT=INDETERMINATE\n",
-        "note: missing predecessor on disk\n",
-    )
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "HALT: coverage gate INDETERMINATE" in err
-
-
-def test_coverage_gate_indeterminate_env_override(monkeypatch, capsys, clean_override_env):
-    monkeypatch.setenv("COORDINATOR_OVERRIDE_COVERAGE_GATE", "1")
-    rc = _run_gate(
-        monkeypatch, 2,
-        "range=dag:x VERDICT=INDETERMINATE\n",
-        "note: missing predecessor on disk\n",
-    )
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "INDETERMINATE gate bypassed by PM override" in err
-
-
-def test_coverage_gate_indeterminate_malformed_empty_verdict_halts(monkeypatch, capsys, clean_override_env):
-    """A malformed INDETERMINATE result can carry an empty verdict_line
-    (review-coverage-gate.py's own documented edge case) — the rc==2 fallback
-    must still halt as INDETERMINATE rather than falling through to COVERED."""
-    rc = _run_gate(monkeypatch, 2, "", "note: missing predecessor on disk\n")
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "HALT: coverage gate INDETERMINATE" in err
-
-
-# ---------------------------------------------------------------------------
-# coverage-gate — chain-ancestry waiver minting default-on, --no-mint opt-out
-#
-# 2026-08-10 (state/audits/2026-08-10 session-shape-misclassification
-# fallout): a prior dispatch inverted this default to opt-in, which
-# regressed the ordinary halt->disposition->re-run path (a re-run would
-# halt again on the same uncovered set). Reverted — the actual fix for the
-# misclassification incident is the LIVE-foreign-chain-owner refusal at the
-# mint site itself (coordinator_core.chain_ancestry_waivers.
-# record_chain_ancestry_waiver), not a narrower default. Pins the ACTUAL
-# behaviour through `_mod.main` (the real argv entrypoint +
-# `_run_review_coverage_gate` call site), not merely a default-parameter-
-# value assertion.
-# ---------------------------------------------------------------------------
-
-
-def _run_gate_capturing_mint(monkeypatch, argv_tail, handoff="state/handoffs/x.md"):
-    calls = []
-
-    def _fake(from_handoff, mint_chain_waivers=True):
-        calls.append(mint_chain_waivers)
-        return (0, "range=dag:x chain_commits=1 covered=1 uncovered=0 VERDICT=COVERED\n", "")
-
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", _fake)
-    rc = _mod.main(["coverage-gate", "--from-handoff", handoff, *argv_tail])
-    return rc, calls
-
-
-def test_coverage_gate_default_mints(monkeypatch, capsys):
-    """No `--no-mint` flag on the CLI -> the underlying gate is invoked with
-    mint_chain_waivers=True (default-on, restored)."""
-    rc, calls = _run_gate_capturing_mint(monkeypatch, [])
-    assert rc == 0
-    assert calls == [True]
-
-
-def test_coverage_gate_no_mint_flag_omits_mint(monkeypatch, capsys):
-    """`--no-mint` on the CLI -> mint_chain_waivers=False reaches the
-    underlying gate."""
-    rc, calls = _run_gate_capturing_mint(monkeypatch, ["--no-mint"])
-    assert rc == 0
-    assert calls == [False]
-
-
-# ---------------------------------------------------------------------------
-# coverage-gate — trail-range-termination disbelief predicate (SKILL.md:556)
-#
-# Regression coverage for the verified 2026-07-25 `work/machine-a/2026-07-21`
-# incident: a VERDICT=COVERED line is only trustworthy when at least one
-# on-disk review-trail record's range-tip reaches the current chain tip.
-# `verify_trail_range_termination` previously had zero production callers;
-# these tests pin the wiring itself (not merely the pure predicate's own
-# unit tests in
-# coordinator_core/workstream_complete/test_directives_review_trail_range_termination.py)
-# by driving the real `cmd_coverage_gate` production entrypoint end to end.
-# ---------------------------------------------------------------------------
-
-
-def test_coverage_gate_wiring_calls_disbelief_check():
-    """Pins the wiring itself: `cmd_coverage_gate`'s source must actually
-    call `_warn_if_covered_verdict_unterminated` — if this call is deleted,
-    this test fails even if every behavioral test below were (incorrectly)
-    made to pass some other way."""
-    import inspect
-
-    source = inspect.getsource(_mod.cmd_coverage_gate)
-    assert "_warn_if_covered_verdict_unterminated(" in source
-
-
-def _run_gate_with_trail_fixture(
-    monkeypatch,
-    *,
-    records,
-    chain_tip_sha="deadbeef",
-    is_ancestor=lambda a, b: False,
-    verdict_line="range=dag:x chain_commits=3 covered=3 uncovered=0 VERDICT=COVERED\n",
-    handoff="state/handoffs/x.md",
-):
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (0, verdict_line, ""),
-    )
-    monkeypatch.setattr(_mod, "_load_trail_records", lambda: records)
-    monkeypatch.setattr(_mod, "_resolve_chain_tip_sha", lambda from_handoff: chain_tip_sha)
-    monkeypatch.setattr(_mod, "_git_is_ancestor", is_ancestor)
-    return _mod.main(["coverage-gate", "--from-handoff", handoff])
-
-
-def test_coverage_gate_covered_unterminated_head_range_prints_fail_loud_note(monkeypatch, capsys):
-    """The exact real on-disk record shape (`sha_range` only, ending in
-    `..HEAD`) must NOT confer trust, and the gate must print an explicit
-    diagnostic naming the rejection reason — never silently downgrade."""
-    rc = _run_gate_with_trail_fixture(
-        monkeypatch,
-        records=[
-            {"sha_range": "0227ea17..HEAD", "reviewer": "code-reviewer", "verdict": "ok"},
-        ],
-    )
-    assert rc == 0  # advisory-only: COVERED's own exit code is unchanged
-    err = capsys.readouterr().err
-    assert "NOTE: VERDICT=COVERED could not be corroborated" in err
-    assert "1 record(s) rejected" in err
-    assert "unterminated ..HEAD range" in err
-
-
-def test_coverage_gate_covered_multiple_stale_records_counts_and_names_each(monkeypatch, capsys):
-    rc = _run_gate_with_trail_fixture(
-        monkeypatch,
-        records=[
-            {"sha_range": "0227ea17..HEAD"},
-            {"sha_range": "abc123..HEAD"},
-            {"sha_range": "dag:some-segment"},
-        ],
-    )
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "3 record(s) rejected" in err
-    assert "unterminated ..HEAD range" in err
-    assert "dag:" in err
-
-
-def test_coverage_gate_covered_terminated_range_at_chain_tip_no_note(monkeypatch, capsys):
-    """A genuinely terminated range whose tip IS the chain tip corroborates
-    the verdict — no diagnostic should print."""
-    rc = _run_gate_with_trail_fixture(
-        monkeypatch,
-        records=[{"sha_range": "0227ea17..deadbeef"}],
-        chain_tip_sha="deadbeef",
-    )
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "could not be corroborated" not in err
-
-
-def test_coverage_gate_covered_terminated_range_ancestor_of_chain_tip_no_note(monkeypatch, capsys):
-    """A concrete range whose tip is an ancestor of (not identical to) the
-    chain tip still corroborates, via the injected `is_ancestor` callable."""
-    rc = _run_gate_with_trail_fixture(
-        monkeypatch,
-        records=[{"sha_range": "0227ea17..oldertip"}],
-        chain_tip_sha="deadbeef",
-        is_ancestor=lambda chain_tip, tip: chain_tip == "deadbeef" and tip == "oldertip",
-    )
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "could not be corroborated" not in err
-
-
-def test_coverage_gate_covered_no_trail_records_prints_note(monkeypatch, capsys):
-    """No trail records at all is the maximally-empty untrustworthy case —
-    must still be reported, not silently treated as covered."""
-    rc = _run_gate_with_trail_fixture(monkeypatch, records=[])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "NOTE: VERDICT=COVERED could not be corroborated" in err
-    assert "no review-trail records on disk" in err
-
-
-def test_coverage_gate_warn_verdict_never_runs_disbelief_check(monkeypatch, capsys, clean_override_env):
-    """The disbelief predicate is COVERED-only — it must not fire (and must
-    not print its own diagnostic) on a WARN verdict, which already has its
-    own remediation-offer diagnostics."""
-    calls = {"n": 0}
-
-    def _tracked_load():
-        calls["n"] += 1
-        return []
-
-    monkeypatch.setattr(_mod, "_load_trail_records", _tracked_load)
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=dag:x chain_commits=3 covered=1 uncovered=2 "
-        "coverage_ratio=0.33 VERDICT=WARN\n",
-        "uncovered: deadbeef some commit\n",
-    )
-    assert rc == 0
-    assert calls["n"] == 0
-    err = capsys.readouterr().err
-    assert "could not be corroborated" not in err
-
-
-def test_coverage_gate_disbelief_check_never_fatal_on_git_failure(monkeypatch, capsys):
-    """A broken disbelief check (chain tip unresolvable) must degrade to a
-    diagnostic note, never crash the gate it backs."""
-    monkeypatch.setattr(_mod, "_resolve_chain_tip_sha", lambda from_handoff: None)
-    monkeypatch.setattr(
-        _mod,
-        "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (
-            0,
-            "range=dag:x chain_commits=3 covered=3 uncovered=0 VERDICT=COVERED\n",
-            "",
-        ),
-    )
-    rc = _mod.main(["coverage-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "trail-range-termination disbelief check skipped" in err
-
-
-# ---------------------------------------------------------------------------
 # _resolve_chain_tip_sha — chain's OWN tip, not raw HEAD (2026-07-27 fix)
 #
 # Prior behavior: `_resolve_chain_tip_sha` was `git rev-parse HEAD` — on this
@@ -634,43 +346,6 @@ def test_unterminated_head_range_still_refused_against_chain_own_tip(monkeypatch
     assert verify_trail_range_termination(records, chain_tip, _mod._git_is_ancestor) is False
 
 
-def test_coverage_gate_uses_chain_own_tip_end_to_end(monkeypatch, temp_git_repo, capsys):
-    """Full `cmd_coverage_gate` wiring with the real (unmocked)
-    `_resolve_chain_tip_sha` — a trail record reaching the chain's own tip
-    corroborates a COVERED verdict with no diagnostic NOTE, end to end."""
-    sha_reviewed = _make_commit(temp_git_repo, "a.txt", "reviewed commit")
-    _make_commit(temp_git_repo, "p1.txt", "unrelated peer commit")  # moves HEAD past the chain tip
-
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
-    monkeypatch.setattr(
-        _mod,
-        "_derive_dag_chain_set",
-        lambda from_handoff, repo_root, closing_session_id: SimpleNamespace(
-            shas=[sha_reviewed], indeterminate=False,
-        ),
-    )
-    monkeypatch.setattr(
-        _mod, "_classify_bookkeeping_shas", lambda shas, repo_root, cache: (frozenset(), frozenset(), None),
-    )
-    monkeypatch.setattr(
-        _mod,
-        "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (
-            0,
-            "range=dag:x chain_commits=1 covered=1 uncovered=0 VERDICT=COVERED\n",
-            "",
-        ),
-    )
-    monkeypatch.setattr(
-        _mod, "_load_trail_records", lambda: [{"sha_range": f"{sha_reviewed}..{sha_reviewed}"}],
-    )
-
-    rc = _mod.main(["coverage-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "could not be corroborated" not in err
-
-
 # ---------------------------------------------------------------------------
 # write-trail
 # ---------------------------------------------------------------------------
@@ -795,7 +470,7 @@ def test_write_trail_propagates_failure(monkeypatch, capsys):
 
 _TIER_B_STDOUT = (
     'BRIGHTLINE reviewers_required=4 reviewers_suggested=32 reviewers_low=4 '
-    'plan_oracle=4 chain_oracle=32 session_oracle=10 tier=B '
+    'plan_oracle=4 chain_oracle=32 session_oracle=10 '
     'verdict=PARTITION-MANDATORY basis="plan_oracle=4(...) tier=B"\n'
 )
 
@@ -855,13 +530,11 @@ def _patch_chain_scoping(monkeypatch, chain_code_shas=None, chain_dag_shas=None,
 
 def _patch_brightline_persist_seam(monkeypatch, tmp_path, session_id="test-sid-brightline"):
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    # 2026-08-07 (state/audits/2026-08-07-review-gate-scoping-predecessor-and-
-    # planning-artifacts.md): `cmd_brightline_gate`'s PARTITION-MANDATORY
-    # branch now also mints chain-ancestry waivers (same call `coverage-gate`
-    # makes). Stub it to a no-op here — these tests exercise persistence and
-    # discharge, not minting; a real subprocess spawn would hit this process's
-    # actual cwd/repo, not the isolated `tmp_path` these tests already use.
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
+    # The chain-ancestry-waiver mint this PARTITION-MANDATORY branch used to
+    # fold in here (`_run_review_coverage_gate(..., mint_chain_waivers=True)`)
+    # is removed outright (state/kill-ledger.md K-005, 2026-08-16 — "waiver
+    # system dies") — no stub needed; these tests exercise persistence and
+    # discharge, not minting.
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: session_id)
     # C13: these persistence-focused tests are not exercising the AC20
@@ -914,7 +587,6 @@ def test_brightline_gate_persist_failure_is_non_fatal_and_loud(monkeypatch, tmp_
 
 def test_brightline_gate_persist_skipped_loudly_when_session_id_unresolvable(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: None)
     _patch_chain_scoping(monkeypatch)
@@ -926,30 +598,11 @@ def test_brightline_gate_persist_skipped_loudly_when_session_id_unresolvable(mon
     assert "session id unresolvable" in err
 
 
-def test_brightline_gate_tier_a_halt_unaffected_by_persistence(monkeypatch, tmp_path, capsys, clean_override_env):
-    """Persisting the verdict is orthogonal to the tier=A hard-stop policy
-    -- a tier=A halt still halts, override rules unchanged."""
-    tier_a_stdout = (
-        'BRIGHTLINE reviewers_required=2 reviewers_suggested=2 reviewers_low=2 '
-        'plan_oracle=2 chain_oracle=2 session_oracle=2 tier=A '
-        'verdict=PARTITION-MANDATORY basis="tier=A declared-but-unwalked repo(s)=foo"\n'
-    )
-    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, tier_a_stdout, ""))
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "sid-tier-a")
-    monkeypatch.setattr(_mod, "_autonomous_sentinel_exists", lambda: False)
-    monkeypatch.setattr(_mod, "_findings_name_unwalked_repo", lambda basis: False)
-    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRIGHTLINE", raising=False)
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "HALT: brightline tier=A" in err
-
-    from coordinator_core.workstream_complete.chain_partition_verdict_store import (
-        read_verdict_record,
-    )
-
-    assert read_verdict_record(tmp_path, session_id="sid-tier-a") == "PARTITION-MANDATORY"
+# tier=A hard-stop branch (declared-but-unwalked-repo halt) and its
+# `test_brightline_gate_tier_a_halt_unaffected_by_persistence` pin are
+# removed outright (state/kill-ledger.md K-004, 2026-08-16, Verdict A —
+# measured across 151 records: tier=A never fired). See
+# docs/wiki/cost-budgets-and-the-kill-disposition.md.
 
 
 # ---------------------------------------------------------------------------
@@ -978,7 +631,6 @@ def _patch_brightline_no_persist_seam(monkeypatch, tmp_path, stdout=_TIER_B_STDO
     through the trail-record fixture they supply, not through git-resolution
     noise."""
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, stdout, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-c13")
     _patch_chain_scoping(monkeypatch)
@@ -1200,7 +852,7 @@ def test_brightline_gate_partition_mandatory_unrelated_range_record_does_not_dis
 
 _TIER_B_SINGLE_REVIEWER_OK_STDOUT = (
     'BRIGHTLINE reviewers_required=1 reviewers_suggested=1 reviewers_low=1 '
-    'plan_oracle=1 chain_oracle=1 session_oracle=1 tier=B '
+    'plan_oracle=1 chain_oracle=1 session_oracle=1 '
     'verdict=single-reviewer-ok basis="plan_oracle=1(...) tier=B"\n'
 )
 
@@ -1526,10 +1178,6 @@ def test_brightline_gate_own_commit_covered_foreign_ancestor_uncovered_caps_clea
     )
 
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (0, "", ""),
-    )
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(temp_git_repo))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "own-sid")
     chain_code_shas = [foreign_sha, own_sha]
@@ -1733,50 +1381,13 @@ def test_brightline_gate_waiver_lookup_failure_degrades_to_unrecordable(
     assert "recordable via a chain-ancestry waiver" not in err
 
 
-def test_brightline_gate_warns_when_the_mint_subprocess_failed_before_minting(
-    monkeypatch, tmp_path, capsys,
-):
-    """The self-fulfilling-narration path (same memo, § "A mint we could not
-    confirm fired"): if the spawned review-coverage-gate.py dies before
-    minting, no waiver exists and every foreign sha reads unwaived — for a
-    reason that has nothing to do with the chain. rc alone cannot detect it
-    (an ordinary HALT verdict also exits 1); the absent `VERDICT=` stdout
-    line is what distinguishes a dead child from a halting gate."""
-    chain_code_shas = ["foreign1"]
-    _patch_foreign_narration_case(
-        monkeypatch, tmp_path, chain_code_shas,
-        foreign=set(chain_code_shas), vouched=set(),
-    )
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (1, "", "engine-won't-start"),
-    )
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "the chain-ancestry waiver mint could not be confirmed" in err
-    assert "engine-won't-start" in err
-
-
-def test_brightline_gate_halting_gate_is_not_mistaken_for_a_failed_mint(
-    monkeypatch, tmp_path, capsys,
-):
-    """The discriminator's other side: an ordinary HALT verdict exits 1 with a
-    VERDICT line on stdout — the engine ran and the mint fired, so the
-    could-not-confirm note must stay silent."""
-    chain_code_shas = ["foreign1"]
-    _patch_foreign_narration_case(
-        monkeypatch, tmp_path, chain_code_shas,
-        foreign=set(chain_code_shas), vouched=set(),
-    )
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (1, "VERDICT=WARN\n", ""),
-    )
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "could not be confirmed" not in err
+# The mint-confirmation discriminator ("the chain-ancestry waiver mint
+# could not be confirmed" / dead-child-vs-halting-gate narration) and its
+# two pins (`test_brightline_gate_warns_when_the_mint_subprocess_failed_
+# before_minting`, `test_brightline_gate_halting_gate_is_not_mistaken_for_a_
+# failed_mint`) are removed outright along with the whole chain-ancestry-
+# waiver mint mechanism (state/kill-ledger.md K-005, 2026-08-16 — "waiver
+# system dies").
 
 
 def test_brightline_gate_waiver_partition_does_not_move_denominator_or_verdict(
@@ -2776,43 +2387,20 @@ def test_partition_foreign_uncovered_shas_grep_failure_degrades_whole_batch(monk
     _ = base
 
 
-def test_resolve_vouched_shas_unreadable_store_falls_back_to_narrowing(monkeypatch):
-    """`_resolve_vouched_shas` (the `wsc-coverage-gate-runner.py` caller
-    that resolves the `vouched_shas` injected argument) degrades to an
-    empty set — never crediting — when the underlying chain-ancestry-
-    waiver store cannot be read. A missing/unreadable waiver store must
-    never manufacture coverage."""
-    _mod._VOUCHED_SHAS_CACHE.clear()
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: "/no/such/repo")
-
-    def _raises(*args, **kwargs):
-        raise OSError("waiver store unreadable")
-
-    monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", _raises)
-
+def test_resolve_vouched_shas_always_returns_empty_no_waiver_source_remains(monkeypatch):
+    """`_resolve_vouched_shas` formerly wrapped the gate-minted chain-
+    ancestry-waiver store (`_chain_ancestry_waived_shas` /
+    `_VOUCHED_SHAS_CACHE`); that whole mechanism is removed outright
+    (state/kill-ledger.md K-005, 2026-08-16 — "waiver system dies"). No
+    waiver source remains, so the resolver is unconditional: it must return
+    an empty frozenset regardless of `session_id`, with no caching and no
+    git/repo-root consultation at all."""
+    monkeypatch.setattr(
+        _mod, "_resolve_repo_root",
+        lambda: (_ for _ in ()).throw(AssertionError("must not resolve repo root")),
+    )
     assert _mod._resolve_vouched_shas("own-sid") == frozenset()
-    _mod._VOUCHED_SHAS_CACHE.clear()
-
-
-def test_resolve_vouched_shas_credits_gate_minted_chain_ancestry_waiver(monkeypatch):
-    """Positive leg: `_resolve_vouched_shas` credits exactly the shas
-    `_chain_ancestry_waived_shas` names for the given `session_id` — the
-    gate-minted chain-ancestry waiver store this resolver wraps."""
-    _mod._VOUCHED_SHAS_CACHE.clear()
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: "/repo")
-
-    waived_sha = "1" * 40
-
-    def _waived(repo_root, session_id):
-        assert repo_root == "/repo"
-        assert session_id == "own-sid"
-        return frozenset({waived_sha})
-
-    monkeypatch.setattr(_mod, "_chain_ancestry_waived_shas", _waived)
-
-    result = _mod._resolve_vouched_shas("own-sid")
-    assert result == frozenset({waived_sha})
-    _mod._VOUCHED_SHAS_CACHE.clear()
+    assert _mod._resolve_vouched_shas(None) == frozenset()
 
 
 def test_peer_record_outside_chain_does_not_discharge_despite_being_later_on_shared_branch():
@@ -2965,81 +2553,16 @@ def test_resolve_chain_code_shas_fails_safe_to_empty_when_dag_unresolvable(monke
     assert _mod._resolve_chain_code_shas("state/handoffs/x.md") == []
 
 
-# ---------------------------------------------------------------------------
-# brightline-gate mints its own chain-ancestry waivers (2026-08-07,
+# brightline-gate's own chain-ancestry-waiver mint (2026-08-07,
 # state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-
-# artifacts.md, candidate fixes #1/#2) — the live incident this closes: a
-# chain-terminal `brightline-gate` run, with no prior `coverage-gate`
-# invocation, deadlocked on foreign predecessor commits because no
-# chain-ancestry waiver had ever been minted for the closing session.
+# artifacts.md, candidate fixes #1/#2) — along with the `--no-mint` CLI
+# flag and its three ordering/default-on/opt-out pins
+# (`test_brightline_gate_partition_mandatory_mints_before_reading_waivers`,
+# `test_brightline_gate_default_mints`, `test_brightline_gate_no_mint_flag_
+# omits_mint`) — is removed outright along with the whole chain-ancestry-
+# waiver mechanism (state/kill-ledger.md K-005, 2026-08-16 — "waiver system
+# dies").
 # ---------------------------------------------------------------------------
-
-def test_brightline_gate_partition_mandatory_mints_before_reading_waivers(monkeypatch, tmp_path):
-    """`cmd_brightline_gate`'s PARTITION-MANDATORY branch must call the SAME
-    mint primitive `coverage-gate` uses (`_run_review_coverage_gate`) BEFORE
-    it resolves discharge — so a single `brightline-gate` invocation is
-    self-sufficient regardless of whether an EM ran `coverage-gate` first.
-    This test only pins ordering."""
-    calls = []
-    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (calls.append(from_handoff), (0, "", ""))[1],
-    )
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
-    _patch_chain_scoping(monkeypatch)
-    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record()])
-
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-
-    assert rc == 0
-    assert calls == ["state/handoffs/x.md"], (
-        "cmd_brightline_gate did not mint chain-ancestry waivers before "
-        "resolving discharge — a chain-terminal run starting from "
-        "brightline-gate alone would reproduce the live deadlock"
-    )
-
-
-def test_brightline_gate_default_mints(monkeypatch, tmp_path, capsys):
-    """No `--no-mint` on the CLI -> the PARTITION-MANDATORY branch's call to
-    `_run_review_coverage_gate` carries mint_chain_waivers=True (default-on,
-    restored)."""
-    calls = []
-    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (calls.append(mint_chain_waivers), (0, "", ""))[1],
-    )
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
-    _patch_chain_scoping(monkeypatch)
-    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record()])
-
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-
-    assert rc == 0
-    assert calls == [True]
-
-
-def test_brightline_gate_no_mint_flag_omits_mint(monkeypatch, tmp_path, capsys):
-    """`--no-mint` on the CLI -> mint_chain_waivers=False reaches the
-    underlying gate."""
-    calls = []
-    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(
-        _mod, "_run_review_coverage_gate",
-        lambda from_handoff, mint_chain_waivers=True: (calls.append(mint_chain_waivers), (0, "", ""))[1],
-    )
-    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-mint")
-    _patch_chain_scoping(monkeypatch)
-    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [_discharging_record()])
-
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md", "--no-mint"])
-
-    assert rc == 0
-    assert calls == [False]
 
 
 def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(
@@ -3058,7 +2581,6 @@ def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(
     session, and the planning-artifact breakdown of the uncovered set
     still fully present in the diagnostic."""
     monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
-    monkeypatch.setattr(_mod, "_run_review_coverage_gate", lambda from_handoff, mint_chain_waivers=True: (0, "", ""))
     monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: "test-sid-planning-foreign")
     chain_code_shas = ["planforeign1", "planforeign2"]
@@ -3086,129 +2608,97 @@ def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(
     assert "REMEDY (foreign/predecessor commits)" not in err
 
 
-def test_minted_chain_ancestry_waiver_moves_a_foreign_commit_from_uncovered_to_covered(tmp_path):
-    """AC (audit #4, DR-245 closed bug-backlog item — 'waiver coverage is
-    per-SHA but gate crediting is range-based ... a minted waiver may not
-    move the ratio even once minting works'): exercises the REAL
-    `directives_review.chain_partition_uncovered_shas` +
-    `chain_ancestry_waivers` mechanism `cmd_brightline_gate` wires together
-    (`vouched_shas` unions the gate-minted waiver store, exactly as
-    `_resolve_vouched_shas` does), with no mocking of the crediting logic
-    itself — only the git-backed resolvers are doubled.
+# `coordinator_core.chain_ancestry_waivers` and its two direct-mechanism
+# pins (`test_minted_chain_ancestry_waiver_moves_a_foreign_commit_from_
+# uncovered_to_covered`, `test_stored_head_only_covering_record_stays_
+# uncovered_even_when_waived`) are removed outright along with the whole
+# chain-ancestry-waiver module (state/kill-ledger.md K-005, 2026-08-16 —
+# "waiver system dies"; the module itself no longer exists on disk).
 
-    Confirms the deadlock does NOT simply reappear one layer down: minting
-    a chain-ancestry waiver for a foreign commit, then supplying a
-    discharging review-trail record whose range names it, moves that commit
-    out of the uncovered set. Without the minted waiver, the same record is
-    rejected (foreign, unvouched) and the commit stays uncovered — the
-    contrast proves the waiver is what moved it, not the record alone."""
-    from coordinator_core import chain_ancestry_waivers
 
-    chain_id = "a" * 8 + "-" + "b" * 4 + "-" + "c" * 4 + "-" + "d" * 4 + "-" + "e" * 12
-    foreign_sha = "f" * 40
-    chain_code_shas = {foreign_sha}
-    chain_dag_shas = {foreign_sha}
-    sha_range = f"start..{foreign_sha}"
-    record = {
-        "verdict": "ok",
-        "sha_range": sha_range,
-        "scope": "chain",
-        "session_id": chain_id,
-    }
+# ---------------------------------------------------------------------------
+# op_latency instrumentation of the `--from-handoff` chain (state/kill-ledger.md
+# K-004, 2026-08-16: "No stage of it is instrumented ... one timing span in
+# cmd_brightline_gate makes this decidable"). `_run_review_brightline_gate`
+# is the single span — see its own docstring/`_OP_LATENCY_LABEL` for why.
+# ---------------------------------------------------------------------------
 
-    def resolve_range_shas(rng):
-        return {foreign_sha} if rng == sha_range else set()
 
-    def narrow_foreign_shas(rng, session_id):
-        # This commit's own trailer names a predecessor session — always
-        # foreign to the CLOSING session, regardless of which record reads it.
-        return frozenset({foreign_sha})
+def test_run_review_brightline_gate_records_a_started_and_completed_row(monkeypatch):
+    calls = []
 
-    def vouched_shas_from(repo_root):
-        return lambda session_id: chain_ancestry_waivers.chain_ancestry_waived_shas(
-            repo_root, session_id or "",
-        )
+    def fake_started(**kwargs):
+        calls.append(("started", kwargs))
 
-    # Before minting: the record is rejected (foreign, unvouched) -> uncovered.
-    uncovered_before = chain_partition_uncovered_shas(
-        [record], chain_code_shas, chain_dag_shas, resolve_range_shas,
-        narrow_foreign_shas=narrow_foreign_shas,
-        vouched_shas=vouched_shas_from(str(tmp_path)),
+    def fake_latency(**kwargs):
+        calls.append(("complete", kwargs))
+
+    monkeypatch.setattr(
+        "coordinator_core.telemetry.op_latency.record_op_started", fake_started
     )
-    assert set(uncovered_before) == {foreign_sha}
-
-    # Mint the waiver under the SAME chain_id the record's session_id carries
-    # (the identity match `_resolve_vouched_shas`'s own docstring requires).
-    chain_ancestry_waivers.record_chain_ancestry_waiver(
-        str(tmp_path), frozenset({foreign_sha}), chain_id,
+    monkeypatch.setattr(
+        "coordinator_core.telemetry.op_latency.record_op_latency", fake_latency
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout=_TIER_B_STDOUT, stderr=""),
     )
 
-    uncovered_after = chain_partition_uncovered_shas(
-        [record], chain_code_shas, chain_dag_shas, resolve_range_shas,
-        narrow_foreign_shas=narrow_foreign_shas,
-        vouched_shas=vouched_shas_from(str(tmp_path)),
+    rc, stdout, stderr = _mod._run_review_brightline_gate(["state/handoffs/x.md"])
+
+    assert rc == 0
+    assert stdout == _TIER_B_STDOUT
+    kinds = [kind for kind, _ in calls]
+    assert kinds == ["started", "complete"], calls
+    started_kwargs = calls[0][1]
+    complete_kwargs = calls[1][1]
+    assert started_kwargs["op"] == _mod._OP_LATENCY_LABEL
+    assert complete_kwargs["op"] == _mod._OP_LATENCY_LABEL
+    assert complete_kwargs["outcome"] == "ok"
+    assert complete_kwargs["corr_id"] == started_kwargs["corr_id"]
+
+
+def test_run_review_brightline_gate_records_error_outcome_on_nonzero_rc(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "coordinator_core.telemetry.op_latency.record_op_started",
+        lambda **kwargs: calls.append(("started", kwargs)),
     )
-    assert set(uncovered_after) == set(), (
-        "a minted chain-ancestry waiver did not move the uncovered count — "
-        "the deadlock reappears one layer down even after minting works"
+    monkeypatch.setattr(
+        "coordinator_core.telemetry.op_latency.record_op_latency",
+        lambda **kwargs: calls.append(("complete", kwargs)),
     )
-
-
-def test_stored_head_only_covering_record_stays_uncovered_even_when_waived(tmp_path):
-    """Live-incident root cause (2026-08-08, sidecar coordinatorexecutor-
-    f6dbb4bf): a chain whose ONLY discharging review-trail evidence for a
-    foreign/predecessor commit is a stale `<sha>..HEAD` range (the shape
-    `coverage._record_range_has_stored_head` exists to reject, per the
-    2026-06-30 false-COVERED incident) is structurally un-dischargeable by a
-    gate-minted chain-ancestry waiver — NOT because the waiver read/write
-    wiring is broken, but because DR-245 requires "an actual trail record
-    over the range" and `_record_membership_shas` rejects a stored-HEAD
-    range at Phase 1, before `narrow_foreign_shas`/`vouched_shas` are ever
-    consulted (contrast `test_minted_chain_ancestry_waiver_moves_a_foreign_
-    commit_from_uncovered_to_covered`, whose covering record uses a
-    concrete-SHA range and DOES get rescued). This is the counterpart proof:
-    minting the identical waiver over a stored-HEAD-only-covered commit must
-    NOT flip it to covered — the correct fix for the live incident was
-    correcting the misleading REMEDY text (which promised the mint-then-
-    retry loop would resolve this), not weakening this rejection."""
-    from coordinator_core import chain_ancestry_waivers
-
-    chain_id = "a" * 8 + "-" + "b" * 4 + "-" + "c" * 4 + "-" + "d" * 4 + "-" + "e" * 12
-    foreign_sha = "f" * 40
-    chain_code_shas = {foreign_sha}
-    chain_dag_shas = {foreign_sha}
-    stale_sha_range = "start..HEAD"
-    record = {
-        "verdict": "ok",
-        "sha_range": stale_sha_range,
-        "scope": "chain",
-        "session_id": chain_id,
-    }
-
-    def resolve_range_shas(rng):
-        return {foreign_sha} if rng == stale_sha_range else set()
-
-    def narrow_foreign_shas(rng, session_id):
-        return frozenset({foreign_sha})
-
-    def vouched_shas_from(repo_root):
-        return lambda session_id: chain_ancestry_waivers.chain_ancestry_waived_shas(
-            repo_root, session_id or "",
-        )
-
-    chain_ancestry_waivers.record_chain_ancestry_waiver(
-        str(tmp_path), frozenset({foreign_sha}), chain_id,
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="boom"),
     )
 
-    uncovered = chain_partition_uncovered_shas(
-        [record], chain_code_shas, chain_dag_shas, resolve_range_shas,
-        narrow_foreign_shas=narrow_foreign_shas,
-        vouched_shas=vouched_shas_from(str(tmp_path)),
+    rc, _stdout, _stderr = _mod._run_review_brightline_gate(["state/handoffs/x.md"])
+
+    assert rc == 1
+    complete_kwargs = calls[1][1]
+    assert complete_kwargs["outcome"] == "error"
+
+
+def test_run_review_brightline_gate_telemetry_failure_never_breaks_the_gate(monkeypatch):
+    def raising_started(**kwargs):
+        raise RuntimeError("telemetry sink unwritable")
+
+    monkeypatch.setattr(
+        "coordinator_core.telemetry.op_latency.record_op_started", raising_started
     )
-    assert set(uncovered) == {foreign_sha}, (
-        "a stored-HEAD-only-covered commit was credited by a minted "
-        "chain-ancestry waiver — this would reintroduce the false-COVERED "
-        "defect the stored-HEAD rejection exists to prevent"
+    monkeypatch.setattr(
+        "coordinator_core.telemetry.op_latency.record_op_latency",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("telemetry sink unwritable")),
     )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout=_TIER_B_STDOUT, stderr=""),
+    )
+
+    rc, stdout, _stderr = _mod._run_review_brightline_gate(["state/handoffs/x.md"])
+
+    assert rc == 0
+    assert stdout == _TIER_B_STDOUT
 
 

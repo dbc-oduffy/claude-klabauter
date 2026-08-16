@@ -62,6 +62,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import git_dir
 from coordinator_core.install.write_surface import (
     StaticClause,
     WriteSurfaceDeclaration,
@@ -213,17 +214,7 @@ def _git_config_set(scope: Sequence[str], key: str, value: str) -> bool:
 
 
 def _is_git_repo() -> bool:
-    try:
-        res = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return False
-    return res.returncode == 0
+    return git_dir() is not None
 
 
 # Group-precondition registry: maps a `GitSetting.group` name to a predicate

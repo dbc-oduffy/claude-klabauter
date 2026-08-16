@@ -77,28 +77,25 @@ def test_active_branch_guard_absent_from_scaffold_and_has_no_directive() -> None
 
 def test_fill_gate_verdicts_populates_gates_key_from_a_run() -> None:
     report = {
-        "landed": ["d0", "d1", "d2", "d3", "d4", "d5", "d6"],
+        "landed": ["d0", "d1", "d2", "d4", "d5", "d6"],
         "results": [
-            {"id": "d3", "already_satisfied": False, "detail": {"cli": "merge-gate-and-pr"}},
             {"id": "d5", "already_satisfied": False, "detail": {"cli": "portability-sweep"}},
             {"id": "d6", "already_satisfied": False, "detail": {"cli": "check-no-illegal-paths"}},
         ],
     }
     gates = _fill_gate_verdicts(report)
     assert set(GATE_DIRECTIVE_IDS) <= set(gates)
-    assert gates["coverage_gate"] == "passed"
     assert gates["portability_sweep"] == "passed"
     assert gates["check_no_illegal_paths"] == "passed"
 
 
 def test_fill_gate_verdicts_marks_failed_directive_failed_and_rest_pending() -> None:
     report = {
-        "error": "merge-gate-and-pr: exited 1: some failure",
-        "failed_directive": "d3",
-        "landed": ["d0", "d1", "d2"],
+        "error": "portability-sweep: exited 1: some failure",
+        "failed_directive": "d5",
+        "landed": ["d0", "d1", "d2", "d4"],
         "results": [],
     }
     gates = _fill_gate_verdicts(report)
-    assert gates["coverage_gate"] == "failed"
-    assert gates["portability_sweep"] == "pending"
+    assert gates["portability_sweep"] == "failed"
     assert gates["check_no_illegal_paths"] == "pending"

@@ -736,6 +736,14 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
+            # Action-class, explicitly decided (plan's C1b correction,
+            # premise-finding sidecar channel 3): the EM dispatches a
+            # worker off this answer, with no directive and no gate --
+            # demoting it into narration would silence a real dispatch
+            # decision. `False`, not left unmarked, so this reads as a
+            # deliberate call rather than an oversight the census could
+            # otherwise flag.
+            reportable=False,
         ),
         build_judgment_point(
             {
@@ -756,6 +764,12 @@ def _build_judgment_points(
             reason="pm-scoped-tradeoff",
             revalidate_at_dispatch=True,
             round_trip="terminal",
+            # Action-class: `extend_span` widens what Rule-5 treats as already
+            # reviewed, and no directive applies that -- the EM does. A
+            # `pm-scoped-tradeoff` is by definition an answer that matters, so
+            # demoting it into narration would silence the one kind of question
+            # this mechanism exists to preserve.
+            reportable=False,
         ),
         build_judgment_point(
             None,

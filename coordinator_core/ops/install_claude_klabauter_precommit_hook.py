@@ -73,13 +73,13 @@ Negative-spec:
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core import py_probe_sh as _py_probe_sh
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.declared_writes import declare_write
 # Cross-package import of the SSOT doc-pointer display string (same
 # precedent write_guards already uses for operator_override_note itself) --
@@ -161,22 +161,7 @@ def _git_toplevel(target: str) -> Optional[str]:
     """Resolve the repo root for `target` via `git -C <target> rev-parse
     --show-toplevel`. Returns None on any git failure (not a git repo, git
     missing, etc.)."""
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            ["git", "-C", target, "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_toplevel: subprocess.run failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    toplevel = result.stdout.strip()
-    return toplevel or None
+    return _show_toplevel(cwd=target)
 
 
 def _atomic_write(path: str, content: str) -> None:

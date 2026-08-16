@@ -383,7 +383,7 @@ def _load_cli_module(cli_name: str) -> ModuleType:
 def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str, CliExitClass]:
     """Invokes `module.main` in-process (never a subprocess) — accepts
     either an `argv`-taking `main(argv)` or a zero-arg `main()`. Returns
-    `(exit_code, stdout, stderr)`: the resolved integer exit code (`main`'s
+    `(exit_code, stdout, stderr, exit_class)`: the resolved integer exit code (`main`'s
     own return value when it returns one, else the code a `SystemExit` it
     raises carries, else `0` on a clean fallthrough) paired with everything
     the call printed to stdout and, separately, to stderr.
@@ -458,11 +458,9 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
             raised = True
             code = exc.code
             exit_code = int(code) if isinstance(code, int) else (0 if code is None else 1)
-            stderr_text = stderr_buf.getvalue()
-            exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
-            return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
+        else:
+            exit_code = int(result) if isinstance(result, int) else 0
 
-    exit_code = int(result) if isinstance(result, int) else 0
     stderr_text = stderr_buf.getvalue()
     exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
     return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
@@ -829,13 +827,15 @@ def _execute_directives(
     Gate verdict memo (C4, AC6, docs/plans/2026-08-10-commit-event-5s-cap-
     and-the-silent-tail.md, retry #3): EXECUTION-TIME is the only place this
     module records the gate verdict memo `directives_review.
-    build_review_brightline_gate_directive`/`__init__.py`'s `d-coverage-gate`
-    builder consult (read-only) at build time. After a directive lands this
-    pass (dispatched, exit 0), `directives_review.
+    build_review_brightline_gate_directive` builder consult (read-only) at
+    build time. After a directive lands this pass (dispatched, exit 0),
+    `directives_review.
     record_gate_verdict_if_passed(repo_root, directive, exit_code, stdout)`
-    is called — a no-op for every directive id other than the two live
-    gates it knows about, and itself verdict-aware for the coverage gate
-    (a `VERDICT=WARN` exit-0 is not a confirmed pass). `repo_root` is
+    is called — a no-op for every directive id other than the single live
+    gate it knows about (`_LIVE_GATE_MEMO_DIRECTIVE_IDS` in
+    `directives_review.py`; K-001 removed the coverage gate's own id from
+    that set, so there is no coverage-gate verdict-awareness left).
+    `repo_root` is
     resolved once, lazily, via `resolve_repo_root()` (the same resolver
     `brief()` itself uses — NOT zero-spawn: it runs `git rev-parse
     --show-toplevel` through `pickup_assemble._run_git`, one subprocess

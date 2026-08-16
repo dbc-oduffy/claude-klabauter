@@ -553,6 +553,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 
 
 _NO_WINDOW = no_console_creationflags()
@@ -2824,13 +2825,7 @@ def check_no_stale_baseline_entries(
 
 
 def _default_root() -> str:
-    proc = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        **_NO_WINDOW,
-    )
-    root = proc.stdout.strip()
+    root = show_toplevel()
     return root or os.getcwd()
 
 

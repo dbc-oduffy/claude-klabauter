@@ -8,7 +8,7 @@ tool call into two append-only T-event logs:
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
-Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
+Port of the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-touched-files.sh (deleted 2026-07-22, DoE ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
@@ -104,15 +104,34 @@ _FILE_LOCKS: dict[str, asyncio.Lock] = {}
 # entries indefinitely. Two-tier eviction: (1) on new-path creation, sweep entries whose
 # parent directory no longer exists (session archived → dir gone — cheap isdir check);
 # (2) hard cap via oldest-entry eviction if the stale sweep wasn't sufficient.
+#
+# HELD-AWARE (docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md
+# § C9). The prior eviction policy (FIFO pop, no `.locked()` check) could evict a lock
+# a peer dispatch currently holds (`async with lock:` in progress in `_handler`). After
+# eviction, `_get_lock` creates a FRESH `asyncio.Lock()` for the same path on the next
+# call, so the held peer and the new caller serialise on TWO DIFFERENT lock objects for
+# the SAME path — i.e. they do not serialise at all, defeating D6's entire purpose. This
+# is a policy redesign, not a trigger tweak: both the stale sweep and the hard-cap
+# eviction below now consult `lock.locked()` and NEVER remove an entry whose lock is
+# currently held, regardless of table size. If every entry is held when the cap is
+# reached, growing past `_MAX_FILE_LOCKS` is the correct behaviour — not evicting a held
+# lock.
 _MAX_FILE_LOCKS = 256
 
 
 def _get_lock(path: str) -> "asyncio.Lock":
     """Return (creating if absent) the per-file asyncio.Lock for path.
 
-    On new-path creation, evicts stale entries (parent dir gone — session archived) to
-    bound _FILE_LOCKS to O(active sessions × agents). Falls back to oldest-entry eviction
-    if the stale sweep alone isn't sufficient (safety cap: _MAX_FILE_LOCKS).
+    On new-path creation, evicts stale UNHELD entries (parent dir gone — session
+    archived) to bound _FILE_LOCKS to O(active sessions × agents). Falls back to
+    oldest-entry eviction among UNHELD entries if the stale sweep alone isn't
+    sufficient (safety cap: _MAX_FILE_LOCKS). A currently-HELD lock (``lock.locked()``
+    True — some concurrent caller is inside its ``async with`` block) is NEVER evicted,
+    by either tier, regardless of table size: evicting a held lock would let two
+    dispatches serialise on different lock objects for the same path, silently
+    defeating D6's cross-dispatch serialisation. If the cap is reached and every
+    entry is held, the table grows past `_MAX_FILE_LOCKS` — that is correct behaviour,
+    not a bug.
 
     Accessed only from the event loop — no threading synchronisation needed on _FILE_LOCKS
     itself (all callers are async coroutines running in the event loop thread).
@@ -122,13 +141,26 @@ def _get_lock(path: str) -> "asyncio.Lock":
     import asyncio
 
     if path not in _FILE_LOCKS:
-        # Evict entries for paths whose containing dir is gone (session archived).
-        stale = [p for p in _FILE_LOCKS if not os.path.isdir(os.path.dirname(p))]
+        # Evict UNHELD entries for paths whose containing dir is gone (session
+        # archived). A held lock is never a stale-sweep candidate even if its
+        # session dir happens to be gone — that combination cannot happen for a
+        # live caller, but the check is unconditional defense-in-depth.
+        stale = [
+            p for p, lock in _FILE_LOCKS.items()
+            if not lock.locked() and not os.path.isdir(os.path.dirname(p))
+        ]
         for p in stale:
             del _FILE_LOCKS[p]
-        # Hard cap: evict oldest insertion-order entries if stale sweep wasn't sufficient.
+        # Hard cap: evict oldest insertion-order UNHELD entries one at a time until
+        # under cap, or until no unheld entry remains (every entry held → stop and
+        # let the table grow past the cap rather than evict a held lock).
         while len(_FILE_LOCKS) >= _MAX_FILE_LOCKS:
-            _FILE_LOCKS.pop(next(iter(_FILE_LOCKS)))
+            evict_path = next(
+                (p for p, lock in _FILE_LOCKS.items() if not lock.locked()), None
+            )
+            if evict_path is None:
+                break
+            del _FILE_LOCKS[evict_path]
         _FILE_LOCKS[path] = asyncio.Lock()
     return _FILE_LOCKS[path]
 

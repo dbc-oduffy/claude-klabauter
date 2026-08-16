@@ -169,7 +169,7 @@ def _resolve_distill_root(coordinator_root: Path) -> Path:
     """Resolve the archive/wiki scan root (bash:19-27 script-location + env-fallback).
 
     Prefers the script-location-inferred root (``bin/../../../..``, the pre-W4.2
-    ``.claude/plugins/coordinator/bin`` nesting) when it has an
+    ``.claude/plugins/coordinator-claude/coordinator/bin`` nesting) when it has an
     ``archive/completed`` dir; else falls back to ``CLAUDE_HOME (or ~) /.claude`` —
     mirroring the bash oracle's own two-rung resolution verbatim (its "mandatory
     env-fallback form (verbatim per spec)" comment).

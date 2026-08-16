@@ -117,6 +117,7 @@ CLOSED PORTING GAPS:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import re
@@ -782,7 +783,19 @@ _GIT_PROBE_BUDGET_SECONDS = 6.0
 #: liveness harness -- sees `None` and behaves byte-identically to before
 #: this budget existed. Do not arm it from a check; a check does not know
 #: whether it is one guard in a chain or the whole call.
-_git_probe_deadline: Optional[float] = None
+#:
+#: `contextvars.ContextVar` rather than a bare module global (C8,
+#: docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md):
+#: under a warm engine two dispatches can be interleaved, and a bare global
+#: lets a second dispatch's `_arm_git_probe_deadline` silently resurrect a
+#: first dispatch's already-exhausted budget (or vice versa) -- the
+#: characterization test this fix flips,
+#: `coordinator_core/warm/tests/test_process_global_characterization.py`
+#: Site 6. Each dispatch runs in its own Task/thread Context, so arm/disarm
+#: in one dispatch is invisible to a concurrently-interleaved one.
+_git_probe_deadline: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "_dispatch_checks_git_probe_deadline", default=None
+)
 
 #: Returned instead of spawning once the budget is spent. Deliberately 127
 #: (`_run_git`'s existing unresolvable-`git` code) and NOT -1: -1 is the
@@ -808,10 +821,9 @@ def _arm_git_probe_deadline(budget: Optional[float] = None) -> None:
     module constant into this signature, making it unreachable to the one
     thing that needs to vary it -- a test shrinking the budget so it can
     exercise exhaustion in milliseconds instead of seconds."""
-    global _git_probe_deadline
     if budget is None:
         budget = _GIT_PROBE_BUDGET_SECONDS
-    _git_probe_deadline = time.monotonic() + budget
+    _git_probe_deadline.set(time.monotonic() + budget)
 
 
 def _disarm_git_probe_deadline() -> None:
@@ -819,14 +831,14 @@ def _disarm_git_probe_deadline() -> None:
     default. Callers arm/disarm in a `try`/`finally` so an exception on the
     guard chain cannot leave a stale deadline armed for the next call in a
     long-lived process (a test run; anything embedding this engine)."""
-    global _git_probe_deadline
-    _git_probe_deadline = None
+    _git_probe_deadline.set(None)
 
 
 def _git_probe_budget_spent() -> bool:
     """True iff a budget is armed AND already spent. `None` (unarmed) is
     never "spent" -- see `_git_probe_deadline`'s inert-by-default note."""
-    return _git_probe_deadline is not None and time.monotonic() >= _git_probe_deadline
+    deadline = _git_probe_deadline.get()
+    return deadline is not None and time.monotonic() >= deadline
 
 
 def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,

@@ -20,6 +20,16 @@ from __future__ import annotations
 import enum
 from typing import Any, Mapping, Type
 
+# Module-level: `_emit` runs on every envelope build (it IS the brief path),
+# unlike `partition_reportable`'s function-local import of `apply_base`,
+# which exists specifically to keep `apply_base` off that path. No cycle:
+# `judgment.py` has no module-level imports of its own besides `typing`, and
+# `apply_base.py` imports neither `envelope` nor `judgment` (Review:
+# code-reviewer -- hoisted from a cargo-culted function-local import).
+from coordinator_core.contract.decision_object.judgment import (
+    find_unclassified_gate_nothing_points,
+)
+
 ENVELOPE_KEYS: tuple[str, ...] = (
     "artifact",
     "preflight",
@@ -90,6 +100,18 @@ def _emit(obj: Mapping[str, Any]) -> Mapping[str, Any]:
             "decision-object envelope key mismatch: "
             f"missing={sorted(missing)} extra={sorted(extra)} "
             f"expected={sorted(expected_keys)}"
+        )
+
+    unclassified = find_unclassified_gate_nothing_points(
+        obj.get("judgment_points") or [], obj.get("directives") or []
+    )
+    if unclassified:
+        ids = ", ".join(sorted(str(p.get("id")) for p in unclassified))
+        raise DecisionObjectError(
+            f"judgment point(s) {ids} carry a recommendation, gate no directive "
+            "on this envelope, and set no `reportable`. Pass reportable=True at "
+            "the builder if the EM only notes the answer, or reportable=False if "
+            "the EM must act on it."
         )
 
     return obj

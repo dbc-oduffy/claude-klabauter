@@ -59,7 +59,7 @@ Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 generations of defect found in the same session:
 
   1. The ORIGINAL bash-ported version baked a literal
-     `$HOME/.claude/plugins/coordinator/bin/...` path into
+     `$HOME/.claude/plugins/coordinator-claude/coordinator/bin/...` path into
      every emitted hook. Commit b644d5a9 migrated the whole executable
      surface into this repo (`claude-klabauter/coordinator/bin/`); that literal
      directory has not existed since. Every gate was guarded by a plain
@@ -171,7 +171,6 @@ GENERATES = []  # writes only $HOME/.claude's .git/hooks/pre-commit (and post-me
 
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,6 +184,7 @@ from coordinator_core.install.write_surface import (
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core import meta_repo_identity as _meta_repo_identity
 from coordinator_core import py_probe_sh as _py_probe_sh
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 # Cross-package import of the SSOT doc-pointer display string (same
 # precedent write_guards already uses for operator_override_note itself) --
 # emitted hook-body remediation text points readers at the doc that
@@ -283,22 +283,7 @@ def _git_toplevel(target: str) -> Optional[str]:
     Returns None on any git failure (not a git repo, git missing, etc.) —
     parity with the bash oracle's `|| { ...skip...; exit 0; }` branch.
     """
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            ["git", "-C", target, "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_toplevel: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    toplevel = result.stdout.strip()
-    return toplevel or None
+    return _show_toplevel(cwd=target)
 
 
 def _atomic_write(path: str, content: str) -> None:

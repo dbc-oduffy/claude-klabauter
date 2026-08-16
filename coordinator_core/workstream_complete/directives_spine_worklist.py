@@ -123,6 +123,18 @@ class OpenSpineRowGate(NamedTuple):
     #: make the ceremony refuse on ambiguity").
     verdict: str = "not-applicable"
 
+    def unwaived_ids(self) -> tuple[str, ...]:
+        """The still-open, not-yet-waived row ids — the single derivation
+        any blocking judgment point builder should read, so the gate text
+        cannot fork from the builder's own enumeration. `warn_text` above
+        applies the identical `not row.waived` filter via its own local
+        (`compute_open_spine_row_gate`'s `unwaived`), not through this
+        method — the two stay logically identical, not textually unified."""
+        # Review: coordinator:code-reviewer aed16e2e — docstring previously
+        # claimed warn_text reads this method; it applies the same filter
+        # via a parallel comprehension instead.
+        return tuple(row.id for row in self.rows if not row.waived)
+
 
 _NOT_APPLICABLE_SUMMARY = "Open spine rows: not applicable — no open rows on the governing plan"
 

@@ -86,7 +86,15 @@ Negative-spec:
       records and an injected `is_ancestor` callable — fetching the
       records and deciding `git merge-base --is-ancestor` are the
       caller's job, consistent with every other builder module in this
-      package staying pure/IO-free (D-4). The live caller is
+      package staying pure/IO-free (D-4). The `chain_attribution` import
+      (C6a, docs/plans/2026-08-15-composition-invocation-budgets.md) is
+      the SAME posture, not an exception to it: only `foreign_shas_from_
+      window` is called, and that function is pure set math over an
+      already-resolved window (`ChainAttributionWindow.commit_map`) —
+      resolving the window itself (`bulk_commit_attribution_map`,
+      `bulk_grep_attributed_shas`, both real `git log` spawns) stays the
+      caller's job, injected via `ChainAttributionWindow` exactly like
+      `resolve_range_shas`/`narrow_foreign_shas` already are. The live caller is
       `coordinator/bin/wsc-coverage-gate-runner.py`'s `coverage-gate`
       subcommand (not `workstream_complete.apply`, which never reads trail
       records at all) — it loads records via
@@ -121,6 +129,7 @@ import tempfile
 from pathlib import Path
 from typing import AbstractSet, Any, Callable, Iterable, Mapping, NamedTuple, Optional, Sequence
 
+from coordinator_core import chain_attribution
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 from coordinator_core.coverage import (
     SAFE_RANGE as _SAFE_RANGE,
@@ -619,14 +628,13 @@ def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
         raise
 
 
-#: The two live gate directive ids `record_gate_verdict_if_passed` knows how
-#: to record a memo for. `d-run-review-brightline-gate` is this module's own
-#: `build_review_brightline_gate_directive` id; `d-coverage-gate` is
-#: `__init__.py`'s LIVE inline chain-end coverage-gate directive id (see
-#: `build_chain_coverage_gate_directive`'s "DEAD CODE, VERIFIED" docstring
-#: paragraph for why the memo lives on this id and not
-#: `d-run-chain-coverage-gate`).
-_LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate", "d-coverage-gate"})
+#: The one live gate directive id `record_gate_verdict_if_passed` knows how
+#: to record a memo for: `d-run-review-brightline-gate`, this module's own
+#: `build_review_brightline_gate_directive` id. `d-coverage-gate` (the
+#: chain-end coverage-verdict directive built by `__init__.py`'s
+#: `_build_legacy_coverage_and_trail_directives`) was removed here (K-001,
+#: state/kill-ledger.md) along with the directive itself.
+_LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate"})
 
 #: C4 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
 #: failed.md): `__init__.py::build_write_trail_directives` emits ONE
@@ -644,25 +652,14 @@ _WRITE_TRAIL_DIRECTIVE_ID_PREFIX = "d-write-trail"
 def _is_write_trail_directive_id(gate_id: Optional[str]) -> bool:
     """True for the single-dict id (`d-write-trail`) and every indexed id
     (`d-write-trail-0`, `d-write-trail-1`, ...) `build_write_trail_
-    directives` can emit. `gate_id` may be `None` (a directive missing its
-    `id` key) — never raises, degrades to False like every other predicate
-    in this module."""
+    directives` can emit. `gate_id` may be `None` or `""` (a directive
+    missing or blanking its `id` key) — never raises, degrades to False
+    like every other predicate in this module."""
     if not gate_id:
         return False
     return gate_id == _WRITE_TRAIL_DIRECTIVE_ID_PREFIX or gate_id.startswith(
         _WRITE_TRAIL_DIRECTIVE_ID_PREFIX + "-"
     )
-
-#: The verdict token `wsc-coverage-gate-runner.py::cmd_coverage_gate` prints
-#: on its own `VERDICT=...` stdout line when the underlying gate resolved
-#: below the code-partition coverage-ratio threshold. `cmd_coverage_gate`
-#: exits 0 on THIS token too (C10: WARN is an offer, never a refusal) — so
-#: exit code alone cannot discriminate a confirmed COVERED pass from a WARN
-#: that still owes remediation. A WARN must never be memoized (stub's own
-#: correctness bar): the listed commits are still owed a real review, and a
-#: cached "already resolved" here would silently swallow that debt on the
-#: next pass.
-_COVERAGE_GATE_WARN_TOKEN = "VERDICT=WARN"
 
 #: Full-length git object id — 40 hex digits (sha1; this fleet has not
 #: migrated to sha256 object ids). Deliberately strict (fullmatch, not
@@ -747,17 +744,11 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
         the git-spawn cost of a git rev-parse-backed floor AND (now) a
         git-rev-parse-backed tip, and its memo records once both are
         concrete, exactly as this restriction was always designed to permit.
-      - `d-coverage-gate` (the live chain-end coverage gate, keyed on
-        `consumed_handoff` — see `build_chain_coverage_gate_directive`'s
-        "DEAD CODE, VERIFIED" paragraph): records on `exit_code == 0` AND
-        `stdout` does NOT contain `VERDICT=WARN`. `cmd_coverage_gate` exits
-        0 on both `VERDICT=COVERED` and `VERDICT=WARN` (C10) — only the
-        stdout token discriminates a confirmed pass from an offer-only
-        WARN. `exit_code == 2` (INDETERMINATE) and any other non-zero exit
-        never reach this function at all (see `_execute_directives`: a
-        non-zero exit lands the directive in `failed`/`degraded`, not
-        `landed`, and this function is only ever called from the `landed`
-        branch).
+      - `d-coverage-gate` (the chain-end coverage-verdict directive) was
+        removed here (K-001, state/kill-ledger.md) along with the directive
+        itself — `_build_legacy_coverage_and_trail_directives` no longer
+        builds it, so this function no longer has a verdict-parsing branch
+        for it.
 
     Any other directive id is a no-op — this function is not a general
     dispatch-result hook, only the two live gates named above ever carry a
@@ -789,20 +780,14 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
         record_gate_memo(repo_root, _WRITE_TRAIL_DIRECTIVE_ID_PREFIX, *[str(p) for p in key_parts])
         return
     args = list(directive.get("args") or [])
-    if gate_id == "d-run-review-brightline-gate":
-        if len(args) != 3:
-            return
-        floor, sep, tip = args[2].partition("..")
-        if not sep or not _is_concrete_sha(floor) or not _is_concrete_sha(tip):
-            return
-        record_gate_memo(repo_root, gate_id, *args)
+    if gate_id != "d-run-review-brightline-gate":
         return
-    # gate_id == "d-coverage-gate"
-    if _COVERAGE_GATE_WARN_TOKEN in (stdout or ""):
+    if len(args) != 3:
         return
-    if len(args) < 3 or args[1] != "--from-handoff":
+    floor, sep, tip = args[2].partition("..")
+    if not sep or not _is_concrete_sha(floor) or not _is_concrete_sha(tip):
         return
-    record_gate_memo(repo_root, gate_id, args[2])
+    record_gate_memo(repo_root, gate_id, *args)
 
 
 # ---------------------------------------------------------------------------
@@ -999,51 +984,11 @@ def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]
 # ---------------------------------------------------------------------------
 
 
-def build_chain_coverage_gate_directive(
-    consumed_handoff: str, *, repo_root: Optional[Path] = None
-) -> dict[str, Any]:
-    """Chain-end coverage gate, DAG mode, wrapped by
-    `wsc-coverage-gate-runner.py coverage-gate --from-handoff`. C10: the
-    gate this CLI wraps now resolves VERDICT=WARN (never VERDICT=UNCOVERED)
-    below the code-partition coverage-ratio threshold. Re-running after WARN
-    remediation is simply calling this builder again with the same
-    `consumed_handoff` — no separate directive id for the re-check.
-
-    DEAD CODE, VERIFIED (C4 retry #3, docs/plans/2026-08-10-commit-event-5s-
-    cap-and-the-silent-tail.md AC6): `workstream_complete/__init__.py`'s
-    `build_directives` never calls this builder — greped every call site.
-    The LIVE chain-end coverage gate is `__init__.py`'s own
-    `_build_legacy_coverage_and_trail_directives`, which builds an inline
-    `d-coverage-gate` directive with the byte-identical CLI/argv under a
-    DIFFERENT id (see that module's own Negative-spec: wiring this builder
-    too would double-dispatch the same call under two ids). The gate
-    verdict memo therefore lives on `d-coverage-gate` in `__init__.py`
-    (read-only hit check threaded through `_build_legacy_coverage_and_trail_
-    directives`'s own `repo_root` param; the write happens in
-    `apply.py::_execute_directives` via `record_gate_verdict_if_passed`
-    below, keyed the same way — `("d-coverage-gate", consumed_handoff)`).
-    This builder's own `repo_root` support below is kept only so its
-    exported shape stays self-consistent with its sibling
-    `build_review_brightline_gate_directive` and so the pre-existing regression
-    tests for it keep exercising the primitive; no production caller reaches
-    it with `repo_root` supplied.
-
-    `repo_root`, when supplied, consults the gate verdict memo (READ-ONLY,
-    via `gate_memo_hit`) keyed on `consumed_handoff` — this builder's sole
-    input, and the exact value threaded into the CLI argv above. A prior
-    recorded hit for the SAME `consumed_handoff` sets `already_satisfied=
-    True`; a different `consumed_handoff` mints a new key and misses. This
-    builder never writes the memo itself. Omitting `repo_root` (every
-    pre-C4 caller) reproduces today's byte-identical directive."""
-    directive = _directive(
-        "d-run-chain-coverage-gate",
-        _COVERAGE_GATE_RUNNER_CLI,
-        ["coverage-gate", "--from-handoff", consumed_handoff],
-    )
-    if repo_root is not None and gate_memo_hit(repo_root, directive["id"], consumed_handoff):
-        directive["already_satisfied"] = True
-    return directive
-
+# `build_chain_coverage_gate_directive` (the `d-run-chain-coverage-gate`
+# dead-code twin of `__init__.py`'s LIVE `d-coverage-gate` directive) was
+# removed here (K-001, state/kill-ledger.md) — it was already verified
+# unreachable (no call site in `build_directives`) before this cut; see the
+# kill ledger for the LIVE directive's own removal in `__init__.py`.
 
 # ---------------------------------------------------------------------------
 # d-resolve-mid-chain-review-scope (SKILL.md:494-498) — pure resolution
@@ -1461,6 +1406,52 @@ _NON_DISCHARGING_VERDICTS = frozenset({"pending", "waived"})
 _NON_CODE_SCOPE_KINDS = frozenset({"integration"})
 
 
+class ChainAttributionWindow(NamedTuple):
+    """C6a (docs/plans/2026-08-15-composition-invocation-budgets.md): the
+    zero-further-spawn accelerator for `_record_membership_shas`'s foreign-
+    session narrowing — an OPTIONAL layer on top of `narrow_foreign_shas`,
+    never a replacement for it (a caller that omits `chain_window` sees
+    byte-identical behaviour to before this type existed; a record whose
+    range escapes the window still falls back to `narrow_foreign_shas`).
+
+    `commit_map` is the caller-resolved result of ONE
+    `chain_attribution.bulk_commit_attribution_map(range_str, cwd, run)`
+    walk over a single covering range (the intended shape is `merge-
+    base..HEAD`, resolved once per close, not once per trail record) — a
+    `Mapping[str, chain_attribution.CommitAttribution]` keyed on full
+    40-char LOWERCASE hex sha, matching `git log --format=%H`'s own output
+    case (no defensive re-lowering here; the same no-re-lowering posture
+    `_record_membership_shas` already takes on `chain_dag_sha_set` /
+    `chain_code_sha_set`, both resolved the same way).
+
+    `grep_attributed_for_session` is `session_id -> iterable-of-shas`,
+    the caller's closure over `chain_attribution.bulk_grep_attributed_shas`
+    scoped to the SAME covering range `commit_map` was built from — never a
+    different range, or the window-coverage precondition below is violated
+    silently. `_collect_discharging_range_shas` wraps whatever this
+    resolves to in ITS OWN per-call memo (keyed on `session_id`), so an
+    unmemoized caller callable still pays at most once per DISTINCT
+    session_id seen in one pass, not once per record — this is what turns
+    the narrowing's git-spawn count from O(records) to O(distinct
+    sessions).
+
+    WINDOW-COVERAGE PRECONDITION (`chain_attribution.foreign_shas_from_
+    window`'s own docstring: a sha absent from `window` reads as FOREIGN,
+    proving coverage is the caller's job): `_record_membership_shas`
+    discharges this itself, per record, BEFORE ever calling
+    `foreign_shas_from_window` — a record's already-resolved `raw` sha set
+    is checked as a subset of `commit_map`'s keys first. Only when every
+    sha in `raw` is present does the window fast path fire; a record naming
+    even one sha `commit_map` does not cover falls back to the per-record
+    `narrow_foreign_shas` callable instead — never silently treated as
+    foreign, and never a correctness change from the pre-window behaviour
+    on that record (this is the escaping-range case C6a's AC5 fixture
+    exercises)."""
+
+    commit_map: Mapping[str, Any]
+    grep_attributed_for_session: Callable[[Optional[str]], Any]
+
+
 def _record_membership_shas(
     record: Mapping[str, Any],
     resolve_range_shas: Callable[[str], Any],
@@ -1469,6 +1460,7 @@ def _record_membership_shas(
     narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
     vouched_shas: Optional[Callable[[Optional[str]], Any]] = None,
     chain_planning_sha_set: Optional[set[str]] = None,
+    chain_window: Optional[ChainAttributionWindow] = None,
 ) -> Optional[set[str]]:
     """Resolve one trail record's contribution to the chain-membership
     union, or `None` if this record contributes nothing.
@@ -1569,6 +1561,16 @@ def _record_membership_shas(
     runner.py`) job to resolve and inject, per this package's pure/IO-free
     convention (D-4).
 
+    `chain_window`, optional, is a `ChainAttributionWindow` (see that type's
+    own docstring for the full contract) — a zero-further-spawn accelerator
+    for the `narrow_foreign_shas` branch only, engaged solely when this
+    record's already-resolved `raw` sha set is fully covered by `chain_
+    window.commit_map`. `None` (the default, and every escaping-range
+    record even when `chain_window` is supplied) falls back to calling
+    `narrow_foreign_shas(sha_range, session_id)` exactly as before this
+    parameter existed — byte-identical behavior, never a second, divergent
+    narrowing rule.
+
     sha comparison is case-insensitive, full-hex only — `resolve_range_shas`
     (the live `git rev-list` injection) and both chain sha sets (resolved
     via `git log`) always emit full 40-char lowercase hex, so no
@@ -1607,10 +1609,32 @@ def _record_membership_shas(
         # posture, rather than silently skipping the narrowing.
         if record.get("scope") not in _FOREIGN_STRIPPED_SCOPES:
             return None
-        try:
-            foreign = {str(s).lower() for s in narrow_foreign_shas(sha_range, record.get("session_id"))}
-        except Exception:  # noqa: BLE001 - a broken narrowing must reject, never crash
-            return None
+        session_id = record.get("session_id")
+        # C6a window fast path (docs/plans/2026-08-15-composition-
+        # invocation-budgets.md): fires only when the window provably
+        # covers every sha this record could contribute — see
+        # `ChainAttributionWindow`'s docstring for the precondition this
+        # subset check discharges. Any other shape (no window supplied, or
+        # an escaping range) falls straight through to the original
+        # per-record `narrow_foreign_shas` spawn, unchanged.
+        if chain_window is not None and raw <= chain_window.commit_map.keys():
+            try:
+                grep_attributed = frozenset(
+                    str(s).lower() for s in chain_window.grep_attributed_for_session(session_id)
+                )
+                foreign = {
+                    str(s).lower()
+                    for s in chain_attribution.foreign_shas_from_window(
+                        raw, session_id, chain_window.commit_map, grep_attributed,
+                    )
+                }
+            except Exception:  # noqa: BLE001 - a broken window resolver must reject, never crash
+                return None
+        else:
+            try:
+                foreign = {str(s).lower() for s in narrow_foreign_shas(sha_range, session_id)}
+            except Exception:  # noqa: BLE001 - a broken narrowing must reject, never crash
+                return None
         if vouched_shas is not None and foreign:
             try:
                 vouched = {str(s).lower() for s in vouched_shas(record.get("session_id"))}
@@ -1627,6 +1651,59 @@ def _record_membership_shas(
     return raw & chain_code_sha_set
 
 
+def _provably_uncreditable_window_shas(
+    shas: Iterable[str],
+    commit_map: Mapping[str, Any],
+    all_session_ids: frozenset,
+) -> set[str]:
+    """C6b (docs/plans/2026-08-15-composition-invocation-budgets.md): of
+    `shas` (already known to be `chain_window.commit_map` members — the
+    caller's job to restrict to that subset first), which ones can be
+    proven, from window facts alone and ZERO further git spawns, to be
+    structurally incapable of EVER being credited by any trail record —
+    present, future, in this pass or a later one?
+
+    Mirrors `chain_attribution.foreign_shas_from_window`'s own foreign
+    rules, because those rules are what actually decides, inside
+    `_record_membership_shas`'s narrowing branch, whether a given sha
+    survives to be credited — but restricted to the two rules that are
+    SESSION-INDEPENDENT commit facts, never a per-range query result:
+
+    - `commit_map[sha].is_merge` — foreign to every session, unconditionally
+      (`foreign_shas_from_window` never treats a merge as attributable, no
+      matter whose narrowing asks).
+    - `commit_map[sha].trailer_ambiguous` — likewise, foreign to every
+      session unconditionally (fail-closed on a multi-valued trailer).
+    - `commit_map[sha].trailer_session_id is not None and not in
+      all_session_ids` — the sha's SOLE eligible session (a non-ambiguous
+      trailer names exactly one) has no trail record anywhere in this pass
+      with that `session_id` — so no record, present or future, could ever
+      pass `_record_membership_shas`'s own-session check for it.
+
+    Deliberately NOT a proof of death for an untrailered sha
+    (`trailer_session_id is None`): its true eligibility is answered only by
+    `chain_attribution.bulk_grep_attributed_shas`, a per-session git spawn —
+    asking it here, purely to decide whether to stop early, would spend the
+    very spawns this short-circuit exists to avoid. An untrailered sha is
+    therefore always treated as still-possibly-creditable, forever — the
+    asymmetric, fail-safe-toward-continuing posture this module's docstring
+    names as what keeps the short-circuit from ever under-crediting."""
+    dead: set[str] = set()
+    for sha in shas:
+        attribution = commit_map.get(sha)
+        if attribution is None:
+            continue
+        if attribution.is_merge or attribution.trailer_ambiguous:
+            dead.add(sha)
+            continue
+        if (
+            attribution.trailer_session_id is not None
+            and attribution.trailer_session_id not in all_session_ids
+        ):
+            dead.add(sha)
+    return dead
+
+
 def _collect_discharging_range_shas(
     trail_records: Iterable[Mapping[str, Any]],
     resolve_range_shas: Callable[[str], Any],
@@ -1635,6 +1712,7 @@ def _collect_discharging_range_shas(
     narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
     vouched_shas: Optional[Callable[[Optional[str]], Any]] = None,
     chain_planning_shas: Optional[Iterable[str]] = None,
+    chain_window: Optional[ChainAttributionWindow] = None,
 ) -> set[str]:
     """The union's raw coverage set: every code-obligation sha named by a
     trail record's resolved range, restricted to records this module trusts
@@ -1656,6 +1734,39 @@ def _collect_discharging_range_shas(
     this is the dominant lever on a chain whose code-obligation set is small
     relative to its on-disk trail-record count.
 
+    A SECOND, independent short-circuit (C6b, docs/plans/2026-08-15-
+    composition-invocation-budgets.md) fires when `covered` will NEVER reach
+    that ceiling — the only path the FIRST short-circuit above cannot serve,
+    since it is, by definition, the "uncovered" case. Engaged only when both
+    `chain_window` and `narrow_foreign_shas` are supplied (see
+    `_provably_uncreditable_window_shas`'s docstring for why the latter is
+    load-bearing): every remaining uncovered `chain_code_sha_set` member that
+    lies inside `chain_window.commit_map` is tested, with ZERO further
+    spawns, against facts the window already carries — is it a merge, an
+    ambiguous-trailer commit, or trailer-attributed to a session absent from
+    every trail record this pass will ever see? Each is a structural
+    guarantee that NO record, present or future, can ever credit that sha
+    (`chain_attribution.foreign_shas_from_window`'s own foreign rules,
+    which do not vary by which range walk discovered them — a commit's
+    merge/trailer shape is a property of the commit, not the query). Once
+    EVERY remaining uncovered code sha is either one of those structurally-
+    dead window members or lies outside the window entirely (unknown, and
+    therefore NEVER classified dead — the window not covering a sha says
+    nothing about its creditability), the loop breaks. An untrailered
+    window member is never classified dead here either — its true
+    eligibility depends on `bulk_grep_attributed_shas`, a per-session query
+    this short-circuit deliberately does not spawn just to decide whether to
+    stop early; conservatively treated as still-possibly-creditable forever.
+    This asymmetry (readily proving death, never proving certain life) is
+    what keeps this short-circuit safe against BOTH failure directions named
+    in the governing plan: it can only ever skip records that provably could
+    not have added anything, so it cannot under-credit (stop too early and
+    miss a legitimate discharge); and it never marks anything covered on its
+    own — it only decides when to stop asking `resolve_range_shas`+
+    `narrow_foreign_shas` a question whose answer is now structurally known
+    — so it cannot over-credit (silently discharge an unreviewed chain)
+    either.
+
     `vouched_shas` is threaded straight through to `_record_membership_shas`
     — see that function's own docstring for its shape and fail-safe
     posture.
@@ -1665,16 +1776,78 @@ def _collect_discharging_range_shas(
     classified subset of `chain_code_shas` a `scope_kind: "plan"` record's
     contribution is capped at. `None` (the default) means every existing
     caller that omits it sees byte-identical behavior to before this
-    parameter existed: a "plan" record credits nothing."""
+    parameter existed: a "plan" record credits nothing.
+
+    `chain_window`, optional, is a `ChainAttributionWindow` (C6a,
+    docs/plans/2026-08-15-composition-invocation-budgets.md) — the record-
+    major-to-window-walk accelerator for the `narrow_foreign_shas` fan-out
+    that this function's own docstring measured at 3 git spawns per
+    surviving record (`resolve_range_shas` + the 2 spawns
+    `narrow_foreign_shas` drives via `chain_attribution.
+    unattributed_foreign_shas`). This function wraps `chain_window.
+    grep_attributed_for_session` in a LOCAL memo keyed on `session_id`,
+    fresh per call and never shared across calls, so the caller-supplied
+    resolver pays at most once per DISTINCT session_id seen across every
+    trail record in THIS pass — turning that leg from O(records) to
+    O(distinct sessions) — before handing the memoized window down to
+    `_record_membership_shas` for its own per-record subset-coverage check.
+    `None` (the default) sees byte-identical behavior to before this
+    parameter existed: every record takes the original per-record
+    `narrow_foreign_shas` spawn. Never touches `resolve_range_shas` — that
+    leg answers a different question (this record's own resolved range, not
+    its foreign-session narrowing) and stays a per-record spawn; see this
+    chunk's body in the governing plan for why a window cannot answer it
+    without `chain_attribution.CommitAttribution` carrying parent-sha
+    ancestry data it does not have."""
     chain_dag_sha_set = {str(s).lower() for s in chain_dag_shas}
     chain_code_sha_set = {str(s).lower() for s in chain_code_shas}
     chain_planning_sha_set = (
         {str(s).lower() for s in chain_planning_shas} if chain_planning_shas is not None else None
     )
+    resolved_window: Optional[ChainAttributionWindow] = None
+    if chain_window is not None:
+        _grep_memo: dict[Optional[str], frozenset] = {}
+
+        def _memoized_grep_attributed_for_session(
+            session_id: Optional[str],
+            _memo: dict[Optional[str], frozenset] = _grep_memo,
+            _resolver: Callable[[Optional[str]], Any] = chain_window.grep_attributed_for_session,
+        ) -> frozenset:
+            if session_id not in _memo:
+                _memo[session_id] = frozenset(_resolver(session_id))
+            return _memo[session_id]
+
+        resolved_window = chain_window._replace(
+            grep_attributed_for_session=_memoized_grep_attributed_for_session,
+        )
+    records_list = list(trail_records)
+
+    # C6b (docs/plans/2026-08-15-composition-invocation-budgets.md): the
+    # zero-further-spawn universe this pass's second short-circuit reasons
+    # over — see this function's own docstring for the full soundness
+    # argument. Both gates below are load-bearing preconditions for
+    # `_provably_uncreditable_window_shas`'s reasoning to hold (see that
+    # helper's docstring): `resolved_window is None` leaves no window facts
+    # to reason from; `narrow_foreign_shas is None` means every surviving
+    # record credits its raw range UNCONDITIONALLY (no foreign-stripping at
+    # all — `_record_membership_shas`'s narrowing block never runs), so a
+    # sha's window-derived "foreign to every session" facts would not apply.
+    all_session_ids: frozenset = frozenset()
+    window_code_sha_set: frozenset[str] = frozenset()
+    if resolved_window is not None and narrow_foreign_shas is not None:
+        all_session_ids = frozenset(record.get("session_id") for record in records_list)
+        window_code_sha_set = frozenset(chain_code_sha_set) & resolved_window.commit_map.keys()
+
     covered: set[str] = set()
-    for record in trail_records:
+    for record in records_list:
         if chain_code_sha_set and covered >= chain_code_sha_set:
             break
+        if window_code_sha_set:
+            remaining_code = chain_code_sha_set - covered
+            if remaining_code and remaining_code <= _provably_uncreditable_window_shas(
+                remaining_code, resolved_window.commit_map, all_session_ids,
+            ):
+                break
         raw = record.get("verdict")
         if raw is None:
             continue
@@ -1686,6 +1859,7 @@ def _collect_discharging_range_shas(
             narrow_foreign_shas=narrow_foreign_shas,
             vouched_shas=vouched_shas,
             chain_planning_sha_set=chain_planning_sha_set,
+            chain_window=resolved_window,
         )
         if membership is None:
             continue
@@ -1701,6 +1875,7 @@ def chain_partition_uncovered_shas(
     narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
     vouched_shas: Optional[Callable[[Optional[str]], Any]] = None,
     chain_planning_shas: Optional[Iterable[str]] = None,
+    chain_window: Optional[ChainAttributionWindow] = None,
 ) -> list[str]:
     """The union's diagnostic sibling: which `chain_code_shas` entries no
     discharging trail record's resolved range names, in input order.
@@ -1734,7 +1909,17 @@ def chain_partition_uncovered_shas(
     `chain_dag_shas`, or `resolve_range_shas` being `None` returns `[]`
     rather than raising `TypeError` on `list(None)` — symmetric with
     `chain_partition_verdict_discharged`'s own `None`-guard rather than
-    trusting every caller to pre-check before calling this sibling."""
+    trusting every caller to pre-check before calling this sibling.
+
+    `chain_window`, optional, is threaded straight through to
+    `_collect_discharging_range_shas` — a `ChainAttributionWindow` (C6a,
+    docs/plans/2026-08-15-composition-invocation-budgets.md) that lets the
+    `narrow_foreign_shas` fan-out answer from ONE precomputed window walk
+    instead of one walk per surviving record. `None` (the default) sees
+    byte-identical behavior to before this parameter existed — this is a
+    trailing optional addition to a pinned signature (Seam 2 above), the
+    same amendment shape `vouched_shas`/`chain_planning_shas` already used;
+    it does not alter arity for any existing positional or keyword call."""
     if chain_code_shas is None or chain_dag_shas is None or resolve_range_shas is None:
         return []
     chain_code_shas = list(chain_code_shas)
@@ -1743,6 +1928,7 @@ def chain_partition_uncovered_shas(
         narrow_foreign_shas=narrow_foreign_shas,
         vouched_shas=vouched_shas,
         chain_planning_shas=chain_planning_shas,
+        chain_window=chain_window,
     )
     return [sha for sha in chain_code_shas if str(sha).lower() not in covered]
 
@@ -1962,6 +2148,7 @@ def chain_partition_verdict_discharged(
     narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
     vouched_shas: Optional[Callable[[Optional[str]], Any]] = None,
     chain_planning_shas: Optional[Iterable[str]] = None,
+    chain_window: Optional[ChainAttributionWindow] = None,
 ) -> bool:
     """True iff `chain_code_shas` is a non-empty set AND every sha in it is
     named by the resolved, within-chain-membership range of at least one
@@ -2084,6 +2271,12 @@ def chain_partition_verdict_discharged(
     verdict, is skipped (treated as non-discharging, never as an error) —
     consistent with every other pure predicate in this module tolerating a
     partially-shaped record rather than raising over it.
+
+    `chain_window`, optional, is threaded straight through to
+    `chain_partition_uncovered_shas` — a `ChainAttributionWindow` (C6a,
+    docs/plans/2026-08-15-composition-invocation-budgets.md) accelerating
+    the `narrow_foreign_shas` fan-out. `None` (the default) sees
+    byte-identical behavior to before this parameter existed.
     """
     if chain_code_shas is None or chain_dag_shas is None or resolve_range_shas is None:
         return False
@@ -2095,6 +2288,7 @@ def chain_partition_verdict_discharged(
         narrow_foreign_shas=narrow_foreign_shas,
         vouched_shas=vouched_shas,
         chain_planning_shas=chain_planning_shas,
+        chain_window=chain_window,
     )
     return not uncovered
 

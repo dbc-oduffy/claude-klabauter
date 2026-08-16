@@ -62,8 +62,7 @@ Exit codes (unchanged from the bash original):
 from __future__ import annotations
 
 import re
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 import sys
 from pathlib import Path
 from shutil import which
@@ -88,23 +87,7 @@ def _resolve_root(explicit_root: str | None) -> str | None:
         return explicit_root
     if which("git") is None:
         return None
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-            # Review: code-reviewer — suppress Windows console-window flash,
-            # matching every other subprocess.run call in this port batch
-            # (Finding 2).
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _resolve_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    top = result.stdout.strip()
+    top = show_toplevel()
     return top or None
 
 

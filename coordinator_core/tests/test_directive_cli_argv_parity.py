@@ -269,9 +269,9 @@ def _directive(id_, cli, args, depends_on=None):
 def build_close_tail_args_directive(decisions):
     args = ["tail-args"]
     if decisions.get("deleted_paths"):
-        args += ["--deleted-paths", decisions["deleted_paths"]]
+        args += ["--deleted-paths", *[str(p) for p in decisions["deleted_paths"]]]
     if decisions.get("kept_entries"):
-        args += ["--kept-entries", decisions["kept_entries"]]
+        args += ["--kept-entries", *[str(p) for p in decisions["kept_entries"]]]
     return _directive("d-close-tail-args", "wsc-close", args)
 
 
@@ -542,6 +542,270 @@ def build_directive():
     pairing = next(p for p in report.pairings if p.directive_id == "d1")
     assert pairing.unresolved is False
     assert pairing.undeclared_required == frozenset({"--global-flag"})
+
+
+def test_two_hop_producer_chain_resolves_transitively(tmp_path):
+    """Regression for the non-fixed-point union bug: A refs B, B refs C --
+    C's tokens must fold into A's regardless of `sites` list-iteration
+    order, which this fixture deliberately defines in A, B, C source order
+    (the order that under-unioned before the fix)."""
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/two_hop_producer_assembler.py",
+        '''
+def _directive(id_, cli, args, depends_on=None):
+    return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on}
+
+
+def build_a():
+    args = ["--sid", "s", "{d-b.argv}"]
+    return _directive("d-a", "known-cli", args, depends_on="d-b")
+
+
+def build_b():
+    args = ["{d-c.argv}"]
+    return _directive("d-b", "known-cli", args, depends_on="d-c")
+
+
+def build_c():
+    args = ["--subject", "x"]
+    return _directive("d-c", "known-cli", args, depends_on=None)
+''',
+    )
+    report = argv_parity_report(root)
+    pairing_a = next(p for p in report.pairings if p.directive_id == "d-a")
+    assert pairing_a.unresolved is False
+    assert pairing_a.undeclared_required == frozenset(), (
+        "C's --subject must fold through B into A's emitted set at depth 2"
+    )
+
+
+def test_three_hop_producer_chain_resolves_transitively(tmp_path):
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/three_hop_producer_assembler.py",
+        '''
+def _directive(id_, cli, args, depends_on=None):
+    return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on}
+
+
+def build_a():
+    args = ["--sid", "s", "{d-b.argv}"]
+    return _directive("d-a", "known-cli", args, depends_on="d-b")
+
+
+def build_b():
+    args = ["{d-c.argv}"]
+    return _directive("d-b", "known-cli", args, depends_on="d-c")
+
+
+def build_c():
+    args = ["{d-e.argv}"]
+    return _directive("d-c", "known-cli", args, depends_on="d-e")
+
+
+def build_e():
+    args = ["--subject", "x"]
+    return _directive("d-e", "known-cli", args, depends_on=None)
+''',
+    )
+    report = argv_parity_report(root)
+    pairing_a = next(p for p in report.pairings if p.directive_id == "d-a")
+    assert pairing_a.unresolved is False
+    assert pairing_a.undeclared_required == frozenset(), (
+        "E's --subject must fold through C then B into A's emitted set at depth 3"
+    )
+
+
+def test_self_referencing_producer_ref_terminates_unresolved(tmp_path):
+    """A directive naming its OWN id as a producer ref must not loop --
+    it must terminate and resolve `unresolved`."""
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/self_ref_producer_assembler.py",
+        '''
+def _directive(id_, cli, args, depends_on=None):
+    return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on}
+
+
+def build_a():
+    args = ["--sid", "s", "{d-a.argv}"]
+    return _directive("d-a", "known-cli", args, depends_on="d-a")
+''',
+    )
+    report = argv_parity_report(root)
+    pairing_a = next(p for p in report.pairings if p.directive_id == "d-a")
+    assert pairing_a.unresolved is True
+
+
+def test_two_hop_producer_cycle_terminates_unresolved(tmp_path):
+    """A refs B, B refs A -- a genuine cycle, must terminate (not loop) and
+    resolve both sides `unresolved`."""
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/cycle_producer_assembler.py",
+        '''
+def _directive(id_, cli, args, depends_on=None):
+    return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on}
+
+
+def build_a():
+    args = ["--sid", "s", "{d-b.argv}"]
+    return _directive("d-a", "known-cli", args, depends_on="d-b")
+
+
+def build_b():
+    args = ["--subject", "x", "{d-a.argv}"]
+    return _directive("d-b", "known-cli", args, depends_on="d-a")
+''',
+    )
+    report = argv_parity_report(root)
+    pairing_a = next(p for p in report.pairings if p.directive_id == "d-a")
+    pairing_b = next(p for p in report.pairings if p.directive_id == "d-b")
+    assert pairing_a.unresolved is True
+    assert pairing_b.unresolved is True
+
+
+_LOOP_BUILT_SUBPARSER_SCRIPT = '''
+import argparse
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="loop-built-cli.py")
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    for name in ("subcommand-a", "subcommand-b"):
+        p = sub.add_parser(name)
+        p.add_argument("--dynamic-only", required=True)
+    return parser
+
+
+if __name__ == "__main__":
+    build_parser().parse_args()
+'''
+
+
+def test_loop_built_subparser_variable_forces_unresolved_not_top_level(tmp_path):
+    """Regression: a subparser variable bound via a non-literal (loop-
+    provided) `add_parser` name must not fall through to 'treated as
+    top-level' -- it must force `saw_unresolved`."""
+    root = _make_repo(tmp_path)
+    script = _write(root, "coordinator/bin/loop-built-cli.py", _LOOP_BUILT_SUBPARSER_SCRIPT)
+    required, saw_unresolved = declared_required_option_strings(script, subcommand="subcommand-a")
+    assert saw_unresolved is True
+    assert required == set()
+
+
+_SHADOWED_SUBPARSER_SCRIPT = '''
+import argparse
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="shadowed-cli.py")
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    p = sub.add_parser("subcommand-a")
+    p.add_argument("--a-flag", required=True)
+    p = sub.add_parser("subcommand-b")
+    p.add_argument("--b-flag", required=True)
+    return parser
+
+
+if __name__ == "__main__":
+    build_parser().parse_args()
+'''
+
+
+def test_shadowed_subparser_variable_forces_unresolved_for_both_subcommands(tmp_path):
+    """Regression: reusing the SAME variable name across two `add_parser`
+    calls for different subcommands must not let last-write-wins
+    misattribute a sibling's required flag -- both aspects must read
+    unresolved rather than a verdict the oracle cannot stand behind."""
+    root = _make_repo(tmp_path)
+    script = _write(root, "coordinator/bin/shadowed-cli.py", _SHADOWED_SUBPARSER_SCRIPT)
+    required_a, unresolved_a = declared_required_option_strings(script, subcommand="subcommand-a")
+    required_b, unresolved_b = declared_required_option_strings(script, subcommand="subcommand-b")
+    assert unresolved_a is True
+    assert unresolved_b is True
+    assert required_a == set()
+    assert required_b == set()
+
+
+def test_starred_in_flag_value_position_consumed_as_value_not_unresolved(tmp_path):
+    """`["--sid", *extra]` -- a `Starred` element sitting in a flag's VALUE
+    position is consumed as that flag's `nargs="+"`-style value list and
+    does NOT force `unresolved`, unlike a `Starred` in flag-candidate
+    position (still covered by `test_non_literal_flag_position_forces_
+    unresolved`'s sibling flag-candidate case elsewhere in this module)."""
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/starred_value_assembler.py",
+        '''
+def build_directive(extra):
+    args = ["--sid", *extra]
+    return {"id": "d1", "cli": "known-cli", "args": args, "depends_on": None}
+''',
+    )
+    tokens = emitted_option_tokens(module)
+    assert tokens["known-cli"] == {"--sid"}
+
+    report = argv_parity_report(root)
+    pairing = next(p for p in report.pairings if p.directive_id == "d1")
+    assert pairing.unresolved is False
+    assert pairing.unaccepted == frozenset()
+
+
+def test_starred_in_flag_candidate_position_still_forces_unresolved(tmp_path):
+    """Unchanged half of finding #3: a bare `Starred` in FLAG-CANDIDATE
+    position (not immediately following a flag token) still forces
+    `unresolved` -- it may expand to hidden flag tokens the oracle would
+    otherwise miss."""
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/starred_flag_candidate_assembler.py",
+        '''
+def build_directive(extra):
+    args = [*extra, "--sid", "s"]
+    return {"id": "d1", "cli": "known-cli", "args": args, "depends_on": None}
+''',
+    )
+    report = argv_parity_report(root)
+    pairing = next(p for p in report.pairings if p.directive_id == "d1")
+    assert pairing.unresolved is True
+
+
+def test_starred_in_value_position_does_not_swallow_trailing_flag(tmp_path):
+    """`["--a", *xs, "--b"]` -- the value-position splice consumes only its
+    own value slot; scanning must resume normally on the NEXT element, so
+    the trailing literal `--b` still lands in the emitted set."""
+    root = _make_repo(tmp_path)
+    _write(root, "coordinator/bin/known-cli.py", _SCRIPT_SOURCE)
+    module = _write(
+        root,
+        "coordinator_core/starred_value_then_flag_assembler.py",
+        '''
+def build_directive(extra):
+    args = ["--sid", *extra, "--prose"]
+    return {"id": "d1", "cli": "known-cli", "args": args, "depends_on": None}
+''',
+    )
+    tokens = emitted_option_tokens(module)
+    assert tokens["known-cli"] == {"--sid", "--prose"}
+
+    report = argv_parity_report(root)
+    pairing = next(p for p in report.pairings if p.directive_id == "d1")
+    assert pairing.unresolved is False
+    assert pairing.unaccepted == frozenset()
 
 
 def test_in_process_op_cli_excluded_from_pairings(tmp_path):

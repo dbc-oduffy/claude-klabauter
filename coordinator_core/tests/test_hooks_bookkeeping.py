@@ -1545,6 +1545,90 @@ class TestConcurrency:
                 f"Single dedup-winner row must have 4 tab-separated columns; got {lines[0]!r}"
             )
 
+class TestFileLockHeldAwareEviction:
+    """C9: _get_lock's eviction (stale sweep + hard-cap) must never evict a HELD lock.
+
+    docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C9:
+    the prior FIFO/held-unaware eviction could pop a lock a peer dispatch currently
+    holds; the next _get_lock(same path) call then creates a FRESH asyncio.Lock, so
+    the held peer and the new caller serialise on DIFFERENT lock objects for the SAME
+    path — i.e. they do not serialise at all. `_MAX_FILE_LOCKS` had no prior coverage.
+    """
+
+    def test_hard_cap_never_evicts_a_held_lock(self, tmp_path: Path) -> None:
+        """Every entry held at cap → table grows past _MAX_FILE_LOCKS rather than
+        evicting a held lock; the identity of every held lock object is preserved."""
+        import coordinator_core.hooks.track_touched_files as ttf
+
+        async def _run():
+            ttf._FILE_LOCKS.clear()
+            held_paths = [str(tmp_path / f"held_{i}.txt") for i in range(ttf._MAX_FILE_LOCKS)]
+            held_locks = [ttf._get_lock(p) for p in held_paths]
+            # Acquire every one of them and keep it held across the new _get_lock calls
+            # below — mirrors a peer dispatch mid-`async with lock:`.
+            for lock in held_locks:
+                await lock.acquire()
+            try:
+                assert len(ttf._FILE_LOCKS) == ttf._MAX_FILE_LOCKS
+                identities_before = {p: ttf._FILE_LOCKS[p] for p in held_paths}
+
+                # Request MORE locks than the cap while every existing entry is held.
+                new_path = str(tmp_path / "new_over_cap.txt")
+                new_lock = ttf._get_lock(new_path)
+
+                # The table must grow past the cap rather than evict any held entry.
+                assert len(ttf._FILE_LOCKS) == ttf._MAX_FILE_LOCKS + 1, (
+                    "table must grow past _MAX_FILE_LOCKS when every existing entry "
+                    "is held, not evict a held lock"
+                )
+                for p in held_paths:
+                    assert p in ttf._FILE_LOCKS, f"held lock for {p} was evicted"
+                    assert ttf._FILE_LOCKS[p] is identities_before[p], (
+                        f"held lock object for {p} was replaced — a peer holding the "
+                        f"old object and a new caller resolving the new object would "
+                        f"serialise on two different locks for the same path"
+                    )
+                assert new_path in ttf._FILE_LOCKS
+                assert ttf._FILE_LOCKS[new_path] is new_lock
+            finally:
+                for lock in held_locks:
+                    lock.release()
+                ttf._FILE_LOCKS.clear()
+
+        asyncio.run(_run())
+
+    def test_hard_cap_evicts_unheld_before_growing(self, tmp_path: Path) -> None:
+        """At cap with a mix of held and unheld entries, eviction prefers an unheld
+        entry over growing the table — held-aware, not held-blind growth-always."""
+        import coordinator_core.hooks.track_touched_files as ttf
+
+        async def _run():
+            ttf._FILE_LOCKS.clear()
+            unheld_path = str(tmp_path / "unheld_victim.txt")
+            other_paths = [str(tmp_path / f"other_{i}.txt") for i in range(ttf._MAX_FILE_LOCKS - 1)]
+            ttf._get_lock(unheld_path)  # left unheld — eviction-eligible
+            held_locks = [ttf._get_lock(p) for p in other_paths]
+            for lock in held_locks:
+                await lock.acquire()
+            try:
+                assert len(ttf._FILE_LOCKS) == ttf._MAX_FILE_LOCKS
+
+                new_path = str(tmp_path / "new_within_cap.txt")
+                ttf._get_lock(new_path)
+
+                # Table stays at the cap — the unheld entry was evicted, not grown past.
+                assert len(ttf._FILE_LOCKS) == ttf._MAX_FILE_LOCKS
+                assert unheld_path not in ttf._FILE_LOCKS, "unheld entry should be evicted first"
+                assert new_path in ttf._FILE_LOCKS
+                for p in other_paths:
+                    assert p in ttf._FILE_LOCKS, f"held lock for {p} must survive eviction"
+            finally:
+                for lock in held_locks:
+                    lock.release()
+                ttf._FILE_LOCKS.clear()
+
+        asyncio.run(_run())
+
 
 # ---------------------------------------------------------------------------
 # CROSS-PROCESS CONCURRENCY — locked_rmw flock layer

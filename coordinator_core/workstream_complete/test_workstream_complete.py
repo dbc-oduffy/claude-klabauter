@@ -211,17 +211,6 @@ def test_every_consumes_manifest_member_resolves_to_a_real_file_on_disk() -> Non
         )
 
 
-def test_chain_terminal_with_consumed_handoff_computes_coverage_gate_directive(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    assert "d-coverage-gate" in ids
-    # Convert #2's original `d-tail` id is SUPERSEDED by C2e's
-    # `directives_commit_tail.build_wsc_tail_directive` (id renamed to
-    # `d-run-wsc-tail` -- the census's own name for the Step 3 keystone
-    # call). See __init__.py's module-docstring Negative-spec.
-    assert "d-run-wsc-tail" in ids
-
 
 #: Every directive id that constitutes a brightline-class gate, in EITHER
 #: scope. The pin below asserts membership in this set rather than one
@@ -292,14 +281,6 @@ def test_chain_terminal_without_consumed_handoff_falls_back_to_session_gate(monk
     assert "d-run-review-brightline-gate" in ids
     assert "d-run-chain-plan-brightline-gate" not in ids
 
-
-def test_single_session_computes_no_coverage_gate_directive(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    assert "d-coverage-gate" not in ids
-    # Same rename as above -- `d-tail` -> `d-run-wsc-tail`.
-    assert "d-run-wsc-tail" in ids
 
 
 def test_write_trail_directive_requires_all_five_review_fields(monkeypatch, tmp_path):
@@ -436,68 +417,55 @@ def test_build_deletion_blocks_check_directive_returns_none_for_falsy_msg_file()
 # ---------------------------------------------------------------------------
 
 
-def test_coverage_judgment_point_resolves_no_phantom_or_enforcing_id(monkeypatch, tmp_path):
-    """`covered`/`uncovered-or-indeterminate-override` resolve only the
-    real, decisions-gated `d-write-trail` directive -- never the removed
-    phantom `d-tail`, and never `d-run-wsc-tail` (that would silently
-    re-introduce enforcement this judgment point does not have). The
-    `uncovered-or-indeterminate-proceed-with-warning` disposition (renamed
-    from `-halt`, which promised an enforcement this judgment point never
-    performed) resolves nothing at all, by design."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+
+
+
+def test_untrusted_gate_reported_point_stays_a_judgment_point_not_narration(monkeypatch, tmp_path):
+    """Anti-scope: an untrusted-gate point (`recommendation=None`, e.g.
+    `jp-session-shape`) must never be demoted into narration even when
+    `partition_reportable` would mechanically classify it `reported` --
+    only a RECOMMENDATION-carrying point is in this plan's class. Forces
+    the uncertain-session-shape branch (an untrusted-gate point whose
+    dispositions all resolve `d-coverage-gate`, absent here because this
+    gate is single-session) and asserts it stays in `judgment_points[]`."""
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            "single-session",
+            diagnostics=["WARN: disposition resolved single-session with Detector C ..."],
+            consumed_handoff_paths=(),
+            detection={"deciding_leg": "none", "detector_c_status": "indeterminate"},
+        ),
+    )
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    matches = [jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-coverage-verdict"]
-    assert len(matches) == 1
-    dispositions_by_value = {d["value"]: d["resolves"] for d in matches[0]["dispositions"]}
-    assert dispositions_by_value["covered"] == ["d-write-trail"]
-    assert dispositions_by_value["uncovered-or-indeterminate-override"] == ["d-write-trail"]
-    assert dispositions_by_value["uncovered-or-indeterminate-proceed-with-warning"] == []
-    assert "uncovered-or-indeterminate-halt" not in dispositions_by_value
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-session-shape" in jp_ids
 
 
-def test_coverage_judgment_point_resolves_every_partitioned_write_trail_id(monkeypatch, tmp_path):
-    """A partitioned `decisions["review"]` list builds N `d-write-trail-<i>`
-    directives (see `build_write_trail_directives`) -- `jp-coverage-verdict`
-    must resolve ALL of them, not just a hardcoded single id, or every
-    slice past the first is silently ungateable by this judgment point."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decisions = {"review": [_REVIEW_SLICE_A, _REVIEW_SLICE_B]}
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    matches = [jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-coverage-verdict"]
-    assert len(matches) == 1
-    dispositions_by_value = {d["value"]: d["resolves"] for d in matches[0]["dispositions"]}
-    assert dispositions_by_value["covered"] == ["d-write-trail-0", "d-write-trail-1"]
-    assert dispositions_by_value["uncovered-or-indeterminate-override"] == ["d-write-trail-0", "d-write-trail-1"]
+def test_resolver_backed_review_partition_strategy_never_demoted_by_a_single_empty_call(monkeypatch, tmp_path):
+    """Anti-scope: `review-partition-strategy` is one of the five resolver-
+    backed points that build `resolves` through a resolver returning real
+    directive ids once `decisions["review_partition"]` is populated, and
+    `[]` only on an empty slice. A single call with no `review_partition`
+    supplied must NOT demote it into `narration` -- that would reintroduce
+    the over-count this plan's Problem section documents."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions={
+            "review": {
+                "sha_range": "a..b",
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "verdict": "ok",
+                "diff_loc": 10,
+            },
+            "scratch_candidates": ["state/scratch/some-file.md"],
+        },
+        repo_root=tmp_path,
+    )
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "review-partition-strategy" in jp_ids
 
-
-def test_commit_tail_directive_carries_no_dependency_on_the_coverage_judgment(monkeypatch, tmp_path):
-    """The commit tail (`d-run-wsc-tail`) must NOT gain a dependency edge on
-    `jp-coverage-verdict` or on `d-coverage-gate` -- the gate is advisory,
-    and wiring an edge here would be an enforcement change the PM declined
-    (2026-07-27). `depends_on` must always carry the pre-existing ordering
-    member (`d-close-tail-args`), on both the chain-terminal (coverage-gate-
-    present) and single-session (no-coverage-gate) legs -- this pins the
-    absence of the coverage edge specifically, so a future session doesn't
-    silently re-land it. It does NOT pin `depends_on` to that single member
-    exactly -- `jp-completion-entry-scaffold`/`jp-commit-subject-missing`
-    (state/bug-backlog/2026-07-28-workstream-complete-apply-re-scaffolds-t-
-    e925d597e0af.yaml) legitimately add further, UNRELATED dependency
-    members onto the same directive under `decisions={}` (no subject
-    supplied); asserting exact list identity here would break on every
-    such legitimate addition without testing this test's own actual
-    invariant."""
-    for gate in (
-        _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
-        _gate("single-session", consumed_handoff_paths=()),
-    ):
-        _patch_gate(monkeypatch, gate)
-        decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-        wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-        depends_on = wsc_tail["depends_on"]
-        depends_on_list = [depends_on] if isinstance(depends_on, str) else list(depends_on)
-        assert "d-close-tail-args" in depends_on_list
-        assert "jp-coverage-verdict" not in depends_on_list
-        assert "d-coverage-gate" not in depends_on_list
 
 
 # ---------------------------------------------------------------------------
@@ -2288,6 +2256,27 @@ def _sweep_directive_ids_and_resolves_ids(
     directive_ids: set[str] = set()
     resolves_ids: set[str] = set()
     judgment_point_ids: set[str] = set()
+    # (C2 redo, docs/plans/2026-08-15-judgment-points-that-gate-nothing-
+    # stop-being-questions.md) `wsc.brief()`'s returned `judgment_points[]`
+    # is now POST-`partition_reportable` (asked-only) -- a `reportable=True`
+    # point (e.g. `cross-cutting-check`) never appears there once demoted
+    # into `narration`, even though `judgments.py` still builds it. This
+    # sweep's OWN purpose (every id `judgments.py` can build, every
+    # directive id, every `resolves` id) needs the PRE-partition set, so a
+    # spy on `partition_reportable` captures its raw input before
+    # delegating through unchanged. A demoted point's own `resolves` is
+    # always `[]` by construction (that is what "gate-nothing" means), so
+    # folding it into `judgment_point_ids` cannot introduce a phantom
+    # `resolves` id into the sibling phantom-directive-id test below.
+    from coordinator_core.contract.decision_object.judgment import (
+        partition_reportable as _real_partition_reportable,
+    )
+
+    def _spy_partition_reportable(judgment_points, directives):
+        judgment_point_ids.update(jp["id"] for jp in judgment_points)
+        return _real_partition_reportable(judgment_points, directives)
+
+    monkeypatch.setattr(wsc, "partition_reportable", _spy_partition_reportable)
     decisions = {
         "lessons": [
             {
@@ -2970,78 +2959,6 @@ def test_clean_session_shape_surfaces_no_session_shape_judgment_point(monkeypatc
     assert "jp-session-shape" not in ids
 
 
-def test_session_shape_judgment_point_offers_canonical_and_legacy_dispositions_both_clearing_coverage_gate(
-    monkeypatch, tmp_path
-):
-    """AC2b: `jp-session-shape`'s `dispositions[]` carries BOTH the canonical
-    (`predecessor-consumed`) and legacy (`chain-terminal`) spellings as
-    SEPARATE entries, each with the IDENTICAL `resolves=["d-coverage-gate"]`
-    list — so `ceremony_common.apply_halt._disposition_resolves_directive`'s
-    ordinary value-match clears `d-coverage-gate` for either spelling an EM
-    types, with zero change to that cross-family shared predicate."""
-    _patch_gate(
-        monkeypatch,
-        _gate(
-            "single-session",
-            diagnostics=["WARN: disposition resolved single-session with Detector C ..."],
-            consumed_handoff_paths=(),
-            detection={"deciding_leg": "none", "detector_c_status": "indeterminate"},
-        ),
-    )
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    matches = [jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-session-shape"]
-    assert len(matches) == 1
-    jp = matches[0]
-
-    resolves_by_value = {entry["value"]: entry["resolves"] for entry in jp["dispositions"]}
-    assert resolves_by_value.get("predecessor-consumed") == ["d-coverage-gate"]
-    assert resolves_by_value.get("chain-terminal") == ["d-coverage-gate"]
-
-    for chosen_value in ("predecessor-consumed", "chain-terminal"):
-        assert apply_halt._disposition_resolves_directive(jp, chosen_value, "d-coverage-gate"), (
-            f"choosing {chosen_value!r} must clear d-coverage-gate"
-        )
-
-
-def test_session_shape_judgment_point_offers_memo_predecessor_as_a_fourth_disposition(
-    monkeypatch, tmp_path
-):
-    """AC4: `jp-session-shape`'s `dispositions[]` carries `memo-predecessor`
-    as a fourth entry ALONGSIDE the pre-existing canonical/legacy/single-
-    session three, whenever the point fires at all (not conditioned on
-    which leg actually decided this resolution) — so an EM correcting a
-    wrong Detector C attribution has the true answer available. Its
-    `resolves` list is the SAME `["d-coverage-gate"]` as the canonical/
-    legacy entries: forced by `_build_legacy_coverage_and_trail_directives`
-    only building `d-coverage-gate` on `canonicalize(disposition) ==
-    PREDECESSOR_CONSUMED` with a non-empty `gate.consumed_handoff`, which
-    the memo leg never carries (plan § Problem (2))."""
-    _patch_gate(
-        monkeypatch,
-        _gate(
-            "single-session",
-            diagnostics=["WARN: disposition resolved single-session with Detector C ..."],
-            consumed_handoff_paths=(),
-            detection={"deciding_leg": "none", "detector_c_status": "indeterminate"},
-        ),
-    )
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    matches = [jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-session-shape"]
-    assert len(matches) == 1
-    jp = matches[0]
-
-    resolves_by_value = {entry["value"]: entry["resolves"] for entry in jp["dispositions"]}
-    assert set(resolves_by_value.keys()) == {
-        "predecessor-consumed",
-        "chain-terminal",
-        "single-session",
-        "memo-predecessor",
-    }
-    assert resolves_by_value["memo-predecessor"] == ["d-coverage-gate"]
-    assert apply_halt._disposition_resolves_directive(jp, "memo-predecessor", "d-coverage-gate"), (
-        "choosing memo-predecessor must clear d-coverage-gate"
-    )
-
 
 def test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_detection_record(monkeypatch, tmp_path):
     """The settled-fact assertion (plan Execution Notes): a `memo-
@@ -3076,23 +2993,6 @@ def test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_detecti
     assert "jp-session-shape" not in ids
 
 
-def test_chain_terminal_coverage_judgment_point_carries_a_recommendation(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    matches = [jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-coverage-verdict"]
-    assert len(matches) == 1
-    recommendation = matches[0]["recommendation"]
-    assert isinstance(recommendation, dict)
-    assert set(recommendation.keys()) == {"disposition", "rationale"}
-    assert recommendation["disposition"]
-    assert recommendation["rationale"]
-
-
-def test_single_session_has_no_coverage_judgment_point(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    ids = [jp["id"] for jp in decision_object["judgment_points"]]
-    assert "jp-coverage-verdict" not in ids
 
 
 def test_review_dispatch_vehicle_choice_does_not_recommend_the_provisioning_bypassing_vehicle():
@@ -3127,7 +3027,15 @@ def test_all_judgment_points_carry_the_shared_constructor_shape(monkeypatch, tmp
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
     assert decision_object["judgment_points"], "expected both judgment points to fire in this fixture"
     for jp in decision_object["judgment_points"]:
-        assert set(jp.keys()) == {
+        # `reportable` and `resolves_computed` are OPTIONAL keys
+        # (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-being-
+        # questions.md): each is present only on a point that explicitly
+        # authored it -- an action-class (`reportable=False`) point stays a
+        # real `judgment_points[]` entry and carries the key, and a
+        # resolver-backed point carries `resolves_computed=True`. Both are
+        # subtracted here rather than asserted as fixed members, mirroring
+        # how `advisory`/`best_effort` are handled on directives elsewhere.
+        assert set(jp.keys()) - {"reportable", "resolves_computed"} == {
             "id",
             "question",
             "dispositions",
@@ -4834,15 +4742,22 @@ def test_open_spine_row_gate_silent_on_malformed_spine_never_raises(monkeypatch,
     assert gate["verdict"] == "indeterminate"
 
 
-def test_open_spine_row_gate_never_blocks_even_while_firing(monkeypatch, tmp_path):
-    """AC4, the binding constraint: a firing gate contributes no blocking
-    judgment point and the ceremony still completes with the SAME
-    directives/judgment-point verdicts it would have computed with the
-    gate silent -- proven by diffing two `brief()` runs against the SAME
-    governing-plan slug/path (so every OTHER builder's inputs are
-    byte-identical between runs), the only difference being the plan's
-    own spine content: one open row vs. zero. Everything except
-    `gates.open_spine_row_worklist` itself must be identical."""
+def test_open_spine_row_gate_never_blocks_directives_other_than_the_stamp(monkeypatch, tmp_path):
+    """AC4 as originally ruled ("never blocks") is now scoped to exactly
+    ONE directive: `directives_spine_worklist.compute_open_spine_row_gate`
+    itself still computes a purely advisory fact (own docstring/Negative-
+    spec unchanged, own module untouched by this fix) and every OTHER
+    directive/judgment-point verdict stays byte-identical between a firing
+    and a silent run -- proven the same way the prior version of this test
+    proved full identity, minus the gate key and minus the one new
+    `jp-open-spine-rows-block-stamp` point plus its `d-stamp-plan-
+    implemented` dependency edge, which now DO differ between the two runs
+    (docs/plans/2026-08-15-composition-invocation-budgets.md was stamped
+    `executing -> implemented` with row C2 still `disposition: open`,
+    state/kill-ledger.md K-003 -- the incident this narrower gate closes).
+    See `test_open_spine_row_gate_blocks_the_implemented_stamp` /
+    `test_open_spine_row_gate_waived_row_still_reaches_implemented` for the
+    stamp-specific behavior itself."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     decisions = {"governing_plan_slug": "toggle-plan", "subject": "x"}
 
@@ -4865,18 +4780,200 @@ def test_open_spine_row_gate_never_blocks_even_while_firing(monkeypatch, tmp_pat
     def _strip(decision_object):
         gates = dict(decision_object["gates"])
         gates.pop("open_spine_row_worklist")
+        judgment_points = [
+            jp for jp in decision_object["judgment_points"] if jp["id"] != "jp-open-spine-rows-block-stamp"
+        ]
+        directives = [dict(d) for d in decision_object["directives"]]
+        for directive in directives:
+            if directive["id"] != "d-stamp-plan-implemented":
+                continue
+            depends_on = directive.get("depends_on")
+            if isinstance(depends_on, list) and "jp-open-spine-rows-block-stamp" in depends_on:
+                remaining = [d for d in depends_on if d != "jp-open-spine-rows-block-stamp"]
+                directive["depends_on"] = remaining[0] if len(remaining) == 1 else (remaining or None)
+        preflight = dict(decision_object["preflight"])
+        decisions_template = dict(preflight["decisions_template"])
+        decisions_template.pop("jp-open-spine-rows-block-stamp", None)
+        preflight["decisions_template"] = decisions_template
         return {
             "gates": gates,
-            "preflight": decision_object["preflight"],
-            "directives": decision_object["directives"],
-            "judgment_points": decision_object["judgment_points"],
-            "narration": decision_object["narration"],
+            # `preflight.decisions_template` legitimately gains a
+            # `jp-open-spine-rows-block-stamp` key while firing (every
+            # judgment point's id feeds that template) -- popped here for
+            # the same reason `narration` is excluded below.
+            "preflight": preflight,
+            "directives": directives,
+            "judgment_points": judgment_points,
+            # `narration` is excluded: it echoes the raw judgment-point
+            # count ("N judgment point(s)"), which legitimately differs
+            # by exactly one between the two runs -- the fact under test
+            # here is captured by the `directives`/`judgment_points`
+            # equality above, not narration's derived prose.
             "next_move": decision_object["next_move"],
         }
 
     assert _strip(firing) == _strip(silent)
-    jp_ids = {jp["id"] for jp in firing["judgment_points"]}
-    assert not any("spine" in jp_id for jp_id in jp_ids)
+    firing_jp_ids = {jp["id"] for jp in firing["judgment_points"]}
+    silent_jp_ids = {jp["id"] for jp in silent["judgment_points"]}
+    assert "jp-open-spine-rows-block-stamp" in firing_jp_ids
+    assert "jp-open-spine-rows-block-stamp" not in silent_jp_ids
+
+
+def test_open_spine_row_gate_blocks_the_implemented_stamp(monkeypatch, tmp_path):
+    """Break-class fix: a plan with an unwaived `disposition: open` row
+    must not reach `status: implemented` -- `d-stamp-plan-implemented`
+    gains a `depends_on` edge onto the new `jp-open-spine-rows-block-stamp`
+    judgment point, which names the still-open row id and carries an
+    empty `resolves` (unclearable by EM pick, like `jp-commit-subject-
+    missing` -- only resolving or waiving the row clears it)."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(
+        tmp_path,
+        "open-row-plan",
+        "- id: C2\n  title: Still unresolved\n  disposition: open\n",
+    )
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "open-row-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-open-spine-rows-block-stamp" in jp_ids
+    blocking_jp = next(
+        jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-open-spine-rows-block-stamp"
+    )
+    assert "C2" in blocking_jp["question"]
+    assert blocking_jp["dispositions"][0]["resolves"] == []
+
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else depends_on
+    assert "jp-open-spine-rows-block-stamp" in depends_on
+
+
+def test_open_spine_row_gate_no_open_rows_reaches_implemented_unblocked(monkeypatch, tmp_path):
+    """Happy-path regression: every row terminal -> no new judgment point,
+    no new `depends_on` edge on `d-stamp-plan-implemented` -- the existing
+    `d-claim-plan-execution-lock` dependency (predating this fix) is the
+    only one present."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(
+        tmp_path,
+        "clean-plan",
+        "- id: C1\n  title: Shipped row\n  disposition: coded\n  disposition_ref: abc123\n",
+    )
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "clean-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-open-spine-rows-block-stamp" not in jp_ids
+
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else (depends_on or [])
+    assert "jp-open-spine-rows-block-stamp" not in depends_on
+
+
+def test_open_spine_row_gate_waived_row_still_reaches_implemented(monkeypatch, tmp_path):
+    """`decisions["waived_open_spine_row_ids"]` clears the block exactly
+    like it already clears the advisory `warn_text` -- a PM-ruled,
+    knowingly-carried-open row (e.g. state/kill-ledger.md K-003) is not
+    forced through a fabricated disposition to unblock the stamp."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(
+        tmp_path,
+        "waived-plan",
+        "- id: C2\n  title: Ruled dead, blocked on a peer\n  disposition: open\n",
+    )
+    decision_object = wsc.brief(
+        decisions={
+            "governing_plan_slug": "waived-plan",
+            "subject": "x",
+            "waived_open_spine_row_ids": ["C2"],
+        },
+        repo_root=tmp_path,
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-open-spine-rows-block-stamp" not in jp_ids
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else (depends_on or [])
+    assert "jp-open-spine-rows-block-stamp" not in depends_on
+
+
+def test_open_spine_row_gate_partial_waiver_names_only_the_unwaived_row(monkeypatch, tmp_path):
+    """Two-row fixture, one waived: the block must still fire (the other
+    row is genuinely open and unwaived) and must name only C2, never the
+    waived C1 -- a single-row fixture cannot distinguish "names the
+    unwaived rows" from "names all open rows"; this one can."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(
+        tmp_path,
+        "partial-waiver-plan",
+        "- id: C1\n  title: Reviewed and knowingly left open\n  disposition: open\n"
+        "- id: C2\n  title: Still genuinely unresolved\n  disposition: open\n",
+    )
+    decision_object = wsc.brief(
+        decisions={
+            "governing_plan_slug": "partial-waiver-plan",
+            "subject": "x",
+            "waived_open_spine_row_ids": ["C1"],
+        },
+        repo_root=tmp_path,
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-open-spine-rows-block-stamp" in jp_ids
+    blocking_jp = next(
+        jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-open-spine-rows-block-stamp"
+    )
+    assert "C2" in blocking_jp["question"]
+    assert "C1" not in blocking_jp["question"]
+    assert "C2" in blocking_jp["evidence"]
+    assert "C1" not in blocking_jp["evidence"]
+
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else depends_on
+    assert "jp-open-spine-rows-block-stamp" in depends_on
+
+
+def test_open_spine_row_gate_indeterminate_still_blocks_the_implemented_stamp(monkeypatch, tmp_path):
+    """Correctness fix: `verdict: indeterminate` (malformed spine fence,
+    here) also has `warn_text is None`, exactly like the genuinely-clean
+    case -- keying the trigger on `warn_text` alone let a terminal
+    `implemented` stamp sail through precisely when the spine could not be
+    read. The block must fire, and its message must say the spine could
+    not be read rather than naming rows it does not have."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(tmp_path, "malformed-stamp-plan", "not: [valid, yaml, - broken")
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "malformed-stamp-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-open-spine-rows-block-stamp" in jp_ids
+    blocking_jp = next(
+        jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-open-spine-rows-block-stamp"
+    )
+    assert "could not be read" in blocking_jp["question"]
+    assert blocking_jp["dispositions"][0]["resolves"] == []
+
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else depends_on
+    assert "jp-open-spine-rows-block-stamp" in depends_on
 
 
 def test_open_spine_row_gate_free_value_keys_appear_in_decisions_template(monkeypatch, tmp_path):
@@ -5006,13 +5103,18 @@ def test_landed_reconciliation_gate_indeterminate_on_landed_plan_with_no_ac_head
     assert gate["verdict"] == "indeterminate"
 
 
-def test_landed_reconciliation_gate_never_blocks_even_while_firing(monkeypatch, tmp_path):
-    """AC9's binding constraint: a firing gate contributes no blocking
-    judgment point, and the rest of the envelope is byte-identical to a
-    run where the gate is silent -- proven the same way the sibling
-    open-spine-row gate's own non-blocking test is proven (toggle the
-    governing plan's own content between two `brief()` calls, diff
-    everything except this one gate key)."""
+def test_landed_reconciliation_gate_blocks_the_implemented_stamp_when_firing(monkeypatch, tmp_path):
+    """fourth-instance-hunt.md item 1, Layer A fix: a governing plan
+    deliberately parked at `status: landed` with an unticked AC must not
+    reach `status: implemented` ungated -- `d-stamp-plan-implemented` gains
+    a `depends_on` edge onto the new `jp-landed-reconciliation-block-stamp`
+    judgment point, which carries an empty `resolves` (unclearable by EM
+    pick -- only reconciling the ACs, so the gate itself goes silent on the
+    next `brief()`, clears it). Supersedes the pre-fix AC9 assertion this
+    test replaced: `landed_reconciliation` used to be non-blocking by
+    design; item 1 promotes it because a `landed` plan is exactly the case
+    where `open_spine_row_gate` is silent by construction (every spine row
+    has already left `open`), leaving no other contradicting signal."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     decisions = {"governing_plan_slug": "toggle-landed-plan", "subject": "x"}
 
@@ -5020,25 +5122,89 @@ def test_landed_reconciliation_gate_never_blocks_even_while_firing(monkeypatch, 
     firing = wsc.brief(decisions=decisions, repo_root=tmp_path)
     assert firing["gates"]["landed_reconciliation"]["applies"] is True
 
+    jp_ids = {jp["id"] for jp in firing["judgment_points"]}
+    assert "jp-landed-reconciliation-block-stamp" in jp_ids
+    blocking_jp = next(
+        jp for jp in firing["judgment_points"] if jp["id"] == "jp-landed-reconciliation-block-stamp"
+    )
+    assert blocking_jp["dispositions"][0]["resolves"] == []
+    assert "1" in blocking_jp["question"]
+
+    stamp_directive = next(
+        d for d in firing["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else depends_on
+    assert "jp-landed-reconciliation-block-stamp" in depends_on
+
+    # Wire-path proof, not just envelope shape: `apply`'s real gate
+    # (`ceremony_common.apply_halt._directive_gate_open`) must actually
+    # refuse to fire the stamp directive with no disposition supplied for
+    # the new judgment point -- this is the check whose absence let the
+    # original defect survive (envelope-shape-only tests passed either way).
+    jp_by_id = {jp["id"]: jp for jp in firing["judgment_points"]}
+    directive_ids = {d["id"] for d in firing["directives"]}
+    assert apply_halt._directive_gate_open(
+        stamp_directive, jp_by_id, decisions={}, directive_ids=directive_ids
+    ) is False
+
     _write_plan_landed_with_acs(tmp_path, "toggle-landed-plan", "- [x] AC1 — now done\n")
     silent = wsc.brief(decisions=decisions, repo_root=tmp_path)
     assert silent["gates"]["landed_reconciliation"]["applies"] is False
+    silent_jp_ids = {jp["id"] for jp in silent["judgment_points"]}
+    assert "jp-landed-reconciliation-block-stamp" not in silent_jp_ids
+    silent_stamp_directive = next(
+        d for d in silent["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    silent_depends_on = silent_stamp_directive["depends_on"]
+    silent_depends_on = (
+        [silent_depends_on] if isinstance(silent_depends_on, str) else (silent_depends_on or [])
+    )
+    assert "jp-landed-reconciliation-block-stamp" not in silent_depends_on
 
-    def _strip(decision_object):
-        gates = dict(decision_object["gates"])
-        gates.pop("landed_reconciliation")
-        return {
-            "gates": gates,
-            "preflight": decision_object["preflight"],
-            "directives": decision_object["directives"],
-            "judgment_points": decision_object["judgment_points"],
-            "narration": decision_object["narration"],
-            "next_move": decision_object["next_move"],
-        }
 
-    assert _strip(firing) == _strip(silent)
-    jp_ids = {jp["id"] for jp in firing["judgment_points"]}
-    assert not any("landed" in jp_id for jp_id in jp_ids)
+def test_landed_reconciliation_gate_indeterminate_blocks_the_implemented_stamp(monkeypatch, tmp_path):
+    """Mirrors `test_open_spine_row_gate_indeterminate_still_blocks_the_
+    implemented_stamp`: `verdict: indeterminate` (a `landed` plan with no
+    `## Acceptance Criteria` heading, here) also has `warn_text is None`,
+    exactly like the genuinely-reconciled case -- keying the trigger on
+    `warn_text` alone (or on `applies`, which is also False here) would let
+    a terminal `implemented` stamp sail through precisely when the
+    landed/AC state could not be read. The block must fire, and its
+    message must say the state could not be determined rather than naming
+    an open/total split it does not have."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    plan_path = tmp_path / "docs" / "plans" / "headless-landed-plan.md"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nstatus: landed\n---\n\n# a plan\n\nno AC section here.\n",
+        encoding="utf-8",
+    )
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "headless-landed-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-landed-reconciliation-block-stamp" in jp_ids
+    blocking_jp = next(
+        jp for jp in decision_object["judgment_points"]
+        if jp["id"] == "jp-landed-reconciliation-block-stamp"
+    )
+    assert "could not be determined" in blocking_jp["question"]
+    assert blocking_jp["dispositions"][0]["resolves"] == []
+
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else depends_on
+    assert "jp-landed-reconciliation-block-stamp" in depends_on
+
+    jp_by_id = {jp["id"]: jp for jp in decision_object["judgment_points"]}
+    directive_ids = {d["id"] for d in decision_object["directives"]}
+    assert apply_halt._directive_gate_open(
+        stamp_directive, jp_by_id, decisions={}, directive_ids=directive_ids
+    ) is False
 
 
 # ---------------------------------------------------------------------------
@@ -5748,6 +5914,32 @@ def test_execution_basis_report_never_changes_discharge_outcome(verdict):
 # of a regression, only a divergence from this pin that should be re-based
 # against a fresh `git show <merge-base>` baseline rather than treated as a
 # failure of this plan's field addition.
+#
+# RE-BASELINED 2026-08-16 (state/kill-ledger.md K-005, "waiver system dies"):
+# K-005 deleted the ~1,913-file `state/review-trail/chain-ancestry-waivers/`
+# subtree. `collect()`'s underlying lister walks every `*.json` under
+# `state/review-trail/` (see `list_review_trail_records.py`'s directory walk)
+# — it was never scoped to review-trail RECORD files specifically, so those
+# waiver files (never review-trail records to begin with) were being counted
+# as malformed quarantine noise. Their deletion is a one-time ~1,913-file step
+# down in `malformed`, not a corpus regression — ~82% of the old 1534 floor
+# was this noise. The bare `>=1534` floor this replaced could never survive
+# that step (nor any other net deletion from the corpus), so it is replaced
+# with a floor/ceiling window sized off the OBSERVED post-K-005 malformed
+# count (277) with generous margin, rather than a single point pin — this
+# form tolerates ordinary day-to-day corpus churn (new malformed records
+# landing, old ones archived) without re-pinning on every run, while still
+# catching a collector regression that silently drops or balloons the
+# quarantine bucket. `valid`'s floor is untouched — genuine review-trail
+# records only accumulate, they were never conflated with the waiver noise.
+#
+# Finding (report-only, no collector change per this chunk's remit): the
+# collector's non-record-file promiscuity above is real and not limited to
+# the now-deleted waivers — anything else dropped under `state/review-trail/`
+# or `archive/review-trail/` as a stray `*.json` is silently counted as
+# "malformed", polluting this number for any other consumer that reads it
+# as "malformed REVIEW-TRAIL records" rather than "unparseable JSON files
+# found under this directory tree".
 def test_real_review_trail_corpus_quarantine_count_unchanged_by_execution_basis_field():
     from coordinator_core.ops.emit.context import EmitContext
     from coordinator_core.ops.emit.sections.review_trail import collect
@@ -5765,12 +5957,9 @@ def test_real_review_trail_corpus_quarantine_count_unchanged_by_execution_basis_
         repo_name="test/test",
     )
     valid, malformed = collect(ctx)
-    # Observed baseline, 2026-08-11 (this chunk's dispatch): 2011 valid,
-    # 1534 malformed. This plan's C1 (execution_basis field addition) does
-    # not touch this collector or its whitelist, so re-running collect()
-    # is itself the "before" and "after" — the field simply is not read.
-    assert len(malformed) >= 1534
+    # Observed baseline, 2026-08-16 (post-K-005): 3030 valid, 277 malformed.
     assert len(valid) >= 2011
+    assert 100 <= len(malformed) <= 800
     # No key this plan adds is projected into the collected record shape.
     for record in valid:
         assert "execution_basis" not in record

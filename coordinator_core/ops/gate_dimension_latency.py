@@ -63,6 +63,7 @@ Spec backlink: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C7
 
 from __future__ import annotations
 
+import contextvars
 import json
 from pathlib import Path
 from typing import Optional
@@ -106,11 +107,26 @@ class LatencyDimensionReentrancyError(RuntimeError):
     """
 
 
-_REENTRANCY_GUARD = False
-"""Module-level re-entrancy flag — set for the duration of one
-`_check_latency` call, on the single-threaded op-dispatch path this check
-runs on. Not thread-safe by design: a concurrent-call scenario is out of
-scope for this op's dispatch model (spawn-per-call, DR-215)."""
+_REENTRANCY_GUARD: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_gate_dimension_latency_reentrancy_guard", default=False
+)
+"""Per-context re-entrancy flag — set for the duration of one
+`_check_latency` call.
+
+`contextvars.ContextVar` rather than a bare module bool (C8,
+docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md):
+under a warm engine, `_check_latency` is no longer guaranteed single-threaded
+per process — two UNRELATED concurrent dispatches (two sessions gating two
+different commits at once) must not trip each other's sentinel, which a bare
+module bool did (the characterization test this fix flips,
+`coordinator_core/warm/tests/test_process_global_characterization.py`
+Site 5). A genuine RE-ENTRANT call — this dimension check somehow calling
+back into itself within the SAME dispatch's Task/thread Context — still sees
+the flag set and still raises `LatencyDimensionReentrancyError`: a ContextVar
+read/write is scoped to the current Context, and a synchronous nested call
+runs in that same Context, so within-context re-entry detection is
+unaffected. Only cross-context (i.e. cross-dispatch) false trips are
+removed."""
 
 
 def _normalize_path(raw: str) -> str:
@@ -283,14 +299,13 @@ def _check_latency(
                  mapped op's record was "unavailable"/every mapped op is
                  MUTATING (nothing gating to report).
     """
-    global _REENTRANCY_GUARD
-    if _REENTRANCY_GUARD:
+    if _REENTRANCY_GUARD.get():
         raise LatencyDimensionReentrancyError(
             "latency dimension check re-entered itself — refusing to "
             "silently pass; see gate_dimension_latency module docstring "
             "'Loud re-entrancy sentinel'"
         )
-    _REENTRANCY_GUARD = True
+    token = _REENTRANCY_GUARD.set(True)
     try:
         inventory = _load_op_inventory()
         op_map = _map_paths_to_ops(changed_files, inventory=inventory)
@@ -322,7 +337,7 @@ def _check_latency(
             dimension="latency", verdict=Verdict.UNAVAILABLE, detail=joined_detail
         )
     finally:
-        _REENTRANCY_GUARD = False
+        _REENTRANCY_GUARD.reset(token)
 
 
 register_dimension("latency", _check_latency)

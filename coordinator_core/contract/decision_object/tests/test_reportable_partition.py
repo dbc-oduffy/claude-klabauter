@@ -37,7 +37,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from coordinator_core.contract.decision_object.judgment import partition_reportable
+from coordinator_core.contract.decision_object.judgment import (
+    _directive_axis,
+    _gates_nothing,
+    partition_reportable,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,16 +71,47 @@ _RESOLVER_BACKED_OUT_OF_SCOPE_IDS = frozenset(
 )
 
 
+def _is_gate_nothing_on_directive_axis(
+    point: dict[str, Any], directives: list[dict[str, Any]]
+) -> bool:
+    """Same "gate-nothing" computation `partition_reportable` makes
+    internally (directive-membership + the `depends_on` precondition), but
+    INDEPENDENT of the `reportable` marker -- this oracle needs the
+    directive-axis fact on its own to build the three-way ledger (a point
+    can be gate-nothing on this axis and still be `asked`, if it is marked
+    `reportable=False` or left unclassified `None`). Delegates to
+    `judgment._gates_nothing`/`_directive_axis` directly (Review:
+    code-reviewer -- was a from-scratch reimplementation that could drift
+    from the production computation) rather than reimplementing it inline."""
+    from coordinator_core.contract.apply_base import normalize_depends_on
+
+    directive_ids, depended_on_ids = _directive_axis(directives, normalize_depends_on)
+    return _gates_nothing(point, directive_ids, depended_on_ids)
+
+
 def _gate_nothing_recommendation_carrying(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
     source_label: str,
-    acc: dict[str, set[str]],
+    acc: dict[str, dict[str, Any]],
 ) -> None:
-    _asked, reported = partition_reportable(judgment_points, directives)
-    for jp in reported:
-        if jp.get("recommendation") is not None and jp["id"] not in _RESOLVER_BACKED_OUT_OF_SCOPE_IDS:
-            acc.setdefault(jp["id"], set()).add(source_label)
+    """Three-way-ledger accumulation (C1b correction): records every
+    gate-nothing, recommendation-carrying point regardless of its
+    `reportable` marking (unlike the pre-C1b version, which only walked
+    `partition_reportable`'s `reported` output -- that undercounted once
+    demotion started requiring an explicit opt-in). Each entry carries its
+    contributing source file(s) and its `reportable` classification
+    (`True`/`False`/`None`), so the test below can assert every such point
+    is in exactly one of the reportable/action-class buckets."""
+    for jp in judgment_points:
+        if jp.get("recommendation") is None:
+            continue
+        if jp["id"] in _RESOLVER_BACKED_OUT_OF_SCOPE_IDS:
+            continue
+        if not _is_gate_nothing_on_directive_axis(jp, directives):
+            continue
+        entry = acc.setdefault(jp["id"], {"sources": set(), "reportable": jp.get("reportable")})
+        entry["sources"].add(source_label)
 
 
 class _FakeMonkeyPatch:
@@ -245,27 +280,58 @@ def _sweep_workstream_complete(acc: dict[str, set[str]], tmp_path: Path) -> None
         _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
         _gate("single-session", consumed_handoff_paths=()),
     )
+
+    # (C2 redo, docs/plans/2026-08-15-judgment-points-that-gate-nothing-
+    # stop-being-questions.md) `wsc.brief()`'s returned `judgment_points[]`
+    # is now POST-`partition_reportable` (asked-only) -- a `reportable=True`
+    # point is demoted out of it into `narration` before `brief()` ever
+    # returns. This census's own purpose is the PRE-partition set (every
+    # gate-nothing recommendation-carrying point regardless of its
+    # `reportable` marking), so a spy on `partition_reportable` captures its
+    # raw input before delegating through unchanged, and that captured list
+    # -- not `decision_object["judgment_points"]` -- is what gets fed to
+    # `_gate_nothing_recommendation_carrying` below.
+    from coordinator_core.contract.decision_object.judgment import (
+        partition_reportable as _real_partition_reportable,
+    )
+
+    def _brief_and_capture_pre_partition_jps(decisions_payload: dict[str, Any]) -> dict[str, Any]:
+        captured: list[dict[str, Any]] = []
+
+        def _spy(judgment_points, directives):
+            captured.extend(judgment_points)
+            return _real_partition_reportable(judgment_points, directives)
+
+        mp = _FakeMonkeyPatch()
+        mp.setattr(wsc, "partition_reportable", _spy)
+        try:
+            decision_object = wsc.brief(decisions=decisions_payload, repo_root=tmp_path)
+        finally:
+            mp.undo()
+        return {"directives": decision_object["directives"], "judgment_points": captured}
+
     for gate in gate_variants:
         mp = _FakeMonkeyPatch()
         _patch_gate(mp, gate)
-        decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+        decision_object = _brief_and_capture_pre_partition_jps(decisions)
         _gate_nothing_recommendation_carrying(
             decision_object["directives"], decision_object["judgment_points"], "workstream_complete", acc
         )
         mp.undo()
 
-    # C1(c)'s bounded determination needs `jp-coverage-verdict` built via the
-    # branch where `decisions["review"]` is ABSENT -- the only path that
-    # exercises `build_coverage_judgment_point`'s legacy fallback
-    # (`write_trail_ids = ["d-write-trail"]` with no real `d-write-trail*`
-    # directive built). The populated-`decisions` sweep above never reaches
-    # this branch. See this file's own `test_jp_coverage_verdict_...` below
-    # for the determination itself; swept into the census here too, since a
-    # gate-nothing point reachable ONLY on this branch is still a real site.
+    # K-001 (state/kill-ledger.md): this second sweep used to exist solely to
+    # reach `jp-coverage-verdict`'s fallback branch (`decisions["review"]`
+    # ABSENT), the one path `build_coverage_judgment_point` -- now removed --
+    # took that the populated-`decisions` sweep above never exercised. Kept
+    # (not deleted with that builder) because `decisions={}` also changes
+    # which OTHER preserved judgment points fire (e.g. governing-plan/
+    # completion-cluster gating in `_build_preserved_judgment_points`) --
+    # this sweep still covers whatever gate-nothing points are reachable only
+    # on that branch, there just happens to be no coverage-specific one left.
     for gate in gate_variants:
         mp = _FakeMonkeyPatch()
         _patch_gate(mp, gate)
-        decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+        decision_object = _brief_and_capture_pre_partition_jps({})
         _gate_nothing_recommendation_carrying(
             decision_object["directives"], decision_object["judgment_points"], "workstream_complete", acc
         )
@@ -415,9 +481,11 @@ def _sweep_orient_assemble_readers_clean_ops(acc: dict[str, set[str]]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The checked-in expected set (AC3: "the number lives here, never in
-# prose"). Computed by running every sweep above and reading back what
-# `partition_reportable` actually classified -- not hand-counted.
+# The checked-in three-way ledger (AC2/AC3, C1b correction: "the census
+# becomes a three-way ledger... every gate-nothing point is in exactly one
+# of: marked reportable (demoted), or marked action-class (keeps asking,
+# decided rather than overlooked)"). Computed by running every sweep above
+# and reading back each point's own `reportable` marker -- not hand-counted.
 #
 # `merge_assemble`, `baton_assemble`, `consolidate_assemble`,
 # `backlog_grind_assemble`, `review_assemble` each contribute ZERO: every
@@ -426,30 +494,48 @@ def _sweep_orient_assemble_readers_clean_ops(acc: dict[str, set[str]]) -> None:
 # build_commit_readiness_gate`, whose `resolves` parameter is a REQUIRED,
 # non-defaulted `Sequence[str]` every caller wires to the real directive id
 # it gates (own docstring) -- it always gates something, by construction,
-# never reaching the `reported` branch.
+# never reaching the gate-nothing set.
 # ---------------------------------------------------------------------------
-EXPECTED_GATE_NOTHING_RECOMMENDATION_CARRYING_IDS: frozenset[str] = frozenset(
+
+#: `reportable=True` -- acknowledgement-class, demoted into narration.
+EXPECTED_REPORTABLE_IDS: frozenset[str] = frozenset(
+    {
+        # orient_assemble/readers_clean_ops.py (2, matches plan's "orient 2")
+        "j-em-env-effort",
+        "j-em-env-model",
+        # workstream_complete (C2 redo, docs/plans/2026-08-15-judgment-points-
+        # that-gate-nothing-stop-being-questions.md): pure recall/backstop-
+        # scan/labeling points where the EM merely notes the answer -- no
+        # distinct action follows from either disposition, same shape as the
+        # plan's own motivating "archived ancestor batons" example.
+        "cross-cutting-check",
+        "inline-waiver-recognition",
+    }
+)
+
+#: `reportable=False` -- action-class, explicitly decided to keep asking
+#: (dispatch-decision points: the EM dispatches a worker off the answer,
+#: with no directive and no gate -- premise-finding sidecar's channel 3).
+EXPECTED_ACTION_CLASS_IDS: frozenset[str] = frozenset(
     {
         # workday_complete/brief.py (4, matches plan's "workday-complete 4")
         "jp_step4b_analyst_dispatch",
         "jp_step4c_observer_dispatch",
         "jp_step4_5_clustering_dispatch",
         "jp_step4e_health_ledger_new_rows",
-        # workweek_complete/brief.py (2, matches plan's "workweek-complete 2")
+        # workweek_complete/brief.py (both of its 2). extend-span widens what
+        # Rule-5 treats as already reviewed and no directive applies it, so it
+        # is a `pm-scoped-tradeoff` the EM acts on, not one it merely records.
         "jp_step4_triage_dispatch",
         "jp_step7_rule5_already_reviewed_span",
-        # orient_assemble/readers_clean_ops.py (2, matches plan's "orient 2")
-        "j-em-env-effort",
-        "j-em-env-model",
-        # workstream_complete (via judgments.py + __init__.py; resolver-backed
-        # points excluded per _RESOLVER_BACKED_OUT_OF_SCOPE_IDS above)
-        "cross-cutting-check",
+        # workstream_complete (C2 redo): each answer here obligates the EM to
+        # DO something concrete (a disk write, a commit/stash, a dispatch
+        # retry, a PM escalation, a widened review) with no directive behind
+        # it -- premise-finding sidecar's channel 3.
         "enablement-vs-opportunistic-deferral",
         "finding-tradeoff-escalation-check",
         "flag-severity-classification",
         "governing-spec-identification",
-        "inline-waiver-recognition",
-        "jp-coverage-verdict",
         "lesson-scope-classification",
         "orientation-doc-row-updates",
         "plan-doc-content-update",
@@ -463,15 +549,28 @@ EXPECTED_GATE_NOTHING_RECOMMENDATION_CARRYING_IDS: frozenset[str] = frozenset(
     }
 )
 
+#: C2 redo (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
+#: being-questions.md) classified all 17 previously-deferred workstream-
+#: complete ids above (into EXPECTED_REPORTABLE_IDS/EXPECTED_ACTION_CLASS_IDS)
+#: -- the deferred allowlist is now empty and REMOVED rather than kept as a
+#: standing empty constant (plan instruction: "if it does [end up empty],
+#: delete it and say so").
+EXPECTED_GATE_NOTHING_RECOMMENDATION_CARRYING_IDS: frozenset[str] = (
+    EXPECTED_REPORTABLE_IDS | EXPECTED_ACTION_CLASS_IDS
+)
+
 
 def test_census_of_gate_nothing_recommendation_carrying_judgment_points(monkeypatch, tmp_path):
     """AC3: walks every `build_judgment_point` call site this plan's
     mechanism can reach, constructs each builder, and asserts the resulting
     gate-nothing recommendation-carrying id set equals the checked-in
-    expected set above. A new one appearing anywhere fails with a message
-    naming the id and its file -- the artifact that discharges the "a
-    question that cannot change an outcome should not be asked" rule."""
-    acc: dict[str, set[str]] = {}
+    three-way ledger above -- every id present must be in EXACTLY one of
+    (reportable, action-class, the named deferred-workstream-complete
+    allowlist), never in neither. A new gate-nothing point appearing
+    anywhere outside all three fails this test with a message naming the id
+    and its file/classification -- the artifact AC2 requires: "adding a new
+    one without classifying it fails a test." """
+    acc: dict[str, dict[str, Any]] = {}
 
     _sweep_workday_complete(acc)
     _sweep_workweek_complete(acc)
@@ -489,22 +588,67 @@ def test_census_of_gate_nothing_recommendation_carrying_judgment_points(monkeypa
     missing = EXPECTED_GATE_NOTHING_RECOMMENDATION_CARRYING_IDS - computed_ids
 
     assert not unexpected, (
-        "New gate-nothing recommendation-carrying judgment point(s) found, not yet in "
-        f"EXPECTED_GATE_NOTHING_RECOMMENDATION_CARRYING_IDS: "
-        + ", ".join(f"{jid!r} (built by {sorted(acc[jid])})" for jid in sorted(unexpected))
+        "New gate-nothing recommendation-carrying judgment point(s) found, not yet "
+        "classified into EXPECTED_REPORTABLE_IDS/EXPECTED_ACTION_CLASS_IDS: "
+        + ", ".join(
+            f"{jid!r} (built by {sorted(acc[jid]['sources'])}, "
+            f"reportable={acc[jid]['reportable']!r})"
+            for jid in sorted(unexpected)
+        )
     )
     assert not missing, (
         "Previously-classified gate-nothing recommendation-carrying judgment point(s) no "
         f"longer reproduced by this census (id now gates something, lost its recommendation, "
-        f"or its builder changed shape) -- update the checked-in expected set if this is "
+        f"or its builder changed shape) -- update the checked-in ledger if this is "
         f"intentional: {sorted(missing)}"
+    )
+
+    # AC2's "cannot rot" property, made explicit: a point in the ledger
+    # must carry the `reportable` marker matching its bucket -- a mismatch
+    # means the builder's marking drifted from this test's expectation
+    # without either being updated together.
+    mismatched_reportable = [
+        jid
+        for jid in sorted(EXPECTED_REPORTABLE_IDS & computed_ids)
+        if acc[jid]["reportable"] is not True
+    ]
+    mismatched_action_class = [
+        jid
+        for jid in sorted(EXPECTED_ACTION_CLASS_IDS & computed_ids)
+        if acc[jid]["reportable"] is not False
+    ]
+    assert not mismatched_reportable, (
+        "Expected reportable=True (acknowledgement-class, demoted) but the builder "
+        f"marked otherwise: {mismatched_reportable}"
+    )
+    assert not mismatched_action_class, (
+        "Expected reportable=False (action-class, explicitly decided) but the builder "
+        f"marked otherwise: {mismatched_action_class}"
+    )
+
+    # The AC2 fail-loud property itself: any gate-nothing recommendation-
+    # carrying point must be classified (True or False) -- `None` here
+    # means someone added a new gate-nothing point (or removed a
+    # `reportable=` kwarg) without ever deciding which bucket it belongs
+    # in. No deferred allowlist remains (C2 redo emptied and removed it).
+    unclassified = [
+        jid
+        for jid in sorted(computed_ids)
+        if acc[jid]["reportable"] is None
+    ]
+    assert not unclassified, (
+        "Gate-nothing recommendation-carrying judgment point(s) with no explicit "
+        "reportable=True/False classification (AC2: adding one without classifying "
+        f"it must fail this test): "
+        + ", ".join(f"{jid!r} (built by {sorted(acc[jid]['sources'])})" for jid in unclassified)
     )
 
 
 def test_partition_reportable_precondition_refuses_to_demote_a_depended_on_point():
     """Pinned interface precondition: a point named in ANY directive's
     `depends_on` must never be classified `reported`, even when no
-    disposition names a live directive id."""
+    disposition names a live directive id and even when explicitly marked
+    `reportable=True` -- the `depends_on` guard trumps the marker."""
     from coordinator_core.contract.decision_object.judgment import (
         build_disposition,
         build_judgment_point,
@@ -518,6 +662,7 @@ def test_partition_reportable_precondition_refuses_to_demote_a_depended_on_point
             dispositions=[build_disposition("x", resolves=[])],
             evidence="e",
             reason="r",
+            reportable=True,
         )
     ]
     directives = [
@@ -531,8 +676,9 @@ def test_partition_reportable_precondition_refuses_to_demote_a_depended_on_point
 def test_partition_reportable_does_not_swallow_a_phantom_resolves_id_into_reported():
     """A `resolves` id naming a directive absent from the envelope entirely
     is out of `partition_reportable`'s vocabulary per the plan's
-    Definitional call -- verified here as: the base rule classifies it
-    `reported` (nothing more this predicate can do without duplicating
+    Definitional call -- verified here as: the base rule (gate-nothing AND
+    explicitly marked `reportable=True`) classifies it `reported` (nothing
+    more this predicate can do without duplicating
     `phantom_resolves_sweep.py`), and that guard -- not this function -- is
     what must catch an ACCIDENTAL instance before it ever reaches this
     predicate on a shipped envelope."""
@@ -553,6 +699,7 @@ def test_partition_reportable_does_not_swallow_a_phantom_resolves_id_into_report
             dispositions=[build_disposition("x", resolves=["d-does-not-exist"])],
             evidence="e",
             reason="r",
+            reportable=True,
         )
     ]
     directives: list[dict[str, Any]] = []
@@ -576,57 +723,386 @@ def test_partition_reportable_does_not_swallow_a_phantom_resolves_id_into_report
         )
 
 
-def test_jp_coverage_verdict_d_write_trail_is_uncovered_by_the_existing_sweep():
-    """C1(c) BOUNDED DETERMINATION: the plan's Definitional call claims
-    `jp-coverage-verdict`'s literal `d-write-trail` is a deliberate
-    back-compat dead reference, but `phantom_resolves_sweep.py` has no
-    allowlist/exemption mechanism for it (`d-write-trail` is absent from
-    `test_workstream_complete.py`'s own `_NO_DIRECTIVE_BACKING_RESOLVES_IDS`,
-    the local guard `_sweep_directive_ids_and_resolves_ids`'s regression
-    feeds).
+def _minimal_envelope(**overrides: Any) -> dict[str, Any]:
+    from coordinator_core.contract.decision_object.envelope import build_envelope
 
-    Settled by construction: `build_coverage_judgment_point`'s fallback
-    branch (`write_trail_ids = ["d-write-trail"]`, taken when `d-coverage-
-    gate` is present but no real `d-write-trail*` directive was built) DOES
-    trip the guard when actually exercised -- proven below. The reason the
-    guard has never failed on it in CI is that `_sweep_directive_ids_and_
-    resolves_ids`'s `decisions` payload always populates `review` (a dict),
-    so `build_write_trail_directives` always emits a real `d-write-trail`
-    directive and the fallback branch is never reached by that sweep's
-    axes -- a COVERAGE GAP in the existing sweep, not evidence the
-    reference is safe. Verdict: the "deliberate back-compat dead reference"
-    framing is not supported by anything that currently runs; `d-write-
-    trail` is a latent defect already owned by `phantom_resolves_sweep.py`
-    the day a sweep actually reaches that branch, not a documented
-    exemption."""
-    from coordinator_core.workstream_complete import build_coverage_judgment_point
-    from coordinator_core.ceremony_common.phantom_resolves_sweep import (
-        PhantomSweepResult,
-        assert_no_phantom_resolves_ids,
+    return build_envelope(**overrides)
+
+
+def test_emit_raises_on_an_unclassified_gate_nothing_recommendation_carrying_point():
+    """AC2, runtime half: `_emit` raises `DecisionObjectError` when an
+    envelope carries a recommendation-carrying judgment point that gates
+    nothing on the directive axis and whose `reportable` is left `None`
+    (unclassified) -- adding a new one without classifying it must fail,
+    not just at census time (`test_census_of_gate_nothing_recommendation_
+    carrying_judgment_points` above) but at the `_emit` chokepoint every
+    `build_envelope` producer routes through."""
+    from coordinator_core.contract.decision_object.envelope import (
+        DecisionObjectError,
+        _emit,
+    )
+    from coordinator_core.contract.decision_object.judgment import (
+        build_disposition,
+        build_judgment_point,
     )
 
-    directives = [{"id": "d-coverage-gate", "cli": "x", "args": [], "depends_on": None, "already_satisfied": False}]
-    jp = build_coverage_judgment_point(gate=None, directives=directives)
-    assert jp["id"] == "jp-coverage-verdict"
-
-    resolves_ids: set[str] = set()
-    for disposition in jp["dispositions"]:
-        resolves_ids.update(disposition.get("resolves") or [])
-    assert "d-write-trail" in resolves_ids
-
-    result = PhantomSweepResult(
-        directive_ids=frozenset(d["id"] for d in directives),
-        resolves_ids=frozenset(resolves_ids),
-        judgment_point_ids=frozenset([jp["id"]]),
+    jp = build_judgment_point(
+        {"disposition": "x", "rationale": "y"},
+        id="jp-unclassified-gate-nothing",
+        question="q",
+        dispositions=[build_disposition("x", resolves=[])],
+        evidence="e",
+        reason="r",
+        # reportable left at its default (None) -- deliberately unclassified.
     )
-    raised = False
+    envelope = _minimal_envelope(judgment_points=[jp], directives=[])
+
     try:
-        assert_no_phantom_resolves_ids(result, package_name="jp_coverage_verdict_fallback_repro")
-    except AssertionError:
-        raised = True
-    assert raised, (
-        "expected phantom_resolves_sweep.py to fail on jp-coverage-verdict's fallback "
-        "d-write-trail reference when no real d-write-trail directive backs it -- if this "
-        "no longer raises, the 'deliberate back-compat dead reference' framing may have "
-        "been made true by an allowlist added elsewhere; re-examine before trusting it"
+        _emit(envelope)
+    except DecisionObjectError as exc:
+        assert "jp-unclassified-gate-nothing" in str(exc)
+    else:
+        raise AssertionError(
+            "_emit did not raise on an unclassified gate-nothing "
+            "recommendation-carrying judgment point"
+        )
+
+
+def test_emit_does_not_raise_on_a_reportable_true_gate_nothing_point():
+    """Acknowledgement-class (`reportable=True`): `_emit` must NOT raise --
+    this is the legal, demoted-into-narration case, not a defect."""
+    from coordinator_core.contract.decision_object.envelope import _emit
+    from coordinator_core.contract.decision_object.judgment import (
+        build_disposition,
+        build_judgment_point,
     )
+
+    jp = build_judgment_point(
+        {"disposition": "x", "rationale": "y"},
+        id="jp-reportable-true-gate-nothing",
+        question="q",
+        dispositions=[build_disposition("x", resolves=[])],
+        evidence="e",
+        reason="r",
+        reportable=True,
+    )
+    envelope = _minimal_envelope(judgment_points=[jp], directives=[])
+
+    result = _emit(envelope)
+    assert result is envelope
+
+
+def test_emit_does_not_raise_on_a_reportable_false_gate_nothing_point():
+    """Action-class (`reportable=False`): `_emit` must NOT raise -- this is
+    a gate-nothing point deliberately kept asking, not an unclassified one.
+    Getting this wrong makes every workday/workweek/wsc ceremony throw on
+    a legitimate, decided point."""
+    from coordinator_core.contract.decision_object.envelope import _emit
+    from coordinator_core.contract.decision_object.judgment import (
+        build_disposition,
+        build_judgment_point,
+    )
+
+    jp = build_judgment_point(
+        {"disposition": "x", "rationale": "y"},
+        id="jp-reportable-false-gate-nothing",
+        question="q",
+        dispositions=[build_disposition("x", resolves=[])],
+        evidence="e",
+        reason="r",
+        reportable=False,
+    )
+    envelope = _minimal_envelope(judgment_points=[jp], directives=[])
+
+    result = _emit(envelope)
+    assert result is envelope
+
+
+def test_emit_does_not_raise_on_a_depended_on_unclassified_point():
+    """A point named in a directive's `depends_on` is legitimately `asked`
+    regardless of its `reportable` marker -- `_emit` must not raise on it
+    even when unclassified, matching `partition_reportable`'s own
+    precondition (mirrored via `find_unclassified_gate_nothing_points`)."""
+    from coordinator_core.contract.decision_object.envelope import _emit
+    from coordinator_core.contract.decision_object.judgment import (
+        build_disposition,
+        build_judgment_point,
+    )
+
+    jp = build_judgment_point(
+        {"disposition": "x", "rationale": "y"},
+        id="jp-gates-nothing-but-depended-on",
+        question="q",
+        dispositions=[build_disposition("x", resolves=[])],
+        evidence="e",
+        reason="r",
+    )
+    directives = [
+        {"id": "d1", "cli": "noop", "args": [], "depends_on": ["jp-gates-nothing-but-depended-on"]},
+    ]
+    envelope = _minimal_envelope(judgment_points=[jp], directives=directives)
+
+    result = _emit(envelope)
+    assert result is envelope
+
+
+def test_emit_does_not_raise_on_a_non_recommendation_carrying_point():
+    """`build_untrusted_gate_judgment_point` never carries a
+    `recommendation` by construction -- it is out of AC2's vocabulary
+    entirely and must not trip the invariant even when unclassified and
+    gate-nothing."""
+    from coordinator_core.contract.decision_object.envelope import _emit
+    from coordinator_core.contract.decision_object.judgment import (
+        build_disposition,
+        build_untrusted_gate_judgment_point,
+    )
+
+    jp = build_untrusted_gate_judgment_point(
+        id="jp-untrusted-gate-nothing",
+        question="q",
+        dispositions=[build_disposition("x", resolves=[])],
+        evidence="e",
+        reason="r",
+    )
+    envelope = _minimal_envelope(judgment_points=[jp], directives=[])
+
+    result = _emit(envelope)
+    assert result is envelope
+
+
+def test_emit_does_not_raise_on_the_five_resolver_backed_points_under_empty_decisions():
+    """2026-08-15 C10 follow-up (EM ruling): the five resolver-backed
+    points -- whose `resolves` is populated from a `decisions` slice, not
+    authored statically -- must NOT trip `_emit`'s invariant even when
+    built under an empty `decisions` slice (the exact condition that made
+    `resolves` come back `[]` and previously triggered a false positive).
+    `resolves_computed=True` is what makes `_emit` tolerate them; this is
+    the regression this dispatch's own run caught."""
+    from coordinator_core.contract.decision_object.envelope import _emit
+    from coordinator_core.workstream_complete.judgments import (
+        build_lesson_worth_capturing_judgment_point,
+        build_memo_resolution_attribution_judgment_point,
+        build_review_dispatch_vehicle_choice_judgment_point,
+        build_review_partition_strategy_judgment_point,
+        build_reviewer_count_on_oracle_disagreement_judgment_point,
+    )
+
+    points = [
+        build_lesson_worth_capturing_judgment_point(capture_resolves_ids=[]),
+        build_memo_resolution_attribution_judgment_point(
+            resolved_resolves_ids=[], attribution_signals=[]
+        ),
+        build_review_partition_strategy_judgment_point(partition_resolves_ids=[]),
+        build_reviewer_count_on_oracle_disagreement_judgment_point(
+            partition_resolves_ids=[]
+        ),
+        build_review_dispatch_vehicle_choice_judgment_point(partition_resolves_ids=[]),
+    ]
+    envelope = _minimal_envelope(judgment_points=points, directives=[])
+
+    result = _emit(envelope)
+    assert result is envelope
+
+
+#: Exactly the census's own `_RESOLVER_BACKED_OUT_OF_SCOPE_IDS` set -- kept
+#: as a SEPARATE pin (not derived from that constant) so a change to either
+#: one is visible as a diff to the other, not silently kept in sync.
+_EXPECTED_RESOLVES_COMPUTED_IDS: frozenset[str] = frozenset(
+    {
+        "lesson-worth-capturing",
+        "memo-resolution-attribution",
+        "review-partition-strategy",
+        "reviewer-count-on-oracle-disagreement",
+        "review-dispatch-vehicle-choice",
+    }
+)
+
+
+def test_resolves_computed_marker_is_pinned_to_exactly_the_resolver_backed_five():
+    """`resolves_computed=True` is legal only on a point whose `resolves`
+    is genuinely resolver-populated -- not a general escape hatch a future
+    author can reach for to silence a real unclassified point. Pinned via
+    static grep over the constructor source (not execution): every
+    `resolves_computed=True` call-site keyword must sit inside one of
+    exactly these five `id="..."` builder bodies, and every one of the
+    five must actually carry the marker.
+
+    Deliberately a SEPARATE assertion from the census's own
+    `_RESOLVER_BACKED_OUT_OF_SCOPE_IDS` exclusion (see this module's
+    top-of-file comment and `find_unclassified_gate_nothing_points`'s
+    docstring): the census asserts the five are excluded by identity: this
+    test asserts the runtime marker's placement is exactly as narrow. A
+    sixth resolver-backed point carrying the marker but missing from the
+    census list is still visible -- it fails the census test's `missing`
+    branch, not silently absorbed here.
+    """
+    import re
+
+    judgments_path = (
+        Path(__file__).resolve().parents[3] / "workstream_complete" / "judgments.py"
+    )
+    source = judgments_path.read_text(encoding="utf-8")
+
+    # Every top-level `def build_..._judgment_point(...)` body, sliced from
+    # its own `def` line to the next `def` line (or EOF).
+    def_starts = [m.start() for m in re.finditer(r"^def build_\w+\(", source, re.MULTILINE)]
+    def_starts.append(len(source))
+
+    carrying_ids: set[str] = set()
+    for i in range(len(def_starts) - 1):
+        body = source[def_starts[i] : def_starts[i + 1]]
+        if "resolves_computed=True" not in body:
+            continue
+        id_match = re.search(r'id="([^"]+)"', body)
+        assert id_match, (
+            "a build_..._judgment_point body carries resolves_computed=True "
+            "but this test could not find its id=\"...\" literal -- "
+            f"body starts: {body[:120]!r}"
+        )
+        carrying_ids.add(id_match.group(1))
+
+    assert carrying_ids == _EXPECTED_RESOLVES_COMPUTED_IDS, (
+        "resolves_computed=True must be spelled on exactly the five resolver-backed "
+        f"ids: extra={sorted(carrying_ids - _EXPECTED_RESOLVES_COMPUTED_IDS)} "
+        f"missing={sorted(_EXPECTED_RESOLVES_COMPUTED_IDS - carrying_ids)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression pin: `jp-review-scale`'s resolved branch (2026-08-15, live
+# incident reported mid-`/workstream-complete` by a peer repo's EM).
+# `build_review_scale_judgment_point`'s RESOLVED branch builds a
+# recommendation-carrying point (`acknowledge-scale`, `resolves=[]`) that
+# gates nothing on the directive axis (DR-068 keeps `d-run-wsc-tail` free of
+# any dependency edge on it) -- exactly the shape `_emit`'s
+# `find_unclassified_gate_nothing_points` backstop refuses when
+# `reportable` is left unset. The three UNRESOLVED branches build
+# `build_untrusted_gate_judgment_point` points instead, which never carry a
+# `recommendation` by construction and are therefore always out of that
+# backstop's vocabulary regardless of any `reportable` marker -- so this
+# defect could only ever fire on the resolved branch, and it fired
+# precisely when a chain-terminal decision transitioned from unresolved
+# (working) to resolved (raising): an EM discharging the review gate by
+# writing review-trail records is what flips `decide_review_scale` from
+# unresolved to resolved on rows 5/6, so compliance with
+# PARTITION-MANDATORY is what broke `brief()`/`apply()`, with no
+# `--decisions` escape since the raise happens inside `_emit` before
+# decisions are ever consulted.
+# ---------------------------------------------------------------------------
+
+from coordinator_core import workstream_complete as _wsc_regression
+from coordinator_core.contract.decision_object.envelope import _emit as _regression_emit
+from coordinator_core.workstream_complete import chain_partition_verdict_store
+from coordinator_core.workstream_complete.directives_review import (
+    _CHAIN_VERDICT_PARTITION_MANDATORY,
+    decide_review_scale,
+)
+
+_REVIEW_SCALE_RESOLVED_SMALL: dict[str, Any] = dict(
+    gross_loc=10,
+    code_loc=10,
+    commit_count=1,
+    surface_count=1,
+    executor_dispatched=False,
+    shared_schema_touched=False,
+)
+
+
+def test_resolved_chain_terminal_review_scale_point_survives_emit():
+    """AC-1/regression proper: a RESOLVED `ReviewScaleDecision` on a
+    chain-terminal row (6, PARTITION-MANDATORY) must produce a judgment
+    point that `_emit` accepts -- asserted on the envelope emitting
+    successfully (never raising `DecisionObjectError`), not merely on the
+    `reportable` key's presence: the key is today's implementation detail,
+    the contract is that the envelope does not raise."""
+    decision = decide_review_scale(
+        **_REVIEW_SCALE_RESOLVED_SMALL,
+        chain_disposition="predecessor-consumed",
+        chain_partition_verdict=_CHAIN_VERDICT_PARTITION_MANDATORY,
+    )
+    assert decision.resolved is True
+    assert decision.row == 6
+
+    jp = _wsc_regression.build_review_scale_judgment_point(
+        decision, chain_terminal=True, verdict_presence=chain_partition_verdict_store.PRESENCE_PRESENT
+    )
+    assert jp is not None
+    assert jp["id"] == "jp-review-scale"
+    assert jp.get("recommendation") is not None
+
+    envelope = _minimal_envelope(judgment_points=[jp], directives=[])
+    result = _regression_emit(envelope)
+    assert result is envelope
+
+
+def test_unresolved_review_scale_branches_are_not_marked_reportable():
+    """AC-2/asymmetry: the three UNRESOLVED branches (pending/unreadable/
+    generic-untrusted-gate) must NOT be marked `reportable=True` -- a
+    blanket `reportable=True` across all four branches would also make
+    `_emit` stop raising and would be the wrong fix (those branches carry
+    real dispositions -- run-the-pending-gate, partition-by-hand,
+    report-if-still-unreadable -- the EM must still act on, not a pure
+    acknowledgement). This test fails if someone "fixes" the defect that
+    way."""
+    unresolved_decision = decide_review_scale(
+        **_REVIEW_SCALE_RESOLVED_SMALL,
+        chain_disposition="predecessor-consumed",
+        chain_partition_verdict=None,
+    )
+    assert unresolved_decision.resolved is False
+
+    pending_jp = _wsc_regression.build_review_scale_judgment_point(
+        unresolved_decision,
+        chain_terminal=True,
+        verdict_presence=chain_partition_verdict_store.PRESENCE_ABSENT,
+    )
+    unreadable_jp = _wsc_regression.build_review_scale_judgment_point(
+        unresolved_decision,
+        chain_terminal=True,
+        verdict_presence=chain_partition_verdict_store.PRESENCE_UNREADABLE,
+    )
+    generic_jp = _wsc_regression.build_review_scale_judgment_point(
+        unresolved_decision, chain_terminal=False, verdict_presence=None
+    )
+
+    for jp in (pending_jp, unreadable_jp, generic_jp):
+        assert jp is not None
+        assert jp.get("recommendation") is None
+        assert jp.get("reportable") is not True
+
+
+def test_review_scale_transition_from_unresolved_to_resolved_never_starts_raising():
+    """AC-3/the actual bug: the SAME envelope shape, moving from unresolved
+    (working) to resolved (the state DISCHARGING the review gate produces)
+    must not turn a working `brief()`-shaped envelope into a raising one --
+    this is the exact state transition the live incident reproduced:
+    `brief()` succeeded while `jp-review-scale` was unresolved, the EM then
+    wrote review-trail records that discharged the review gate, and the
+    NEXT close's `decide_review_scale` call resolved the same chain-terminal
+    row and raised."""
+    unresolved_decision = decide_review_scale(
+        **_REVIEW_SCALE_RESOLVED_SMALL,
+        chain_disposition="predecessor-consumed",
+        chain_partition_verdict=None,
+    )
+    unresolved_jp = _wsc_regression.build_review_scale_judgment_point(
+        unresolved_decision,
+        chain_terminal=True,
+        verdict_presence=chain_partition_verdict_store.PRESENCE_ABSENT,
+    )
+    unresolved_envelope = _minimal_envelope(judgment_points=[unresolved_jp], directives=[])
+    assert _regression_emit(unresolved_envelope) is unresolved_envelope
+
+    resolved_decision = decide_review_scale(
+        **_REVIEW_SCALE_RESOLVED_SMALL,
+        chain_disposition="predecessor-consumed",
+        chain_partition_verdict=_CHAIN_VERDICT_PARTITION_MANDATORY,
+    )
+    resolved_jp = _wsc_regression.build_review_scale_judgment_point(
+        resolved_decision, chain_terminal=True, verdict_presence=chain_partition_verdict_store.PRESENCE_PRESENT
+    )
+    resolved_envelope = _minimal_envelope(judgment_points=[resolved_jp], directives=[])
+    # This is the regression: pre-fix, this call raised `DecisionObjectError`
+    # for exactly the reason a discharged review gate produces a resolved
+    # decision -- i.e. the transition an EM's compliance triggers.
+    assert _regression_emit(resolved_envelope) is resolved_envelope

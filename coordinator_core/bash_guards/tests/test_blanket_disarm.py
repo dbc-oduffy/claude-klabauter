@@ -467,6 +467,93 @@ class TestM18ActiveRequiresNamedBands:
         assert bd.disarm_status(EM_PAYLOAD).active is True
 
 
+class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
+    """C4 -- the cache used to be keyed ONLY on (session_id, is_em), so a
+    long-lived (warm-engine) process could keep replaying a cached
+    `active=True` verdict past the marker's own `Expires:` instant, or past
+    an operator editing/deleting the marker entirely. Both are the ONE
+    staleness case in this module that trades safety (fail-open), so both
+    get a dedicated regression here rather than relying on the scope tests
+    above (which all clear the cache explicitly and never call twice with
+    the clock advanced)."""
+
+    def test_cached_active_verdict_does_not_survive_its_own_expiry(self, tmp_path):
+        # Review: coordinatorreview-integrator (failopen-caches P3) -- the
+        # initial "still active" assertion below is widened from a 1ms
+        # Expires window to several seconds. A 1ms window made THIS
+        # assertion (not the later, deliberately-slept one) flaky on a
+        # loaded/contended box (this repo's own CLAUDE.md notes 50-70
+        # concurrent LLM sessions as the norm): more than 1ms can elapse
+        # between the marker write and the very next line's disarm_status
+        # call for reasons unrelated to the expiry logic under test. The
+        # tight window is preserved only for the second assertion below,
+        # which explicitly sleeps past it.
+        now = datetime.now(timezone.utc)
+        expires_in = timedelta(seconds=2)
+        _write_marker(
+            tmp_path,
+            f"Scope: time\nSince: {_iso(now)}\nExpires: {_iso(now + expires_in)}\n"
+            "Bands: advisory-rewrite\nReason: x\n",
+        )
+        # Widened window (was 1ms): a loaded/contended box (this repo's own
+        # CLAUDE.md notes 50-70 concurrent LLM sessions as the norm) can let
+        # more than 1ms elapse between the marker write above and this very
+        # next line, making a 1ms-Expires "still active" assertion flaky for
+        # reasons unrelated to the expiry logic under test. 2 seconds gives
+        # this line comfortable headroom.
+        assert bd.disarm_status(EM_PAYLOAD).active is True
+
+        # Marker is UNCHANGED on disk (same stat key) -- only wall-clock
+        # time has moved past Expires. The old (session_id, is_em)-only
+        # cache key would replay the still-True verdict forever within this
+        # process; the fix must re-check expires_at live on every call.
+        later = bd._evaluate(
+            now + expires_in + timedelta(seconds=1), session_id="", is_em=True, home=bd.settings_home()
+        )
+        assert later.active is False  # sanity: the pure evaluator agrees
+
+        # Tight window preserved HERE, on the real expiry-crossing check --
+        # sleep comfortably past the marker's own Expires, then confirm the
+        # cached (still-True) verdict does not survive it.
+        import time as _time
+
+        _time.sleep(expires_in.total_seconds() + 0.5)
+        assert bd.disarm_status(EM_PAYLOAD).active is False
+
+    def test_cache_key_changes_when_marker_is_edited_without_explicit_clear(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        _write_marker(
+            tmp_path,
+            f"Scope: machine-total\nSince: {_iso(now)}\nBands: advisory-rewrite\nReason: x\n",
+        )
+        assert bd.disarm_status(EM_PAYLOAD).active is True
+
+        # Rewrite with a Bands field that names nothing suppressible --
+        # deliberately WITHOUT calling bd._cache.clear() (unlike the M18
+        # test with the same shape), to prove the stat-keyed cache detects
+        # the edit on its own rather than requiring a test-only reset.
+        import time as _time
+
+        _time.sleep(0.01)
+        _write_marker(
+            tmp_path,
+            f"Scope: machine-total\nSince: {_iso(now)}\nReason: x\n",
+        )
+        assert bd.disarm_status(EM_PAYLOAD).active is False
+
+    def test_cache_key_changes_when_marker_is_deleted(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        marker = tmp_path / bd.MARKER_BASENAME
+        _write_marker(
+            tmp_path,
+            f"Scope: machine-total\nSince: {_iso(now)}\nBands: advisory-rewrite\nReason: x\n",
+        )
+        assert bd.disarm_status(EM_PAYLOAD).active is True
+
+        marker.unlink()
+        assert bd.disarm_status(EM_PAYLOAD).active is False
+
+
 class TestDisarmResultDetailIsInformative:
     def test_disarm_status_never_raises_on_garbage_marker(self, tmp_path):
         _write_marker(tmp_path, "this is not key: value shaped garbage \x00\x01")

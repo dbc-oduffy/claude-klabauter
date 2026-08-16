@@ -11,6 +11,7 @@ Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-implemented --plan <path>
     plan-status-transition stamp-implemented --plan <path> --override-reason "<why>"
     plan-status-transition stamp-superseded --plan <path> --by <successor-plan-path>
+    plan-status-transition stamp-reopened --plan <path> --reason "<why>"
 
 ``--override-reason`` (2026-08-10, cross-repo memo example-retrieval-repo-em-close-out-
 stamps-implemented-without-reading-the-ac-table.md): an explicit,
@@ -172,6 +173,69 @@ below is a NEW stderr line reached only on a git-commit failure; it does not
 alter any existing stdout line the node-oracle byte-parity obligation, while
 it held, ever covered.
 
+``stamp-reopened`` (2026-08-16, PM-authorized directly, no plan file — see
+this op's own git history for the dispatch that added it): the THIRD
+authorized writer of a plan's ``status:`` field, and the only one that moves
+a plan OUT of a frozen status. It exists to repair a since-fixed defect: a
+now-closed gate could stamp a plan ``status: implemented`` (a member of
+``_FROZEN_STATUSES``, terminal-by-convention) while its own plan-tasks spine
+still carried row(s) at ``disposition: open`` — a corpus scan found 18 such
+plans, and because ``implemented`` is frozen, nothing could ever move them
+off that false-clean status again. The defect that produced this is fixed
+(no NEW plan can be mis-stamped this way), but the engine had no way to
+LEAVE the state by design; this verb is the exit, not a new way in.
+
+Root cause the freeze rationale itself misses: ``_FROZEN_STATUSES`` exists
+to protect HUMAN-DECLARED judgments (``abandoned``, ``deferred``,
+``superseded`` — see ``_stamp_superseded``'s own docstring) from being
+silently overwritten by this op's own machine-derived flip logic.
+``implemented`` is the one member of that set THIS OP WRITES ITSELF — a rule
+authored to guard a human's word is, for that one member, guarding this
+op's own prior machine-derived output instead. ``stamp-reopened`` is scoped
+to repairing exactly that one member, and only when the spine itself
+disagrees with it (see the precondition-gate below) — it does not touch
+``abandoned``/``deferred``/``superseded`` at all.
+
+Negative-spec (the scope limits are the load-bearing half of this verb):
+  - Moves ``implemented -> landed`` and NOTHING ELSE. There is no generic
+    ``--to <status>`` flag and none will be added here — ``plan.schema.json``
+    already defines ``landed`` as "every chunk's code is on the branch, but
+    not every spine row has reached a disposition yet... NOT terminal",
+    which is exactly the true state a false-``implemented`` plan with open
+    spine rows is actually in; a plan reopened to ``landed`` re-stamps to
+    ``implemented`` again by the ORDINARY ``stamp-implemented`` path, once
+    (and only once) its spine rows resolve. Widening this verb's target set
+    (``implemented -> draft``/``executing``, or any other pair) is
+    reintroducing the false-clean this verb exists to repair — a status this
+    op can move ANYWHERE is no longer evidence of anything.
+  - Never reachable from a sweep, cascade, or ceremony tail — mirrors
+    ``stamp-superseded``'s identical negative-spec below verbatim. No
+    ``@register_op``, no registry entry, no caller anywhere in this module
+    or its siblings invokes it programmatically. One plan at a time, with a
+    stated reason, typed by a human/EM — never looped over the corpus by an
+    automated sweep, however well-intentioned; a sweep that reopens 18
+    plans unattended is the same failure mode as the gate that closed them
+    wrongly in the first place, just pointed the other way.
+  - Precondition-gated on a COMPUTED verdict
+    (``directives_spine_worklist.compute_open_spine_row_gate``), never on
+    the caller's bare assertion that a plan is wrongly stamped — see
+    ``_stamp_reopened``'s own docstring for why a second, bespoke oracle is
+    not written here.
+  - Does NOT walk back the original cascade (see "Reverse cascade" below) —
+    only reports the inconsistency it leaves behind.
+
+Reverse cascade — report, never auto-reverse (2026-08-16): the ORIGINAL
+false flip fired ``_run_cascade``, which may have advanced downstream
+``state/handoffs/*.md``/sizing artifacts believing the plan's work was
+fully done. Reopening the plan does not, and must not, walk any of that
+back — precedent (commit ``2c5c7f907``) already ruled that artifacts
+describing work that genuinely landed stay as they are; a handoff/sizing
+that advanced is not FALSE just because its governing plan's own status
+was. ``_stamp_reopened`` detects any live governing handoff (reusing
+``_find_governing_handoff_paths``, the same reverse-join
+``_refuse_if_live_foreign_holder`` already uses — not a second lookup) and
+prints it as an advisory inconsistency note; it never mutates the handoff.
+
 Path containment (2026-08-06, C2a, docs/plans/2026-08-06-writer-side-commit-
 ownership-lock-gap.md): until this addition, this op had NO containment
 guard of any kind -- it flipped `status:` and committed ANY path the caller
@@ -295,7 +359,7 @@ _FLIPPABLE_STATUSES = frozenset(_FLIPPABLE_STATUSES_ORDER)
 
 
 class _Opts:
-    __slots__ = ("verb", "plan", "by", "override_reason")
+    __slots__ = ("verb", "plan", "by", "override_reason", "reason")
 
     def __init__(
         self,
@@ -303,11 +367,13 @@ class _Opts:
         plan: Optional[str],
         by: Optional[str] = None,
         override_reason: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> None:
         self.verb = verb
         self.plan = plan
         self.by = by
         self.override_reason = override_reason
+        self.reason = reason
 
 
 class _CliError(Exception):
@@ -332,6 +398,11 @@ def _parse_args(argv: List[str]) -> _Opts:
     the-ac-table.md) is parsed the same way, generically, for the same
     reason: gating an out-of-verb flag belongs to `main()`, not the parser
     (see the rejection there for `stamp-superseded`).
+
+    ``--reason`` (2026-08-16, `stamp-reopened` only) is parsed the same
+    generic way, for the same reason -- `stamp-reopened` requires it
+    (see `_stamp_reopened`), and `main()` rejects it out-of-verb, mirroring
+    `--by`/`--override-reason` above.
     """
     verb = argv[0] if argv else None
     opts = _Opts(verb=verb, plan=None)
@@ -353,6 +424,11 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.override_reason = argv[i]
+        elif a == "--reason":
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            opts.reason = argv[i]
         else:
             raise _CliError(f"unknown argument: {a}")
         i += 1
@@ -1469,6 +1545,265 @@ def _stamp_superseded(opts: _Opts) -> int:
     return 0
 
 
+def _stamp_reopened(opts: _Opts) -> int:
+    """Perform the stamp-reopened verb (2026-08-16, PM-authorized directly);
+    returns the exit code.
+
+    Purpose: the ONLY writer that moves a plan OUT of ``implemented`` — see
+    this module's docstring "stamp-reopened" section for the incident this
+    repairs (a since-fixed defect stamped ``implemented`` while the plan's
+    own spine still had open rows; 18 plans found by corpus scan). Moves
+    ``implemented -> landed`` and NOTHING ELSE — no generic ``--to``, no
+    other source/target pair; see the module docstring's negative-spec for
+    why widening this verb's target set is how it becomes the false-clean
+    it exists to repair.
+
+    Precondition-gated on a COMPUTED verdict, never the caller's assertion:
+    reuses ``directives_spine_worklist.compute_open_spine_row_gate`` (the
+    same oracle `workstream_complete/__init__.py` already gates
+    ``d-stamp-plan-implemented`` on) rather than writing a second, bespoke
+    "does this plan have open spine rows" check — the standing convention
+    this repo already follows for the AC-table oracle
+    (`_ac_open_rows_warning` reuses `_ac_table_desync_finding` rather than
+    re-deriving it). The plan itself is its own "governing plan" for this
+    gate's purposes (it is the spine being reopened, not some other
+    session's inherited baton) -- `governing_plan_slug` is the plan path's
+    stem, used only for the gate's own human-readable summary/warn text,
+    never for gate logic. Refuses unless the gate's `verdict` is exactly
+    `"applicable"` with `open_count > 0` -- `"not-applicable"` (spine
+    resolved, genuinely nothing open) and `"indeterminate"` (could not
+    resolve the spine at all) both refuse: this verb requires POSITIVE
+    evidence of an open row, not merely the absence of a clean verdict.
+
+    Negative-spec: NOT reachable from any automated sweep, cascade, or
+    ceremony tail -- mirrors `_stamp_superseded`'s identical negative-spec
+    verbatim (see that function's docstring). Only ever invoked from
+    `main()`'s explicit `stamp-reopened` verb dispatch, itself only
+    reachable via a human/EM-typed CLI invocation naming both `--plan` and
+    `--reason` by hand -- never looped over the corpus.
+
+    Reverse cascade -- report, never auto-reverse (module docstring's
+    "Reverse cascade" section): after a successful flip, this function
+    reuses `_find_governing_handoff_paths` (the same reverse plan-
+    ->handoff join `_refuse_if_live_foreign_holder` already performs, not a
+    second lookup) to detect any handoff that may have been advanced by the
+    original (now-known-false) cascade, and prints it as an advisory
+    inconsistency note on stdout. It never mutates, claims, or reverses
+    that handoff -- precedent (commit `2c5c7f907`) already ruled that
+    artifacts describing work that genuinely landed stay as they are.
+
+    Mirrors `_stamp_superseded`'s authorized-writer discipline (path
+    containment, locked read-modify-write, writer-side commit ownership,
+    exit-code conventions) exactly -- see that function's docstring for the
+    shared machinery this one reuses verbatim. Diverges only where the verb
+    itself differs:
+      - requires `--reason`, a non-empty string, before touching `--plan`
+        at all (fail loud, no bare `--force` -- mirrors `--override-reason`
+        on `stamp-implemented`, not `--by`'s "path that must exist" shape,
+        since a reopen reason is prose, not a filesystem reference);
+      - refuses unless the CURRENT on-disk status is exactly `"implemented"`
+        (not any member of `_FROZEN_STATUSES` -- a `superseded`/`abandoned`/
+        `deferred` plan is a human judgment call this verb does not touch);
+      - refuses unless `compute_open_spine_row_gate` confirms an open row;
+      - writes `status: landed` plus `reopened_by`/`reopened_reason`/
+        `reopened_at`, the durable audit trail of the judgment call this
+        verb records (mirrors `superseded_by`'s role on `stamp-superseded`);
+      - never fires the terminal-state cascade (`_run_cascade` is specific
+        to `stamp-implemented`'s own semantics; a plan moving OUT of
+        `implemented` has nothing new to cascade forward) -- instead prints
+        the reverse-cascade advisory note described above.
+    """
+    if not opts.plan:
+        print(f"{_PROG}: stamp-reopened requires --plan <path>", file=sys.stderr)
+        return 1
+    if not opts.reason or not opts.reason.strip():
+        print(
+            f"{_PROG}: stamp-reopened requires --reason \"<why>\" "
+            "(state WHY this plan is being reopened -- no bare/blank reason)",
+            file=sys.stderr,
+        )
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+
+    from coordinator_core.archive_stamp import _resolve_repo_root_for
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.workstream_complete.directives_spine_worklist import (
+        compute_open_spine_row_gate,
+    )
+
+    worktree_root, git_common_dir = _resolve_repo_root_for(plan_path)
+
+    if worktree_root is not None:
+        if contained_path(plan_path, [worktree_root]) is None:
+            print(
+                f"{_PROG}: --plan escapes the resolved git worktree: {opts.plan!r}",
+                file=sys.stderr,
+            )
+            return 1
+
+    gate = compute_open_spine_row_gate(plan_path.stem, plan_path)
+    if gate.verdict != "applicable" or gate.open_count <= 0:
+        print(
+            f"{_PROG}: refusing to reopen {opts.plan}: the computed spine-row gate found "
+            f"no open row ({gate.summary_line}) -- stamp-reopened only repairs a plan whose "
+            "spine genuinely has an open row; the caller's own assertion is not evidence",
+            file=sys.stderr,
+        )
+        return 1
+
+    reason_value = opts.reason
+    _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = read_fm_field(split.fm_text, "status")
+        if status is None:
+            raise MutateAbort(f"{_PROG}: no \"status\" field found in frontmatter of {opts.plan}")
+        if status.startswith("#"):
+            raise MutateAbort(f"{_PROG}: no \"status\" field found in frontmatter of {opts.plan}")
+        status = _strip_unquoted_trailing_comment(status)
+        if status and status[0] in ("'", '"') and not status.endswith(status[0]):
+            raise MutateAbort(
+                f"{_PROG}: status value appears to carry a quoted-scalar-plus-trailing-comment, "
+                f"which this CLI does not support -- remove the inline comment or the quotes "
+                f"({opts.plan})"
+            )
+        status = unquote_yaml_scalar(status)
+        _state["deliverable_id"] = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+
+        if status != "implemented":
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at status \"{status}\", not \"implemented\" -- "
+                "stamp-reopened only moves implemented -> landed, no other transition"
+            )
+
+        from datetime import datetime, timezone
+
+        from coordinator_core.session.core import resolve_session_id
+
+        reopened_by = resolve_session_id() or "unknown-session"
+        reopened_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        fm_text = replace_fm_field(split.fm_text, "status", "landed")
+        fm_text = insert_fm_field(fm_text, "reopened_at", reopened_at, after_key="status")
+        fm_text = insert_fm_field(fm_text, "reopened_reason", reason_value, after_key="status")
+        fm_text = insert_fm_field(fm_text, "reopened_by", reopened_by, after_key="status")
+
+        _state["flipped"] = True
+        _state["prior_status"] = status
+        _state["reopened_by"] = reopened_by
+        _state["reopened_at"] = reopened_at
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        if new_text != old_text:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        written_text = new_text
+
+    if not _state["flipped"]:
+        # Unreachable in practice (`mutate` either flips or raises MutateAbort
+        # above), kept only as a defensive mirror of the sibling verbs' shape.
+        return 1
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
+                "disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> landed "
+                f"(reopened, reason: {reason_value}) on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                    f"{commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(
+        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → landed (reopened by "
+        f"{_state['reopened_by']} at {_state['reopened_at']} — reason: {reason_value})"
+    )
+
+    # Reverse-cascade advisory (report only -- see module docstring "Reverse
+    # cascade" and this function's own docstring): the original flip may have
+    # advanced a governing handoff. Detected here, AFTER the write/commit
+    # above already landed -- this note never gates or reverses the reopen.
+    if worktree_root is not None:
+        governing = _find_governing_handoff_paths(worktree_root, plan_path, _state["deliverable_id"])
+        for handoff_path in governing:
+            try:
+                handoff_text = handoff_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            split = split_frontmatter(handoff_text)
+            if split is None:
+                continue
+            deployment_state = read_fm_field_unquoted(split.fm_text, "deployment_state")
+            print(
+                f"{_PROG}: NOTE: {handoff_path} governs this plan and carries "
+                f"deployment_state={deployment_state!r} -- it may have been advanced by the "
+                "original (now-reopened) implemented flip's cascade; this op does NOT walk "
+                "that back, reported for operator awareness only",
+                file=sys.stderr,
+            )
+
+    return 0
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: dispatch on the verb (``stamp-implemented`` / ``stamp-superseded``).
 
@@ -1502,9 +1837,25 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
             return 1
+        if opts.reason is not None:
+            print(
+                f"{_PROG}: stamp-implemented does not accept --reason "
+                "(it has no reopening judgment call to record -- that is "
+                "stamp-reopened's own flag)",
+                file=sys.stderr,
+            )
+            return 1
         return _stamp_implemented(opts)
 
     if opts.verb == "stamp-superseded":
+        if opts.reason is not None:
+            print(
+                f"{_PROG}: stamp-superseded does not accept --reason "
+                "(it has no reopening judgment call to record -- name the "
+                "successor via --by instead)",
+                file=sys.stderr,
+            )
+            return 1
         if opts.override_reason is not None:
             # Symmetric rejection to `--by` on stamp-implemented above:
             # `--override-reason` names an explicit judgment call about the
@@ -1523,9 +1874,26 @@ def main(argv: List[str]) -> int:
             return 1
         return _stamp_superseded(opts)
 
+    if opts.verb == "stamp-reopened":
+        if opts.by is not None:
+            print(
+                f"{_PROG}: stamp-reopened does not accept --by "
+                "(it has no successor-plan judgment call to record -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.override_reason is not None:
+            print(
+                f"{_PROG}: stamp-reopened does not accept --override-reason "
+                "(it has no completeness verdict to override -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        return _stamp_reopened(opts)
+
     print(
         f"{_PROG}: unknown verb: {opts.verb or '(none)'} — supported: stamp-implemented, "
-        "stamp-superseded",
+        "stamp-superseded, stamp-reopened",
         file=sys.stderr,
     )
     return 1

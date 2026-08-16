@@ -171,7 +171,7 @@ def _invoke_cli_main(
     either an `argv`-taking `main(argv)` or a zero-arg `main()` (the C1
     manifest's `workday-complete-step2_5-dirty-tree` script exposes the
     latter, calling `sys.exit` internally). Returns `(exit_code, stdout,
-    stderr)`: the resolved integer exit code (`main`'s own return value when
+    stderr, exit_class)`: the resolved integer exit code (`main`'s own return value when
     it returns one, else the code a `SystemExit` it raises carries, else `0`
     on a clean fallthrough) paired with everything the call printed to
     stdout and, separately, to stderr.

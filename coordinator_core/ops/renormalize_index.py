@@ -85,6 +85,7 @@ import sys
 from typing import List, Optional, Set
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import git_dir as _git_dir_seam
 
 
 def _diff_probe_failed_message(probe: str) -> str:
@@ -106,20 +107,7 @@ def _git_rev_parse_git_dir(cwd: Optional[str] = None) -> Optional[str]:
     # their NUL-list output can contain arbitrary filename bytes.
     # Review: code-reviewer (Finding 9) -- mixed text=True/manual-decode style read as an
     # oversight rather than a deliberate per-output choice; this comment disambiguates.
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except (OSError, FileNotFoundError):
-        return None
-    if proc.returncode != 0:
-        return None
-    git_dir = proc.stdout.strip()
+    git_dir = _git_dir_seam(cwd)
     if not git_dir:
         return None
     return git_dir

@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import git_common_dir, show_toplevel
 
 # Deferred-import accessor (hot-path import diet round 2 — docs/plans/
 # 2026-08-08-seven-measured-levers-load-norm.md § C1). psutil measured
@@ -161,24 +162,7 @@ def git_root(cwd: Optional[str] = None) -> str:
     fixed root must pass ``cwd`` explicitly rather than rely on process-wide
     caching.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            # House value (dispatch_checks._run_git) -- 2026-08-05 hot-path
-            # hardening pass. Fail-open, joining the pre-existing OSError
-            # leg: a hung git is indistinguishable from "not a git repo"
-            # for every caller of this function.
-            timeout=2.0,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    return show_toplevel(cwd) or ""
 
 
 def _sessions_dir_resolve(cwd: Optional[str]) -> str:
@@ -188,22 +172,7 @@ def _sessions_dir_resolve(cwd: Optional[str]) -> str:
     ``_sessions_dir_cached()``; see ``sessions_dir`` docstring for the
     caching policy layered on top of this.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            # House value -- 2026-08-05 hot-path hardening pass. Fail-open,
-            # joining the pre-existing OSError leg (see git_root() above).
-            timeout=2.0,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if result.returncode != 0:
-        return ""
-    common = result.stdout.strip()
+    common = git_common_dir(cwd)
     if not common:
         return ""
     return str(Path(common) / "coordinator-sessions")

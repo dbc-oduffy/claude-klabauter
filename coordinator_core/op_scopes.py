@@ -881,21 +881,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "git_branch.detect_unpushed_commits":     "show_top",
     "git_branch.list_unmerged_work":          "common_dir",
     "git_branch.verify_commit_in_review_window": "common_dir",
-    # chain_ancestry_waivers.reap — "common_dir", MUTATING (fail-closed,
-    # REMOVE-ONLY deletion, per the module's own docstring): the handler
-    # (_chain_ancestry_waivers_reap) DOES use repo_root — it falls back to
-    # `str(repo_root)` as `cwd` whenever the caller omits an explicit
-    # `params["cwd"]`, and `chain_root_dir(cwd)` (chain_ancestry_waivers.py)
-    # resolves `<cwd>/state/review-trail/chain-ancestry-waivers`, the same
-    # main-worktree-rooted `state/` tree handoff.has_live_children reads.
-    # `chain_reached_terminal_close` (same module) explicitly resolves `cwd`
-    # to the git common dir before classifying, matching the common_dir
-    # keying class exactly. Without this entry dispatch resolves
-    # repo_root=None, cwd falls back to "." (module docstring's own
-    # DO-NOT-RUN-AGAINST-THE-LIVE-TREE warning), and the reaper would act
-    # against the engine process's cwd instead of the caller's own worktree.
-    # Spec: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § Tasks, row W2.
-    "chain_ancestry_waivers.reap":            "common_dir",
     # scratchpad.sweep — "none", MUTATING (dry-run by default; `reclaim: true`
     # is the sole destructive opt-in — see module docstring's two-gate
     # deletion contract). The handler (_handler in scratchpad_sweep.py)

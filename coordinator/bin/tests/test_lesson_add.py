@@ -456,13 +456,25 @@ def test_no_independent_routing_gate():
     Native routing is inherited transitively through the subprocess delegation to
     coordinator-queue-append. Adding a routing gate here would be a wrong second
     arming site — the gate lives in queue-append, not here.
+
+    Narrowed (2026-08-15): this originally forbade any "cc_invoke" reference at
+    all, which also caught `from cc_invoke import require_engine_on_path` — the
+    sys.path bootstrap helper added deliberately in 9b979ee5f (2026-08-12) to
+    fix a real critical-path failure on the mirror-resolved install (the CLI's
+    dedup pre-check imports coordinator_core, which needs the engine root on
+    sys.path first). That helper is the same bootstrap used by ~45 other
+    coordinator/bin/ CLIs and is unrelated to routing — the actual routing
+    gate this test guards against is `from cc_invoke import route`
+    (coordinator-queue-append's own pattern, aliased `_cc_route`). Narrow the
+    assertion to that specific import shape so the legitimate bootstrap import
+    stays allowed while a real second arming site is still caught.
     """
     source = _source()
-    assert "from cc_invoke import" not in source, (
-        "coordinator-lesson-add must not import cc_invoke — no independent routing gate"
+    assert "from cc_invoke import route" not in source, (
+        "coordinator-lesson-add must not import cc_invoke.route — no independent routing gate"
     )
-    assert "cc_invoke" not in source, (
-        "cc_invoke must not be referenced in coordinator-lesson-add"
+    assert "_cc_route" not in source, (
+        "cc_invoke's route()/_cc_route seam must not be referenced in coordinator-lesson-add"
     )
 
 

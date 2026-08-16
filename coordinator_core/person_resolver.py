@@ -54,6 +54,20 @@ uses for its own `git config user.email` read (`_git_user_email_cached` /
 `reset_git_user_email_cache`). `reset_person_resolver_git_config_cache()`
 below is this module's own reset seam so tests do not contaminate each
 other across fixture cases.
+
+Repo-root cache-key fix (2026-08-15, C7): `_git_config_cached` was keyed on
+`key` ONLY, with no `cwd=` passed to the underlying `git config` spawn —
+the same missing-key-COLLISION defect as `machine_resolver`'s
+`_git_user_email_cached`, one level down. Under the warm resident engine
+(DR-315) a single process can resolve the operating person for clients in
+different repos with different local `user.email`/`user.name`; without a
+repo-root component in the cache key, the first repo's resolved value would
+be served to every other repo for the rest of the process. Fixed by adding
+the resolved repo root (`_resolve_repo_root`, shared with `machine_resolver`
+via `coordinator_core._repo_root_probe` — see that module's own docstring
+for why it is memoized per AMBIENT cwd rather than left uncached, a
+2026-08-16 follow-up fix) to the cache key alongside `key`, and passing that
+same root as `cwd=` to the underlying spawn.
 """
 
 from __future__ import annotations
@@ -65,6 +79,11 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+
+from coordinator_core._repo_root_probe import (
+    reset_repo_root_memo as _reset_repo_root_memo,
+    resolve_repo_root as _resolve_repo_root,
+)
 
 ALIAS_BUNDLE_KEYS: tuple[str, ...] = ("github", "github_id", "display", "email")
 
@@ -87,15 +106,29 @@ class _GitConfigResolutionFailed(Exception):
     the process the way a successful resolution legitimately can."""
 
 
-def _git_config_uncached(key: str) -> str:
+# `_resolve_repo_root` is `coordinator_core._repo_root_probe.resolve_repo_root`
+# (imported above) — a per-cwd-memoized shared probe, de-duplicating the
+# near-identical copy that used to live here (P3 nit, review-integrator
+# 2026-08-16) and also used to key `_git_config_cached` / supply the matching
+# `cwd=` for the underlying `git config` spawn. See module docstring's
+# "Repo-root cache-key fix" note for why the key itself must track cwd, and
+# `coordinator_core._repo_root_probe`'s own docstring for why the probe is
+# now memoized per-cwd rather than spawning fresh on every call (P2 fix).
+
+
+def _git_config_uncached(key: str, cwd: Optional[str] = None) -> str:
     """Return `git config --get <key>`, or "" on any failure (missing git,
-    no config, timeout). Uncached — spawns `git config` every call."""
+    no config, timeout). Uncached — spawns `git config` every call. ``cwd``
+    lets ``_git_config_value`` pin the spawn to the same resolved repo root
+    its cache is keyed on (see module docstring's "Repo-root cache-key fix"
+    note); ``cwd=None`` inherits the process's ambient directory."""
     try:
         result = subprocess.run(
             ["git", "config", "--get", key],
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
+            cwd=cwd,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -106,39 +139,56 @@ def _git_config_uncached(key: str) -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def _git_config_cached(key: str) -> str:
+def _git_config_cached(key: str, repo_root: Optional[str]) -> str:
     """Process-lifetime cache of a resolved `git config --get <key>` value,
-    keyed on ``key`` (module-level, populated on first call per key). A
-    failed resolution is NOT memoized — see ``_GitConfigResolutionFailed``."""
-    result = _git_config(key)
+    keyed on ``(key, repo_root)`` (module-level, populated on first call per
+    key/root pair). A failed resolution is NOT memoized — see
+    ``_GitConfigResolutionFailed``.
+
+    ``repo_root`` joined the key 2026-08-15 (C7) — see module docstring's
+    "Repo-root cache-key fix" note: keying on ``key`` alone was a
+    missing-key COLLISION under the warm engine, where one process can
+    resolve this value for clients in different repos.
+    """
+    result = _git_config(key, cwd=repo_root)
     if not result:
         raise _GitConfigResolutionFailed()
     return result
 
 
-def _git_config(key: str) -> str:
+def _git_config(key: str, cwd: Optional[str] = None) -> str:
     """Module-level `git config` read helper — tests monkeypatch this name
     directly to drive synthetic fixtures without spawning a real subprocess.
     Uncached by design: caching is applied one layer up, at the
     ``_git_config_cached`` call site, so a monkeypatch here is honoured on
     every cache miss."""
-    return _git_config_uncached(key)
+    return _git_config_uncached(key, cwd=cwd)
 
 
 def reset_person_resolver_git_config_cache() -> None:
     """Test/diagnostic escape hatch — clears the process-local
-    ``_git_config_cached()`` cache. Call this in test teardown/setup for any
-    test that monkeypatches ``_git_config``, since the cache is
-    process-global and otherwise leaks a prior test's resolved value into a
-    later one."""
+    ``_git_config_cached()`` cache, and the shared per-cwd repo-root memo
+    (``coordinator_core._repo_root_probe``) alongside it. Call this in test
+    teardown/setup for any test that monkeypatches ``_git_config``, since the
+    cache is process-global and otherwise leaks a prior test's resolved
+    value into a later one. The repo-root memo is included so a test that
+    stubs `subprocess.run` directly (and therefore also answers the
+    `git rev-parse` repo-root probe) does not leak a prior test's fake
+    "resolved root" into a later one either."""
     _git_config_cached.cache_clear()
+    _reset_repo_root_memo()
 
 
 def _git_config_value(key: str) -> Optional[str]:
     """Cached read of one `git config` key, honouring the module-level
-    ``_git_config`` seam. Returns ``None`` when unresolved."""
+    ``_git_config`` seam. Resolves the current repo root (see
+    ``_resolve_repo_root``, per-cwd-memoized) and uses it alongside ``key``
+    as the cache key, so a warm process serving different repos never
+    cross-serves one repo's cached value to another. Returns ``None`` when
+    unresolved."""
+    repo_root = _resolve_repo_root()
     try:
-        return _git_config_cached(key)
+        return _git_config_cached(key, repo_root)
     except _GitConfigResolutionFailed:
         return None
 

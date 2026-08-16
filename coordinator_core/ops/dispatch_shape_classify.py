@@ -88,6 +88,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import git_dir as _git_dir_seam
 
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -234,23 +235,9 @@ def _resolve_git_dir(near_path: str) -> Optional[str]:
     fallback — see module negative-spec re: relative-path fragility (deliberately
     preserved, not fixed)."""
     for cwd in (os.path.dirname(near_path) or ".", None):
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--git-dir"],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=_GIT_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                **_CREATIONFLAGS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            print(f"skip: _resolve_git_dir: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-            continue
-        if result.returncode == 0:
-            git_dir = result.stdout.strip()
-            if git_dir:
-                return git_dir
+        resolved = _git_dir_seam(cwd)
+        if resolved:
+            return resolved
     return None
 
 
@@ -329,7 +316,7 @@ Was this a serial grind (one agent handling chunks sequentially), or an intentio
 pilot-then-expand shape, or did the EM author some chunks inline?
 
 If serial grind: consider re-dispatching with true fan-out parallelism — e.g.
-  bash ~/.claude/plugins/coordinator/bin/fan-out-dispatch.sh <tsv>
+  bash ~/.claude/plugins/coordinator-claude/coordinator/bin/fan-out-dispatch.sh <tsv>
 
 If intentional (pilot-then-expand / inline EM / other valid shape): no action needed.
 

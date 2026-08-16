@@ -65,6 +65,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import compute_machine
 from coordinator_core.ops._path_guard import safe_id
@@ -1949,18 +1950,80 @@ def _range_commit_shas(worktree: Path, date: str, full_sha: str) -> List[str]:
     )
 
 
+def _batch_resolve_commits(worktree: Path, tokens: List[str]) -> Dict[str, Optional[str]]:
+    """Resolve every token in `tokens` to a full commit SHA (or None if it
+    doesn't peel to a commit) in ONE `git cat-file --batch-check` process,
+    instead of one `git rev-parse --verify` spawn per token.
+
+    Each token is queried as `{tok}^{commit}` -- the identical peel
+    `_cited_in_range_count`'s prior per-token `rev-parse --verify -q
+    {tok}^{commit}` used -- so a token that resolves to a non-commit object
+    (tree/blob/tag-to-non-commit) or doesn't resolve at all classifies as
+    unresolved here exactly as it did there; a token that is hex-looking but
+    not an actual object (the common case for a free-text body) is `missing`
+    in `cat-file --batch-check` output the same way `rev-parse --verify -q`
+    failed for it. Order of `tokens` is preserved 1:1 in the reply stream by
+    `--batch-check`'s own contract, so no result line ever needs to be
+    matched back to its token by content.
+
+    Review: code-reviewer (F3, P2) — byte-parity with the old per-token
+    `rev-parse --verify -q` loop is TESTED for resolvable, missing, and
+    non-sha-hex tokens (see
+    `test_changelog_cited_in_range_spawn_bound.py::
+    test_cited_in_range_count_matches_per_token_baseline`), but NOT for a
+    genuinely ambiguous/colliding short-sha prefix -- `cat-file
+    --batch-check`'s output shape for that input has not been independently
+    confirmed to match `rev-parse --verify -q`'s. Treat that one case as an
+    unverified parity claim, not a proven one, until a real short-sha
+    collision fixture is built.
+    """
+    if not tokens:
+        return {}
+    stdin_text = "\n".join(f"{tok}^{{commit}}" for tok in tokens) + "\n"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {tok: None for tok in tokens}
+    if result.returncode != 0:
+        return {tok: None for tok in tokens}
+    lines = result.stdout.splitlines()
+    resolved: Dict[str, Optional[str]] = {}
+    for tok, line in zip(tokens, lines):
+        if line.endswith(" missing"):
+            resolved[tok] = None
+            continue
+        parts = line.split(" ")
+        if len(parts) != 2 or parts[1] != "commit":
+            resolved[tok] = None
+            continue
+        resolved[tok] = parts[0]
+    for tok in tokens[len(lines):]:
+        resolved[tok] = None
+    return resolved
+
+
 def _cited_in_range_count(worktree: Path, body: str, range_shas: List[str]) -> int:
     """Count how many of `range_shas` are cited (as resolvable commit-ish
-    tokens) in `body`. Byte-parity port of the oracle's cited-SHA scan."""
+    tokens) in `body`. Byte-parity port of the oracle's cited-SHA scan.
+
+    Resolves the whole token set in ONE batched `git cat-file --batch-check`
+    process (`_batch_resolve_commits`) rather than one `git rev-parse
+    --verify` subprocess per unique token -- the set of tokens classified as
+    resolvable-to-a-commit-in-range is unchanged, only the spawn shape is.
+    """
     range_set = set(range_shas)
-    tokens = {t.lower() for t in re.findall(r"\b[0-9a-fA-F]{7,40}\b", body)}
+    tokens = sorted({t.lower() for t in re.findall(r"\b[0-9a-fA-F]{7,40}\b", body)})
+    resolved_map = _batch_resolve_commits(worktree, tokens)
     cited: set = set()
-    for tok in tokens:
-        resolved = _git_lines_at(worktree, ["rev-parse", "--verify", "-q", f"{tok}^{{commit}}"])
-        if not resolved:
-            continue
-        full = resolved[0]
-        if full in range_set:
+    for full in resolved_map.values():
+        if full is not None and full in range_set:
             cited.add(full)
     return len(cited)
 
@@ -2482,25 +2545,14 @@ def main(argv: List[str]) -> int:
     # every other positional (including the legacy [repo-root]) stays
     # accepted-but-ignored, per legacy/facade contract
     cwd = os.getcwd()
-    try:
-        proc = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        proc = None
-    if proc is None or proc.returncode != 0 or not proc.stdout.strip():
+    common_dir_str = git_common_dir(cwd)
+    if not common_dir_str:
         print(
             f"backfill-week-changelog-gaps.sh: cannot resolve git repo root from {cwd}",
             file=sys.stderr,
         )
         return 1
-    # --git-common-dir may print a path relative to cwd (e.g. ".git") — resolve
-    # against cwd to get an absolute common_dir before handing to backfill_gaps().
-    common_dir = (Path(cwd) / proc.stdout.strip()).resolve()
+    common_dir = Path(common_dir_str)
 
     # Machine slug, not raw hostname — see the Host resolution note above.
     host = compute_machine()

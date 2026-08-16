@@ -173,11 +173,15 @@ class TestStagedDeadlockClosed:
         assert "check-persona-names.py exited 1" in str(excinfo.value)
         assert "PLANTED-FINDING-SENTINEL" in str(excinfo.value)
 
-    def test_sibling_subdir_row_still_falls_back_to_real_dest(self, tmp_path):
-        """Unchanged behavior for a sibling toplevel row's repo root: this
-        row's `dest_dir` is a subdirectory, so no staged content for the
-        (different) repo-root row is available here -- must still scan the
-        real (possibly stale) tree, same as before this fix."""
+    def test_sibling_subdir_row_defers_to_end_of_run_leg(self, tmp_path, capsys):
+        """C-round-scan (measured ~28-33s per row for a byte-identical
+        mirror-root scan): a sibling toplevel row's repo root -- this row's
+        `dest_dir` is a subdirectory, so `scan_dest` here is the real,
+        unstaged mirror root, never this row's own staging tree -- no longer
+        runs a per-row scan at all. Coverage for that same real (possibly
+        stale) tree moves to `dispatch_end_of_run_identity_check`, once per
+        repo root after every row has synced (§
+        `test_publish_identity_check_source_refresh.py`)."""
         src = tmp_path / "src"
         src.mkdir()
         repo_root = tmp_path / "repo"
@@ -196,13 +200,23 @@ class TestStagedDeadlockClosed:
         (repo_root / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
-        with pytest.raises(publish.EngineUnavailableError) as excinfo:
-            publish.dispatch_percolate_pre_ci(
-                _ctx(claude_klabauter_engine),
-                tmp_path / "store.yaml",
-                sync_target,
-                tmp_path / "src",
-                None,
-                identity_dest_dir=real_subdir_dest,
-            )
-        assert "check-persona-names.py exited 1" in str(excinfo.value)
+        # Must NOT raise -- even though the repo root's checker would fail
+        # if scanned -- the per-row leg is gone for this row shape.
+        publish.dispatch_percolate_pre_ci(
+            _ctx(claude_klabauter_engine),
+            tmp_path / "store.yaml",
+            sync_target,
+            tmp_path / "src",
+            None,
+            identity_dest_dir=real_subdir_dest,
+        )
+        captured = capsys.readouterr()
+        assert "pre_ci per-row identity scan skipped" in captured.err
+
+        # The end-of-run leg, scanning the SAME real repo root, still finds
+        # (and fails on) the planted finding -- coverage is deferred, not
+        # dropped.
+        ok = publish.dispatch_end_of_run_identity_check(
+            _ctx(claude_klabauter_engine), [repo_root], target_filtered=False
+        )
+        assert ok is False

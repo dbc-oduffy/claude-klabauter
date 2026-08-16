@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shlex
 import shutil
 import sys
 
@@ -45,7 +46,14 @@ def _load_module():
 
 rvc = _load_module()
 
-_EXP_INTERP = "python3" if shutil.which("python3") else "python"
+# Mirrors resolve_fast_test_cmd's own interpreter-resolution algorithm
+# (_resolve_python_interp) rather than re-deriving a POSIX-only guess: on
+# Windows the resolver deliberately prefers `sys.executable` over probing
+# `python3` on PATH (Store App Execution Alias hazard — see the resolver's
+# own docstring), and the chosen interpreter is shlex.quote-wrapped before
+# substitution because a Windows path routinely contains backslashes/spaces
+# that a bare token would not survive a caller's later `shlex.split`.
+_EXP_INTERP = shlex.quote(rvc._resolve_python_interp(None))
 
 
 def _write_local_md_with_cmd(dir_: str, cmd_val: str) -> None:
@@ -221,11 +229,21 @@ def test_full_tier_propagates_malformed_fast_value(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_bare_python_prefers_repo_venv(tmp_path, monkeypatch, capsys):
-    venv_bin = tmp_path / ".venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    interp = venv_bin / "python"
-    interp.write_text("#!/bin/sh\n")
-    interp.chmod(0o755)
+    # _venv_interp's two candidates are platform-shaped: on Windows,
+    # os.stat mode-bit-style POSIX "bin/python" is never is_executable()
+    # (no PATHEXT-recognized extension, no PATHEXT sibling) — the real
+    # Windows venv layout is "Scripts/python.exe".
+    if os.name == "nt":
+        venv_bin = tmp_path / ".venv" / "Scripts"
+        venv_bin.mkdir(parents=True)
+        interp = venv_bin / "python.exe"
+        interp.write_text("")
+    else:
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        interp = venv_bin / "python"
+        interp.write_text("#!/bin/sh\n")
+        interp.chmod(0o755)
     _write_local_md_with_cmd(str(tmp_path), "python -m pytest")
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
 
@@ -233,7 +251,7 @@ def test_bare_python_prefers_repo_venv(tmp_path, monkeypatch, capsys):
     stderr = capsys.readouterr().err
 
     assert result.returncode == 0
-    assert result.stdout.strip() == f"{interp} -m pytest"
+    assert result.stdout.strip() == f"{shlex.quote(str(interp))} -m pytest"
     assert "step=interp" in stderr
 
 
@@ -248,10 +266,19 @@ def test_bare_python_falls_back_to_ambient_without_venv(tmp_path, monkeypatch):
 
 
 def test_explicit_interpreter_is_not_rewritten_by_venv(tmp_path, monkeypatch):
-    venv_bin = tmp_path / ".venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    (venv_bin / "python").write_text("#!/bin/sh\n")
-    (venv_bin / "python").chmod(0o755)
+    # Platform-shaped fixture, matching test_bare_python_prefers_repo_venv's
+    # convention — a POSIX-only "bin/python" fixture is never is_executable()
+    # on Windows (no PATHEXT-recognized extension), so this test would pass
+    # vacuously there without ever exercising the not-rewritten assertion.
+    if os.name == "nt":
+        venv_bin = tmp_path / ".venv" / "Scripts"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python.exe").write_text("")
+    else:
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python").write_text("#!/bin/sh\n")
+        (venv_bin / "python").chmod(0o755)
     _write_local_md_with_cmd(str(tmp_path), "python3 -m pytest")
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
 
@@ -387,11 +414,78 @@ def test_non_python_untouched():
 
 def test_missing_interpreter_fails_loud(monkeypatch):
     monkeypatch.setattr(rvc.shutil, "which", lambda _name: None)
+    # On Windows, `_resolve_python_interp` prefers `sys.executable` over
+    # probing PATH at all (Store App Execution Alias hazard) — patching only
+    # `shutil.which` leaves that branch resolving successfully. Starve both
+    # so the "no interpreter at all" path is genuinely reached cross-platform.
+    monkeypatch.setattr(rvc.sys, "executable", "")
     try:
         rvc._normalize_python_token("python x.py")
         assert False, "expected InterpreterMissing"
     except rvc.InterpreterMissing:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Tests 14-18: _resolve_python_interp — independent pin on its documented
+# contract (docstring: venv-first, then Windows prefers sys.executable over
+# probing PATH, POSIX prefers python3 on PATH, else python, else None).
+# _EXP_INTERP above is a tautology w.r.t. this function — these tests pin the
+# literal expected OUTPUT for each leg via monkeypatch, not by recomputation,
+# so a regression in the resolver itself is caught rather than mirrored.
+# Both platform legs are pinned regardless of host OS (monkeypatch os.name),
+# per the resolver's own documented cross-platform contract.
+# ---------------------------------------------------------------------------
+
+def test_resolve_python_interp_windows_prefers_sys_executable(monkeypatch):
+    monkeypatch.setattr(rvc.os, "name", "nt")
+    # abs-path-ok: opaque fixture literal for sys.executable, not a real filesystem reference
+    monkeypatch.setattr(rvc.sys, "executable", "C:\\Python312\\python.exe")
+    # Even if python3 is also on PATH, Windows must prefer sys.executable
+    # (Store App Execution Alias hazard) — not probe PATH at all.
+    monkeypatch.setattr(rvc.shutil, "which", lambda name: f"C:\\fake\\{name}.exe")
+
+    assert rvc._resolve_python_interp(None) == "C:\\Python312\\python.exe"
+
+
+def test_resolve_python_interp_windows_falls_back_when_no_sys_executable(monkeypatch):
+    monkeypatch.setattr(rvc.os, "name", "nt")
+    monkeypatch.setattr(rvc.sys, "executable", "")
+    monkeypatch.setattr(
+        rvc.shutil, "which", lambda name: "/fake/python3" if name == "python3" else None
+    )
+
+    assert rvc._resolve_python_interp(None) == "python3"
+
+
+def test_resolve_python_interp_posix_prefers_python3_on_path(monkeypatch):
+    monkeypatch.setattr(rvc.os, "name", "posix")
+    monkeypatch.setattr(rvc.sys, "executable", "/usr/bin/python3.11")
+    monkeypatch.setattr(
+        rvc.shutil,
+        "which",
+        lambda name: "/usr/bin/python3" if name == "python3" else "/usr/bin/python",
+    )
+
+    assert rvc._resolve_python_interp(None) == "python3"
+
+
+def test_resolve_python_interp_posix_falls_back_to_python(monkeypatch):
+    monkeypatch.setattr(rvc.os, "name", "posix")
+    monkeypatch.setattr(rvc.sys, "executable", "/usr/bin/python3.11")
+    monkeypatch.setattr(
+        rvc.shutil, "which", lambda name: "/usr/bin/python" if name == "python" else None
+    )
+
+    assert rvc._resolve_python_interp(None) == "python"
+
+
+def test_resolve_python_interp_returns_none_when_nothing_resolves(monkeypatch):
+    monkeypatch.setattr(rvc.os, "name", "posix")
+    monkeypatch.setattr(rvc.sys, "executable", "")
+    monkeypatch.setattr(rvc.shutil, "which", lambda name: None)
+
+    assert rvc._resolve_python_interp(None) is None
 
 
 if __name__ == "__main__":

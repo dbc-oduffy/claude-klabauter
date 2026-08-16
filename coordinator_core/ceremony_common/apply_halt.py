@@ -35,18 +35,80 @@ Negative-spec:
       stdin-piping extension over `workweek_complete`'s plainer loop);
       only the gate predicate, the unrecognized-directive signal, and the
       exit-code ladder are common enough across every consumer to live
-      here.
+      here. The composition-budget helpers below follow the same rule:
+      they are call-shaped primitives a caller's own loop invokes at ITS
+      OWN pre-mutation/post-mutation/mid-directive points
+      (`workday_complete/apply.py`, `workweek_complete/apply.py`,
+      `workstream_complete/apply.py` each author where in their own loop
+      shape those points fall) — this module never loops over directives
+      itself, and never will.
     - Does NOT read or validate `CONSUMES_MANIFEST` — that is each
       caller's own `brief()`-side concern, unrelated to the apply-side
       halt contract this module provides.
+
+COMPOSITION BUDGET WIRING (chunk C10, docs/plans/2026-08-15-composition-
+invocation-budgets.md): the ceremony family (including WSC, the measured
+offender at docs/research/2026-08-15-wsc-close-cost-attribution.md's
+260-284s / 54-57%-single-child close) never composes `apply_base`, so its
+budget wiring cannot live in `execute_directives` (§ that module's own
+COMPOSITION BUDGET WIRING section) — it lives here instead, as three small
+primitives each consumer's own `apply.py` calls from its own loop shape,
+mirroring apply_base's boundary/advisory split without importing it
+(`_normalize_depends_on`'s "byte-mirror... deliberately copied rather than
+shared" precedent, applied to this seam too):
+
+    - `budget_check_pre_mutation(composition_budget)` -- call once, after
+      whole-list directive validation and before a caller's directive loop
+      begins mutating. Nothing has mutated at this point regardless of
+      whether the loop's first directive is `already_satisfied` (the same
+      caveat `apply_base` documents: "first iteration" is not "first
+      mutation"). Returns `None` when within budget; a breach-message
+      `str` otherwise -- a breach here reuses `DIRECTIVE_FAILED`
+      (position 2 of `CEREMONY_HALT_EXIT_CODES`, exactly as `apply_base`
+      reuses `CLAIM_DENIED` at its own equivalent position) rather than
+      minting a new ladder member: nothing landed yet, so the existing
+      "a directive failed before landing, nothing mutated" contract
+      already fits. The caller attaches the returned message to its own
+      report under an additive `"budget_breach"` key and returns
+      `DIRECTIVE_FAILED`.
+    - `budget_check_post_mutation(composition_budget)` -- call once, after
+      a caller's directive loop completes successfully (never from a
+      partial-mutation/compensation branch — same non-reachability
+      argument as `apply_base`'s post-loop check: this function is never
+      invoked from a failure path, so it can never itself trigger
+      compensation). Returns `None` or a breach-message `str`, same
+      shape as the pre-mutation check, but the caller's own exit code is
+      UNCHANGED on a breach here (rc=0-with-loud-stderr, this function
+      prints the loud stderr line itself) — never `PARTIAL_MUTATION`,
+      for the identical reason `apply_base` gives: the mutation already
+      landed successfully, and `PARTIAL_MUTATION`'s reverse-compensation
+      pass exists to undo a run that failed mid-mutation, not one that
+      merely finished slowly.
+    - `budget_advisory_mid_directive(composition_budget, directive_id)` --
+      call after each directive that actually dispatched (never for an
+      `already_satisfied` entry), mirroring `apply_base`'s own placement.
+      WARN-ONLY: prints loud stderr on breach, never raises, never
+      affects the caller's control flow. Also records the invocation via
+      `composition_budget.record_invocation`.
+
+INSTRUMENTATION-ERROR ISOLATION (same contract as `apply_base`'s):
+`_budget_call` below lets `BudgetBreach` (only) propagate to its caller
+and swallows any other exception — e.g. from a caller-injected `on_count`
+— into a loud stderr line, so an instrumentation bug can never take down a
+ceremony close.
 """
 
 from __future__ import annotations
 
 import enum
-from typing import Any, Type
+import sys
+from typing import TYPE_CHECKING, Any, Callable, Optional, Type
 
+from coordinator_core.composition_budget import BudgetBreach
 from coordinator_core.contract.decision_object.envelope import extend_exit_codes
+
+if TYPE_CHECKING:
+    from coordinator_core.composition_budget import CompositionBudget
 
 #: The four halt-contract exit-code members every ceremony-close assembler's
 #: apply half raises beyond the fixed `SUCCESS = 0` anchor. Values are the
@@ -197,3 +259,124 @@ def _directive_gate_open(
         # than apply_base's fail-open on this same case).
         return False
     return True
+
+
+def _budget_call(label: str, fn: Callable[[], Any]) -> Any:
+    """Runs one `composition_budget` call, letting `BudgetBreach` (the
+    deliberate fail-loud signal) propagate unchanged while any OTHER
+    exception is swallowed into a loud stderr line and never propagates
+    (§ module docstring, "INSTRUMENTATION-ERROR ISOLATION"). Byte-mirror
+    of `apply_base._budget_call` — this module's own Negative-spec commits
+    to never importing `apply_base`, so this helper is duplicated rather
+    than shared, same precedent as `_normalize_depends_on` above."""
+    try:
+        return fn()
+    except BudgetBreach:
+        raise
+    except Exception as exc:  # noqa: BLE001 - isolated, never propagated
+        print(
+            f"[composition-budget] instrumentation error at {label}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def budget_check_pre_mutation(
+    composition_budget: "Optional[CompositionBudget]",
+) -> Optional[str]:
+    """Boundary #1 (§ module docstring "COMPOSITION BUDGET WIRING"): call
+    once, after whole-list directive validation and before a caller's own
+    directive loop begins mutating. `composition_budget=None` (the
+    default any pre-C10 caller keeps passing) is a no-op — returns `None`
+    unconditionally, byte-identical to omitting this call entirely.
+
+    Returns `None` when within budget. Returns a breach-message `str`
+    otherwise, for the caller to attach under its own report's additive
+    `"budget_breach"` key and return `DIRECTIVE_FAILED` (position 2 of
+    `CEREMONY_HALT_EXIT_CODES`) with `landed: []` — nothing has mutated
+    yet at this call site."""
+    if composition_budget is None:
+        return None
+    try:
+        within_budget = _budget_call(
+            "pre-mutation boundary", lambda: composition_budget.check(unit="pre_mutation")
+        )
+    except BudgetBreach as exc:
+        return str(exc)
+    if within_budget is False:
+        return (
+            "composition budget breach: composition="
+            f"{composition_budget.composition_id!r} unit='pre_mutation' (skip-and-surface)"
+        )
+    return None
+
+
+def budget_check_post_mutation(
+    composition_budget: "Optional[CompositionBudget]",
+) -> Optional[str]:
+    """Boundary #2 (§ module docstring "COMPOSITION BUDGET WIRING"): call
+    once, after a caller's own directive loop completes successfully —
+    never from a partial-mutation/compensation branch, so this call can
+    never itself trigger compensation. `composition_budget=None` is a
+    no-op, same as `budget_check_pre_mutation`.
+
+    Prints a loud stderr line on breach and returns the same message (the
+    caller may attach it to its own report's `"budget_breach"` key), but
+    NEVER changes the caller's own exit code — rc stays whatever the
+    loop's own outcome already was; a breach here is never routed through
+    `PARTIAL_MUTATION`, for the same reason `apply_base` gives: the
+    mutation already landed successfully, and `PARTIAL_MUTATION`'s
+    reverse-compensation pass exists to undo a run that failed
+    mid-mutation, not one that merely finished slowly."""
+    if composition_budget is None:
+        return None
+    try:
+        within_budget = _budget_call(
+            "post-mutation boundary", lambda: composition_budget.check(unit="post_mutation")
+        )
+    except BudgetBreach as exc:
+        message = str(exc)
+    else:
+        if within_budget is False:
+            message = (
+                "composition budget breach: composition="
+                f"{composition_budget.composition_id!r} unit='post_mutation' "
+                "(skip-and-surface, observed after last mutation)"
+            )
+        else:
+            return None
+    print(f"[composition-budget] {message}", file=sys.stderr)
+    return message
+
+
+def budget_advisory_mid_directive(
+    composition_budget: "Optional[CompositionBudget]", directive_id: str
+) -> None:
+    """Mid-directive advisory (§ module docstring "COMPOSITION BUDGET
+    WIRING"): call after each directive that actually dispatched (never
+    for an `already_satisfied` entry — it did no work this run).
+    `composition_budget=None` is a no-op.
+
+    WARN-ONLY: prints a loud stderr line on breach, never raises, never
+    has any control-flow effect regardless of `composition_budget`'s own
+    `disposition` (`advisory_check()`'s own contract). Also records the
+    dispatch via `record_invocation`, so a `max_invocations` ceiling stays
+    meaningful across the ceremony family exactly as it does in
+    `apply_base`."""
+    if composition_budget is None:
+        return
+    _budget_call(
+        "mid-directive advisory",
+        lambda: composition_budget.record_invocation(unit=directive_id),
+    )
+
+    def _advise() -> None:
+        if not composition_budget.advisory_check(unit=directive_id):
+            print(
+                "[composition-budget] mid-directive advisory breach after "
+                f"directive={directive_id!r}: composition="
+                f"{composition_budget.composition_id!r}",
+                file=sys.stderr,
+            )
+
+    _budget_call("mid-directive advisory", _advise)

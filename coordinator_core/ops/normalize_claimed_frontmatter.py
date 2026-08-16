@@ -112,6 +112,7 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Set
 
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.frontmatter.consumed_marker import (
     CONSUMED_MARKER_RE,
     TERMINAL_DEPLOYMENT,
@@ -211,19 +212,8 @@ def detect_root(specified: Optional[str]) -> str:
     else cwd fallback (mirrors the node oracle's detectRoot exactly)."""
     if specified:
         return os.path.abspath(specified)
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            check=True,
-            **_CREATIONFLAGS,
-        )
-        return result.stdout.strip()
-    except Exception:
-        return os.getcwd()
+    toplevel = _show_toplevel()
+    return toplevel if toplevel else os.getcwd()
 
 
 def normalize_one(file_path: str) -> Optional[Dict[str, object]]:

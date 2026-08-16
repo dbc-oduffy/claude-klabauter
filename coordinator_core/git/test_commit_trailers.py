@@ -660,6 +660,263 @@ def test_trailer_block_id_still_deduplicates(tmp_path, monkeypatch):
     assert "Deliverable-Id:" not in joined
 
 
+# ---------------------------------------------------------------------------
+# (ix) `Absorbed-From` derivation (C1/C4, docs/plans/2026-08-16-authorship-
+# survives-the-sweep.md) -- reproduction of the `e7360c2c5` shape: a path in
+# the committer's pathspec was actually claimed (and authored) by a
+# different, live peer session, and the commit must disclose that rather
+# than silently crediting the commit's own `Session-Id`.
+# ---------------------------------------------------------------------------
+
+_PEER_SID = "peer-session-b1b1b1"
+
+
+def _sessions_dir(repo: Path) -> Path:
+    return repo / ".git" / "coordinator-sessions"
+
+
+def _write_touched(repo: Path, sid: str, lines: list) -> None:
+    """Same shape as ``coordinator_core/ops/ceremony/tests/
+    test_scoped_git_commit_recent_edit_warn.py``'s helper of the same name
+    -- one ``T <iso8601> <path>`` claim-event line per entry."""
+    sdir = _sessions_dir(repo) / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "touched.txt").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def _touch_line(verb: str, path: str, ts: str) -> str:
+    return "%s %s %s" % (verb, ts, path)
+
+
+def _write_live_meta(repo: Path, sid: str, *, live: bool) -> None:
+    """``meta.json`` for ``session_liveness.session_live``'s Layer-2 recency
+    gate -- ``live=True`` writes a fresh ``last_activity`` (inside the
+    30-minute window), ``live=False`` writes one far enough in the past to
+    read dead."""
+    sdir = _sessions_dir(repo) / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    from coordinator_core.session import core as _session_core
+
+    last_activity = _session_core.now_iso() if live else "2020-01-01T00:00:00Z"
+    (sdir / "meta.json").write_text(
+        '{"pid": 1, "last_activity": "%s"}\n' % last_activity,
+        encoding="utf-8",
+    )
+
+
+def test_absorbed_from_emitted_for_live_peer_claimant(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    (repo / "hot.py").write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, _PEER_SID, [_touch_line("T", "hot.py", "2026-08-13T10:00:00Z")])
+    _write_live_meta(repo, _PEER_SID, live=True)
+    _write_shape(repo, _PEER_SID, {"pickup": {"deliverable_id": "dlv-peer-work"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["hot.py"])
+
+    joined = " ".join(args)
+    assert f"Absorbed-From: {_PEER_SID} dlv-peer-work hot.py" in joined
+
+
+def test_absorbed_from_not_emitted_for_callers_own_claim(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    (repo / "own.py").write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, _SID, [_touch_line("T", "own.py", "2026-08-13T10:00:00Z")])
+    _write_live_meta(repo, _SID, live=True)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-own-work"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["own.py"])
+
+    joined = " ".join(args)
+    assert "Absorbed-From:" not in joined
+
+
+def test_absorbed_from_not_emitted_for_non_live_claimant(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    (repo / "cold.py").write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, _PEER_SID, [_touch_line("T", "cold.py", "2026-08-13T10:00:00Z")])
+    _write_live_meta(repo, _PEER_SID, live=False)
+    _write_shape(repo, _PEER_SID, {"pickup": {"deliverable_id": "dlv-peer-work"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["cold.py"])
+
+    joined = " ".join(args)
+    assert "Absorbed-From:" not in joined
+
+
+def test_absorbed_from_not_emitted_for_unclaimed_path(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    (repo / "untouched.py").write_text("x = 1\n", encoding="utf-8")
+    # No touched.txt entry anywhere for this path.
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["untouched.py"])
+
+    joined = " ".join(args)
+    assert "Absorbed-From:" not in joined
+
+
+def test_absorbed_from_emitted_even_when_session_and_deliverable_id_already_present(
+    tmp_path, monkeypatch
+):
+    """Trap 1 (anti-scope): a message that already carries `Session-Id` and
+    `Deliverable-Id` trailers -- exactly the swept-hunk case -- must NOT
+    suppress `Absorbed-From`. The early-return / idempotency checks that
+    gate the other two trailers must not gate this one."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    (repo / "hot.py").write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, _PEER_SID, [_touch_line("T", "hot.py", "2026-08-13T10:00:00Z")])
+    _write_live_meta(repo, _PEER_SID, live=True)
+    _write_shape(repo, _PEER_SID, {"pickup": {"deliverable_id": "dlv-peer-work"}})
+    msg = _msg_file(
+        repo,
+        "chore: land trailers\n\n"
+        f"Session-Id: {_SID}\n"
+        "Deliverable-Id: dlv-already-here\n",
+    )
+
+    args = compute_missing_trailer_args(msg, repo, paths=["hot.py"])
+
+    joined = " ".join(args)
+    assert "Session-Id:" not in joined  # already present -- correctly suppressed
+    assert "Deliverable-Id:" not in joined  # already present -- correctly suppressed
+    assert f"Absorbed-From: {_PEER_SID} dlv-peer-work hot.py" in joined
+
+
+def test_absorbed_from_degrades_to_no_trailer_when_index_raises(tmp_path, monkeypatch):
+    """Trap 3 (anti-scope): any exception in the derivation -- here, a
+    raising `claim_index.lookup()` -- degrades to no `Absorbed-From`
+    trailer and must never fail (or even affect) the commit's other
+    trailers."""
+    from coordinator_core.session import claim_index as claim_index_module
+
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    (repo / "hot.py").write_text("x = 1\n", encoding="utf-8")
+
+    def _raise(*a, **kw):
+        raise RuntimeError("simulated claim_index failure")
+
+    monkeypatch.setattr(claim_index_module, "lookup", _raise)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["hot.py"])
+
+    joined = " ".join(args)
+    assert "Absorbed-From:" not in joined
+    # The rest of the commit's trailers are unaffected -- the derivation's
+    # own failure never propagates.
+    assert f"Session-Id: {_SID}" in joined
+    assert "Deliverable-Id: dlv-from-pickup" in joined
+
+
+def test_absorbed_from_swept_hunk_case_resolves_to_claimant(tmp_path, monkeypatch):
+    """The exact incident this closes: committer session A runs the commit,
+    but the pathspec's true author is a different, live claimant session
+    B -- the record must resolve to B, not to A."""
+    session_a = _SID
+    session_b = _PEER_SID
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_a)
+    (repo / "coordinator_core" / "contract").mkdir(parents=True, exist_ok=True)
+    target = "coordinator_core/contract/apply_base.py"
+    (repo / target).write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, session_b, [_touch_line("T", target, "2026-08-15T22:50:38Z")])
+    _write_live_meta(repo, session_b, live=True)
+    _write_shape(
+        repo, session_b,
+        {"pickup": {"deliverable_id": "dlv-constantly-warm-engine-to-retire-per-inv-1dd353"}},
+    )
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=[target])
+
+    joined = " ".join(args)
+    assert (
+        f"Absorbed-From: {session_b} "
+        f"dlv-constantly-warm-engine-to-retire-per-inv-1dd353 {target}"
+    ) in joined
+    # Session-Id still names the committer (A), unchanged -- Absorbed-From
+    # is additive, never a replacement for it.
+    assert f"Session-Id: {session_a}" in joined
+
+
+# ---------------------------------------------------------------------------
+# (x) AC2b (PM ruling, 2026-08-16): identity is compared at OWNER-SESSION
+# granularity on BOTH sides. `claim_index` already folds a dispatched
+# agent's claims to its owning session via the `.agents/<id>/em-session-
+# id.txt` back-pointer; the COMMITTER side must fold the same way before
+# the self-comparison, or a dispatched commit-agent committing its own EM's
+# claimed path false-positives an `Absorbed-From` onto the EM's own work.
+# ---------------------------------------------------------------------------
+
+
+def _write_agent_owner_pointer(repo: Path, agent_id: str, owner_sid: str) -> None:
+    """`<sessions-dir>/.agents/<agent_id>/em-session-id.txt` -- the exact
+    back-pointer `claim_index._agent_owner_sid` reads, first line names the
+    owning session."""
+    agent_dir = _sessions_dir(repo) / ".agents" / agent_id
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "em-session-id.txt").write_text(owner_sid + "\n", encoding="utf-8")
+
+
+_COMMIT_AGENT_ID = "agent-9c9c9c9c"
+
+
+def test_absorbed_from_not_emitted_when_commit_agent_folds_to_owning_em_session(
+    tmp_path, monkeypatch
+):
+    """AC2b pin: `coordinator:git-commit-agent` runs the commit under its
+    own agent id, but that agent is back-pointed to EM session `_SID`, which
+    is also the path's claimant. Folded to owner-session granularity, both
+    sides are `_SID` -- no `Absorbed-From` (this would be a false positive
+    on the EM's own team's work if the committer side were left unfolded)."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _COMMIT_AGENT_ID)
+    _write_agent_owner_pointer(repo, _COMMIT_AGENT_ID, _SID)
+    (repo / "own.py").write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, _SID, [_touch_line("T", "own.py", "2026-08-13T10:00:00Z")])
+    _write_live_meta(repo, _SID, live=True)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["own.py"])
+
+    joined = " ".join(args)
+    assert "Absorbed-From:" not in joined
+
+
+def test_absorbed_from_still_emitted_for_a_genuine_peer_when_committer_is_an_agent(
+    tmp_path, monkeypatch
+):
+    """Contrast case: the committer is a dispatched agent (back-pointed to
+    EM session `_SID`), but the claimant is a DIFFERENT, unrelated live
+    session -- folding the committer to its owner must not suppress a
+    genuine peer disclosure."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _COMMIT_AGENT_ID)
+    _write_agent_owner_pointer(repo, _COMMIT_AGENT_ID, _SID)
+    (repo / "hot.py").write_text("x = 1\n", encoding="utf-8")
+    _write_touched(repo, _PEER_SID, [_touch_line("T", "hot.py", "2026-08-13T10:00:00Z")])
+    _write_live_meta(repo, _PEER_SID, live=True)
+    _write_shape(repo, _PEER_SID, {"pickup": {"deliverable_id": "dlv-peer-work"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["hot.py"])
+
+    joined = " ".join(args)
+    assert f"Absorbed-From: {_PEER_SID} dlv-peer-work hot.py" in joined
+
+
 def test_env_var_tiers_win_regardless_of_sentinel(tmp_path, monkeypatch):
     """$CLAUDE_SESSION_ID / $CLAUDE_CODE_SESSION_ID win outright regardless
     of whether a sentinel file or session directory exists at all."""

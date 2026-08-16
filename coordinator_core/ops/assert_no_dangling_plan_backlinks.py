@@ -144,6 +144,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.backfill_deliverable_spine import (
     _DATE_PREFIX_RE as _BACKFILL_DATE_PREFIX_RE,
     _PLAN_ID_CLASSES,
@@ -297,19 +298,7 @@ def _build_moved_plan_map(root: str) -> Dict[str, str]:
 def _resolve_root(explicit_root: Optional[str]) -> Optional[str]:
     if explicit_root:
         return explicit_root
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        print(f"skip: _resolve_root: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if proc.returncode != 0:
-        return None
-    out = proc.stdout.strip()
-    return out or None
+    return show_toplevel()
 
 
 def _scan_dangling(

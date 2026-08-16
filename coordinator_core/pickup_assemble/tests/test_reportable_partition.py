@@ -73,9 +73,21 @@ def _build_reply_closure_jp(closure: dict) -> dict:
     return jps[0]
 
 
+def _resolves_any_live_directive(jp, directives) -> bool:
+    """The directive axis alone, isolated from the `reportable` marker, so
+    these tests pin the two facts separately: gates-nothing is a property of
+    the point's `resolves`; demotability is an authoring decision on top."""
+    directive_ids = {d.get("id") for d in directives}
+    return any(
+        r in directive_ids
+        for d in (jp.get("dispositions") or [])
+        for r in (d.get("resolves") or [])
+    )
+
+
 class TestJReplyClosureSettlement:
-    """SETTLED: `j-reply-closure` is `reported` (gate-nothing) -- confirmed
-    by construction in both the `open` and `unknown` verdict shapes, and
+    """SETTLED: `j-reply-closure` is gate-nothing ON THE DIRECTIVE AXIS --
+    confirmed by construction in both the `open` and `unknown` verdict shapes, and
     against both a directives[] that names a real directive
     (`d-action-memo`, the archived-open-memo branch) and an empty one (the
     terminal-memo M0 branch). Its dispositions' `resolves` are always `[]`
@@ -86,23 +98,34 @@ class TestJReplyClosureSettlement:
     @pytest.mark.parametrize(
         "directives", [[], _ACTION_MEMO_DIRECTIVES], ids=["no-directives", "with-action-memo-directive"]
     )
-    def test_j_reply_closure_is_reported_in_every_real_envelope_shape(self, closure, directives):
+    def test_j_reply_closure_gates_no_directive_in_every_real_envelope_shape(self, closure, directives):
         jp = _build_reply_closure_jp(closure)
         assert jp["id"] == "j-reply-closure"
+        assert not _resolves_any_live_directive(jp, directives)
+
+    @pytest.mark.parametrize("closure", [_OPEN_CLOSURE, _UNKNOWN_CLOSURE], ids=["open", "unknown"])
+    @pytest.mark.parametrize(
+        "directives", [[], _ACTION_MEMO_DIRECTIVES], ids=["no-directives", "with-action-memo-directive"]
+    )
+    def test_it_stays_asked_because_it_is_never_marked_reportable(self, closure, directives):
+        """Gate-nothing is necessary but not sufficient for demotion. This
+        point carries no `reportable` marker, so `partition_reportable`
+        leaves it in `asked` -- which is the correct outcome here for the
+        reason the next class pins."""
+        jp = _build_reply_closure_jp(closure)
+        assert jp.get("reportable") is None
         asked, reported = partition_reportable([jp], directives)
-        assert asked == []
-        reported_ids = {p["id"] for p in reported}
-        assert reported_ids == {"j-reply-closure"}
+        assert {p["id"] for p in asked} == {"j-reply-closure"}
+        assert reported == []
 
-    def test_reported_point_carries_a_recommendation_and_the_open_verdict_rationale(self):
+    def test_the_point_carries_a_recommendation_and_the_open_verdict_rationale(self):
         jp = _build_reply_closure_jp(_OPEN_CLOSURE)
-        _asked, reported = partition_reportable([jp], _ACTION_MEMO_DIRECTIVES)
-        assert reported[0]["recommendation"]["disposition"] == "send-reply"
-        assert reported[0]["recommendation"]["rationale"]
+        assert jp["recommendation"]["disposition"] == "send-reply"
+        assert jp["recommendation"]["rationale"]
 
 
-class TestJReplyClosureGatesCoastDespiteBeingReported:
-    """THE FINDING: a point can be `reported` on the directive axis and
+class TestJReplyClosureGatesCoastDespiteGatingNoDirective:
+    """THE FINDING: a point can gate no directive and
     still gate something -- `gates.coast` -- through a channel
     `partition_reportable` cannot see, because `compute_coast` gates on
     mere presence of an id'd point in `judgment_points[]`, not on whether
@@ -118,13 +141,15 @@ class TestJReplyClosureGatesCoastDespiteBeingReported:
     envelope.
     """
 
-    def test_reply_closure_point_classifies_reported_yet_still_blocks_coast(self):
+    def test_reply_closure_point_gates_no_directive_yet_still_blocks_coast(self):
         jp = _build_reply_closure_jp(_OPEN_CLOSURE)
 
         # Sound on the directive axis: no directive names or is named by it.
-        asked, reported = partition_reportable([jp], _ACTION_MEMO_DIRECTIVES)
-        assert asked == []
-        assert {p["id"] for p in reported} == {"j-reply-closure"}
+        assert not _resolves_any_live_directive(jp, _ACTION_MEMO_DIRECTIVES)
+
+        # And it must never be marked reportable -- that marker is what would
+        # let `partition_reportable` demote it.
+        assert jp.get("reportable") is None
 
         # And yet: a real envelope's judgment_points[] still carries it
         # (no demotion), so gates.coast still blocks on it.

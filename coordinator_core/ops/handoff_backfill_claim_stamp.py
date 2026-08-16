@@ -26,7 +26,7 @@ Writes exactly three frontmatter fields via `locked_rmw`: `claimed_at`,
 `claimed_by`, and `status_reason` (an EXISTING schema field, carrying the
 attesting session id and the verified evidence SHAs — see AC3). Evidence is
 verified, not merely recorded (AC2): every `--evidence-commit` must resolve
-via `git cat-file -e` in this repo, or the op refuses with no write.
+via `git cat-file --batch-check` in this repo, or the op refuses with no write.
 
 Post-mutation validation is scoped to what this op actually writes, not the
 whole document (see `_validate_backfilled_fields`). The intended INPUT to
@@ -74,9 +74,8 @@ from __future__ import annotations
 
 import datetime
 import logging
-import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import yaml
 
@@ -193,22 +192,24 @@ def _validate_backfilled_fields(fm_text: str) -> list:
     return errors
 
 
-def _verify_commit(sha: str, worktree: Path) -> bool:
-    """`git cat-file -e <sha>` inside `worktree` — True iff the object
-    resolves in THIS repo (AC2). Never raises: any subprocess/OSError
-    failure reads as "does not resolve", not as a verification pass."""
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
+def _verify_commits_batch(shas: Sequence[str], worktree: Path) -> dict[str, bool]:
+    """Resolve MANY evidence commit shas against `worktree` in ONE
+    `git cat-file --batch-check` invocation (AC2), N spawns to 1.
 
-        proc = subprocess.run(
-            ["git", "-C", str(worktree), "cat-file", "-e", sha],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return False
-    return proc.returncode == 0
+    Reuses `cutover_gate._git_cat_file_batch_check` — the shared
+    `--batch-check` protocol written once for C14 and reused as-is here
+    (C18); do not duplicate it.
+    """
+    from coordinator_core.ops.cutover_gate import _git_cat_file_batch_check
+
+    return _git_cat_file_batch_check(worktree, list(shas))
+
+
+def _verify_commit(sha: str, worktree: Path) -> bool:
+    """Single-sha convenience wrapper over `_verify_commits_batch`. Never
+    raises: any subprocess/OSError failure reads as "does not resolve",
+    not as a verification pass (see `_git_cat_file_batch_check`)."""
+    return _verify_commits_batch([sha], worktree)[sha]
 
 
 @register_op("handoff.backfill_claim_stamp")
@@ -223,8 +224,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      (`handoff_transition._resolve_path`'s own containment —
                      mutation verbs are live-only).
         evidence_commit (list[str], required, >=1) — one or more commit SHAs;
-                     each must resolve in this repo (`git cat-file -e`) or
-                     the op refuses with no write (AC2).
+                     each must resolve in this repo (`git cat-file
+                     --batch-check`, one call for the whole list) or the op
+                     refuses with no write (AC2).
         attested_by (str, optional)       — session id to record as the
                      attesting session; defaults to
                      `coordinator_core.session.core.resolve_session_id()`.
@@ -270,12 +272,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "CLAUDE_CODE_SESSION_ID all empty) — pass --attested-by explicitly"
         )
 
-    # AC2: every evidence commit must resolve in THIS repo, or refuse with no write.
-    unverifiable = [sha for sha in evidence_commits if not _verify_commit(sha, worktree)]
+    # AC2: every evidence commit must resolve in THIS repo, or refuse with no
+    # write. One batch-check call covers the whole evidence list (C18).
+    verified = _verify_commits_batch(evidence_commits, worktree)
+    unverifiable = [sha for sha in evidence_commits if not verified.get(sha)]
     if unverifiable:
         return _err(
             "the following --evidence-commit sha(s) do not resolve in this "
-            f"repo (git cat-file -e failed): {', '.join(unverifiable)} — no write attempted"
+            f"repo (git cat-file --batch-check failed): {', '.join(unverifiable)} — no write attempted"
         )
 
     try:

@@ -98,9 +98,9 @@ split is deliberate, not an oversight.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.declared_writes import declare_write
 # Cross-package import of the SSOT doc-pointer display string (same
 # precedent write_guards already uses for operator_override_note itself) --
@@ -283,22 +283,7 @@ def _canon(path: str) -> str:
 
 def _git_repo_root(cwd: str) -> str:
     """Return `git rev-parse --show-toplevel` output for cwd, or "" on failure."""
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_repo_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    return _show_toplevel(cwd=cwd) or ""
 
 
 def main(argv: list[str]) -> int:

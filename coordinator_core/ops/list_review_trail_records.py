@@ -76,6 +76,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 
 _STATE_ROOT_OVERRIDE_ENV = "COORDINATOR_ROOT"
 _CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
@@ -157,20 +158,7 @@ def _same_path(a: str, b: str) -> bool:
 
 def _git_root() -> Optional[str]:
     """Resolve the current working directory's git repo root, or None if not in one."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return _show_toplevel()
 
 
 def _resolve_state_root() -> Optional[str]:

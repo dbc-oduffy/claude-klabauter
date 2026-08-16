@@ -106,7 +106,7 @@ def test_check_stale_mixed_classes(tmp_path: Path) -> None:
     repo_root = _git_root(tmp_path)
     _write_stamp(repo_root, hl.ARCHIVE_SWEEPS, age_seconds=60)
     _write_stamp(repo_root, hl.ROADMAP_CALLOUT, age_seconds=30 * 24 * 3600)
-    # COMPLETION_SCAFFOLD / COVERAGE_GATE never stamped at all.
+    # COMPLETION_SCAFFOLD never stamped at all.
 
     messages = hl.check_stale(repo_root, stale_threshold_s=7 * 24 * 3600.0)
 
@@ -175,7 +175,7 @@ def test_remedy_commands_archive_sweeps_names_all_four_sweep_clis() -> None:
 
 
 def test_remedy_commands_classes_with_no_cli_are_empty() -> None:
-    for cls in (hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT, hl.COVERAGE_GATE):
+    for cls in (hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT):
         assert hl.REMEDY_COMMANDS[cls] == ()
 
 
@@ -219,14 +219,13 @@ def test_liveness_status_mixed_classes_distinguishes_all_three_states(tmp_path: 
     repo_root = _git_root(tmp_path)
     _write_stamp(repo_root, hl.ARCHIVE_SWEEPS, age_seconds=60)
     _write_stamp(repo_root, hl.ROADMAP_CALLOUT, age_seconds=30 * 24 * 3600)
-    # COMPLETION_SCAFFOLD / COVERAGE_GATE never stamped at all.
+    # COMPLETION_SCAFFOLD never stamped at all.
 
     statuses = hl.liveness_status(repo_root, stale_threshold_s=7 * 24 * 3600.0)
 
     assert statuses[hl.ARCHIVE_SWEEPS] == hl.STATUS_FRESH
     assert statuses[hl.ROADMAP_CALLOUT] == hl.STATUS_STALE
-    for cls in (hl.COMPLETION_SCAFFOLD, hl.COVERAGE_GATE):
-        assert statuses[cls] == hl.STATUS_NEVER_STAMPED
+    assert statuses[hl.COMPLETION_SCAFFOLD] == hl.STATUS_NEVER_STAMPED
 
 
 def test_liveness_status_unparseable_timestamp_is_stale(tmp_path: Path) -> None:
@@ -254,9 +253,9 @@ def test_liveness_status_never_raises_on_corrupt_file(tmp_path: Path) -> None:
 def test_liveness_status_respects_classes_arg(tmp_path: Path) -> None:
     repo_root = _git_root(tmp_path)
 
-    statuses = hl.liveness_status(repo_root, classes=[hl.COVERAGE_GATE])
+    statuses = hl.liveness_status(repo_root, classes=[hl.COMPLETION_SCAFFOLD])
 
-    assert set(statuses.keys()) == {hl.COVERAGE_GATE}
+    assert set(statuses.keys()) == {hl.COMPLETION_SCAFFOLD}
 
 
 # ---------------------------------------------------------------------------

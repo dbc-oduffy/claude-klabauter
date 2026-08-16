@@ -93,6 +93,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.schema_validate import (
     _PLAN_TASKS_GROUPING_BY_DISPOSITION,
@@ -311,22 +312,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
 
 def _resolve_git_root(cwd: Optional[str] = None) -> str:
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            ["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError as exc:
-        raise GroupingDigestError(f"cannot resolve git repo root: {exc}") from exc
-    if proc.returncode != 0 or not proc.stdout.strip():
-        raise GroupingDigestError(
-            f"cannot resolve git repo root from {cwd or '.'}: {proc.stderr.strip()}"
-        )
-    return proc.stdout.strip()
+    toplevel = _show_toplevel(cwd=cwd or ".")
+    if not toplevel:
+        raise GroupingDigestError(f"cannot resolve git repo root from {cwd or '.'}")
+    return toplevel
 
 
 def _parse_cut_arg(raw: Optional[str]) -> List[dict]:

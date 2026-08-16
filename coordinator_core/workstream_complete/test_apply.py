@@ -1755,6 +1755,53 @@ def test_wsc_tail_does_not_dispatch_when_stage_paths_missing(
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.HALTED_AT_JUDGMENT)
 
 
+# ---------------------------------------------------------------------------
+# jp-open-spine-rows-block-stamp's own apply-level HALT coverage -- mirrors
+# jp-commit-subject-missing's `_execute_directives`-level test above: the
+# claim "this blocks" must be proven at the wire, not inferred from the
+# envelope shape alone. Uses the real builder, not a hand-authored jp dict.
+# ---------------------------------------------------------------------------
+
+
+def test_open_spine_rows_block_stamp_withholds_the_implemented_stamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coordinator_core.workstream_complete import build_open_spine_rows_block_stamp_judgment_point
+    from coordinator_core.workstream_complete import directives_spine_worklist
+
+    def dispatched_main(argv: list[str]) -> int:
+        raise AssertionError(
+            f"d-stamp-plan-implemented must never dispatch while "
+            f"jp-open-spine-rows-block-stamp is open; got argv={argv!r}"
+        )
+
+    modules = {"archive-stamp-cli": _fake_module(dispatched_main, "archive_stamp_cli")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    gate = directives_spine_worklist.OpenSpineRowGate(
+        applies=True,
+        rows=(directives_spine_worklist.SpineRowItem(id="C2", title="Still open", waived=False),),
+        open_count=1,
+        warn_text="WARN [open-spine-row-worklist]: 1 plan-spine row(s) still open on some-plan.",
+        summary_line="Open spine rows: 1 still open on some-plan -- WARN emitted",
+        verdict="applicable",
+    )
+    jp = build_open_spine_rows_block_stamp_judgment_point(gate)
+    stamp = _directive(
+        "d-stamp-plan-implemented", "archive-stamp-cli", depends_on="jp-open-spine-rows-block-stamp"
+    )
+    # Selecting the point's one disposition is the load-bearing half of this
+    # assertion: it proves the one option an EM can pick does not open the
+    # gate, since its `resolves` is deliberately empty.
+    decisions = {"jp-open-spine-rows-block-stamp": {"disposition": jp["dispositions"][0]["value"]}}
+
+    exit_code, report = ws_apply._execute_directives([stamp], [jp], decisions)
+
+    assert report["blocked"] == ["d-stamp-plan-implemented"]
+    assert "d-stamp-plan-implemented" not in report["landed"]
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.HALTED_AT_JUDGMENT)
+
+
 def test_execute_directives_resolves_and_dispatches_an_entry_path_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

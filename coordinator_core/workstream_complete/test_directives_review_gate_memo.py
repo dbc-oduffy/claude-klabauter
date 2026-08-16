@@ -542,6 +542,50 @@ def test_record_gate_verdict_write_trail_without_key_parts_is_a_noop(tmp_path: P
     assert not memo_dir.exists() or list(memo_dir.iterdir()) == []
 
 
+def test_execute_directives_write_trail_partial_failure_only_succeeded_entry_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Composed case: two indexed `d-write-trail-<n>` directives with
+    DIFFERENT `sha_range` values in one apply pass, one dispatching
+    successfully and its sibling failing. A memo hit must never cause a
+    trail write to be SKIPPED when the record does not exist — so the
+    FAILED entry's sha_range must re-fire on a subsequent pass (no memo
+    recorded for it) while the SUCCEEDED entry's sha_range short-circuits.
+    Proves the partial-failure case cannot over-claim `already_satisfied`."""
+    dispatch_count = {"n": 0}
+
+    def write_trail_main(argv: list[str]) -> int:
+        dispatch_count["n"] += 1
+        # entry_a's range succeeds; entry_b's range fails.
+        return 0 if entry_a["sha_range"] in argv else 1
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: _fake_module(write_trail_main))
+
+    entry_a = dict(_SINGLE_REVIEW, sha_range=f"{_FLOOR_SHA}..{_TIP_SHA}")
+    entry_b = dict(_SINGLE_REVIEW, sha_range=f"{_TIP_SHA}..{_FLOOR_SHA}")
+
+    directives = build_write_trail_directives([entry_a, entry_b], session_id="sid-1", repo_root=tmp_path)
+    assert [d["id"] for d in directives] == ["d-write-trail-0", "d-write-trail-1"]
+    assert all(d["already_satisfied"] is False for d in directives)
+
+    _, report = ws_apply._execute_directives(directives, [], {}, repo_root=tmp_path)
+    assert report["landed"] == ["d-write-trail-0"]
+    assert [f["id"] for f in report["failed"]] == ["d-write-trail-1"]
+    assert dispatch_count["n"] == 2
+
+    # Only entry_a's range got a memo -- entry_b's failed dispatch must not
+    # have written one.
+    assert gate_memo_hit(tmp_path, "d-write-trail", "sid-1", entry_a["sha_range"]) is True
+    assert gate_memo_hit(tmp_path, "d-write-trail", "sid-1", entry_b["sha_range"]) is False
+
+    # Subsequent pass: the succeeded range short-circuits, the failed range
+    # re-fires -- no over-claimed `already_satisfied` for the sibling that
+    # never actually got a review-trail record written.
+    directives_2 = build_write_trail_directives([entry_a, entry_b], session_id="sid-1", repo_root=tmp_path)
+    assert directives_2[0]["already_satisfied"] is True
+    assert directives_2[1]["already_satisfied"] is False
+
+
 def test_execute_directives_write_trail_skip_on_second_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dispatch_count = {"n": 0}
 

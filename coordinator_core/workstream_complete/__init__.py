@@ -219,6 +219,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
     build_untrusted_gate_judgment_point,
+    partition_reportable,
 )
 from coordinator_core.dag import CONTINUATION_EDGE_KINDS
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
@@ -288,6 +289,32 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "classify-dispatch-shape",
     "session-claim-cli",
     "emit-cadence",
+)
+
+
+#: C2 (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-being-
+#: questions.md): the five wsc judgment points the plan's Problem/Anti-scope
+#: sections name as NOT gate-nothing -- each builds `resolves` through a
+#: resolver (`review_partition_resolves_ids`, `lesson_capture_resolves_ids`,
+#: `memo_flip_resolves_ids`) that returns real directive ids once its
+#: `decisions` slice is populated, and `[]` only when that slice is empty,
+#: deliberately ("an honest 'this dispatches nothing', not a phantom id" --
+#: each resolver's own docstring). `partition_reportable` cannot distinguish
+#: "structurally gates nothing" from "this one call's decisions happened to
+#: leave the resolver's slice empty" -- classifying these five by a single
+#: observation would reintroduce the over-count the plan's Problem section
+#: documents. Mirrors the identical exemption in
+#: `contract/decision_object/tests/test_reportable_partition.py`'s own
+#: `_RESOLVER_BACKED_OUT_OF_SCOPE_IDS` (C1's census harness) -- same five
+#: ids, same rationale, not independently derived here.
+_RESOLVER_BACKED_OUT_OF_SCOPE_IDS: frozenset[str] = frozenset(
+    {
+        "review-partition-strategy",
+        "review-dispatch-vehicle-choice",
+        "reviewer-count-on-oracle-disagreement",
+        "lesson-worth-capturing",
+        "memo-resolution-attribution",
+    }
 )
 
 
@@ -723,26 +750,17 @@ def build_session_shape_judgment_point(gate: SessionShapeGate) -> Optional[dict[
             "flagged an unresolved case below — is that resolution actually correct?"
         ),
         dispositions=[
-            # AC2b: the canonical spelling and the legacy spelling are
-            # emitted as TWO disposition entries with IDENTICAL resolves —
+            # AC2b (historical): the canonical and legacy spellings used to
+            # carry IDENTICAL `resolves=["d-coverage-gate"]` lists —
             # ceremony_common/apply_halt._disposition_resolves_directive's
-            # ordinary value-match then clears d-coverage-gate for either
-            # spelling an EM types, with zero change to that cross-family
-            # shared predicate (see wsc_disposition module docstring).
-            build_disposition(PREDECESSOR_CONSUMED, resolves=["d-coverage-gate"]),
-            build_disposition(LEGACY_PREDECESSOR_CONSUMED, resolves=["d-coverage-gate"]),
+            # ordinary value-match cleared d-coverage-gate for either
+            # spelling an EM typed. `d-coverage-gate` itself was removed
+            # (K-001, state/kill-ledger.md), so every disposition here now
+            # resolves nothing.
+            build_disposition(PREDECESSOR_CONSUMED, resolves=[]),
+            build_disposition(LEGACY_PREDECESSOR_CONSUMED, resolves=[]),
             build_disposition(SINGLE_SESSION, resolves=[]),
-            # AC4/plan Execution Notes: offered so an EM correcting a wrong
-            # Detector C attribution has the true answer available whenever
-            # this point fires at all — not conditioned on which leg
-            # actually decided this resolution. `resolves=["d-coverage-
-            # gate"]` is FORCED, not chosen: `_build_legacy_coverage_and_
-            # trail_directives` only builds `d-coverage-gate` when
-            # `canonicalize(disposition) == PREDECESSOR_CONSUMED` AND
-            # `gate.consumed_handoff` is non-empty, and `consumed_handoff`
-            # is empty on the memo leg — so "the gate runs" is not
-            # implementable any other way (plan § Problem (2) PM ruling).
-            build_disposition(MEMO_PREDECESSOR, resolves=["d-coverage-gate"]),
+            build_disposition(MEMO_PREDECESSOR, resolves=[]),
         ],
         evidence="gates.session_shape.detection",
         reason=(
@@ -797,65 +815,37 @@ def _build_legacy_coverage_and_trail_directives(
     plan_claim_directives: list[dict[str, Any]],
     repo_root: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
-    """The pre-existing (Convert #2) `d-coverage-gate` / `d-write-trail`
-    pair.
+    """The pre-existing (Convert #2) `d-write-trail` directive builder.
 
-    `repo_root` (C4, AC6, docs/plans/2026-08-10-commit-event-5s-cap-and-the-
-    silent-tail.md): when supplied, consults the gate verdict memo
-    (READ-ONLY, via `directives_review.gate_memo_hit`) keyed on
-    `("d-coverage-gate", gate.consumed_handoff)` and sets `already_satisfied
-    =True` on the emitted `d-coverage-gate` directive on a hit. This is the
-    LIVE chain-end coverage gate — `directives_review.
-    build_chain_coverage_gate_directive` is dead code, never called by
-    `build_directives` (verified: no call site anywhere in this module; see
-    that builder's own "DEAD CODE, VERIFIED" docstring paragraph) — so the
-    memo capability lives here, on the directive that actually dispatches,
-    rather than on the unwired duplicate-CLI builder. This function NEVER
-    WRITES the memo itself: the write happens exactly once, from
-    `apply.py::_execute_directives`'s `directives_review.
-    record_gate_verdict_if_passed`, after the gate CLI actually dispatched
-    and returned a confirmed-pass verdict this pass (`exit_code == 0` AND
-    stdout does not carry `VERDICT=WARN` — a WARN is an offer, never a
-    confirmed pass, and must not be memoized). Omitting `repo_root` (every
-    pre-C4 caller) reproduces today's byte-identical directive.
+    `d-coverage-gate` — the LIVE chain-end coverage-verdict directive this
+    function used to also emit (`wsc-coverage-gate-runner coverage-gate
+    --from-handoff <consumed_handoff>`, gated on `gate.disposition ==
+    PREDECESSOR_CONSUMED and gate.consumed_handoff`) — was removed here
+    (K-001, state/kill-ledger.md): the DAG walk behind its verdict cost
+    ~150-180s per close. The gate-verdict memo machinery it used
+    (`directives_review.gate_memo_hit`/`record_gate_verdict_if_passed`) was
+    trimmed alongside it; only `d-run-review-brightline-gate`'s memo entry
+    survives (brightline itself is unaffected by this cut and still mints
+    chain-ancestry waivers via its own `--mint-chain-waivers` subprocess —
+    see `coordinator/bin/wsc-coverage-gate-runner.py::cmd_brightline_gate`).
+    `gate`/`decisions` are still accepted (`gate` was this function's own
+    coverage-directive gating input; `decisions` is a write-trail-directives
+    passthrough) so the signature stays stable for its one caller.
 
-    Neither directive carries a `depends_on` — 2026-08-10 audit
-    (`state/audits/2026-08-10-...` sweep for the `depends_on`-repointed-
-    but-never-gating pattern): `depends_on` naming a sibling DIRECTIVE id
-    (as opposed to a judgment-point id) never gates in
-    `ceremony_common.apply_halt._directive_gate_open` — see that
-    function's own docstring — so a `depends_on` here would have been
-    decorative, not enforcement. The only mechanism that actually binds a
-    directive-id producer dependency is a `{<producer-id>.landed}`/
-    `{<producer-id>.entry_path}` token in `args`
-    (`workstream_complete.apply._resolve_arg_tokens`), and neither
-    `wsc-coverage-gate-runner` subcommand this pair dispatches
-    (`coverage-gate`, `write-trail`) has a positional slot to carry one —
-    both subparsers define ONLY `--flag`-form arguments (see
-    `coordinator/bin/wsc-coverage-gate-runner.py::_build_parser`), so an
-    appended bare token would surface as an unrecognized positional
-    argument and argparse-fail the directive outright. Ordering between
-    this pair and `plan_claim_directives`/each other is INCIDENTAL, not
-    enforced: guaranteed only by `directives.extend()` append order in
-    this module's assembly function (`plan_claim_directives` extended
-    before this pair; `d-coverage-gate` appended before `d-write-trail`
-    within this function), never by a runtime gate. A real block-until-
-    landed dependency here would require adding a tolerated extra
-    positional/flag to the CLI first — out of this sweep's scope."""
+    `repo_root`, `plan_claim_directives` — kept for signature stability;
+    `plan_claim_directives` was never read by the coverage-directive logic
+    (see the ordering note below) and `d-write-trail` does not consult a
+    verdict memo of its own.
+
+    `d-write-trail`'s `wsc-coverage-gate-runner` subcommand (`write-trail`)
+    has no positional slot for a `{<producer-id>.landed}`/
+    `{<producer-id>.entry_path}` dependency token (both subparsers define
+    ONLY `--flag`-form arguments — see
+    `coordinator/bin/wsc-coverage-gate-runner.py::_build_parser`), so it
+    never carried a real block-until-landed dependency on
+    `plan_claim_directives` either; that was true before this cut and is
+    unchanged by it."""
     directives: list[dict[str, Any]] = []
-
-    if canonicalize(gate.disposition) == PREDECESSOR_CONSUMED and gate.consumed_handoff:
-        coverage_directive = _directive(
-            "d-coverage-gate",
-            "wsc-coverage-gate-runner",
-            ["coverage-gate", "--from-handoff", gate.consumed_handoff],
-            advisory=True,
-        )
-        if repo_root is not None and directives_review.gate_memo_hit(
-            repo_root, coverage_directive["id"], gate.consumed_handoff
-        ):
-            coverage_directive["already_satisfied"] = True
-        directives.append(coverage_directive)
 
     directives.extend(
         build_write_trail_directives(decisions.get("review"), session_id=gate.sid, repo_root=repo_root)
@@ -987,10 +977,8 @@ def _apply_write_trail_gate_memo(
         return
     key_parts = [session_id, str(sha_range)]
     directive["_gate_memo_key_parts"] = key_parts
-    # "d-write-trail" here is the memo's fixed gate-id tag, matching
-    # `directives_review._WRITE_TRAIL_DIRECTIVE_ID_PREFIX` -- NOT this
-    # directive's own (possibly indexed) `id`; see that constant's
-    # docstring comment for why the two must not be conflated.
+    # Fixed gate-id tag (matches `directives_review._WRITE_TRAIL_DIRECTIVE_ID_PREFIX`);
+    # see this function's docstring for why it is not this directive's own id.
     if directives_review.gate_memo_hit(repo_root, "d-write-trail", *key_parts):
         directive["already_satisfied"] = True
 
@@ -1262,65 +1250,10 @@ def build_directives(
     return directives
 
 
-def build_coverage_judgment_point(gate: SessionShapeGate, directives: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    """When this run is chain-terminal, `d-coverage-gate`'s VERDICT is only
-    known at run time (COVERED/UNCOVERED/INDETERMINATE) — this assembler
-    cannot pre-resolve it from disk. Surfaces the run-then-check obligation
-    as a trusted recommendation (this module IS trusted to recommend
-    running the named directive; it is not trusted to guess the verdict)."""
-    if not any(d["id"] == "d-coverage-gate" for d in directives):
-        return None
-    # Every `d-write-trail*` directive this pass actually built —
-    # `build_write_trail_directives` may emit one `d-write-trail` (the
-    # pre-existing single-object shape) or several `d-write-trail-<index>`
-    # entries (a partitioned `decisions["review"]` list). Resolved
-    # dynamically off THIS pass's own `directives[]`, never hardcoded to
-    # the single literal id `"d-write-trail"` — a hardcoded id would leave
-    # every OTHER slice's directive with no resolving disposition at all,
-    # silently un-gateable by this judgment point.
-    write_trail_ids = [
-        d["id"] for d in directives
-        if d["id"] == "d-write-trail" or d["id"].startswith("d-write-trail-")
-    ]
-    if not write_trail_ids:
-        # Legacy default (pre-2026-08-11 fix): this judgment point named the
-        # literal `"d-write-trail"` id unconditionally, even on a pass that
-        # built no such directive at all (`decisions["review"]` absent) — a
-        # harmless dead reference `_disposition_resolves_directive` simply
-        # never matches. Preserved here, rather than resolving to `[]`, so
-        # every pre-existing test/caller that never supplies `review` at all
-        # keeps seeing the exact same disposition shape it always has.
-        write_trail_ids = ["d-write-trail"]
-    # ADVISORY, not an enforced lock, by deliberate PM ruling (2026-07-27):
-    # the commit tail (`d-run-wsc-tail`) carries no dependency edge on this
-    # judgment point or on `d-coverage-gate`, and none of the dispositions
-    # below resolve it. See `state/lessons/2026-07-27-verify-a-gate-
-    # actually-enforces-before-s-a20579f1aa06.yaml` (evidence 87578a31 in
-    # claude-klabauter, e5f7b47c in DoE-claude) — do not re-derive this as a
-    # bug or wire a dependency edge here without a fresh PM decision.
-    return build_judgment_point(
-        {
-            "disposition": "uncovered-or-indeterminate-proceed-with-warning",
-            "rationale": (
-                "This gate is advisory: an UNCOVERED/INDETERMINATE verdict does not block "
-                "the commit tail — it is the EM's judgment whether to stop and reconcile "
-                "before proceeding."
-            ),
-        },
-        id="jp-coverage-verdict",
-        question="Has d-coverage-gate run, and if so did it return COVERED?",
-        dispositions=[
-            build_disposition("covered", resolves=write_trail_ids),
-            build_disposition("uncovered-or-indeterminate-override", resolves=write_trail_ids),
-            build_disposition("uncovered-or-indeterminate-proceed-with-warning", resolves=[]),
-        ],
-        evidence="directives[] entry with id == 'd-coverage-gate'",
-        reason=(
-            "The chain-end coverage gate's VERDICT (COVERED/UNCOVERED/INDETERMINATE) is a "
-            "runtime fact review-coverage-gate.py computes, not something this read-only "
-            "assembler can pre-resolve from disk."
-        ),
-    )
+# `build_coverage_judgment_point` (jp-coverage-verdict) was removed here
+# (K-001, state/kill-ledger.md) along with the `d-coverage-gate` directive
+# it existed to surface a run-then-check obligation for -- the directive
+# no longer exists, so the function would always return None.
 
 
 def build_review_scale_judgment_point(
@@ -1484,6 +1417,19 @@ def build_review_scale_judgment_point(
                 "decide_review_scale's chain-terminal rows (5, 6) had zero call sites — this "
                 "judgment point is the surfacing this plan adds, not new enforcement."
             ),
+            # (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
+            # being-questions.md) This branch is reached only once the scale
+            # RESOLVES, its one disposition `acknowledge-scale` carries
+            # `resolves=[]`, and DR-068 keeps `d-run-wsc-tail` free of any
+            # dependency edge on this point — so it gates nothing on the
+            # directive axis while carrying a recommendation, which is exactly
+            # the shape `_emit`'s backstop refuses when unclassified. Without
+            # this marker the envelope raises the moment an EM discharges the
+            # review gate, i.e. complying with PARTITION-MANDATORY is what
+            # breaks the ceremony. The three unresolved branches below build
+            # untrusted-gate points whose dispositions the EM must still act
+            # on, and are correctly left unmarked.
+            reportable=True,
         )
     if chain_terminal and verdict_presence == chain_partition_verdict_store.PRESENCE_ABSENT:
         return build_untrusted_gate_judgment_point(
@@ -1659,6 +1605,140 @@ def build_commit_subject_missing_judgment_point() -> dict[str, Any]:
             "(or decisions['commit-message-authoring']['subject']) to the commit subject text "
             "directly, then re-run apply; the next brief() recomputation simply stops emitting "
             "this judgment point once a real value resolves."
+        ),
+    )
+
+
+def build_open_spine_rows_block_stamp_judgment_point(gate: "directives_spine_worklist.OpenSpineRowGate") -> dict[str, Any]:
+    """Blocks `d-stamp-plan-implemented` when the governing plan's spine
+    (`directives_spine_worklist.compute_open_spine_row_gate`) either still
+    has one or more UNWAIVED `disposition: open` rows, or could not be
+    resolved/read at all (`verdict: indeterminate`) — `status: implemented`
+    is a terminal state
+    (`coordinator_core/frontmatter/schemas/plan.schema.json`) and stamping
+    it over unresolved or unverifiable spine work misrepresents the plan as
+    done. Mirrors `build_commit_subject_missing_judgment_point`'s shape: a
+    single disposition with an empty `resolves` — there is no EM pick that
+    clears this gate short of actually resolving/waiving the named row(s)
+    or fixing the spine so it can be read (SKILL.md § Resolve judgment
+    points: "not the last step"), same as that builder's own docstring
+    reasons for `jp-commit-subject-missing`. Only ever called once this
+    module has already confirmed `gate.verdict == "indeterminate"` or
+    (`gate.verdict == "applicable"` and `gate.unwaived_ids()` is non-empty)
+    — see the call site's own comment for the incident this closes; raises
+    rather than emitting a degenerate message naming rows it does not have
+    if called on any other gate shape.
+
+    Negative spec — the waiver asymmetry is deliberate, not an oversight.
+    `decisions["waived_open_spine_row_ids"]` clears the `applicable` arm and
+    deliberately does NOT clear the `indeterminate` one. Waiving a named row
+    asserts a judgment about work whose state was successfully read; there is
+    no equivalent assertion available when the spine could not be read at all,
+    so a "proceed anyway" override here would reintroduce exactly the
+    false-clean this gate exists to prevent. The cost is real and accepted: a
+    governing plan that is permanently unreachable (deleted, moved, or
+    unreadable) blocks this directive until the plan itself is repaired, and
+    no `decisions[...]` key shortcuts that repair."""
+    if gate.verdict == "indeterminate":
+        return build_untrusted_gate_judgment_point(
+            id="jp-open-spine-rows-block-stamp",
+            question=(
+                "The governing plan's spine could not be read "
+                f"({gate.summary_line}) — stamping status: implemented (a terminal "
+                "state) cannot be verified safe. Fix the spine, then re-run."
+            ),
+            dispositions=[build_disposition("rows-not-yet-resolved", resolves=[])],
+            evidence=f"gates.open_spine_row_worklist.verdict: indeterminate — {gate.summary_line}",
+            reason=(
+                "The spine could not be resolved or read, so whether any row is still "
+                "open is unknown; stamping implemented over that unknown risks the same "
+                "false-clean this gate exists to prevent. Fix the governing plan or its "
+                "spine fence, then re-run apply."
+            ),
+        )
+
+    unwaived_ids = gate.unwaived_ids()
+    if not unwaived_ids:
+        raise ValueError(
+            "build_open_spine_rows_block_stamp_judgment_point called on a gate with no "
+            "unwaived open rows and verdict != 'indeterminate' — caller should not have "
+            "promoted this gate to a judgment point"
+        )
+    unwaived_text = ", ".join(unwaived_ids)
+    return build_untrusted_gate_judgment_point(
+        id="jp-open-spine-rows-block-stamp",
+        question=(
+            f"The governing plan still has plan-spine row(s) at disposition: open "
+            f"({unwaived_text}) — stamping status: implemented (a terminal state) would "
+            "misrepresent that unresolved work as done. Resolve them first."
+        ),
+        dispositions=[build_disposition("rows-not-yet-resolved", resolves=[])],
+        evidence=f"gates.open_spine_row_worklist.rows, still open and unwaived: {unwaived_text}",
+        reason=(
+            "Resolve via `python3 coordinator/bin/plan-tasks-resolve` (see "
+            "gates.open_spine_row_worklist.warn_text), or add the id to "
+            "decisions['waived_open_spine_row_ids'] and re-run apply."
+        ),
+    )
+
+
+def build_landed_reconciliation_block_stamp_judgment_point(gate: "LandedReconciliationGate") -> dict[str, Any]:
+    """Blocks `d-stamp-plan-implemented` when the session's own governing
+    plan is `status: landed` with one or more `## Acceptance Criteria` rows
+    still unticked (`gate.verdict == "applicable"`), or when that state
+    could not be determined at all (`gate.verdict == "indeterminate"`) --
+    mirrors `build_open_spine_rows_block_stamp_judgment_point`'s shape and
+    carries the same three load-bearing rules that fix landed-instance #1
+    (`state/review-sidecars/fourth-instance-hunt.md`): keyed on
+    `gate.verdict`, never on whether `gate.warn_text` is set (`warn_text`
+    is `None` on `indeterminate` too, so a message-keyed trigger would fail
+    open exactly when the plan cannot be read); the `indeterminate` arm
+    BLOCKS, and its message says the state could not be determined rather
+    than naming an open/total split it does not have; and the open/total
+    counts quoted in the `applicable` question below are read directly off
+    `gate` -- the single derivation `compute_landed_reconciliation_gate`
+    already computed, never recomputed here. Only ever called once the call
+    site has confirmed `gate.verdict != "not-applicable"` -- raises rather
+    than emitting a degenerate message naming counts it does not have if
+    called on any other gate shape."""
+    if gate.verdict == "indeterminate":
+        return build_untrusted_gate_judgment_point(
+            id="jp-landed-reconciliation-block-stamp",
+            question=(
+                "The governing plan's landed-reconciliation state could not be "
+                f"determined ({gate.summary_line}) — stamping status: implemented (a "
+                "terminal state) cannot be verified safe. Fix the plan, then re-run."
+            ),
+            dispositions=[build_disposition("acs-not-yet-reconciled", resolves=[])],
+            evidence=f"gates.landed_reconciliation.verdict: indeterminate — {gate.summary_line}",
+            reason=(
+                "The plan's landed/AC state could not be resolved or read, so whether "
+                "any acceptance criterion is still open is unknown; stamping implemented "
+                "over that unknown risks the same false-clean this gate exists to "
+                "prevent. Fix the governing plan, then re-run apply."
+            ),
+        )
+
+    if gate.verdict != "applicable":
+        raise ValueError(
+            "build_landed_reconciliation_block_stamp_judgment_point called on a gate "
+            "with verdict 'not-applicable' — caller should not have promoted this gate "
+            "to a judgment point"
+        )
+    return build_untrusted_gate_judgment_point(
+        id="jp-landed-reconciliation-block-stamp",
+        question=(
+            f"The governing plan is status: landed with {gate.open_count} of "
+            f"{gate.total_count} acceptance criteria unticked — stamping status: "
+            "implemented (a terminal state) would misrepresent that unreconciled work "
+            "as done. Reconcile them first."
+        ),
+        dispositions=[build_disposition("acs-not-yet-reconciled", resolves=[])],
+        evidence=f"gates.landed_reconciliation.open_count/total_count: {gate.open_count}/{gate.total_count}",
+        reason=(
+            "Tick each remaining acceptance criterion once its work is verified landed, "
+            "or resolve the outstanding item via `python3 coordinator/bin/plan-tasks-"
+            "resolve` (see gates.landed_reconciliation.warn_text), then re-run apply."
         ),
     )
 
@@ -2627,12 +2707,38 @@ def _is_verified_replay_safe(directive_id: Optional[str]) -> bool:
 
 
 def _narration_and_next_move(
-    gate: SessionShapeGate, directives: list[dict[str, Any]], judgment_points: list[dict[str, Any]]
+    gate: SessionShapeGate,
+    directives: list[dict[str, Any]],
+    judgment_points: list[dict[str, Any]],
+    reported_judgment_points: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[str, str]:
+    reported_judgment_points = reported_judgment_points or []
     narration = (
         f"Session {gate.sid} resolved disposition={gate.disposition!r} "
         f"({len(directives)} directive(s) computed, {len(judgment_points)} judgment point(s) open)."
     )
+    if reported_judgment_points:
+        # C2 (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
+        # being-questions.md): a point `partition_reportable` classified as
+        # `reported` (gates no directive present on this envelope) is
+        # demoted out of `judgment_points[]` but must not go silent -- its
+        # question and its recommendation's rationale (when it carries one)
+        # are folded into narration instead, so the EM still sees the fact
+        # without being asked to answer a question that cannot change
+        # anything. No envelope key is added for this -- `narration` is
+        # already free-form.
+        reported_bits = []
+        for point in reported_judgment_points:
+            recommendation = point.get("recommendation") or {}
+            rationale = recommendation.get("rationale")
+            bit = f"{point.get('id')} ({point.get('question')})"
+            if rationale:
+                bit += f" -- {rationale}"
+            reported_bits.append(bit)
+        narration += (
+            f" {len(reported_judgment_points)} point(s) gate nothing on this run and are reported, "
+            f"not asked: {'; '.join(reported_bits)}."
+        )
     if judgment_points:
         replay_safe_ids = sorted(
             d.get("id") for d in directives if _is_verified_replay_safe(d.get("id"))
@@ -3630,9 +3736,8 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     session_shape_jp = build_session_shape_judgment_point(gate)
     if session_shape_jp:
         judgment_points.append(session_shape_jp)
-    coverage_jp = build_coverage_judgment_point(gate, directives)
-    if coverage_jp:
-        judgment_points.append(coverage_jp)
+    # `jp-coverage-verdict` (build_coverage_judgment_point) was removed here
+    # (K-001, state/kill-ledger.md) along with `d-coverage-gate` itself.
     # The unresolved point's cause is DISCRIMINATED, never asserted: before
     # this, the point told every unresolved chain-terminal close that a
     # verdict "was not carried forward" — a diagnosis it had checked
@@ -3769,26 +3874,121 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         decisions=decisions,
     )
 
-    # AC4 — advisory only, per docs/plans/2026-08-05-wsc-open-spine-row-
-    # worklist.md: this gate contributes no judgment point and no directive
-    # dependency edge anywhere in this module — its `warn_text`/
-    # `summary_line` feed only `gates.open_spine_row_worklist` below.
+    # `directives_spine_worklist.compute_open_spine_row_gate` itself stays
+    # purely advisory (its own docstring/Negative-spec: "Does NOT block" —
+    # unchanged here, and this call site still feeds `warn_text`/
+    # `summary_line` into `gates.open_spine_row_worklist` below exactly as
+    # before). What changed: THIS assembly layer now promotes the gate's
+    # unwaived-open-rows fact into a blocking judgment point gating
+    # `d-stamp-plan-implemented` specifically (see
+    # `build_open_spine_rows_block_stamp_judgment_point` below) — mirroring
+    # `judgments.py`'s own division of labour (module computes the fact,
+    # `__init__.py` decides which facts gate a directive). Closes a live
+    # incident: `docs/plans/2026-08-15-composition-invocation-budgets.md`
+    # was stamped `executing -> implemented` (commit `1ee373668`) with row
+    # C2 still `disposition: open` (state/kill-ledger.md K-003) — the
+    # `landed <-> implemented` schema distinction
+    # (`coordinator_core/frontmatter/schemas/plan.schema.json`) exists
+    # precisely to separate "code is on the branch" from "every spine row
+    # reached a disposition", and the stamp directive reached past it
+    # ungated. `open_spine_row_gate.warn_text` already excludes waived rows
+    # (`decisions["waived_open_spine_row_ids"]`) — a PM-ruled, genuinely
+    # carried-open row clears the block the same way it already clears the
+    # advisory WARN, no new disposition needed. The trigger keys on
+    # `verdict`, not `warn_text` alone: `warn_text` is also `None` on
+    # `verdict: indeterminate` (plan unreadable, spine fence malformed),
+    # and that case must still gate — an unreadable spine is the one
+    # condition this module can least afford to wave the terminal stamp
+    # through on.
     open_spine_row_gate = directives_spine_worklist.compute_open_spine_row_gate(
         governing_plan.slug if governing_plan else None,
         governing_plan.path if governing_plan else None,
         decisions=decisions,
     )
+    _open_spine_row_gate_blocks = open_spine_row_gate.verdict == "indeterminate" or (
+        open_spine_row_gate.verdict == "applicable" and open_spine_row_gate.warn_text is not None
+    )
+    if _open_spine_row_gate_blocks and any(
+        d["id"] == "d-stamp-plan-implemented" for d in directives
+    ):
+        judgment_points.append(build_open_spine_rows_block_stamp_judgment_point(open_spine_row_gate))
+        _append_directive_dependency(directives, "d-stamp-plan-implemented", "jp-open-spine-rows-block-stamp")
 
-    # C3, pln-landed-fires-at-spine-resoluti-ac7e89 (AC9) — advisory only,
-    # same non-blocking contract as `open_spine_row_gate` just above: this
-    # gate contributes no judgment point and no directive dependency edge
-    # anywhere in this module, only `gates.landed_reconciliation` below.
+    # C3, pln-landed-fires-at-spine-resoluti-ac7e89 (AC9): `compute_landed_
+    # reconciliation_gate` itself stays read-only/degrade-never-raise, same
+    # as `open_spine_row_gate` above. What changed (fourth-instance-hunt
+    # item 1, Layer A): THIS assembly layer now promotes a non-"not-
+    # applicable" verdict into a blocking judgment point gating
+    # `d-stamp-plan-implemented`, mirroring the open-spine wiring
+    # immediately above it line for line -- see `build_landed_
+    # reconciliation_block_stamp_judgment_point`'s own docstring for the
+    # verdict-keyed/indeterminate-blocks/single-derivation rules this
+    # carries forward. Closes the gap the previous comment here named: a
+    # governing plan deliberately parked at `status: landed` with unticked
+    # ACs used to reach `d-stamp-plan-implemented` ungated, because the
+    # spine gate above is silent by construction once every row has left
+    # `open` (the same state `landed` requires) and this was the only
+    # remaining contradicting signal, advisory-only.
     landed_reconciliation_gate = compute_landed_reconciliation_gate(
         governing_plan.slug if governing_plan else None,
         governing_plan.path if governing_plan else None,
     )
+    _landed_reconciliation_gate_blocks = landed_reconciliation_gate.verdict != "not-applicable"
+    if _landed_reconciliation_gate_blocks and any(
+        d["id"] == "d-stamp-plan-implemented" for d in directives
+    ):
+        judgment_points.append(
+            build_landed_reconciliation_block_stamp_judgment_point(landed_reconciliation_gate)
+        )
+        _append_directive_dependency(
+            directives, "d-stamp-plan-implemented", "jp-landed-reconciliation-block-stamp"
+        )
 
-    narration, next_move = _narration_and_next_move(gate, directives, judgment_points)
+    # C2 (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
+    # being-questions.md): route every judgment point assembled above
+    # through C1's shared predicate. Asked points (including every point
+    # whose id is named in a directive's `depends_on`, and every point
+    # whose disposition resolves a directive actually on THIS envelope)
+    # stay in `judgment_points[]`, unchanged. Reported points (gate no
+    # directive present here) are demoted out of `judgment_points[]` --
+    # `decisions_template` and the envelope's own `judgment_points=` below
+    # both read the post-partition (asked-only) list, since a reported
+    # point is no longer a question a caller needs to answer -- and folded
+    # into `narration` instead, via `_narration_and_next_move` below. This
+    # is narration-demotion only: no `decisions=` pre-population, no 9th
+    # envelope key -- see the plan's "Forked out of this plan" section.
+    _asked_judgment_points, _reported_judgment_points = partition_reportable(judgment_points, directives)
+    # `partition_reportable` classifies by directive-membership alone, with
+    # no opinion on `recommendation` presence -- an untrusted-gate point
+    # (`recommendation=None`, e.g. `jp-session-shape` and `jp-review-scale`'s
+    # three untrusted branches) can land in `reported` there too, purely
+    # because its dispositions' `resolves` happen to be empty. This plan's
+    # premise (Anti-scope: "do NOT add a recommendation to jp-review-scale's
+    # three unresolved/untrusted-gate branches... the three... are correctly
+    # untouched, by construction") is narration-demotion for
+    # RECOMMENDATION-carrying points only -- an untrusted-gate point has no
+    # recommendation to fold into narration and stays a judgment point
+    # regardless of what `partition_reportable` computed for it.
+    #
+    # `_RESOLVER_BACKED_OUT_OF_SCOPE_IDS` mirrors the identical exemption in
+    # `contract/decision_object/tests/test_reportable_partition.py` (C1's
+    # own census harness): these five points build `resolves` through a
+    # resolver that returns real directive ids once its `decisions` slice is
+    # populated, and `[]` only on an empty slice -- a single call's empty
+    # `decisions` must not demote them (Anti-scope: "classifying them by a
+    # single observation re-introduces the over-count this plan's Problem
+    # section documents").
+    reported_judgment_points = [
+        jp
+        for jp in _reported_judgment_points
+        if jp.get("recommendation") is not None and jp["id"] not in _RESOLVER_BACKED_OUT_OF_SCOPE_IDS
+    ]
+    _reported_ids = {jp["id"] for jp in reported_judgment_points}
+    judgment_points = [jp for jp in judgment_points if jp["id"] not in _reported_ids]
+
+    narration, next_move = _narration_and_next_move(
+        gate, directives, judgment_points, reported_judgment_points
+    )
 
     # `detection` defaults to `None` (no shared mutable default); the wire
     # shape for "no structured detection" stays `{}`, so consumers never have

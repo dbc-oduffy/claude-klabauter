@@ -2948,8 +2948,11 @@ def run_commit_pipeline(
     #: Paths whose committed content comes from `stage_patch`'s private
     #: index rather than the worktree -- see the `dirty_tree_gate` scoping
     #: note below for why that distinction is load-bearing. Empty whenever
-    #: `stage_patch` is None, which keeps every pre-stage-patch caller's
-    #: gate scope byte-identical.
+    #: `stage_patch` is None (keeping every pre-stage-patch caller's gate
+    #: scope byte-identical) and also empty-but-still-safe whenever
+    #: `stage_patch` is supplied but its patch touches none of
+    #: `stage_paths` -- same effect as the None case, computed rather than
+    #: special-cased.
     patch_covered: List[str] = []
     landed = False
     try:
@@ -2981,7 +2984,7 @@ def run_commit_pipeline(
             # path-key drift has already caused a live incident here (a
             # C-quoted path never matching its key, silently exempting a
             # guard).
-            patch_covered[:] = [
+            patch_covered = [
                 p for p in stage_paths if git_native._normalize_path_key(p) in patch_touched
             ]
             remainder = [p for p in stage_paths if p not in patch_covered]
@@ -3106,24 +3109,17 @@ def run_commit_pipeline(
 
         deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
         # A `stage_patch`-covered path is scoped OUT of the dirty-tree gate,
-        # and only out of that one gate. That gate's whole question is "can
-        # this call attribute the WORKTREE edit it is about to commit" -- and
-        # for a covered path it is not committing the worktree at all:
-        # `stage_from_patch()` seeds a process-private index from `read-tree
-        # HEAD`, applies the patch into it, and `commit()` commits the blob
-        # THAT produced, never reading index or worktree for that path
-        # (provenance by construction; `stage_from_patch_cas_refusal` covers
-        # the peer-committed-underneath case separately). Leaving covered
-        # paths in scope made `--stage-patch` refuse its single most valuable
-        # case -- committing your own hunks out of a file a peer is
-        # concurrently editing, which on a box whose declared norm is 50-70
-        # concurrent sessions is the ordinary condition, not the exception.
-        # NOT a relaxation of the 2026-07-07 auto-adopt refusal that motivated
-        # this gate: nothing here adopts an unattributable worktree edit -- a
-        # covered path's worktree content is simply never what lands. Every
-        # other gate keeps the full `gate_paths`: they answer questions
+        # and only out of that one gate -- see this function's own commit
+        # message (subject "dirty-tree gate stops judging stage-patch-covered
+        # paths") for the full trace. The one-line version: this gate asks
+        # "can this call attribute the WORKTREE edit it is about to commit,"
+        # and a covered path's committed content never comes from the
+        # worktree at all -- `stage_from_patch()` commits a blob built in a
+        # process-private index seeded from `read-tree HEAD`, provenanced by
+        # construction. Do not "simplify" by dropping the exclusion or
+        # widening it to the other three gates below: they answer questions
         # (message-declared deletions, carry, op scope) that stay valid for a
-        # covered path.
+        # covered path, and this gate's own question does not apply to one.
         dirty_gate = dirty_tree_gate(root, [p for p in gate_paths if p not in patch_covered])
         carry_outcome = carry_gate(root, gate_paths)
         op_scope_outcome = op_scope_coverage_gate(root, gate_paths)

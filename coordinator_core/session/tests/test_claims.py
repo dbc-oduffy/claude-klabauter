@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import claims, core, scope, shape
+from coordinator_core.session import claim_neighbours, claims, core, scope, shape
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -560,6 +560,198 @@ class TestClaimArtifact:
         assert f"live PID {held_pid}" in err
         assert "not confirmed live" not in err
         assert "confirmed via legacy pid-liveness check" in err
+
+
+# ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-16-trace-a-claim-back-to-its-session.md): the
+# claim-time neighbour report. AC4 (never gates) is the load-bearing
+# property this class pins — every scenario below asserts the claim's own
+# return value FIRST, then the report's stderr side effect. Both the
+# formatting helper and the claim-time wiring are covered directly, since
+# `_format_claim_neighbour_report` is the one place the status-first
+# discipline (never inferring UNRESOLVABLE from an empty list) is enforced.
+# ---------------------------------------------------------------------------
+
+
+def _neighbour(sid="peer-sid", artifact_path="docs/plans/peer-plan.md", paths=("a/b.py",)):
+    return claim_neighbours.Neighbour(
+        session_id=sid, overlapping_paths=list(paths), artifact_path=artifact_path
+    )
+
+
+class TestFormatClaimNeighbourReport:
+    def test_unresolvable_yields_no_report(self):
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.UNRESOLVABLE,
+            file_set=[],
+            neighbours=[],
+            reason="no scope: or deliverable_id bridge",
+        )
+        assert claims._format_claim_neighbour_report("plan", "p-1", result) is None
+
+    def test_resolved_empty_neighbours_yields_no_report(self):
+        # Status-first: an empty list on RESOLVED must be silent exactly the
+        # same way UNRESOLVABLE is — but for a DIFFERENT reason (checked,
+        # nobody there vs. couldn't check) — the discriminator this test
+        # exists to pin is that the formatter branches on `.status`, not on
+        # `bool(neighbours)` alone (both happen to be empty lists here).
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED, file_set=["a/b.py"], neighbours=[]
+        )
+        assert claims._format_claim_neighbour_report("plan", "p-1", result) is None
+
+    def test_resolved_with_neighbour_names_session_and_artifact(self):
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED,
+            file_set=["a/b.py"],
+            neighbours=[_neighbour()],
+        )
+        message = claims._format_claim_neighbour_report("plan", "p-1", result)
+        assert message is not None
+        assert "peer-sid" in message
+        assert "docs/plans/peer-plan.md" in message
+        assert "a/b.py" in message
+
+    def test_neighbour_with_no_claimed_artifact_still_reports(self):
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED,
+            file_set=["a/b.py"],
+            neighbours=[_neighbour(artifact_path=None)],
+        )
+        message = claims._format_claim_neighbour_report("plan", "p-1", result)
+        assert message is not None
+        assert "peer-sid" in message
+        assert "no claimed artifact" in message
+
+    def test_multiple_neighbours_each_get_their_own_line(self):
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED,
+            file_set=["a/b.py", "c/d.py"],
+            neighbours=[
+                _neighbour(sid="peer-1", paths=("a/b.py",)),
+                _neighbour(sid="peer-2", paths=("c/d.py",)),
+            ],
+        )
+        message = claims._format_claim_neighbour_report("plan", "p-1", result)
+        lines = message.splitlines()
+        assert len(lines) == 2
+        assert "peer-1" in lines[0] and "peer-2" not in lines[0]
+        assert "peer-2" in lines[1] and "peer-1" not in lines[1]
+
+
+class TestClaimTimeNeighbourReport:
+    def test_claim_succeeds_when_neighbour_check_raises(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("simulated claim_neighbours failure")
+
+        monkeypatch.setattr(claim_neighbours, "find_neighbours", _boom)
+        assert claims.claim_artifact("handoff", "hb-boom", cwd=str(repo)) is True
+        assert _claim_dir(repo, "handoff", "hb-boom").is_dir()
+        # Advisory failure is swallowed, not surfaced as claim-neighbour noise.
+        assert "overlaps session" not in capsys.readouterr().err
+
+    def test_report_reaches_caller_when_neighbours_exist(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED,
+            file_set=["docs/plans/hb-live.md"],
+            neighbours=[_neighbour(sid="peer-live", artifact_path="docs/plans/peer.md")],
+        )
+        monkeypatch.setattr(claim_neighbours, "find_neighbours", lambda *a, **kw: result)
+        assert claims.claim_artifact("handoff", "hb-live", cwd=str(repo)) is True
+        err = capsys.readouterr().err
+        assert "peer-live" in err
+        assert "docs/plans/peer.md" in err
+
+    def test_unresolvable_surfaces_no_report_distinct_from_no_neighbours(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.UNRESOLVABLE,
+            file_set=[],
+            neighbours=[],
+            reason="no scope: or deliverable_id bridge",
+        )
+        monkeypatch.setattr(claim_neighbours, "find_neighbours", lambda *a, **kw: result)
+        assert claims.claim_artifact("handoff", "hb-unresolvable", cwd=str(repo)) is True
+        assert "overlaps session" not in capsys.readouterr().err
+
+    def test_resolved_no_neighbours_surfaces_no_report(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED, file_set=["docs/plans/hb-alone.md"], neighbours=[]
+        )
+        monkeypatch.setattr(claim_neighbours, "find_neighbours", lambda *a, **kw: result)
+        assert claims.claim_artifact("handoff", "hb-alone", cwd=str(repo)) is True
+        assert "overlaps session" not in capsys.readouterr().err
+
+    def test_memo_class_never_invokes_neighbour_check(self, tmp_path, monkeypatch):
+        # claim_neighbours has no memo file-set resolution (module docstring)
+        # — memo claims must not even attempt the lookup.
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        calls = []
+        monkeypatch.setattr(
+            claim_neighbours,
+            "find_neighbours",
+            lambda *a, **kw: calls.append((a, kw)) or None,
+        )
+        assert claims.claim_artifact("memo", "m-1", cwd=str(repo)) is True
+        assert calls == []
+
+    def test_plan_reentrant_success_still_fires_report(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "plan", "p-reentrant", session_id="me-sid")
+        _write_session(repo, "me-sid", _fresh())
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED,
+            file_set=["docs/plans/p-reentrant.md"],
+            neighbours=[_neighbour(sid="peer-reentrant")],
+        )
+        monkeypatch.setattr(claim_neighbours, "find_neighbours", lambda *a, **kw: result)
+        assert claims.claim_artifact("plan", "p-reentrant", cwd=str(repo)) is True
+        assert "peer-reentrant" in capsys.readouterr().err
+
+    def test_stale_takeover_success_still_fires_report(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "handoff", "h-stale-report", session_id="dead-sid")
+        _write_session(repo, "dead-sid", _stale())
+        result = claim_neighbours.ClaimNeighboursResult(
+            status=claim_neighbours.RESOLVED,
+            file_set=["state/handoffs/h-stale-report"],
+            neighbours=[_neighbour(sid="peer-takeover")],
+        )
+        monkeypatch.setattr(claim_neighbours, "find_neighbours", lambda *a, **kw: result)
+        assert claims.claim_artifact("handoff", "h-stale-report", cwd=str(repo)) is True
+        assert "peer-takeover" in capsys.readouterr().err
+
+    def test_live_holder_rejection_still_fails_and_never_reports(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # AC4 sanity: a FAILED claim (live-holder collision) must not fire
+        # the neighbour check at all — this is claim-SUCCESS-triggered, not
+        # claim-attempt-triggered.
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "handoff", "h-live-reject", session_id="other-sid")
+        _write_session(repo, "other-sid", _fresh())
+        calls = []
+        monkeypatch.setattr(
+            claim_neighbours,
+            "find_neighbours",
+            lambda *a, **kw: calls.append((a, kw)) or None,
+        )
+        assert claims.claim_artifact("handoff", "h-live-reject", cwd=str(repo)) is False
+        assert calls == []
 
 
 # ---------------------------------------------------------------------------

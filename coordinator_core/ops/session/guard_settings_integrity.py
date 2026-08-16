@@ -110,6 +110,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from coordinator_core.git.repo_root import git_dir
 from coordinator_core.ipc import register_op
 from coordinator_core.resolve_coordinator_clone import (
     ResolveCoordinatorCloneError,
@@ -1851,19 +1852,7 @@ def evaluate_settings_integrity(config_dir: Optional[Path] = None) -> str:
 
     # Rung 2: git HEAD of config_dir.
     if not restored_from:
-        try:
-            is_git_repo = (
-                subprocess.run(
-                    ["git", "-C", str(config_dir), "rev-parse", "--git-dir"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    # popup-intentional-last-resort
-                ).returncode
-                == 0
-            )
-        except OSError:
-            is_git_repo = False
+        is_git_repo = git_dir(str(config_dir)) is not None
 
         if is_git_repo:
             head_tmp_fd, head_tmp_name = tempfile.mkstemp(

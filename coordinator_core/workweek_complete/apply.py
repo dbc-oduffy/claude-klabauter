@@ -173,7 +173,7 @@ def _load_cli_module(cli_name: str) -> ModuleType:
 def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, CliExitClass]:
     """Invokes `module.main` in-process (never a subprocess) — accepts
     either an `argv`-taking `main(argv)` or a zero-arg `main()`. Returns
-    `(exit_code, stderr)`: the resolved integer exit code (`main`'s own
+    `(exit_code, stderr, exit_class)`: the resolved integer exit code (`main`'s own
     return value when it returns one, else the code a `SystemExit` it
     raises carries, else `0` on a clean fallthrough) paired with everything
     the call printed to stderr.

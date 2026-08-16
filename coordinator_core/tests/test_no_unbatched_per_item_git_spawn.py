@@ -1,9 +1,27 @@
 """Amplification collector (G1): sibling to `spawn_policy`, resolving generic runners and
-injected `GitRunner`s -- the third state neither existing gate expresses.
+injected runners -- the third state neither existing gate expresses.
 
 Spec backlink: `pln-kill-the-n-1-git-spawn-class-a-88897a`,
 `## Tasks` chunk G1 (this collector) and G2 (the two assertions this collector feeds, landed
-in a later wave over this same file).
+in a later wave over this same file). Widened past git by
+`docs/plans/2026-08-15-composition-invocation-budgets.md` chunk C11 (AC11).
+
+EVERY SPAWN VERB, NOT JUST GIT (AC11). This collector was built for the N+1 GIT spawn class and
+counted only calls whose argv0 resolved to the literal "git". A composition budget cares about
+processes, and the ops census's single most expensive per-item site is `[sys.executable, "-m",
+"pytest", *refs]` -- a git-only filter cannot see it, and neither can any widening keyed on an
+argv0 ALLOWLIST: `spawn_policy._resolve_argv0` reports a `sys.executable`-fronted argv as
+`<dynamic>`, because the program name is an `ast.Attribute` with no static value. So the argv0
+filter was REMOVED rather than extended, and the routes now resolve on "does this callee reach a
+spawn" alone. Measured repo-wide over `coordinator_core` + `coordinator/bin`: 90 -> 154 distinct
+site keys, 53 -> 100 files, and no site the git-only collector found was lost. What that bought
+is the whole reason AC11 exists -- `cutover_gate`'s pytest fan-out, `cruft_sweep`'s deletes,
+`find_polluter`'s `npm test`, `backfill_initiative_fk`'s CLI attach, `setup_chain_walker`'s
+probes, and all four machine-local rows were invisible by construction before it.
+
+The FILE keeps its git-shaped name: five other modules cite this path, its inventory audit is
+published under it, and the git class it was built for is a subset of what it now covers. The
+SYMBOLS do not -- see `AmpSite` / `find_unbatched_per_item_spawns`.
 
 THE GAP THIS COLLECTOR CLOSES. `test_no_bare_hot_path_spawn.py` asserts a property of each
 individual call -- console suppression -- with no concept of call COUNT: a maximally-compliant
@@ -13,15 +31,15 @@ argv is INVARIANT with respect to the loop target (hoistable to one call), and b
 acceptance criterion must stay SILENT on varying argv -- that silence is a negative control, not
 an omission (see this module's own negative-spec block below; do NOT read this collector as
 relaxing that silence). This collector's class is a third state neither expresses: *varying argv,
-but batchable into a single call* -- one `git` spawn per loop item, where the callee itself
-directly reaches a git spawn, reachable through a local helper, a cross-module import, a
-dependency-injected runner, or a generic `_run(argv)` wrapper whose git-ness is only visible at
-the call site.
+but batchable into a single call* -- one spawn per loop item, where the callee itself directly
+reaches a spawn, reachable through a local helper, a cross-module import, a dependency-injected
+runner, a runner bound as a parameter default, or a generic `_run(argv)` wrapper only the call
+site can see an argv for.
 
 REUSE FROM `spawn_policy`, UNMODIFIED (pinned API, `tasks/shell-spawn-regrowth-gate/
 PINNED-API.md`): `discover_source_files`, `sites_in_source`, `is_test_tree_site`,
 `DEFAULT_EXCLUDE`, `SpawnParseError`. This module does NOT extend `SpawnSite` -- it is a frozen
-dataclass under that pinned API -- and instead defines a sibling, `GitAmpSite`, the same
+dataclass under that pinned API -- and instead defines a sibling, `AmpSite`, the same
 precedent `LoopSpawnSite` (`test_no_spawn_per_item_loop.py`) and `BareSpawnSite`
 (`test_no_bare_hot_path_spawn.py`) already set.
 
@@ -33,14 +51,20 @@ stratum, sharing this collector exactly as `_STANDING_GATE_FAMILIES` / `_ALL_FAM
 
 SCOPE. `_GATE_SCOPE_ROOTS` names `coordinator_core` AND `coordinator/bin` -- AC4. Neither
 existing gate scans `coordinator/bin/`, and that is where the worst site in this plan's audit
-lives. Restricted to the HIGH-PRECISION STRATUM: the callee must DIRECTLY contain a git spawn
-(one hop, by one of the five routes below), never a transitive/multi-hop reach. The prototype
+lives. Restricted to the HIGH-PRECISION STRATUM: the callee must DIRECTLY contain a spawn
+(one hop, by one of the six routes below), never a transitive/multi-hop reach. The prototype
 measured the transitive deep tail at 32% TP with no static discriminator separating true from
 false positives at any depth -- deliberately excluded here, tracked instead as G2's named
 residual.
 
 THREE STRUCTURAL DISCRIMINATORS (measured: 32.4% naive FP -> 4.2% with all three applied, zero
-true positives lost):
+true positives lost). Those rates were measured in 2026-08-08 against the GIT-ONLY collector and
+have NOT been re-measured for the widened one -- the discriminators are argv0-independent, so
+there is no reason to expect them to move, but that is an argument, not a measurement, and it
+should not be cited as one. What was actually checked at the AC11 re-freeze is narrower and
+worth exactly what it is: the 83 newly-added keys were read individually, and the single
+false-positive class found (a helper sharing a spawn's line) was closed in route a rather than
+frozen into the inventory:
 
   1. Loop-ITERABLE-expression exclusion. A `for`/comprehension's `iter` expression is evaluated
      ONCE, before the first iteration -- a call appearing there is not a per-item spawn. This
@@ -54,15 +78,18 @@ true positives lost):
      `while` loops are excluded wholesale (only 11 hits repo-wide carried this shape; the
      false-negative exposure is accepted, matching this collector's stated bias).
 
-FIVE DETECTION ROUTES (per gate-substrate.md Task C), restricted to the high-precision stratum:
+SIX DETECTION ROUTES (per gate-substrate.md Task C), restricted to the high-precision stratum:
 
   a-direct       -- the call itself is a recognized `subprocess`/`os`/`asyncio` spawn (via
-                    `sites_in_source`) with a git-shaped argv0.
+                    `sites_in_source`). Matched on the detected spawn LINE *and* a recognized
+                    spawn-API callee name (`_SPAWN_API_NAMES`), because a line routinely carries
+                    a second call -- `subprocess.call(argv, **no_console_passthrough_kwargs())`
+                    -- and matching on line alone reported the helper as the site.
   b-local-helper -- the callee is a function DEFINED IN THE SAME MODULE whose own body directly
-                    contains a git-argv0 spawn site.
+                    contains a spawn site.
   c-cross-module -- the callee is imported (`from X import name`) and resolves, via a repo-wide
                     name index built over the same scope, to a function in another module whose
-                    own body directly contains a git-argv0 spawn site.
+                    own body directly contains a spawn site.
   d-injected     -- a bare-`Name` argument sits in a runner-shaped position (a kwarg named
                     `run`/`runner`/`git`/`git_runner`/`run_git`/`spawn`, OR the passed
                     identifier's own first token is `run`/`git`/`spawn`) and resolves, via the
@@ -74,12 +101,22 @@ FIVE DETECTION ROUTES (per gate-substrate.md Task C), restricted to the high-pre
                     189 near-all-false hits against this repo; requiring a runner-SHAPED position
                     is what keeps it at the measured 1 true positive.
   e-generic-runner -- the callee resolves to a "generic runner" -- a single-parameter function
-                    whose body forwards that parameter, unchanged, as the argv-bearing arg of
-                    exactly one recognized spawn call (the `_run(argv)` wrapper idiom) -- and the
-                    ACTUAL argument passed at THIS call site is git-shaped (a list/tuple literal
-                    whose first element is the string `"git"`, or an f-string/concatenation whose
-                    static prefix is `"git"`). Git-ness is read at the call site because the
-                    wrapper's own body only ever sees a bare parameter name.
+                    whose body forwards that parameter, unchanged, as the argv-bearing arg of a
+                    recognized spawn call (the `_run(argv)` wrapper idiom) -- and the ACTUAL
+                    argument passed at THIS call site is argv-SHAPED (a non-empty list/tuple
+                    literal, or a non-empty command string). Shape is read at the call site
+                    because the wrapper's own body only ever sees a bare parameter name.
+  f-default-runner -- the callee is a PARAMETER of the enclosing function whose default binds a
+                    module-level function that directly spawns -- the injectable-seam idiom
+                    (`def resync(..., *, run_git=_update_index_with_retry)`), where the loop body
+                    calls the parameter rather than the function. Route d reads a runner passed
+                    AT a call site; this reads one bound a hop up as a default, which route d's
+                    own docstring already named as a miss. Added by AC11, and load-bearing: it is
+                    what keeps the two `_common.py` index-resync sites visible. Until AC11 those
+                    were found only by an accidental name collision with an unrelated `run_git`
+                    in another module -- a true site on a false route -- and tightening route e
+                    removed the collision, so without route f the widening would have LOST two
+                    real sites while adding sixty-four.
 
 Routes `d` and `e` are kept deliberately, even though they are individually rare (14 combined
 measured hits), because they are the ONLY reason the audit's three worst sites are visible at
@@ -101,7 +138,11 @@ NEGATIVE SPEC -- what this collector deliberately does NOT do:
   - Does not touch, import from, or relax `test_no_spawn_per_item_loop.py`'s invariant-argv gate
     in any way. That gate's silence on varying argv is its own tested negative control; this
     collector is a sibling, never a widening of it.
-  - Does not extend `spawn_policy.detect.SpawnSite`; see `GitAmpSite` below.
+  - Does not extend `spawn_policy.detect.SpawnSite`; see `AmpSite` below.
+  - Does not import `spawn_policy.detect._RECOGNIZED`, despite `_SPAWN_API_NAMES` projecting it.
+    That name is private and this module's reuse is restricted to the pinned API; the two are
+    held together by an assertion (`test_spawn_api_names_track_spawn_policy`) rather than by an
+    import that would widen the pinned surface.
   - Does not resolve the transitive deep tail (multi-hop call chains). A callee that only
     *eventually* reaches a git spawn is out of scope for every route above.
   - Does not report reachability, hot-path status, or live cost -- matching `spawn_policy`'s own
@@ -126,6 +167,14 @@ KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated p
     the outer function. Accepted per this module's stated false-negative-over-false-positive
     preference (a broader match here can only ADD candidate runners, and route e still requires
     the call site's own argv to look git-shaped before counting a violation).
+  - Route e currently matches NOTHING repo-wide. Its two pre-AC11 hits were the `run_git`
+    name collision described under route f, and requiring the runner to forward into a
+    recognized SPAWN call retired both. The route is kept, with its self-tests, because the
+    cross-module `_run(argv)` shape it exists for is a real idiom this repo can reintroduce at
+    any time -- a route that currently matches nothing is not the same as a route that cannot.
+  - Route f resolves a parameter default by NAME within the file that declares it, and only for
+    a default that is a bare `Name`. A seam defaulting to an attribute (`run=mod.helper`), to a
+    lambda, or to `None` with the real runner chosen inside the body is not traced.
   - `_generic_runner_param` (route e) only recognizes a runner with EXACTLY ONE
     positional-or-keyword parameter (`len(params) != 1: return None`). This repo's dominant
     `GitRunner` idiom takes TWO (`argv`, `cwd`) -- e.g. `chain_attribution.GitRunner =
@@ -135,6 +184,12 @@ KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated p
     route e, even though the module's own self-test only exercises the one-param shape. Accepted
     per this module's stated false-negative bias; route e's parameter-count check is not widened
     here (see G2's frozen `_KNOWN_SITES` inventory, the actual regrowth guard).
+  - `AmpSite.key` (`(path, enclosing, callee)`) excludes `route` by design, so when the SAME
+    key is independently reachable via two different routes in one run (e.g. a callee that is
+    both a same-module direct spawner and a parameter-default-bound name in the same scope),
+    dedup silently keeps whichever route was appended first. This can only suppress route
+    diversity in a report, never lose a true violation or admit a false one -- acceptable per
+    this module's stated false-negative-biased design.
 """
 
 from __future__ import annotations
@@ -155,7 +210,29 @@ from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_sourc
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _THIS_FILE = pathlib.Path(__file__).resolve()
 
-_GIT_ARGV0 = "git"
+#: Leaf function names of every call `spawn_policy.detect` recognizes as a spawn. Route a
+#: matches a call by LINE (`SpawnSite.lineno`), and a line often carries more than one call --
+#: `subprocess.call(argv, **no_console_passthrough_kwargs())` is two. Without a callee check the
+#: kwargs helper is reported as the amplification site, which was a visible artifact even before
+#: AC11 (`int`, `join` and `Path` all sit in the frozen inventory for exactly this reason) and
+#: got worse once every spawn verb started counting rather than git alone.
+#:
+#: SSOT is `spawn_policy.detect._RECOGNIZED`; this is a leaf-name projection of it, kept local
+#: because that name is private and this module's reuse is restricted to the pinned API (see
+#: "Reuse from spawn_policy"). `test_spawn_api_names_track_spawn_policy` pins the two together
+#: so the copy cannot drift silently.
+_SPAWN_API_NAMES: frozenset[str] = frozenset(
+    {
+        "run", "call", "check_call", "check_output", "Popen",
+        "system", "popen",
+        "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
+        "spawnl", "spawnle", "spawnlp", "spawnlpe",
+        "spawnv", "spawnve", "spawnvp", "spawnvpe",
+        "posix_spawn", "posix_spawnp",
+        "spawn",
+        "create_subprocess_shell", "create_subprocess_exec",
+    }
+)
 
 #: AC4 -- coordinator/bin/ MUST be in scope; neither existing gate scans it.
 _GATE_SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin")
@@ -172,15 +249,19 @@ _EXEMPT_SITES: set[tuple[str, int]] = set()
 
 
 @dataclasses.dataclass(frozen=True)
-class GitAmpSite:
+class AmpSite:
     """Sibling to `spawn_policy.SpawnSite` -- carries the loop/route signal that frozen
     dataclass deliberately does not. NOT a subtype or extension of `SpawnSite`; see module
-    docstring's "Reuse from spawn_policy" section for why a sibling, not an extension."""
+    docstring's "Reuse from spawn_policy" section for why a sibling, not an extension.
+
+    Was `GitAmpSite` until AC11 widened the collector past git. The rename is contained: no
+    module outside this file referenced the symbol, only the file PATH, which is unchanged."""
 
     path: str
     lineno: int
     enclosing: str
-    route: str  # "a-direct" | "b-local-helper" | "c-cross-module" | "d-injected" | "e-generic-runner"
+    route: str  # "a-direct" | "b-local-helper" | "c-cross-module" | "d-injected"
+    #             | "e-generic-runner" | "f-default-runner"
     callee: str
 
     @property
@@ -322,21 +403,26 @@ def _is_chunking_stride_iterable(node: ast.expr) -> bool:
 
 @dataclasses.dataclass
 class _FuncIndex:
-    #: top-level function name -> list of (relpath, func_name) whose body directly contains a
-    #: git-argv0 spawn site (routes b/c)
-    direct_git_funcs: dict[str, list[tuple[str, str]]] = dataclasses.field(default_factory=dict)
     #: top-level function name -> list of (relpath, func_name) whose body directly contains ANY
-    #: recognized spawn site, regardless of argv0 (route d's "resolves to a direct spawner")
-    direct_any_spawn_funcs: dict[str, list[tuple[str, str]]] = dataclasses.field(
-        default_factory=dict
-    )
+    #: recognized spawn site, regardless of argv0 (routes b/c/d).
+    #:
+    #: Was two dicts until AC11: a git-argv0-only one for routes b/c, and this any-spawn one for
+    #: route d alone. Widening b/c to every spawn verb made them compute the same thing, so they
+    #: are one field rather than two identical ones.
+    direct_spawn_funcs: dict[str, list[tuple[str, str]]] = dataclasses.field(default_factory=dict)
     #: top-level function name -> forwarded parameter name, for a single-parameter function whose
     #: body forwards that parameter unchanged into exactly one recognized spawn call (route e)
     runner_shaped_funcs: dict[str, str] = dataclasses.field(default_factory=dict)
     #: (relpath, func_name) -> True, restricted to route-b's SAME-MODULE lookup
-    same_module_direct_git: dict[tuple[str, str], bool] = dataclasses.field(default_factory=dict)
+    same_module_direct_spawn: dict[tuple[str, str], bool] = dataclasses.field(default_factory=dict)
     #: relpath -> set of names imported via `from X import name` in that file (route c's gate)
     imported_names_by_file: dict[str, set[str]] = dataclasses.field(default_factory=dict)
+    #: (relpath, dotted_scope) -> {parameter name: the module-level function name its default
+    #: binds to}, for parameters whose default is a bare `Name` (route f). Covers positional and
+    #: keyword-only defaults alike -- the resync seams this exists for are keyword-only.
+    param_runner_defaults: dict[tuple[str, str], dict[str, str]] = dataclasses.field(
+        default_factory=dict
+    )
     #: (relpath, func_name) -> the set of argv verbs that function actually SPAWNS for, when
     #: every spawn in its body is dominated by an `if <param>[0] in <MODULE_SET>:` branch
     #: (discriminator 5). Any other verb is served without a process.
@@ -345,12 +431,25 @@ class _FuncIndex:
     )
 
 
-def _generic_runner_param(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
+def _generic_runner_param(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef, spawn_linenos: set[int]
+) -> str | None:
     """A single-parameter function that forwards that parameter, unchanged, as the FIRST
-    positional argument of at least one `ast.Call` anywhere in its body -- the `_run(argv)`
-    wrapper idiom. See module docstring's blind-spots note: this does not exclude nested
-    function scopes from the walk, a deliberate false-negative-biased looseness (it can only
-    widen the candidate-runner set; route e still gates on the call SITE's own argv)."""
+    positional argument of a RECOGNIZED SPAWN call in its body -- the `_run(argv)` wrapper
+    idiom.
+
+    The spawn-lineno gate is what the call site's git-argv0 check used to stand in for. While
+    route e additionally required the caller's own argv to begin with the literal `"git"`, a
+    runner that merely forwarded its parameter into some arbitrary call could not produce a
+    violation on its own, so matching any `ast.Call` here was harmless. Once the collector
+    counts every spawn verb (AC11), that looseness becomes the dominant false-positive source:
+    any one-parameter function forwarding to any callee would qualify as a runner. Requiring the
+    forwarding call to sit on a line `sites_in_source` independently detected as a spawn
+    restores the precision the argv0 check was carrying, and matches what this route's own
+    description always claimed.
+
+    See module docstring's blind-spots note: this does not exclude nested function scopes from
+    the walk, a deliberate false-negative-biased looseness."""
     params = [a.arg for a in func_node.args.args]
     if len(params) != 1:
         return None
@@ -358,7 +457,7 @@ def _generic_runner_param(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     for node in ast.walk(func_node):
         if node is func_node:
             continue
-        if isinstance(node, ast.Call) and node.args:
+        if isinstance(node, ast.Call) and node.args and node.lineno in spawn_linenos:
             first = node.args[0]
             if isinstance(first, ast.Name) and first.id == only_param:
                 return only_param
@@ -467,7 +566,7 @@ def _call_literal_verb(call: ast.Call) -> str | None:
 @dataclasses.dataclass(frozen=True)
 class _FileRecord:
     """One file's read+parse+spawn-detect result, computed exactly ONCE and shared between
-    `_build_func_index` and `find_unbatched_per_item_git_spawns`'s own violation-detection pass
+    `_build_func_index` and `find_unbatched_per_item_spawns`'s own violation-detection pass
     below. Pure memoization -- see `_load_file_records`'s docstring for why this exists; it
     changes cost, never output."""
 
@@ -483,7 +582,7 @@ def _load_file_records(files: list[tuple[str, pathlib.Path]]) -> list[_FileRecor
     internal `ast.parse`) each file in `files` exactly ONCE.
 
     Perf note (G3, 2026-08-08): the prior implementation had `_build_func_index` and
-    `find_unbatched_per_item_git_spawns`'s own loop each independently re-read, re-`ast.parse`,
+    `find_unbatched_per_item_spawns`'s own loop each independently re-read, re-`ast.parse`,
     and re-run `sites_in_source` (itself another `ast.parse`) over every file in the ~1287-file
     scoped corpus -- four parses per file, two full read+parse+detect passes, for identical
     results both times. Measured repo-wide: `_build_func_index` alone cost ~8.3s and the
@@ -528,12 +627,19 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
         tree = record.tree
         spawn_sites = record.spawn_sites
 
-        git_enclosing = {s.enclosing for s in spawn_sites if s.argv0 == _GIT_ARGV0}
-        any_enclosing = {s.enclosing for s in spawn_sites}
+        spawning_enclosing = {s.enclosing for s in spawn_sites}
+        # Review: reviewer -- keyed by the spawn's OWN dotted enclosing scope (e.g.
+        # "outer._forward"), not the bare top-level function name a lookup by `name` alone
+        # would use. A runner candidate's forwarding call can sit inside a nested closure
+        # (own_spawn_linenos below matches `name` itself AND any dotted scope nested under
+        # it), so this dict is built keyed on the raw dotted `enclosing` strings and matched
+        # by prefix at lookup time, not collapsed to bare names here.
         spawn_linenos_by_func: dict[str, set[int]] = {}
         for site in spawn_sites:
             spawn_linenos_by_func.setdefault(site.enclosing, set()).add(site.lineno)
         set_members = _module_level_str_set_members(tree)
+
+        _ParamDefaultTracker(relpath, index.param_runner_defaults).visit(tree)
 
         imported: set[str] = set()
         for node in ast.walk(tree):
@@ -547,19 +653,25 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
                 continue
             name = node.name
 
-            if name in git_enclosing:
-                index.direct_git_funcs.setdefault(name, []).append((relpath, name))
-                index.same_module_direct_git[(relpath, name)] = True
-                gated = _verb_gated_spawn_verbs(
-                    node, spawn_linenos_by_func.get(name, set()), set_members
-                )
+            # Review: reviewer -- `name` is this function's own bare (top-level) name, but a
+            # spawn the function reaches only through a nested closure is filed under a
+            # DOTTED scope ("name.inner"), not bare "name" -- matching `spawn_linenos_by_func`
+            # by exact key alone would miss it (`_generic_runner_param` walks into nested
+            # defs, so it can see that lineno). Own linenos are every spawn whose recorded
+            # enclosing is this function itself OR nested under it.
+            own_spawn_linenos: set[int] = set()
+            for enclosing_key, linenos in spawn_linenos_by_func.items():
+                if enclosing_key == name or enclosing_key.startswith(name + "."):
+                    own_spawn_linenos |= linenos
+
+            if name in spawning_enclosing:
+                index.direct_spawn_funcs.setdefault(name, []).append((relpath, name))
+                index.same_module_direct_spawn[(relpath, name)] = True
+                gated = _verb_gated_spawn_verbs(node, own_spawn_linenos, set_members)
                 if gated is not None:
                     index.verb_gated_spawn_verbs[(relpath, name)] = gated
 
-            if name in any_enclosing:
-                index.direct_any_spawn_funcs.setdefault(name, []).append((relpath, name))
-
-            runner_param = _generic_runner_param(node)
+            runner_param = _generic_runner_param(node, own_spawn_linenos)
             if runner_param is not None and name not in index.runner_shaped_funcs:
                 index.runner_shaped_funcs[name] = runner_param
 
@@ -571,23 +683,32 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
 # --------------------------------------------------------------------------
 
 
-def _call_arg_is_git_shaped(call: ast.Call, param_index: int) -> bool:
-    """True if the argument `call` passes at `param_index` looks like it could be a git argv:
-    a list/tuple literal whose first element is the string literal `"git"`, or a string/
-    f-string constant/prefix equal to `"git"`. Deliberately conservative (false-negative
-    preferred): anything not statically resolvable is treated as NOT git-shaped."""
+def _call_arg_is_argv_shaped(call: ast.Call, param_index: int) -> bool:
+    """True if the argument `call` passes at `param_index` looks like an argv the runner will
+    spawn: a non-empty list/tuple literal, or a non-empty string/f-string command line.
+
+    Reads the ARGV SHAPE, never the program name. `[sys.executable, "-m", "pytest", *refs]`
+    -- the most expensive per-item spawn in the ops census -- fronts its argv with an
+    `ast.Attribute`, which `spawn_policy._resolve_argv0` reports as `<dynamic>`; any check
+    keyed on a resolvable program name is blind to it by construction. That blindness is the
+    concrete half of the git-argv-only blind spot AC11 closes.
+
+    Deliberately conservative (false-negative preferred): a bare `Name`, a call, or anything
+    else not statically shaped as an argv is treated as NOT argv-shaped."""
     if param_index >= len(call.args):
         return False
     arg = call.args[param_index]
-    if isinstance(arg, (ast.List, ast.Tuple)) and arg.elts:
-        first = arg.elts[0]
-        return isinstance(first, ast.Constant) and first.value == _GIT_ARGV0
+    if isinstance(arg, (ast.List, ast.Tuple)):
+        return bool(arg.elts)
     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-        return arg.value.strip().split()[:1] == [_GIT_ARGV0] if arg.value.strip() else False
+        return bool(arg.value.strip())
     if isinstance(arg, ast.JoinedStr) and arg.values:
         first = arg.values[0]
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            return first.value.strip().startswith(_GIT_ARGV0)
+        return (
+            isinstance(first, ast.Constant)
+            and isinstance(first.value, str)
+            and bool(first.value.strip())
+        )
     return False
 
 
@@ -726,7 +847,7 @@ def _find_injected_runner_name(call: ast.Call) -> str | None:
     """Route d: a bare-`Name` argument in a runner-shaped position. Checked over both keyword
     and positional arguments -- see module docstring's route-d description.
 
-    Resolution against `index.direct_any_spawn_funcs` is BY NAME: the identifier passed at
+    Resolution against `index.direct_spawn_funcs` is BY NAME: the identifier passed at
     THIS call site must literally match the target function's own defined name. A default-
     parameter alias one hop up the call chain (`def check(shas, run=_run): ...; g(run=run)`,
     where the passed identifier is `run`, not `_run`) is not traced and will be missed -- the
@@ -747,16 +868,19 @@ def _find_injected_runner_name(call: ast.Call) -> str | None:
     return None
 
 
-def _git_argv0_linenos(spawn_sites) -> set[int]:
-    return {s.lineno for s in spawn_sites if s.argv0 == _GIT_ARGV0}
+def _spawn_linenos(spawn_sites) -> set[int]:
+    """Every recognized spawn site's line, regardless of argv0 (AC11). Was git-argv0-only; see
+    `_call_arg_is_argv_shaped` for why filtering on a resolvable program name cannot see the
+    `sys.executable`-fronted spawns that dominate the ops census."""
+    return {s.lineno for s in spawn_sites}
 
 
-def find_unbatched_per_item_git_spawns(
+def find_unbatched_per_item_spawns(
     roots: tuple[pathlib.Path, ...], index: _FuncIndex | None = None
-) -> list[GitAmpSite]:
+) -> list[AmpSite]:
     """Core collector. Walk `roots` (via the shared `discover_source_files` traversal),
-    restricted to the high-precision stratum (callee directly contains a git spawn, one hop),
-    applying all three structural discriminators and all five detection routes described in
+    restricted to the high-precision stratum (callee directly contains a spawn, one hop),
+    applying all three structural discriminators and all six detection routes described in
     the module docstring.
 
     `index`, when provided, lets a caller reuse one repo-wide `_FuncIndex` across multiple
@@ -769,14 +893,14 @@ def find_unbatched_per_item_git_spawns(
     if index is None:
         index = _build_func_index(records)
 
-    violations: list[GitAmpSite] = []
+    violations: list[AmpSite] = []
 
     for record in records:
         relpath = record.relpath
         tree = record.tree
         spawn_sites = record.spawn_sites
 
-        git_linenos = _git_argv0_linenos(spawn_sites)
+        spawn_linenos = _spawn_linenos(spawn_sites)
         literal_names = _module_level_literal_names(tree)
 
         loop_visitor = _QualifyingLoopVisitor(literal_names)
@@ -802,13 +926,15 @@ def find_unbatched_per_item_git_spawns(
             callee = _call_callee_name(node)
             route: str | None = None
 
-            # route a-direct: the call itself is a recognized git-argv0 spawn.
-            if node.lineno in git_linenos:
+            # route a-direct: the call itself is a recognized spawn. Both halves are
+            # required -- the line carries a detected spawn AND this call is the spawn on it,
+            # not a helper sharing the line (see `_SPAWN_API_NAMES`).
+            if node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES:
                 route = "a-direct"
 
             if route is None and callee is not None:
-                # route b-local-helper: same-module function directly git-spawns.
-                if (relpath, callee) in index.same_module_direct_git:
+                # route b-local-helper: same-module function directly spawns.
+                if (relpath, callee) in index.same_module_direct_spawn:
                     # Discriminator 5: a verb-dispatching chokepoint spawns only for the
                     # verbs in its own statically-resolvable allowlist. This call site's
                     # literal verb is not one, so it creates no process.
@@ -818,35 +944,62 @@ def find_unbatched_per_item_git_spawns(
                         route = "b-local-helper"
 
                 # route c-cross-module: imported name resolves (repo-wide, by name) to a
-                # function elsewhere that directly git-spawns.
+                # function elsewhere that directly spawns.
                 if (
                     route is None
                     and callee in imported_here
-                    and callee in index.direct_git_funcs
-                    and not any(r == relpath for r, _ in index.direct_git_funcs[callee])
+                    and callee in index.direct_spawn_funcs
+                    and not any(r == relpath for r, _ in index.direct_spawn_funcs[callee])
                 ):
                     route = "c-cross-module"
 
                 # route e-generic-runner: callee is runner-shaped (a single-parameter
-                # `_run(argv)`-style wrapper -- `_generic_runner_param` always resolves to
-                # that sole parameter, i.e. argument position 0) and THIS call's own argv
-                # looks git-shaped.
+                # `_run(argv)`-style wrapper forwarding into a recognized spawn --
+                # `_generic_runner_param` always resolves to that sole parameter, i.e.
+                # argument position 0) and THIS call passes an argv-shaped argument.
                 if (
                     route is None
                     and callee in index.runner_shaped_funcs
-                    and _call_arg_is_git_shaped(node, 0)
+                    and _call_arg_is_argv_shaped(node, 0)
                 ):
                     route = "e-generic-runner"
 
             if route is None:
                 # route d-injected: a runner-shaped argument resolves to ANY direct spawner.
                 runner_name = _find_injected_runner_name(node)
-                if runner_name is not None and runner_name in index.direct_any_spawn_funcs:
+                if runner_name is not None and runner_name in index.direct_spawn_funcs:
                     route = "d-injected"
+
+            if route is None and callee is not None:
+                # route f-default-runner: the callee is a PARAMETER of the enclosing function
+                # whose default binds a module-level direct spawner -- the injectable-seam
+                # idiom (`def resync(..., *, run_git=_update_index_with_retry)`), where the
+                # loop body calls the parameter, not the function. Route d reads a runner
+                # passed AT the call site; this reads one bound one hop up as a default, the
+                # gap route d's own docstring names.
+                default_name = index.param_runner_defaults.get((relpath, enclosing), {}).get(
+                    callee
+                )
+                # Review: reviewer -- a parameter default can only bind a name resolvable in
+                # the DEFINING MODULE's own scope: either a same-module function, or a name
+                # imported into this file. The prior unscoped `default_name in
+                # index.direct_spawn_funcs` fallback was a repo-wide bare-name lookup with no
+                # import check (unlike route c's `callee in imported_here` gate), so a
+                # same-named but unrelated, unimported spawner defined elsewhere would
+                # false-positive -- the exact "true site on a false route" collision route f
+                # exists to correctly resolve.
+                if default_name is not None and (
+                    (relpath, default_name) in index.same_module_direct_spawn
+                    or (
+                        default_name in imported_here
+                        and default_name in index.direct_spawn_funcs
+                    )
+                ):
+                    route = "f-default-runner"
 
             if route is not None:
                 violations.append(
-                    GitAmpSite(
+                    AmpSite(
                         path=relpath,
                         lineno=node.lineno,
                         enclosing=enclosing,
@@ -856,6 +1009,48 @@ def find_unbatched_per_item_git_spawns(
                 )
 
     return violations
+
+
+class _ParamDefaultTracker(ast.NodeVisitor):
+    """Records each function scope's parameters that default to a bare `Name` -- route f's
+    index. Tracks the same dotted scope stack as `_EnclosingTracker` so a call site's
+    `enclosing` string keys straight into the result."""
+
+    def __init__(self, relpath: str, out: dict[tuple[str, str], dict[str, str]]) -> None:
+        self._relpath = relpath
+        self._stack: list[str] = []
+        self._out = out
+
+    def _record(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        args = node.args
+        pairs: list[tuple[ast.arg, ast.expr | None]] = []
+        positional = args.posonlyargs + args.args
+        # `defaults` right-aligns against the positional parameters; `kw_defaults` is
+        # index-aligned against `kwonlyargs` with `None` for the ones that have no default.
+        if args.defaults:
+            pairs.extend(zip(positional[-len(args.defaults) :], args.defaults))
+        pairs.extend(zip(args.kwonlyargs, args.kw_defaults))
+        bound = {
+            arg.arg: default.id
+            for arg, default in pairs
+            if isinstance(default, ast.Name)
+        }
+        if bound:
+            scope = ".".join(self._stack)
+            self._out.setdefault((self._relpath, scope), {}).update(bound)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._stack.append(node.name)
+        self._record(node)
+        self.generic_visit(node)
+        self._stack.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._stack.append(node.name)
+        self.generic_visit(node)
+        self._stack.pop()
 
 
 class _EnclosingTracker(ast.NodeVisitor):
@@ -891,201 +1086,400 @@ class _EnclosingTracker(ast.NodeVisitor):
 # collector above. See module docstring's "ONE collector, TWO assertions".
 # --------------------------------------------------------------------------
 
-#: Frozen inventory of already-known amplification sites (G2, dated 2026-08-08 -- repo-wide run
-#: of `find_unbatched_per_item_git_spawns((coordinator_core, coordinator/bin))`: 116 violations /
-#: 51 files, 85 distinct `GitAmpSite.key` identities after dedup by (path, enclosing, callee).
-#: Full inventory, wall-clock cost, and the three deliberately-live sites this plan examined and
-#: kept (none of which this collector's by-name/single-hop resolution can currently see):
-#: `state/audits/2026-08-08-git-amplification-gate-known-sites.md`.
+#: Frozen inventory of already-known amplification sites. RE-FROZEN 2026-08-16 (AC11) over a
+#: repo-wide run of `find_unbatched_per_item_spawns((coordinator_core, coordinator/bin))`:
+#: 191 violations / 100 files, 154 distinct `AmpSite.key` identities after dedup by
+#: (path, enclosing, callee).
 #:
-#: Renamed since that run: `consolidate_assemble/__init__.py::brief -> inspect_commit` (site 32)
-#: is now `-> inspect_commits`, which batches every commit of a stale branch into ONE
-#: `git show --stat <sha>...`. The site stays frozen because it remains a call inside `brief`'s
-#: per-BRANCH loop -- structurally identical to its `unique_commits`/`tip_author` siblings; what
-#: went away is the inner per-COMMIT fan-out, which the collector's (path, enclosing, callee) key
-#: cannot express. Burning down the branch loop itself is the remaining work on this row.
+#: Two independent movements are folded into this one re-freeze, and they run in opposite
+#: directions -- read the delta as their sum, never as a regression:
+#:   +83 keys, because AC11 stopped filtering on a `"git"` argv0 and the collector now sees
+#:        every spawn verb (see the module docstring's AC11 section for what that exposed).
+#:   -14 keys, of which 11 are genuine burn-downs by the batching chunks that landed alongside
+#:        this one (C3/C4/C7/C14/C16/C17 of
+#:        docs/plans/2026-08-15-composition-invocation-budgets.md) and 3 are a RE-KEY, not a
+#:        fix: `coordinator/bin/coordinator-safe-commit` gained a `.py` extension, and this
+#:        inventory keys on the path, so the same three sites re-entered under new keys.
 #:
-#: The standing assertion below is a SUBSET check, not a bare `violations == []` (blocked on this
-#: volume) -- it bites immediately on any NEW site outside this frozen set. Do NOT grow this
-#: constant to silence a new violation; fix the site, or route a genuine deliberate exception
-#: through the collector's own `_EXEMPT_SITES` with a dated reason (never a
+#: The prior freeze (2026-08-08, 85 keys) and its published inventory --
+#: `state/audits/2026-08-08-git-amplification-gate-known-sites.md` -- describe the GIT-ONLY
+#: collector. That audit is still an accurate record of that run; it is not a description of
+#: this constant.
+#:
+#: The standing assertion below is a SUBSET check, not a bare `violations == []` (blocked on
+#: this volume) -- it bites immediately on any NEW site outside this frozen set. Do NOT grow
+#: this constant to silence a new violation; fix the site, or route a genuine deliberate
+#: exception through the collector's own `_EXEMPT_SITES` with a dated reason (never a
 #: `# amplification-ok:` pragma -- § Anti-scope 17, the discriminators are structural). Shrink
 #: this constant as sites are fixed -- that is the designed_red worklist's job below.
 _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
     {
-        ("coordinator/bin/age-sweep-lessons.py", "main", "run"),
-        ("coordinator/bin/coordinator-safe-commit", "do_blanket", "_git_reset_unstage"),
-        ("coordinator/bin/coordinator-safe-commit", "do_scope_from", "_validate_pathspec"),
-        ("coordinator/bin/coordinator-safe-commit", "do_scoped", "_validate_pathspec"),
-        ("coordinator/bin/emit-goal-from-artifact.py", "main", "run"),
-        ("coordinator/bin/merge-release-notes-derive.py", "_contains_all", "_git"),
-        ("coordinator/bin/migrate-archive-week-changelogs.py", "run", "git_mv"),
-        ("coordinator/bin/publish.py", "_delta_row_source_sha", "_git_rev_parse"),
-        ("coordinator/bin/publish.py", "_materialize_inject_srcs", "_git_materialize_ref"),
+        ('coordinator/bin/age-sweep-lessons.py', 'main', 'run'),
+        ('coordinator/bin/check-mcp-versions.py', 'main', '_npm_latest'),
+        ('coordinator/bin/coordinator-doc-new.py', '_resolve_from_repo', '_machine_local_get'),
+        ('coordinator/bin/coordinator-harvest-deferrals.py', '_harvest', '_run_lesson_promote'),
+        ('coordinator/bin/coordinator-harvest-deferrals.py', '_harvest', '_run_queue_append'),
+        ('coordinator/bin/coordinator-safe-commit.py', 'do_blanket', '_git_reset_unstage'),
+        ('coordinator/bin/coordinator-safe-commit.py', 'do_scope_from', '_validate_pathspec'),
+        ('coordinator/bin/coordinator-safe-commit.py', 'do_scoped', '_validate_pathspec'),
+        ('coordinator/bin/cross-repo-memo.py', '_verify_delivery_landed', 'run'),
+        ('coordinator/bin/emit-goal-from-artifact.py', 'main', 'run'),
+        ('coordinator/bin/lib/cli_shared.py', 'resolve_from_repo', 'machine_local_get'),
+        ('coordinator/bin/lib/coordinator_registry.py', '<module>', 'run'),
+        ('coordinator/bin/merge-release-notes-derive.py', '_contains_all', '_git'),
         (
-            "coordinator/bin/publish.py",
-            "_publish_relevant_allowlist_leg",
-            "_git_ls_tree_entries_files",
+            'coordinator/bin/merge-release-notes-derive.py',
+            'cmd_reconcile_sweep',
+            '_run_sibling_cli',
         ),
-        ("coordinator/bin/publish.py", "main", "_git_head"),
-        ("coordinator/bin/publish.py", "main", "_is_git_repo"),
-        ("coordinator/bin/publish.py", "run_pre_sync_gates", "_git_rev_parse"),
-        ("coordinator/bin/reap-integrated-review-findings.py", "_reap_integrated_legacy", "_git"),
-        ("coordinator/bin/reap-stale-subagent-sidecars.py", "main", "_is_tracked"),
-        ("coordinator/bin/refresh-plugin-live-install.py", "_handle_default", "_git"),
-        ("coordinator/bin/refresh-plugin-live-install.py", "_interactive_gate", "_git"),
-        ("coordinator/bin/workday-complete-reconcile.py", "run_completion_reconcile", "_git_add"),
-        ("coordinator/bin/workday-complete-step9-append-changelog.py", "main", "run"),
-        ("coordinator_core/bash_guards/block_subagent_commit.py", "_fold_template_is_bounded", "int"),
+        ('coordinator/bin/migrate-archive-week-changelogs.py', 'run', 'git_mv'),
+        ('coordinator/bin/migrate-bug-backlog.py', 'run_apply', 'run'),
+        ('coordinator/bin/migrate-debt-backlog.py', 'run_apply', 'run'),
+        ('coordinator/bin/migrate-improvement-queue-project.py', 'run_apply', 'run'),
+        ('coordinator/bin/migrate-improvement-queue-universals.py', 'run_apply', 'run'),
+        ('coordinator/bin/percolate-gate.py', '_git_log_batched', 'run'),
+        ('coordinator/bin/percolate-round.py', '_filter_commit_pathspec', '_dest_path_exists'),
+        ('coordinator/bin/publish.py', '_materialize_inject_srcs', '_git_materialize_ref'),
         (
-            "coordinator_core/bash_guards/block_subagent_commit.py",
-            "_git_commit_agent_may_commit",
-            "_pathspec_element_is_sweeping",
-        ),
-        ("coordinator_core/bash_guards/commit_tripwires.py", "check_bin_sh_polyglot", "join"),
-        (
-            "coordinator_core/bash_guards/dispatch_checks.py",
-            "_check_destructive_git_revert_full",
-            "_run_git",
-        ),
-        ("coordinator_core/bash_guards/dispatch_checks.py", "_is_hazard_repo", "_paths_match"),
-        ("coordinator_core/bash_guards/dispatch_checks.py", "check_blanket_git_add", "_paths_match"),
-        ("coordinator_core/bash_guards/dispatch_checks.py", "check_destructive_git_clean", "_run_git"),
-        (
-            "coordinator_core/bash_guards/dispatch_checks.py",
-            "check_destructive_git_orphan",
-            "_run_git",
-        ),
-        ("coordinator_core/bash_guards/dispatch_checks.py", "check_destructive_rm", "_run_git"),
-        ("coordinator_core/bash_guards/dispatch_checks.py", "check_validate_commit", "_run_git"),
-        ("coordinator_core/bash_guards/dispatch_checks.py", "check_validate_commit", "join"),
-        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "branch_reachable"),
-        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "inspect_commits"),
-        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "tip_author"),
-        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "unique_commits"),
-        ("coordinator_core/consolidate_assemble/__init__.py", "brief", "worktree_is_dirty"),
-        ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_cherry_pick_and_delete", "_run_git"),
-        ("coordinator_core/coverage.py", "_bulk_trailer_lookup", "_run"),
-        ("coordinator_core/coverage.py", "_derive_dag_chain_set", "_run"),
-        ("coordinator_core/coverage.py", "_reviewed_via_graph_walk", "_run"),
-        (
-            "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-            "_dispatch_ledger_delivered",
-            "_run_git",
+            'coordinator/bin/publish.py',
+            '_publish_relevant_allowlist_leg',
+            '_git_ls_tree_entries_files',
         ),
         (
-            "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-            "_first_deliverable_commit_range_base",
-            "_run_git",
+            'coordinator/bin/publish.py',
+            'dispatch_end_of_run_argv_parity_gate',
+            '_argv_parity_pairing_origin',
+        ),
+        ('coordinator/bin/publish.py', 'main', '_git_head'),
+        ('coordinator/bin/publish.py', 'main', '_is_git_repo'),
+        (
+            'coordinator/bin/reap-orphaned-in-flight-handoffs.py',
+            'main',
+            '_has_live_children_exit_code',
+        ),
+        ('coordinator/bin/reap-orphaned-in-flight-handoffs.py', 'main', '_run_archive_stamp_cli'),
+        ('coordinator/bin/reap-stale-subagent-sidecars.py', 'main', '_is_tracked'),
+        ('coordinator/bin/refresh-plugin-live-install.py', '_handle_default', '_git'),
+        ('coordinator/bin/refresh-plugin-live-install.py', '_interactive_gate', '_git'),
+        (
+            'coordinator/bin/workday-complete-close.py',
+            'cmd_backfill_dispatch_rows',
+            '_dispatch_step9_row',
+        ),
+        ('coordinator/bin/workday-complete-reconcile.py', 'run_completion_reconcile', '_git_add'),
+        (
+            'coordinator/bin/workday-complete-reconcile.py',
+            'run_completion_reconcile',
+            '_run_reconcile_append',
+        ),
+        ('coordinator/bin/workday-complete-step9-append-changelog.py', 'main', 'run'),
+        ('coordinator/bin/workday-start-reconcile-sweep.py', 'run_sweep', '_run_reconcile_helper'),
+        (
+            'coordinator/bin/workweek-complete-close.py',
+            'run_reconcile_sweep',
+            '_run_reconcile_helper',
         ),
         (
-            "coordinator_core/frontmatter/schema_drift_watch.py",
-            "_scan",
-            "check_schema_drift_advisory",
+            'coordinator_core/bash_guards/block_subagent_commit.py',
+            '_fold_template_is_bounded',
+            'int',
         ),
-        ("coordinator_core/ops/agent_worktree_sweep.py", "_sweep_one", "_cherry_pick_abort"),
-        ("coordinator_core/ops/agent_worktree_sweep.py", "_sweep_one", "_cherry_pick_with_env"),
-        ("coordinator_core/ops/bootstrap_orchestrate.py", "main", "_git"),
-        ("coordinator_core/ops/bootstrap_orchestrate.py", "main", "run"),
-        ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "_run_git"),
-        ("coordinator_core/ops/ceremony/scoped_git_commit.py", "_remote_sha_state", "run"),
-        ("coordinator_core/ops/configure_git.py", "main", "_git_config_get"),
-        ("coordinator_core/ops/configure_git.py", "main", "_git_config_set"),
-        ("coordinator_core/ops/cutover_gate.py", "_reverify_commit_sha", "run"),
-        ("coordinator_core/ops/dirty_tree_gate.py", "main", "run"),
         (
-            "coordinator_core/ops/distill_apply_disposal.py",
-            "_delete_tracked_and_append_log",
-            "_run_git",
+            'coordinator_core/bash_guards/block_subagent_commit.py',
+            '_git_commit_agent_may_commit',
+            '_pathspec_element_is_sweeping',
         ),
-        ("coordinator_core/ops/distill_apply_disposal.py", "_write_denormalizations", "_is_tracked"),
-        ("coordinator_core/ops/distill_apply_disposal.py", "apply_disposal_manifest", "_is_tracked"),
-        ("coordinator_core/ops/emit/envelope.py", "main", "_commit_age_label"),
-        ("coordinator_core/ops/emit/envelope.py", "main", "resolve_ref"),
-        ("coordinator_core/ops/fleet/_common.py", "archive_and_commit", "create_subprocess_exec"),
-        ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec"),
-        # RE-KEYED 2026-08-11 (docs/plans/2026-08-11-resync-leaves-a-bare-staged-deletion-whe.md,
-        # chunks C2/C4a). Not new sites: the two post-commit main-index resyncs moved OUT of
-        # archive_and_commit / rm_and_commit into their own module-level functions, and this
-        # inventory keys on the ENCLOSING function, so the same code re-entered under new keys.
+        ('coordinator_core/bash_guards/commit_tripwires.py', 'check_bin_sh_polyglot', 'join'),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            '_check_destructive_git_revert_full',
+            '_check_destructive_git_revert_full',
+        ),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            '_check_destructive_git_revert_full',
+            '_run_git',
+        ),
+        ('coordinator_core/bash_guards/dispatch_checks.py', '_is_hazard_repo', '_paths_match'),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            '_no_verify_rescan_shell_c_and_heredoc',
+            'check_no_verify',
+        ),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            'check_blanket_git_add',
+            '_paths_match',
+        ),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            'check_destructive_git_clean',
+            '_run_git',
+        ),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            'check_destructive_git_clean',
+            'operator_override_note',
+        ),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            'check_destructive_git_orphan',
+            '_run_git',
+        ),
+        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git'),
+        (
+            'coordinator_core/bash_guards/dispatch_checks.py',
+            'check_git_commit_safe_commit_advise',
+            'operator_override_note',
+        ),
+        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_validate_commit', '_run_git'),
+        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_validate_commit', 'join'),
+        ('coordinator_core/benchmarks/floor.py', 'measure_floor', 'time_invocation'),
+        ('coordinator_core/benchmarks/harness.py', '_collect_samples', 'time_invocation'),
+        ('coordinator_core/benchmarks/measure_read_events.py', 'measure', '_time_probe'),
+        ('coordinator_core/benchmarks/measure_render_status.py', 'measure', '_time_probe'),
+        (
+            'coordinator_core/benchmarks/measure_render_status.py',
+            'measure_bare_import',
+            '_time_bare_import',
+        ),
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'branch_reachable'),
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'inspect_commits'),
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'tip_author'),
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits'),
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'worktree_is_dirty'),
+        (
+            'coordinator_core/consolidate_assemble/apply.py',
+            '_dispatch_cherry_pick_and_delete',
+            '_run_git',
+        ),
+        (
+            'coordinator_core/coverage.py',
+            '_derive_dag_chain_set',
+            '_add_commit_touched_file_count',
+        ),
+        ('coordinator_core/coverage.py', '_reviewed_via_graph_walk', '_run'),
+        (
+            'coordinator_core/distill/curation_status.py',
+            'compute_curation_status',
+            'active_reference_guard',
+        ),
+        ('coordinator_core/distill/sidecar_sweep.py', 'sweep_sidecars', 'active_reference_guard'),
+        (
+            'coordinator_core/execute_plan_assemble/close_out_and_stamp.py',
+            '_first_deliverable_commit_range_base',
+            '_run_git',
+        ),
+        (
+            'coordinator_core/frontmatter/schema_drift_watch.py',
+            '_scan',
+            'check_schema_drift_advisory',
+        ),
+        (
+            'coordinator_core/hooks/subagent_fabrication_check.py',
+            '_targets_changed',
+            '_git_porcelain_for_path',
+        ),
+        ('coordinator_core/install/first_run.py', '_seed_machine_local_registry', '_run'),
+        ('coordinator_core/install/maximalist.py', '_defender_offer', '_run'),
+        ('coordinator_core/install/maximalist.py', '_run_body', '_run_compileall'),
+        ('coordinator_core/install/prereq_probe.py', 'probe_clone_auth', '_run'),
+        (
+            'coordinator_core/install/uninstall_legs.py',
+            'uninstall_reverse_git_config_group',
+            'config_unset',
+        ),
+        ('coordinator_core/ops/agent_worktree_sweep.py', '_sweep_one', '_cherry_pick_abort'),
+        ('coordinator_core/ops/agent_worktree_sweep.py', '_sweep_one', '_cherry_pick_with_env'),
+        ('coordinator_core/ops/backfill_initiative_fk.py', '_process_pairs', 'run'),
+        ('coordinator_core/ops/bootstrap_orchestrate.py', 'main', '_git'),
+        ('coordinator_core/ops/bootstrap_orchestrate.py', 'main', 'run'),
+        ('coordinator_core/ops/central_run_due.py', 'main', '_count_universals'),
+        (
+            'coordinator_core/ops/ceremony/detached_render_commit.py',
+            'commit_own_artifact',
+            '_run_git',
+        ),
+        ('coordinator_core/ops/ceremony/scoped_git_commit.py', '_remote_sha_state', 'run'),
+        (
+            'coordinator_core/ops/ceremony/tail_ops.py',
+            'fire_archive_sweeps_detached',
+            'spawn_detached',
+        ),
+        (
+            'coordinator_core/ops/ceremony/tail_ops.py',
+            'fire_tracker_and_roadmap_detached',
+            'spawn_detached',
+        ),
+        ('coordinator_core/ops/check_atlas_watch_drift.py', 'run', '_watch_line'),
+        (
+            'coordinator_core/ops/check_machine_local_regeneratability.py',
+            'main',
+            '_ladder_resolves',
+        ),
+        ('coordinator_core/ops/configure_git.py', 'main', '_git_config_get'),
+        ('coordinator_core/ops/configure_git.py', 'main', '_git_config_set'),
+        ('coordinator_core/ops/cruft_sweep.py', 'sweep_empty_toplevel_dirs', '_delete_path'),
+        ('coordinator_core/ops/cruft_sweep.py', 'sweep_harness', '_delete_path'),
+        ('coordinator_core/ops/cruft_sweep.py', 'sweep_orphans', '_delete_path'),
+        ('coordinator_core/ops/cruft_sweep.py', 'sweep_scratch', '_delete_path'),
+        ('coordinator_core/ops/cruft_sweep.py', 'sweep_subagent_sandbox_files', '_delete_path'),
+        (
+            'coordinator_core/ops/cutover_gate.py',
+            '_reverify_test_node_ids_batch',
+            '_run_pytest_batch',
+        ),
+        (
+            'coordinator_core/ops/distill_apply_disposal.py',
+            '_delete_tracked_and_append_log',
+            '_run_git',
+        ),
+        (
+            'coordinator_core/ops/distill_apply_disposal.py',
+            '_write_denormalizations',
+            '_is_tracked',
+        ),
+        (
+            'coordinator_core/ops/distill_apply_disposal.py',
+            'apply_disposal_manifest',
+            '_is_tracked',
+        ),
+        ('coordinator_core/ops/emit/envelope.py', 'main', '_commit_age_label'),
+        ('coordinator_core/ops/emit/envelope.py', 'main', 'resolve_ref'),
+        ('coordinator_core/ops/find_polluter.py', 'main', '_existence_detail'),
+        ('coordinator_core/ops/find_polluter.py', 'main', 'run'),
+        # DELIBERATE, and not to be "fixed" by batching (docs/plans/
+        # 2026-08-11-resync-leaves-a-bare-staged-deletion-whe.md, AC6): the resync annotates
+        # `index_resync_failed` onto the individual acted[] / reaped[] item that failed. One
+        # batched call cannot say WHICH path failed, which would trade a visible defect for an
+        # invisible one. Re-keyed 2026-08-11 when the two post-commit main-index resyncs moved
+        # out of archive_and_commit / rm_and_commit into their own module-level functions;
         # `run_git` is the extracted injectable seam, defaulting to _update_index_with_retry.
         #
-        # These stay per-item DELIBERATELY and must not be "fixed" by batching every path into
-        # one call: the resync annotates `index_resync_failed` onto the individual acted[] /
-        # reaped[] item that failed, which is a hard acceptance criterion (AC6) of that plan and
-        # the thing that closed the 2026-08-01/02 "log line nobody read" incident. One batched
-        # call cannot say WHICH path failed. Batching here would trade a visible defect for an
-        # invisible one — the exact swap that plan's Anti-scope forbids.
-        #
-        # Retired in the same edit: (_common.py, archive_and_commit, _ls_tree_head_cacheinfo).
-        # C2 replaced the ls-tree + update-index --add --cacheinfo pair with a single
-        # `git restore --staged`, so that call site no longer exists — a genuine burn-down, not
-        # a re-key. The helper's definition survives with no caller.
-        ("coordinator_core/ops/fleet/_common.py", "_resync_main_index_for_moves", "run_git"),
-        ("coordinator_core/ops/fleet/_common.py", "_resync_main_index_for_reaps", "run_git"),
-        ("coordinator_core/ops/fleet/_findings_reap.py", "reap_findings", "_is_tracked"),
-        ("coordinator_core/ops/fleet/archive_plans.py", "_handle_act", "_plan_worktree_dirty"),
-        ("coordinator_core/ops/fleet/archive_plans.py", "_handle_preview", "_plan_worktree_dirty"),
-        ("coordinator_core/ops/migrate_branch_canonical_case.py", "_migrate", "_git"),
-        ("coordinator_core/ops/migrate_completion_log_legacy.py", "main", "_git_mv"),
-        ("coordinator_core/ops/migrate_cross_repo_layout.py", "main", "_move_one"),
-        ("coordinator_core/ops/normalize_claimed_frontmatter.py", "main", "get_tracked_files"),
-        ("coordinator_core/ops/orphan_branch_sweep.py", "main", "_git"),
+        # Found by route f since 2026-08-16 (AC11). Until then these two rows were reported
+        # only because `run_git` collided by name with an unrelated single-parameter function
+        # in another module -- a true site standing on a false route, which is why widening
+        # the collector had to add route f rather than simply drop them.
+        ('coordinator_core/ops/fleet/_common.py', '_resync_main_index_for_moves', 'run_git'),
+        ('coordinator_core/ops/fleet/_common.py', '_resync_main_index_for_reaps', 'run_git'),
         (
-            "coordinator_core/ops/promote_shipped_in_flight_stubs.py",
-            "_run_promotions",
-            "_git_common_dir",
+            'coordinator_core/ops/fleet/_common.py',
+            '_update_index_with_retry',
+            'create_subprocess_exec',
+        ),
+        ('coordinator_core/ops/fleet/_common.py', 'archive_and_commit', 'create_subprocess_exec'),
+        ('coordinator_core/ops/fleet/_common.py', 'rm_and_commit', 'create_subprocess_exec'),
+        ('coordinator_core/ops/fleet/_findings_reap.py', 'reap_findings', '_is_tracked'),
+        ('coordinator_core/ops/fleet/archive_plans.py', '_handle_act', '_plan_worktree_dirty'),
+        ('coordinator_core/ops/fleet/archive_plans.py', '_handle_preview', '_plan_worktree_dirty'),
+        ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
+        ('coordinator_core/ops/learn_lessons_config_update.py', 'main', '_machine_local_get'),
+        ('coordinator_core/ops/learn_lessons_roots.py', '_registry_roots', '_machine_local_run'),
+        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git'),
+        ('coordinator_core/ops/migrate_completion_log_legacy.py', 'main', '_git_mv'),
+        ('coordinator_core/ops/migrate_cross_repo_layout.py', 'main', '_move_one'),
+        ('coordinator_core/ops/normalize_claimed_frontmatter.py', 'main', 'get_tracked_files'),
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git'),
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run'),
+        (
+            'coordinator_core/ops/percolate_preflight_scratch_publish.py',
+            'check_allowlist_string',
+            '_run_child',
         ),
         (
-            "coordinator_core/ops/review_brightline_gate.py",
-            "_compute_chain_oracle",
-            "_derive_dag_chain_set",
-        ),
-        ("coordinator_core/ops/review_coverage_core.py", "build_reviewed_set", "_run"),
-        ("coordinator_core/ops/review_coverage_core.py", "build_segments", "_run"),
-        (
-            "coordinator_core/ops/review_trail_readjudication_report.py",
-            "compute_readjudication_report",
-            "_full_range_shas",
+            'coordinator_core/ops/plan_suggest_completion_steps.py',
+            '_plans_with_review_trail_coverage',
+            '_resolve_range_shas',
         ),
         (
-            "coordinator_core/ops/session/safe_commit_offer.py",
-            "_render_report",
-            "_commit_changed_count",
+            'coordinator_core/ops/plan_suggest_completion_steps.py',
+            'suggest_completion_steps',
+            '_plan_touching_shas',
         ),
         (
-            "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py",
-            "_act_gitignore",
-            "_run_git",
+            'coordinator_core/ops/promote_shipped_in_flight_stubs.py',
+            '_run_promotions',
+            '_git_common_dir',
+        ),
+        ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run'),
+        ('coordinator_core/ops/render_template_tree.py', 'main', 'run'),
+        (
+            'coordinator_core/ops/review_brightline_gate.py',
+            '_compute_chain_oracle',
+            '_derive_dag_chain_set',
+        ),
+        ('coordinator_core/ops/review_coverage_core.py', 'build_reviewed_set', '_run'),
+        ('coordinator_core/ops/review_coverage_core.py', 'build_segments', '_run'),
+        (
+            'coordinator_core/ops/review_trail_readjudication_report.py',
+            'compute_readjudication_report',
+            '_full_range_shas',
+        ),
+        ('coordinator_core/ops/run_pre_ci_hooks.py', '_run_pre_ci_hooks', 'run'),
+        ('coordinator_core/ops/run_shellcheck_sweep.py', 'run_shellcheck_sweep', '_lint_one_file'),
+        (
+            'coordinator_core/ops/session/boot_sweep.py',
+            '_sweep_consumed_handoffs',
+            '_shipped_in_resolvable',
         ),
         (
-            "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py",
-            "_classify_main_pass",
-            "_run_git",
-        ),
-        ("coordinator_core/pickup_assemble/__init__.py", "compute_premise_checks", "_run_git"),
-        ("coordinator_core/plugin_health/drift.py", "_check_copy_install", "_run_git"),
-        (
-            "coordinator_core/reconcile/ac27_differential_oracle.py",
-            "_check_transitive_import_isolation",
-            "_git_show_blob",
-        ),
-        ("coordinator_core/session/scope.py", "compute_scope", "_dirty_files_under_batch"),
-        ("coordinator_core/session_attribution.py", "detect_foreign_commits", "_git_run"),
-        (
-            "coordinator_core/write_guards/block_consumed_handoff_edit.py",
-            "check",
-            "_normalize_and_gate",
+            'coordinator_core/ops/setup_chain_walker.py',
+            '_sibling_fallback',
+            '_functional_probe_ok',
         ),
         (
-            "coordinator_core/write_guards/block_cutover_phase_hand_edit.py",
-            "check",
-            "_normalize_and_gate",
+            'coordinator_core/ops/setup_chain_walker.py',
+            'command_succeeds_native',
+            '_run_probe_argv',
+        ),
+        ('coordinator_core/ops/setup_chain_walker.py', 'dep_probe_all', 'dep_probe'),
+        ('coordinator_core/ops/staleness_git.py', 'commits_touching_since', '_touches_artifact'),
+        ('coordinator_core/ops/updatedocs_gates.py', '_gate_queue_prune_sweep', '_run'),
+        (
+            'coordinator_core/ops/workday_complete_step2_5_dirty_tree.py',
+            '_act_gitignore',
+            '_run_git',
+        ),
+        ('coordinator_core/ops/workweek_reverse_drift_gate.py', 'run_gate', 'run'),
+        ('coordinator_core/percolate/engine.py', 'run_entrypoint_gate', '_run_one_entrypoint'),
+        (
+            'coordinator_core/plan_assemble/predicates/composition_graph.py',
+            'path_rename_or_move',
+            '_run_git',
+        ),
+        ('coordinator_core/plugin_health/drift.py', '_check_copy_install', '_run_git'),
+        (
+            'coordinator_core/reconcile/ac27_differential_oracle.py',
+            '_check_transitive_import_isolation',
+            '_git_show_blob',
+        ),
+        ('coordinator_core/session_attribution.py', 'detect_foreign_commits', '_git_run'),
+        ('coordinator_core/snippet_sync/registry.py', 'list_for', '_ml_get'),
+        ('coordinator_core/snippet_sync/registry.py', 'resolve_conditional_consumers', '_ml_get'),
+        (
+            'coordinator_core/write_guards/block_consumed_handoff_edit.py',
+            'check',
+            '_normalize_and_gate',
         ),
         (
-            "coordinator_core/write_guards/block_memo_status_hand_edit.py",
-            "check",
-            "_normalize_and_gate",
+            'coordinator_core/write_guards/block_cutover_phase_hand_edit.py',
+            'check',
+            '_normalize_and_gate',
+        ),
+        (
+            'coordinator_core/write_guards/block_memo_status_hand_edit.py',
+            'check',
+            '_normalize_and_gate',
+        ),
+        (
+            'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
+            '_reviewed_range_offer',
+            'Path',
+        ),
+        (
+            'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
+            '_reviewed_range_offer',
+            '_resolve_ref_to_sha',
         ),
     }
 )
@@ -1103,7 +1497,7 @@ def test_no_new_amplification_sites_outside_known_inventory():
     and bites immediately on any NEW amplification site outside the frozen inventory -- the
     class-regrowth property this whole plan exists to buy, satisfied at land rather than deferred
     to graduation."""
-    violations = find_unbatched_per_item_git_spawns(_gate_scope_paths())
+    violations = find_unbatched_per_item_spawns(_gate_scope_paths())
     observed = {site.key for site in violations}
     new_site_keys = observed - _KNOWN_SITES
     new_violations = [site for site in violations if site.key in new_site_keys]
@@ -1124,11 +1518,11 @@ def test_burn_down_known_preexisting_amplification_sites():
     blocker for every other session sharing `main`. This test's failure output is exactly that
     worklist, in the marker's own terms: run it explicitly to see the current burn-down surface.
     """
-    violations = find_unbatched_per_item_git_spawns(_gate_scope_paths())
+    violations = find_unbatched_per_item_spawns(_gate_scope_paths())
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
-def _format_violation(site: GitAmpSite) -> str:
+def _format_violation(site: AmpSite) -> str:
     return (
         f"{site.path}:{site.lineno} ({site.enclosing}) -- route {site.route}: a per-item call "
         f"to `{site.callee}` inside a qualifying loop reaches a git spawn directly. Batch it "
@@ -1143,7 +1537,7 @@ def _format_violation(site: GitAmpSite) -> str:
 # this chunk. The real gate is NOT run repo-wide here -- G3 (concurrent, `spawn_policy/
 # detect.py`) is landing a prebuilt name-to-keys index that brings the equivalent prototype run
 # from 33.8s to ~8.6s; G1 does not re-measure that cost and does not invoke
-# `find_unbatched_per_item_git_spawns` against the real tree.
+# `find_unbatched_per_item_spawns` against the real tree.
 # --------------------------------------------------------------------------
 
 
@@ -1157,7 +1551,7 @@ def test_route_a_direct_positive(tmp_path):
         "        subprocess.run(['git', 'add', p], cwd='/repo')\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert len(violations) == 1
     assert violations[0].route == "a-direct"
     assert violations[0].lineno == 5
@@ -1176,7 +1570,7 @@ def test_route_b_local_helper_positive(tmp_path):
         "        _git_add(p)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert len(violations) == 1
     assert violations[0].route == "b-local-helper"
     assert violations[0].callee == "_git_add"
@@ -1200,7 +1594,7 @@ def test_route_c_cross_module_positive(tmp_path):
         "        commit_one(p)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     matches = [v for v in violations if v.route == "c-cross-module"]
     assert len(matches) == 1
     assert matches[0].path.endswith("caller.py")
@@ -1228,65 +1622,258 @@ def test_route_d_injected_positive(tmp_path):
         "        trailer_foreign_shas(sha, 's1', run=_run)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     matches = [v for v in violations if v.route == "d-injected"]
     assert len(matches) == 1
     assert matches[0].lineno == 11
 
 
-def test_route_e_generic_runner_positive_git_shaped(tmp_path):
+_RUNNER_MODULE_SRC = (
+    "import subprocess\n"
+    "\n"
+    "def _run(argv):\n"
+    "    return subprocess.run(argv, cwd='/repo')\n"
+)
+
+
+def test_route_e_generic_runner_positive_attribute_access(tmp_path):
     """Route e requires a CROSS-MODULE runner: `sites_in_source`'s own `_local_helpers`
-    resolution already recognizes a same-module `_run(argv)` wrapper called with a literal
-    argv (reads the git-ness straight off the call site) and reports it as route a-direct --
-    that is spawn_policy's existing capability, reused, not re-derived. Route e exists for the
-    shape `_local_helpers` cannot see: the runner defined in a DIFFERENT module, so this file's
-    own `sites_in_source` pass has no local-helper visibility into it at all."""
-    runner_mod = tmp_path / "git_runner.py"
-    runner_mod.write_text(
-        "import subprocess\n"
-        "\n"
-        "def _run(argv):\n"
-        "    return subprocess.run(argv, cwd='/repo')\n",
-        encoding="utf-8",
-    )
-    fixture = tmp_path / "route_e.py"
-    fixture.write_text(
-        "from git_runner import _run\n"
+    resolution already recognizes a same-module `_run(argv)` wrapper called with a literal argv
+    and reports it as route a-direct -- that is spawn_policy's existing capability, reused, not
+    re-derived. Route e exists for the shape `_local_helpers` cannot see: the runner defined in
+    a DIFFERENT module, so this file's own `sites_in_source` pass has no local-helper visibility
+    into it at all.
+
+    Reached here by ATTRIBUTE access (`import mod` / `mod._run(...)`), not `from mod import
+    _run`. Since AC11 dropped the git-argv0 requirement, a runner brought in by `from`-import is
+    claimed by route c first -- c only ever skipped it before because `subprocess.run(argv,
+    ...)` resolves argv0 to `<dynamic>`, never to `"git"`. Attribute access leaves the name out
+    of `imported_names_by_file`, which is the remaining shape only route e resolves."""
+    (tmp_path / "runner_mod.py").write_text(_RUNNER_MODULE_SRC, encoding="utf-8")
+    (tmp_path / "route_e.py").write_text(
+        "import runner_mod\n"
         "\n"
         "def check(shas):\n"
         "    for sha in shas:\n"
-        "        _run(['git', 'show', sha])\n",
+        "        runner_mod._run(['git', 'show', sha])\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     matches = [v for v in violations if v.route == "e-generic-runner"]
     assert len(matches) == 1
     assert matches[0].callee == "_run"
     assert matches[0].path.endswith("route_e.py")
 
 
-def test_route_e_generic_runner_negative_non_git_argv(tmp_path):
-    """Negative control: the same cross-module runner shape, called with a non-git argv, must
-    NOT fire -- route e's git-ness is read at the call site, not the definition site."""
-    runner_mod = tmp_path / "git_runner.py"
-    runner_mod.write_text(
-        "import subprocess\n"
-        "\n"
-        "def _run(argv):\n"
-        "    return subprocess.run(argv, cwd='/repo')\n",
-        encoding="utf-8",
-    )
-    fixture = tmp_path / "route_e_negative.py"
-    fixture.write_text(
-        "from git_runner import _run\n"
+def test_route_e_generic_runner_positive_non_git_argv(tmp_path):
+    """AC11 at route e. This fixture is the pre-AC11 `test_route_e_generic_runner_negative_
+    non_git_argv`, INVERTED: a per-item `['ls', name]` spawn used to be a required silence,
+    because route e read git-ness off the call site. A per-item process is a per-item process
+    whatever it runs, so the same fixture is now a required violation. The assertion is kept
+    in inverted form rather than deleted so the reversal is legible as a decision."""
+    (tmp_path / "runner_mod.py").write_text(_RUNNER_MODULE_SRC, encoding="utf-8")
+    (tmp_path / "route_e_non_git.py").write_text(
+        "import runner_mod\n"
         "\n"
         "def check(names):\n"
         "    for name in names:\n"
-        "        _run(['ls', name])\n",
+        "        runner_mod._run(['ls', name])\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
-    assert violations == []
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "e-generic-runner"]
+    assert len(matches) == 1
+    assert matches[0].callee == "_run"
+
+
+def test_route_e_negative_argument_not_argv_shaped(tmp_path):
+    """Negative control that survives AC11: route e reads the call site's argument SHAPE, and a
+    bare `Name` is not statically an argv. Conservative by construction -- see
+    `_call_arg_is_argv_shaped`."""
+    (tmp_path / "runner_mod.py").write_text(_RUNNER_MODULE_SRC, encoding="utf-8")
+    (tmp_path / "route_e_unshaped.py").write_text(
+        "import runner_mod\n"
+        "\n"
+        "def check(commands):\n"
+        "    for command in commands:\n"
+        "        runner_mod._run(command)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_route_e_negative_runner_forwards_into_a_non_spawn(tmp_path):
+    """A single-parameter function that forwards its parameter into an ordinary call is NOT a
+    runner. Before AC11 this was free: route e also demanded a `"git"`-prefixed argv at the call
+    site, so a non-spawning forwarder could never produce a violation on its own. Once every
+    spawn verb counts, that looseness would make any one-argument pass-through function a
+    runner -- `_generic_runner_param` requires the forwarding call to sit on a line
+    `sites_in_source` independently detected as a spawn."""
+    (tmp_path / "not_a_runner.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def _forward(argv):\n"
+        "    return ' '.join(argv)\n"
+        "\n"
+        "def _elsewhere():\n"
+        "    return subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "caller.py").write_text(
+        "import not_a_runner\n"
+        "\n"
+        "def check(names):\n"
+        "    for name in names:\n"
+        "        not_a_runner._forward(['git', 'show', name])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_ac11_per_item_non_git_spawn_is_flagged(tmp_path):
+    """AC11's headline: "the regression guard fails on a new per-unit NON-GIT spawn in a
+    composer path". The fixture is `cutover_gate`'s real shape -- a `sys.executable`-fronted
+    pytest invocation per item -- which no argv0-keyed check can see: `_resolve_argv0` reports
+    an `ast.Attribute` program name as `<dynamic>`, so this spawn has no resolvable name to put
+    on an allowlist. It is caught because the argv0 filter was removed, not extended."""
+    (tmp_path / "composer.py").write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def reverify(node_ids):\n"
+        "    for node_id in node_ids:\n"
+        "        subprocess.run([sys.executable, '-m', 'pytest', node_id])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert len(violations) == 1
+    assert violations[0].route == "a-direct"
+    assert violations[0].enclosing == "reverify"
+
+
+def test_route_a_does_not_report_a_helper_sharing_the_spawn_line(tmp_path):
+    """Route a matches on `SpawnSite.lineno`, and a spawn line routinely carries a second call
+    (`subprocess.call(argv, **no_console_passthrough_kwargs())`). The spawn is the violation;
+    the kwargs helper is not. Without the `_SPAWN_API_NAMES` half of route a's test, widening
+    past git reported both -- and `install_health_run._run_legs` was a live instance."""
+    (tmp_path / "shared_line.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def _flags():\n"
+        "    return {}\n"
+        "\n"
+        "def run_all(argvs):\n"
+        "    for argv in argvs:\n"
+        "        subprocess.call(argv, **_flags())\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [v.callee for v in violations] == ["call"]
+
+
+def test_route_f_parameter_default_runner_is_resolved(tmp_path):
+    """Route f: the injectable-seam idiom, where the loop calls a PARAMETER and the runner is
+    bound as that parameter's default a hop up. `_common.py`'s two index-resync sites are the
+    live instance, and before AC11 they were visible only through an accidental collision with
+    an unrelated same-named function in another module."""
+    (tmp_path / "seam.py").write_text(
+        "import asyncio\n"
+        "\n"
+        "async def _update_index_with_retry(argv, *, cwd):\n"
+        "    return await asyncio.create_subprocess_exec(*argv, cwd=cwd)\n"
+        "\n"
+        "async def resync(paths, *, cwd, run_git=_update_index_with_retry):\n"
+        "    for path in paths:\n"
+        "        await run_git(['git', 'restore', '--staged', '--', path], cwd=cwd)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "f-default-runner"]
+    assert len(matches) == 1
+    assert matches[0].enclosing == "resync"
+    assert matches[0].callee == "run_git"
+
+
+def test_route_f_negative_default_is_not_a_spawner(tmp_path):
+    """Negative control: a parameter default that resolves to a function which does not spawn
+    is not a runner, so the loop is not amplification."""
+    (tmp_path / "seam_negative.py").write_text(
+        "def _record(item):\n"
+        "    return item\n"
+        "\n"
+        "def walk(items, *, run=_record):\n"
+        "    for item in items:\n"
+        "        run(item)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
+    """Review: reviewer -- a runner candidate whose forwarding call sits inside a NESTED
+    closure (`_run(argv): def _forward(): subprocess.run(argv); _forward()`) must still be
+    recognized. `SpawnSite.enclosing` is a DOTTED scope path (`"_run._forward"`, not bare
+    `"_run"`), so `_build_func_index`'s own-spawn-lineno lookup has to match the function's
+    name AND any dotted scope nested under it -- a lookup keyed on the bare name alone finds
+    nothing here and mis-reports a genuine runner as not-a-runner (a false negative, not the
+    module docstring's already-documented opposite-direction over-inclusion blind spot)."""
+    (tmp_path / "nested_runner_mod.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run(argv):\n"
+        "    def _forward():\n"
+        "        subprocess.run(argv)\n"
+        "    _forward()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "route_e_nested.py").write_text(
+        "import nested_runner_mod\n"
+        "\n"
+        "def check(shas):\n"
+        "    for sha in shas:\n"
+        "        nested_runner_mod._run(['git', 'show', sha])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "e-generic-runner"]
+    assert len(matches) == 1
+    assert matches[0].callee == "_run"
+
+
+def test_route_f_negative_unscoped_default_name_collision(tmp_path):
+    """Review: reviewer -- route f's `default_name in index.direct_spawn_funcs` fallback was
+    unscoped by file, so a same-named, unrelated, UNIMPORTED spawning function in another file
+    would false-positive route f purely off a bare-name repo-wide match. A parameter default
+    can only bind a name resolvable in the defining module's own scope: same-module, or
+    imported into that file -- neither holds here, so this must stay silent."""
+    (tmp_path / "unrelated_spawner.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def run_git():\n"
+        "    return subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "seam_collision.py").write_text(
+        "def run_git(item):\n"
+        "    return item\n"
+        "\n"
+        "def walk(items, *, run=run_git):\n"
+        "    for item in items:\n"
+        "        run(item)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_spawn_api_names_track_spawn_policy():
+    """Completeness pin for `_SPAWN_API_NAMES`, whose SSOT is `spawn_policy.detect._RECOGNIZED`.
+    That name is private, so the collector holds a leaf-name projection rather than importing it
+    (see the negative spec). This assertion is what stops the copy drifting: a spawn API added
+    to `detect` but not here makes route a silently blind to it, which is the failure mode the
+    whole AC11 widening exists to remove."""
+    from coordinator_core.spawn_policy.detect import _RECOGNIZED
+
+    assert {func for _module, func in _RECOGNIZED} == set(_SPAWN_API_NAMES)
 
 
 def test_discriminator_loop_iterable_expression_not_flagged(tmp_path):
@@ -1308,7 +1895,7 @@ def test_discriminator_loop_iterable_expression_not_flagged(tmp_path):
         "        pass\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 
@@ -1329,7 +1916,7 @@ def test_discriminator_constant_literal_sequence_not_flagged(tmp_path):
         "        _git_show(base)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 
@@ -1350,7 +1937,7 @@ def test_discriminator_while_loop_not_flagged(tmp_path):
         "        attempt += 1\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 
@@ -1374,7 +1961,7 @@ def test_discriminator_chunking_stride_loop_not_flagged(tmp_path):
         "        _git_batch(shas[i : i + CHUNK])\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 
@@ -1394,7 +1981,7 @@ def test_discriminator_unit_stride_range_still_flagged(tmp_path):
         "        _git_show(shas[i])\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [site.enclosing for site in violations] == ["check"]
 
 
@@ -1428,7 +2015,7 @@ def test_discriminator_verb_gated_chokepoint_non_spawning_verb_not_flagged(tmp_p
         "        _run_git(['cat-file', '-e', sha], root)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 
@@ -1445,7 +2032,7 @@ def test_discriminator_verb_gated_chokepoint_spawning_verb_still_flagged(tmp_pat
         "        _run_git(['diff', '--quiet', path], root)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
@@ -1461,7 +2048,7 @@ def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path):
         "        _run_git([verb, '--quiet'], root)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
@@ -1483,7 +2070,7 @@ def test_deep_tail_not_flagged(tmp_path):
         "        _stage_one(p)\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 
@@ -1501,7 +2088,7 @@ def test_gate_ignores_test_tree_paths(tmp_path):
         "        subprocess.run(['git', 'add', p], cwd='/repo')\n",
         encoding="utf-8",
     )
-    violations = find_unbatched_per_item_git_spawns((tmp_path,))
+    violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
 
 

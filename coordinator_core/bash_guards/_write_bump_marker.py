@@ -238,13 +238,11 @@ machinery this chunk deliberately does not add.
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
+from coordinator_core.git.repo_root import git_dir as _seam_git_dir
 from coordinator_core.subagent_sandbox.engine import _SESSION_ID_FORMAT_RE
-
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 #: The marker's basename prefix. The full basename a caller creates is
 #: `f"{MARKER_PREFIX}{session_id}"`; matching on read is by this same
@@ -340,31 +338,14 @@ def resolve_gitdir(cwd: Optional[str] = None) -> Optional[Path]:
 
 
 def _resolve_gitdir_uncached(cwd: Optional[str]) -> Optional[Path]:
-    """The actual `git rev-parse --git-dir` spawn -- unmemoized. Split out of
-    `resolve_gitdir()` so every one of its several fail-open return points
-    stores into `_GITDIR_MEMO` exactly once, at the single call site above,
-    rather than each needing its own memo-write."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            cwd=cwd,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            # House value (dispatch_checks._run_git) -- was 10s with no
-            # stated reason; brought down 2026-08-05 hardening pass. This
-            # runs on the same identity-gated hot path as every other
-            # `git rev-parse` in this package and the fail-open contract
-            # below is unaffected by a shorter cap.
-            timeout=2.0,
-            stdin=subprocess.DEVNULL,
-            creationflags=_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    raw = (result.stdout or "").strip()
+    """`git rev-parse --git-dir`'s answer, resolved to an absolute path --
+    delegated to the shared `coordinator_core.git.repo_root.git_dir` seam
+    (walks for the ordinary case, spawns only as a last resort; see that
+    module's docstring). Split out of `resolve_gitdir()` so every one of its
+    several fail-open return points stores into `_GITDIR_MEMO` exactly once,
+    at the single call site above, rather than each needing its own
+    memo-write."""
+    raw = _seam_git_dir(cwd)
     if not raw:
         return None
     git_dir = Path(raw)

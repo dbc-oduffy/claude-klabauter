@@ -198,7 +198,7 @@ def brief(cadence: str) -> dict[str, Any]:
     )
     if reported_points:
         reported_fragments = "; ".join(
-            f"{point.get('question', '')} — "
+            f"{point.get('id', '')} ({point.get('question', '')}) — "
             f"{(point.get('recommendation') or {}).get('rationale', '')}"
             for point in reported_points
         )

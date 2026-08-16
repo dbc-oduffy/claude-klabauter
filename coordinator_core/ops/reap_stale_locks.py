@@ -87,6 +87,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from coordinator_core.git.repo_root import absolute_git_dir, git_common_dir
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -116,36 +117,12 @@ def _file_size(path: Path) -> int:
 
 
 def _git_absolute_git_dir(cwd: Optional[Path] = None) -> Optional[Path]:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--absolute-git-dir"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    out = result.stdout.strip()
+    out = absolute_git_dir(str(cwd) if cwd is not None else None)
     return Path(out) if out else None
 
 
 def _git_common_dir(git_dir: Path, cwd: Optional[Path] = None) -> Path:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return git_dir
-    if result.returncode != 0:
-        return git_dir
-    out = result.stdout.strip()
+    out = git_common_dir(str(cwd) if cwd is not None else None)
     if not out:
         return git_dir
     common = Path(out)

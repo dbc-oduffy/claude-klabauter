@@ -502,6 +502,49 @@ def test_pathspec_filter_fails_open_on_undeterminable_dest_state(tmp_path, monke
     assert pathspec == [str(dest / "maybe-gone.sh")]
 
 
+def test_check_ignore_result_outside_rel_paths_raises_hard(tmp_path, monkeypatch):
+    """`check-ignore --stdin` can only ever echo back a member of what it was
+    fed once `rel_paths` and its output share one canonical (POSIX) form --
+    a returned path absent from `rel_paths` means that invariant broke, and
+    this must fail LOUD (hard raise) rather than silently filtering nothing:
+    the corrupting direction is a narrowed filter missing a real gitignored
+    path and committing gitignored content into the mirror."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    seen = {str(dest / "tracked.md"): ("NEW", "tracked.md")}
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 0, "not-in-rel-paths.md\n", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    with pytest.raises(ValueError, match="check-ignore reported"):
+        _mod._filter_commit_pathspec(dest, str(dest), seen)
+
+
+def test_check_ignore_result_subset_of_rel_paths_does_not_raise(tmp_path, monkeypatch):
+    """Ordinary legitimate input -- every path `check-ignore` reports as
+    ignored is drawn from what it was asked about -- must never trip the
+    invariant-break raise; only a genuine mismatch does (§ the sibling
+    hard-raise test above)."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    seen = {
+        str(dest / "ignored.pyc"): ("NEW", "ignored.pyc"),
+        str(dest / "kept.md"): ("NEW", "kept.md"),
+    }
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 0, "ignored.pyc\n", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    kept = _mod._filter_commit_pathspec(dest, str(dest), seen)
+    assert kept == [str(dest / "kept.md")]
+
+
 def test_no_pathspec_element_names_a_directory():
     """AC7: every entry `_build_commit_pathspec` emits names a specific
     file, never a directory — the function trusts its inputs to already be

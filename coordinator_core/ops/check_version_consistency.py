@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 
 _PROG = "check-version-consistency"
 
@@ -87,20 +88,7 @@ def _fail(msg: str) -> None:
 
 
 def _git_toplevel(start: Optional[str] = None) -> Optional[str]:
-    try:
-        res = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=start or os.getcwd(),
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except (OSError, FileNotFoundError):
-        print(f"skip: _git_toplevel: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if res.returncode != 0:
-        return None
-    out = res.stdout.strip()
+    out = show_toplevel(start or os.getcwd())
     return out or None
 
 

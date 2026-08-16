@@ -72,6 +72,7 @@ import json
 import os
 import shlex
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
@@ -341,6 +342,63 @@ def _check_hook_registration() -> Layer:
     return Layer("Hook registration (hooks.json + settings.json)", overall, findings)
 
 
+#: Process-scope lock + refcount table guarding the `sys.path` push/pop
+#: below (C10, staff-eng review finding 8). The naive shape — a per-call
+#: `inserted = dir not in sys.path` check, insert, then unconditional
+#: `sys.path.remove(dir)` in a `finally` — is a first-match-by-VALUE
+#: removal: under two interleaved warm dispatches both needing the SAME
+#: `hooks_lib_dir` (the common case — most sessions target one doe-claude
+#: root), the FIRST caller to finish can pop the entry while the SECOND
+#: caller's still-in-flight `import fail_open_launcher` is relying on it
+#: being present, stripping a peer's still-needed path entry mid-import.
+#: Refcounting fixes this: the directory is only ever actually removed from
+#: `sys.path` once every concurrent holder has released it.
+_SYS_PATH_LOCK = threading.Lock()
+_SYS_PATH_REFCOUNTS: dict = {}
+
+
+# Review: coordinator:code-reviewer 9b8765ad finding 1 — tracks, per
+# dir_path, whether THIS module's own `_sys_path_push` was the call that
+# actually inserted the entry, separately from the borrow count. Without
+# this, a `dir_path` already present in `sys.path` for a reason outside this
+# refcounting (PYTHONPATH, another module, a future second call site) would
+# be treated as "count==0 -> we must insert" on first touch, inserting a
+# duplicate, and the matching pop would then genuinely `sys.path.remove` an
+# entry this module never owned once the count reached 0 — the exact
+# "strip a peer's still-needed path entry" bug class C10 exists to close,
+# just relocated from a race to a pre-populated path.
+_SYS_PATH_OWNED: set = set()
+
+
+def _sys_path_push(dir_path: str) -> None:
+    """Add *dir_path* to `sys.path` (front) if not already held, and record
+    one more holder. Pair with `_sys_path_pop` in a `try`/`finally`."""
+    with _SYS_PATH_LOCK:
+        count = _SYS_PATH_REFCOUNTS.get(dir_path, 0)
+        if count == 0 and dir_path not in sys.path:
+            sys.path.insert(0, dir_path)
+            _SYS_PATH_OWNED.add(dir_path)
+        _SYS_PATH_REFCOUNTS[dir_path] = count + 1
+
+
+def _sys_path_pop(dir_path: str) -> None:
+    """Release one holder of *dir_path*; only actually removed from
+    `sys.path` once the last concurrent holder releases it, and only if this
+    module's own `_sys_path_push` was the one that inserted it."""
+    with _SYS_PATH_LOCK:
+        count = _SYS_PATH_REFCOUNTS.get(dir_path, 0)
+        if count <= 1:
+            _SYS_PATH_REFCOUNTS.pop(dir_path, None)
+            if dir_path in _SYS_PATH_OWNED:
+                _SYS_PATH_OWNED.discard(dir_path)
+                try:
+                    sys.path.remove(dir_path)
+                except ValueError:
+                    pass  # already absent — nothing to release
+        else:
+            _SYS_PATH_REFCOUNTS[dir_path] = count - 1
+
+
 def _fix_bare_hook_commands(fix_report: List[str]) -> None:
     """--fix action: wrap every bare (unwrapped) command in DoE-claude's
     hooks.json via the real, already-tested fail_open_launcher.wrap_command —
@@ -362,17 +420,14 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
         return
 
     hooks_lib_dir = str(Path(doe_root) / "coordinator" / "hooks")
-    inserted = hooks_lib_dir not in sys.path
-    if inserted:
-        sys.path.insert(0, hooks_lib_dir)
+    _sys_path_push(hooks_lib_dir)
     try:
         import fail_open_launcher
     except ImportError as exc:
         fix_report.append(f"--fix: skipped hooks.json wrap — fail_open_launcher unimportable: {exc}")
         return
     finally:
-        if inserted:
-            sys.path.remove(hooks_lib_dir)
+        _sys_path_pop(hooks_lib_dir)
 
     try:
         with hooks_json_path.open("r", encoding="utf-8") as fh:

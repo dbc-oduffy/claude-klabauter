@@ -154,7 +154,6 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -718,18 +717,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     root = args.root
     if not root:
-        try:
-            from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.git.repo_root import show_toplevel
 
-            proc = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, check=True,
-                **no_console_creationflags(),
-            )
-        except (subprocess.CalledProcessError, OSError) as exc:
-            print(f"--root not given and not inside a git repo: {exc}", file=sys.stderr)
+        toplevel = show_toplevel()
+        if toplevel is None:
+            print("--root not given and not inside a git repo", file=sys.stderr)
             return 1
-        root = proc.stdout.strip()
+        root = toplevel
 
     manifest_root = args.manifest_root or root
 

@@ -21,10 +21,10 @@ from __future__ import annotations
 import os
 import sys
 
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional
+
+from coordinator_core.git.repo_root import show_toplevel
 
 
 def git_root(cwd: Optional[Path] = None) -> Optional[str]:
@@ -34,23 +34,15 @@ def git_root(cwd: Optional[Path] = None) -> Optional[str]:
     (not in a repo, git not on PATH, non-zero exit) rather than raising —
     callers degrade with their own error message, matching the bash
     `GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)` convention.
+
+    Delegates to `coordinator_core.git.repo_root.show_toplevel` (walk-first,
+    spawn-fallback, cwd-keyed memo) rather than shelling out directly — see
+    that module's docstring for the caching/negative-caching contract. The
+    module docstring's "Does NOT cache" note above describes this function's
+    pre-migration behaviour; the seam it now delegates to caches per resolved
+    cwd, never a failed resolution.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(cwd) if cwd is not None else None,
-            capture_output=True,
-            text=True,
-            # Review: code-reviewer — Windows portability convention applied
-            # inconsistently across this wave's siblings; align this call site.
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: git_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
+    return show_toplevel(str(cwd) if cwd is not None else None)
 
 
 def git_root_zero_spawn(start: Optional[Path] = None) -> Optional[str]:

@@ -497,6 +497,13 @@ class TestEntrypointGateDataLists:
                 # own-parser usage rejection, no plugin-root dependency at
                 # all -- see `_USAGE_NONZERO_ENTRYPOINTS`'s own comment.
                 "coordinator/bin/orient-assemble.py",
+                # four-coordinator-bin-entrypoints sweep (state/bug-backlog,
+                # filed the day this fix landed): both reach their own
+                # parser and print a recognizable own-parser usage complaint,
+                # not a root-resolution/import failure -- re-pinned here,
+                # entrant not code drift.
+                "coordinator/bin/chunk-commits",
+                "coordinator/bin/with-suite-mutex",
             }
         )
 
@@ -524,7 +531,22 @@ class TestEntrypointGateDataLists:
             "coordinator/bin/claude-home",
             "coordinator/bin/coordinator-settings-home",
         }
-        assert set(pct_engine._ENTRYPOINT_GATE_WAIVERS) == sourced_f3 | measured_2026_08_10
+        # Measured 2026-08-14 against a PUBLISHED coordinator-claude payload
+        # (not this source tree) -- `_canonical_gate_entrypoint_id`'s layout
+        # canonicalisation makes these keys match there for the first time.
+        # All five rc=1 for the same root cause: engine-dependent
+        # distribution via cc_invoke env/registry rungs the gate's hermetic
+        # env strips. Re-pinned here, entrants not code drift.
+        measured_2026_08_14 = {
+            "coordinator/bin/coordinator-ensure-hooks-fleet",
+            "coordinator/bin/coordinator-queue-close",
+            "coordinator/bin/plan-tasks-resolve",
+            "coordinator/bin/plan-tasks-stamp",
+            "coordinator/bin/with-suite-mutex",
+        }
+        assert set(pct_engine._ENTRYPOINT_GATE_WAIVERS) == (
+            sourced_f3 | measured_2026_08_10 | measured_2026_08_14
+        )
         for name, reason in pct_engine._ENTRYPOINT_GATE_WAIVERS.items():
             assert isinstance(reason, str) and len(reason.split()) >= 5, (
                 f"_ENTRYPOINT_GATE_WAIVERS[{name!r}] needs a real reason, got {reason!r}"

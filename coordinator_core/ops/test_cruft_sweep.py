@@ -886,3 +886,236 @@ def test_sweep_harness_scratchpads_dry_run_maps_apply_false_to_reclaim_false(tmp
     )
 
     assert captured.get("reclaim") is False
+
+
+# ---------------------------------------------------------------------------
+# toolchain-caches class — Phase G, sweep_toolchain_caches. Every subprocess
+# call is mocked (AC9): no test here may invoke a real prune or touch a real
+# cache directory. Follows this file's existing pattern of monkeypatching
+# the underlying worker (subprocess.run / shutil.which) out entirely.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode=0):
+        self.returncode = returncode
+        self.stdout = b""
+        self.stderr = b""
+
+
+def test_sweep_toolchain_caches_invokes_resolved_full_path_not_bare_name(tmp_path, monkeypatch):
+    """AC3 regression pin — the single most important test in this class.
+    A `.CMD`-shaped fixture (simulating npm/pnpm's Windows shim resolution)
+    must be invoked via the FULL PATH `shutil.which` returns, never the bare
+    executable name. Invoking by bare name would raise FileNotFoundError on
+    a real Windows box, silently reported upstream as "tool absent" — the
+    false-negative hazard this class exists to avoid."""
+    cmd_shaped_path = str(tmp_path / "npm.CMD")
+
+    def _fake_which(name):
+        if name == "npm":
+            return cmd_shaped_path
+        return None
+
+    captured_argv = {}
+
+    def _fake_run(argv, **kwargs):
+        captured_argv["argv"] = argv
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(cruft_sweep.shutil, "which", _fake_which)
+    monkeypatch.setattr(cruft_sweep.subprocess, "run", _fake_run)
+
+    total_bytes, total_items = cruft_sweep.sweep_toolchain_caches(
+        apply=True, json_mode=False, quiet=True,
+    )
+
+    # Only npm resolves in this fixture; every other tool is UNAVAILABLE.
+    assert total_items == 1
+    assert total_bytes == 0
+    assert captured_argv["argv"][0] == cmd_shaped_path
+    assert captured_argv["argv"][0] != "npm"  # never the bare name
+    assert Path(captured_argv["argv"][0]).name == "npm.CMD"
+
+
+def test_sweep_toolchain_caches_absent_tool_is_unavailable_not_a_phase_failure(monkeypatch):
+    """AC4: a tool absent from PATH yields UNAVAILABLE for that row and
+    never fails the phase."""
+    monkeypatch.setattr(cruft_sweep.shutil, "which", lambda name: None)
+    run_calls = []
+    monkeypatch.setattr(
+        cruft_sweep.subprocess, "run",
+        lambda *a, **k: run_calls.append((a, k)) or _FakeCompletedProcess(),
+    )
+
+    records = []
+    total_bytes, total_items = cruft_sweep.sweep_toolchain_caches(
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+
+    assert total_items == 0
+    assert run_calls == []  # no subprocess ever invoked -- every tool absent
+    assert len(records) == len(cruft_sweep._TOOLCHAIN_CACHE_TOOLS)
+    assert all(r["disposition"] == "unavailable" for r in records)
+    assert all("UNAVAILABLE" in r["evidence"] for r in records)
+
+
+def test_sweep_toolchain_caches_one_tool_erroring_does_not_abort_others(monkeypatch):
+    """AC4: one tool's subprocess call raising must not abort the remaining
+    rows -- the failure is recorded against that row only."""
+    def _fake_which(name):
+        return f"/resolved/{name}"
+
+    def _fake_run(argv, **kwargs):
+        if "uv" in argv[0]:
+            raise OSError("simulated spawn failure")
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(cruft_sweep.shutil, "which", _fake_which)
+    monkeypatch.setattr(cruft_sweep.subprocess, "run", _fake_run)
+
+    records = []
+    total_bytes, total_items = cruft_sweep.sweep_toolchain_caches(
+        apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+
+    # uv fails, the other four (pip, npm, pnpm, huggingface) still succeed.
+    assert total_items == len(cruft_sweep._TOOLCHAIN_CACHE_TOOLS) - 1
+    uv_records = [r for r in records if r["name"] == "uv"]
+    assert len(uv_records) == 1
+    assert uv_records[0]["disposition"] == "prune-failed"
+    other_records = [r for r in records if r["name"] != "uv"]
+    assert all(r["disposition"] == "auto-prune" for r in other_records)
+
+
+def test_sweep_toolchain_caches_dry_run_issues_no_mutating_call(monkeypatch):
+    """AC5: apply=False (the default) must run no mutating prune -- none of
+    the five tools expose a native dry-run flag, so subprocess.run must
+    never be called at all in dry-run mode."""
+    monkeypatch.setattr(cruft_sweep.shutil, "which", lambda name: f"/resolved/{name}")
+    run_calls = []
+    monkeypatch.setattr(
+        cruft_sweep.subprocess, "run",
+        lambda *a, **k: run_calls.append((a, k)) or _FakeCompletedProcess(),
+    )
+
+    records = []
+    total_bytes, total_items = cruft_sweep.sweep_toolchain_caches(
+        apply=False, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+
+    assert run_calls == []
+    assert total_items == 0
+    assert total_bytes == 0
+    assert len(records) == len(cruft_sweep._TOOLCHAIN_CACHE_TOOLS)
+    assert all(r["disposition"] == "skip" for r in records)
+    assert all("no dry-run available" in r["evidence"] for r in records)
+
+
+def test_sweep_toolchain_caches_dry_run_argv_invoked_but_never_mutates(tmp_path, monkeypatch):
+    """AC5, dry_run_argv wiring: a row WITH a native `dry_run_argv` must
+    still issue no MUTATING call under apply=False -- the dry-run argv is
+    invoked instead of `prune_argv`, and `prune_argv` is never touched."""
+    fake_table = (
+        {
+            "name": "uv", "executable": "uv",
+            "prune_argv": ("cache", "prune"),
+            "dry_run_argv": ("cache", "prune", "--dry-run"),
+            "wholesale": False,
+        },
+    )
+    monkeypatch.setattr(cruft_sweep, "_TOOLCHAIN_CACHE_TOOLS", fake_table)
+    monkeypatch.setattr(cruft_sweep.shutil, "which", lambda name: f"/resolved/{name}")
+
+    calls = []
+
+    def _fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(cruft_sweep.subprocess, "run", _fake_run)
+
+    records = []
+    total_bytes, total_items = cruft_sweep.sweep_toolchain_caches(
+        apply=False, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+
+    assert len(calls) == 1
+    assert calls[0] == ["/resolved/uv", "cache", "prune", "--dry-run"]
+    assert calls[0] != ["/resolved/uv", "cache", "prune"]  # never the mutating argv
+    assert total_items == 0
+    assert total_bytes == 0
+    assert len(records) == 1
+    assert records[0]["disposition"] == "dry-run"
+    assert "dry-run, no mutation" in records[0]["evidence"]
+    assert "wholesale=False" in records[0]["evidence"]
+
+
+def test_run_all_phases_toolchain_caches_class_dispatches_phase(monkeypatch):
+    called = {}
+
+    def _fake_sweep(*, apply, json_mode, quiet, log_path=None, emit_fn=None):
+        called["hit"] = True
+        called["apply"] = apply
+        return 0, 0
+
+    monkeypatch.setattr(cruft_sweep, "sweep_toolchain_caches", _fake_sweep)
+    totals = cruft_sweep._run_all_phases(
+        "toolchain-caches", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        None, [], [], None, None,
+    )
+    assert called.get("hit") is True
+    assert "toolchain_caches" in totals
+
+
+def test_run_all_phases_other_classes_do_not_dispatch_toolchain_caches(monkeypatch):
+    called = {"hit": False}
+
+    def _fake_sweep(*args, **kwargs):
+        called["hit"] = True
+        return 0, 0
+
+    monkeypatch.setattr(cruft_sweep, "sweep_toolchain_caches", _fake_sweep)
+
+    cruft_sweep._run_all_phases(
+        "harness", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        None, [], [], None, None,
+    )
+    assert called["hit"] is False
+
+
+def test_run_all_phases_all_class_includes_toolchain_caches_in_grand_total(monkeypatch):
+    def _fake_sweep(*, apply, json_mode, quiet, log_path=None, emit_fn=None):
+        return 0, 3
+
+    monkeypatch.setattr(cruft_sweep, "sweep_toolchain_caches", _fake_sweep)
+
+    totals = cruft_sweep._run_all_phases(
+        "all", False, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, None,
+        Path("/nonexistent-repo-root"), [], [], None, None,
+    )
+    assert totals["toolchain_caches"] == {"bytes": 0, "items": 3}
+    assert totals["_grand_total_items"] >= 3
+
+
+def test_toolchain_cache_tools_table_is_data_shape(tmp_path):
+    """AC2: the table is data, not branching -- every row carries the same
+    shape (name, executable, prune_argv, dry_run_argv), and huggingface
+    targets `hf`, never the deprecated `huggingface-cli` (AC6)."""
+    names = [row["name"] for row in cruft_sweep._TOOLCHAIN_CACHE_TOOLS]
+    assert "huggingface" in names
+    assert "playwright" not in names  # AC7: excluded, not silently grouped in
+    for row in cruft_sweep._TOOLCHAIN_CACHE_TOOLS:
+        assert set(row.keys()) == {"name", "executable", "prune_argv", "dry_run_argv", "wholesale"}
+    pip_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "pip")
+    assert pip_row["wholesale"] is True  # only forced whole-cache-clear primitive
+    non_pip_rows = [r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] != "pip"]
+    assert all(r["wholesale"] is False for r in non_pip_rows)
+    npm_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "npm")
+    assert npm_row["prune_argv"] == ("cache", "verify")  # not the destructive "clean --force"
+    hf_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "huggingface")
+    assert hf_row["executable"] == "hf"
+    assert hf_row["executable"] != "huggingface-cli"

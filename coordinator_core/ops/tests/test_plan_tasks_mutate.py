@@ -3238,3 +3238,338 @@ def test_resolve_path_never_reaches_a_terminal_status(tmp_path):
     assert wont_do_status not in _FROZEN_STATUSES, wont_do_status
     assert wont_do_status != "implemented", wont_do_status
     assert wont_do_status == "landed", wont_do_status
+
+
+# ---------------------------------------------------------------------------
+# Untouched-invalid-row deadlock fix (2026-08-16): a pre-existing
+# schema-invalid row a mutation does NOT touch must not veto that mutation.
+# Reproduces the live deadlock (two invalid rows, each blocking the other's
+# repair) and asserts the write path this fix restores, plus the invariant
+# it must NOT relax (a mutation may never WRITE a newly-invalid row).
+# ---------------------------------------------------------------------------
+
+_PLAN_TWO_INVALID_ROWS = """\
+---
+title: "Test Plan — two pre-existing invalid rows"
+status: draft
+---
+
+# Test Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: B1
+  title: First bad row
+  change_kind: not-a-real-enum-value
+  surface: a.py
+  queue_scope: project
+  deferred: false
+  body: |
+    First.
+- id: B2
+  title: Second bad row
+  change_kind: not-a-real-enum-value
+  surface: b.py
+  queue_scope: project
+  deferred: false
+  body: |
+    Second.
+```
+"""
+
+
+def test_stamp_repairs_one_invalid_row_in_one_call(tmp_path):
+    """A spine with ONE pre-existing schema-invalid row can be repaired to
+    valid via a single stamp call that touches only that row."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "one-invalid-row.md", _PLAN_TWO_ROWS)
+    # Corrupt C1 in place so it starts invalid, on disk, before any op runs.
+    text = plan.read_text(encoding="utf-8")
+    text = text.replace(
+        "  change_kind: script-edit\n  surface: a.py",
+        "  change_kind: not-a-real-enum-value\n  surface: a.py",
+    )
+    plan.write_text(text, encoding="utf-8")
+
+    result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [{"id": "C1", "change_kind": "script-edit"}],
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    assert "change_kind: script-edit" in plan.read_text(encoding="utf-8")
+
+
+def test_stamp_two_invalid_rows_repaired_in_two_calls_no_deadlock(tmp_path):
+    """The exact deadlock this fix exists for: two rows in the SAME spine
+    are each pre-existing schema-invalid, and neither call touches the
+    other row. Repairing B1 alone must succeed despite B2 still being
+    invalid on disk, and repairing B2 alone (in a second call) must then
+    also succeed — the two rows must not be able to block each other."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "two-invalid-rows.md", _PLAN_TWO_INVALID_ROWS)
+
+    first = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [{"id": "B1", "change_kind": "script-edit"}],
+        },
+        repo_root=repo / ".git",
+    ))
+    assert first["exit_code"] == 0, first
+    assert first["applied"] is True
+    text_after_first = plan.read_text(encoding="utf-8")
+    assert "id: B1" in text_after_first
+    b1_block = text_after_first.split("id: B2")[0]
+    assert "change_kind: script-edit" in b1_block
+    assert "not-a-real-enum-value" in text_after_first, (
+        "B2 must still be present and still invalid — the first call must "
+        "not have touched it"
+    )
+
+    second = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [{"id": "B2", "change_kind": "script-edit"}],
+        },
+        repo_root=repo / ".git",
+    ))
+    assert second["exit_code"] == 0, second
+    assert second["applied"] is True
+    final_text = plan.read_text(encoding="utf-8")
+    assert "not-a-real-enum-value" not in final_text
+    assert final_text.count("change_kind: script-edit") == 2
+
+
+def test_stamp_mutation_writing_a_newly_invalid_row_still_refused(tmp_path):
+    """Invariant (1) must not regress: a mutation that would WRITE a row
+    into an invalid state is still refused with no write — even when the
+    spine ALREADY carries an untouched pre-existing invalid row. The
+    untouched-invalid-row diagnostic exists to surface pre-existing breakage
+    without vetoing an unrelated write; it must never widen into 'anything
+    goes because the spine was already broken.'"""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "still-refuses.md", _PLAN_TWO_INVALID_ROWS)
+    original = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            # B1 starts invalid (bad change_kind); this update does not fix
+            # it — it renames the row instead, so B1 is STILL invalid after
+            # this write. B1 is touched, so it must still be refused.
+            "updates": [{"id": "B1", "title": "renamed but still bad"}],
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert result["applied"] is False
+    assert plan.read_text(encoding="utf-8") == original, (
+        "no write must land: the touched row (B1) is still invalid after "
+        "this mutation, so it must be refused exactly as before — the "
+        "untouched-invalid-row diagnostic must never let a mutation write "
+        "a row that remains invalid"
+    )
+
+
+def test_stamp_untouched_invalid_rows_diagnostic_names_the_ids(tmp_path):
+    """A successful stamp that repairs one row while a sibling row remains
+    pre-existing-invalid surfaces a `warnings` diagnostic naming the
+    untouched row's id — a repair must not silently normalize a broken
+    spine into looking fully clean (requirement 4 of the 2026-08-16 fix)."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "diagnostic-names-ids.md", _PLAN_TWO_INVALID_ROWS)
+
+    result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [{"id": "B1", "change_kind": "script-edit"}],
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    warnings = result.get("warnings") or []
+    assert warnings, "expected a non-empty warnings list naming the untouched-invalid row"
+    assert any("B2" in w for w in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# add-task / resolve untouched_ids regression coverage (2026-08-16 fix,
+# e4a1ffe9a000) — the four stamp-only tests above left add-task and resolve,
+# which received the identical `touched_ids` treatment, with zero dedicated
+# coverage. Review: code-reviewer (P2) — cover both obligations (still
+# refuses a newly-invalid touched write; surfaces untouched-invalid ids as
+# warnings) for both verbs, prioritising resolve's Phase 1/Phase 2 split as
+# the highest-risk shape in the file.
+# ---------------------------------------------------------------------------
+
+_PLAN_ONE_VALID_ONE_INVALID = """\
+---
+title: "Test Plan — one valid, one pre-existing invalid sibling"
+status: draft
+---
+
+# Test Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: First chunk
+  change_kind: script-edit
+  surface: a.py
+  queue_scope: project
+  deferred: false
+  body: |
+    First.
+- id: BX
+  title: Pre-existing bad row
+  change_kind: not-a-real-enum-value
+  surface: b.py
+  queue_scope: project
+  deferred: false
+  body: |
+    Bad.
+```
+"""
+
+
+def test_add_task_succeeds_with_untouched_invalid_row_and_warns(tmp_path):
+    """add-task on a spine carrying a pre-existing, untouched schema-invalid
+    row (BX) still succeeds and appends the new valid row — the untouched
+    row must not veto an unrelated write — and the reply names BX in
+    `warnings`."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "add-task-sibling-invalid.md", _PLAN_ONE_VALID_ONE_INVALID)
+
+    result = _run(_handler(
+        {"verb": "add-task", "plan_path": str(plan), "task": _valid_task("C2")},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+
+    text = plan.read_text(encoding="utf-8")
+    assert "id: C2" in text
+    assert "not-a-real-enum-value" in text, "BX must survive untouched"
+
+    warnings = result.get("warnings") or []
+    assert warnings, "expected a non-empty warnings list naming the untouched-invalid row"
+    assert any("BX" in w for w in warnings), warnings
+
+
+def test_add_task_writing_a_newly_invalid_row_still_refused(tmp_path):
+    """Invariant (1) must not regress for add-task: a new row that is itself
+    schema-invalid is still refused with no write, even on a spine that
+    already carries an untouched pre-existing invalid row (BX) — the
+    untouched-invalid-row diagnostic must never widen into 'anything goes
+    because the spine was already broken.'"""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "add-task-sibling-invalid-refused.md", _PLAN_ONE_VALID_ONE_INVALID)
+    original = plan.read_text(encoding="utf-8")
+
+    bad_task = {
+        "id": "C-BAD",
+        "title": "Missing required fields",
+        # 'change_kind' and 'surface' are required by the schema — omitted.
+    }
+
+    result = _run(_handler(
+        {"verb": "add-task", "plan_path": str(plan), "task": bad_task},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert result["applied"] is False
+    assert plan.read_text(encoding="utf-8") == original, (
+        "no write must land: the newly-added row (C-BAD) is invalid, so it "
+        "must be refused exactly as before — an untouched sibling-invalid "
+        "row must not relax this"
+    )
+
+
+def test_resolve_succeeds_with_untouched_invalid_row_and_warns_untouched_ids(tmp_path):
+    """resolve repairs/closes a valid row (C1 -> coded) on a spine that also
+    carries a pre-existing, untouched schema-invalid row (BX) — Phase 1
+    writes disposition fields, Phase 2 builds `resolved_ids` around
+    dispatch calls, and neither phase may be vetoed by BX's unrelated
+    breakage. The reply must still name BX in `warnings`."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-sibling-invalid.md", _PLAN_ONE_VALID_ONE_INVALID)
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "coded",
+            "disposition_ref": "abc1234",
+            "disposition_detail": "shipped in abc1234",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: coded" in text
+    assert "not-a-real-enum-value" in text, "BX must survive untouched"
+
+    warnings = result.get("warnings") or []
+    assert warnings, "expected a non-empty warnings list naming the untouched-invalid row"
+    assert any("BX" in w for w in warnings), warnings
+
+
+def test_resolve_writing_a_newly_invalid_touched_row_still_refused(tmp_path):
+    """Invariant (1) must not regress for resolve: resolving a row that is
+    ITSELF schema-invalid (bad change_kind) still leaves it invalid after
+    Phase 1 writes only the disposition fields — resolve never touches
+    change_kind — so the touched row must still be refused with no write,
+    even on a spine that also carries a second, untouched invalid row.
+    Asserts byte-identical file content (not just exit_code) to rule out a
+    silent partial write from Phase 1's in-place mutation before the
+    Phase 2 dispatch loop and the post-loop `_validate_all` gate."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-newly-invalid-refused.md", _PLAN_ONE_VALID_ONE_INVALID)
+    original = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            # BX starts invalid (bad change_kind); resolve only ever writes
+            # disposition/disposition_ref/disposition_detail, so BX is still
+            # invalid after this write. BX is the touched row here, so it
+            # must still be refused.
+            "id": "BX",
+            "disposition": "coded",
+            "disposition_ref": "abc1234",
+            "disposition_detail": "shipped in abc1234",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert result["applied"] is False
+    assert plan.read_text(encoding="utf-8") == original, (
+        "no write must land: the touched row (BX) is still invalid after "
+        "this mutation (resolve does not touch change_kind), so it must be "
+        "refused exactly as before — Phase 1's in-place row mutation before "
+        "the post-loop _validate_all gate must never produce a silent "
+        "partial write"
+    )

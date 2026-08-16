@@ -63,6 +63,22 @@ Negative-spec:
       that override to ``apply``-stage claims: an apply-stage claim is backed
       by a landed frontmatter stamp and real mutation, and its only takeover
       route stays the holder-is-dead one.
+
+C2 ADDITION (docs/plans/2026-08-16-trace-a-claim-back-to-its-session.md,
+chunk C2): ``claim_artifact`` fires ``claim_neighbours.find_neighbours`` on
+every SUCCESSFUL plan/handoff claim and prints an advisory stderr line
+naming any live peer session pointed at the same files — the discovery
+moment the plan exists for. ADVISORY ONLY, and this is the acceptance
+criterion, not a style note (AC4): no gate, no pause, no prompt, nothing
+here can turn a successful claim into a failed one. ``_report_claim_
+neighbours`` swallows every exception itself, so a raising neighbour check
+degrades to no report, never to a propagated error — see that function's
+own docstring. Read this module's own excision history one file over
+(``coordinator_core/ops/ceremony/scoped_git_commit.py``'s module docstring,
+"Sink-side ownership enforcement"): a mechanism that hard-denied on this
+same advisory claim signal was removed twice (2026-08-08 cost, 2026-08-13
+hard-denial). This is reporting, never gating, by construction — no branch
+here reads ``_report_claim_neighbours``'s outcome to decide anything.
 """
 
 from __future__ import annotations
@@ -79,6 +95,7 @@ from typing import List, Optional, Tuple, Union
 
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.session import claim_index
+from coordinator_core.session import claim_neighbours
 from coordinator_core.session import core
 from coordinator_core.session import liveness
 from coordinator_core.session import scope
@@ -522,6 +539,88 @@ def _claim_base(class_: str, baton_repo_root: str, cwd: Optional[str]) -> Option
     return base
 
 
+#: Repo-relative artifact-path templates for the two claim classes
+#: ``claim_neighbours`` knows how to resolve a file set for (its own
+#: ``_CLAIM_CLASS_TO_PATH_FMT``, re-derived here rather than imported — that
+#: dict is private to that module, and this is the same "private copy below
+#: a public seam" layering call ``claim_neighbours._SCOPE_ENTRY_RE``'s own
+#: comment names for its relationship to ``pickup_assemble.holder_evidence``).
+#: ``memo`` is deliberately absent — ``claim_neighbours`` never resolves a
+#: memo's file set (see its module docstring), so a memo claim fires no
+#: neighbour report at all, by construction, not by an extra branch here.
+_CLAIM_REPORT_PATH_FMT = {
+    "plan": lambda basename: f"docs/plans/{basename}.md",
+    "handoff": lambda basename: f"state/handoffs/{basename}",
+}
+
+
+def _format_claim_neighbour_report(
+    class_: str, basename: str, result: claim_neighbours.ClaimNeighboursResult
+) -> Optional[str]:
+    """Render ``result`` into the one stderr line ``_report_claim_
+    neighbours`` prints, or ``None`` when nothing is worth telling the
+    claiming session.
+
+    Status-first (mirrors ``claim_neighbours``'s own contract): an
+    ``UNRESOLVABLE`` file set and a ``RESOLVED`` result with an empty
+    ``neighbours`` list are BOTH silent here — neither is the positive
+    "someone else is on your files" fact this report exists to surface, and
+    printing on either would be exactly the narration the message register
+    (``docs/wiki/guard-messaging.md`` § Register) rules out: noise on every
+    claim, not a fact worth stating. A caller that wants the UNRESOLVABLE-
+    vs-empty distinction itself reads ``ClaimNeighboursResult.status``
+    directly (``claim_neighbours.find_neighbours``, e.g. via the CLI in
+    C4) — this function never collapses that distinction, it just never
+    routes it to stderr at claim time.
+
+    One line per neighbour, register-conforming: WHAT HAPPENED (a live
+    peer session, its artifact, the overlapping paths) stated once, no
+    repetition, no reassurance, no apology, no override key.
+    """
+    if result.status != claim_neighbours.RESOLVED or not result.neighbours:
+        return None
+    lines = []
+    for neighbour in result.neighbours:
+        artifact = neighbour.artifact_path or "no claimed artifact on record"
+        paths = ", ".join(neighbour.overlapping_paths) or "(no path detail)"
+        lines.append(
+            f"cs_claim_{class_}: {basename} overlaps session "
+            f"{neighbour.session_id}'s {artifact} on {paths} — reconcile if "
+            "you're both editing"
+        )
+    return "\n".join(lines)
+
+
+def _report_claim_neighbours(class_: str, basename: str, cwd: Optional[str]) -> None:
+    """Advisory-only (AC4): fire ``claim_neighbours.find_neighbours`` for the
+    artifact ``claim_artifact`` just successfully claimed, and print the
+    result to stderr. NEVER raises and NEVER returns a value a caller could
+    branch on — this is a side effect, not a decision, so there is nothing
+    here for a future edit to accidentally gate on.
+
+    Every failure mode degrades to no report: an unsupported claim class
+    (``_CLAIM_REPORT_PATH_FMT`` has no entry — memo, or a future class this
+    module hasn't been taught), a ``find_neighbours`` call that itself
+    raises (it shouldn't, per its own never-raises contract, but this
+    function does not trust that contract with the caller's successful
+    claim), or a formatting/print failure. Mirrors ``ceremony.scoped_git_
+    commit._disclose_peer_claims``'s own advisory-reporting shape one file
+    over (see this module's docstring) — a broad ``except Exception`` here
+    is deliberate, not a lint violation to narrow later.
+    """
+    try:
+        path_fmt = _CLAIM_REPORT_PATH_FMT.get(class_)
+        if path_fmt is None:
+            return
+        artifact_path = path_fmt(basename)
+        result = claim_neighbours.find_neighbours(artifact_path, cwd=cwd)
+        message = _format_claim_neighbour_report(class_, basename, result)
+        if message:
+            print(message, file=sys.stderr)
+    except Exception:  # noqa: BLE001 -- advisory-only, must never fail the claim
+        return
+
+
 def claim_artifact(
     class_: str,
     basename: str,
@@ -552,7 +651,9 @@ def claim_artifact(
     written into the cwd session's ``.git`` by session-init, never the baton).
 
     On success: atomic ``os.mkdir`` then write pid/session_id/claimed_at inside
-    the claim dir.
+    the claim dir. Every success path (fresh claim, plan-class re-entrant
+    self-claim, stale takeover) then fires ``_report_claim_neighbours``
+    (C2, module docstring) — advisory-only, never affects this return value.
 
     On EEXIST — liveness is evaluated against the HOLDER (the claim dir's OWN
     metadata via ``liveness.claim_holder_live``), NEVER the caller:
@@ -625,6 +726,7 @@ def claim_artifact(
         created = False
     if created:
         _write_claim_meta(claim_dir, sid, stage)
+        _report_claim_neighbours(class_, basename, cwd)
         return True
 
     # ---- EEXIST — inspect the existing claim (holder's OWN metadata) ----
@@ -633,6 +735,7 @@ def claim_artifact(
 
     # Re-entrant self-claim (PLAN CLASS ONLY) — BEFORE the liveness branch.
     if class_ == "plan" and liveness.claim_held_by_me(str(claim_dir), sid, cwd):
+        _report_claim_neighbours(class_, basename, cwd)
         return True
 
     lease_expired = brief_lease_expired(claim_dir)
@@ -692,6 +795,7 @@ def claim_artifact(
         )
         return False
     _write_claim_meta(claim_dir, sid, stage)
+    _report_claim_neighbours(class_, basename, cwd)
     return True
 
 

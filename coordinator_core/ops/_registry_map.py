@@ -34,11 +34,21 @@ from typing import Dict
 # __init__.py for the order-dependent drift-guard failure that shape produces.
 OP_MODULE_MAP: Dict[str, str] = {
     "ping":                                   "coordinator_core.ops.ping",
-    "coverage.gate":                          "coordinator_core.ops.coverage_gate",
     "cutover.gate":                           "coordinator_core.ops.cutover_gate",
     "cutover.advance":                        "coordinator_core.ops.cutover_advance",
     "handoff.has_live_children":              "coordinator_core.ops.handoff_children",
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
+    # peer_notice.send / peer_notice.check — same-repo peer-contention notice channel
+    # (see op_scopes.py::_OP_KEY_SCOPE's peer_notice.* entries, both "common_dir"),
+    # each registered by its own
+    # owning module. Registered in _REGISTRY and _OP_KEY_SCOPE/OP_CLASSIFICATION but
+    # absent from this map until C3's three-way reconciliation (docs/plans/
+    # 2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C3) — a real
+    # registry_map.py::OP_MODULE_MAP gap, not a deliberate omission; per this
+    # module's docstring the absence degraded silently to the eager-import
+    # fallback rather than breaking dispatch, which is why it went unnoticed.
+    "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
+    "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "handoff.reconcile_close_terminal":       "coordinator_core.ops.handoff_reconcile_close_terminal",
     "artifact.emit":                          "coordinator_core.ops.artifact_emit",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
@@ -86,7 +96,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "distill.curate_clusters":                "coordinator_core.ops.distill_curate_clusters",
     "memo.fate_backfill":                     "coordinator_core.ops.memo_fate_backfill",
     "updatedocs.gates":                       "coordinator_core.ops.updatedocs_gates",
-    "chain_ancestry_waivers.reap":            "coordinator_core.ops.reap_chain_ancestry_waivers",
     "commit.anchors":                         "coordinator_core.ops.commit_anchors",
     "memo.transition":                        "coordinator_core.ops.memo_transition",
     "handoff.transition":                     "coordinator_core.ops.handoff_transition",
@@ -231,7 +240,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "lessons.reject_orphan_strip_entries":    "coordinator_core.ops.lessons_filter",
     "completion.flip_to_released":            "coordinator_core.ops.completion_ops",
     "install.clone_idempotent":               "coordinator_core.install.clone_sibling_repo",
-    "coverage.halt_on_uncovered":             "coordinator_core.ops.coverage_gate",
     "ceremony.init_anchor_injection_state":   "coordinator_core.ops.init_anchor_injection_state",
     "install.write_shell_rc_guard_block":     "coordinator_core.install.shell_rc_guard",
     "install.wrapper_onto_path":              "coordinator_core.install.wrapper_onto_path",

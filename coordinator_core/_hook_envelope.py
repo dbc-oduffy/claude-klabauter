@@ -50,26 +50,40 @@ Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § D2
 from __future__ import annotations
 
 import contextlib
+import contextvars
 from typing import Iterator
 
-# Instrumentation seam (measurement only, no prose changes): a module-level
+# Instrumentation seam (measurement only, no prose changes): a per-context
 # capture sink, None on the production path. Every prose-carrying builder
 # below calls `_record` immediately before returning; `_record` is a single
-# None-check when no sink is installed, so the guard hot path (spawn-per-call,
-# invocation-budgeted) pays no measurement work. Tests install a sink via
-# `capture_session()` to observe (builder_name, envelope) pairs without
-# altering any builder's return value.
-_capture_sink: list[tuple[str, dict]] | None = None
+# `.get()` + None-check when no sink is installed, so the guard hot path
+# (spawn-per-call, invocation-budgeted) pays no measurement work.
+#
+# `contextvars.ContextVar` rather than a bare module global (C8,
+# docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md):
+# under a warm engine, two `capture_session()` blocks can be in flight at once
+# for unrelated dispatches. A bare global lets the later block's sink silently
+# receive records meant for the earlier one's (the characterization test this
+# fix flips, `coordinator_core/warm/tests/test_process_global_characterization.py`
+# Site 7). Each asyncio Task/thread gets its own copy-on-write `Context`, so
+# concurrent `capture_session()` calls each see and mutate only their own sink;
+# a genuine synchronous nesting within the SAME context still sees the prior
+# sink via `prior = _capture_sink.get()`, unchanged from before. Tests install
+# a sink via `capture_session()`.
+_capture_sink: contextvars.ContextVar[list[tuple[str, dict]] | None] = contextvars.ContextVar(
+    "_hook_envelope_capture_sink", default=None
+)
 
 
 def _record(builder_name: str, envelope: dict) -> None:
     """Append (builder_name, envelope) to the active capture sink, if any.
 
-    No-op on the production path (no sink installed) — a single attribute
-    read and identity check, not measurement work.
+    No-op on the production path (no sink installed) — a single `.get()` and
+    identity check, not measurement work.
     """
-    if _capture_sink is not None:
-        _capture_sink.append((builder_name, envelope))
+    sink = _capture_sink.get()
+    if sink is not None:
+        sink.append((builder_name, envelope))
 
 
 @contextlib.contextmanager
@@ -79,16 +93,16 @@ def capture_session() -> Iterator[list[tuple[str, dict]]]:
     Yields a list that accumulates (builder_name, envelope) pairs for every
     prose-carrying builder call made inside the ``with`` block. Restores the
     prior sink (usually None) on exit, so sessions nest safely and never
-    leak into sibling tests or production calls.
+    leak into sibling tests or production calls — and, under concurrent
+    dispatch, never leak into an unrelated overlapping session either (see
+    the ContextVar docstring above).
     """
-    global _capture_sink
-    prior = _capture_sink
     sink: list[tuple[str, dict]] = []
-    _capture_sink = sink
+    token = _capture_sink.set(sink)
     try:
         yield sink
     finally:
-        _capture_sink = prior
+        _capture_sink.reset(token)
 
 
 #: Provenance marker prefixed to every agent-facing advisory this module emits

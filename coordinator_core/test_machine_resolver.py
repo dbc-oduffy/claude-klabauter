@@ -240,6 +240,23 @@ def test_compute_contributor_caches_spawn_across_calls(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mr.subprocess, "run", _fake_run)
 
+    # ONE spawn lands across both calls: `git config user.email`, cached on
+    # the resolved repo root.
+    #
+    # It was two until 2026-08-16 (chunk C5,
+    # docs/plans/2026-08-16-a-process-per-predicate.md): repo-root resolution
+    # used to spawn `git rev-parse --show-toplevel` on the first call.
+    # `coordinator_core._repo_root_probe` now delegates to
+    # `coordinator_core.git.repo_root.show_toplevel`, which walks the parent
+    # chain for a `.git` entry and spawns only when the walk finds none — so
+    # in a real worktree that spawn is gone entirely rather than merely
+    # memoized. (The earlier 2026-08-16 P2 fix memoized the probe so a cache
+    # HIT would stop re-paying the spawn; walking removes the spawn from the
+    # MISS path too, which is the fix that one was approximating.)
+    #
+    # This assertion counts spawns to prove a cache holds, not to require
+    # that a spawn happen — it drops with the spawn count rather than
+    # pinning it.
     assert mr.compute_contributor() == "cached"
     assert mr.compute_contributor() == "cached"
     assert call_count["n"] == 1
@@ -256,6 +273,13 @@ def test_contributor_live_bypasses_cache_and_observes_live_reality(monkeypatch, 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    # Pin the repo-root resolution so only the email value varies below —
+    # otherwise the stubbed `subprocess.run` fake (which answers every
+    # spawn, including the rev-parse repo-root probe) would resolve a
+    # DIFFERENT cache key each time the stubbed email changes, defeating
+    # the very cache-hit behaviour this test is proving.
+    monkeypatch.setattr(mr, "_resolve_repo_root", lambda: "/fixture/repo")
 
     _stub_git_email(monkeypatch, "stale@example.com\n")
     assert mr.compute_contributor() == "stale"  # populates the cache
@@ -278,6 +302,45 @@ def test_reset_git_user_email_cache_clears_stale_value(monkeypatch, tmp_path):
     _stub_git_email(monkeypatch, "second@example.com\n")
     mr.reset_git_user_email_cache()
     assert mr.compute_contributor() == "second"
+
+
+def test_git_user_email_cache_is_keyed_on_repo_root_not_collided(monkeypatch, tmp_path):
+    """C7: the old ``lru_cache(maxsize=1)`` zero-arg cache was a missing-key
+    COLLISION under a process serving two different repos — the first
+    repo's resolved email leaked into the second repo's resolution. Stub
+    ``_resolve_repo_root`` to return two distinct roots across two calls
+    (simulating a warm process's cwd changing between requests) with two
+    distinct emails; each root must resolve and cache its OWN value, never
+    the other's."""
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    roots = iter(["/repo/one", "/repo/two"])
+    monkeypatch.setattr(mr, "_resolve_repo_root", lambda: next(roots))
+
+    emails = {"/repo/one": "alice@example.com\n", "/repo/two": "bob@example.com\n"}
+
+    def _fake_run(args, **kwargs):
+        cwd = kwargs.get("cwd")
+        return subprocess.CompletedProcess(args, 0, stdout=emails[cwd], stderr="")
+
+    monkeypatch.setattr(mr.subprocess, "run", _fake_run)
+
+    assert mr.compute_contributor() == "alice"
+    assert mr.compute_contributor() == "bob"
+
+
+def test_git_user_email_uncached_passes_cwd_through(monkeypatch):
+    captured = {}
+
+    def _fake_run(args, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return subprocess.CompletedProcess(args, 0, stdout="x@example.com\n", stderr="")
+
+    monkeypatch.setattr(mr.subprocess, "run", _fake_run)
+    mr._git_user_email_uncached(cwd="/some/repo")
+    assert captured["cwd"] == "/some/repo"
 
 
 def test_git_user_email_cache_does_not_memoize_failure(monkeypatch, tmp_path):

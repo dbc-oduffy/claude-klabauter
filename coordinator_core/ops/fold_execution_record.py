@@ -85,6 +85,8 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.git.repo_root import show_toplevel
+
 _PROG = "coordinator-fold-execution-record"
 
 _DATE_PREFIX_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-")
@@ -113,21 +115,9 @@ def _resolve_git_root(plan_path: str) -> str:
     --show-toplevel` from the plan's directory, then a logical (non-symlink-
     resolving) grandparent-of-plan-dir fallback."""
     plan_dir = os.path.dirname(plan_path) or "."
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            ["git", "-C", plan_dir, "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-        if proc.returncode == 0:
-            candidate = proc.stdout.strip()
-            if candidate:
-                return candidate
-    except OSError:
-        pass
+    candidate = show_toplevel(plan_dir)
+    if candidate:
+        return candidate
 
     fallback = os.path.normpath(os.path.join(plan_dir, "..", ".."))
     fallback = os.path.abspath(fallback)

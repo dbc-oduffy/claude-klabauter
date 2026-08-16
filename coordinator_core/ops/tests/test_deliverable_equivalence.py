@@ -138,11 +138,10 @@ def test_known_loser_end_to_end(tmp_path):
     assert canonicalize("dlv-unrelated", equivalence_map) == "dlv-unrelated"
 
 
-def test_memoization_reads_artifact_at_most_once(tmp_path):
-    """load_equivalence_map memoizes per process — a post-first-call edit is not observed.
-
-    Mirrors deliverable_rollup.py's _central_initiatives_dir memoization contract:
-    resolve once, reuse for the process lifetime.
+def test_memoization_reads_artifact_at_most_once_per_mtime(tmp_path):
+    """load_equivalence_map memoizes on (worktree_root, artifact mtime) — repeat
+    calls against an UNCHANGED artifact reuse the memo, but a rewrite (which bumps
+    mtime) busts the entry rather than serving stale pre-rewrite data (C5 P2 fix).
     """
     _write_artifact(
         tmp_path,
@@ -151,14 +150,19 @@ def test_memoization_reads_artifact_at_most_once(tmp_path):
     first = load_equivalence_map(tmp_path)
     assert first == {"dlv-a-old": "dlv-a"}
 
-    # Rewrite the artifact with different contents; the memo must NOT observe this.
+    # A repeat call against the same (root, mtime) reuses the memoized map.
+    repeat = load_equivalence_map(tmp_path)
+    assert repeat == first
+
+    # Rewrite the artifact with different contents; the mtime-keyed memo DOES
+    # observe this — the fix this test guards is exactly that a rewrite must not
+    # keep serving the pre-rewrite map.
     _write_artifact(
         tmp_path,
-        [{"loser": "dlv-b-old", "winner": "dlv-b", "evidence": "second read, unread"}],
+        [{"loser": "dlv-b-old", "winner": "dlv-b", "evidence": "second read, observed"}],
     )
     second = load_equivalence_map(tmp_path)
-    assert second == first
-    assert second == {"dlv-a-old": "dlv-a"}
+    assert second == {"dlv-b-old": "dlv-b"}
 
 
 def test_idempotence_known_loser(tmp_path):
@@ -590,15 +594,22 @@ def test_load_equivalence_map_unaffected_by_ledger_block(tmp_path):
     assert equivalence_map == {"dlv-old": "dlv-new"}
 
 
-def test_deliverable_ledger_memoization_reads_at_most_once(tmp_path):
+def test_deliverable_ledger_memoization_reads_at_most_once_per_mtime(tmp_path):
+    """load_deliverable_ledger memoizes on (worktree_root, artifact mtime) — a
+    repeat call against an unchanged artifact reuses the memo, but a rewrite (which
+    bumps mtime) is observed rather than serving stale pre-rewrite rows (C5 P2 fix).
+    """
     _write_artifact_with_ledger(tmp_path, [], [_well_formed_row(deliverable_id="dlv-first")])
     first = load_deliverable_ledger(tmp_path)
     assert first == [_well_formed_row(deliverable_id="dlv-first")]
 
+    repeat = load_deliverable_ledger(tmp_path)
+    assert repeat == first
+
     _write_artifact_with_ledger(tmp_path, [], [_well_formed_row(deliverable_id="dlv-second")])
     second = load_deliverable_ledger(tmp_path)
 
-    assert second == first
+    assert second == [_well_formed_row(deliverable_id="dlv-second")]
 
 
 def test_reset_deliverable_ledger_cache_forces_reread(tmp_path):

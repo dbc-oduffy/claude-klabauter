@@ -1212,17 +1212,10 @@ def _resolve_receiver_path(receiver_em_id: str) -> tuple[str | None, bool]:
 def _current_repo_root() -> str | None:
     """The git repo root of the cwd this CLI was invoked from — the sender's
     repo. Returns None when cwd is not inside a git repo or git is unavailable."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
+    cc_invoke.ensure_engine_on_path(__file__)
+    from coordinator_core.git.repo_root import show_toplevel
+
+    return show_toplevel()
 
 
 # ---------------------------------------------------------------------------

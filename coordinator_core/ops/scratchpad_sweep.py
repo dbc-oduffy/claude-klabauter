@@ -84,28 +84,66 @@ a live directory is never eligible at any threshold, and its bytes (reported
 as ``0`` because it was never scanned, per the liveness-gated ``_scan_dir``
 call above) are never treated as "already accounted for" reclaimed space.
 
-Archive-shaped exemption (2026-08-11, EM-directed, size-cut-scoped only): a
-live dry-run surfaced the size-cut pass as already eligible to delete a peer
-repo's scratchpad at age 2.81 days (inside the default 7-day TTL, past the
-1-day size-cut floor) containing a versioned, release-shaped artifact
+Per-file size predicate (2026-08-16, PM-ruled): the size-cut pass above is
+aggregate- and age-keyed — it cannot see the size of an individual file, so a
+multi-GB staging database and a KB-scale scratch note in the same day-age
+cohort are treated identically. Measured on this box 2026-08-16
+(``sweep_scratchpads(reclaim=False)``, 1180 entries, 22.79 GB, 4.4 s): the
+aggregate-bytes lever already runs to its hard floor and still misses
+target (``size_cut`` reported ``met: false``, ``shortfall_bytes: ~8.0 GB``),
+so a per-file predicate is the next lever, not an optional refinement. Fix:
+a directory whose single largest regular file is ``>= size_cut_large_file_bytes``
+(default 268435456 = 256 MB) is judged against ``size_cut_large_file_floor_days``
+(default 0.5) instead of ``size_cut_floor_days`` — an exact ``age_days``
+comparison, never day-rounded, since such a directory is judged individually
+rather than as part of a same-day cohort of ordinary small files. A
+directory whose largest file is under the threshold is unaffected: it still
+needs the whole day cohort to clear the ordinary ``floor_days`` before it is
+ever eligible. The largest-file value is captured in the SAME ``_scan_dir``
+walk that already sizes every entry and tracks ``archive_bytes`` — one more
+``max()`` in a loop that already runs, never a second traversal. Both
+thresholds are grounded in that 2026-08-16 dry-run, not guessed: 256 MB sits
+above every ordinary scratch artifact measured and below all fifty of the
+large ones the driving memo identified.
+
+Archive-shaped exemption (2026-08-11, EM-directed, size-cut-scoped only —
+REVERSED 2026-08-16, PM-ruled; see below): a live dry-run surfaced the
+size-cut pass as already eligible to delete a peer repo's scratchpad at age
+2.81 days (inside the default 7-day TTL, past the 1-day size-cut floor)
+containing a versioned, release-shaped artifact
 (`pub58/engine-structural-ue5.8-v0.6.0.tar.zst`, 843 MB) — a sibling EM
 flagged the shape: a versioned archive under a scratchpad is what will
 eventually cost someone a rebuild, and the reclaim being *silent* about it is
-the actual defect, not the reclaim itself. The 1-day size-cut floor is far
-too short a window for a release-shaped artifact someone may still need.
-Fix: a directory carrying one or more archive-shaped files (``_ARCHIVE_SHAPE_RE``
-— ``*.tar``, ``*.tar.*`` incl. ``.tar.zst``/``.tar.gz``/``.tar.bz2``/``.tar.xz``,
-``*.tgz``, ``*.zip``, ``*.7z``, ``*.rar``, ``*.zst``; case-insensitive) is
-exempt from the SIZE-CUT pass only — it keeps verdict "too-recent" and is
-never selected into a pruned cohort, regardless of target/floor.
-NEGATIVE-SPEC: NEVER exempt an archive-shaped file from the TTL gate — the
-7-day TTL boundary is unchanged and still reclaims such a directory once it
-ages past ``ttl_days``; the exemption is size-cut-scoped BY DESIGN, not a
-general "never touch archives" rule. To keep TTL reclamation from silently
-repeating the same failure mode, the TTL gate prints a named stderr line
-(session id, archive count, byte total) whenever it reclaims or previews
-reclaiming a directory that carries an archive-shaped file — "no silent
-reclaim" is the property this fix exists to restore.
+the actual defect, not the reclaim itself. The 1-day size-cut floor was far
+too short a window for a release-shaped artifact someone may still need. The
+2026-08-11 fix exempted a directory carrying one or more archive-shaped files
+(``_ARCHIVE_SHAPE_RE`` — ``*.tar``, ``*.tar.*`` incl.
+``.tar.zst``/``.tar.gz``/``.tar.bz2``/``.tar.xz``, ``*.tgz``, ``*.zip``,
+``*.7z``, ``*.rar``, ``*.zst``; case-insensitive) from the SIZE-CUT pass
+only — it kept verdict "too-recent" and was never selected into a pruned
+cohort, regardless of target/floor.
+
+REVERSAL (2026-08-16, PM ruling): carrying an archive-shaped file no longer
+confers size-cut immunity. An archive-carrying "too-recent" entry is now
+judged by the exact same ordinary/large-file rules as any other entry — see
+"Per-file size predicate" above; a large archive (``>= size_cut_large_file_bytes``)
+is in fact the canonical case the per-file predicate exists to catch sooner.
+``_ARCHIVE_SHAPE_RE``, the ``archives``/``archive_count``/``archive_bytes``
+scan fields, and the ``archives_seen`` report key all SURVIVE this reversal —
+they were built for VISIBILITY, not for the exemption itself, and that
+visibility is what made the reversal safe to make. The TTL gate's named
+stderr "no silent reclaim" line (see below) also survives and is now the
+archive class's SOLE protection: nothing about an archive-shaped file changes
+when or whether it is reclaimed, only whether the reclaim is loud about it.
+NEGATIVE-SPEC: an archive-shaped file confers NO exemption anywhere in this
+module, TTL or size-cut — the 7-day TTL boundary was always unaffected by the
+now-reversed exemption, and the size-cut pass no longer is either. To keep
+reclamation from silently repeating the shape of failure the 2026-08-11 fix
+was responding to, the TTL gate still prints a named stderr line (session id,
+archive count, byte total) whenever it reclaims or previews reclaiming a
+directory that carries an archive-shaped file — "no silent reclaim" is the
+property this line exists to preserve, deliberately kept even though the
+exemption it was built alongside did not survive.
 
 Negative-spec:
     - NEVER descend into a non-``claude`` child of the temp root (pytest-of-*,
@@ -122,8 +160,14 @@ Negative-spec:
       failure against that directory's entry and continue.
     - NEVER delete anything when ``reclaim`` is not explicitly ``true`` —
       dry-run is the default, not an opt-out.
-    - NEVER exempt an archive-shaped file from the TTL gate — see
-      "Archive-shaped exemption" above; the exemption is size-cut-scoped only.
+    - NEVER exempt an archive-shaped file from the TTL gate — unaffected by
+      the "Archive-shaped exemption" reversal above; the TTL gate never
+      exempted archives before it and does not now.
+    - NEVER exempt an archive-shaped file from the size-cut pass either — see
+      "Archive-shaped exemption" above: this WAS the exemption (2026-08-11)
+      and was reversed by PM ruling 2026-08-16. The stderr "no silent
+      reclaim" line is now the archive class's sole protection; do not read
+      its survival as evidence the exemption itself survived.
 """
 
 from __future__ import annotations
@@ -166,6 +210,14 @@ _SECONDS_PER_DAY = 86400.0
 _DEFAULT_SIZE_CUT_TARGET_BYTES = 500 * 1024 * 1024
 _DEFAULT_SIZE_CUT_FLOOR_DAYS = 1.0
 
+#: Per-file size predicate defaults — see module docstring's "Per-file size
+#: predicate" note. Grounded in the 2026-08-16 dry-run (1180 entries, 22.79
+#: GB, 4.4 s): 256 MB sits above every ordinary scratch artifact measured and
+#: below all fifty of the large ones the source memo identified. Do not tune
+#: past that without a fresh measurement.
+_DEFAULT_SIZE_CUT_LARGE_FILE_BYTES = 268435456
+_DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS = 0.5
+
 # Per-directory error strings are capped so one catastrophically broken
 # directory (thousands of unreadable children) cannot blow up the report.
 _MAX_ERRORS_PER_DIR = 20
@@ -201,6 +253,7 @@ class _ScanResult(NamedTuple):
     archives: List[dict]
     archive_count: int
     archive_bytes: int
+    largest_file_bytes: int
 
 
 def _is_session_dirname(name: str) -> bool:
@@ -211,11 +264,11 @@ def _scan_dir(path: Path) -> _ScanResult:
     """Recursively size *path* and find its newest-content mtime.
 
     Returns a ``_ScanResult(total_bytes, newest_mtime_epoch_or_None, errors,
-    archives, archive_count, archive_bytes)``. ``errors`` is a capped list of
-    human-readable per-entry failures (permission denied, a file removed
-    mid-walk, etc.) — never raises. ``newest_mtime`` falls back to the
-    directory's own mtime if it contains no readable regular files at all
-    (mirrors ``coordinator_core.session.liveness._dir_recency_fallback_epoch``'s
+    archives, archive_count, archive_bytes, largest_file_bytes)``. ``errors``
+    is a capped list of human-readable per-entry failures (permission denied,
+    a file removed mid-walk, etc.) — never raises. ``newest_mtime`` falls back
+    to the directory's own mtime if it contains no readable regular files at
+    all (mirrors ``coordinator_core.session.liveness._dir_recency_fallback_epoch``'s
     established pattern for "no content signal yet" — never reads as
     infinitely old or infinitely new).
 
@@ -225,6 +278,11 @@ def _scan_dir(path: Path) -> _ScanResult:
     TRUE totals across every archive-shaped file this walk saw, accurate even
     once ``archives`` itself has been truncated — a caller must never under-
     report the byte total it judges risk off just because the list capped.
+
+    ``largest_file_bytes`` is the size of the single largest regular file
+    seen anywhere under ``path`` — one more ``max()`` folded into this same
+    walk (module docstring's "Per-file size predicate" note), never a second
+    traversal. It is the basis for ``_apply_size_cut``'s per-file floor.
     """
     total_bytes = 0
     newest: Optional[float] = None
@@ -232,6 +290,7 @@ def _scan_dir(path: Path) -> _ScanResult:
     archives: List[dict] = []
     archive_count = 0
     archive_bytes = 0
+    largest_file_bytes = 0
 
     def _record_error(msg: str) -> None:
         if len(errors) < _MAX_ERRORS_PER_DIR:
@@ -260,6 +319,8 @@ def _scan_dir(path: Path) -> _ScanResult:
             total_bytes += stat.st_size
             if newest is None or stat.st_mtime > newest:
                 newest = stat.st_mtime
+            if stat.st_size > largest_file_bytes:
+                largest_file_bytes = stat.st_size
             if _ARCHIVE_SHAPE_RE.search(entry.name):
                 archive_count += 1
                 archive_bytes += stat.st_size
@@ -275,7 +336,9 @@ def _scan_dir(path: Path) -> _ScanResult:
             _record_error(f"stat failed for {path}: {exc}")
             newest = None
 
-    return _ScanResult(total_bytes, newest, errors, archives, archive_count, archive_bytes)
+    return _ScanResult(
+        total_bytes, newest, errors, archives, archive_count, archive_bytes, largest_file_bytes
+    )
 
 
 def _enumerate_session_dirs(slug_dir: Path) -> List[Path]:
@@ -361,26 +424,35 @@ def _apply_size_cut(
     reclaim: bool,
     target_bytes: int,
     floor_days: float,
+    large_file_bytes: int = _DEFAULT_SIZE_CUT_LARGE_FILE_BYTES,
+    large_file_floor_days: float = _DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS,
 ) -> dict:
     """Second, additive pass over the ``entries`` the TTL loop already
     produced — prunes whole day-age cohorts oldest-first, from the TTL
     boundary down to ``floor_days``, if total scratch still exceeds
     ``target_bytes`` after the TTL gate's own action. Never re-walks disk —
-    reuses the ``bytes``/``age_days`` already gathered by ``_scan_dir`` at
-    the caller's liveness-gated eligibility branch (module docstring's
-    "Reuse the existing single walk" constraint).
+    reuses the ``bytes``/``age_days``/``largest_file_bytes`` already gathered
+    by ``_scan_dir`` at the caller's liveness-gated eligibility branch
+    (module docstring's "Reuse the existing single walk" constraint).
 
     Only entries with verdict "too-recent" are eligible candidates (dead,
     sized, aged inside ``ttl_days`` — i.e. NOT already removed/previewed by
     the TTL gate, whose own "reclaimable"/"reclaimed" bytes are already
     excluded from the post-TTL remaining total below). Live / self /
     undeterminable / no-scratchpad entries are never eligible at any
-    threshold and are never mutated by this pass. A "too-recent" entry
-    carrying one or more archive-shaped files (``archive_count > 0``) is ALSO
-    never an eligible candidate — see module docstring's "Archive-shaped
-    exemption" note — and instead gets ``size_cut_exempt: True`` plus a
-    ``size_cut_exempt_reason``; every other entry gets ``size_cut_exempt:
-    False`` so a reader never hits a missing key.
+    threshold and are never mutated by this pass.
+
+    Per-file size predicate (module docstring's "Per-file size predicate"
+    note): an entry whose ``largest_file_bytes >= large_file_bytes`` is
+    judged against ``large_file_floor_days`` instead of ``floor_days`` — an
+    exact ``age_days`` comparison, never day-rounded, since such an entry is
+    judged individually rather than as part of a same-day cohort of ordinary
+    small files. A directory whose largest file is under the threshold is
+    unaffected: it still needs the whole day cohort to clear the ordinary
+    ``floor_days`` before it is ever eligible.
+
+    Every entry gets ``size_cut_exempt``/``size_cut_exempt_reason`` keys
+    (``False``/``None`` by default) so a reader never hits a missing key.
 
     Mutates matching ``entries`` in place (verdict/action/bytes-consumed
     bookkeeping identical in shape to the TTL loop's own reclaim branch) and
@@ -445,34 +517,36 @@ def _apply_size_cut(
         return report
 
     ttl_floor = int(math.floor(ttl_days))
-    # Lowest eligible whole-day cohort: ceil(floor_days), not floor(floor_days)
-    # — a fractional floor_days (e.g. 1.5) must never make the day==1 cohort
-    # (ages [1.0, 2.0)) eligible, since ages 1.0-1.499 are strictly younger
-    # than the stated floor — matches the module's own hard invariant,
-    # "nothing younger than size_cut_floor_days is ever eligible".
+    # Lowest eligible whole-day cohort for an ORDINARY (non-large-file) entry:
+    # ceil(floor_days), not floor(floor_days) — a fractional floor_days (e.g.
+    # 1.5) must never make the day==1 cohort (ages [1.0, 2.0)) eligible,
+    # since ages 1.0-1.499 are strictly younger than the stated floor —
+    # matches the module's own hard invariant, "nothing younger than
+    # size_cut_floor_days is ever eligible".
     floor_int = int(math.ceil(floor_days))
 
+    # A large-file entry is judged individually via an exact age_days
+    # comparison (see docstring above), so its hard floor is enforced by
+    # that comparison, not by day-rounding — the day-walk's lower bound only
+    # needs to physically REACH its day, hence floor() here rather than the
+    # conservative ceil() used for floor_int above.
+    large_file_floor_day_bound = int(math.floor(large_file_floor_days))
+    lowest_day = min(floor_int, large_file_floor_day_bound)
+
     # Group eligible ("too-recent") entries by whole day-age cohort. An
-    # entry carrying an archive-shaped file is excluded from this grouping
-    # entirely — it is never an eligible size-cut candidate at any threshold
-    # (module docstring's "Archive-shaped exemption" note) — rather than
-    # excluded only when its cohort happens to be visited by the day-walk
-    # below, so it stays exempt even on a target/floor combination that would
-    # otherwise never reach its day.
+    # archive-shaped file confers NO exemption here — the 2026-08-11
+    # exemption was reversed by PM ruling 2026-08-16 (module docstring's
+    # "Archive-shaped exemption" note); an archive-carrying entry is judged
+    # by the exact same ordinary/large-file rules as any other entry.
     cohort_entries: dict = {}
     for e in entries:
         if e["verdict"] != "too-recent" or e["age_days"] is None:
             continue
-        if e.get("archive_count", 0) > 0:
-            e["size_cut_exempt"] = True
-            e["size_cut_exempt_reason"] = (
-                f"{e['archive_count']} archive-shaped file(s), {e['archive_bytes']} "
-                "bytes — exempt from the size-cut pass (TTL gate still applies)"
-            )
-            report["archive_exempt_entries"] += 1
-            report["archive_exempt_bytes"] += e["bytes"]
-            continue
         day = int(math.floor(e["age_days"]))
+        if day < lowest_day:
+            # Younger than even the large-file floor extension below —
+            # never eligible at any threshold this pass offers.
+            continue
         cohort_entries.setdefault(day, []).append(e)
 
     floor_reached = False
@@ -481,13 +555,45 @@ def _apply_size_cut(
     # and must remain visitable — starting one cohort short permanently
     # exempts it from ever being size-cut. For a whole-number ttl_days this
     # cohort is always empty (age >= ttl_days is already "reclaimable"), so
-    # the extra iteration is a free no-op.
-    for day in range(ttl_floor, floor_int - 1, -1):
+    # the extra iteration is a free no-op. The walk now runs down to
+    # lowest_day, not floor_int - 1, so a large-file entry below the
+    # ordinary floor still gets visited.
+    for day in range(ttl_floor, lowest_day - 1, -1):
         if remaining <= target_bytes:
             break
 
         day_entries = cohort_entries.get(day, [])
-        cohort_bytes = sum(e["bytes"] for e in day_entries)
+        if day >= floor_int:
+            # At or above the ordinary floor: the whole cohort is eligible,
+            # exactly as before the per-file predicate existed — EXCEPT a
+            # large-file entry still must clear its own large_file_floor_days
+            # (Review: coordinator:code-reviewer P2 — when large_file_floor_days
+            # exceeds floor_days, a large-file entry could otherwise become
+            # eligible here before reaching its own stated floor).
+            eligible_entries = [
+                e
+                for e in day_entries
+                if e.get("largest_file_bytes", 0) < large_file_bytes
+                or e["age_days"] >= large_file_floor_days
+            ]
+        else:
+            # Below the ordinary floor — reachable only via the large-file
+            # extension. An ordinary sibling in the same day cohort is left
+            # untouched (AC2: "nothing changes for a directory whose largest
+            # file is under the threshold"); only entries that themselves
+            # carry a large file AND have reached large_file_floor_days are
+            # eligible.
+            eligible_entries = [
+                e
+                for e in day_entries
+                if e.get("largest_file_bytes", 0) >= large_file_bytes
+                and e["age_days"] >= large_file_floor_days
+            ]
+
+        if not eligible_entries:
+            continue
+
+        cohort_bytes = sum(e["bytes"] for e in eligible_entries)
         cohort_record = {"age_days": day, "bytes": cohort_bytes, "pruned": False}
         report["cohorts"].append(cohort_record)
 
@@ -497,7 +603,7 @@ def _apply_size_cut(
         # not be subtracted from remaining, or a partial cohort-delete
         # failure under-counts real remaining usage.
         cohort_bytes_settled = 0
-        for e in day_entries:
+        for e in eligible_entries:
             if reclaim:
                 try:
                     shutil.rmtree(Path(e["path"]))
@@ -590,6 +696,8 @@ def sweep_scratchpads(
     slug_to_root_map: Optional[dict] = None,
     size_cut_target_bytes: int = _DEFAULT_SIZE_CUT_TARGET_BYTES,
     size_cut_floor_days: float = _DEFAULT_SIZE_CUT_FLOOR_DAYS,
+    size_cut_large_file_bytes: int = _DEFAULT_SIZE_CUT_LARGE_FILE_BYTES,
+    size_cut_large_file_floor_days: float = _DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS,
 ) -> dict:
     """Enumerate + (optionally) reclaim dead scratchpad directories.
 
@@ -608,13 +716,18 @@ def sweep_scratchpads(
     unit tests never depend on this machine's actual ``~/.claude/projects/``
     or registered repos.
 
+    ``size_cut_large_file_bytes`` (default 268435456 = 256 MB) and
+    ``size_cut_large_file_floor_days`` (default 0.5) are the per-file size
+    predicate's threshold and floor — see module docstring's "Per-file size
+    predicate" note and ``_apply_size_cut``'s docstring.
+
     Returns a report dict:
         {
           "reclaim": bool, "ttl_days": float, "temp_root": str,
           "self_session_id": str,
           "entries": [ {project_slug, session_id, path, verdict, live,
                          age_days, bytes, action, error, archives,
-                         archive_count, archive_bytes}, ... ],
+                         archive_count, archive_bytes, largest_file_bytes}, ... ],
           "counts": {verdict_name: count, ...},
           "bytes_reclaimable": int,  # sum over verdict == "reclaimable"
           "bytes_reclaimed": int,    # sum over verdict == "reclaimed"
@@ -695,6 +808,7 @@ def sweep_scratchpads(
                 "archives": [],
                 "archive_count": 0,
                 "archive_bytes": 0,
+                "largest_file_bytes": 0,
             }
 
             try:
@@ -750,6 +864,7 @@ def sweep_scratchpads(
                 entry["archives"] = scan_result.archives
                 entry["archive_count"] = scan_result.archive_count
                 entry["archive_bytes"] = scan_result.archive_bytes
+                entry["largest_file_bytes"] = scan_result.largest_file_bytes
                 if scan_result.errors:
                     entry["error"] = "; ".join(scan_result.errors)
 
@@ -805,6 +920,8 @@ def sweep_scratchpads(
         reclaim=reclaim,
         target_bytes=size_cut_target_bytes,
         floor_days=size_cut_floor_days,
+        large_file_bytes=size_cut_large_file_bytes,
+        large_file_floor_days=size_cut_large_file_floor_days,
     )
     # Recompute counts from the (possibly size-cut-mutated) entries — the
     # per-entry verdict mutations above are the source of truth.
@@ -860,6 +977,15 @@ def _handler(params: dict, repo_root=None) -> dict:
             500 MB. See module docstring's "Size-cut pass" note.
         size_cut_floor_days: number — hard age floor for the size cut, in
             days; default 1. Nothing younger is ever eligible.
+        size_cut_large_file_bytes: number — a directory carrying a single
+            regular file at or above this size is judged by
+            size_cut_large_file_floor_days instead of size_cut_floor_days;
+            default 268435456 (256 MB). See module docstring's "Per-file
+            size predicate" note.
+        size_cut_large_file_floor_days: number — hard age floor for a
+            large-file directory (see size_cut_large_file_bytes above), in
+            days; default 0.5. Nothing younger is ever eligible, even a
+            directory carrying a very large file.
 
     Scope: ``none`` — this op reads/writes only the OS temp root, never
     coordinator substrate or a git repo; ``repo_root`` is accepted for
@@ -908,6 +1034,31 @@ def _handler(params: dict, repo_root=None) -> dict:
             "error": "scratchpad.sweep: size_cut_floor_days must be a non-negative number"
         }
 
+    size_cut_large_file_bytes = params.get(
+        "size_cut_large_file_bytes", _DEFAULT_SIZE_CUT_LARGE_FILE_BYTES
+    )
+    if (
+        isinstance(size_cut_large_file_bytes, bool)
+        or not isinstance(size_cut_large_file_bytes, (int, float))
+        or size_cut_large_file_bytes < 0
+    ):
+        return {
+            "error": "scratchpad.sweep: size_cut_large_file_bytes must be a non-negative number"
+        }
+
+    size_cut_large_file_floor_days = params.get(
+        "size_cut_large_file_floor_days", _DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS
+    )
+    if (
+        isinstance(size_cut_large_file_floor_days, bool)
+        or not isinstance(size_cut_large_file_floor_days, (int, float))
+        or size_cut_large_file_floor_days < 0
+    ):
+        return {
+            "error": "scratchpad.sweep: size_cut_large_file_floor_days must be a "
+            "non-negative number"
+        }
+
     return sweep_scratchpads(
         temp_root=temp_root,
         project_slugs=project_slugs,
@@ -915,4 +1066,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         reclaim=reclaim,
         size_cut_target_bytes=int(size_cut_target_bytes),
         size_cut_floor_days=float(size_cut_floor_days),
+        size_cut_large_file_bytes=int(size_cut_large_file_bytes),
+        size_cut_large_file_floor_days=float(size_cut_large_file_floor_days),
     )

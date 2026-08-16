@@ -79,14 +79,13 @@ Negative-spec:
 from __future__ import annotations
 
 import re
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from shutil import which
 
 import yaml
+
+from coordinator_core.git.repo_root import show_toplevel
 
 _EXIT_INTERVIEW_QUESTION_RE = re.compile(
     r"-\s*What did you have to work out that the brief could have told you\?"
@@ -123,23 +122,7 @@ _SIMILARITY_THRESHOLD = 0.5
 def _resolve_root(explicit_root: str | None) -> str | None:
     if explicit_root:
         return explicit_root
-    if which("git") is None:
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _resolve_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    top = result.stdout.strip()
-    return top or None
+    return show_toplevel()
 
 
 def _parse_frontmatter(text: str) -> dict:

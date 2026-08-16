@@ -74,11 +74,34 @@ def _load_baseline_keys() -> set[tuple]:
     return keys
 
 
-def _format_new_keys(new_keys: set[tuple]) -> str:
+def _rename_candidates(new_key: tuple, removed_keys: set[tuple]) -> list[tuple]:
+    """Removed-baseline keys sharing `new_key`'s kind and trailing token
+    (everything but the `(module, directive_id, cli)` identity) -- a
+    non-empty result means a baseline entry that flagged the SAME aspect
+    vanished in the same run a differently-identified one appeared, the
+    signature of a pure rename (module/directive-id/cli renamed, no
+    behavior change) rather than genuine new skew. Heuristic, not proof --
+    surfaced as a hint for the reader to confirm, never used to suppress
+    the assertion itself."""
+    kind, _module, _directive_id, _cli, *token = new_key
+    return [rk for rk in removed_keys if rk[0] == kind and rk[4:] == tuple(token)]
+
+
+def _format_new_keys(new_keys: set[tuple], removed_keys: set[tuple]) -> str:
     lines = []
-    for kind, module, directive_id, cli, *token in sorted(new_keys):
+    for key in sorted(new_keys):
+        kind, module, directive_id, cli, *token = key
         token_txt = f" token={token[0]!r}" if token else ""
-        lines.append(f"  [{kind}] module={module} directive_id={directive_id!r} cli={cli!r}{token_txt}")
+        line = f"  [{kind}] module={module} directive_id={directive_id!r} cli={cli!r}{token_txt}"
+        candidates = _rename_candidates(key, removed_keys)
+        if candidates:
+            old = candidates[0]
+            line += (
+                f"  -- probable rename: baseline had the same [{kind}]"
+                f"{token_txt} under module={old[1]!r} directive_id={old[2]!r} "
+                f"cli={old[3]!r}; confirm before treating as new skew"
+            )
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -90,15 +113,20 @@ def test_live_argv_parity_report_is_subset_of_baseline():
 
     baseline_keys = _load_baseline_keys()
     new_keys = live_keys - baseline_keys
+    removed_keys = baseline_keys - live_keys
 
     assert not new_keys, (
         "argv parity regressed: the following pairing(s) are flagged now but "
         "are NOT in the committed baseline "
-        f"({_BASELINE_PATH.name}):\n{_format_new_keys(new_keys)}\n"
-        "If this is a genuine new skew, fix the emitting module or the target "
-        "CLI's parser. If it is a deliberate, reviewed baseline update, "
-        "regenerate the file with: python -m "
-        "coordinator_core.tests.test_engine_cli_argv_parity --write-baseline"
+        f"({_BASELINE_PATH.name}):\n{_format_new_keys(new_keys, removed_keys)}\n"
+        "A line marked 'probable rename' is a heuristic match against a "
+        "baseline entry for the same flagged aspect that disappeared in the "
+        "same run -- confirm it really is a rename before assuming there is "
+        "no genuine new skew. If this is a genuine new skew, fix the "
+        "emitting module or the target CLI's parser. If it is a deliberate, "
+        "reviewed baseline update (rename or otherwise), regenerate the "
+        "file with: python -m coordinator_core.tests.test_engine_cli_argv_parity "
+        "--write-baseline"
     )
 
 

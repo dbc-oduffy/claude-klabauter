@@ -143,7 +143,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
-    COVERAGE_GATE as _HL_COVERAGE_GATE,
     ROADMAP_CALLOUT as _HL_ROADMAP_CALLOUT,
     stamp_liveness,
 )
@@ -160,7 +159,14 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 # this module calls them in-process; the detached CLIs spawned by
 # `fire_archive_sweeps_detached` register them in their OWN freshly-spawned process via
 # `coordinator_core/ops/__init__.py`'s central registration list instead.
-from coordinator_core.ops import coverage_gate as _coverage_gate_mod  # noqa: F401
+#
+# coverage.gate (coordinator_core.ops.coverage_gate) is deliberately NOT
+# pre-imported here any more (K-001, state/kill-ledger.md): the close path no
+# longer calls this op in-process -- see the retired `run_coverage_gate`
+# below this module's own history. The op still exists as mint-only
+# plumbing reachable from `cmd_brightline_gate`
+# (coordinator/bin/wsc-coverage-gate-runner.py), which imports and registers
+# it in its own process.
 from coordinator_core.ops import review_trail_write as _review_trail_write_mod  # noqa: F401
 from coordinator_core.ops.review_trail_write import ForeignSessionRangeRefused
 
@@ -169,7 +175,6 @@ _LOG = logging.getLogger(__name__)
 TailResult = Dict[str, Any]
 
 # Public op keys this module wires in-process (AC11).
-OP_COVERAGE_GATE = "coverage.gate"
 OP_REVIEW_TRAIL = "review_trail.write"
 
 # Results-dict label for the single detached-fire entry (C2) that replaced the three
@@ -585,67 +590,14 @@ def fire_tracker_and_roadmap_detached(
 
 
 # ---------------------------------------------------------------------------
-# coverage.gate -- single-call, in-process, best-effort
-# ---------------------------------------------------------------------------
-
-
-async def run_coverage_gate(
-    common_dir: Path,
-    *,
-    closing_session_id: str = "",
-    range_arg: str = "",
-    from_handoff: str = "",
-    scope_paths: Optional[List[str]] = None,
-) -> TailResult:
-    """Wire ``coverage.gate`` in-process, best-effort.
-
-    ``COVERED``/``UNCOVERED`` verdicts land in ``acted[]`` (tagged with the verdict
-    token); ``INDETERMINATE`` (``exit_code == 2``) lands in ``failed[]`` -- the ceremony
-    continues either way, this is D-node evidence only, never a hard gate.
-    """
-    handler = get_op_handler(OP_COVERAGE_GATE)
-    if handler is None:
-        return _fail(OP_COVERAGE_GATE, f"{OP_COVERAGE_GATE} not registered")
-
-    params: Dict[str, Any] = {"closing_session_id": closing_session_id}
-    if range_arg:
-        params["range"] = range_arg
-    if from_handoff:
-        params["from_handoff"] = from_handoff
-    if scope_paths:
-        params["scope_paths"] = scope_paths
-
-    try:
-        result = await handler(params, repo_root=common_dir)
-        ec = result.get("exit_code", 1)
-        verdict_line = result.get("verdict_line", "")
-        if ec == 0:
-            token = (
-                verdict_line.split("VERDICT=")[-1].split()[0]
-                if "VERDICT=" in verdict_line
-                else verdict_line
-            )
-            # Success-path-only liveness stamp (COVERAGE_GATE): exit_code == 0
-            # means the gate produced a real COVERED/UNCOVERED verdict. Stamped
-            # against `main_worktree_root(common_dir)`, NOT `common_dir` itself --
-            # `common_dir` is `.git`-internal (the coverage.gate handler above is
-            # called with `repo_root=common_dir` for ITS own purposes, but the
-            # liveness stamp must land at the worktree root, which is the only
-            # path `housekeeping_liveness.liveness_path`'s predicate accepts and
-            # the only path `orientation/regenerate_cache.py`'s reader ever reads).
-            # INDETERMINATE (ec == 2) and any other error fall through to the
-            # _fail(...) branches below and do NOT stamp.
-            stamp_liveness(str(main_worktree_root(common_dir)), _HL_COVERAGE_GATE)
-            return {"acted": [f"{OP_COVERAGE_GATE}:{token}"], "skipped": [], "failed": []}
-        if ec == 2:
-            notes = "; ".join(str(n) for n in result.get("notes", []))
-            return _fail(OP_COVERAGE_GATE, f"INDETERMINATE -- {notes[:200]}")
-        return _fail(OP_COVERAGE_GATE, f"error exit_code={ec}")
-    except Exception as exc:  # noqa: BLE001 -- best-effort tail op, never raises
-        _LOG.warning("tail_ops: coverage.gate raised %s: %s", type(exc).__name__, exc)
-        return _fail(OP_COVERAGE_GATE, f"{type(exc).__name__} -- {str(exc)[:160]}")
-
-
+# coverage.gate's ceremony-close wiring was removed here (K-001,
+# state/kill-ledger.md): the DAG fixpoint walk it drove cost ~150-180s per
+# close, one git subprocess per chain commit. `coordinator_core.coverage.
+# run_coverage_gate`, the `coverage.gate` op handler, and
+# `coordinator/bin/review-coverage-gate.py` still exist as mint-only
+# plumbing reachable from `cmd_brightline_gate`
+# (coordinator/bin/wsc-coverage-gate-runner.py) -- see that op module's own
+# docstring for the live kill-candidate note.
 # ---------------------------------------------------------------------------
 # review_trail.write -- single-call, in-process, best-effort, metadata-gated
 # ---------------------------------------------------------------------------

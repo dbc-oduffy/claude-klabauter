@@ -106,20 +106,26 @@ def git_common_dir(repo_root: Path) -> Path:
     function returns the main worktree's .git directory instead, which is always a
     real directory and safe to mkdir under.
 
-    Uses --path-format=absolute so that git emits an absolute path directly — this
-    avoids the relative-path trap where Path(x).resolve() would resolve against the
-    CURRENT PROCESS working directory instead of the subprocess cwd=repo_root,
-    silently producing a wrong path.
+    Delegates to the `coordinator_core.git.repo_root` seam, which resolves this
+    by a pure-Python upward walk for a `.git` entry plus `git_dir.
+    resolve_git_common_dir` — NO subprocess is spawned when `repo_root` is
+    inside a repository, which is every documented caller. `git rev-parse
+    --git-common-dir` is only reached as a fallback when the walk finds no
+    `.git` entry at all, and that spawn then fails too. Callers on a hot path
+    may treat this as zero-spawn.
 
     Negative-spec:
-      - Do NOT call .resolve() on the returned path — it is already absolute (git
-        guarantees this with --path-format=absolute).
-      - Do NOT omit --path-format=absolute and use .resolve() as a substitute —
-        that resolves relative to the calling process cwd, not the subprocess cwd.
+      - Do NOT call .resolve() on the returned path — the seam guarantees an
+        absolute path, normalizing any relative spawn-fallback result against
+        the same cwd the spawn ran under. A .resolve() here would resolve
+        against the CALLING process cwd, not `repo_root`, silently producing a
+        wrong path.
+      - Do NOT reintroduce a direct `git rev-parse` call here as a
+        "simplification" — the walk is what keeps this off the spawn budget.
 
-    Raises RuntimeError if git fails (e.g. not inside a git repository).
-    Results are cached per repo_root (lru_cache, maxsize=32) — the common dir
-    for a given repo does not change during a process lifetime.
+    Raises RuntimeError if resolution fails (e.g. not inside a git repository).
+    The lru_cache (maxsize=32) is a second-order memo over the seam's own; the
+    common dir for a given repo does not change during a process lifetime.
     """
     common_dir = _repo_root_seam.git_common_dir(str(repo_root))
     if common_dir is None:

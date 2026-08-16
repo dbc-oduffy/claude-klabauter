@@ -88,13 +88,12 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import no_console_creationflags
 
 # Generator-provenance declaration (generator_provenance.py). append_dispositions()
 # appends a disposition block to whichever open reviewer findings sidecar the
@@ -282,20 +281,10 @@ def _extract_frontmatter_agent_type(text: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str] = None) -> str:
-    try:
-        proc = subprocess.run(
-            ["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError as exc:
-        raise DispositionsError(f"cannot resolve git repo root: {exc}") from exc
-    if proc.returncode != 0 or not proc.stdout.strip():
-        raise DispositionsError(
-            f"cannot resolve git repo root from {cwd or '.'}: {proc.stderr.strip()}"
-        )
-    return proc.stdout.strip()
+    root = show_toplevel(cwd)
+    if root is None:
+        raise DispositionsError(f"cannot resolve git repo root from {cwd or '.'}")
+    return root
 
 
 def _build_block(buckets: Dict[str, List[str]], rationale: Optional[str]) -> str:

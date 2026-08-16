@@ -23,7 +23,7 @@ Coverage:
              ("ping") imports ONLY that op's owning module
              (coordinator_core.ops.ping) -- not the rest of the ~55-module
              eager-import list (spot-checked via coordinator_core.ops.
-             coverage_gate, an unrelated module never touched by the ping
+             handoff_children, an unrelated module never touched by the ping
              dispatch path).
         (b2) with COORDINATOR_CORE_LAZY_OPS=1 AND OP_MODULE_MAP missing the
              entry for a real, registerable op ("workflow.scaffold", entry
@@ -118,9 +118,9 @@ _MAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
         "dispatching the mapped op 'ping' must import its owning module "
         "coordinator_core.ops.ping."
     )
-    assert "coordinator_core.ops.coverage_gate" not in sys.modules, (
+    assert "coordinator_core.ops.handoff_children" not in sys.modules, (
         "dispatching the mapped op 'ping' must NOT import an unrelated op module "
-        "(coordinator_core.ops.coverage_gate) -- a mapped-op dispatch should do a "
+        "(coordinator_core.ops.handoff_children) -- a mapped-op dispatch should do a "
         "targeted single-module import, not the whole-package eager-import fallback."
     )
     print("MAPPED_OP_TARGETED_IMPORT_OK")

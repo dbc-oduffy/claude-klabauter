@@ -77,7 +77,6 @@ class OpClass(enum.Enum):
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
     "ping": OpClass.COMPUTE_ONLY,
-    "coverage.gate": OpClass.COMPUTE_ONLY,
     # cutover.gate — COMPUTE_ONLY: the cutover state machine's read-only
     # coverage verdict (ops/cutover_gate.py::_cutover_gate) — re-derives a
     # cutover record's consumer set at call time and evaluates the two-way
@@ -3110,12 +3109,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
-    # chain_ancestry_waivers.reap — MUTATING: deletes waiver files/subdirectories
-    # (coordinator_core/ops/reap_chain_ancestry_waivers.py — .unlink()/.rmdir() calls,
-    # verified). Deletion is a write to coordinator substrate even though the module's
-    # own docstring frames it as fail-safe/remove-only (a reap mistake can only make
-    # coverage.py's gate MORE conservative, never less) — that safety property is about
-    # DIRECTION of harm, not about whether a write happens at all.
     # ceremony.chunk_commits — COMPUTE_ONLY: pure git-log read (resolve_chunk_commits
     # composes git_native.log_diff_filter + a range `git log` call; no write_text/
     # locked_rmw/unlink anywhere in coordinator_core/ops/ceremony/chunk_commits.py,
@@ -3125,7 +3118,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # entry, outside the frozen _KNOWN_UNCLASSIFIED_OPS_DEBT baseline — a genuine
     # registration-quad regression, not baseline debt (see that entry for detail on why
     # widening the baseline would have been the wrong fix).
-    "chain_ancestry_waivers.reap": OpClass.MUTATING,
     "ceremony.chunk_commits": OpClass.COMPUTE_ONLY,
     # sizing.decline — MUTATING: writes `status: declined` under locked_rmw
     # (2026-08-10, docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2).
@@ -3620,8 +3612,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #     the file's own docstring is explicit throughout.
     #   commit.exec_bit_change — ops/ceremony/commit_exec_bit.py: `git commit`
     #     (unrestricted, per DR-151) writing an exec-bit change.
-    #   coverage.halt_on_uncovered — ops/coverage_gate.py: writes the coverage
-    #     artifact atomically via tempfile + os.replace (line ~426-429).
     #   findings.self_persist_fallback — ops/self_persist_findings.py: writes
     #     via `coordinator_core.locked_write.locked_rmw` (mkstemp + os.replace);
     #     module docstring is explicit this is the native port of a
@@ -3695,7 +3685,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "branch.merge_into_workstream": OpClass.MUTATING,
     "ceremony.scoped_git_commit": OpClass.MUTATING,
     "commit.exec_bit_change": OpClass.MUTATING,
-    "coverage.halt_on_uncovered": OpClass.MUTATING,
     "findings.self_persist_fallback": OpClass.MUTATING,
     "fleet.archive_paper_trail": OpClass.MUTATING,
     "fleet.archive_queue_entry": OpClass.MUTATING,

@@ -134,8 +134,7 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 import sys
 from pathlib import Path
 from shutil import which
@@ -218,19 +217,7 @@ def _resolve_root(explicit_root: str | None) -> str | None:
         return explicit_root
     if which("git") is None:
         return None
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    top = result.stdout.strip()
+    top = show_toplevel()
     return top or None
 
 

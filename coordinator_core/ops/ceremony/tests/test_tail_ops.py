@@ -77,10 +77,11 @@ Coverage:
          acted[] entry stamps ROADMAP_CALLOUT
     (hh) refresh_roadmap_callout_all_skipped_does_not_stamp -- an all-skipped pass
          (no roadmap_id anywhere) leaves ROADMAP_CALLOUT unstamped
-    (ii) coverage_gate_covered_stamps_coverage_gate -- exit_code == 0 stamps
-         COVERAGE_GATE (against common_dir)
-    (jj) coverage_gate_indeterminate_does_not_stamp -- exit_code == 2 leaves
-         COVERAGE_GATE unstamped
+
+  (ii)/(jj) coverage_gate liveness tests, and the coverage.gate wrapper tests
+  above them, were removed 2026-08-16 -- `tail_ops.run_coverage_gate`/
+  `OP_COVERAGE_GATE` and `housekeeping_liveness.COVERAGE_GATE` no longer
+  exist (state/kill-ledger.md K-001).
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C6, § C9.
 Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C5.
@@ -99,7 +100,6 @@ import pytest
 
 from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 from coordinator_core.ops.ceremony import tail_ops
-from coordinator_core.ops.fleet._common import main_worktree_root
 
 
 def _run(coro) -> Any:
@@ -393,45 +393,6 @@ def test_unregistered_op_key_is_clean_failure(tmp_path):
     assert result["acted"] == []
     assert result["skipped"] == []
     assert result["failed"] == ["fleet.does_not_exist: fleet.does_not_exist not registered"]
-
-
-# ---------------------------------------------------------------------------
-# coverage.gate wrapper
-# ---------------------------------------------------------------------------
-
-
-def test_coverage_gate_covered_verdict_is_acted(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        return {"verdict_line": "VERDICT=COVERED range=abc..def", "exit_code": 0, "notes": []}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        result = _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
-
-    assert result["failed"] == []
-    assert result["acted"] == [f"{tail_ops.OP_COVERAGE_GATE}:COVERED"]
-
-
-def test_coverage_gate_indeterminate_is_failed(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        return {"verdict_line": "VERDICT=INDETERMINATE", "exit_code": 2, "notes": ["no chain"]}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        result = _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
-
-    assert result["acted"] == []
-    assert len(result["failed"]) == 1
-    assert "INDETERMINATE" in result["failed"][0]
-
-
-def test_coverage_gate_not_registered_is_clean_failure(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-    with patch.object(tail_ops, "get_op_handler", return_value=None):
-        result = _run(tail_ops.run_coverage_gate(common_dir))
-    assert result["failed"] == [f"{tail_ops.OP_COVERAGE_GATE}: {tail_ops.OP_COVERAGE_GATE} not registered"]
 
 
 # ---------------------------------------------------------------------------
@@ -1005,57 +966,6 @@ def test_refresh_roadmap_callout_all_skipped_does_not_stamp(tmp_path):
     mock_main.assert_not_called()
     statuses = hl.liveness_status(str(worktree_root))
     assert statuses[hl.ROADMAP_CALLOUT] == hl.STATUS_NEVER_STAMPED
-
-
-def test_coverage_gate_covered_stamps_coverage_gate(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        return {"verdict_line": "VERDICT=COVERED range=abc..def", "exit_code": 0, "notes": []}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
-
-    statuses = hl.liveness_status(str(main_worktree_root(common_dir)))
-    assert statuses[hl.COVERAGE_GATE] == hl.STATUS_FRESH
-
-
-def test_coverage_gate_covered_stamp_is_readable_by_check_stale_detailed(tmp_path):
-    """AC10: the COVERAGE_GATE stamp must be visible to the ACTUAL reader --
-    `orientation/regenerate_cache.py`'s `check_stale_detailed(str(repo_root))` -- not
-    merely retargeted to the right path in isolation. A stamp that only `liveness_status`
-    can see but the real reader cannot would still be a dead signal."""
-    common_dir = _make_common_dir(tmp_path)
-    repo_root = main_worktree_root(common_dir)
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        return {"verdict_line": "VERDICT=COVERED range=abc..def", "exit_code": 0, "notes": []}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
-
-    # A negative threshold means "any recorded stamp, however fresh, counts as stale" --
-    # the only way to positively prove the reader SEES a stamp (an absent/never-stamped
-    # class is silently skipped and would ALSO yield an empty list at a normal threshold,
-    # which would not distinguish "found and fresh" from "never found").
-    stale_messages = hl.check_stale_detailed(
-        str(repo_root), classes=[hl.COVERAGE_GATE], stale_threshold_s=-1.0
-    )
-    assert len(stale_messages) == 1
-    assert stale_messages[0][0] == hl.COVERAGE_GATE
-
-
-def test_coverage_gate_indeterminate_does_not_stamp(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        return {"verdict_line": "VERDICT=INDETERMINATE", "exit_code": 2, "notes": ["no chain"]}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        _run(tail_ops.run_coverage_gate(common_dir, closing_session_id="sid-1"))
-
-    statuses = hl.liveness_status(str(main_worktree_root(common_dir)))
-    assert statuses[hl.COVERAGE_GATE] == hl.STATUS_NEVER_STAMPED
 
 
 # ---------------------------------------------------------------------------

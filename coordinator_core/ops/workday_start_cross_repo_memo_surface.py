@@ -72,6 +72,7 @@ import os
 import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 import sys
 from datetime import date
 from typing import List, Optional, Tuple
@@ -102,25 +103,7 @@ def _resolve_inbox_dir(cwd: Optional[str] = None) -> str:
         return env_override
 
     cwd = cwd or os.getcwd()
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            # Review: code-reviewer -- A4 Windows console-flash suppression, matching
-            # the pattern already used in generate_exec_summary.py (same slice).
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return os.path.join(cwd, "cross-repo", "inbox")
-
-    if result.returncode != 0:
-        return os.path.join(cwd, "cross-repo", "inbox")
-
-    git_root = result.stdout.strip()
+    git_root = show_toplevel(cwd)
     if not git_root:
         return os.path.join(cwd, "cross-repo", "inbox")
     return os.path.join(git_root, "cross-repo", "inbox")

@@ -63,16 +63,13 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List
 
 import coordinator_core.resolve_coordinator_clone as rcc
-
-_SUBPROCESS_TIMEOUT_SECS = 15
 
 _PLACEHOLDER_NAMES = frozenset(
     {
@@ -228,24 +225,16 @@ def _discover_wiki_names(plugin_root: str, bundled_wiki: str) -> "tuple[List[str
 
 
 def _stat_mtime(path: str) -> str:
-    """Shell out to `stat` for a byte-identical mtime string to the oracle's
-    `stat -c "%y" ... || stat -f "%Sm" ... || echo "unknown"` dual-form."""
-    for args in (["-c", "%y", path], ["-f", "%Sm", path]):
-        try:
-            proc = subprocess.run(
-                ["stat", *args],
-                capture_output=True,
-                text=True,
-                timeout=_SUBPROCESS_TIMEOUT_SECS,
-                **no_console_creationflags(),
-            )
-            if proc.returncode == 0:
-                return (proc.stdout or "").strip()
-        except (OSError, subprocess.TimeoutExpired):
-            # Mirrors the oracle's `stat -c ... || stat -f ... || echo "unknown"`
-            # dual-form fallback -- try the next form.
-            continue
-    return "unknown"
+    """In-process `os.stat().st_mtime`, platform-neutral — replaces the
+    prior GNU-then-BSD `stat` shell-out dual-form (up to 2 spawns/call, 2
+    calls/loop iteration in `main`) with zero spawns (C18). This is a
+    log-only display string (see `main`'s MIRROR DETECTED block); no
+    consumer parses it or compares it against the old shell-out's format."""
+    try:
+        ts = os.stat(path).st_mtime
+    except OSError:
+        return "unknown"
+    return datetime.datetime.fromtimestamp(ts).isoformat(sep=" ", timespec="seconds")
 
 
 def main(argv: List[str]) -> int:

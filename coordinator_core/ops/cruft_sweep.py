@@ -151,12 +151,14 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path, PurePath
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
+from coordinator_core.git.repo_root import git_dir, show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
@@ -186,6 +188,67 @@ _ORPHAN_HARD_EXCLUDE_NAMES = {
 # 24h hard mtime floor — RD-2 consolidated age gate and the subagent-sandbox
 # file-level reap's sole gate (spec: docs/plans/2026-06-14-deep-research-workdir-out-of-killzone.md RD-2).
 _MTIME_FLOOR_SECS = 86400
+
+# ---------------------------------------------------------------------------
+# Toolchain-cache tool table — Phase G ("toolchain-caches" class), net-new,
+# no bash-oracle counterpart. See docs/plans/2026-08-16-toolchain-caches-
+# sweep-class.md. Data, not branching (AC2): a seventh tool is a new row,
+# never a code change to sweep_toolchain_caches below.
+#
+# Each row: `name` (report label), `executable` (bare PATH name looked up
+# via `shutil.which` — NEVER invoked bare; see AC3), `prune_argv` (argv
+# tail appended after the resolved full path), `dry_run_argv` (argv tail
+# for a native dry-run, or None when the tool offers none — every row here
+# is None today; none of the five tools expose a cache-prune dry-run flag),
+# `wholesale` (bool — True iff `prune_argv` empties the tool's cache/store
+# entirely rather than evicting only unreferenced entries; surfaced in the
+# reported evidence string so an operator can see at a glance which tools
+# evict selectively and which empty wholesale. `pip` is the only True row:
+# pip's cache CLI has no selective/unreachable-only prune primitive at all
+# (only `list`/`info`/`remove <pattern>`/`purge`), so `purge` — a full wipe
+# — is the necessary tradeoff, not an oversight. Every other row's verb is
+# a genuine selective GC: `npm cache verify` in particular was chosen over
+# `npm cache clean --force` specifically because the latter is also a full
+# wipe — see the npm row's own comment below).
+#
+# huggingface targets `hf`, NOT `huggingface-cli` (AC6): `huggingface-cli`
+# is deprecated and exits 1 with "no longer works. Use `hf`" (probed live
+# 2026-08-16, see plan's tool-presence table). A future author must not
+# "restore" the old name.
+#
+# playwright is deliberately EXCLUDED from this table (AC7), not silently
+# grouped in: it has no prune verb, only `playwright uninstall`, which
+# removes installed browsers wholesale — not like-for-like with the other
+# five tools' cache-only eviction. A "prune" class must never silently run
+# a browser uninstall, so it is left out entirely rather than gated behind
+# an opt-in flag this plan does not ask for.
+# npm: `cache verify` (not `cache clean --force`) — `clean --force` deletes
+# the entire cache directory unconditionally (npm requires `--force`
+# specifically because it is a full wipe, not a selective GC). `verify` is
+# npm's actual close analog to `uv cache prune`/`pnpm store prune`: it
+# garbage-collects unreferenced cache data and verifies integrity while
+# keeping the rest. This box runs 50-70 concurrent sessions off a shared
+# npm cache; `clean --force` would cost every session a full re-download
+# after the next apply=True sweep, `verify` does not (code review finding,
+# 2026-08-16).
+_TOOLCHAIN_CACHE_TOOLS: Tuple[dict, ...] = (
+    {"name": "uv", "executable": "uv", "prune_argv": ("cache", "prune"), "dry_run_argv": None, "wholesale": False},
+    {"name": "pip", "executable": "pip", "prune_argv": ("cache", "purge"), "dry_run_argv": None, "wholesale": True},
+    {"name": "npm", "executable": "npm", "prune_argv": ("cache", "verify"), "dry_run_argv": None, "wholesale": False},
+    {"name": "pnpm", "executable": "pnpm", "prune_argv": ("store", "prune"), "dry_run_argv": None, "wholesale": False},
+    {"name": "huggingface", "executable": "hf", "prune_argv": ("cache", "prune"), "dry_run_argv": None, "wholesale": False},
+)
+
+
+def _resolve_toolchain_tool(row: dict) -> Optional[str]:
+    """Full-path resolution ONLY (AC3) — never returns/invokes the bare
+    executable name. On Windows, `npm`/`pnpm` resolve to `.CMD` shims; a
+    bare-name `subprocess.run(["npm", ...])` raises `FileNotFoundError`,
+    which naive handling upstream would catch and report as "tool absent" —
+    a silent false negative reporting sweep success having reaped nothing.
+    `shutil.which` returns the resolved full path (including the `.CMD`
+    extension where applicable) or None if the tool is not on PATH."""
+    return shutil.which(row["executable"])
 
 # Watchdog wall-clock ceiling (stall arm intentionally dormant — every bash
 # call site advances its counter every iteration, per the recipe's confirmed
@@ -546,16 +609,7 @@ def _is_untracked(repo_root: Path, path: Path) -> bool:
 
     if _shutil.which("git") is None:
         return True
-    try:
-        r = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
-            capture_output=True, timeout=10,
-            **no_console_creationflags(),
-        )
-        if r.returncode != 0:
-            return True
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"_is_untracked: git rev-parse --git-dir failed for {repo_root}: {sys.exc_info()[1]}", file=sys.stderr)
+    if git_dir(str(repo_root)) is None:
         return True
 
     try:
@@ -612,16 +666,7 @@ def _batch_is_untracked_dirs(repo_root: Path, dirs: Sequence[Path]) -> dict:
         return {}
     if _shutil.which("git") is None:
         return {str(d): True for d in dirs}
-    try:
-        r = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
-            capture_output=True, timeout=10,
-            **no_console_creationflags(),
-        )
-        if r.returncode != 0:
-            return {str(d): True for d in dirs}
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"_batch_is_untracked_dirs: git rev-parse --git-dir failed for {repo_root}: {sys.exc_info()[1]}", file=sys.stderr)
+    if git_dir(str(repo_root)) is None:
         return {str(d): True for d in dirs}
 
     rels: dict = {}
@@ -1126,22 +1171,14 @@ def sweep_harness(
 def _resolve_repo_root(repo_root: Optional[Path]) -> Path:
     if repo_root is not None:
         return repo_root
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
-            **no_console_creationflags(),
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-        if r.returncode != 0:
-            print(
-                f"WARNING: _resolve_repo_root: git rev-parse exited {r.returncode}, "
-                f"falling back to cwd: {(r.stderr or '').strip()}",
-                file=sys.stderr,
-            )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"WARNING: _resolve_repo_root: git rev-parse failed, falling back to cwd: {exc}", file=sys.stderr)
+    top = show_toplevel()
+    if top:
+        return Path(top)
+    print(
+        "WARNING: _resolve_repo_root: git rev-parse --show-toplevel failed, "
+        "falling back to cwd",
+        file=sys.stderr,
+    )
     return Path.cwd()
 
 
@@ -1822,6 +1859,164 @@ def sweep_harness_scratchpads(
 
 
 # ---------------------------------------------------------------------------
+# Phase G (net-new): toolchain-cache reap via each tool's own prune command.
+# Registered under the "toolchain-caches" class. Unlike every prior phase,
+# this one shells out to third-party CLIs rather than walking a directory —
+# the tools own their own reachability graphs (content-addressed stores),
+# so a file walk would be both slower and less correct than the tool's own
+# eviction. See docs/plans/2026-08-16-toolchain-caches-sweep-class.md.
+# ---------------------------------------------------------------------------
+
+
+def sweep_toolchain_caches(
+    *,
+    apply: bool,
+    json_mode: bool,
+    quiet: bool,
+    log_path: Optional[Path] = None,
+    emit_fn: Optional[EmitFn] = None,
+) -> Tuple[int, int]:
+    """Reap toolchain package-manager/download caches (uv, pip, npm, pnpm,
+    hf) by invoking each tool's own prune command — see `_TOOLCHAIN_CACHE_
+    TOOLS` for the data table (AC2) and `_resolve_toolchain_tool` for the
+    full-path-only resolution rule (AC3).
+
+    Returns (total_bytes, total_items). `total_bytes` is always 0 — none of
+    these five tools report freed bytes on their prune command, and this
+    phase does not walk the cache directories to measure them; per the
+    plan's Out-of-scope note, a per-tool byte total would need the same
+    file walk this phase exists to avoid.
+
+    Per-row semantics:
+      - Tool absent from PATH -> verdict UNAVAILABLE, phase continues (AC4).
+      - `apply=False` (dry-run, the default) -> no MUTATING prune is ever
+        invoked. When the row's `dry_run_argv` is non-None, that native
+        dry-run argv IS invoked (AC5's "used where available" half) — it is
+        never the mutating `prune_argv`, so this still issues no mutating
+        call. When `dry_run_argv` is None (every row today — none of the
+        five tools expose a cache-prune dry-run flag), no subprocess call is
+        issued at all and the row reports "no dry-run available, size not
+        measured".
+      - `apply=True` -> the resolved full path is invoked with `prune_argv`.
+        A raising subprocess call or a nonzero returncode is caught and
+        recorded against that row only — it never aborts the remaining
+        rows (AC4), matching the module's "NEVER fail the whole sweep
+        because one directory errored" negative-spec.
+
+    Every reported row's evidence string carries a `wholesale=True/False`
+    tag (see `_TOOLCHAIN_CACHE_TOOLS`'s `wholesale` field) so an operator
+    can see which tools evict selectively and which empty their cache/store
+    wholesale.
+
+    playwright is not a member of `_TOOLCHAIN_CACHE_TOOLS` — see that
+    table's docstring comment for why (AC7).
+    """
+    total_bytes = 0
+    total_items = 0
+
+    for row in _TOOLCHAIN_CACHE_TOOLS:
+        name = row["name"]
+        wholesale_tag = f"wholesale={row['wholesale']!r}"
+        resolved = _resolve_toolchain_tool(row)
+
+        if resolved is None:
+            if json_mode:
+                emit_jsonl(
+                    "toolchain-caches", row["executable"], name, 0, 0,
+                    "unavailable",
+                    f"verdict UNAVAILABLE: {row['executable']!r} not found on PATH ({wholesale_tag})",
+                    emit_fn=emit_fn,
+                )
+            continue
+
+        if not apply:
+            dry_run_argv = row["dry_run_argv"]
+            if dry_run_argv is None:
+                if json_mode:
+                    emit_jsonl(
+                        "toolchain-caches", resolved, name, 0, 0,
+                        "skip",
+                        f"no dry-run available, size not measured (apply=False) ({wholesale_tag})",
+                        emit_fn=emit_fn,
+                    )
+                continue
+
+            dry_argv = [resolved] + list(dry_run_argv)
+            try:
+                dry_result = subprocess.run(
+                    dry_argv, capture_output=True, timeout=_DELETE_TIMEOUT_SECS,
+                    **no_console_creationflags(),
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                if json_mode:
+                    emit_jsonl(
+                        "toolchain-caches", resolved, name, 0, 0,
+                        "dry-run-failed",
+                        f"{dry_argv} raised: {exc} ({wholesale_tag})",
+                        emit_fn=emit_fn,
+                    )
+                continue
+
+            if json_mode:
+                emit_jsonl(
+                    "toolchain-caches", resolved, name, 0, 0,
+                    "dry-run",
+                    f"{dry_argv} exited {dry_result.returncode} (dry-run, no mutation) ({wholesale_tag})",
+                    emit_fn=emit_fn,
+                )
+            continue
+
+        argv = [resolved] + list(row["prune_argv"])
+        try:
+            result = subprocess.run(
+                argv, capture_output=True, timeout=_DELETE_TIMEOUT_SECS,
+                **no_console_creationflags(),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _banner(
+                f"[cruft-sweep] WARNING: toolchain-caches prune failed for {name}: {exc}",
+                quiet=quiet,
+            )
+            if json_mode:
+                emit_jsonl(
+                    "toolchain-caches", resolved, name, 0, 0,
+                    "prune-failed", f"{argv} raised: {exc} ({wholesale_tag})", emit_fn=emit_fn,
+                )
+            continue
+
+        if result.returncode != 0:
+            _banner(
+                f"[cruft-sweep] WARNING: toolchain-caches prune failed for {name}: rc={result.returncode}",
+                quiet=quiet,
+            )
+            if json_mode:
+                emit_jsonl(
+                    "toolchain-caches", resolved, name, 0, 0,
+                    "prune-failed", f"{argv} exited {result.returncode} ({wholesale_tag})", emit_fn=emit_fn,
+                )
+            continue
+
+        total_items += 1
+        if json_mode:
+            emit_jsonl(
+                "toolchain-caches", resolved, name, 0, 0,
+                "auto-prune", f"{argv} exited 0 ({wholesale_tag})", emit_fn=emit_fn,
+            )
+
+    if not json_mode and not quiet:
+        mode_label = "APPLY" if apply else "DRY-RUN"
+        _banner(
+            f"[cruft-sweep] toolchain-caches ({mode_label}): {total_items} tool(s) pruned",
+            quiet=False,
+        )
+
+    if apply and total_items > 0:
+        _append_log_row(log_path, "toolchain-caches", total_bytes, total_items)
+
+    return total_bytes, total_items
+
+
+# ---------------------------------------------------------------------------
 # Registered op — convenience JSON-RPC façade over the four phase functions.
 # Primary call path remains the DoE trampoline's in-process import (recipe §
 # DoE-side work item 5); this registration exists for op-registry parity /
@@ -1919,12 +2114,24 @@ def _run_all_phases(
             log_path=log_path, emit_fn=emit_fn,
         )
 
+    toolchain_caches_bytes = toolchain_caches_items = 0
+    if class_ in ("toolchain-caches", "all"):
+        # NET-NEW class (see Phase G docstring above) — shells out to each
+        # tool's own prune command, takes none of the other classes' params
+        # (same "out-of-tree corpus" shape as scratchpad above); folded into
+        # the grand total by this façade's own design.
+        toolchain_caches_bytes, toolchain_caches_items = sweep_toolchain_caches(
+            apply=apply, json_mode=json_mode, quiet=quiet,
+            log_path=log_path, emit_fn=emit_fn,
+        )
+
     return {
         "harness": {"bytes": harness_bytes, "items": harness_items},
         "scratch": {"bytes": scratch_bytes + sandbox_bytes, "items": scratch_items + sandbox_items},
         "orphans": {"bytes": orphans_bytes, "items": orphans_items},
         "empty_dirs": {"bytes": empty_dirs_bytes, "items": empty_dirs_items},
         "scratchpad": {"bytes": scratchpad_bytes, "items": scratchpad_items},
+        "toolchain_caches": {"bytes": toolchain_caches_bytes, "items": toolchain_caches_items},
         # Grand-total components, kept separate from the display-oriented
         # "scratch" bucket above. cruft-sweep.sh's grand-total banner
         # (lines 1525-1526) is HARNESS + SCRATCH + ORPHANS only — it never
@@ -1936,8 +2143,8 @@ def _run_all_phases(
         # 1 GB reclaimable-space advisory threshold. EMPTY_DIRS is folded
         # into this facade's grand total (its own net-new design choice,
         # not an oracle mirror).
-        "_grand_total_bytes": harness_bytes + scratch_bytes + orphans_bytes + empty_dirs_bytes + scratchpad_bytes,
-        "_grand_total_items": harness_items + scratch_items + orphans_items + empty_dirs_items + scratchpad_items,
+        "_grand_total_bytes": harness_bytes + scratch_bytes + orphans_bytes + empty_dirs_bytes + scratchpad_bytes + toolchain_caches_bytes,
+        "_grand_total_items": harness_items + scratch_items + orphans_items + empty_dirs_items + scratchpad_items + toolchain_caches_items,
     }
 
 
@@ -1946,15 +2153,18 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC cruft_sweep.run handler — MUTATING when apply=True.
 
     Dispatches ONE class ("harness" | "scratch" | "orphans" | "empty-dirs" |
-    "scratchpad" | "all") against fully-resolved params. Every path/threshold/
-    list value must already be resolved by the caller — this handler does NOT
-    touch machine-local, coordinator_state_root, or any registry. "empty-dirs"
-    is a net-new phase (see module docstring) — reuses `repo_root_override`
-    and `whitelist`, no dedicated params of its own. "scratchpad" is also
-    net-new (see Phase F docstring) — a fully independent corpus (the OS
-    harness temp root, not this repo), so it takes none of the other
-    classes' params either; it delegates entirely to
-    `scratchpad_sweep.sweep_scratchpads`'s own defaults.
+    "scratchpad" | "toolchain-caches" | "all") against fully-resolved params.
+    Every path/threshold/list value must already be resolved by the caller —
+    this handler does NOT touch machine-local, coordinator_state_root, or
+    any registry. "empty-dirs" is a net-new phase (see module docstring) —
+    reuses `repo_root_override` and `whitelist`, no dedicated params of its
+    own. "scratchpad" is also net-new (see Phase F docstring) — a fully
+    independent corpus (the OS harness temp root, not this repo), so it
+    takes none of the other classes' params either; it delegates entirely to
+    `scratchpad_sweep.sweep_scratchpads`'s own defaults. "toolchain-caches"
+    is also net-new (see Phase G docstring) — shells out to each tool's own
+    prune command (uv, pip, npm, pnpm, hf), takes none of the other classes'
+    params, same "out-of-tree corpus" shape as "scratchpad".
 
     Params:
         class_ (str, default "all")
@@ -2009,6 +2219,7 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "orphans": {"bytes": 0, "items": 0},
             "empty_dirs": {"bytes": 0, "items": 0},
             "scratchpad": {"bytes": 0, "items": 0},
+            "toolchain_caches": {"bytes": 0, "items": 0},
         }
         empty_result = {"totals": empty_totals, "total_bytes": 0, "total_items": 0}
         if json_mode:

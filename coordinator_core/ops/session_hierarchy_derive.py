@@ -59,6 +59,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.emit._slug import machine_slug
@@ -81,20 +82,7 @@ def _engine_worktree_root() -> Optional[Path]:
     ``handoff_lineage_ancestry``'s absent-``repo_root`` branch).
     """
     engine_dir = Path(__file__).resolve().parent
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(engine_dir), "rev-parse", "--path-format=absolute", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            **no_console_creationflags(),
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
-        print(f"skip: _engine_worktree_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    out = result.stdout.strip()
+    out = show_toplevel(str(engine_dir))
     if not out:
         return None
     return Path(out)

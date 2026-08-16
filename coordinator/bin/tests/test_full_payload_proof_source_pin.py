@@ -223,7 +223,12 @@ class TestResolvePinnedCommitShas:
         fake = _FakePublishModule(
             row_to_roots={"row1": [_FakePath("/repo/src")]},
             toplevel_by_root={"/repo/src": "/repo"},
-            head_by_toplevel={"/repo": "sha-abc"},
+            # `_resolve_pinned_commit_shas` re-wraps the resolved toplevel
+            # string in `Path(...)` before the second `_git_rev_parse` call
+            # (matching `_git_rev_parse(path: Path, ...)`'s declared type),
+            # so the HEAD lookup key is `str(Path(toplevel))` -- which
+            # normalizes separators on Windows -- not the raw literal.
+            head_by_toplevel={str(Path("/repo")): "sha-abc"},
         )
         pins = proof._resolve_pinned_commit_shas(fake, ["row1"])
         assert pins == {"/repo": "sha-abc"}
@@ -235,11 +240,13 @@ class TestResolvePinnedCommitShas:
                 "row2": [_FakePath("/repo/b")],
             },
             toplevel_by_root={"/repo/a": "/repo", "/repo/b": "/repo"},
-            head_by_toplevel={"/repo": "sha-abc"},
+            # See test_single_row_single_root_pins_by_toplevel for why this
+            # key must be `str(Path(...))`, not the raw literal.
+            head_by_toplevel={str(Path("/repo")): "sha-abc"},
         )
         pins = proof._resolve_pinned_commit_shas(fake, ["row1", "row2"])
         assert pins == {"/repo": "sha-abc"}
-        assert fake.head_resolution_calls == ["/repo"]
+        assert fake.head_resolution_calls == [str(Path("/repo"))]
 
     def test_rows_in_different_repos_get_independent_pins(self):
         fake = _FakePublishModule(
@@ -248,7 +255,12 @@ class TestResolvePinnedCommitShas:
                 "row2": [_FakePath("/repo-b/src")],
             },
             toplevel_by_root={"/repo-a/src": "/repo-a", "/repo-b/src": "/repo-b"},
-            head_by_toplevel={"/repo-a": "sha-a", "/repo-b": "sha-b"},
+            # See test_single_row_single_root_pins_by_toplevel for why these
+            # keys must be `str(Path(...))`, not the raw literal.
+            head_by_toplevel={
+                str(Path("/repo-a")): "sha-a",
+                str(Path("/repo-b")): "sha-b",
+            },
         )
         pins = proof._resolve_pinned_commit_shas(fake, ["row1", "row2"])
         assert pins == {"/repo-a": "sha-a", "/repo-b": "sha-b"}

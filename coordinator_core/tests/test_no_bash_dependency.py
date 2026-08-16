@@ -57,18 +57,17 @@ reader (and a future executor) can never mistake one kind for another:
    scoped to a specific (file, function, tool) triple, with a named fix
    path, never a growing blanket mute. Flagged to the EM for a follow-up
    fix chunk; out of this chunk's write scope (disjoint-write discipline
-   for this wave) to fix in-place. Three entries; the first two are a shell-out-with-
-   graceful-Python-fallback shape that predates the naked-Python mandate:
-   ``ops/sync_plugin_wiki.py::_stat_mtime`` (shells to `stat` for a
-   byte-identical mtime string; fix path: drop the `stat` shell-out
-   entirely and always take the `os.stat().st_mtime` branch — the
-   byte-parity-with-a-retired-bash-oracle rationale that motivated
-   shelling out no longer has a live oracle to stay parity with) and
+   for this wave) to fix in-place. Two entries remain (a third,
+   ``ops/sync_plugin_wiki.py::_stat_mtime``, was retired once its `stat`
+   shell-out was actually replaced by the in-process `os.stat().st_mtime`
+   branch it fell back to — see the module's own docstring for the
+   replacement). The first is a shell-out-with-graceful-Python-fallback
+   shape that predates the naked-Python mandate:
    ``ops/discover_working_repos.py::_sort_unique`` (shells to `sort -u`
-   for locale-collated byte parity; fix path: same shape — the
+   for locale-collated byte parity; fix path: the
    Python-`sorted()` fallback already exists in the same function, so
    the fix is deleting the shell-out branch, not writing a new one).
-   The third entry is a DIFFERENT shape, dated 2026-07-24 (regression from
+   The second entry is a DIFFERENT shape, dated 2026-07-24 (regression from
    safety-commit 9e721eeb, a concurrent session's in-flight reverse-drift
    work): ``ops/workweek_reverse_drift_gate.py::run_gate`` runs an arbitrary
    user-registered ``reverse_drift_cmd`` via ``bash -euo pipefail -c`` — no
@@ -166,7 +165,6 @@ _SANCTIONED_BASH_CARVEOUT_SITES: frozenset[tuple[str, str, str]] = frozenset(
 # ---------------------------------------------------------------------------
 _KNOWN_PREEXISTING_BASH_DEPENDENCY_DEBT: frozenset[tuple[str, str, str]] = frozenset(
     {
-        ("coordinator_core/ops/sync_plugin_wiki.py", "_stat_mtime", "stat"),
         ("coordinator_core/ops/discover_working_repos.py", "_sort_unique", "sort"),
         # 2026-07-24 (introduced by safety-commit 9e721eeb, a concurrent
         # session's in-flight reverse-drift work — NOT a 2026-07-22 discovery
@@ -242,6 +240,48 @@ def _call_argument_strings(call: ast.Call) -> list[str]:
     return strings
 
 
+def _call_argument_argv_lists(call: ast.Call) -> list[ast.List | ast.Tuple]:
+    """The literal list/tuple argv nodes among `call`'s args (positional,
+    plus a keyword `args=`) -- the argv shape a git-subcommand exemption
+    can apply to. A bare shell=True string is never one of these: that
+    shape is out of scope for the exemption (see `_matched_banned_tools`)."""
+    argv_lists: list[ast.List | ast.Tuple] = []
+    candidates = list(call.args)
+    for kw in call.keywords:
+        if kw.arg == "args" and kw.value is not None:
+            candidates.append(kw.value)
+    for node in candidates:
+        if isinstance(node, (ast.List, ast.Tuple)):
+            argv_lists.append(node)
+    return argv_lists
+
+
+def _git_subcommand_slot_value(call: ast.Call) -> str | None:
+    """If `call` spawns a literal argv list/tuple whose first element's
+    basename is `git`, return the literal string at argv[1] -- the git
+    SUBCOMMAND slot (`grep` in `git grep`, `log` in `git log`, ...), which
+    is git, not a coreutils/bash binary, and must not be classified as a
+    banned tool. Returns None when no such argv is present, so the
+    exemption never fires for a bare shell=True command string or for a
+    dynamically-built argv this literal-only scan can't see anyway.
+
+    Narrow by construction: this inspects ONLY argv[1] of a `git`-headed
+    literal list. Any other position -- a later `-c` string, an argv
+    element after the subcommand, or a wholly separate spawn -- is
+    unaffected and still flows through the normal banned-tool match."""
+    for argv in _call_argument_argv_lists(call):
+        if len(argv.elts) < 2:
+            continue
+        first, second = argv.elts[0], argv.elts[1]
+        if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+            continue
+        if _basename(first.value) != "git":
+            continue
+        if isinstance(second, ast.Constant) and isinstance(second.value, str):
+            return second.value
+    return None
+
+
 def _basename(token: str) -> str:
     """Last path component of `token`, splitting on both `/` and `\\` so a
     literal like `/bin/bash` or (hypothetically) `C:\\Windows\\bash` still
@@ -257,9 +297,20 @@ def _string_tokens(s: str) -> list[str]:
     return [s, *s.split()]
 
 
-def _matched_banned_tools(strings: list[str]) -> set[str]:
+def _matched_banned_tools(call: ast.Call, strings: list[str]) -> set[str]:
+    """Match `strings` (from `_call_argument_strings(call)`) against
+    `_BANNED_TOOLS`, exempting exactly the git-subcommand slot value (if
+    any) identified by `_git_subcommand_slot_value` -- so `git grep`/`git
+    log`/`git diff` read as git, not as a bare coreutils spawn, while a
+    genuine coreutils `grep` elsewhere in the same or a different call is
+    still caught."""
+    git_subcommand = _git_subcommand_slot_value(call)
+    exempted_once = False
     found: set[str] = set()
     for s in strings:
+        if not exempted_once and git_subcommand is not None and s == git_subcommand:
+            exempted_once = True
+            continue
         for candidate in _string_tokens(s):
             base = _basename(candidate)
             if base in _BANNED_TOOLS:
@@ -309,7 +360,7 @@ class BashDependencyVisitor(ast.NodeVisitor):
         name = _spawn_call_name(node.func)
         if name in _SPAWN_CALL_NAMES:
             strings = _call_argument_strings(node)
-            reasons: set[str] = set(_matched_banned_tools(strings))
+            reasons: set[str] = set(_matched_banned_tools(node, strings))
             if _has_process_substitution(strings):
                 reasons.add("process-substitution")
             if _has_shell_true(node):
@@ -435,6 +486,44 @@ def test_gate_detects_a_planted_process_substitution(tmp_path):
     assert lineno == 4
     assert scope == "diff_two_sorted_files"
     assert reasons == {"process-substitution"}
+
+
+def test_gate_exempts_git_subcommand_but_still_catches_real_coreutils(tmp_path):
+    """`git grep`/`git log` are git, not a coreutils/bash spawn, and must
+    not be flagged -- the narrowing this test proves in. But the
+    exemption is positional (argv[1] of a `git`-headed literal argv)
+    ONLY: a genuine coreutils `grep` spawned as its own call, even
+    alongside a `git grep` call in the same function, must still be
+    caught. A matcher that widened past the subcommand slot (e.g. by
+    value rather than position, or by whole-file rather than per-call)
+    would silently swallow this second call too."""
+    fixture = tmp_path / "fixture_git_subcommand.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def run_git_grep_count(token):\n"
+        "    return subprocess.run(\n"
+        "        ['git', 'grep', '--fixed-strings', '--count', '--', token],\n"
+        "        capture_output=True,\n"
+        "        text=True,\n"
+        "    )\n"
+        "\n"
+        "def run_git_log(path):\n"
+        "    return subprocess.run(['git', 'log', '--', path], capture_output=True)\n"
+        "\n"
+        "def run_git_grep_then_real_grep(token):\n"
+        "    subprocess.run(['git', 'grep', '--count', token], capture_output=True)\n"
+        "    return subprocess.run(['grep', '-c', token, 'file.txt'], capture_output=True)\n",
+        encoding="utf-8",
+    )
+
+    violations = find_bash_dependency_violations(tmp_path)
+
+    by_scope = {scope: reasons for _, _, scope, _, reasons in violations}
+    assert "run_git_grep_count" not in by_scope, violations
+    assert "run_git_log" not in by_scope, violations
+    assert by_scope["run_git_grep_then_real_grep"] == {"grep"}
+    assert len(violations) == 1, violations
 
 
 def test_gate_ignores_benign_and_dynamically_constructed_calls(tmp_path):

@@ -16,9 +16,10 @@ every test below. Electron fixtures are fabricated `node_modules/electron/`
 trees under `tmp_path`, never a real install.
 
 Git-common-dir handling: `app_session._handle_dir` resolves the handle store
-via `coordinator_core.lifecycle.git_common_dir`, which shells out to
-`git rev-parse --git-common-dir`. Tests here monkeypatch that function
-directly (see `_patch_git_common_dir`) rather than standing up real git
+via `coordinator_core.lifecycle.git_common_dir`, which resolves by a
+pure-Python `.git` walk and does NOT spawn (guarded below by
+`test_handle_dir_resolution_spawns_no_subprocess`). Tests here monkeypatch
+that function directly (see `_patch_git_common_dir`) rather than standing up real git
 repos/worktrees — this keeps the suite spawn-free and fast while still
 proving `_handle_dir` COMPOSES whatever `git_common_dir` returns rather than
 naively joining `<root>/.git` (the trap a `.git`-file worktree falls into).
@@ -567,3 +568,40 @@ def test_teardown_toctou_recheck_skips_terminate_on_recycled_pid(consuming_repo,
         "a recycled PID whose create_time no longer matches the handle's "
         "start_epoch at the pre-terminate re-check must never be signalled"
     )
+
+
+def test_handle_dir_resolution_spawns_no_subprocess(tmp_path, monkeypatch):
+    """Hard constraint 7 (zero-spawn) must hold THROUGH the handle-store
+    resolution, not merely up to it.
+
+    `git_root_zero_spawn` being spawn-free buys nothing if `_handle_dir`'s
+    `lifecycle.git_common_dir` call shells out one level deeper — every
+    launch/census/teardown would pay a `git rev-parse` on a box whose spawn
+    cost is a standing P0. A code review read exactly that from the (then
+    stale) docstrings and filed it as debt; this test is the artifact that
+    keeps the claim honest instead of the prose.
+
+    Deliberately does NOT monkeypatch `git_common_dir` — the point is to
+    exercise the real resolver against a real `.git` directory.
+    """
+    from coordinator_core.git import repo_root as repo_root_seam
+    from coordinator_core.lifecycle import git_common_dir
+
+    consuming_repo = tmp_path / "consuming-repo"
+    (consuming_repo / ".git").mkdir(parents=True)
+
+    git_common_dir.cache_clear()
+    repo_root_seam._memo.clear()
+
+    spawns = []
+
+    def _forbidden(*args, **kwargs):
+        spawns.append(args[0] if args else kwargs.get("args"))
+        raise AssertionError(f"unexpected subprocess spawn: {spawns[-1]}")
+
+    monkeypatch.setattr(repo_root_seam.subprocess, "run", _forbidden)
+
+    resolved = app_session._handle_dir(str(consuming_repo))
+
+    assert resolved == consuming_repo / ".git" / app_session._HANDLE_DIRNAME
+    assert spawns == []

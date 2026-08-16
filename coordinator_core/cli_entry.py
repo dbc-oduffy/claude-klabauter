@@ -16,6 +16,17 @@ the `scoped_git_commit` sink
 (`state/improvement-queue/2026-08-03-sanctioned-mutating-clis-record-no-sessi-dedd1f017d02.yaml`,
 filed with an observed instance).
 
+C13 (the warm engine's entry-path convergence): this is one of four engine
+entry paths, and the only one of the four that is authored in this repo's
+`coordinator_core/warm/`-adjacent scope rather than `ipc.py`. Its declared-
+write COLLECTION now opens through `warm.entry_seam.per_request_state`
+rather than `session.declared_writes.collecting()` directly, so this path
+and `ipc._dispatch_message_impl`'s own per-request scoping (C11) converge on
+one shared mechanism instead of each holding its own copy. RECORDING is
+unchanged — still `_record()` below, handing off to `ipc._record_self_
+reported_touches` verbatim. See `coordinator_core/warm/entry_seam.py`'s
+module docstring for the full four-path inventory.
+
 Negative-spec (RAG-bait):
     This is NOT an RPC invoke and does NOT spawn a subprocess. It is the
     in-process path, deliberately — the trampolines' existing docstrings
@@ -44,7 +55,7 @@ import logging
 import os
 from typing import Iterator, List, Optional, Sequence
 
-from coordinator_core.session.declared_writes import collecting
+from coordinator_core.warm.entry_seam import per_request_state
 
 __all__ = ["run_op_main", "recording_declared_writes"]
 
@@ -108,7 +119,7 @@ def recording_declared_writes(*, cwd: Optional[str] = None) -> Iterator[List[str
     resolved_cwd = cwd if cwd is not None else os.getcwd()
     declared: List[str] = []
     try:
-        with collecting(declared):
+        with per_request_state(declared):
             yield declared
     finally:
         _record(declared, resolved_cwd)

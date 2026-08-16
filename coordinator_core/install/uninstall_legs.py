@@ -1049,6 +1049,39 @@ def uninstall_strip_cmd_autorun() -> bool:
     return True
 
 
+def uninstall_strip_host_sampler_task() -> bool:
+    """Reverses the host-sampler Windows Task Scheduler registration leg
+    (``coordinator_core.install.host_sampler_scheduler``) — closes the
+    uninstall gap that a scheduled task, once registered, would otherwise
+    survive a full-remove uninstall forever (the residue this repo's
+    uninstall surface exists to prevent).
+
+    Grouped with ``uninstall_strip_cmd_autorun`` (same dependency tier, run
+    immediately after it): both reverse an OS-level scheduling/interception
+    surface with no dependency on `plugin_root` or the substrate registry.
+
+    Idempotent (a no-op on an absent task — see
+    ``unregister_host_sampler_task``'s own already-absent-is-success
+    handling) and self-gates to a no-op on non-Windows.
+
+    Returns True on success (including the absent-task no-op case), False
+    only on an unexpected `schtasks.exe` failure (fail-loud, matches every
+    other leg's bool contract)."""
+    from coordinator_core.install.host_sampler_scheduler import (
+        unregister_host_sampler_task,
+    )
+
+    try:
+        return unregister_host_sampler_task()
+    except Exception as exc:
+        print(
+            f"uninstall_strip_host_sampler_task: failed to remove host-sampler "
+            f"scheduled task: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+
 def _unlink_clearing_readonly(path: Path) -> None:
     """Unlink ``path``, clearing a read-only attribute first if that is what
     blocks the delete.
@@ -1787,13 +1820,14 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     print("  1. strip settings.json generated hooks (resolves coordinator-root)")
     print("  2. remove shell shim + wrapper (#4a/#4b/#4c/#10)")
     print("  3. strip cmd.exe AutoRun guard (HKCU Command Processor\\AutoRun)")
+    print("  4. remove host-sampler scheduled task (Windows Task Scheduler)")
     print(
-        "  4. remove substrate (registry keys, whoami/venv, .doe-root, "
+        "  5. remove substrate (registry keys, whoami/venv, .doe-root, "
         "~/.claude/bin forwarders, settings-home tree)"
     )
     if purge_operator_config:
         print(f"     (+ purge operator config, force={1 if force else 0})")
-    print(f"  5. set plugin end-state ({mode})")
+    print(f"  6. set plugin end-state ({mode})")
 
     if dry_run:
         print(
@@ -1844,6 +1878,14 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
             "content are always clean no-ops, never a failure source.",
         )
 
+    if not uninstall_strip_host_sampler_task():
+        return fail_loud(
+            "host-sampler scheduled task (Windows Task Scheduler)",
+            "Check stderr above for the specific schtasks.exe error; this leg is "
+            "idempotent (re-running after a manual fix is safe), and non-Windows/"
+            "already-absent-task are always clean no-ops, never a failure source.",
+        )
+
     if not uninstall_remove_substrate(
         mode,
         purge_operator_config=purge_operator_config,
@@ -1884,6 +1926,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub.add_parser("strip-settings-hooks")
     sub.add_parser("remove-shim")
     sub.add_parser("strip-cmd-autorun")
+    sub.add_parser("strip-host-sampler-task")
 
     p_substrate = sub.add_parser("remove-substrate")
     p_substrate.add_argument("mode", nargs="?", default="full-remove")
@@ -1916,6 +1959,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         ok = uninstall_remove_shim()
     elif args.leg == "strip-cmd-autorun":
         ok = uninstall_strip_cmd_autorun()
+    elif args.leg == "strip-host-sampler-task":
+        ok = uninstall_strip_host_sampler_task()
     elif args.leg == "remove-substrate":
         ok = uninstall_remove_substrate(
             args.mode,

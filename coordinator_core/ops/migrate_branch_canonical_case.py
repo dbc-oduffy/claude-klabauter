@@ -107,16 +107,38 @@ _USAGE_TEXT = """\
 """
 
 
-def _git(repo_root: str, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        # Review: code-reviewer — Windows portability convention applied
-        # inconsistently across this wave's siblings; align this call site.
-        **no_console_creationflags(),
-    )
+# Sibling precedent: coordinator/bin/check-install-divergence.py's
+# _GIT_TIMEOUT_SECS = 60. Local ref/plumbing calls (rev-parse, symbolic-ref,
+# show-ref, for-each-ref, branch -m) get that same local bound; the three
+# network calls under --push-cleanup (ls-remote, push --delete, push -u) get
+# a larger bound since they wait on the remote, not just local disk/plumbing.
+_GIT_TIMEOUT_SECS = 60.0
+_GIT_NETWORK_TIMEOUT_SECS = 120.0
+
+
+def _git(repo_root: str, *args: str, timeout: float = _GIT_TIMEOUT_SECS) -> subprocess.CompletedProcess:
+    """Degrade rather than raise on timeout: a timed-out git call returns a
+    synthetic non-zero CompletedProcess so callers' existing `.returncode`
+    checks treat it the same as any other git failure, instead of an
+    uncaught TimeoutExpired aborting the whole migration mid-flight."""
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            # Review: code-reviewer — Windows portability convention applied
+            # inconsistently across this wave's siblings; align this call site.
+            **no_console_creationflags(),
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=["git", *args],
+            returncode=1,
+            stdout="",
+            stderr=f"git command timed out after {timeout:g}s: git {' '.join(args)}",
+        )
 
 
 def _find_git_root(cwd: str) -> str | None:
@@ -259,17 +281,26 @@ def _migrate(push_cleanup: bool) -> int:
             continue
 
         if push_cleanup:
-            ls_remote = _git(git_root, "ls-remote", "--exit-code", "origin", f"refs/heads/{ref}")
+            ls_remote = _git(
+                git_root, "ls-remote", "--exit-code", "origin", f"refs/heads/{ref}",
+                timeout=_GIT_NETWORK_TIMEOUT_SECS,
+            )
             if ls_remote.returncode == 0:
                 print(f"  REMOTE-DELETE: origin/{ref}", file=out)
-                push_delete = _git(git_root, "push", "origin", "--delete", ref)
+                push_delete = _git(
+                    git_root, "push", "origin", "--delete", ref,
+                    timeout=_GIT_NETWORK_TIMEOUT_SECS,
+                )
                 if push_delete.returncode != 0:
                     print(
                         f"  WARN: remote delete of '{ref}' failed (may already be gone)",
                         file=out,
                     )
             print(f"  REMOTE-PUSH: origin/{lc}", file=out)
-            push_new = _git(git_root, "push", "-u", "origin", lc)
+            push_new = _git(
+                git_root, "push", "-u", "origin", lc,
+                timeout=_GIT_NETWORK_TIMEOUT_SECS,
+            )
             if push_new.returncode != 0:
                 print(
                     f"  WARN: push of '{lc}' returned non-zero (may need re-run)",

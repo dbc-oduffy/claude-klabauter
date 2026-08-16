@@ -1,0 +1,261 @@
+"""
+coordinator_core.tests.test_ipc_per_request_state — C11 regression net.
+
+Covers the two defects C11 fixes, both invisible under one-op-per-process and
+both only observable under OVERLAPPING dispatch:
+
+  1. `_declared_writes_var` (the DR-276 declare-write collection) is now bound
+     via `ContextVar.set()`'s returned Token and unwound via `reset()` in a
+     `finally`, rather than a bare `set()` with no reset. Two interleaved
+     dispatches with different declared writes must not cross-contaminate —
+     each dispatch's `declare_write()` calls must land only on that
+     dispatch's own declared-writes list, never a sibling's.
+  2. `DISPATCH_TIMEOUT_SECS` / `_timeout_for()` are resolved PER REQUEST via
+     `ipc._resolve_dispatch_timeout_secs()`, re-reading
+     `COORDINATOR_DISPATCH_TIMEOUT_SECS` from `os.environ` on every call
+     rather than trusting the value the module constant snapshotted at
+     import — a warm, long-lived process must be able to retune this knob
+     without a restart.
+  3. `_OP_TIMEOUT_OVERRIDES` remains live after the C11 change:
+     `coverage.gate` (600s) and `ceremony.scoped_git_commit` (150s) must
+     still resolve to their table values regardless of the global knob.
+
+Handlers use `asyncio.run()` in sync test functions — no pytest-asyncio
+dependency, matching `test_dispatch_message.py`'s own pattern.
+
+Spec backlink: docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C11
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import coordinator_core.ipc as ipc
+from coordinator_core.ipc import dispatch_message, _REGISTRY
+from coordinator_core.session.declared_writes import declare_write, active_declarations
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+class _RegistryScope:
+    """Install test handlers into `_REGISTRY`, restore on exit.
+
+    Mirrors `test_dispatch_message.py::_RegistryScope` exactly — kept as a
+    local copy rather than an import so this test file has no coupling to
+    that module's internals beyond the shared `_REGISTRY` object.
+    """
+
+    def __init__(self, handlers: dict) -> None:
+        self._handlers = handlers
+        self._saved: dict = {}
+
+    def __enter__(self):
+        for name in self._handlers:
+            self._saved[name] = _REGISTRY.get(name)
+        _REGISTRY.update(self._handlers)
+        return self
+
+    def __exit__(self, *_):
+        for name, old in self._saved.items():
+            if old is None:
+                _REGISTRY.pop(name, None)
+            else:
+                _REGISTRY[name] = old
+
+
+# ---------------------------------------------------------------------------
+# Defect 1 — declared-writes isolation under overlapping dispatch
+# ---------------------------------------------------------------------------
+
+def test_overlapping_dispatch_declared_writes_do_not_cross_contaminate():
+    """Two concurrently-running dispatches each see only their own declared
+    writes — the misattributed-write-claim failure C11 names.
+
+    `_record_self_reported_touches` unconditionally pops
+    `_SCOPE_TOUCH_PATHS_KEY` off the wire result (by design — it never
+    reaches the caller), so this test observes the mid-flight collection
+    directly via `active_declarations()` — a live snapshot taken from
+    inside each handler — rather than through the wire response.
+    """
+    seen: dict = {}
+
+    async def _declaring_handler_a(params: dict, ctx=None, repo_root=None) -> dict:
+        """Declares one write, yields (so the sibling dispatch can interleave),
+        then declares a second write and snapshots the collection —
+        exercising the window where a bare `set()` with no reset previously
+        let a later dispatch's rebind stomp this dispatch's still-open
+        collection."""
+        declare_write("a-first.txt")
+        await asyncio.sleep(0.05)
+        declare_write("a-second.txt")
+        seen["a"] = list(active_declarations() or [])
+        return {"who": "a"}
+
+    async def _declaring_handler_b(params: dict, ctx=None, repo_root=None) -> dict:
+        """Starts after `a` has already declared once, declares its own
+        write, and returns before `a` declares its second write — the
+        interleave shape that reproduces a misattributed write claim if the
+        two dispatches share one `ContextVar` slot."""
+        await asyncio.sleep(0.01)
+        declare_write("b-only.txt")
+        seen["b"] = list(active_declarations() or [])
+        return {"who": "b"}
+
+    msg_a = {"jsonrpc": "2.0", "id": "a", "method": "test.declare_a", "params": {}}
+    msg_b = {"jsonrpc": "2.0", "id": "b", "method": "test.declare_b", "params": {}}
+
+    async def _both():
+        return await asyncio.gather(
+            dispatch_message(msg_a),
+            dispatch_message(msg_b),
+        )
+
+    handlers = {"test.declare_a": _declaring_handler_a, "test.declare_b": _declaring_handler_b}
+    with _RegistryScope(handlers):
+        _run(_both())
+
+    assert seen["a"] == ["a-first.txt", "a-second.txt"], (
+        f"dispatch a's declared writes were contaminated by dispatch b: {seen['a']!r}"
+    )
+    assert seen["b"] == ["b-only.txt"], (
+        f"dispatch b's declared writes were contaminated by dispatch a: {seen['b']!r}"
+    )
+
+
+def test_declared_writes_var_reset_after_dispatch_completes():
+    """After a dispatch returns, the module-level `_declared_writes_var`
+    context slot is back to its pre-dispatch state (None at module scope) —
+    proof `reset()` actually unwinds the Token rather than leaving the
+    dispatch's list bound forever."""
+    from coordinator_core.session.declared_writes import _ACTIVE
+
+    assert _ACTIVE.get() is None
+
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "test.declare_sync", "params": {}}
+
+    def _handler(params, ctx=None, repo_root=None):
+        declare_write("x.txt")
+        return {}
+
+    with _RegistryScope({"test.declare_sync": _handler}):
+        _run(dispatch_message(msg))
+
+    assert _ACTIVE.get() is None, (
+        "_declared_writes_var must be reset after dispatch, not left bound"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Defect 2 — DISPATCH_TIMEOUT_SECS resolved per-request, not at import
+# ---------------------------------------------------------------------------
+
+def test_resolve_dispatch_timeout_secs_reads_env_live(monkeypatch):
+    """`_resolve_dispatch_timeout_secs()` picks up a live env-var change on
+    the very next call — no reliance on the import-time snapshot."""
+    monkeypatch.delenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", raising=False)
+    baseline = ipc._resolve_dispatch_timeout_secs()
+    assert baseline == ipc.DISPATCH_TIMEOUT_SECS
+
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "77")
+    assert ipc._resolve_dispatch_timeout_secs() == 77.0
+
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "12.5")
+    assert ipc._resolve_dispatch_timeout_secs() == 12.5
+
+
+def test_resolve_dispatch_timeout_secs_falls_back_to_module_attr(monkeypatch):
+    """With no env var set, `_resolve_dispatch_timeout_secs()` falls back to
+    the `DISPATCH_TIMEOUT_SECS` module attribute — so a caller (or test) that
+    assigns `ipc.DISPATCH_TIMEOUT_SECS = X` directly still takes effect,
+    matching the pre-C11 monkeypatch idiom used elsewhere in this suite."""
+    monkeypatch.delenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", raising=False)
+    orig = ipc.DISPATCH_TIMEOUT_SECS
+    try:
+        ipc.DISPATCH_TIMEOUT_SECS = 42.0
+        assert ipc._resolve_dispatch_timeout_secs() == 42.0
+        assert ipc._timeout_for("test.nonesuch") == 42.0
+    finally:
+        ipc.DISPATCH_TIMEOUT_SECS = orig
+
+
+def test_resolve_dispatch_timeout_secs_ignores_unparsable_env(monkeypatch):
+    """An unparsable env value falls back to the module attribute rather than
+    raising out of the dispatch hot path."""
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "not-a-number")
+    assert ipc._resolve_dispatch_timeout_secs() == ipc.DISPATCH_TIMEOUT_SECS
+
+
+# ---------------------------------------------------------------------------
+# Defect 2, continued — _OP_TIMEOUT_OVERRIDES stays live after the change
+# ---------------------------------------------------------------------------
+
+def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch):
+    """`ceremony.scoped_git_commit` must keep resolving to its
+    `_OP_TIMEOUT_OVERRIDES` table value regardless of the global knob's
+    per-request re-resolution — the C11 body's explicit DO NOT BREAK.
+    `coverage.gate`'s row was removed (K-001, state/kill-ledger.md); it now
+    tracks the live global knob like any unlisted op."""
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "5")
+    assert ipc._timeout_for("coverage.gate") == 5.0
+    assert ipc._timeout_for("ceremony.scoped_git_commit") == 150.0
+    # A method NOT in the override table still tracks the live global knob.
+    assert ipc._timeout_for("ping") == 5.0
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-timeout ratchet — every override is monotonically non-increasing.
+# docs/wiki/cost-budgets-and-the-kill-disposition.md
+# ---------------------------------------------------------------------------
+
+# Each row's high-water mark. A timeout may be LOWERED freely (that is the
+# direction this repo wants and no test should stand in its way); raising one
+# requires editing this table, which is the point — the edit is the argument,
+# made in a diff a reviewer sees, rather than a one-character change to a dict
+# literal that reads as routine tuning.
+_TIMEOUT_HIGH_WATER_SECS = {
+    "ceremony.scoped_git_commit": 150.0,
+}
+
+
+def test_op_timeout_overrides_never_ratchet_upward():
+    """No `_OP_TIMEOUT_OVERRIDES` row may exceed its recorded high-water mark.
+
+    This is the enforcement half of the budget rule: a bound is derived from
+    what the box can afford at the load norm and then measured against, never
+    fitted to what the op currently costs. Without a ratchet, every regression
+    arrives as a locally-reasonable argument for a slightly larger constant —
+    each one defensible in isolation, and the sequence unbounded. `coverage.gate`
+    is the worked example: 30s until eb3c24348 raised it to 600s to unmask a
+    real latency property, after which a single op held for ten minutes at a
+    time and took 45 of the 49 fleet-wide >60s events on 2026-08-15. A later
+    pass then derived 660s from post-fix telemetry — arithmetic that was correct
+    and a direction that was not.
+
+    An op that cannot fit under its bound is a kill candidate. Necessity is not
+    a defense: work that genuinely requires the time is thereby shown not to be
+    worth it, and the disposition is removal plus a rebuild record, never a
+    larger number.
+    """
+    for method, ceiling in _TIMEOUT_HIGH_WATER_SECS.items():
+        assert method in ipc._OP_TIMEOUT_OVERRIDES, (
+            f"{method} left _OP_TIMEOUT_OVERRIDES while its high-water mark "
+            f"remains here — drop the row from _TIMEOUT_HIGH_WATER_SECS too, "
+            f"and record the kill in the rebuild ledger."
+        )
+        assert ipc._OP_TIMEOUT_OVERRIDES[method] <= ceiling, (
+            f"{method} raised to {ipc._OP_TIMEOUT_OVERRIDES[method]}s over its "
+            f"{ceiling}s high-water mark. Over budget is a kill candidate, not a "
+            f"budget raise — see docs/wiki/cost-budgets-and-the-kill-disposition.md."
+        )
+
+
+def test_timeout_high_water_table_covers_every_override():
+    """Every override row carries a high-water mark, so a new op cannot enter
+    the table above the ratchet's reach and become the next unbounded row."""
+    missing = set(ipc._OP_TIMEOUT_OVERRIDES) - set(_TIMEOUT_HIGH_WATER_SECS)
+    assert not missing, (
+        f"new _OP_TIMEOUT_OVERRIDES rows with no high-water mark: {sorted(missing)}. "
+        f"Add each to _TIMEOUT_HIGH_WATER_SECS at the value it enters with."
+    )

@@ -127,7 +127,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
     monkeypatch.setattr(
         publish,
         "delta_row_unchanged",
-        lambda setup_dir, target, signature: target.name == _SKIPPED_ROW,
+        lambda setup_dir, target, signature, round_pinned_shas: target.name == _SKIPPED_ROW,
     )
 
     def fake_process_target(target, setup_dir, totals, **kwargs):

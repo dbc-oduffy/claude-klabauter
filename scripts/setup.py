@@ -2427,6 +2427,32 @@ def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Pa
         print(f"PASS [identity] {key} = {value}")
 
 
+def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
+    """Install-chain step: register the Windows Task Scheduler entry that
+    fires ``coordinator_core.telemetry.host_sampler`` on a fixed cadence.
+
+    ADVISORY, non-fatal (mirrors `install_precommit_hook`/
+    `install_percolate_identity`/`install_machine_identity`'s shape) — a
+    non-Windows host, an unavailable `schtasks.exe`, or a registration
+    failure must fall through to a printed [ADVISORY], never fail the
+    install. See `coordinator_core.install.host_sampler_scheduler` for the
+    registration mechanism, why it must survive an engine death, and the
+    open shell-out-carve-out question this site raises (schtasks.exe is not
+    yet a named class in docs/reference/shell-out-carve-outs.md).
+
+    Idempotent: `register_host_sampler_task` uses `schtasks /Create ... /F`,
+    which overwrites an existing task of the same name in place rather than
+    duplicating it.
+    """
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    from coordinator_core.install.host_sampler_scheduler import (
+        register_host_sampler_task,
+    )
+
+    register_host_sampler_task(repo_root)
+
+
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
@@ -2496,6 +2522,7 @@ def main(argv: list[str]) -> int:
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
+        install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
 
     print()
     if probe_hard_failure:

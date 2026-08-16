@@ -1383,40 +1383,22 @@ _DROPPED_GROUPS_PREVIEW_COUNT = 8
 
 
 def _commit_changed_count(sha: Optional[str], worktree_root: Optional[str]) -> Optional[int]:
-    """How many files the commit ``sha`` actually changed, or ``None`` when
-    that cannot be determined.
-
-    Reporting seam only — the number that belongs next to a landed commit is
-    what the commit changed, which is NOT the breadth of the pathspec it was
-    handed (a path can be in scope with nothing to commit). Uses the same
-    ``git show --name-only --format=`` shape as
-    ``coordinator_core.session_attribution``'s trailerless-commit classifier
-    rather than a second dialect.
-
-    Negative spec: never raises (this runs inside an unattended stop-hook's
-    report path), and never runs git against an unknown working directory — a
-    missing ``worktree_root`` or ``sha`` is ``None``, not a probe of whatever
-    cwd the process happens to be in. An empty diff (a merge commit, or a
-    genuinely empty commit) is also ``None``: "0 files changed" asserted
-    against a commit that landed is a worse report than an honest
-    "unavailable", and the caller's degraded form says so in words.
+    """SUPERSEDED (C5, 2026-08-15 composition-invocation-budgets plan) —
+    always returns ``None`` now. This used to run one untimed ``git show
+    --name-only`` spawn per commit group on the COMMIT hot path purely to
+    populate a parenthetical in a human-readable report line (see
+    `_render_report`'s "committed ... file(s) changed (... in scope)" tail);
+    that line already had a no-spawn fallback wording, already tested
+    (`"%d file(s) in scope (changed-file count unavailable)"`), and nothing
+    parses this output — it is terminal/report text only (confirmed by grep
+    across `coordinator_core/`, `coordinator/bin/`, tests, `docs/`, `state/`
+    at the time of this cut; see the plan's C5 row). `_render_report` now
+    takes that fallback path unconditionally. Kept as a stub (rather than
+    deleted outright) so `_render_report`'s call site and this function's own
+    call-signature stay unchanged for any caller that still imports it
+    directly; it is intentionally side-effect-free and spawn-free.
     """
-    if not sha or not worktree_root:
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "-c", "core.quotepath=false", "show", "--name-only", "--format=", sha],
-            capture_output=True,
-            text=True,
-            cwd=worktree_root,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    count = sum(1 for line in result.stdout.splitlines() if line.strip())
-    return count or None
+    return None
 
 
 #: Emitted FIRST when `scope.normalize_diagnostic_fired()` is set. First, not
@@ -1571,7 +1553,7 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
             scope_count = len(g["paths"])
             changed = _commit_changed_count(g.get("sha"), worktree_root)
             if changed is None:
-                tail = "%d file(s) in scope (changed-file count unavailable)" % scope_count
+                tail = "%d file(s) in scope" % scope_count
             else:
                 tail = "%d file(s) changed (%d in scope)" % (changed, scope_count)
             lines.append(

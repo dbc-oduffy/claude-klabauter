@@ -199,6 +199,11 @@ def _read_em_environment() -> ReaderResult:
                     "unpinned/non-medium effort silently inflates cost as "
                     "Anthropic's default drifts upward"
                 ),
+                # Acknowledgement-class (plan's C1b correction): the EM
+                # merely notes session-config drift here; nothing the EM
+                # does off this answer is un-gated action, so demotion into
+                # narration loses nothing.
+                reportable=True,
             )
         )
     if model_warn:
@@ -216,6 +221,8 @@ def _read_em_environment() -> ReaderResult:
                 ],
                 evidence=f"model={model_warn!r}",
                 reason="EM work is expected to run on Opus",
+                # Acknowledgement-class -- see j-em-env-effort's comment above.
+                reportable=True,
             )
         )
     return ReaderResult(judgment_points=judgment_points)

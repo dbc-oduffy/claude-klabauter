@@ -59,12 +59,18 @@ Native leg registry (`_NATIVE_LEGS`) — no globbing for claude-klabauter-owned 
   sibling repo's routine housekeeping silently disabling a claude-klabauter-owned
   health check) is structurally impossible to repeat for any of them.
 
-  The `bin/install-health/*.sh` glob + shebang-dispatch subprocess path
-  below is retained ONLY as a residual extensibility hook for a
+  The `bin/install-health/*.sh`+`*.py` glob + shebang-dispatch subprocess
+  path below is retained ONLY as a residual extensibility hook for a
   hypothetical FUTURE foreign drop-in with no native peer — it is not
   required for any leg this module currently owns, and every currently
-  known basename is excluded from it via `_decoupled_basenames` (skip, not
-  double-run, if one is ever reintroduced on disk).
+  known basename (across every extension the glob matches) is excluded from
+  it via `_decoupled_basenames` (skip, not double-run, if one is ever
+  reintroduced on disk). `*.sh`-only was measured (C18) to glob EMPTY on
+  Windows — the platform install-health most needs to run on — because this
+  directory's actual drop-ins today are `.cmd`/`.ps1`/`.py`, never `.sh`;
+  the glob now also matches `.py` (the other extension
+  `coordinator_core.launchable.resolve_by_shebang` can actually launch) so
+  the hook is live on Windows rather than a permanently-empty no-op.
 
 Spec backlink: cross-repo/inbox/2026-07-21-claude-central-em-dr079-doe-dispositions-and-install-health-defect.md
 Spec backlink: cross-repo/inbox/2026-07-22-claude-central-em-install-health-trio-deleted-kill-first.md
@@ -157,6 +163,16 @@ _NATIVE_LEGS = [
         lambda plugin_root, claude_klabauter_root: check_bareword_path_provisioning(plugin_root, claude_klabauter_root),
     ),
 ]
+
+# Extensions the residual drop-in glob matches, and `resolve_by_shebang`
+# (coordinator_core.launchable) can actually launch: `.sh` via its bash
+# entry, `.py` via its sys.executable special-case. `.cmd`/`.ps1` are
+# deliberately NOT here — resolve_by_shebang has no launch path for either,
+# so matching them would find a file this loop cannot run (C18: census §8
+# open question 4 found bin/install-health/ on Windows holds `.cmd`/`.ps1`/
+# `.py` siblings and zero `.sh` files, so a `*.sh`-only glob is empty on the
+# platform that most needs install health).
+_DROP_IN_LEG_EXTENSIONS = (".sh", ".py")
 
 _BIN_DST_KNOWN_FORWARDER = "machine-local"
 
@@ -355,13 +371,22 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
     # surface, per the dual-anchor split (see module docstring).
     health_dir = os.path.join(claude_klabauter_root, "coordinator", "bin", "install-health")
 
-    # Basenames of the three decoupled `_NATIVE_LEGS` entries' `.sh` names.
-    # They already ran unconditionally above; if any were ever reintroduced
-    # as a file in the drop-in directory, skip it here to avoid a double
-    # execution rather than silently re-running it via subprocess.
-    _decoupled_basenames = frozenset(f"{name}.sh" for name, _ in _NATIVE_LEGS)
+    # Basenames of the four decoupled `_NATIVE_LEGS` entries, one per
+    # extension this glob matches. They already ran unconditionally above;
+    # if any were ever reintroduced as a file in the drop-in directory, skip
+    # it here to avoid a double execution rather than silently re-running it
+    # via subprocess. `seed-skill-overrides.py` is a live instance of this
+    # today (its `.py`/`.cmd`/`.ps1` siblings sit in this very directory).
+    _decoupled_basenames = frozenset(
+        f"{name}{ext}" for name, _ in _NATIVE_LEGS for ext in _DROP_IN_LEG_EXTENSIONS
+    )
 
-    for script in sorted(glob.glob(os.path.join(health_dir, "*.sh"))) if os.path.isdir(health_dir) else []:
+    _drop_in_scripts: list[str] = []
+    if os.path.isdir(health_dir):
+        for ext in _DROP_IN_LEG_EXTENSIONS:
+            _drop_in_scripts.extend(glob.glob(os.path.join(health_dir, f"*{ext}")))
+
+    for script in sorted(_drop_in_scripts):
         if os.path.basename(script) in _decoupled_basenames:
             continue
 

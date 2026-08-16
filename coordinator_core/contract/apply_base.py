@@ -81,15 +81,110 @@ Negative-spec:
       registered undo, in reverse landing order, never a generalized
       rollback engine. See `execute_directives`'s own docstring for the
       full contract (opt-in, additive, byte-identical when omitted).
+
+COMPOSITION BUDGET WIRING (chunk C10, docs/plans/2026-08-15-composition-
+invocation-budgets.md): `execute_directives`'s optional `composition_budget`
+parameter (`coordinator_core.composition_budget.CompositionBudget | None`,
+default `None` — byte-identical to pre-C10 behaviour when omitted) adds
+TWO boundary checks and ONE mid-directive advisory, never a mid-mutation
+abort (the anti-scope's hard line):
+
+    - BEFORE-FIRST-MUTATION boundary: checked once, after the whole-list
+      `resolve_cli` pre-validation pass and the pre-loop claim-grant gate,
+      and BEFORE the per-directive loop begins. Nothing has mutated by
+      this point regardless of what the loop's first entries look like —
+      this is why the check sits before the loop rather than "at the
+      first iteration": an `already_satisfied` directive at index 0 does
+      not mutate either, so gating on "first iteration" would not in fact
+      be "first mutation" (the caveat this chunk's brief names). A breach
+      here reuses `APPLY_EXIT_CLAIM_DENIED` (position 2) rather than
+      minting a new ladder member — nothing landed yet, `"landed": []`,
+      the exact shape the pre-existing claim-grant-denied branch already
+      returns; a caller switching on `rc == 2` sees the same "nothing
+      mutated, consult the report" contract it already handles. The
+      report's additive `"budget_breach"` key (present only when this
+      fires) carries the breach message for a caller that wants to tell
+      the two `CLAIM_DENIED` causes apart.
+    - AFTER-LAST-MUTATION boundary: checked once, after the loop
+      completes (successfully — this call site is never reached from the
+      `except Exception` partial-mutation branch, so it structurally
+      cannot precede or trigger `_run_compensators`). By this point every
+      directive that was going to mutate already has, successfully — a
+      breach here reports rc=0 with loud stderr (`APPLY_EXIT_OK`/
+      `APPLY_EXIT_HALTED_AT_JUDGMENT`, whichever the loop's own outcome
+      already was, UNCHANGED), never `APPLY_EXIT_PARTIAL_MUTATION`.
+      Reusing `PARTIAL_MUTATION=4` here was considered and rejected: that
+      code is the one that triggers `_run_compensators` in reverse
+      landing order, so a post-loop breach on a run that completed
+      successfully but slowly would tear down a run that had nothing
+      wrong with it beyond taking too long — exactly the half-applied-
+      ceremony harm this budget exists to prevent, caused by the guard
+      itself. The report's additive `"budget_breach"` key carries the
+      breach message here too.
+    - MID-DIRECTIVE advisory: after each directive that actually
+      dispatches a handler (never for `already_satisfied` entries — they
+      did no work this run), `composition_budget.advisory_check()` is
+      called and `record_invocation()` records the dispatch.
+      `advisory_check()` never raises and has no control-flow effect
+      (§ `composition_budget.py`'s own contract) — a breach here only
+      emits loud stderr, so a slow directive's cost surfaces right after
+      IT finishes rather than only at the run's final report. This is
+      coarser than "inside" a single long-running handler (this module
+      does not own handler internals to instrument further), but it is
+      the finest granularity available at this seam without reaching
+      into a composed primitive's own body — which the anti-scope's
+      mid-mutation-abort prohibition would forbid instrumenting for
+      abort purposes anyway.
+
+SESSION IDENTITY SHAPE (chunk C6, docs/plans/2026-08-15-warm-engine-retires-
+the-per-invocation-cold-start.md): `session_identity()` is a per-CONTEXT
+`contextvars.ContextVar` scope, not a process-wide `os.environ` mutation.
+Under a warm engine, two overlapping in-process dispatches (two threads, or
+two `asyncio` tasks) each hold their OWN session id for the lifetime of
+their own `with session_identity(...):` block — entering or exiting one
+never overwrites the other's ambient identity, and neither block leaves a
+DEAD session id behind as a process-wide default once it exits. This is the
+shape C11/C12 (concurrent MUTATING dispatch) build on: a per-request
+contextvar, not a global.
+
+`os.environ` is mirrored from the active contextvar **only** at the ONE
+outermost boundary this module owns where a CHILD PROCESS must inherit the
+identity — `scoped_commit`'s own `run_git` invocations, the sole
+subprocess-spawning seam here (`git add`/`diff --cached`/`commit`/
+`rev-parse`, each already wrapped by `run_with_lock_retry` where
+applicable). `_mirror_session_env_for_subprocess` performs that mirror,
+scoped to exactly the one `run_git` call it wraps, restoring the prior
+`os.environ` value (or deleting the key) immediately after — never left
+mirrored in between calls, and never mirrored anywhere else in this module.
+A caller with no active `session_identity()` context (the contextvar reads
+its `None` default) leaves `os.environ` untouched, matching today's
+behaviour for a dispatch that never entered a session-identity block at
+all.
+
+    INSTRUMENTATION-ERROR ISOLATION: `op_latency`, `_hook_envelope`, and
+    `cli_entry._record` are all deliberately unable to fail at their own
+    seams (an observed pattern in this codebase, not a ruled house rule —
+    no decision record was found asserting it). A budget BREACH must be
+    loud (that is the whole point of `disposition="fail-loud"`); an
+    INSTRUMENTATION ERROR — an exception from a caller-supplied `on_count`
+    callback, or any other unexpected failure inside the budget machinery
+    itself, as opposed to `BudgetBreach` — must not. `_budget_call` below
+    resolves that tension: it lets `BudgetBreach` (and only `BudgetBreach`)
+    propagate to its caller, and swallows any OTHER exception into a loud
+    stderr line, so a bug in an injected `on_count` sink can never take
+    down a ceremony close.
 """
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
+from coordinator_core.composition_budget import BudgetBreach, CompositionBudget
 from coordinator_core.git_lock_retry import run_with_lock_retry
 
 # ---------------------------------------------------------------------------
@@ -298,11 +393,14 @@ def resolve_cli(
 
 # ---------------------------------------------------------------------------
 # Session-id propagation — explicit only, never an ambient tier-4
-# sentinel. `SESSION_ENV_VARS` is what a resolved explicit id gets
-# written INTO for the duration of a call (both identity chains a
-# consumer's composed primitives may read); `SESSION_ENV_READ_ORDER` is
+# sentinel. `SESSION_ENV_VARS` names the two identity chains a resolved
+# explicit id is scoped INTO for the duration of a call, via a
+# `contextvars.ContextVar` per name (see `session_identity` below) — NOT
+# `os.environ` process-wide, since chunk C6. `SESSION_ENV_READ_ORDER` is
 # what an implicit id is read FROM, highest-precedence first, when no
-# explicit id is supplied.
+# explicit id is supplied — that read is a genuine ambient-environment
+# read (the caller's own launch environment), unrelated to the
+# `session_identity` contextvar scope.
 # ---------------------------------------------------------------------------
 SESSION_ENV_VARS = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID")
 
@@ -327,13 +425,73 @@ def resolve_explicit_session_id(
     return None
 
 
+# One `ContextVar` per env-var NAME, created lazily and cached here so an
+# arbitrary caller-supplied `env_vars` tuple (baton/pickup/etc. all pass the
+# same two names today, but nothing pins that) still gets a stable, shared
+# contextvar per name across every consumer of this module — never a fresh
+# contextvar per call, which would make `current_session_env` unable to see
+# a value `session_identity` set moments earlier in the same context.
+_SESSION_ID_CONTEXTVARS: dict[str, "contextvars.ContextVar[Optional[str]]"] = {}
+
+
+def _contextvar_for(var: str) -> "contextvars.ContextVar[Optional[str]]":
+    cv = _SESSION_ID_CONTEXTVARS.get(var)
+    if cv is None:
+        cv = contextvars.ContextVar(f"apply_base_session_env__{var}", default=None)
+        _SESSION_ID_CONTEXTVARS[var] = cv
+    return cv
+
+
 @contextmanager
 def session_identity(
     session_id: str, *, env_vars: tuple[str, ...] = SESSION_ENV_VARS
 ) -> Iterator[None]:
-    previous = {var: os.environ.get(var) for var in env_vars}
+    """Scopes `session_id` into `env_vars`' contextvars for the lifetime of
+    this `with` block ONLY — never `os.environ` (§ module docstring
+    "SESSION IDENTITY SHAPE"). Two overlapping calls (two threads/tasks,
+    the warm-dispatch shape) each see their own value for the duration of
+    their own block; neither can overwrite the other's ambient identity,
+    and exiting one never leaves a dead id as a process-wide default."""
+    tokens = [(_contextvar_for(var), _contextvar_for(var).set(session_id)) for var in env_vars]
+    try:
+        yield
+    finally:
+        for cv, token in tokens:
+            cv.reset(token)
+
+
+def current_session_env(env_vars: tuple[str, ...] = SESSION_ENV_VARS) -> dict[str, str]:
+    """Reads the ACTIVE `session_identity()` context's ids, keyed by env-var
+    name — for a caller about to cross the one outermost boundary where a
+    CHILD PROCESS must inherit them (a subprocess spawn), never for a
+    general-purpose ambient read. A var with no active context (or no
+    `session_identity()` entered at all) is omitted, not `None`-valued."""
+    result: dict[str, str] = {}
     for var in env_vars:
-        os.environ[var] = session_id
+        val = _contextvar_for(var).get()
+        if val is not None:
+            result[var] = val
+    return result
+
+
+@contextmanager
+def _mirror_session_env_for_subprocess(
+    env_vars: tuple[str, ...] = SESSION_ENV_VARS,
+) -> Iterator[None]:
+    """THE outermost boundary (§ module docstring "SESSION IDENTITY
+    SHAPE"): mirrors the active `session_identity()` contextvar scope into
+    `os.environ` for the duration of ONE subprocess-spawning call only,
+    restoring (or deleting) immediately after. `scoped_commit`'s own
+    `run_git` invocations are the sole subprocess seam this module owns —
+    nothing else in this module touches `os.environ` for session identity.
+    A context with no active session id leaves `os.environ` untouched."""
+    overrides = current_session_env(env_vars)
+    if not overrides:
+        yield
+        return
+    previous = {var: os.environ.get(var) for var in overrides}
+    for var, value in overrides.items():
+        os.environ[var] = value
     try:
         yield
     finally:
@@ -342,6 +500,27 @@ def session_identity(
                 os.environ.pop(var, None)
             else:
                 os.environ[var] = value
+
+
+def _budget_call(label: str, fn: Callable[[], Any]) -> Any:
+    """Runs one `composition_budget` call, letting `BudgetBreach` (the
+    deliberate fail-loud signal) propagate unchanged while any OTHER
+    exception — an instrumentation error, e.g. from a caller-injected
+    `on_count` — is swallowed into a loud stderr line and never propagates
+    (§ module docstring, "INSTRUMENTATION-ERROR ISOLATION"). `label`
+    identifies which of the three call sites (pre-mutation boundary,
+    post-mutation boundary, mid-directive advisory) failed, for the
+    stderr line only — never for control flow."""
+    try:
+        return fn()
+    except BudgetBreach:
+        raise
+    except Exception as exc:  # noqa: BLE001 - isolated, never propagated
+        print(
+            f"[composition-budget] instrumentation error at {label}: {exc}",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _run_compensators(
@@ -358,7 +537,46 @@ def _run_compensators(
     that itself raises is caught here and recorded as `succeeded: False` —
     it must never propagate, and never replaces the caller's own `error`/
     `failed_directive` fields, which this function's return value is
-    additive to, never substitutes for."""
+    additive to, never substitutes for.
+
+    Wraps each compensator call in `_mirror_session_env_for_subprocess`,
+    same as the per-directive handler dispatch in `execute_directives`'s
+    own loop above (§ module docstring "SESSION IDENTITY SHAPE") — a
+    compensator is itself a caller-supplied callable that may resolve
+    session identity from `os.environ` and shell out (e.g.
+    `_compensate_d1_scaffold`'s re-render of the SAME generator scaffolder
+    `handler` above ran, which stamps an ambient-session-derived
+    `authoring_session` field only when the identity is mirrored into
+    `os.environ` at call time). Omitting this wrap here left the
+    boundary-#1/mid-directive/boundary-#2 sites mirrored but this reaction
+    path un-mirrored — the 2026-08-15 regression this wrap fixes: a
+    compensator's re-render diverging from the actual on-disk file it
+    produced moments earlier purely because the ambient identity it saw at
+    mint time was no longer visible at compensate time, which silently
+    masked a real compensator outcome (declined to delete, reported
+    `succeeded: True` anyway) rather than the instrumentation-only
+    isolation this module's budget wiring is scoped to.
+
+    RETURN-VALUE CONTRACT (2026-08-16, downstream of ada42cb429f2): a
+    compensator's own RETURN VALUE, not merely whether it raised, decides
+    `succeeded`. Every compensator registered today (`_D1_COMPENSATORS` in
+    `baton_assemble/apply.py`: `_compensate_d1_scaffold`,
+    `_compensate_d5_release_claim`) returns `None` on every path, including
+    its own early-return "nothing to do here" guards -- so `None` MUST
+    continue to mean success; flipping that would turn every one of
+    today's normal no-op runs into a false `succeeded: False` alarm, a
+    worse defect than the one this fixes. An EXPLICIT `False` return is
+    the one signal a compensator has to say "I ran, I deliberately chose
+    NOT to act, and that decision was itself intact" -- recorded as
+    `succeeded: False` (matching a raise's own `succeeded: False`, since
+    neither compensated anything) but distinguished by an additive
+    `"declined": True` key with no `"error"` key, so a caller reading this
+    list can always tell "the compensator broke" (`error` present) apart
+    from "the compensator ran fine and chose not to act" (`declined`
+    present) -- the exact conflation `ada42cb429f2` cured one layer up for
+    missing ambient session identity. `True`, or any other non-`False`
+    return, is treated the same as `None` -- `succeeded: True` -- so a
+    compensator that returns `{"ok": True}` or similar today is unaffected."""
     outcomes: list[dict[str, Any]] = []
     for result in reversed(results):
         if result.already_satisfied:
@@ -368,8 +586,15 @@ def _run_compensators(
             continue
         outcome: dict[str, Any] = {"directive_id": result.directive_id, "attempted": True}
         try:
-            compensator(directive_lookup[result.directive_id], repo_root, result.detail)
-            outcome["succeeded"] = True
+            with _mirror_session_env_for_subprocess():
+                comp_result = compensator(
+                    directive_lookup[result.directive_id], repo_root, result.detail
+                )
+            if comp_result is False:
+                outcome["succeeded"] = False
+                outcome["declined"] = True
+            else:
+                outcome["succeeded"] = True
         except Exception as exc:  # noqa: BLE001 - recorded, never propagated
             outcome["succeeded"] = False
             outcome["error"] = str(exc)
@@ -388,6 +613,7 @@ def execute_directives(
     compensators: Optional[
         dict[str, Callable[[dict[str, Any], Path, Optional[dict[str, Any]]], Any]]
     ] = None,
+    composition_budget: "Optional[CompositionBudget]" = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam, callable directly with two
     `judgment_points` lists differing only in `recommendation` content to
@@ -488,11 +714,43 @@ def execute_directives(
         return APPLY_EXIT_OK, {"landed": []}
 
     if resolve_claim_grant is not None:
-        claim_grant = resolve_claim_grant()
+        # Same outermost-boundary rationale as the per-directive handler
+        # call below: `resolve_claim_grant` is a caller-injected zero-arg
+        # closure that may itself resolve session identity from
+        # `os.environ` and shell out (claim-mechanics probes).
+        with _mirror_session_env_for_subprocess():
+            claim_grant = resolve_claim_grant()
         if claim_grant.get("verdict") not in GRANTED_VERDICTS:
             return APPLY_EXIT_CLAIM_DENIED, {
                 "claim_grant": claim_grant,
                 "landed": [],
+            }
+
+    # Composition-budget boundary #1 -- before any mutation (§ module
+    # docstring "COMPOSITION BUDGET WIRING"). Nothing has mutated yet
+    # regardless of what the loop below finds at its own first entry
+    # (an already_satisfied directive does not mutate either), so this
+    # single pre-loop check is genuinely "before first mutation," not
+    # merely "before first iteration."
+    if composition_budget is not None:
+        breach_message: Optional[str] = None
+        try:
+            within_budget = _budget_call(
+                "pre-mutation boundary", lambda: composition_budget.check(unit="pre_mutation")
+            )
+        except BudgetBreach as exc:
+            breach_message = str(exc)
+        else:
+            if within_budget is False:
+                breach_message = (
+                    "composition budget breach: composition="
+                    f"{composition_budget.composition_id!r} unit='pre_mutation' "
+                    "(skip-and-surface)"
+                )
+        if breach_message is not None:
+            return APPLY_EXIT_CLAIM_DENIED, {
+                "landed": [],
+                "budget_breach": breach_message,
             }
 
     try:
@@ -527,7 +785,15 @@ def execute_directives(
             continue
 
         try:
-            detail = handler(directive.get("args", []), repo_root)
+            # Outermost boundary (§ module docstring "SESSION IDENTITY
+            # SHAPE"): a dispatch-table handler receives no explicit
+            # session-id parameter -- it resolves identity, if it needs
+            # one, from `os.environ` and may itself shell out (e.g. a
+            # claim-mechanics handler's own git call). Mirror the active
+            # `session_identity()` contextvar scope for the duration of
+            # THIS ONE handler call only.
+            with _mirror_session_env_for_subprocess():
+                detail = handler(directive.get("args", []), repo_root)
         except Exception as exc:  # noqa: BLE001 - captured for the partial-mutation report
             if directive.get("advisory"):
                 advisory_failures.append({"directive_id": directive_id, "error": str(exc)})
@@ -548,6 +814,57 @@ def execute_directives(
         results.append(DirectiveResult(directive_id, already_satisfied=False, detail=detail))
         landed.append(directive_id)
 
+        # Mid-directive advisory (§ module docstring "COMPOSITION BUDGET
+        # WIRING") -- WARN-ONLY, no control-flow effect, never for an
+        # already_satisfied entry (it did no work this run). Runs right
+        # after the directive that may have just been the slow one, so a
+        # breach surfaces here rather than only at the run's final report.
+        if composition_budget is not None:
+            _budget_call(
+                "mid-directive advisory",
+                lambda directive_id=directive_id: composition_budget.record_invocation(
+                    unit=directive_id
+                ),
+            )
+
+            def _advise(directive_id: str = directive_id) -> None:
+                if not composition_budget.advisory_check(unit=directive_id):
+                    print(
+                        "[composition-budget] mid-directive advisory breach after "
+                        f"directive={directive_id!r}: composition="
+                        f"{composition_budget.composition_id!r}",
+                        file=sys.stderr,
+                    )
+
+            _budget_call("mid-directive advisory", _advise)
+
+    # Composition-budget boundary #2 -- after the last mutation (§ module
+    # docstring "COMPOSITION BUDGET WIRING"). Only reachable when the loop
+    # above completed WITHOUT raising -- the PARTIAL_MUTATION `except`
+    # branch returns before this point, so this check can never precede
+    # (and therefore never triggers) `_run_compensators`. A breach here is
+    # rc=0-with-loud-stderr, never PARTIAL_MUTATION: the mutation already
+    # landed successfully, and PARTIAL_MUTATION's own reverse-compensation
+    # pass exists to undo a run that failed mid-mutation, not one that
+    # merely finished slowly.
+    post_budget_breach: Optional[str] = None
+    if composition_budget is not None:
+        try:
+            post_within_budget = _budget_call(
+                "post-mutation boundary", lambda: composition_budget.check(unit="post_mutation")
+            )
+        except BudgetBreach as exc:
+            post_budget_breach = str(exc)
+        else:
+            if post_within_budget is False:
+                post_budget_breach = (
+                    "composition budget breach: composition="
+                    f"{composition_budget.composition_id!r} unit='post_mutation' "
+                    "(skip-and-surface, observed after last mutation)"
+                )
+        if post_budget_breach is not None:
+            print(f"[composition-budget] {post_budget_breach}", file=sys.stderr)
+
     if blocked_jp_ids:
         halted_report: dict[str, Any] = {
             "unresolved_judgment_points": sorted(blocked_jp_ids),
@@ -556,11 +873,15 @@ def execute_directives(
         }
         if advisory_failures:
             halted_report["advisory_failures"] = advisory_failures
+        if post_budget_breach is not None:
+            halted_report["budget_breach"] = post_budget_breach
         return APPLY_EXIT_HALTED_AT_JUDGMENT, halted_report
 
     ok_report: dict[str, Any] = {"landed": landed, "results": [r.to_report() for r in results]}
     if advisory_failures:
         ok_report["advisory_failures"] = advisory_failures
+    if post_budget_breach is not None:
+        ok_report["budget_breach"] = post_budget_breach
     return APPLY_EXIT_OK, ok_report
 
 
@@ -601,25 +922,29 @@ def scoped_commit(
     resolved = assert_in_repo_root(Path(artifact_rel_path), repo_root)
     pathspec = ["--", str(resolved)]
 
-    add_proc = run_with_lock_retry(lambda: run_git(["add", *pathspec], repo_root))
+    with _mirror_session_env_for_subprocess():
+        add_proc = run_with_lock_retry(lambda: run_git(["add", *pathspec], repo_root))
     if add_proc.returncode != 0:
         raise RuntimeError(
             f"git add {artifact_rel_path} failed (rc={add_proc.returncode}, "
             f"cwd={repo_root}): {add_proc.stderr.strip() or '<no stderr>'}"
         )
 
-    unchanged = run_git(["diff", "--cached", "--quiet", *pathspec], repo_root)
+    with _mirror_session_env_for_subprocess():
+        unchanged = run_git(["diff", "--cached", "--quiet", *pathspec], repo_root)
     if unchanged.returncode == 0:
         return None
 
-    commit_proc = run_with_lock_retry(
-        lambda: run_git(["commit", "-m", message, *pathspec], repo_root)
-    )
+    with _mirror_session_env_for_subprocess():
+        commit_proc = run_with_lock_retry(
+            lambda: run_git(["commit", "-m", message, *pathspec], repo_root)
+        )
     if commit_proc.returncode != 0:
         raise RuntimeError(
             f"git commit {artifact_rel_path} failed (rc={commit_proc.returncode}, "
             f"cwd={repo_root}): {commit_proc.stderr.strip() or '<no stderr>'}"
         )
 
-    sha_proc = run_git(["rev-parse", "HEAD"], repo_root)
+    with _mirror_session_env_for_subprocess():
+        sha_proc = run_git(["rev-parse", "HEAD"], repo_root)
     return sha_proc.stdout.strip() if sha_proc.returncode == 0 else None

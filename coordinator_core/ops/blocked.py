@@ -42,36 +42,20 @@ Negative-spec:
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.wire_paths import rel_id
-from coordinator_core.win_portability import no_console_creationflags
 
 _PROG = "blocked.sh"  # literal program-name prefix — matches the DoE filename
 
 
 def _git_repo_root(cwd: Optional[str] = None) -> Optional[str]:
     """Resolve the git repo root for `cwd` (defaults to process cwd). None if not a repo."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_repo_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return show_toplevel(cwd)
 
 
 def _render_handoff_line(path: str, frontmatter: dict) -> str:

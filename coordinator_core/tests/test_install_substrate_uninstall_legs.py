@@ -747,7 +747,7 @@ def test_orchestrate_keep_marketplace_dry_run_reports_mode(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "mode=revert-to-marketplace" in out
-    assert "4. set plugin end-state (revert-to-marketplace)" in out
+    assert "6. set plugin end-state (revert-to-marketplace)" in out
 
 
 def test_orchestrate_stops_at_first_failing_leg(tmp_path, monkeypatch, capsys):

@@ -1552,6 +1552,312 @@ class TestDefect2ChunkCommitDetection:
 
 
 # ===========================================================================
+# Regression: paren-slug chunk-id suffix (Defect fix, 2026-08-15) -- the house
+# `Cn(slug):` commit-subject convention (`C16(composition-invocation-
+# budgets): ...`) registered ZERO chunk-ids: `_CHUNK_SUBJECT_RE`'s id
+# character class excluded `(`/`)` outright, so the leading-token match
+# failed before the separator/spine-bounding logic ever ran. 221 subjects
+# match this shape in this repo's own `git log` (2026-08-15), including
+# three of HEAD's own most recent commits at the time of the fix. Reported
+# cross-repo by example-retrieval-repo-em (memo dated 2026-08-15), where it presented
+# as a false `key_mismatch` on a fully-shipped plan.
+# ===========================================================================
+
+
+class TestParenSlugChunkIdSuffix:
+    def test_single_id_paren_slug_strips_to_bare_id(self):
+        assert coas._extract_chunk_ids(
+            "C1(path-scope): typed path_scope kwarg", spine_ids=["C1"]
+        ) == ["C1"]
+        assert coas._extract_chunk_ids(
+            "C16(composition-invocation-budgets): compute_scope's agent-claim "
+            "scan stops scaling with peer count",
+            spine_ids=["C16"],
+        ) == ["C16"]
+
+    def test_compound_paren_slug_strips_each_token_independently(self):
+        """A compound subject may mix a plain and a parenthesized id
+        freely -- only the parenthesized token's suffix is stripped, the
+        plain token is untouched."""
+        assert coas._extract_chunk_ids(
+            "C1+C3(path-scope): typed path_scope kwarg", spine_ids=["C1", "C3"]
+        ) == ["C1", "C3"]
+        assert coas._extract_chunk_ids(
+            "C1(path-scope)+C3(other-scope): typed", spine_ids=["C1", "C3"]
+        ) == ["C1", "C3"]
+
+    def test_spine_bounded_paren_slug_still_bounds_on_the_bare_id(self):
+        """The paren suffix is stripped BEFORE spine-id bounding, so a
+        parenthesized token that does not cover any real spine id is still
+        dropped, exactly like an unparenthesized stranger token would be."""
+        assert coas._extract_chunk_ids(
+            "C1(path-scope)+C9(unrelated): typed", spine_ids=["C1"]
+        ) == ["C1"]
+
+    def test_unparenthesized_id_list_unaffected_by_the_fix(self):
+        """Control case: `C1+C3: typed` (no parens at all) is byte-identical
+        to pre-fix behavior."""
+        assert coas._extract_chunk_ids(
+            "C1+C3: typed", spine_ids=["C1", "C3"]
+        ) == ["C1", "C3"]
+
+    def test_empty_parens_strip_to_the_bare_id(self):
+        assert coas._extract_chunk_ids("C1(): typed", spine_ids=["C1"]) == ["C1"]
+
+    def test_unbalanced_parens_do_not_crash_and_register_nothing(self):
+        assert coas._extract_chunk_ids("C1(oops: unterminated paren") == []
+        assert coas._extract_chunk_ids(
+            "C1(oops: unterminated paren", spine_ids=["C1"]
+        ) == []
+
+    def test_nested_parens_do_not_crash_and_register_nothing(self):
+        assert coas._extract_chunk_ids("C1(a(b)): nested paren") == []
+        assert coas._extract_chunk_ids(
+            "C1(a(b)): nested paren", spine_ids=["C1"]
+        ) == []
+
+    def test_pinned_counter_examples_unchanged(self):
+        """The three counter-examples this defect fix must not regress,
+        pinned by the dispatching brief -- none of these involve parens at
+        all, so none of their outputs should move."""
+        assert coas._extract_chunk_ids(
+            "coordinator/bin/stitch-observer-sidecar.py: add --scan standalone leak sweep"
+        ) == []
+        assert coas._extract_chunk_ids(
+            "g4-M1/M3a/M3b/M4/M4b: commit-authorization teeth"
+        ) == []
+        assert coas._extract_chunk_ids("fix: whatever was broken") == ["fix"]
+        assert coas._extract_chunk_ids(
+            "mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3"
+        ) == ["mise"]
+        assert coas._extract_chunk_ids(
+            "mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3",
+            spine_ids=["C12", "C3"],
+        ) == []
+
+    def test_paren_slug_commit_registers_end_to_end(self, tmp_path):
+        """Same defect, exercised through the real `_committed_chunk_ids`
+        git-log scan and `_determine_shipped` -- a plan whose every chunk
+        landed under the `Cn(slug):` convention must be reported fully
+        shipped, not `key_mismatch`."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root, "plan.md", "C1(path-scope): typed path_scope kwarg",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+        _commit_with_subject(
+            root, "plan.md", "C2a+C2b(second-scope): land both remaining chunks",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert missing == []
+        assert shipped is True
+        assert join_provenance == coas.JOIN_PROVENANCE_JOINED
+
+
+# ===========================================================================
+# Defect fix, 2026-08-15 -- prefix-then-ids commit-subject form
+# (`retrieval-audit C0/C1/C7: ...`, `retrieval-audit C2: ...`). A SECOND,
+# DISTINCT defect from the paren-slug fix above: `_CHUNK_SUBJECT_RE` requires
+# the id-list to be the LEADING token, so a scope word ahead of it fails the
+# whole match and `_extract_chunk_ids` returns `[]`. Reported cross-repo via
+# `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-close-out-and-stamp-key-
+# mismatch.md`: ten correctly-trailered commits on a fully-shipped
+# example-retrieval-repo plan all refused stamping. See `_CHUNK_SUBJECT_PREFIXED_RE`'s
+# own comment block for the exact contiguity bound admitted.
+# ===========================================================================
+
+
+class TestPrefixThenIdsChunkSubject:
+    def test_single_id_with_prefix_registers(self):
+        assert coas._extract_chunk_ids(
+            "retrieval-audit C2: schema v21 adds verdict, result_count, event_class",
+            spine_ids=["C2"],
+        ) == ["C2"]
+
+    def test_slash_joined_multi_id_with_prefix_registers(self):
+        assert coas._extract_chunk_ids(
+            "retrieval-audit C0/C1/C7: migration-ladder tripwire, RED outcome "
+            "test, consumer-dimension ruling",
+            spine_ids=["C0", "C1", "C7"],
+        ) == ["C0", "C1", "C7"]
+
+    def test_prefixed_token_naming_no_real_spine_id_is_dropped(self):
+        """Spine-bounded rejection: a prefixed token still has to cover a
+        real spine id, exactly like the unprefixed multi-id path."""
+        assert coas._extract_chunk_ids(
+            "retrieval-audit C9: nothing real here", spine_ids=["C1"]
+        ) == []
+
+    def test_pinned_counter_examples_still_register_nothing_extra(self):
+        """Every counter-example the dispatching brief pins: each has its
+        real chunk-id mention strictly AFTER the subject's only `: `, not
+        immediately before it, so `_CHUNK_SUBJECT_RE` resolves the single
+        leading token first and `_CHUNK_SUBJECT_PREFIXED_RE` is never
+        reached -- none of these move from pre-fix behavior."""
+        assert coas._extract_chunk_ids(
+            "close: mark C8 shipped, and record why this plan cannot stamp "
+            "implemented",
+            spine_ids=["C8"],
+        ) == []
+        assert coas._extract_chunk_ids(
+            "cross-repo: deliver ... C7 sweep deny was inverted memo from ...",
+            spine_ids=["C7"],
+        ) == []
+        assert coas._extract_chunk_ids(
+            "doctrine: stage the resolves-trailer zero-join amendment ahead "
+            "of claude-klabauter C4",
+            spine_ids=["C4"],
+        ) == []
+        assert coas._extract_chunk_ids(
+            "mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3",
+            spine_ids=["C12", "C3"],
+        ) == []
+        assert coas._extract_chunk_ids(
+            "mise: wave 1 -- DOCTRINE-C7a admission gate ...; RESIDUE-C9 "
+            "named-dispatch strip guard ...",
+            spine_ids=["C7a", "C9"],
+        ) == []
+
+    def test_still_unaffected_control_cases(self):
+        """Unrelated pinned counter-examples from the paren-slug fix, still
+        untouched by this fix."""
+        assert coas._extract_chunk_ids(
+            "coordinator/bin/stitch-observer-sidecar.py: add --scan "
+            "standalone leak sweep",
+            spine_ids=["C1"],
+        ) == []
+        assert coas._extract_chunk_ids(
+            "g4-M1/M3a/M3b/M4/M4b: ...",
+            spine_ids=["M1", "M3a", "M3b", "M4", "M4b"],
+        ) == ["M3a", "M3b", "M4", "M4b"]
+        assert coas._extract_chunk_ids("fix: whatever was broken") == ["fix"]
+        assert coas._extract_chunk_ids(
+            "C1+C3(path-scope): typed", spine_ids=["C1", "C3"]
+        ) == ["C1", "C3"]
+
+    def test_prefix_then_ids_commit_registers_end_to_end(self, tmp_path):
+        """Same defect, exercised through the real `_committed_chunk_ids`
+        git-log scan and `_determine_shipped` -- a plan whose every chunk
+        landed under the `<scope> Cn: ...`/`<scope> Cn/Cm: ...` convention
+        must be reported fully shipped, not `key_mismatch`."""
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root, "plan.md", "retrieval-audit C1: typed path_scope kwarg",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+        _commit_with_subject(
+            root, "plan.md",
+            "retrieval-audit C2a/C2b: land both remaining chunks",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert missing == []
+        assert shipped is True
+        assert join_provenance == coas.JOIN_PROVENANCE_JOINED
+
+
+class TestTrailerMatchedNoChunkIdMessaging:
+    """Chunk B: a commit whose `Deliverable-Id` trailer MATCHES but whose
+    subject registers zero chunk-ids (e.g. a plan-authoring/ceremony
+    commit) used to be reported through the exact same `key_mismatch`
+    reason string as a commit whose trailer VALUE genuinely differed --
+    `_JOIN_PROVENANCE_REASON[JOIN_PROVENANCE_KEY_MISMATCH]` asserts "never
+    one equal to this plan's own frontmatter value", which is false in this
+    state and sends the reader to re-inspect an already-correct trailer.
+    `DeliverableJoinStats.trailer_matched_no_chunk_id_count` (2026-08-15)
+    lets the message name the real cause instead."""
+
+    def test_committed_chunk_shas_counts_trailer_matched_no_chunk_id_commits(
+        self, tmp_path
+    ):
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root, "plan.md", "docs: author more of the plan document",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        query_ok, committed, committed_shas, join_stats = coas._committed_chunk_shas(
+            root, _DLV_VALID_SPINE, spine_ids=["C1", "C2a", "C2b"]
+        )
+        assert query_ok is True
+        assert committed == set()
+        assert committed_shas == {}
+        assert join_stats.matched_commit_count == 0
+        assert join_stats.trailer_matched_no_chunk_id_count == 1
+
+    def test_broken_query_placeholder_zeroes_the_new_field(self, tmp_path, monkeypatch):
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+
+        def _broken_git_log(args, cwd):
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: broken")
+
+        monkeypatch.setattr(coas, "_run_git", _broken_git_log)
+        query_ok, _committed, _shas, join_stats = coas._committed_chunk_shas(
+            root, _DLV_VALID_SPINE, spine_ids=["C1", "C2a", "C2b"]
+        )
+        assert query_ok is False
+        assert join_stats.trailer_matched_no_chunk_id_count == 0
+
+    def test_message_names_no_chunk_id_cause_not_value_differed(
+        self, tmp_path, monkeypatch
+    ):
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root, "plan.md", "docs: author more of the plan document",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is False
+        assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
+        assert "registered no chunk-id" in result["message"]
+        assert "inspect the commit subject, not the trailer" in result["message"]
+        assert "never one equal to this plan's own frontmatter value" not in result["message"]
+
+    def test_genuine_value_mismatch_keeps_the_static_reason(
+        self, tmp_path, monkeypatch
+    ):
+        """Control case: when NO commit's trailer matches at all (a genuine
+        value mismatch, not a no-chunk-id one), the static reason string is
+        unchanged."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root, "plan.md", "C1: land the chunk",
+            deliverable_id="dlv-a-totally-different-plan",
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
+        assert "never one equal to this plan's own frontmatter value" in result["message"]
+        assert "registered no chunk-id" not in result["message"]
+
+
+# ===========================================================================
 # Regression: C7, plan-line-item-resolution-model (2026-07-27) -- AC7/AC8/AC9
 # ===========================================================================
 

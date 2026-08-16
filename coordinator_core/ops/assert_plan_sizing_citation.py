@@ -59,11 +59,10 @@ from __future__ import annotations
 import glob
 import os
 import re
-import subprocess
 import sys
 from typing import List, Optional, Tuple
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -89,18 +88,7 @@ _PLAN_BASENAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[^.]+\.md$")
 def _resolve_root(explicit_root: Optional[str]) -> Optional[str]:
     if explicit_root:
         return explicit_root
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    out = proc.stdout.strip()
-    return out or None
+    return show_toplevel()
 
 
 def _scan_plans(

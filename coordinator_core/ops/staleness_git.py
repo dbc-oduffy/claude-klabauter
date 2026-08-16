@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 
 _COMMIT_ISH_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
@@ -103,20 +104,7 @@ class Verdict(str, Enum):
 def git_root(cwd: Optional[str] = None) -> Optional[Path]:
     """Resolve a git repo root from *cwd* (or the process cwd), or None if
     not inside a repo / git is unusable. Never raises."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: git_root: subprocess.run failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
+    root = show_toplevel(cwd)
     return Path(root) if root else None
 
 

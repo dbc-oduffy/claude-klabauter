@@ -396,11 +396,35 @@ _SUPPRESSIBLE_BANDS = frozenset(
     {GuardBand.ADVISORY_REWRITE.value, GuardBand.PLATFORM_CONDITIONED_DENY.value}
 )
 
-#: Per-process cache, keyed by the calling context -- see module docstring
-#: "HOT-PATH CHEAP, PER-(SESSION, AUDIENCE) CACHE". Safe for the lifetime of
-#: this process only, which is exactly one PreToolUse(Bash) event by
-#: construction.
-_cache: Dict[Tuple[str, bool], "DisarmResult"] = {}
+#: Per-process cache, keyed by the calling context AND the on-disk marker's
+#: own identity -- see module docstring "HOT-PATH CHEAP, PER-(SESSION,
+#: AUDIENCE) CACHE" and its C4 correction below. The key is
+#: `(settings_home, marker_stat_key, session_id, is_em)` rather than merely
+#: `(session_id, is_em)`: the original two-tuple key assumed the calling
+#: process never outlives one PreToolUse(Bash) event, which stopped being
+#: true the moment this engine can run warm (long-lived, many events per
+#: process) -- under that regime a `(session_id, is_em)`-only key would keep
+#: returning a verdict computed from wall-clock and on-disk marker state
+#: that is neither in the key, so an expired-or-edited marker's stale
+#: verdict would outlive its own expiry. This module's own `active=True`
+#: branch is the ONE staleness case in the whole inventory that trades
+#: SAFETY (fail-open) rather than accuracy, so it is re-keyed rather than
+#: merely re-validated. See `_marker_stat_key()` and `disarm_status()`'s
+#: live re-check of a cached, still-active result's `expires_at` for the
+#: two halves of the fix.
+_cache: Dict[Tuple[str, Optional[Tuple[int, int]], str, bool], "DisarmResult"] = {}
+
+#: Review: coordinatorreview-integrator (failopen-caches P2) — `_cache`'s key
+#: now varies on `(session_id, is_em)`, which is unbounded under a long-lived
+#: warm-engine process (a new session_id or marker edit adds a permanent
+#: entry). Bounded the same way `coordinator_core.cache.read_revalidated`
+#: bounds its own module-level memo — cap at `_MAX_CACHE`, evict the oldest
+#: half on overflow — rather than introducing a distinct caching idiom.
+#: Eviction here is safe by construction: a cache miss always re-runs
+#: `_evaluate()`, the same fail-closed pure function a fresh call would run
+#: anyway, never a fail-open default (see `disarm_status`'s own C4 re-check
+#: of `expires_at`, which this eviction does not change or bypass).
+_MAX_CACHE: int = 512
 
 
 @dataclass(frozen=True)
@@ -437,6 +461,26 @@ def marker_path() -> Path:
     the machine-scoped settings home (see module docstring "MARKER
     LOCATION")."""
     return settings_home() / MARKER_BASENAME
+
+
+def _marker_stat_key(path: Path) -> Optional[Tuple[int, int]]:
+    """`(st_mtime_ns, st_size)` for `path`, or `None` when the marker is
+    absent/unreadable (an `OSError` -- including a race where it vanishes
+    between this call and `_evaluate`'s own read -- is treated identically
+    to "no marker", never propagated).
+
+    This is the C4 re-keying fix's first half: any create/edit/delete of the
+    marker changes this tuple, which changes the `_cache` key in
+    `disarm_status()`, which forces a fresh `_evaluate()` rather than
+    replaying a verdict computed against the marker's PREVIOUS content. See
+    `_cache`'s own docstring for why a stat-based key is required once this
+    process can outlive a single PreToolUse(Bash) event (warm engine).
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
 
 def _parse_utc_timestamp(raw: str) -> Optional[datetime]:
@@ -785,12 +829,26 @@ def _evaluate_machine_total_scope(
     )
 
 
-def _evaluate(now: datetime, session_id: str, is_em: bool) -> DisarmResult:
+def _evaluate(now: datetime, session_id: str, is_em: bool, home: Optional[Path] = None) -> DisarmResult:
     """Pure evaluation of the marker against `now` and the calling context
     -- factored out of `disarm_status()` so the cache wrapper and the pure
     logic are separate, and so tests can exercise arbitrary `now`/context
-    values without patching the clock or forging a payload."""
-    path = marker_path()
+    values without patching the clock or forging a payload.
+
+    `home` (Review: coordinatorreview-integrator, failopen-caches P3): the
+    already-resolved `settings_home()` the caller used to build its cache
+    key, threaded through rather than re-resolved here. `disarm_status()`
+    used to call `settings_home()` once for its cache key and then rely on
+    this function independently calling `marker_path()` (which calls
+    `settings_home()` again) -- a caller who mutated
+    `COORDINATOR_SETTINGS_HOME`/`CLAUDE_HOME` between those two reads within
+    one invocation could have the cache-key stat computed against one home
+    gate a slot that this function then filled by reading a marker from a
+    DIFFERENT home. Defaults to `None` (which resolves via `settings_home()`
+    itself) only so this function stays independently callable/testable the
+    same way it always has been -- `disarm_status()` always passes its own
+    resolved `home` explicitly."""
+    path = (home / MARKER_BASENAME) if home is not None else marker_path()
 
     try:
         if not path.exists():
@@ -915,16 +973,51 @@ def disarm_status(
     `DisarmResult` (with `detail`/`scope`/`expires_at`) for a caller -- e.g.
     a future guard deny-message -- that wants to explain a non-disarmed
     state truthfully rather than as a bare boolean.
+
+    C4 -- RE-KEYED SO A VERDICT CANNOT OUTLIVE THE MARKER'S OWN EXPIRY.
+    Two independent staleness sources used to be invisible to `_cache`'s old
+    `(session_id, is_em)` key: the marker's own on-disk content (edited,
+    replaced, or deleted between calls) and wall-clock time passing an
+    already-cached `expires_at`. Both are now covered:
+      1. The cache key includes `_marker_stat_key()` (mtime+size) alongside
+         `settings_home()`, so any create/edit/delete of the marker misses
+         the cache and forces a fresh `_evaluate()`.
+      2. A cache HIT whose cached verdict carries a non-None `expires_at`
+         is still re-validated against the CURRENT wall clock before being
+         returned -- a marker that has not changed on disk but whose
+         `Expires:` instant has now passed while this process kept running
+         (the warm-engine case this fix exists for) is re-evaluated rather
+         than replayed. This is the one branch of this module that fails
+         OPEN (`active=True`), so it is the one that must never be replayed
+         past its own expiry -- see module docstring "FAIL-CLOSED, WITHOUT
+         EXCEPTION".
+    Both legs recompute via the same pure `_evaluate()` the original code
+    path used; nothing about the fail-closed evaluation logic itself
+    changes, only when a cached answer is trusted.
     """
     session_id = (payload or {}).get("session_id") or ""
     if not isinstance(session_id, str):
         session_id = ""
     is_em = _is_em_caller(payload, git_root)
 
-    cache_key = (session_id, is_em)
+    home = settings_home()
+    stat_key = _marker_stat_key(home / MARKER_BASENAME)
+    cache_key = (str(home), stat_key, session_id, is_em)
+
     cached = _cache.get(cache_key)
+    now = datetime.now(timezone.utc)
+    if cached is not None and cached.expires_at is not None and now >= cached.expires_at:
+        # The marker's own content is unchanged (same stat_key), but its
+        # Expires instant has passed since it was cached -- re-evaluate
+        # rather than trust the old verdict. See docstring leg 2 above.
+        cached = None
+
     if cached is None:
-        cached = _evaluate(datetime.now(timezone.utc), session_id, is_em)
+        cached = _evaluate(now, session_id, is_em, home=home)
+        if len(_cache) >= _MAX_CACHE:
+            evict_keys = list(_cache.keys())[: _MAX_CACHE // 2]
+            for k in evict_keys:
+                del _cache[k]
         _cache[cache_key] = cached
     return cached
 

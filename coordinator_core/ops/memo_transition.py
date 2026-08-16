@@ -124,6 +124,7 @@ from typing import Any
 
 import yaml
 
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -190,15 +191,8 @@ def _containment_check(memo: str) -> Path:
     # memo_path.parent, which would spawn a fresh git rev-parse per unique memo directory.
     m = Path(memo).resolve()
 
-    result = subprocess.run(
-        ["git", "-C", str(m.parent), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=_GIT_TIMEOUT_SECS,
-        **_CREATIONFLAGS,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
+    toplevel = _show_toplevel(cwd=str(m.parent))
+    if not toplevel:
         raise ValueError(
             f"memo.transition: --memo outside containment (must be under a git repo "
             f"cross-repo/ or state/ subtree): {memo!r} — could not determine git root"
@@ -206,7 +200,7 @@ def _containment_check(memo: str) -> Path:
 
     # Review: code-reviewer (F7) — .resolve() makes symlink handling explicit and
     # platform-consistent; git on macOS returns /private/tmp/... for /tmp/... repos.
-    git_root = Path(result.stdout.strip()).resolve()
+    git_root = Path(toplevel).resolve()
     for subtree in _ALLOWED_SUBTREES:
         if m.is_relative_to(git_root / subtree):
             return git_root

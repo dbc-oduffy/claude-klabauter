@@ -50,6 +50,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.state_root import StateRootError, coordinator_state_root as _native_state_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -87,19 +88,7 @@ def _resolve_outbox_dir(repo_root_arg: str) -> Optional[str]:
     if repo_root_arg and os.path.isdir(repo_root_arg):
         return os.path.join(repo_root_arg, "state", "memo-outbox")
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=os.getcwd(),
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _resolve_outbox_dir: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-
-    if result.returncode != 0:
+    if not show_toplevel(os.getcwd()):
         # Not in a git repo — stay silent per spec.
         return None
 

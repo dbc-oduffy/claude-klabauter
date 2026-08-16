@@ -460,6 +460,37 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         "sweep-terminal-plans.py",
         "workday-start-inbox-blitz-assemble.py",
         "wsc-session-disposition.py",
+        # Added 2026-08-15 (docs/plans/2026-08-15-turn-coordinator-bin-
+        # tests-green-eleven.md C3), per-file verdict via `git log
+        # -G'"?--show-toplevel"?'` against the 2026-08-11 22:23 freeze
+        # commit (9cae5568f) -- these six are C6 `.py`-extension RENAMES
+        # (2026-08-13, confirmed 1-3-line diffs, pure `git mv` shape): the
+        # call site itself predates the freeze under its pre-`.py`
+        # filename, which the `*.py` glob this test walks could not have
+        # seen until the rename landed. The freeze simply missed them
+        # because they weren't `.py` files yet, not because the guard
+        # failed to catch a real new offender.
+        "coordinator-doc-new.py",
+        "coordinator-harvest-deferrals.py",
+        "coordinator-lesson-add.py",
+        "cross-repo-memo.py",
+        "cruft-sweep.py",
+        "cutover-cli.py",
+        "queue-triage.py",
+        "schema-drift-gate.py",
+        # `coordinator/bin/app-session.py` (commit f004929a6, 2026-08-15):
+        # genuinely postdates the freeze and is a real new call site, but
+        # its own docstring/`_resolve_repo_root` explicitly mirror
+        # `advance-tracker-status.py`'s posture (see this set above) --
+        # that file is itself un-migrated and out of this plan's scope, so
+        # a new file deliberately copying its already-accepted-out-of-scope
+        # pattern is the same class, not a fresh bypass to fix. Separately:
+        # `coordinator_core/ops/app_session.py` / `_app_session_runtime.py`
+        # / `_registry_map.py` are another session's IN-FLIGHT work this
+        # plan's Anti-scope forbids touching, and this bin trampoline is
+        # that same feature's CLI surface -- not this chunk's to migrate
+        # even if it were otherwise in scope.
+        "app-session.py",
     }
 
     #: Every `coordinator/bin/*.py` file legitimately still allowed to
@@ -490,6 +521,30 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         # Named class-C individually in Anti-scope:
         "check-global-doctrine-mirror.py",
         "regen-cockpit-schema.py",
+        # `handoff-discharge-criteria.py` (commit 232c9d960, 2026-08-13,
+        # genuinely postdates the 2026-08-11 freeze -- a brand-new file,
+        # not a rename): own docstring/`_resolve_repo_root` state verbatim
+        # "mirrors handoff-backfill-claim-stamp.py::_resolve_repo_root" --
+        # same Class-C shape (`git -C dirname(handoff_path)
+        # rev-parse --show-toplevel`, resolving the TARGET HANDOFF's repo,
+        # never the process cwd) as the already-allowlisted
+        # handoff-backfill-claim-stamp.py / handoff-reconcile-close-
+        # terminal.py. Not this plan's to migrate for the same reason those
+        # two aren't.
+        "handoff-discharge-criteria.py",
+        # `percolate-round.py` (commit 786faba65, 2026-08-14, genuinely
+        # postdates the freeze -- a real new `_resolve_repo_root(dest)`
+        # call site, added deliberately per that commit's own message,
+        # "resolve the repo root from git, not from the row's dest", to fix
+        # a live regression). `resolve_checked_repo_root()` takes no path
+        # argument and answers only "what repo is THIS PROCESS'S cwd in";
+        # `_resolve_repo_root(dest)` answers a THIRD meaning of root --
+        # the git worktree of `dest`, a percolate row's destination mirror,
+        # which may be an entirely different repo than the process's own
+        # cwd (same class as fan-out-dispatch.py's already-allowlisted
+        # `target_git_root`, below). Migrating to the checked resolver
+        # would answer the wrong question.
+        "percolate-round.py",
         # NOT allowlisted, deliberately, though an earlier draft of this
         # set listed them: close-origin-stub-on-ship.py (C5),
         # coordinator-write-review-trail.py (C4), sweep-shipped-handoffs.py

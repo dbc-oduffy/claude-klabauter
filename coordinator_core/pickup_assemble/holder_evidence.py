@@ -21,7 +21,29 @@ a new one. See `liveness.py`'s own module docstring: a caught liveness
 exception is an INDETERMINATE read, never confirmed-dead, and this module
 must never launder that into a `False`.
 
-Spec backlink: pln-pickup-as-a-code-computed-deci-7394dc
+`scope_overlap` (C3, docs/plans/2026-08-16-trace-a-claim-back-to-its-
+session.md): previously derived from the holder's TRANSCRIPT
+`recent_paths` (<=10 entries, most-recent-first) — a fragile proxy for
+what a session is actually working on, and answering `None` whenever
+either side was empty, which made it `None` for effectively every
+candidate on a live box (a handoff declares no `scope:`, so the empty side
+was EVERY handoff). Re-pointed at the same substrate C1
+(`coordinator_core.session.claim_neighbours`) joins against:
+`claim_index.lookup()`'s `touched.txt`-derived claimant set, which answers
+what a session has actually CLAIMED, not merely last touched in a
+transcript tail. Two call shapes, chosen by whichever of `scope`/
+`artifact_path` the caller supplies (see `holder_evidence()`'s docstring):
+a bare `scope` list is looked up directly via `claim_index.lookup()`; an
+`artifact_path` routes through `claim_neighbours.find_neighbours()` for
+its full two-tier file-set resolution (the `deliverable_id` bridge a
+handoff needs, AC2) plus its own live-peer filtering. The three-valued
+`True`/`False`/`None` contract is preserved exactly — `None` still means
+genuinely unresolvable, never merely empty, and this module's own
+`_scope_path_overlaps`-era either-side-empty-collapses-to-None bug does
+not survive the re-point (see `_claim_scope_overlap`'s docstring).
+
+Spec backlink: pln-pickup-as-a-code-computed-deci-7394dc,
+pln-trace-a-claim-back-to-its-sess-25ae79 (C3)
 """
 
 from __future__ import annotations
@@ -33,6 +55,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ops.check_em_environment import _resolve_transcript
+from coordinator_core.session import claim_index
+from coordinator_core.session import claim_neighbours
 from coordinator_core.session import core
 from coordinator_core.session import liveness as _liveness
 
@@ -160,25 +184,103 @@ def _parse_scope_entry(entry: str) -> tuple[Optional[str], str]:
     return match.group(1), match.group(2).strip()
 
 
-def _scope_path_overlaps(scope: list[str], candidate_path: str) -> bool:
-    """True iff `candidate_path` (a repo-relative path pulled from recent
-    tool-use activity) falls under, or matches, any bare-local entry in
-    `scope`. Sibling-repo-qualified scope entries (`<repo-id>: <path>`) are
-    skipped here — `recent_paths` is always local-repo-relative, so a
-    cross-repo scope entry cannot be evaluated against it."""
-    cand = candidate_path.strip().rstrip("/")
-    if not cand:
-        return False
+def _local_scope_paths(scope: list[str]) -> list[str]:
+    """Filter a `scope:`-shaped list down to bare-local (this-repo) path
+    entries, order-preserving. Sibling-repo-qualified entries
+    (`<repo-id>: <path>`) are dropped — `claim_index` only ever resolves
+    THIS repo's claimants (same convention `claim_neighbours.
+    _local_paths_from_scope` uses; kept as a private re-derivation here
+    rather than an upward import, per this module's own layering note on
+    `_parse_scope_entry`)."""
+    paths: list[str] = []
     for entry in scope:
         repo_id, path = _parse_scope_entry(entry)
         if repo_id is not None:
             continue
         path = path.rstrip("/")
-        if not path:
-            continue
-        if cand == path or cand.startswith(path + "/") or path.startswith(cand + "/"):
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _claim_scope_overlap(
+    holder_sid: str,
+    repo_root: Path,
+    *,
+    scope: Optional[list[str]],
+    artifact_path: Optional[str],
+    caller_sid: Optional[str],
+) -> Optional[bool]:
+    """True/False/None per `holder_evidence()`'s documented three-valued
+    `scope_overlap` contract — now derived from `claim_index.lookup()`
+    (what `holder_sid` has actually CLAIMED, via `touched.txt`) rather than
+    the holder's transcript `recent_paths`.
+
+    Two shapes, chosen by which of `artifact_path`/`scope` the caller
+    supplies:
+
+    `artifact_path` given (preferred — this is "C1's join" in full):
+    delegates to `claim_neighbours.find_neighbours()`, which resolves
+    `artifact_path`'s own file set through its two-tier resolution (a
+    `scope:` if present, else the `deliverable_id` bridge to a plan's
+    `scope:` — the handoff case, AC2) and returns only LIVE peer
+    claimants. `holder_sid` membership in that neighbour set is the
+    answer. `UNRESOLVABLE` (file set could not be determined) maps to
+    `None` here — never `False`; that distinction is the whole point of
+    C1's status-first result and must not be flattened back into the
+    conflation this re-point exists to close (see module docstring).
+
+    `scope` given instead (back-compat path for callers that have
+    already resolved a file set themselves, e.g. a plan/sizing artifact's
+    own frontmatter `scope:`): looked up directly via `claim_index.
+    lookup()`. `scope is None` (no scope resolved and no `artifact_path`
+    to bridge from) is genuinely unresolvable -> `None`. `scope == []`
+    (an artifact that explicitly declares no scoped paths) IS resolved,
+    just empty -> deterministically `False`, never `None` — this is the
+    either-side-empty-collapses-to-None bug this re-point fixes: an empty
+    RESOLVED file set proves zero overlap, it does not mean "unknown".
+
+    A path `claim_index.lookup()` itself could not answer (aborted
+    rebuild — `claim_index.UNANSWERABLE`) is excluded from a `True`/
+    `False` verdict on its own; if EVERY local path comes back
+    unanswerable (and none confirm an overlap), the honest answer is
+    `None`, not a false-negative `False`.
+
+    Never raises (module's fail-soft contract) — any exception here
+    yields `None`, the same "evidence gap" a raising `claim_index`/
+    `claim_neighbours` call already degrades to internally.
+    """
+    try:
+        if artifact_path is not None:
+            result = claim_neighbours.find_neighbours(
+                artifact_path, caller_sid=caller_sid, cwd=str(repo_root)
+            )
+            if result.status == claim_neighbours.UNRESOLVABLE:
+                return None
+            return any(n.session_id == holder_sid for n in result.neighbours)
+
+        if scope is None:
+            return None
+
+        local_paths = _local_scope_paths(scope)
+        if not local_paths:
+            return False
+
+        lookup = claim_index.lookup(local_paths, cwd=str(repo_root))
+        found_overlap = False
+        found_unanswerable = False
+        for path in local_paths:
+            claimants = lookup.get(path, [])
+            if claim_index.UNANSWERABLE in claimants:
+                found_unanswerable = True
+                continue
+            if holder_sid in claimants:
+                found_overlap = True
+        if found_overlap:
             return True
-    return False
+        return None if found_unanswerable else False
+    except Exception:  # noqa: BLE001 - evidence, never a raise (module contract)
+        return None
 
 
 def _extract_paths_from_tool_use(tool_input: dict, repo_root: Path) -> list[str]:
@@ -282,6 +384,8 @@ def holder_evidence(
     repo_root: Path,
     *,
     scope: Optional[list[str]] = None,
+    artifact_path: Optional[str] = None,
+    caller_sid: Optional[str] = None,
     want_activity: bool = False,
 ) -> dict[str, Any]:
     """Decidable evidence about what `holder_sid` is actually doing, to
@@ -312,12 +416,29 @@ def holder_evidence(
                                  <= 10 entries; only populated when
                                  `want_activity=True`
       recent_paths_source    - "transcript" | "unavailable"
-      scope_overlap           - True/False/None; None when either
-                                 `recent_paths` or `scope` is empty (unknown
-                                 reads as unknown here — NOT the "either-side-
-                                 empty counts as overlap" convention
-                                 `_scopes_intersect` uses for blocking
-                                 decisions; this is evidence, not a gate)
+      scope_overlap           - True/False/None; whether `holder_sid` is a
+                                 CLAIMANT (`claim_index.lookup()`, i.e. what
+                                 it has actually touched/claimed — see
+                                 `_claim_scope_overlap`) on the file set
+                                 resolved from `artifact_path` (preferred,
+                                 routes through `claim_neighbours.
+                                 find_neighbours()` for the full
+                                 `deliverable_id` handoff bridge) or, absent
+                                 that, `scope` directly. `None` means
+                                 genuinely unresolvable — no `scope` AND no
+                                 `artifact_path`, or `artifact_path`
+                                 resolved `UNRESOLVABLE` — NEVER merely
+                                 "either side was empty" (an explicit
+                                 `scope: []` is resolved-empty and reads
+                                 `False`). This is evidence, not a gate: NOT
+                                 the "either-side-empty counts as overlap"
+                                 convention `_scopes_intersect` uses for
+                                 blocking decisions. Only computed when
+                                 `want_activity=True`, same activity-cap
+                                 cost gate `recent_paths` uses (AC6) — a
+                                 `claim_index.lookup()` rebuild is O(claims-
+                                 corpus), not free, per that module's own
+                                 docstring.
 
     Fail-soft (module contract): any exception during evidence-gathering
     yields `evidence_error` and NEVER raises, changes a verdict, or hangs.
@@ -344,6 +465,17 @@ def holder_evidence(
     holder is an evidence gap, not an error — it yields the all-`None` result
     below by the same fail-soft contract, never an exception into a caller
     that is mid-verdict.
+
+    `artifact_path` (Optional) is the CALLER's own claimed artifact (a
+    plan, sizing, or handoff) — pass it to get `scope_overlap`'s full C1
+    join, including a handoff's `deliverable_id` bridge (AC2). `caller_sid`
+    is an optional pass-through to `claim_neighbours.find_neighbours()` (the
+    calling session's own id, excluded from its neighbour set) — same
+    default-resolves-if-omitted contract that function documents. When
+    `artifact_path` is omitted, `scope` (already-resolved paths, e.g. a
+    plan's own frontmatter `scope:`) is used directly against
+    `claim_index.lookup()` instead — the pre-C3 call shape, kept for
+    callers that have already resolved a file set themselves.
     """
     result: dict[str, Any] = {
         "liveness_basis": None,
@@ -383,11 +515,18 @@ def holder_evidence(
         result["recent_paths"] = recent_paths
         result["recent_paths_source"] = "transcript"
 
-        scope = scope or []
-        if recent_paths and scope:
-            result["scope_overlap"] = any(
-                _scope_path_overlaps(scope, path) for path in recent_paths
-            )
+        # Claim-derived, not transcript-derived (C3) — `recent_paths`
+        # plays no part in this computation any more; see
+        # `_claim_scope_overlap`'s docstring for the three-valued
+        # contract and why `scope == []` must stay distinguishable from
+        # `scope is None`.
+        result["scope_overlap"] = _claim_scope_overlap(
+            holder_sid,
+            repo_root,
+            scope=scope,
+            artifact_path=artifact_path,
+            caller_sid=caller_sid,
+        )
         return result
     except Exception as exc:  # noqa: BLE001 - fail-soft is the contract here
         # Review: code-reviewer P3 (2026-08-13) — only clobber fields that

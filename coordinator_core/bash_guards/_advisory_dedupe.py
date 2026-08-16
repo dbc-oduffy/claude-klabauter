@@ -394,6 +394,21 @@ def _maybe_sweep_stale_session_dirs(gitdir: Path, current_session_id: str) -> in
     root/sentinel sweeps immediately (nothing to throttle -- either there is
     no sweep work yet, or a stale timestamp read should never itself
     suppress reaping). Never raises.
+
+    Piggybacks `coordinator_core.telemetry.log_rotation.rotate_all_known_
+    sinks` on the SAME throttle -- this is the one cadence site in the
+    package that (a) runs on ordinary bash-guard-advisory traffic, not a
+    rare/manual path, and (b) is already rate-limited to once per
+    `_SWEEP_THROTTLE_SECONDS` (30 min) independent of the fleet's session
+    count, so wiring a second, unrelated cadence primitive here costs
+    nothing beyond what the stale-session sweep already pays. At the
+    documented 50-70-concurrent-session load norm this throttle interval
+    fires far more often than the rotation module's own ~3-4-day-per-
+    generation sizing needs, so the log cannot blow past
+    `log_rotation._ROTATE_THRESHOLD_BYTES` between firings. Best-effort and
+    independently fail-open (see that module's own "Never raises"
+    negative-spec) -- a rotation failure never blocks or is blocked by the
+    stale-session-dir sweep.
     """
     root = gitdir / _DEDUPE_SUBDIR
     sentinel = root / _LAST_SWEEP_SENTINEL
@@ -401,13 +416,30 @@ def _maybe_sweep_stale_session_dirs(gitdir: Path, current_session_id: str) -> in
         sentinel_mtime = sentinel.stat().st_mtime
     except OSError:
         removed = _sweep_stale_session_dirs(gitdir, current_session_id)
+        _rotate_known_logs(gitdir)
         _touch_sweep_sentinel(root, sentinel)
         return removed
     if (time.time() - sentinel_mtime) < _SWEEP_THROTTLE_SECONDS:
         return 0
     removed = _sweep_stale_session_dirs(gitdir, current_session_id)
+    _rotate_known_logs(gitdir)
     _touch_sweep_sentinel(root, sentinel)
     return removed
+
+
+def _rotate_known_logs(gitdir: Path) -> None:
+    """Best-effort rotation of the four known unbounded log sinks under
+    `<gitdir>/coordinator-sessions/logs/` -- see
+    `coordinator_core.telemetry.log_rotation` module docstring. Swallows
+    every exception; a rotation defect must never surface through the
+    advisory-dedupe path it piggybacks on.
+    """
+    try:
+        from coordinator_core.telemetry.log_rotation import rotate_all_known_sinks
+
+        rotate_all_known_sinks(gitdir / "coordinator-sessions" / "logs")
+    except Exception:
+        pass
 
 
 def _touch_sweep_sentinel(root: Path, sentinel: Path) -> None:

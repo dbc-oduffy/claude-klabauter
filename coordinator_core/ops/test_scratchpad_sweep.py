@@ -635,6 +635,283 @@ def test_apply_size_cut_own_filter_excludes_live_verdict_even_with_age_days(tmp_
     assert entries[1]["verdict"] == "size-cut-reclaimed"
 
 
+# ---------------------------------------------------------------------------
+# Per-file size predicate (2026-08-16) — a directory whose largest single
+# file is >= size_cut_large_file_bytes uses size_cut_large_file_floor_days
+# as its floor instead of size_cut_floor_days. Fixture-only, small explicit
+# thresholds throughout (never the real 256 MB / 0.5-day production
+# defaults, which would require multi-hundred-MB fixture files) so these
+# tests stay fast — the defaults themselves are exercised only by AC8's
+# manual dry-run against the real temp root, not by the automated tier.
+# ---------------------------------------------------------------------------
+
+
+def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path):
+    """AC2: a directory carrying a file >= size_cut_large_file_bytes becomes
+    size-cut-eligible from size_cut_large_file_floor_days, well before it
+    would clear the ordinary size_cut_floor_days."""
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid_large = "80000000-0000-0000-0000-000000000001"
+    # Aged 0.7d: past the 0.5d large-file floor, short of the 1.0d ordinary
+    # floor — the exact gap this predicate exists to reach into.
+    _make_dated_session_with_files(claude_root, sid_large, 0.7, {"staging.db": 2000})
+
+    result = _sweep(
+        tmp_path,
+        slug_to_root_map={slug: "X:/claude-klabauter"},
+        project_slugs=[slug],
+        reclaim=True,
+        size_cut_target_bytes=0,
+        size_cut_floor_days=1.0,
+        size_cut_large_file_bytes=1000,
+        size_cut_large_file_floor_days=0.5,
+    )
+
+    entry = _entry_for(result, sid_large)
+    assert entry["largest_file_bytes"] == 2000
+    assert entry["verdict"] == "size-cut-reclaimed"
+    scratch = claude_root / sid_large / "scratchpad"
+    assert not scratch.exists()
+
+
+def test_small_file_directory_same_age_is_not_eligible(tmp_path):
+    """AC2, second half: "nothing changes for a directory whose largest file
+    is under the threshold" — same age as the large-file case above, but its
+    largest file is below size_cut_large_file_bytes, so it stays governed by
+    the ordinary (unreached) size_cut_floor_days and is untouched."""
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid_small = "80000000-0000-0000-0000-000000000002"
+    _make_dated_session_with_files(claude_root, sid_small, 0.7, {"note.txt": 200})
+
+    result = _sweep(
+        tmp_path,
+        slug_to_root_map={slug: "X:/claude-klabauter"},
+        project_slugs=[slug],
+        reclaim=True,
+        size_cut_target_bytes=0,
+        size_cut_floor_days=1.0,
+        size_cut_large_file_bytes=1000,
+        size_cut_large_file_floor_days=0.5,
+    )
+
+    entry = _entry_for(result, sid_small)
+    assert entry["largest_file_bytes"] == 200
+    assert entry["verdict"] == "too-recent"
+    scratch = claude_root / sid_small / "scratchpad"
+    assert scratch.is_dir()
+
+
+def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path, monkeypatch):
+    """AC3: liveness gating stays unconditionally upstream of the per-file
+    predicate — a live entry must never be selected, even at the most
+    aggressive large-file thresholds (near-zero size, zero floor)."""
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid_live = "80000000-0000-0000-0000-000000000003"
+    _make_dated_session_with_files(claude_root, sid_live, 5.0, {"huge.bin": 5000})
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.scratchpad_sweep._session_liveness.session_live",
+        lambda sid, cwd=None: sid == sid_live,
+    )
+
+    result = _sweep(
+        tmp_path,
+        slug_to_root_map={slug: "X:/claude-klabauter"},
+        project_slugs=[slug],
+        reclaim=True,
+        size_cut_target_bytes=0,
+        size_cut_floor_days=1.0,
+        size_cut_large_file_bytes=1,
+        size_cut_large_file_floor_days=0.0,
+    )
+
+    entry = _entry_for(result, sid_live)
+    assert entry["verdict"] == "live"
+    scratch = claude_root / sid_live / "scratchpad"
+    assert scratch.is_dir(), "a live directory must never be size-cut eligible"
+
+
+def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
+    """AC3 at the _apply_size_cut unit boundary directly: a "live"-verdict
+    entry carrying a largest_file_bytes above threshold and a non-None
+    age_days must still never be size-cut eligible — the verdict filter
+    alone must exclude it, at any large-file threshold."""
+    entries = [
+        _entry("live-large", verdict="live", age_days=5.0, bytes_=5000, path="unused"),
+    ]
+    entries[0]["largest_file_bytes"] = 999_999_999
+    report = _apply_size_cut(
+        entries,
+        ttl_days=7.0,
+        reclaim=True,
+        target_bytes=0,
+        floor_days=1.0,
+        large_file_bytes=1,
+        large_file_floor_days=0.0,
+    )
+    assert entries[0]["verdict"] == "live"
+    assert report["bytes_reclaimed"] == 0
+
+
+def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_path):
+    """Review: coordinator:code-reviewer P2 — when large_file_floor_days
+    exceeds floor_days, the day >= floor_int branch must still exclude a
+    large-file entry that hasn't reached its own (higher) floor. Pre-fix,
+    reaching floor_int admitted the whole cohort unconditionally, deleting
+    a large-file directory before its stated floor."""
+    large_dir = tmp_path / "large"
+    large_dir.mkdir()
+    (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
+
+    entries = [
+        _entry("large", verdict="too-recent", age_days=1.5, bytes_=100, path=str(large_dir)),
+    ]
+    entries[0]["largest_file_bytes"] = 5000
+    report = _apply_size_cut(
+        entries,
+        ttl_days=7.0,
+        reclaim=True,
+        target_bytes=0,
+        floor_days=1.0,
+        large_file_bytes=1000,
+        large_file_floor_days=2.0,
+    )
+    assert entries[0]["verdict"] == "too-recent", (
+        "aged 1.5 is past the ordinary 1.0 floor but short of its own 2.0 "
+        "large-file floor — must not be size-cut eligible"
+    )
+    assert report["bytes_reclaimed"] == 0
+
+
+def test_large_file_floor_above_ordinary_floor_boundary_is_eligible(tmp_path):
+    """Same inverted-floor configuration, but aged exactly at (and past) the
+    higher large_file_floor_days — must become eligible once it clears its
+    own floor, on the day >= floor_int path."""
+    large_dir = tmp_path / "large"
+    large_dir.mkdir()
+    (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
+
+    entries = [
+        _entry("large", verdict="too-recent", age_days=2.5, bytes_=100, path=str(large_dir)),
+    ]
+    entries[0]["largest_file_bytes"] = 5000
+    report = _apply_size_cut(
+        entries,
+        ttl_days=7.0,
+        reclaim=True,
+        target_bytes=0,
+        floor_days=1.0,
+        large_file_bytes=1000,
+        large_file_floor_days=2.0,
+    )
+    assert entries[0]["verdict"] == "size-cut-reclaimed"
+    assert report["bytes_reclaimed"] == 100
+
+
+def test_large_file_floor_equal_to_ordinary_floor_is_eligible(tmp_path):
+    """Equal-value boundary: large_file_floor_days == floor_days is the
+    shipped-defaults ordering's edge case — a large-file entry at exactly
+    the shared floor must still be eligible via the day >= floor_int path."""
+    large_dir = tmp_path / "large"
+    large_dir.mkdir()
+    (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
+
+    entries = [
+        _entry("large", verdict="too-recent", age_days=1.5, bytes_=100, path=str(large_dir)),
+    ]
+    entries[0]["largest_file_bytes"] = 5000
+    report = _apply_size_cut(
+        entries,
+        ttl_days=7.0,
+        reclaim=True,
+        target_bytes=0,
+        floor_days=1.0,
+        large_file_bytes=1000,
+        large_file_floor_days=1.0,
+    )
+    assert entries[0]["verdict"] == "size-cut-reclaimed"
+    assert report["bytes_reclaimed"] == 100
+
+
+def test_fractional_floor_days_with_larger_large_file_floor_gates_correctly(tmp_path):
+    """Fractional floor_days paired with a larger large_file_floor_days —
+    the exact combination the reviewer named as untested. An entry past the
+    fractional ordinary floor but short of the larger large-file floor must
+    stay excluded; one past both must become eligible."""
+    short_dir = tmp_path / "short"
+    short_dir.mkdir()
+    (short_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
+    long_dir = tmp_path / "long"
+    long_dir.mkdir()
+    (long_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
+
+    entries = [
+        _entry("short", verdict="too-recent", age_days=1.6, bytes_=100, path=str(short_dir)),
+        _entry("long", verdict="too-recent", age_days=2.6, bytes_=100, path=str(long_dir)),
+    ]
+    entries[0]["largest_file_bytes"] = 5000
+    entries[1]["largest_file_bytes"] = 5000
+    report = _apply_size_cut(
+        entries,
+        ttl_days=7.0,
+        reclaim=True,
+        target_bytes=0,
+        floor_days=1.5,
+        large_file_bytes=1000,
+        large_file_floor_days=2.5,
+    )
+    assert entries[0]["verdict"] == "too-recent", (
+        "aged 1.6 clears the fractional 1.5 ordinary floor but not the 2.5 "
+        "large-file floor"
+    )
+    assert entries[1]["verdict"] == "size-cut-reclaimed", (
+        "aged 2.6 clears both floors"
+    )
+    assert report["bytes_reclaimed"] == 100
+
+
+def test_size_cut_large_file_params_flow_through_the_op_handler(tmp_path, monkeypatch):
+    """AC1: size_cut_large_file_bytes/size_cut_large_file_floor_days are
+    accepted, keyword-only-defaulted params on the op handler surface, not
+    just on sweep_scratchpads directly."""
+    _build_fixture(tmp_path)
+    monkeypatch.setattr(
+        "coordinator_core.ops.scratchpad_sweep._build_slug_to_root_map",
+        lambda: _DEFAULT_SLUG_MAP,
+    )
+    result = _handler(
+        {
+            "temp_root": str(tmp_path),
+            "size_cut_large_file_bytes": 1000,
+            "size_cut_large_file_floor_days": 0.25,
+        }
+    )
+    assert "error" not in result
+    assert result["size_cut"]["floor_days"] == 1.0  # ordinary floor unaffected
+
+
+@pytest.mark.parametrize(
+    "bad_params",
+    [
+        {"size_cut_large_file_bytes": "big"},
+        {"size_cut_large_file_bytes": -1},
+        {"size_cut_large_file_bytes": True},
+        {"size_cut_large_file_floor_days": "half"},
+        {"size_cut_large_file_floor_days": -1},
+        {"size_cut_large_file_floor_days": True},
+    ],
+)
+def test_handler_invalid_large_file_params_structured_error(bad_params):
+    result = _handler(bad_params)
+    assert "error" in result
+
+
 def test_registered_under_op_key():
     from coordinator_core.ipc import get_op_handler
 
@@ -708,15 +985,25 @@ def test_archive_shape_pattern_set(tmp_path, fname, is_archive):
     assert (entry["archive_count"] == 1) is is_archive
 
 
-def test_too_recent_entry_with_archive_is_size_cut_exempt(tmp_path):
+def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path):
+    """REGRESSION-DIRECTION test for a deliberately reversed decision — do
+    NOT "fix" this back. Through 2026-08-11 an archive-shaped file exempted
+    its directory from the size-cut pass; the PM reversed that on
+    2026-08-16 (see scratchpad_sweep.py's module docstring, "Archive-shaped
+    exemption"). An archive-carrying "too-recent" entry must now be
+    size-cut exactly like any other same-cohort entry — carrying an archive
+    confers no special treatment here anymore. The stderr "no silent
+    reclaim" warning (see test_archive_past_ttl_is_still_reclaimed_by_ttl_gate
+    and the TTL-gate-scoped warning test below) is the archive class's only
+    remaining protection."""
     slug = "X--claude-klabauter"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
 
     sid_archive = "70000000-0000-0000-0000-000000000003"
     sid_plain = "70000000-0000-0000-0000-000000000004"
-    # Same cohort (day 3), same size — the sibling with no archive must still
-    # be size-cut even though the archived one is exempted.
+    # Same cohort (day 3), same size — both must be size-cut identically now
+    # that the archive-shaped exemption has fallen.
     _make_dated_session_with_files(claude_root, sid_archive, 3.1, {"release.tar.gz": 100})
     _make_dated_session_with_files(claude_root, sid_plain, 3.1, {"a.txt": 100})
 
@@ -729,22 +1016,46 @@ def test_too_recent_entry_with_archive_is_size_cut_exempt(tmp_path):
     )
 
     archive_entry = _entry_for(result, sid_archive)
-    assert archive_entry["verdict"] == "too-recent"
-    assert archive_entry["size_cut_exempt"] is True
-    assert archive_entry["size_cut_exempt_reason"]
+    assert archive_entry["verdict"] == "size-cut-reclaimed"
+    assert archive_entry["size_cut_exempt"] is False
+    assert archive_entry["size_cut_exempt_reason"] is None
     scratch_archive = claude_root / sid_archive / "scratchpad"
-    assert scratch_archive.is_dir()
+    assert not scratch_archive.exists(), "archive-shaped file no longer blocks size-cut reclaim"
 
     plain_entry = _entry_for(result, sid_plain)
     assert plain_entry["verdict"] == "size-cut-reclaimed"
     assert plain_entry["size_cut_exempt"] is False
 
+    # The exemption bookkeeping keys survive (report-shape stability) but the
+    # exemption itself never fires anymore.
     sc = result["size_cut"]
-    assert sc["archive_exempt_entries"] == 1
-    assert sc["archive_exempt_bytes"] == 100
-    # The exempted archive's bytes stay in remaining_after_size_cut — they
-    # were never reclaimed, so they must not be subtracted.
-    assert sc["remaining_after_size_cut"] >= 100
+    assert sc["archive_exempt_entries"] == 0
+    assert sc["archive_exempt_bytes"] == 0
+
+
+def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path, capsys):
+    """The named stderr "no silent reclaim" line is the archive class's SOLE
+    remaining protection post-reversal — it must still fire when the TTL
+    gate (unaffected by the size-cut exemption reversal) reclaims an
+    archive-carrying directory."""
+    slug = "X--claude-klabauter"
+    claude_root = tmp_path / "claude" / slug
+    claude_root.mkdir(parents=True)
+    sid = "70000000-0000-0000-0000-000000000008"
+    _make_dated_session_with_files(claude_root, sid, 10, {"release.tar.zst": 100})
+
+    result = _sweep(
+        tmp_path,
+        slug_to_root_map={slug: "X:/claude-klabauter"},
+        project_slugs=[slug],
+        reclaim=True,
+    )
+
+    entry = _entry_for(result, sid)
+    assert entry["verdict"] == "reclaimed"
+    captured = capsys.readouterr()
+    assert "archive-shaped file" in captured.err
+    assert sid in captured.err
 
 
 def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):

@@ -14,10 +14,12 @@ per surviving judgment_point id, each a pure, zero-argument constructor
 call against `coordinator_core.contract.decision_object.judgment`. Nothing
 here computes live session state, reads disk, or decides whether a point
 actually fires for a given run — that is `__init__.py`'s (C3's) assembly
-job, exactly as `build_session_shape_judgment_point`/
-`build_coverage_judgment_point` in this package already do for the two
-pre-existing judgment points this module does NOT duplicate (see
-Negative-spec).
+job, exactly as `build_session_shape_judgment_point` in this package
+already does for the one pre-existing judgment point this module does NOT
+duplicate (see Negative-spec). `build_coverage_judgment_point` and the
+`jp-coverage-verdict` judgment point it built were removed by K-001
+(`state/kill-ledger.md`) along with `coverage.gate`'s review-coverage
+verdict and every consumer — this module's residue posture is unaffected.
 
 29 distinct ids (collapsing every repeated in-source trigger of the same
 id into one builder — e.g. `completion-entry-prose` recurs across Steps
@@ -66,12 +68,13 @@ positive-liveness predicate does, so it alone carries
 `revalidate_at_dispatch=True`; every other point defaults to `False`.
 
 Negative-spec:
-  - Does NOT define `jp-session-shape` or `jp-coverage-verdict` — those
-    are the pre-existing, already-green judgment points this same
-    package's `__init__.py` builds (`build_session_shape_judgment_point`,
-    `build_coverage_judgment_point`). Rebuilding them here would be exactly
-    the context-less re-derivation the plan's Anti-scope section warns
-    against.
+  - Does NOT define `jp-session-shape` — that is the pre-existing,
+    already-green judgment point this same package's `__init__.py` builds
+    (`build_session_shape_judgment_point`). Rebuilding it here would be
+    exactly the context-less re-derivation the plan's Anti-scope section
+    warns against. `jp-coverage-verdict`/`build_coverage_judgment_point`
+    were removed by K-001 and no longer exist anywhere in this package —
+    not a case this module needs to avoid duplicating any more.
   - Does NOT decide whether a given builder's judgment_point should appear
     in a particular `brief()` call. Every function here is unconditional —
     conditional inclusion (e.g. "only offer `commit-significance-filter`
@@ -141,6 +144,11 @@ def build_lesson_worth_capturing_judgment_point(
             "qualitative call over session memory, not computable from a fixed predicate"
         ),
         revalidate_at_dispatch=False,
+        # `resolves` is resolver-populated: an empty list here means the
+        # `decisions` slice is not filled in yet, not that this point gates
+        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
+        # `reportable` classification and must never be used as one.
+        resolves_computed=True,
     )
 
 
@@ -171,6 +179,11 @@ def build_lesson_scope_classification_judgment_point() -> dict[str, Any]:
             "require reading the lesson's substance, not a disk-computable fact"
         ),
         revalidate_at_dispatch=False,
+        # (review-integration slice B) action-class: the question asks
+        # "and which --change-kind enum value applies?" -- the EM must
+        # produce a value it then supplies to `lesson-add`, an input the EM
+        # generates rather than a label the engine records.
+        reportable=False,
     )
 
 
@@ -197,6 +210,11 @@ def build_plan_doc_content_update_judgment_point() -> dict[str, Any]:
             "in prose is authorial, not a fixed predicate"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo, same plan) action-class: `update-now` means the EM
+        # literally edits the governing plan doc on disk -- a concrete write,
+        # no directive gates it, so the answer must keep asking rather than
+        # be silently narrated away.
+        reportable=False,
     )
 
 
@@ -229,6 +247,10 @@ def build_plan_vs_reality_reconcile_judgment_point() -> dict[str, Any]:
             "judgment"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: `annotate-divergence` means the EM writes a
+        # SHIPPED annotation into the plan doc -- a concrete disk edit with
+        # no directive behind it.
+        reportable=False,
     )
 
 
@@ -264,6 +286,13 @@ def build_enablement_vs_opportunistic_deferral_judgment_point() -> dict[str, Any
             "own tells are illustrative, not diagnostic"
         ),
         revalidate_at_dispatch=False,
+        # (review-integration slice B) action-class: `load-bearing-promote`
+        # obligates an action, not a relabel -- it means this queued item
+        # gates the feature this session is calling complete end-to-end, and
+        # that obligates either shipping the enabler or withdrawing the
+        # completeness claim. Demoted to narration, the EM is never asked and
+        # can close a session with an inert feature reading as done.
+        reportable=False,
     )
 
 
@@ -445,6 +474,11 @@ def build_memo_resolution_attribution_judgment_point(
             "EM must confirm"
         ),
         revalidate_at_dispatch=False,
+        # `resolves` is resolver-populated: an empty list here means the
+        # `decisions` slice is not filled in yet, not that this point gates
+        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
+        # `reportable` classification and must never be used as one.
+        resolves_computed=True,
     )
 
 
@@ -496,6 +530,12 @@ def build_scratch_disposition_per_file_judgment_point() -> dict[str, Any]:
             "to a predicate -- the source text gives example reasons, not exhaustive rules"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo, premise-finding sidecar channel 3) action-class: the
+        # answer decides whether a file is `git rm`'d -- no directive, no
+        # gate, but the EM must still DO something on the answer. Named
+        # explicitly by the plan's premise-finding sidecar as evidence the
+        # channel-3 gap is real.
+        reportable=False,
     )
 
 
@@ -531,6 +571,10 @@ def build_predecessor_distill_fate_judgment_point() -> dict[str, Any]:
             "predecessor's work actually resolved'"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: the answer is backfilled into the
+        # predecessor handoff's own `distill_fate:` frontmatter -- a
+        # concrete disk write to another file, with no directive gating it.
+        reportable=False,
     )
 
 
@@ -594,6 +638,11 @@ def build_orientation_doc_row_updates_judgment_point() -> dict[str, Any]:
             "not derivable from a fixed rule"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: the recommended disposition itself is
+        # "rows-identified-and-drafted" -- the EM must write those drafted
+        # rows into the tracker/action-items/docs-index, a concrete edit
+        # with no directive behind it.
+        reportable=False,
     )
 
 
@@ -625,6 +674,12 @@ def build_cross_cutting_check_judgment_point() -> dict[str, Any]:
             "the definition of judgment residue"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) acknowledgement-class: same shape as the plan's own
+        # motivating example (the archived-ancestor-batons "if that wasn't
+        # right, check on it" self-check) -- the recommended answer
+        # ("nothing-found") is a pure backstop scan result the EM merely
+        # notes; demoting it loses nothing.
+        reportable=True,
     )
 
 
@@ -652,6 +707,11 @@ def build_inline_waiver_recognition_judgment_point() -> dict[str, Any]:
             "is not a structured-data lookup as currently specified"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) acknowledgement-class: this is a recall check over the
+        # session's own transcript ("did this actually happen"), not a
+        # decision that triggers a distinct EM action -- the checklist item
+        # itself is resolved elsewhere regardless of this answer.
+        reportable=True,
     )
 
 
@@ -696,6 +756,11 @@ def build_review_partition_strategy_judgment_point(
             "slices -- the genuine architectural-partitioning call"
         ),
         revalidate_at_dispatch=False,
+        # `resolves` is resolver-populated: an empty list here means the
+        # `decisions` slice is not filled in yet, not that this point gates
+        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
+        # `reportable` classification and must never be used as one.
+        resolves_computed=True,
     )
 
 
@@ -728,6 +793,11 @@ def build_reviewer_count_on_oracle_disagreement_judgment_point(
             "oracles disagree -- genuinely no single correct computed answer"
         ),
         revalidate_at_dispatch=False,
+        # `resolves` is resolver-populated: an empty list here means the
+        # `decisions` slice is not filled in yet, not that this point gates
+        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
+        # `reportable` classification and must never be used as one.
+        resolves_computed=True,
     )
 
 
@@ -753,6 +823,11 @@ def build_shared_schema_touch_check_judgment_point() -> dict[str, Any]:
         evidence="touched paths against the repo's known shared-schema/seam surfaces",
         reason='semantic classification of a file\'s role, not a path-pattern predicate as written',
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: a "shared-seam-touched" answer widens the
+        # review's blast radius (e.g. drives reviewer-count-on-oracle-
+        # disagreement's own fan-out call) -- the EM must actually widen
+        # dispatch/coverage on this answer, not merely record a fact.
+        reportable=False,
     )
 
 
@@ -780,6 +855,11 @@ def build_governing_spec_identification_judgment_point() -> dict[str, Any]:
             "recall/matching judgment, not a computed lookup as stated"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: when torn, the plan directs choosing
+        # False. This answer is copied verbatim into the reviewer dispatch
+        # brief the EM authors -- the EM must actually write that citation
+        # into the brief on the answer, not merely record an opinion.
+        reportable=False,
     )
 
 
@@ -808,6 +888,11 @@ def build_finding_tradeoff_escalation_check_judgment_point() -> dict[str, Any]:
             "judgment call coordinator doctrine names throughout -- not mechanizable here"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo, premise-finding sidecar channel 3) action-class: the
+        # answer decides whether the PM is escalated to at all -- no
+        # directive, no gate, but the EM must still DO something on the
+        # answer. Named explicitly by the plan's premise-finding sidecar.
+        reportable=False,
     )
 
 
@@ -836,6 +921,10 @@ def build_shallow_row3_waive_check_judgment_point() -> dict[str, Any]:
             "a backstop against ceremony-avoidance"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: "waive" means the EM skips dispatching the
+        # extra review tier -- a concrete behavioral decision (does the
+        # extra review happen or not), no directive behind it.
+        reportable=False,
     )
 
 
@@ -882,6 +971,11 @@ def build_review_dispatch_vehicle_choice_judgment_point(
             "optional, but still a real 'which mechanism' call"
         ),
         revalidate_at_dispatch=False,
+        # `resolves` is resolver-populated: an empty list here means the
+        # `decisions` slice is not filled in yet, not that this point gates
+        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
+        # `reportable` classification and must never be used as one.
+        resolves_computed=True,
     )
 
 
@@ -909,6 +1003,10 @@ def build_quota_retry_vs_escalate_judgment_point() -> dict[str, Any]:
             "genuinely situational"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: the answer decides whether the EM retries
+        # the dispatch or escalates -- a concrete next action either way, no
+        # directive gates it.
+        reportable=False,
     )
 
 
@@ -974,6 +1072,10 @@ def build_unattributable_file_disposition_judgment_point() -> dict[str, Any]:
             "and risk -- not reducible to a rule"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: every disposition here is itself a
+        # concrete disk action (commit, stash, or leave a note) the EM must
+        # carry out -- no directive gates any of the three.
+        reportable=False,
     )
 
 
@@ -1051,6 +1153,11 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
             "findings requires reading them, not a fixed rule"
         ),
         revalidate_at_dispatch=False,
+        # (C2 redo) action-class: per fleet doctrine, break-class is
+        # fix-by-default -- the recommended answer directly obligates the EM
+        # to fix the item, the same shape as
+        # finding-tradeoff-escalation-check (fix-now vs escalate-to-pm).
+        reportable=False,
     )
 
 

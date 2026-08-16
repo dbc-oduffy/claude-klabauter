@@ -2,7 +2,7 @@
 `merge-assemble` computed skill: `brief()` returns the ORDERED directive list
 over the existing merge CLIs `merging-to-main/SKILL.md` currently hand-
 sequences (`merge-recovery-and-tag-cut` resolve-tag-prefix/cut-tag,
-`merge-gate-and-pr` coverage-gate/pr-body, `check-no-illegal-paths`,
+`merge-gate-and-pr` pr-body, `check-no-illegal-paths`,
 `merge-release-notes-derive` flip-tags, `orphan-branch-sweep`, plus the node
 ceremony hard-gate) alongside the computed decision fields this module
 derives itself: `branch_state` (the clean/needs-recovery/diverged
@@ -116,9 +116,7 @@ def compute_branch_state(repo_root: Path) -> str:
     """Computes the clean/needs-recovery/diverged trichotomy from the local
     ahead/behind count against `origin/main` (`git rev-list --left-right
     --count origin/main...HEAD`, read-only — no fetch performed here; the
-    skill's own Step 1.5 fetch is what keeps `origin/main` current, exactly
-    as `merge-gate-and-pr coverage-gate`'s own dependency comment already
-    documents for `origin/main..HEAD`).
+    skill's own Step 1.5 fetch is what keeps `origin/main` current).
 
     - 0 behind, 0 ahead -> `clean` (nothing to merge).
     - behind > 0 -> `needs-recovery` (local main is stale; the skill's
@@ -264,10 +262,13 @@ def _resolve_version_override(
 #: active-branch gate exists in this ceremony, so that key was removed
 #: from the scaffold below rather than left dangling with no CLI to fill
 #: it in (C3 exit (b) judgment for this one key; exit (a) taken for the
-#: three gates that DO have a directive — see this module's C3 audit
+#: gates that DO have a directive — see this module's C3 audit
 #: entry in state/audits/2026-08-08-judgment-point-evidence-merge-assemble.md).
+#: K-001 (state/kill-ledger.md): `coverage_gate`/`d3` removed — the
+#: directive it named (`merge-gate-and-pr coverage-gate`) no longer
+#: exists; `d3` is retired rather than renumbered, so `d4` onward keep
+#: their existing ids.
 GATE_DIRECTIVE_IDS: dict[str, str] = {
-    "coverage_gate": "d3",
     "portability_sweep": "d5",
     "check_no_illegal_paths": "d6",
 }
@@ -285,7 +286,6 @@ def build_gate_verdicts_scaffold() -> dict[str, str]:
     there is no CLI result that could ever fill it in; see
     `GATE_DIRECTIVE_IDS`'s docstring."""
     return {
-        "coverage_gate": "pending",
         "portability_sweep": "pending",
         "check_no_illegal_paths": "pending",
     }
@@ -450,13 +450,6 @@ def build_directives(
             "cli": "merge-recovery-and-tag-cut",
             "args": ["cut-tag", cut_tag],
             "depends_on": ["version_bump_final", "ship_verdict"],
-            "already_satisfied": False,
-        },
-        {
-            "id": "d3",
-            "cli": "merge-gate-and-pr",
-            "args": ["coverage-gate", "origin/main..HEAD"],
-            "depends_on": None,
             "already_satisfied": False,
         },
         {

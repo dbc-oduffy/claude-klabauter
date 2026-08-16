@@ -117,7 +117,6 @@ _logger = _logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ping", 'registers "ping"'),
-    ("coordinator_core.ops.coverage_gate", 'registers "coverage.gate"'),
     ("coordinator_core.ops.cutover_gate", 'registers "cutover.gate"'),
     ("coordinator_core.ops.cutover_advance", 'registers "cutover.advance"'),
     (
@@ -141,7 +140,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_handoffs", 'registers "fleet.archive_completed_handoffs"'),
     ("coordinator_core.ops.fleet.prune_bugs", 'registers "fleet.prune_closed_bugs"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
-    ("coordinator_core.ops.reap_chain_ancestry_waivers", 'registers "chain_ancestry_waivers.reap"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),

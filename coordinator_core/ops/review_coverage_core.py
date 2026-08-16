@@ -40,13 +40,14 @@ Two DISTINCT error-class flags (guards-match-conditions-not-containers):
         commits, so affected commits surface as MORE review, never less.
 
 Negative-spec:
-    - --segments-json mode never batches `git rev-list` or `git log
-      --name-only` across DISTINCT ranges — both legs ARE memoised per
-      DISTINCT sha_range (build_segments's revlist_memo/namelog_memo) since
-      each is a pure function of (sha_range, cwd), but combining ranges
-      into one call is a separate, still-forbidden operation (SAFE_RANGE
-      admits symbolic/live-HEAD endpoints — see build_segments's own
-      comment).
+    - --segments-json mode never batches its single `git log --format=%H
+      --name-only <range>` spawn (C17 merged the former separate `git
+      rev-list` + `git log --name-only` legs into this one call, per range)
+      across DISTINCT ranges — it IS memoised per DISTINCT sha_range
+      (build_segments's segment_memo) since it is a pure function of
+      (sha_range, cwd), but combining ranges into one call is a separate,
+      still-forbidden operation (SAFE_RANGE admits symbolic/live-HEAD
+      endpoints — see build_segments's own comment).
     - --reviewed-set mode also resolves each DISTINCT range independently
       (one `git rev-list` per range, deduplicated, unioned) rather than
       reproducing the bash oracle's single-batched-call optimization — see
@@ -78,6 +79,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -485,18 +487,53 @@ def build_reviewed_set(
 
 # ---------------------------------------------------------------------------
 # --segments-json mode — per-record git rev-list + git log --name-only.
-# Mirrors the bash oracle. Neither leg is BATCHED across distinct ranges
-# (SAFE_RANGE admits symbolic/live-HEAD endpoints; git computes
-# reachable(positives) \ reachable(negatives) as ONE set expression per
-# range — combining ranges would silently drop coverage on a linear chain).
-# Both legs ARE memoised per DISTINCT sha_range (revlist_memo / namelog_memo
-# in build_segments): `git log --name-only --format= <sha_range>` is a pure
-# function of (sha_range, cwd) with `kind` already discarded by `_classify`,
-# so two records citing the same range resolve to the identical `files` set.
-# Per-segment ATTRIBUTION is still preserved — each record still gets its
-# own segment dict, the memoised set is just emitted into every one of them
-# instead of being re-resolved by a fresh spawn each time.
+# Mirrors the bash oracle. NOT batched across distinct ranges (SAFE_RANGE
+# admits symbolic/live-HEAD endpoints; git computes reachable(positives) \
+# reachable(negatives) as ONE set expression per range — combining ranges
+# would silently drop coverage on a linear chain, with no test failure).
+#
+# The two legs ARE now ONE spawn per DISTINCT sha_range instead of two
+# (C17, docs/plans/2026-08-15-composition-invocation-budgets.md): `git
+# rev-list <range>` and `git log --name-only --format= <range>` walk the
+# IDENTICAL commit set for the same range (no pathspec, no --first-parent
+# on either side), so `git log --format=%H --name-only <range>` answers
+# both in a single spawn — one `%H` line per commit (the rev-list leg) plus
+# that commit's changed-file lines (the name-only leg), same as today: a
+# merge commit still emits its `%H` line and no file lines under both the
+# old two-call form and this combined one, since --name-only shows no diff
+# for a merge either way. `_parse_combined_log_output` splits the two
+# interleaved sets back apart. This is a leg MERGE, not a range collapse —
+# each distinct sha_range is still resolved by its own independent spawn;
+# the forbidden operation (batching >1 range into one git invocation) is
+# untouched. Memoised per DISTINCT sha_range exactly as the two-leg form
+# was: two records citing the same range emit their own segment dict, the
+# memoised (shas, files) pair is just not re-resolved by a fresh spawn.
 # ---------------------------------------------------------------------------
+
+
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _parse_combined_log_output(text: str) -> Tuple[Set[str], Set[str]]:
+    """Split `git log --format=%H --name-only <range>` output into the SHA
+    set (`%H` lines) and the changed-file set (every other non-blank line).
+
+    Line-shape disambiguation: a `%H` line is always exactly 40 lowercase hex
+    characters; a repo path that happens to look like one is not a realistic
+    collision this corpus has ever produced (same assumption the rest of this
+    module and coverage.py already make about SHA-shaped lines in git output).
+    """
+    shas: Set[str] = set()
+    files: Set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _FULL_SHA_RE.match(line):
+            shas.add(line)
+        else:
+            files.add(line)
+    return shas, files
 
 
 def build_segments(
@@ -506,28 +543,20 @@ def build_segments(
 ) -> List[Dict[str, object]]:
     segments: List[Dict[str, object]] = []
 
-    # Per-range memo for the `git rev-list` leg (keyed on sha_range alone —
-    # build_segments has no kind-partition, unlike build_reviewed_set). Each
-    # DISTINCT range is still resolved independently (no multi-range
-    # batching: SAFE_RANGE admits symbolic/live-HEAD endpoints, and git
-    # computes reachable(positives) \ reachable(negatives) as ONE set
-    # expression per range — combining ranges would silently drop coverage
-    # on a linear chain with no test failure). This memo only eliminates
-    # RE-resolving a range already seen in this same build_segments call —
-    # the top repeater fires 22x with zero dedup before this fix.
+    # Per-range memo for the combined `git log --format=%H --name-only` spawn
+    # (keyed on sha_range alone — build_segments has no kind-partition, unlike
+    # build_reviewed_set). Each DISTINCT range is still resolved independently
+    # (no multi-range batching: SAFE_RANGE admits symbolic/live-HEAD endpoints,
+    # and git computes reachable(positives) \ reachable(negatives) as ONE set
+    # expression per range — combining ranges would silently drop coverage on
+    # a linear chain with no test failure). This memo only eliminates
+    # RE-resolving a range already seen in this same build_segments call.
     #
-    # The sibling `git log --name-only` leg gets the identical treatment
-    # (namelog_memo/namelog_skip below): memoised per DISTINCT sha_range,
-    # never batched across ranges. `git log --name-only --format= <range>`
-    # is a pure function of (sha_range, cwd) — `_classify` already discarded
-    # `kind` before this point — so two records citing the same range get an
-    # identical `files` set. Per-segment file ATTRIBUTION (the reason this
-    # leg exists) is preserved because the memoised set is still emitted
-    # into every record's own segment dict below, not deduplicated away.
-    revlist_memo: Dict[str, Optional[Set[str]]] = {}
-    revlist_skip: Set[str] = set()
-    namelog_memo: Dict[str, Set[str]] = {}
-    namelog_skip: Set[str] = set()
+    # Per-segment file ATTRIBUTION (the reason the name-only leg exists) is
+    # preserved because the memoised (shas, files) pair is still emitted into
+    # every record's own segment dict below, not deduplicated away.
+    segment_memo: Dict[str, Tuple[Set[str], Set[str]]] = {}
+    segment_skip: Set[str] = set()
     unrecognized_kind_counts: Dict[str, int] = {}
 
     for _source_path, rec in all_records:
@@ -536,49 +565,32 @@ def build_segments(
             continue
         sha_range, artifact, _kind = classified
 
-        if sha_range in revlist_skip:
+        if sha_range in segment_skip:
             continue
 
-        if sha_range in revlist_memo:
-            shas = revlist_memo[sha_range]
+        if sha_range in segment_memo:
+            shas, files = segment_memo[sha_range]
         else:
-            rc, shas_out, rev_err = _run(["git", "rev-list", sha_range], cwd=cwd)
+            rc, combined_out, err = _run(
+                ["git", "log", "--format=%H", "--name-only", sha_range], cwd=cwd
+            )
             if rc != 0:
-                last_err = rev_err.strip().splitlines()[-1] if rev_err.strip() else "git rev-list failed"
+                last_err = err.strip().splitlines()[-1] if err.strip() else "git log failed"
                 if on_unresolvable_ref == "skip":
                     print(
                         f"WARN: skipping trail record with unresolvable range {sha_range!r}: "
                         f"{last_err} ({artifact})",
                         file=sys.stderr,
                     )
-                    revlist_skip.add(sha_range)
+                    segment_skip.add(sha_range)
                     continue
-                print(f"ERROR: command failed: git rev-list {sha_range}\n{rev_err}", file=sys.stderr)
-                raise _FatalError(f"git rev-list {sha_range} failed")
-            shas = set(shas_out.splitlines()) if shas_out else set()
-            revlist_memo[sha_range] = shas
-
-        if sha_range in namelog_skip:
-            continue
-
-        if sha_range in namelog_memo:
-            files = namelog_memo[sha_range]
-        else:
-            rc2, log_out, log_err = _run(
-                ["git", "log", "--name-only", "--format=", sha_range], cwd=cwd
-            )
-            if rc2 != 0:
-                if on_unresolvable_ref == "skip":
-                    print(
-                        f"WARN: skipping trail record (git log failed) {sha_range!r} ({artifact})",
-                        file=sys.stderr,
-                    )
-                    namelog_skip.add(sha_range)
-                    continue
-                print(f"ERROR: command failed: git log {sha_range}\n{log_err}", file=sys.stderr)
+                print(
+                    f"ERROR: command failed: git log --format=%H --name-only {sha_range}\n{err}",
+                    file=sys.stderr,
+                )
                 raise _FatalError(f"git log {sha_range} failed")
-            files = set(line for line in log_out.splitlines() if line.strip()) if log_out else set()
-            namelog_memo[sha_range] = files
+            shas, files = _parse_combined_log_output(combined_out)
+            segment_memo[sha_range] = (shas, files)
 
         segments.append({"sha_range": sha_range, "shas": shas, "files": files})
 

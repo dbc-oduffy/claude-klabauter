@@ -195,3 +195,35 @@ def test_never_evaluated_arm_reports_in_flight_and_keeps_remediation(
     ]
     assert matching, failed_entries
     assert any("archive-stamp-cli ship-handoff" in e for e in matching), matching
+
+
+def test_never_evaluated_arm_reports_present_non_terminal_state_and_keeps_remediation(
+    state_read_repo, monkeypatch
+):
+    """AC9 non-terminal, present-key case: a baton whose frontmatter carries
+    a present-but-non-terminal `deployment_state` (e.g. `awaiting_gate`, not
+    absent) must report that literal state -- not fall back to the
+    absent-key `in_flight` default -- and must still keep the ship-handoff
+    remediation, since `awaiting_gate` is not in
+    `HANDOFF_TERMINAL_DEPLOYMENT` either. Closes the coverage gap the
+    control test above leaves: it only exercises the absent-key path, not a
+    present-but-non-terminal one."""
+    root = state_read_repo
+    sid = _unique_session_id()
+    relpath = _seed_handoff(
+        root,
+        "2026-07-15_100000_awaiting_gate.md",
+        consumed_by=sid,
+        deployment_state="awaiting_gate",
+    )
+
+    result = _run_never_evaluated_arm(root, sid, monkeypatch)
+
+    failed_entries = result["tail_results"]["consumed_handoff_stamp"]["failed"]
+    matching = [
+        e for e in failed_entries
+        if relpath in e and "never-evaluated" in e and "deployment_state: awaiting_gate" in e
+    ]
+    assert matching, failed_entries
+    assert any("archive-stamp-cli ship-handoff" in e for e in matching), matching
+    assert not any("deployment_state: in_flight" in e for e in matching), matching

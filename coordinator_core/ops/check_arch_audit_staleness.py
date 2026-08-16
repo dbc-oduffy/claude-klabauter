@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.git.repo_root import show_toplevel
 
 STALENESS_THRESHOLD_DAYS = 10
 
@@ -157,21 +158,7 @@ def _git_root(cwd: Optional[str] = None) -> Optional[str]:
     unaffected: ``cwd=None`` is a legal ``subprocess.run`` keyword meaning
     "inherit the caller's cwd", identical to the previous implicit behaviour.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
-    return root or None
+    return show_toplevel(cwd)
 
 
 def _parse_root_arg(argv) -> Optional[str]:

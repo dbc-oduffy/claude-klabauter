@@ -103,6 +103,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 
 STALENESS_THRESHOLD_DAYS = 7
 
@@ -118,20 +119,7 @@ def _git_root(cwd: Optional[str] = None) -> Optional[str]:
     different directory (the coordinator STATE root) owned by a live
     sibling plan (see module docstring).
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _git_root: subprocess.run failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
+    root = show_toplevel(cwd)
     return root or None
 
 

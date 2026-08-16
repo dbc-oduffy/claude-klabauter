@@ -207,53 +207,45 @@ class TestIdentityCheckGateResolvesDestSubdirToRepoRoot:
     that is a SUBDIRECTORY of the destination repo, e.g.
     `<repo>/coordinator_core`. `.github/scripts/check-persona-names.py` only
     ever lands at the repo ROOT (a separate toplevel row publishes it there).
-    Anchoring the identity check on `target.dest_dir` made this class of row
-    permanently blind (`skipped=True`, gate never fires) -- root-caused in
-    `state/audits/2026-08-05-klabauter-scrub-and-gate-both-silent.md` § Q3.
+
+    C-round-scan (measured: `run_identity_check` cost ~28-33s on EVERY row,
+    six of eight scanning the byte-identical mirror root): the per-row scan
+    now runs ONLY for the row whose `scan_dest` is its own staging tree
+    (`scan_dest == target.dest_dir`) -- never true for a `dest_subdir` row,
+    whose `scan_dest` is always the (unstaged) mirror root. A `dest_subdir`
+    row's pre_ci therefore never runs `run_identity_check` at all any more;
+    coverage for that row's published bytes moves to
+    `dispatch_end_of_run_identity_check` (§ `TestEndOfRunIdentityCheckLeg`),
+    which scans the same repo root once, after every row has synced.
     """
 
-    def test_checker_at_repo_root_actually_runs_for_subdir_row(self, tmp_path):
-        target = _target_with_subdir(tmp_path)
-        repo_root = target.dest_dir.parent
-        _write_checker(repo_root)
-        # No sentinel file -- synthetic checker exits 0. Proves the checker
-        # was actually invoked (not silently skipped) by asserting a clean
-        # pass rather than merely "did not raise" (a skip also would not
-        # raise, so a clean-tree-only assertion wouldn't distinguish them).
-
-        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
-        publish.dispatch_percolate_pre_ci(
-            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
-        )  # must not raise -- and must have actually run, per the next test
-
-    def test_nonzero_exit_at_repo_root_aborts_subdir_row(self, tmp_path):
+    def test_subdir_row_pre_ci_never_scans_the_mirror_root(self, tmp_path, capsys):
         target = _target_with_subdir(tmp_path)
         repo_root = target.dest_dir.parent
         _write_checker(repo_root)
         (repo_root / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
-        with pytest.raises(publish.EngineUnavailableError) as excinfo:
-            publish.dispatch_percolate_pre_ci(
-                _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
-            )
-        assert "check-persona-names.py exited 1" in str(excinfo.value)
-        assert "PLANTED-FINDING-SENTINEL" in str(excinfo.value)
-
-    def test_checker_under_dest_subdir_itself_is_not_found(self, tmp_path):
-        """Negative control: planting the checker under `dest_dir` (the OLD,
-        buggy resolution) must NOT be what the gate finds -- it has to
-        resolve to the repo root, not `dest_dir`."""
-        target = _target_with_subdir(tmp_path)
-        _write_checker(target.dest_dir)  # wrong location, old buggy behavior
-        (target.dest_dir / _SENTINEL_NAME).write_text("x", encoding="utf-8")
-
-        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
-        # The repo-root checker doesn't exist, so this is a loud skip, not a
-        # run against the wrongly-placed one (which would have failed).
+        # Must NOT raise -- and must not even run the checker -- even though
+        # the repo root's checker would fail if it ran: the per-row leg is
+        # gone for this row shape, deferred to the end-of-run leg instead.
         publish.dispatch_percolate_pre_ci(
             _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
-        )  # must not raise -- skip, never a false failure either
+        )
+        captured = capsys.readouterr()
+        assert "pre_ci per-row identity scan skipped" in captured.err
+        assert "end-of-run identity scan" in captured.err
+
+    def test_subdir_row_never_raises_regardless_of_repo_root_checker_state(self, tmp_path):
+        """No checker at all at the repo root, for a `dest_subdir` row: also
+        must not raise -- pre_ci simply has nothing to do for this row shape
+        any more, clean tree or planted finding alike (§ test above)."""
+        target = _target_with_subdir(tmp_path)
+        # No `.github/scripts/check-persona-names.py` anywhere.
+        claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
+        publish.dispatch_percolate_pre_ci(
+            _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
+        )  # must not raise
 
 
 # ---------------------------------------------------------------------------

@@ -112,7 +112,12 @@ class ProcessGroupTeardownTest(unittest.TestCase):
         fake_proc = type("FakeProc", (), {"pid": 999999})()
         with mock.patch.object(mod.os, "name", "nt"):
             # Must not raise or attempt a POSIX killpg call at all.
-            with mock.patch.object(mod.os, "killpg") as fake_killpg:
+            # create=True: os.killpg is POSIX-only and does not exist on
+            # this platform's os module, so patch.object must be told to
+            # synthesize the attribute rather than require it pre-exist —
+            # this test is asserting the Windows no-op path, where killpg
+            # is never touched at all.
+            with mock.patch.object(mod.os, "killpg", create=True) as fake_killpg:
                 mod._teardown_process_group(fake_proc)
                 fake_killpg.assert_not_called()
 

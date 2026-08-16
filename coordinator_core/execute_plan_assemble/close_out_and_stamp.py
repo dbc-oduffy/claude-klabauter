@@ -466,9 +466,96 @@ MUTATES = ["docs/plans/*.md"]
 #: than widened further (parens/brackets have no observed real chunk-id
 #: use) -- see `test_apostrophe_chunk_id_registers_and_covers_its_own_
 #: spine_id` for the confirmed live corpus shape this fixes.
-_CHUNK_SUBJECT_RE = re.compile(
-    r"^([A-Za-z0-9._'-]+(?:(?:,\s*|\s*[+/]\s*)[A-Za-z0-9._'-]+)*):\s"
+#:
+#: Trailing paren-slug suffix (Defect fix, 2026-08-15 -- the house
+#: `Cn(slug):` commit-subject convention registered ZERO chunk-ids): the
+#: "parens have no observed real chunk-id use" claim above is now known
+#: WRONG. `git log --format='%s'` over this repo alone (2026-08-15) finds
+#: 221 subjects matching `^[A-Z][0-9][A-Za-z0-9._-]*(\+...)*\([^)]*\): `
+#: -- including this branch's own three most-recent commits at the time of
+#: this fix -- every one silently registering zero ids under the pre-fix
+#: pattern. Reported cross-repo by example-retrieval-repo-em (memo dated 2026-08-15),
+#: where it blocked stamping a fully-shipped plan: the join reported
+#: `key_mismatch` on commits whose `Deliverable-Id` trailer was already
+#: correct, because `_extract_chunk_ids` never registered a chunk-id to
+#: join on in the first place (see `DeliverableJoinStats.trailer_matched_
+#: no_chunk_id_count` for the messaging half of that incident). The fix
+#: does NOT admit `(`/`)` into the id character class itself -- an id like
+#: `C1(2` is still not a legal token, and parens still cannot appear
+#: mid-id. Instead, each already-matched id token may carry ONE optional
+#: trailing `\([^()]*\)` GROUP -- a single, non-nested paren pair, which
+#: `_extract_chunk_ids` strips (`_strip_chunk_id_paren_suffix`) before the
+#: id is ever compared or returned. Empty (`()`), unbalanced, or nested
+#: parens simply fail to match that optional group, degrading the whole
+#: match to "no id here" (never a crash, never a bogus id) -- see
+#: `_extract_chunk_ids`'s own docstring for the full contract.
+#: Shared id-list grammar (one token, optionally paren-suffixed, optionally
+#: repeated via `,`/`+`/`/`) -- factored out so `_CHUNK_SUBJECT_RE` (no
+#: prefix admitted) and `_CHUNK_SUBJECT_PREFIXED_RE` (Defect fix, 2026-08-15
+#: -- see that regex's own comment block) apply the IDENTICAL id-shape rule,
+#: never two grammars drifting apart.
+_CHUNK_ID_LIST_GRAMMAR = (
+    r"[A-Za-z0-9._'-]+(?:\([^()]*\))?"
+    r"(?:(?:,\s*|\s*[+/]\s*)[A-Za-z0-9._'-]+(?:\([^()]*\))?)*"
 )
+
+_CHUNK_SUBJECT_RE = re.compile(rf"^({_CHUNK_ID_LIST_GRAMMAR}):\s")
+
+#: Prefix-then-ids form (Defect fix, 2026-08-15 -- cross-repo memo
+#: `2026-08-15-example-retrieval-repo-em-close-out-and-stamp-key-mismatch`, ten
+#: correctly-trailered commits on a fully-shipped example-retrieval-repo plan all
+#: refused stamping because their subjects lead with a scope word before the
+#: id-list, e.g. `retrieval-audit C0/C1/C7: migration-ladder tripwire, RED
+#: outcome test, consumer-dimension ruling` and `retrieval-audit C2: schema
+#: v21 adds verdict, result_count, event_class` -- `_CHUNK_SUBJECT_RE` above
+#: requires the id-list to be the LEADING token, so the whole match failed
+#: and `_extract_chunk_ids` returned `[]` for both, exactly the "zero ids
+#: registered" failure mode `_CHUNK_SUBJECT_RE`'s own comment block already
+#: documents for the paren-slug and apostrophe defects).
+#:
+#: This is a SEPARATE, NARROWER admission than `_extract_chunk_ids`'s own
+#: "KNOWN, DELIBERATE false negative" paragraph bars (mid-subject chunk
+#: mentions, e.g. `mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3`) --
+#: that VERDICT stands untouched. The bound here is CONTIGUITY: the id-list
+#: must sit immediately before the `: ` that ends the subject's lead-in,
+#: with exactly one prefix word (or run of whitespace-separated prefix
+#: words) ahead of it and nothing else between prefix and id-list but
+#: whitespace. `_extract_chunk_ids` only ever reaches for this regex when
+#: `_CHUNK_SUBJECT_RE` above already failed to match at all -- i.e. the
+#: leading segment up to the first `: ` is NOT itself a bare id-list -- so
+#: every subject `_CHUNK_SUBJECT_RE` already handles (bare `fix: ...`,
+#: `close: mark C8 shipped, ...`, `mise: wave 5 -- ... C12 ...`, all five
+#: pinned counter-examples in the fix's own dispatch) is resolved by that
+#: regex FIRST and never falls through here. Each of those five counter-
+#: examples has its own real chunk-id mention strictly AFTER the subject's
+#: only `: `, not immediately before it -- so the mid-subject VERDICT above
+#: still governs them, unchanged.
+#:
+#: The prefix-word run is matched LAZILY (`(?:\S+\s+)+?`), not greedily --
+#: preferring the FEWEST prefix words and therefore the EARLIEST `: ` in the
+#: subject that has a valid id-list immediately before it, never a later
+#: one a longer prefix could reach past unrelated prose. Every token this
+#: regex yields is still run through the SAME `_committed_id_covers_spine_id`
+#: spine bound as the unprefixed multi-id path (and, since Finding 3 above,
+#: the single-id path too) -- a prefix word that happens to leave a
+#: plausible-looking id-shaped remainder right before some interior `: `
+#: (e.g. "release notes: ship the thing" -> candidate token `notes`) is
+#: caught by that bound, not by this regex being conservative about what it
+#: matches.
+_CHUNK_SUBJECT_PREFIXED_RE = re.compile(
+    rf"^(?:\S+\s+)+?({_CHUNK_ID_LIST_GRAMMAR}):\s"
+)
+
+_CHUNK_ID_PAREN_SUFFIX_RE = re.compile(r"\([^()]*\)$")
+
+
+def _strip_chunk_id_paren_suffix(token: str) -> str:
+    """Strips one trailing, non-nested `(...)` group off an already-
+    extracted id token (`C16(composition-invocation-budgets)` -> `C16`) --
+    see `_CHUNK_SUBJECT_RE`'s own comment block for why this suffix is
+    admitted at all. A token with no such suffix is returned unchanged."""
+    return _CHUNK_ID_PAREN_SUFFIX_RE.sub("", token)
+
 
 _CHUNK_ID_SHAPE_RE = re.compile(r"^C\d")
 """FALLBACK-ONLY shape gate, used by `_extract_chunk_ids`'s multi-id split
@@ -502,15 +589,41 @@ unit-test calls to `_extract_chunk_ids(subject)`, and
 that function started passing `missing_chunk_ids` as `spine_ids` too)."""
 
 
+#: Sized against the machine load norm (50-70 concurrent LLM sessions, this
+#: repo's own CLAUDE.md): every `git` call in this module is single-object
+#: plumbing work, so a breach here is a wedged process, not a slow one --
+#: same rationale `check-install-divergence.py`'s own `_GIT_TIMEOUT_SECS`
+#: records. Absence was previously load-bearing-but-unbounded (this
+#: module's own fan-out sites, `_sibling_committed_chunk_ids` and
+#: `_dispatch_ledger_delivered`, had none) -- see
+#: `state/audits/2026-08-15-fleet-composed-op-spawn-census.md` rows 10, 18.
+_GIT_TIMEOUT_SECS = 20.0
+
+
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    """Runs one `git` subprocess, never raising -- a timeout degrades to a
+    synthetic non-zero-returncode result (never `subprocess.TimeoutExpired`
+    escaping), the SAME "never raises, every failure degrades to a skip/
+    false" posture every reader of this function's result already assumes
+    throughout this module (e.g. `_committed_chunk_ids`'s own docstring,
+    Defect 2(d))."""
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=["git", *args],
+            returncode=1,
+            stdout="",
+            stderr=f"git command timed out after {_GIT_TIMEOUT_SECS:g}s",
+        )
 
 
 _OPEN = "open"
@@ -691,12 +804,119 @@ def _extract_chunk_ids(
     for completeness must not assume otherwise for a non-leading-id
     subject. See `test_leading_token_only_bound_documents_non_leading_
     chunk_id_miss` for the pinned corpus example and the pinned counter-
-    examples that justify not widening."""
+    examples that justify not widening.
+
+    Trailing paren-slug suffix (Defect fix, 2026-08-15 -- see `_CHUNK_
+    SUBJECT_RE`'s own comment block for the 221-subject corpus count and
+    the example-retrieval-repo cross-repo memo, dated 2026-08-15, this closes): the
+    house `Cn(slug):` commit-subject convention -- `C1(path-scope): ...`,
+    `C1+C3(path-scope): ...`, `C16(composition-invocation-budgets): ...` --
+    now registers the bare id(s), the parenthesized slug stripped
+    (`_strip_chunk_id_paren_suffix`) before the token is bounded against
+    `spine_ids`/`_CHUNK_ID_SHAPE_RE` or returned. This applies uniformly on
+    BOTH the single-id and multi-id paths -- a compound subject may mix
+    plain and parenthesized tokens freely (`C1+C3(path-scope): ...`
+    registers `['C1', 'C3']`). The separator set itself is UNCHANGED (still
+    only `,`/`+`/`/`) and parens remain illegal mid-id -- only a single,
+    non-nested `(...)` group immediately following an id token is ever
+    admitted, and only as a suffix to strip, never as id content. Empty
+    parens (`C1(): ...`) strip to the bare id exactly like a non-empty
+    slug; unbalanced (`C1(oops: ...`) or nested (`C1(a(b)): ...`) parens
+    make the WHOLE leading-token match fail (`_CHUNK_SUBJECT_RE.match`
+    returns `None`), degrading to `[]` -- the same fail-closed posture as
+    any other subject this function cannot parse, never a crash and never
+    a bogus id.
+
+    Prefix-then-ids form (Defect fix, 2026-08-15 -- see
+    `_CHUNK_SUBJECT_PREFIXED_RE`'s own comment block for the corpus
+    incident this closes and the exact contiguity bound it applies): the
+    "KNOWN, DELIBERATE false negative" paragraph above is REVISED, not
+    voided, by this fix. It now reads precisely as: a subject registers its
+    id-list when that list is either the LEADING token(s) (unchanged,
+    `_CHUNK_SUBJECT_RE`) OR sits immediately before the subject's `: ` with
+    exactly a run of prefix words ahead of it and nothing else between
+    (`_CHUNK_SUBJECT_PREFIXED_RE`) -- e.g. `retrieval-audit C0/C1/C7:
+    migration-ladder tripwire, ...` now registers `['C0', 'C1', 'C7']` and
+    `retrieval-audit C2: schema v21 adds verdict, ...` now registers
+    `['C2']`. What remains INVISIBLE, permanently, is a chunk-id mentioned
+    ANYWHERE ELSE in the subject -- not immediately before its `: ` -- which
+    is exactly the mid-subject-mention shape the VERDICT above still bars
+    scanning for: `close: mark C8 shipped, and record why this plan cannot
+    stamp implemented` (C8 follows the subject's only `: `, not precedes
+    it -- `close` is the only token that registers, and only if it covers a
+    real spine id), `cross-repo: deliver ... C7 sweep deny was inverted
+    memo from ...`, `doctrine: stage the resolves-trailer zero-join
+    amendment ahead of claude-klabauter C4`, and both `mise: wave N -- ...` examples
+    above -- every one has its real chunk-id mention strictly AFTER the
+    subject's only `: `, not immediately before it, so none of them ever
+    reach `_CHUNK_SUBJECT_PREFIXED_RE` (`_CHUNK_SUBJECT_RE` already resolves
+    their single leading token first) and none register anything beyond
+    what they already registered before this fix.
+
+    The prefixed path runs the SAME tokenization and the SAME
+    `_committed_id_covers_spine_id` spine bound as the unprefixed path below
+    -- a prefix word is never itself eligible to register as a chunk-id
+    (only the id-list group the regex captures is), and every candidate
+    token from the prefixed id-list is still spine-bounded when `spine_ids`
+    is supplied, exactly like the unprefixed multi-id path (and, since
+    Finding 3, the unprefixed single-id path too).
+
+    RESIDUAL this fix knowingly accepts, stated because the spine bound is
+    NOT the guard for it: a subject with no leading `<token>: ` of its own,
+    whose REAL spine id sits immediately before an interior `: `, now
+    registers that id regardless of whether the commit landed it --
+    `reverted C1: land chunk (bad)` registers `['C1']`, as do
+    `fix the thing C4: whatever` and `note that C8: is the syntax`. The
+    `_committed_id_covers_spine_id` bound cannot catch these BY
+    CONSTRUCTION, since the token is a genuine spine id; only the
+    contiguous-before-`: ` rule stands between them and a false credit, and
+    for these shapes it does not fire. Accepted on corpus evidence, not on
+    argument: a `git log --format='%s'` sweep of this repo at the fix
+    (18147 subjects, 3127 newly reachable by the prefixed regex) found ZERO
+    such over-crediting subject -- every newly-reachable one yields a
+    non-spine token (`apply`, `action`, `maintenance`) that the bound drops.
+    Git's own revert form is safe by quoting: `Revert "C1: land chunk"`
+    cannot match, because `"` is not in the id character class. A
+    hand-written `reverted <id>: ...` subject is the shape that would
+    defeat this, and it does not occur in the corpus.
+
+    Do NOT "fix" that residual with a denylist of revert-synonyms if it
+    ever bites (Review: coordinator:code-reviewer, P2, 2026-08-15): the
+    exploitable shape is not "a landing verb before a real id" but ANY
+    prefix word before a real-or-covering id immediately before `: ` --
+    `wip`, `todo`, `draft`, `attempt`, `see`, `re` all behave exactly like
+    `reverted`, and none is a landing verb. The attack surface is
+    open-ended natural language, not a closed set like
+    `_ADJACENCY_DASH_TAGS`, so a denylist closes none of it. A real fix
+    would have to exclude one prefix word directly negating or qualifying
+    the id it precedes -- and is still NOT a wider spine bound, which
+    cannot help when the token is a genuine spine id.
+
+    Earliest-colon masking (same review, Q2 hand-trace): because the prefix
+    run is lazy and each repetition consumes exactly one whitespace-
+    delimited word (`\\S+` cannot partially consume one -- backtracking it
+    below a full word immediately fails the mandatory `\\s+`), the FIRST
+    interior `: ` with a grammar-valid token before it wins, always. An
+    early unrelated one therefore MASKS a later genuine chunk mention in
+    the same subject: `ignore me + this: filler C1: real change` matches at
+    `this:`, whose tokens cover no spine id, so the call returns `[]` and
+    the real `C1:` two words later is never reached. This is a false
+    negative -- the safe direction, and the same direction as the
+    mid-subject miss above -- not a correctness bug, and it is the price of
+    the earliest-colon rule that keeps a longer prefix from reaching past
+    prose to a flattering later colon."""
     match = _CHUNK_SUBJECT_RE.match(subject)
+    if not match:
+        match = _CHUNK_SUBJECT_PREFIXED_RE.match(subject)
     if not match:
         return []
     raw = match.group(1)
-    if not any(sep in raw for sep in (",", "+", "/")):
+    tokens = [
+        _strip_chunk_id_paren_suffix(token)
+        for token in re.findall(r"[A-Za-z0-9._'-]+(?:\([^()]*\))?", raw)
+    ]
+    if len(tokens) == 1:
+        bare = tokens[0]
         # Review: code-reviewer -- Finding 3: bound the single-id path
         # against `spine_ids` too, when supplied, for the same reason the
         # multi-id path is bounded -- an unrelated prose subject can
@@ -705,11 +925,10 @@ def _extract_chunk_ids(
         # The `spine_ids is None` path is untouched -- context-free callers
         # keep exact prior behavior.
         if spine_ids is not None:
-            if any(_committed_id_covers_spine_id(raw, spine_id) for spine_id in spine_ids):
-                return [raw]
+            if any(_committed_id_covers_spine_id(bare, spine_id) for spine_id in spine_ids):
+                return [bare]
             return []
-        return [raw]
-    tokens = [token for token in (t.strip() for t in re.split(r"[,+/]", raw)) if token]
+        return [bare]
     if spine_ids is not None:
         spine_id_list = list(spine_ids)
         return [
@@ -1006,6 +1225,29 @@ def _resolve_sibling_repo_root(repo_id: str) -> tuple[Optional[Path], Optional[s
     return root, None
 
 
+#: See `_sibling_committed_chunk_ids`'s own docstring, "Memoized" -- keyed
+#: on the full call-input tuple, process-lifetime only.
+#:
+#: Review: coordinator:code-reviewer (P4-percolate-assemble, F4) -- correctness
+#: precondition, stated explicitly rather than left implicit: this cache is
+#: sufficient ONLY under the observed call pattern of exactly two calls per
+#: `close_out_and_stamp` invocation (both passing an identical `(plan_text,
+#: deliverable_id, spine_ids, repo_root)` key -- `plan_text` itself, not just
+#: an id, is part of the key, so a stale/aliased text object cannot false-hit).
+#: It does NOT scope itself to one closeout call: if any caller in this
+#: process invokes `close_out_and_stamp` / `_sibling_committed_chunk_ids` MORE
+#: THAN ONCE for the SAME plan (a retry loop, a batch-closeout driver, a
+#: session processing multiple plans where one repeats) while a sibling
+#: repo's HEAD has moved between calls, the later call silently returns
+#: stale delivery evidence from the earlier scan rather than re-checking.
+#: A caller with such a repeat-call shape must invalidate/bypass this cache
+#: itself; nothing here detects staleness across time.
+_SIBLING_COMMITTED_MEMO: dict[
+    tuple[str, Optional[str], Optional[tuple[str, ...]], Optional[Path]],
+    tuple[frozenset[str], tuple[str, ...]],
+] = {}
+
+
 def _sibling_committed_chunk_ids(
     plan_text: str,
     deliverable_id: Optional[str],
@@ -1043,7 +1285,34 @@ def _sibling_committed_chunk_ids(
 
     `repo_root` (Review: code-reviewer -- Finding 1, 2026-08-02) is
     forwarded to `_plan_sibling_repo_ids` verbatim as its own containment
-    check's home-repo anchor -- see that function's docstring."""
+    check's home-repo anchor -- see that function's docstring.
+
+    Memoized (cheapen-in-place, 2026-08-15 -- see this module's spawn
+    census, `state/audits/2026-08-15-fleet-composed-op-spawn-census.md`
+    row 10): `close_out_and_stamp`'s own main routine calls this function
+    TWICE per plan with byte-identical inputs -- once inside
+    `_determine_shipped` for the real evidence union, once again purely to
+    surface `skipped_sibling_repos` for the result dict -- so this doubled
+    the per-sibling git fan-out for no evidence gain. `_SIBLING_COMMITTED_
+    MEMO` is a plain module-level dict, keyed on the full input tuple
+    (`plan_text` included, not just its id -- a stale/aliased `plan_text`
+    object could otherwise false-hit), valid only for this process's own
+    single spawn-per-call lifetime (this module's own docstring: no
+    resident daemon, no cross-invocation persistence). Every call still
+    returns FRESH `set()`/`list()` copies, never the cached container
+    itself, so a caller mutating its own return value can never corrupt
+    the memo or a sibling caller's copy."""
+    cache_key = (
+        plan_text,
+        deliverable_id,
+        tuple(spine_ids) if spine_ids is not None else None,
+        repo_root,
+    )
+    cached = _SIBLING_COMMITTED_MEMO.get(cache_key)
+    if cached is not None:
+        cached_committed, cached_skipped = cached
+        return set(cached_committed), list(cached_skipped)
+
     committed: set[str] = set()
     skipped: list[str] = []
     for repo_id in _plan_sibling_repo_ids(plan_text, repo_root):
@@ -1058,6 +1327,7 @@ def _sibling_committed_chunk_ids(
             skipped.append(f"{repo_id}: git-log query failed against {sibling_root}")
             continue
         committed |= sibling_committed
+    _SIBLING_COMMITTED_MEMO[cache_key] = (frozenset(committed), tuple(skipped))
     return committed, skipped
 
 
@@ -1565,12 +1835,35 @@ class DeliverableJoinStats:
     state -- trailered candidates exist, just none of them both matched the
     deliverable id AND named a real chunk-id.
 
+    `trailer_matched_no_chunk_id_count` (Defect fix, 2026-08-15, the
+    misdirecting `key_mismatch` reason string -- see `_extract_chunk_ids`'s
+    own paren-slug docstring paragraph for the corpus/memo citation): a
+    SUBSET of `matched_commit_count`'s own zero-case -- how many commits
+    carried a `Deliverable-Id` trailer EQUAL to `deliverable_id` (the exact
+    same equality test `matched_commit_count` uses) but registered ZERO
+    chunk-ids via `_extract_chunk_ids`, i.e. every commit this function's
+    own loop `continue`s past on the "trailer matched, no chunk-id" branch.
+    `_determine_shipped`'s `"key_mismatch"` state collapses two genuinely
+    different situations -- "no trailer in range ever equalled this plan's
+    `deliverable_id`" and "one did, but its subject named no chunk-id" --
+    behind one static, VALUE-differed reason string
+    (`_JOIN_PROVENANCE_REASON[JOIN_PROVENANCE_KEY_MISMATCH]`), which is
+    false in the second case and sends the reader to re-check a trailer
+    that was never the problem. This field lets the `key_mismatch` message
+    site tell them apart without a second query. Nonzero here does NOT by
+    itself change `join_provenance` (still `"key_mismatch"` whenever
+    `matched_commit_count == 0` -- this is a messaging refinement inside
+    that existing value, not a new provenance state); it only lets the
+    message name the right cause. Zero on the broken-query placeholder
+    below, same as the other two counts.
+
     Computed from the SAME single `git log` call `_committed_chunk_shas`
     already makes for `committed_ids`/`committed_shas` -- no second query."""
 
     attempted: bool
     trailered_commit_count: int
     matched_commit_count: int
+    trailer_matched_no_chunk_id_count: int
 
 
 def _plan_claim_holder_session_id(root: Path, plan_path_rel: Optional[str]) -> Optional[str]:
@@ -1809,6 +2102,7 @@ def _committed_chunk_shas(
                 attempted=bool(deliverable_id),
                 trailered_commit_count=0,
                 matched_commit_count=0,
+                trailer_matched_no_chunk_id_count=0,
             ),
         )
 
@@ -1819,6 +2113,7 @@ def _committed_chunk_shas(
     committed_shas: dict[str, str] = {}
     trailered_commit_count = 0
     matched_commit_count = 0
+    trailer_matched_no_chunk_id_count = 0
     for line in log_lines:
         parts = line.split("\t", 2)
         if len(parts) < 2 or not parts[0]:
@@ -1833,6 +2128,7 @@ def _committed_chunk_shas(
             continue
         subject_chunk_ids = _extract_chunk_ids(subject, spine_ids)
         if not subject_chunk_ids:
+            trailer_matched_no_chunk_id_count += 1
             continue
         matched_commit_count += 1
         for chunk_id in subject_chunk_ids:
@@ -1843,6 +2139,7 @@ def _committed_chunk_shas(
         attempted=bool(deliverable_id),
         trailered_commit_count=trailered_commit_count,
         matched_commit_count=matched_commit_count,
+        trailer_matched_no_chunk_id_count=trailer_matched_no_chunk_id_count,
     )
 
     # Session-Id-scoped fallback (2026-08-10, plan C6, finding 0) -- see
@@ -2123,7 +2420,12 @@ def _hyphen_range_subject_diagnostics(
         match = _CHUNK_SUBJECT_RE.match(subject)
         if not match:
             continue
-        raw = match.group(1)
+        # Paren-slug suffix (Defect fix, 2026-08-15, see `_CHUNK_SUBJECT_RE`'s
+        # own comment block): strip it BEFORE the hyphen split below, or a
+        # legitimately parenthesized, hyphenated slug (`C16(composition-
+        # invocation-budgets): ...`) misreads as a hyphen-range typo on its
+        # own annotation text rather than the id it actually is.
+        raw = _strip_chunk_id_paren_suffix(match.group(1))
         if any(sep in raw for sep in (",", "+", "/")):
             continue
         components = raw.split("-")
@@ -2301,6 +2603,73 @@ def _parse_dispatch_ledger_table(
     return rows, None
 
 
+def _batch_git_cat_file_check(
+    shas: Sequence[str], repo_root: Path
+) -> dict[str, Optional[str]]:
+    """Resolves every sha in `shas` to a full commit object id in ONE
+    `git cat-file --batch-check` spawn (cheapen-in-place, 2026-08-15 --
+    see `state/audits/2026-08-15-fleet-composed-op-spawn-census.md` row
+    18), replacing what `_dispatch_ledger_delivered` used to spend one
+    `git cat-file -e <sha>` spawn per Dispatch Ledger row on. Feeds every
+    sha on stdin, one per line -- `--batch-check` guarantees one output
+    line per input line, IN ORDER, even for a missing/ambiguous object
+    (`<sha> missing`/`<sha> ambiguous`), so positional zip is safe.
+
+    Returns `{sha: full_oid_or_None}`. `None` covers every case the
+    original per-sha `git cat-file -e` treated as "does not exist":
+    missing, ambiguous, or malformed output. Narrower than the original
+    call's own semantics in one respect -- this only accepts an object
+    whose type is `commit` -- but that narrowing is a no-op on the actual
+    verdict: the caller's very next step is `merge-base --is-ancestor`,
+    which itself requires a commit-ish and would reject a non-commit
+    object anyway, so a sha that resolved-but-wasn't-a-commit was already
+    guaranteed to end up `missing` under the pre-batch code path too.
+    Never raises -- an empty `shas` short-circuits with no spawn at all,
+    matching this module's existing zero-work-zero-spawn posture."""
+    result: dict[str, Optional[str]] = {sha: None for sha in shas}
+    if not shas:
+        return result
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            cwd=str(repo_root),
+            input="\n".join(shas) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return result
+    out_lines = (proc.stdout or "").splitlines()
+    for sha, line in zip(shas, out_lines):
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "commit":
+            result[sha] = parts[0]
+    return result
+
+
+def _rev_list_ancestor_shas(repo_root: Path) -> Optional[set[str]]:
+    """Every full commit sha reachable from `HEAD`, in ONE `git rev-list
+    HEAD` spawn -- the batched replacement for a per-sha `git merge-base
+    --is-ancestor <sha> HEAD` call (cheapen-in-place, 2026-08-15 -- see
+    this module's spawn census row 18). "sha is an ancestor of HEAD" and
+    "sha is a member of `git rev-list HEAD`'s own output" are the same
+    reachability question asked two ways -- `rev-list HEAD` walks
+    exactly the commit graph `--is-ancestor` would have walked per call.
+
+    Returns `None` on a `rev-list` failure (non-zero exit) -- the
+    caller degrades that to the same not-shipped, no-crash posture every
+    other git-query failure in this module already takes, distinct from
+    an empty-but-successful set (a repo with a one-commit `HEAD`, whose
+    ancestor set is genuinely just that commit)."""
+    result = _run_git(["rev-list", "HEAD"], repo_root)
+    if result.returncode != 0:
+        return None
+    return set((result.stdout or "").splitlines())
+
+
 def _dispatch_ledger_delivered(
     plan_text: str, repo_root: Path
 ) -> tuple[bool, list[str], Optional[str]]:
@@ -2337,24 +2706,37 @@ def _dispatch_ledger_delivered(
     if error is not None:
         return False, [], error
 
-    missing: list[str] = []
-    for row in rows:
+    # Batched (cheapen-in-place, 2026-08-15 -- see this module's spawn
+    # census row 18): the old code ran TWO `git` spawns per row
+    # (`cat-file -e`, then `merge-base --is-ancestor`) -- a 20-chunk plan
+    # was 40 spawns. Every row's cited sha is first collected, then
+    # resolved/reachability-checked in exactly TWO spawns TOTAL for the
+    # whole table (`_batch_git_cat_file_check`, `_rev_list_ancestor_shas`),
+    # regardless of row count -- same two-stage verdict per row
+    # (existence, THEN reachability from `HEAD`, mirroring
+    # `_verify_disposition_ref`), just computed from two shared batch
+    # results instead of a live spawn per row.
+    row_shas: dict[int, str] = {}
+    for idx, row in enumerate(rows):
         match = _DISPATCH_LEDGER_COMMITTED_RE.match(row["status_cell"])
-        if match is None:
+        if match is not None:
+            row_shas[idx] = match.group(1)
+
+    distinct_shas = sorted(set(row_shas.values()))
+    resolved = _batch_git_cat_file_check(distinct_shas, repo_root)
+    ancestor_shas = _rev_list_ancestor_shas(repo_root) if distinct_shas else set()
+
+    missing: list[str] = []
+    for idx, row in enumerate(rows):
+        sha = row_shas.get(idx)
+        if sha is None:
             missing.append(row["chunk_id"])
             continue
-        sha = match.group(1)
-        # Review: coordinator:code-reviewer -- cat-file -e alone only proves
-        # the object exists in the object store, not that HEAD ever reached
-        # it (dangling/abandoned-branch/never-merged commits pass). Mirror
-        # `_verify_disposition_ref`'s two-stage check: existence, THEN
-        # `merge-base --is-ancestor` reachability from HEAD.
-        verify = _run_git(["cat-file", "-e", sha], repo_root)
-        if verify.returncode != 0:
+        full_oid = resolved.get(sha)
+        if full_oid is None:
             missing.append(row["chunk_id"])
             continue
-        ancestor = _run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root)
-        if ancestor.returncode != 0:
+        if ancestor_shas is None or full_oid not in ancestor_shas:
             missing.append(row["chunk_id"])
     return (len(missing) == 0), missing, None
 
@@ -4519,19 +4901,38 @@ def close_out_and_stamp(
     # Cross-repo scope scanning (Defect fix, 2026-07-27): surface which
     # sibling repos (if any) this plan's own `scope:` named but this run
     # could not scan -- `_determine_shipped` above already folded any
-    # SUCCESSFULLY-scanned sibling's evidence into `missing`; this second,
-    # cheap call (same `_plan_sibling_repo_ids`/registry-resolve path,
-    # `[]` immediately when `scope:` names no sibling) exists ONLY to
-    # surface the skip list itself in this op's own result dict, per this
-    # module's docstring "Degrade-safely, and say so".
+    # SUCCESSFULLY-scanned sibling's evidence into `missing`; this second
+    # call exists ONLY to surface the skip list itself in this op's own
+    # result dict, per this module's docstring "Degrade-safely, and say
+    # so". `root` (Latent-bug fix, cheapen-in-place 2026-08-15) is now
+    # passed -- previously omitted, defaulting to `None` and skipping
+    # `_plan_sibling_repo_ids`'s own containment check (see that
+    # function's docstring: "every production call site always supplies
+    # its real `repo_root`" -- this one silently didn't). With `root`
+    # passed, this call's inputs are now byte-identical to
+    # `_determine_shipped`'s own call above (same `text`/`deliverable_id`/
+    # `spine_ids`/`root`), which is what lets `_sibling_committed_chunk_
+    # ids`'s own memo (see its docstring) turn this second per-sibling git
+    # fan-out into a cache hit instead of a second live spawn.
     _unused_sibling_ids, skipped_sibling_repos = _sibling_committed_chunk_ids(
-        text, _plan_deliverable_id(text), spine_ids
+        text, _plan_deliverable_id(text), spine_ids, root
     )
 
     auto_resolved = False
+    # `join_stats` (Defect fix, 2026-08-15): this call already runs the
+    # IDENTICAL `_committed_chunk_shas` query `_determine_shipped` used to
+    # decide `join_provenance` above (same root/deliverable_id/spine_ids/
+    # plan_text/plan_path_rel, `text` not yet mutated by auto-resolve below)
+    # -- captured here rather than re-queried, so the `key_mismatch`
+    # message-construction site further down can distinguish "trailer
+    # matched, no chunk-id" from "trailer value differed" without paying for
+    # a THIRD git-log call. `None` when `rows` is falsy, which never reaches
+    # `JOIN_PROVENANCE_KEY_MISMATCH` (that provenance requires a located,
+    # parsed spine -- see `_determine_shipped`'s own routing).
+    join_stats = None
     if rows:
         deliverable_id = _plan_deliverable_id(text)
-        query_ok, _committed_ids, committed_shas, _join_stats = _committed_chunk_shas(
+        query_ok, _committed_ids, committed_shas, join_stats = _committed_chunk_shas(
             root, deliverable_id, spine_ids, plan_text=text, plan_path_rel=plan_path_rel
         )
         if query_ok and committed_shas:
@@ -5016,10 +5417,35 @@ def close_out_and_stamp(
             # value means. `_JOIN_PROVENANCE_REASON` supplies the plain-
             # language reason so the message names WHY attribution failed,
             # not just that it did.
+            #
+            # `key_mismatch` reason override (Defect fix, 2026-08-15 --
+            # `DeliverableJoinStats.trailer_matched_no_chunk_id_count`'s own
+            # docstring): the static `_JOIN_PROVENANCE_REASON` entry for
+            # `key_mismatch` asserts the trailer VALUE never matched, which
+            # is false whenever at least one commit's trailer DID match but
+            # its subject registered no chunk-id -- that reader would
+            # otherwise be sent to re-inspect a trailer that was already
+            # correct. `join_stats` is `None` only when `rows` was falsy
+            # above, which never reaches `key_mismatch` (see that
+            # assignment's own comment), so this is never a live `None`
+            # dereference on this branch.
+            join_reason = _JOIN_PROVENANCE_REASON[join_provenance]
+            if (
+                join_provenance == JOIN_PROVENANCE_KEY_MISMATCH
+                and join_stats is not None
+                and join_stats.trailer_matched_no_chunk_id_count > 0
+            ):
+                join_reason = (
+                    f"{join_stats.trailer_matched_no_chunk_id_count} commit(s) in "
+                    "range carry a Deliverable-Id trailer equal to this plan's own "
+                    "frontmatter value, but their subject registered no chunk-id "
+                    "(see _extract_chunk_ids's own docstring for what counts) -- "
+                    "inspect the commit subject, not the trailer"
+                )
             message = (
                 f"{plan_path_rel}: {len(missing)} chunk(s) could not be "
                 f"attributed ({join_provenance}) -- "
-                f"{_JOIN_PROVENANCE_REASON[join_provenance]}; "
+                f"{join_reason}; "
                 "committed partial state"
             )
             if chunk_evidence_range:
@@ -5108,7 +5534,7 @@ def close_out_and_stamp(
             example_offender = hyphen_range_subjects[0]
             example_match = _CHUNK_SUBJECT_RE.match(example_offender["subject"])
             example_raw = (
-                example_match.group(1)
+                _strip_chunk_id_paren_suffix(example_match.group(1))
                 if example_match
                 else "-".join(example_offender["spanned_chunk_ids"])
             )

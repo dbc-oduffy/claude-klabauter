@@ -80,6 +80,7 @@ from coordinator_core.win_portability import no_console_creationflags, no_consol
 import sys
 from typing import List, Optional, Tuple
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.list_reverse_drift_cmds import _run
 
 _PROG = "workweek-complete-reverse-drift-gate"
@@ -124,20 +125,9 @@ def _default_scope_repo() -> str:
     falling back to cwd on any failure (no git, not a repo, etc.) — mirrors
     the ceremony step's own `REVDRIFT_SCOPE_REPO="$(git rev-parse
     --show-toplevel 2>/dev/null || pwd)"` computation verbatim."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-        if result.returncode == 0:
-            top = result.stdout.strip()
-            if top:
-                return top
-    except (OSError, FileNotFoundError):
-        pass
+    top = show_toplevel()
+    if top:
+        return top
     return os.getcwd()
 
 

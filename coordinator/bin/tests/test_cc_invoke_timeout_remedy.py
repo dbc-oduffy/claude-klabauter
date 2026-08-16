@@ -15,13 +15,16 @@ Fixture: floor(10) < engine_budget(30) + margin(10) = 40, so the computed ceilin
 strictly above the floor — the case a naive "just print CC_INVOKE_TIMEOUT_SECS" fix would get
 wrong (an operator raising the floor to, say, 20 would see no change, since 20 < 40).
 
-Also covers the coordinator:code-reviewer [P2]/[P3] findings (2026-08-08, sidecar
-coordinatorcode-reviewer-6c2abba0.md): `review-coverage-gate.py` re-appended the install-blame
-line unconditionally after ANY RuntimeError (including the now-fixed timeout message), and
-`append-goal-event.py` hand-built a third, divergent "engine timeout after Ns" message with no
-ceiling derivation. `is_timeout_error` is the shared discriminator both callers now gate on;
-`TestReviewCoverageGateInstallLineGating` and `TestAppendGoalEventUsesSharedTimeoutMessage`
-exercise those two call sites directly.
+Also covers the coordinator:code-reviewer [P3] finding (2026-08-08, sidecar
+coordinatorcode-reviewer-6c2abba0.md): `append-goal-event.py` hand-built a third, divergent
+"engine timeout after Ns" message with no ceiling derivation. `is_timeout_error` is the shared
+discriminator that caller now gates on; `TestAppendGoalEventUsesSharedTimeoutMessage` exercises
+that call site directly.
+
+The sibling [P2] case covered the same install-blame regression in
+`coordinator/bin/review-coverage-gate.py`. That script and its whole review-coverage verdict
+surface were removed by K-001 (`55e64be13`), so the regression has no site left to recur at and
+its coverage is deliberately gone rather than repointed.
 
 `TestRegistryReadTimeoutDistinguishedFromAbsentKey` covers plan
 pln-the-ceremony-tail-stops-lying-b58fb3 § C1 (AC1/AC2a/AC3/AC3b): before this fix,
@@ -241,41 +244,6 @@ def _load_bin_module(name: str, filename: str):
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
-
-
-_rcg = _load_bin_module("review_coverage_gate_timeout_remedy_test", "review-coverage-gate.py")
-
-
-class TestReviewCoverageGateInstallLineGating(unittest.TestCase):
-    """[P2] regression: review-coverage-gate.py used to unconditionally append the
-    install-blame line after ANY RuntimeError from cc_invoke.route — reintroducing the
-    exact bug C5 removed from cc_invoke.py itself, for coverage.gate specifically. Fails
-    if that line reappears on a timeout, or if it stops appearing on a genuine
-    engine-won't-start failure (the distinction is the crux of the finding).
-    """
-
-    def _run_main_with(self, route_exc: Exception) -> str:
-        stderr = io.StringIO()
-        with unittest.mock.patch.object(_rcg.cc_invoke, "route", side_effect=route_exc), \
-                contextlib.redirect_stderr(stderr):
-            exit_code = _rcg.main(["HEAD~1..HEAD"])
-        self.assertEqual(exit_code, 1)
-        return stderr.getvalue()
-
-    def test_timeout_never_gets_install_line(self) -> None:
-        out = self._run_main_with(
-            RuntimeError(_mod._timeout_exceeded_message("coverage.gate", 40))
-        )
-        self.assertNotIn("Verify CLAUDE_KLABAUTER_ROOT", out)
-
-    def test_non_timeout_still_gets_install_line(self) -> None:
-        out = self._run_main_with(
-            RuntimeError(
-                "cc_invoke: engine will not import/start (op=coverage.gate, rc=1)\n"
-                "  ImportError — verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation:"
-            )
-        )
-        self.assertIn("Verify CLAUDE_KLABAUTER_ROOT", out)
 
 
 _age = _load_bin_module("append_goal_event_timeout_remedy_test", "append-goal-event.py")

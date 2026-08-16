@@ -135,6 +135,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.frontmatter.baton_class import canonical_kind
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.lifecycle import git_common_dir as _git_common_dir
@@ -572,22 +573,11 @@ def main(argv: List[str], *, repo_root: Optional[str] = None) -> int:
         return 0
 
     if repo_root is None:
-        try:
-            r = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                timeout=_GIT_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                **no_console_creationflags(),
-            )
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            print(f"{_PROG}: cannot resolve repo root: {exc}", file=sys.stderr)
-            return 0
-        if r.returncode != 0 or not r.stdout.strip():
+        top = show_toplevel()
+        if not top:
             print(f"{_PROG}: not inside a git repository", file=sys.stderr)
             return 0
-        repo_root_path = Path(r.stdout.strip())
+        repo_root_path = Path(top)
     else:
         repo_root_path = Path(repo_root)
 

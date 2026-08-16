@@ -54,21 +54,20 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence
 
-from coordinator_core import launchable
-from coordinator_core._settings_home import settings_home
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.machine_resolver import (
+    merged_flat_registry as _merged_flat_registry,
+    registry_value as _registry_value,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 
 _CREATIONFLAGS = no_console_creationflags()
-
-_MACHINE_LOCAL_TIMEOUT_SECS = 10
 
 
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/.*)?$")
@@ -262,54 +261,19 @@ def _publish_mirror_keys() -> set:
     """Dedup keys (`_to_posix_key` form) of every path registered under the
     machine-local `publish.mirrors.*.path` namespace.
 
-    Best-effort, matching this module's never-block contract: an unavailable or
-    slow machine-local yields an empty set (discovery proceeds unfiltered)
-    rather than an error.
+    Best-effort, matching this module's never-block contract: an unreadable
+    registry yields an empty set (discovery proceeds unfiltered) rather than
+    an error.
     """
-    ml_bin = _resolve_machine_local()
-    if ml_bin is None:
-        return set()
-    ml_argv = _machine_local_launch_argv(ml_bin)
-    try:
-        proc = subprocess.run(
-            [*ml_argv, "keys"],
-            capture_output=True,
-            text=True,
-            timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            check=False,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _publish_mirror_keys: machine-local keys failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return set()
-
-    keys = [
-        line.strip()
-        for line in proc.stdout.splitlines()
-        if line.strip().startswith("publish.mirrors.") and line.strip().endswith(".path")
-    ]
-
+    flat = _merged_flat_registry()
     mirrors: set = set()
-    for key in keys:
-        try:
-            get_proc = subprocess.run(
-                [*ml_argv, "get", key],
-                capture_output=True,
-                text=True,
-                timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                check=False,
-                **_CREATIONFLAGS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            print(f"skip: _publish_mirror_keys: machine-local get {key} failed: {sys.exc_info()[1]}", file=sys.stderr)
+    for key in flat:
+        if not (key.startswith("publish.mirrors.") and key.endswith(".path")):
             continue
-        if get_proc.returncode != 0:
-            continue
-        val = get_proc.stdout.strip()
-        if val:
-            mirrors.add(_to_posix_key(val))
+        val = _registry_value(key, flat)
+        s = (val or "").strip()
+        if s:
+            mirrors.add(_to_posix_key(s))
     return mirrors
 
 
@@ -465,83 +429,20 @@ def _tier_a() -> List[str]:
 # Tier A.5 — machine-local registry repos.* enumeration.
 # ---------------------------------------------------------------------------
 
-def _resolve_machine_local() -> Optional[str]:
-    """PATH first, then settings-home, then the legacy ~/.claude/bin fallback.
-
-    Existence alone gates the settings-home/fallback candidates -- an exec bit
-    is no longer required now that every rung is launched through an
-    interpreter (see `_machine_local_launch_argv`); a PATH hit via
-    `shutil.which` is exec-bit-verified by the OS's own PATH search already.
-    """
-    found = shutil.which("machine-local")
-    if found:
-        return found
-
-    settings_home_candidate = settings_home() / "bin" / "machine-local"
-    if settings_home_candidate.is_file():
-        return str(settings_home_candidate)
-
-    fallback = Path.home() / ".claude" / "bin" / "machine-local"
-    if fallback.is_file():
-        return str(fallback)
-    return None
-
-
-def _machine_local_launch_argv(ml_bin: str) -> List[str]:
-    """Interpreter-prefix `ml_bin` for a bare-exec launch: `machine-local` is an
-    extensionless coordinator/bin sibling, so `resolve_launchable()` is POSIX-bare
-    by design and is not the fix there -- prefix `sys.executable` directly on
-    POSIX. On Windows keep `resolve_launchable()`'s `.cmd`-twin preference and
-    shebang sniffing, which are load-bearing on this repo's P0 primary platform.
-    """
-    if launchable._is_windows():
-        return launchable.resolve_launchable(ml_bin)
-    return [sys.executable, ml_bin]
-
-
 def _tier_a5() -> List[str]:
     """Closes the gap where an operator has registered sibling repos in
     registry.local.toml but no activity record exists yet (Tier A miss) AND
     the path doesn't match the dev-folder probe layouts (Tier B miss).
-    Defensive fallback: silently no-op if machine-local is unavailable.
+    Defensive fallback: silently no-op if the registry is unreadable — see
+    `_merged_flat_registry`'s never-block contract.
     """
-    ml_bin = _resolve_machine_local()
-    if ml_bin is None:
-        return []
-    ml_argv = _machine_local_launch_argv(ml_bin)
-    try:
-        proc = subprocess.run(
-            [*ml_argv, "keys"],
-            capture_output=True,
-            text=True,
-            timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            check=False,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _tier_a5: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return []
-    keys = [line for line in proc.stdout.splitlines() if line.startswith("repos.")]
-
+    flat = _merged_flat_registry()
     results: List[str] = []
-    for key in keys:
-        try:
-            get_proc = subprocess.run(
-                [*ml_argv, "get", key],
-                capture_output=True,
-                text=True,
-                timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                check=False,
-                **_CREATIONFLAGS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            print(f"skip: _tier_a5: get_proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+    for key in flat:
+        if not key.startswith("repos."):
             continue
-        if get_proc.returncode != 0:
-            continue
-        val = get_proc.stdout.strip()
+        val = _registry_value(key, flat)
+        val = (val or "").strip()
         if not val:
             continue
         # Normalize to POSIX form for the existence test (registry values are

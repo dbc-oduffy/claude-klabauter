@@ -62,6 +62,7 @@ from coordinator_core.ops.review_trail_write import (  # noqa: E402
     _diagnose_zero_chain_terminal_credit,
     _dispatch_id_resolvable,
     _walk_range_commit_session_trailers,
+    _ZERO_CREDIT_KEY,
     write_review_trail_entry,
 )
 
@@ -1236,6 +1237,99 @@ class TestAtomicWrite:
         assert result1["out_path"] != result2["out_path"]
         assert len(list((tmp_path / "review-trail").glob("*.json"))) == 2
 
+    def test_divergent_scope_kind_produces_second_record(self, tmp_path, monkeypatch):
+        """scope_kind is load-bearing (2026-08-15, review slice 2, C3 finding
+        #1): a diff-scoped record and a plan-scoped record sharing
+        `(session_id, sha_range)` — and agreeing on verdict/reviewer/scope,
+        with `reviewed_paths` reading `None` on both (omitted for scope_kind
+        != "diff", present-but-null for scope_kind == "diff") — must NOT
+        silently collapse into one record; they describe different review
+        target types."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            scope_kind="diff",
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            scope_kind="plan",
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] != result2["out_path"], (
+            "a scope_kind mismatch must produce a SECOND record, never "
+            "silently collapse a diff-scoped and a plan-scoped record"
+        )
+        json_files = list((tmp_path / "review-trail").glob("*.json"))
+        assert len(json_files) == 2
+        on_disk_scope_kinds = {
+            json.loads(p.read_text(encoding="utf-8"))["scope_kind"] for p in json_files
+        }
+        assert on_disk_scope_kinds == {"diff", "plan"}
+
+    def test_reviewed_paths_order_difference_still_converges(
+        self, tmp_path, monkeypatch
+    ):
+        """reviewed_paths comparison is order-insensitive (2026-08-15, review
+        slice 2, C3 finding #2): the same path SET re-derived in a different
+        iteration order on retry must still converge on the first writer,
+        not be treated as a load-bearing divergence. This must not change
+        what is written to disk — the surviving record keeps the FIRST
+        writer's on-disk order verbatim."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        result1 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            scope_kind="diff",
+            reviewed_paths=["a.py", "b/c.py"],
+            _timestamp="2026-01-15-100000",
+        )
+        result2 = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer="code-reviewer",
+            scope="chain",
+            verdict="ok",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+            scope_kind="diff",
+            reviewed_paths=["b/c.py", "a.py"],  # same set, different order
+            _timestamp="2026-01-15-100001",
+        )
+
+        assert result1["out_path"] == result2["out_path"], (
+            "reviewed_paths differing only in order must converge, not "
+            "produce a spurious second record"
+        )
+        json_files = list((tmp_path / "review-trail").glob("*.json"))
+        assert len(json_files) == 1
+        on_disk = json.loads(json_files[0].read_text(encoding="utf-8"))
+        assert on_disk["reviewed_paths"] == ["a.py", "b/c.py"], (
+            "the surviving record must keep the FIRST writer's on-disk "
+            "order verbatim — order-normalization is for comparison only, "
+            "never for what gets serialized"
+        )
+
     def test_different_session_id_never_converges_even_with_identical_fields(
         self, tmp_path, monkeypatch
     ):
@@ -1628,26 +1722,6 @@ class TestForeignSessionScopeGuard:
     defect: a scope="chain" record vouching for a peer session's unreviewed
     commits."""
 
-    def test_foreign_trailer_sha_in_range_is_refused_and_named(self, tmp_path):
-        """Case 1: a commit whose OWN Session-Id trailer names a different
-        session anywhere in sha_range is a hard refusal, and the raised
-        message NAMES the offending SHA (not just "some commit is foreign")."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="session")
-
-        assert foreign_sha in str(exc_info.value), (
-            f"expected the offending SHA {foreign_sha!r} named in the error, "
-            f"got: {exc_info.value}"
-        )
 
     def test_foreign_refusal_message_names_remedy_not_absolute_impossibility(
         self, tmp_path
@@ -1680,51 +1754,16 @@ class TestForeignSessionScopeGuard:
         # (an exact substring of the old raised message) does the falsifying
         # work, along with the two positive-content checks.
         assert "there is no vouch, grant, or override" not in message
-        assert "coverage-gate" in message or "brightline-gate" in message
-        assert "--from-handoff" in message
+        # K-005 (state/kill-ledger.md, 2026-08-16) removed the chain-ancestry
+        # waiver system, and with it the "coverage-gate --from-handoff" mint
+        # remedy this test previously pinned. The surviving remedy is
+        # re-committing through the trailer-emitting path so the commit
+        # carries this session's own Session-Id trailer, then retrying —
+        # still a performable action, not the absolute impossibility this
+        # test guards against.
+        assert "re-commit" in message
+        assert "trailer-emitting path" in message
 
-    def test_foreign_refusal_message_discriminator_precedes_remedy_once(
-        self, tmp_path
-    ) -> None:
-        """Register regression (B2 REPEATED FACT, docs/wiki/guard-messaging.md
-        § Register): the predecessor:none / single-node-walk discriminator
-        must appear BEFORE the gate-before-write remedy is first prescribed —
-        a real peer EM (example-retrieval-repo-em, cross-repo/inbox/2026-08-13-project-
-        rag-em-foreign-session-guard-cannot-see-a-legitimate-successor.md)
-        read the old message, missed the discriminator arriving last, and
-        ran a mint that could not fire for its shape. The ordering assertion
-        below is the load-bearing regression guard and genuinely fails
-        against the old text. The count assertion only guards against the
-        literal remedy sentence being duplicated verbatim; the old defect
-        was the remedy being conceptually restated three times across
-        different phrasings, and this literal-substring count does not by
-        itself prove that broader defect fixed."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        with pytest.raises(ForeignSessionRangeRefused) as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="session")
-
-        message = str(exc_info.value)
-
-        discriminator_marker = "predecessor: none"
-        remedy_marker = "run the ceremony close coverage gate"
-
-        assert discriminator_marker in message
-        assert remedy_marker in message
-        assert message.index(discriminator_marker) < message.index(remedy_marker), (
-            "discriminator must precede the first gate-before-write remedy "
-            "prescription, not follow it"
-        )
-        assert message.count(remedy_marker) == 1, (
-            "gate-before-write remedy must be prescribed exactly once, "
-            f"got {message.count(remedy_marker)}"
-        )
 
     def test_untrailered_commit_placed_in_scope_by_touched_path_writes_and_logs(
         self, tmp_path, caplog
@@ -1843,22 +1882,6 @@ class TestForeignSessionScopeGuard:
             f"the trailer-emitting path. Got: {message}"
         )
 
-    def test_git_failure_in_guard_fails_closed(self, tmp_path) -> None:
-        """A git failure inside the guard's own git subprocess calls (here:
-        trailer_foreign_shas's `git log` over a sha_range naming SHAs that
-        do not exist) must raise, not silently proceed to write — failing
-        closed, never open."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        _make_commit(repo, "base")
-
-        # Both endpoints are hex-shaped (matches the write-side ref-concretization
-        # fast path, so no symbolic-ref resolution touches them and they reach
-        # the guard's own `git log` call unresolved) but name commits that do
-        # not exist in this repo — `git log` over this range fails non-zero.
-        with pytest.raises(GitLogFailed):
-            _write_guarded(repo, "deadbeef01..deadbeef02")
 
     def test_workstream_resolves_null_not_a_peer_slug(self, tmp_path) -> None:
         """A handoff claimed by a PEER session must never leak its workstream
@@ -1896,24 +1919,6 @@ class TestForeignSessionScopeGuard:
             f"got: {result['workstream']!r}"
         )
 
-    def test_scope_chain_foreign_commit_refused_same_as_session_scope(
-        self, tmp_path
-    ) -> None:
-        """(i.1) scope="chain" grants NO exemption from the guard — a foreign-
-        attributed commit in range is refused identically to scope="session"
-        (the reported defect was specifically a scope="chain" record)."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
-        assert foreign_sha in str(exc_info.value)
 
     def test_scope_chain_own_session_range_writes_normally(self, tmp_path) -> None:
         """(i.2) scope="chain" over only this session's own attributed
@@ -1981,260 +1986,6 @@ class TestForeignSessionScopeGuard:
             "aaaa..bbbb", _GUARD_OWN_SESSION, not_a_repo,
         )
 
-    def test_guard_refuses_exactly_the_same_ranges_after_vouch_removal(
-        self, tmp_path
-    ) -> None:
-        """AC7 negative-spec pin (2026-08-08 vouch-free-review-coverage-gates
-        C2/C4b): commit c4a8e5e864c3 deleted the Case-1 PM-vouch relaxation
-        mechanism (`coordinator_core/session/review_trail_vouch.py` and its
-        `check_review_trail_vouch` consult inside `_guard_foreign_session_range`).
-        That deletion did NOT touch the guard's refusal logic itself — it only
-        removed one caller-supplied escape hatch the guard used to consult.
-
-        This test exists so a future reader looking at the vouch removal
-        cannot conclude "the guard got weaker" or "the guard got stronger"
-        from that change alone: it pins that a foreign-attributed SHA in
-        range is refused today with the exact same exception type and the
-        exact same offending-SHA-in-message behaviour the guard exhibited
-        before the vouch escape hatch existed at all. If this test goes red,
-        the guard's refusal strength itself changed — stop and report it as
-        a break-class regression, do not adjust this test to match."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain")
-        assert foreign_sha in str(exc_info.value), (
-            f"expected the offending SHA {foreign_sha!r} named in the "
-            f"refusal, got: {exc_info.value}"
-        )
-
-        # No vouch, no chain-ancestry waiver, no grant of any kind exists
-        # anywhere on disk for this repo — the refusal above is unconditional,
-        # not merely "unconditional because nobody happened to vouch."
-        assert not (repo / "state" / "review-trail" / "pm-vouches").exists()
-
-
-# ---------------------------------------------------------------------------
-# NOTE: the Case-1 PM-vouch relaxation mechanism (2026-07-28 amendment —
-# archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C7
-# amendment, coordinator_core/session/review_trail_vouch.py) was removed by
-# commit c4a8e5e864c3 (this plan's C2). The `TestForeignSessionScopePMVouchRelaxation`
-# class that pinned it, and every test elsewhere in this file that used
-# `review_trail_vouch.write_review_trail_vouch` as setup, were deleted along
-# with it here — the mechanism they exercised no longer exists, and there is
-# nothing left to salvage or rewrite without inventing coverage for a
-# different behaviour.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Chain-ancestry waiver as a SECOND evidence source (2026-07-31, C3,
-# docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md).
-# AC1 (refusal strength unchanged for an un-waived foreign SHA) and AC1b
-# (the residual strength that must survive the new source: a foreign SHA
-# outside the gate's chain_set, and one from a chain the gate never HALTed
-# on). The full write-side matrix (waived-admits, partial-refuse, scope-
-# mismatch) is C4a's — this class stays to the two chunks this dispatch owns.
-# ---------------------------------------------------------------------------
-
-from coordinator_core import chain_ancestry_waivers as _chain_waivers  # noqa: E402
-
-# Chain identity must satisfy chain_ancestry_waivers._CHAIN_ID_RE (hex chars
-# and dashes only, first/last char hex) — a real closing session's own id is
-# a UUID and always shaped this way, unlike `_GUARD_OWN_SESSION` above (a
-# human-readable slug used elsewhere in this file's guard tests, which never
-# key off a directory-name-safety-checked chain_id).
-_CHAIN_OWN_SESSION = "abcdef01-1111-2222-3333-444444444444"
-_CHAIN_OTHER_SESSION = "abcdef02-5555-6666-7777-888888888888"
-
-
-class TestForeignSessionScopeChainAncestryWaiver:
-    """C3: `_guard_foreign_session_range` consults the C1 chain-ancestry
-    waiver set as a second source alongside the PM-vouch set — no signature
-    change, no new parameter, no new derivation. `own_session_id` (already
-    passed to the guard) IS the chain identity looked up, mirroring the read
-    side's `_narrow_foreign_session_scope` use of `own_session_id` as
-    `reading_chain_id` (coverage.py's `_chain_ancestry_waived_shas`)."""
-
-    def test_ac1_unwaived_foreign_sha_still_refuses_exactly_as_at_head(
-        self, tmp_path
-    ) -> None:
-        """AC1: with NEITHER a PM-vouch grant NOR a chain-ancestry waiver on
-        disk anywhere, a foreign-attributed SHA refuses exactly as it did
-        before this chunk — same exception type, same offending SHA named."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
-        assert foreign_sha in str(exc_info.value)
-
-    def test_ac1b_foreign_sha_outside_chain_set_still_refuses(self, tmp_path) -> None:
-        """AC1b (case 1 of 2): a chain-ancestry waiver DOES exist for this
-        writing session's own chain identity, but not for the offending SHA
-        in this range (it was minted for some OTHER commit the gate's
-        chain_set did include) — the un-waived foreign SHA here, which is
-        outside that chain_set, must still refuse.
-
-        Load-bearing check performed manually (not asserted here): a guard
-        that intersected the waived set with `foreign_trailer_shas` only
-        loosely (or dropped the intersection and unioned the whole
-        directory's waived set unconditionally) would make this test go
-        red, because `chain_waived_but_unrelated_sha` shares this session's
-        chain identity and would otherwise leak into `waived`.
-        """
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        # A waiver minted for THIS session's own chain identity, but naming a
-        # different, unrelated SHA — i.e. the gate's chain_set for this
-        # chain included some other commit, not the foreign_sha under test.
-        chain_waived_but_unrelated_sha = "f" * 40
-        _chain_waivers.record_chain_ancestry_waiver(
-            str(repo),
-            frozenset({chain_waived_but_unrelated_sha}),
-            chain_id=_CHAIN_OWN_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
-        assert foreign_sha in str(exc_info.value)
-
-    def test_ac1b_foreign_sha_from_chain_never_halted_on_still_refuses(
-        self, tmp_path
-    ) -> None:
-        """AC1b (case 2 of 2): a chain-ancestry waiver exists NAMING the
-        exact offending SHA, but it was minted for a DIFFERENT chain's
-        close (a chain the gate never HALTed on when THIS session was the
-        closer) — this session's own chain identity does not match the
-        waiver's minting chain, so it must still refuse (AC3's
-        scope-mismatch discipline, exercised here from the write side).
-
-        Load-bearing check performed manually (not asserted here): a guard
-        that consulted chain waivers by PRESENCE alone (any chain,
-        anywhere — the pm-vouches shape) rather than scoped to
-        `own_session_id` would make this test go red, since the waiver
-        below exists and names `foreign_sha` exactly.
-        """
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        # A waiver minted for the EXACT offending SHA, but under a chain_id
-        # that is NOT this writing session's own chain identity.
-        _chain_waivers.record_chain_ancestry_waiver(
-            str(repo),
-            frozenset({foreign_sha}),
-            chain_id=_CHAIN_OTHER_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
-        assert foreign_sha in str(exc_info.value)
-
-    def test_chain_ancestry_waiver_for_own_chain_admits_the_write(
-        self, tmp_path
-    ) -> None:
-        """Sanity companion (not AC1/AC1b, but needed to prove the two
-        residual-strength tests above are discriminating tests and not
-        vacuously refusing regardless of any waiver): a waiver minted for
-        THIS session's own chain identity, naming the exact offending SHA,
-        DOES admit the write — proving the guard's refusal above is
-        conditioned on scope/identity, not on chain-ancestry waivers being
-        inert."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
-        foreign_sha = _make_commit_touching(
-            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        _chain_waivers.record_chain_ancestry_waiver(
-            str(repo),
-            frozenset({foreign_sha}),
-            chain_id=_CHAIN_OWN_SESSION,
-        )
-
-        result = _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="chain", own_session_id=_CHAIN_OWN_SESSION)
-        assert Path(result["out_path"]).is_file()
-
-    def test_partial_chain_waiver_refuses_naming_only_unwaived_remainder(
-        self, tmp_path
-    ) -> None:
-        """C4a matrix: a range with TWO foreign-attributed SHAs where only
-        ONE carries a chain-ancestry waiver for this session's own chain
-        must STILL refuse — DR-243's existing narrowness property (a range
-        only PARTIALLY covered by waived/vouched evidence still refuses)
-        must survive the new evidence source unchanged. The refusal message
-        names ONLY the un-waived remainder, never the already-waived SHA."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
-        base_sha = _make_commit(repo, "base")
-        _make_commit_touching(repo, "own.py", "own work", session_id=_CHAIN_OWN_SESSION)
-        waived_foreign_sha = _make_commit_touching(
-            repo, "peer-waived.py", "peer work (waived)", session_id=_GUARD_FOREIGN_SESSION,
-        )
-        unwaived_foreign_sha = _make_commit_touching(
-            repo, "peer-unwaived.py", "peer work (unwaived)", session_id=_GUARD_FOREIGN_SESSION,
-        )
-
-        _chain_waivers.record_chain_ancestry_waiver(
-            str(repo),
-            frozenset({waived_foreign_sha}),
-            chain_id=_CHAIN_OWN_SESSION,
-        )
-
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
-            _write_guarded(
-                repo, f"{base_sha}..{unwaived_foreign_sha}", scope="chain",
-                own_session_id=_CHAIN_OWN_SESSION,
-            )
-        message = str(exc_info.value)
-        assert unwaived_foreign_sha in message, (
-            f"expected the un-waived remainder {unwaived_foreign_sha!r} named "
-            f"in the refusal, got: {message}"
-        )
-        assert waived_foreign_sha not in message, (
-            f"the already-waived SHA {waived_foreign_sha!r} must NOT appear "
-            f"in the refusal — only the un-waived remainder is named, "
-            f"got: {message}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Write-time zero-chain-terminal-credit diagnostic (state/audits/2026-08-07-
-# wsc-chain-gate-counts-doc-only-commits.md Q2/Q4/Q5).
-# ---------------------------------------------------------------------------
-
-_ZERO_CREDIT_KEY = "chain_terminal_zero_credit_warning"
-
 
 class TestZeroChainTerminalCreditDiagnostic:
     """The write ALWAYS succeeds in every case below — the diagnostic is
@@ -2244,15 +1995,15 @@ class TestZeroChainTerminalCreditDiagnostic:
         self, tmp_path
     ) -> None:
         """A `scope_kind='diff'` single-commit range naming a predecessor
-        session's own, unvouched commit — the exact audited incident shape
-        (state/audits/2026-08-07-wsc-chain-gate-counts-doc-only-commits.md
-        Q2) — never reaches the diagnostic at all for `scope_kind='diff'`:
-        `_guard_foreign_session_range` already refuses it outright (this is
-        the write-side guard's own Case 1, verified live, not merely
-        asserted) before `write_review_trail_entry` ever gets to build a
-        result. This pins that fact so a future change to the guard's
-        strictness cannot silently make this shape both guard-accepted AND
-        undiagnosed."""
+        session's own commit never reaches the diagnostic at all: it never
+        touches this session's own scope (Case 2 does not apply), and a
+        single-commit range has no narrower form to fall back to (Case 3's
+        `is_single_commit` branch), so `_guard_foreign_session_range` still
+        refuses it outright before `write_review_trail_entry` ever gets to
+        build a result — Case 1's own hard refusal for this shape is
+        REMOVED (state/kill-ledger.md K-005, 2026-08-16), but Case 3 still
+        catches it. This pins that fact so a future change cannot silently
+        make this shape both guard-accepted AND undiagnosed."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -2262,7 +2013,7 @@ class TestZeroChainTerminalCreditDiagnostic:
             session_id=_GUARD_FOREIGN_SESSION,
         )
 
-        with pytest.raises(ValueError, match="names a different session"):
+        with pytest.raises(ForeignSessionRangeRefused, match="genuinely ambiguous"):
             _write_guarded(repo, f"{foreign_sha}^..{foreign_sha}", scope="chain")
 
     def test_plan_scope_kind_foreign_unvouched_range_is_guard_refused_not_diagnosed(
@@ -2271,13 +2022,12 @@ class TestZeroChainTerminalCreditDiagnostic:
         """2026-08-07 fix: `scope_kind='plan'` now runs through
         `_guard_foreign_session_range` exactly like `scope_kind='diff'`
         (see `write_review_trail_entry`'s call site) — a single-commit range
-        naming a predecessor session's own, unvouched commit is refused
-        outright at write time, the same as the diff sibling test above,
-        rather than accepted with zero write-time check and left to the
-        advisory diagnostic alone. This supersedes the prior pinned
-        behaviour (accepted-with-diagnostic), which was the reported
-        defect: an unvouched foreign plan record used to slip through with
-        no write-time signal at all."""
+        naming a predecessor session's own commit is refused outright at
+        write time, the same as the diff sibling test above (via Case 3's
+        `is_single_commit` branch — Case 1's own hard refusal for this
+        shape is REMOVED, state/kill-ledger.md K-005, 2026-08-16), rather
+        than accepted with zero write-time check and left to the advisory
+        diagnostic alone."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -2287,7 +2037,7 @@ class TestZeroChainTerminalCreditDiagnostic:
             session_id=_GUARD_FOREIGN_SESSION,
         )
 
-        with pytest.raises(ValueError, match="names a different session") as exc_info:
+        with pytest.raises(ForeignSessionRangeRefused, match="genuinely ambiguous"):
             write_review_trail_entry(
                 sha_range=f"{foreign_sha}^..{foreign_sha}",
                 reviewer="staff-eng",
@@ -2299,7 +2049,6 @@ class TestZeroChainTerminalCreditDiagnostic:
                 workstream="",
                 caller_worktree=repo,
             )
-        assert foreign_sha in str(exc_info.value)
 
     def test_scope_kind_integration_emits_diagnostic_regardless_of_shas(
         self, tmp_path
@@ -3021,7 +2770,10 @@ class TestDeliverableIdRecoveryFallback:
         Session-Id trailer names a DIFFERENT session is refused exactly as
         today, unconditionally — a matching Deliverable-Id must never rescue
         it. If this test ever goes red, the guard has stopped being a
-        guard."""
+        guard. Refused via Case 3's single-commit branch now (Case 1's own
+        hard refusal for this shape is REMOVED, state/kill-ledger.md K-005,
+        2026-08-16) rather than Case 1 — the refusal itself is what this
+        test guards, not which case produces it."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -3032,12 +2784,17 @@ class TestDeliverableIdRecoveryFallback:
             deliverable_id=_RECOVERY_DELIVERABLE_ID,
         )
 
-        with pytest.raises(ForeignSessionRangeRefused, match="names a different session") as exc:
+        with pytest.raises(ForeignSessionRangeRefused, match="genuinely ambiguous"):
+            # Case 3's single-commit-range message names the literal
+            # `sha_range` string handed in (here "{base}..HEAD"), not a
+            # resolved commit SHA — unlike Case 1's now-removed message,
+            # it never echoes `foreign_sha` back. The invariant this test
+            # guards is the refusal itself (see docstring above), not the
+            # message's SHA content.
             self._guard(
                 repo, f"{base_sha}..HEAD", monkeypatch,
                 resolved_id=_RECOVERY_DELIVERABLE_ID,
             )
-        assert foreign_sha in str(exc.value)
 
     def test_present_foreign_session_id_on_merge_commit_still_refused_even_with_matching_deliverable_id(
         self, tmp_path, monkeypatch

@@ -117,6 +117,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import FrozenSet, Optional
 
@@ -145,37 +146,64 @@ _LAYER1_DISABLE_TRUTHY = frozenset({"1", "true", "yes"})
 #: and memo-sweep's per-claim-dir loops (``harness_registry``'s own module
 #: docstring: "hundreds of parses per invocation on a loaded box"). Rather
 #: than re-scan ``harness_registry.snapshot()`` per call, this memoizes ONE
-#: snapshot for the lifetime of the current process -- safe under the
-#: spawn-per-call model (one process per op invocation; no long-lived daemon
-#: to go stale under), and the registry read here is already advisory
-#: (confirmed via ``core.stable_pid_alive`` before being trusted, so a
-#: microseconds-stale snapshot cannot manufacture a false LIVE any more than
-#: a fresh one could -- both still require the recorded pid+start_epoch to
-#: pass the birth-instant compare). `None` means "not yet fetched this
-#: process"; a fetch that raises or finds an empty registry caches `{}`, not
-#: `None`, so a miss is never re-fetched every call.
+#: snapshot -- but on a 2 s TTL, not for the lifetime of the process (C8,
+#: docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md),
+#: mirroring the 2 s TTL shape ``resolve_live_session_ids``/the old bridge
+#: layer used before the native port. Under spawn-per-call this TTL is inert
+#: -- a process lives milliseconds, so it never outlives 2 s and behaves
+#: identically to the old unconditional-pin. Under a WARM engine a
+#: process-lifetime pin would mean a session that registers into the
+#: harness registry AFTER the first snapshot is invisible for the rest of
+#: the server's life (the characterization test this fix flips,
+#: ``coordinator_core/warm/tests/test_process_global_characterization.py``
+#: Site 4). The registry read here is already advisory (confirmed via
+#: ``core.stable_pid_alive`` before being trusted, so a stale snapshot
+#: cannot manufacture a false LIVE any more than a fresh one could -- both
+#: still require the recorded pid+start_epoch to pass the birth-instant
+#: compare); a 2 s TTL bounds that staleness rather than eliminating the
+#: cache. `None` means "not yet fetched, or the last fetch has expired"; a
+#: fetch that raises or finds an empty registry caches `{}` (with a fresh
+#: timestamp), not `None`, so a miss is never re-fetched every call within
+#: the TTL window.
 _registry_snapshot_cache: Optional[dict] = None
+
+#: Wall-clock (``time.monotonic()``) stamp of the last successful
+#: ``_registry_snapshot_cache`` fetch, or `None` before the first fetch.
+#: Paired with ``_registry_snapshot_cache`` above -- read together, written
+#: together, reset together (see the test-suite reset note below).
+_registry_snapshot_cache_at: Optional[float] = None
+
+#: TTL in seconds for ``_registry_snapshot_cache`` -- mirrors the 2 s TTL
+#: shape ``resolve_live_session_ids``' own caching layer used historically
+#: (see docstring above).
+_REGISTRY_SNAPSHOT_TTL_SEC = 2.0
 
 
 def _cached_registry_lookup(sid: str):
-    """``harness_registry.lookup(sid)`` via a process-memoized ``snapshot()``
+    """``harness_registry.lookup(sid)`` via a 2 s-TTL-memoized ``snapshot()``
     (see cache docstring above) -- ``session_live`` is the ONLY caller; other
     module call sites (``_verdict_for_sdir``'s batch scan, ``session_verdict``'s
     per-sid path) are unrelated to F5's hot loops and are left untouched.
 
     Cross-test-file staleness window (Review: coordinator:code-reviewer P2):
-    this cache is process-lifetime, not call-lifetime, and only
-    ``coordinator_core/session/tests/test_liveness.py`` resets it (autouse
+    this cache lives at most ``_REGISTRY_SNAPSHOT_TTL_SEC`` seconds, and only
+    ``coordinator_core/session/tests/test_liveness.py`` resets it early (autouse
     fixture). ``coordinator_core/pickup_assemble/tests/test_brief_claim_lease.py``
     and ``test_pickup_claim_stage_stamp_evidence.py`` also exercise
     ``session_live``/``claim_holder_live`` and now carry their own matching
     autouse reset for the same reason -- a snapshot cached by one test (in
     any of these files, sharing a pytest worker process) would otherwise
     silently outlive a later test's ``monkeypatch.setattr(harness_registry,
-    "registry_dir", ...)``. Still production-safe (spawn-per-call, no
-    daemon); this is a test-suite-only staleness window."""
-    global _registry_snapshot_cache
-    if _registry_snapshot_cache is None:
+    "registry_dir", ...)`` for up to the TTL. Still production-safe
+    (spawn-per-call or warm-with-TTL); this is a test-suite-only staleness
+    window."""
+    global _registry_snapshot_cache, _registry_snapshot_cache_at
+    now = time.monotonic()
+    expired = (
+        _registry_snapshot_cache_at is None
+        or (now - _registry_snapshot_cache_at) >= _REGISTRY_SNAPSHOT_TTL_SEC
+    )
+    if _registry_snapshot_cache is None or expired:
         try:
             _registry_snapshot_cache = harness_registry.snapshot()
         # snapshot()'s own contract never raises (it catches internally and
@@ -184,6 +212,7 @@ def _cached_registry_lookup(sid: str):
         # not because snapshot() is currently believed to raise.
         except Exception:
             _registry_snapshot_cache = {}
+        _registry_snapshot_cache_at = now
     return _registry_snapshot_cache.get(sid)
 
 

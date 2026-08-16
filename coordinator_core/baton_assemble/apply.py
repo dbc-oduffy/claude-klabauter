@@ -1372,6 +1372,21 @@ _STATUS_LABELS: dict[int, str] = {
     apply_base.APPLY_EXIT_PARTIAL_MUTATION: "partial",
 }
 
+#: composition-budget pre-mutation breach (chunk C10,
+#: docs/plans/2026-08-15-composition-invocation-budgets.md) reuses
+#: `APPLY_EXIT_CLAIM_DENIED`'s numeric position -- both carry `landed: []`
+#: -- but is NOT a claim denial: no claim was ever evaluated, a
+#: composition budget was. `apply_base.execute_directives` discriminates
+#: the two causes with an additive `report["budget_breach"]` string key,
+#: present only when the breach fired. `_finalize_report` below checks
+#: for that key BEFORE falling back to `_STATUS_LABELS`, so a budget
+#: breach is never mislabelled `"claim_denied"` for a caller branching on
+#: `status` -- distinguishable causes, per the same legibility goal
+#: `_STATUS_LABELS`' own "do NOT add a degraded label" comment above
+#: serves, without touching `degraded` semantics or minting a new ladder
+#: member.
+_BUDGET_BREACH_STATUS = "budget_breach"
+
 
 def _finalize_report(exit_code: int, report: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     """Single chokepoint every `apply()` return path funnels through.
@@ -1380,10 +1395,19 @@ def _finalize_report(exit_code: int, report: dict[str, Any]) -> tuple[int, dict[
     where nothing landed but the key was previously just absent -- and
     stamps `status` (see `_STATUS_LABELS`) so a partially-applied run
     (`d1`/`d2` landed, `d4` failed) is never mistaken for a clean one by a
-    caller that only reads the `error` field."""
+    caller that only reads the `error` field.
+
+    A `report["budget_breach"]` key (§ `_BUDGET_BREACH_STATUS`) takes
+    precedence over `_STATUS_LABELS`: it means `execute_directives`'
+    pre-mutation composition-budget boundary fired, reusing
+    `APPLY_EXIT_CLAIM_DENIED`'s exit code for its `landed: []` shape
+    without this being an actual claim denial."""
     report = dict(report)
     report.setdefault("landed", [])
-    report["status"] = _STATUS_LABELS.get(exit_code, "unknown")
+    if "budget_breach" in report:
+        report["status"] = _BUDGET_BREACH_STATUS
+    else:
+        report["status"] = _STATUS_LABELS.get(exit_code, "unknown")
     return exit_code, report
 
 
@@ -1557,6 +1581,7 @@ def apply(
     repo_root: Optional[Path] = None,
     decisions: Optional[dict[str, Any]] = None,
     title: Optional[str] = None,
+    explicit_deliverable_id: Optional[str] = None,
 ) -> tuple[int, dict[str, Any]]:
     """`apply <kind> <artifact-path> [--session-id <id>] [--decisions <json>]
     [--title <text>]` -- recomputes the brief in-process and executes its
@@ -1564,7 +1589,14 @@ def apply(
     `apply_base.execute_directives`. Returns `(exit_code, report)`;
     `report["landed"]` names exactly which directive ids mutated state.
     `title`, when supplied, is forwarded to `brief()` so d1's scaffold
-    directive carries `--title=<title>`; omitted entirely otherwise."""
+    directive carries `--title=<title>`; omitted entirely otherwise.
+
+    `explicit_deliverable_id` (spinoff only) is likewise forwarded, so a
+    fork that must CARRY an existing deliverable_id never re-mints one.
+    Negative spec: this parameter existed on `brief()` alone until
+    2026-08-15, which made the documented flag reachable only on the
+    read-only verb -- every `apply` silently minted a fresh id and broke
+    the spine join the flag exists to preserve."""
     from coordinator_core.baton_assemble import TransportFailure, brief, resolve_repo_root
     from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
 
@@ -1603,7 +1635,18 @@ def apply(
 
     with _session_identity(resolved_sid):
         try:
-            brief_result = brief(kind, artifact_path, decisions=decisions, repo_root=root, title=title)
+            brief_result = brief(
+                kind,
+                artifact_path,
+                decisions=decisions,
+                repo_root=root,
+                title=title,
+                **(
+                    {"explicit_deliverable_id": explicit_deliverable_id}
+                    if explicit_deliverable_id is not None
+                    else {}
+                ),
+            )
         except TransportFailure as exc:
             return _finalize_report(APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc)})
         except ValueError as exc:
@@ -1803,6 +1846,7 @@ def main_apply(argv: list[str]) -> int:
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
     title: Optional[str] = None
+    explicit_deliverable_id: Optional[str] = None
     i = 0
     while i < len(tail):
         tok = tail[i]
@@ -1829,6 +1873,11 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("baton-assemble")
             title = tail[i + 1]
             i += 2
+        elif tok == "--deliverable-id":
+            if i + 1 >= len(tail):
+                return _usage("baton-assemble")
+            explicit_deliverable_id = tail[i + 1]
+            i += 2
         elif not tok.startswith("-") and title is None and artifact_path:
             # Unambiguous position: once artifact-path and --title are the
             # only two positional/flag slots left, a bare non-flag token
@@ -1851,6 +1900,13 @@ def main_apply(argv: list[str]) -> int:
             print(f"baton-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return APPLY_EXIT_TRANSPORT_FAIL
 
-    exit_code, report = apply(kind, artifact_path, session_id=session_id, decisions=decisions, title=title)
+    exit_code, report = apply(
+        kind,
+        artifact_path,
+        session_id=session_id,
+        decisions=decisions,
+        title=title,
+        explicit_deliverable_id=explicit_deliverable_id,
+    )
     print(json.dumps(report, indent=2))
     return exit_code

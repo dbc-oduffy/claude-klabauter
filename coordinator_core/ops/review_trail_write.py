@@ -78,11 +78,13 @@ Write semantics (DR-216 D2(i) SUPERSEDED 2026-07-27 — see incident note below)
     identity is ``(session_id, sha_range)``, not the record's serialized bytes. A retry
     whose only difference is a derived field (``execution_basis``) converges on the
     first-written record (a no-op skip, not a new file); a retry that disagrees on
-    ``verdict``/``reviewer``/``scope``/``reviewed_paths`` for the same identity writes a
-    genuinely new record plus a diagnostic naming both paths — it is never merged into
-    the first. This scan is session-scoped (the ``*-{session_id_short}*.json`` glob), so
-    a cross-session re-run of the "same" review does not converge — see
-    ``_reserve_unique_trail_path`` for why that scoping is kept rather than widened.
+    ``verdict``/``reviewer``/``scope``/``scope_kind``/``reviewed_paths`` for the same
+    identity writes a genuinely new record plus a diagnostic naming both paths — it is
+    never merged into the first (``reviewed_paths`` compares order-insensitively — a
+    list re-derived in a different iteration order is NOT a divergence). This scan is
+    session-scoped (the ``*-{session_id_short}*.json`` glob), so a cross-session re-run
+    of the "same" review does not converge — see ``_reserve_unique_trail_path`` for why
+    that scoping is kept rather than widened.
 
 MUTATING op: writes ONLY ``state/review-trail/`` (DR-216 D2(iv) noun confinement).
 NEVER writes ``state/handoffs/``, ``archive/``, or rag's relational store
@@ -138,7 +140,7 @@ import time
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional
 
-from coordinator_core import chain_ancestry_waivers, chain_attribution, session_attribution
+from coordinator_core import chain_attribution, session_attribution
 from coordinator_core.session_attribution import GitLogFailed
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.ipc import CallerFacingValidationError, register_op
@@ -261,13 +263,13 @@ _VALID_REVIEWERS = frozenset(
 # record already on disk (no on-disk schema change, no new required key on
 # read).
 #
-# Chain-ancestry waivers (`state/review-trail/chain-ancestry-waivers/`,
-# `coordinator_core.chain_ancestry_waivers`) are NOT this mechanism -- they
-# are a separate, per-SHA, gate-minted provenance-not-discharge marker
+# Chain-ancestry waivers (formerly `state/review-trail/chain-ancestry-waivers/`,
+# `coordinator_core.chain_ancestry_waivers`) were NOT this mechanism -- they
+# were a separate, per-SHA, gate-minted provenance-not-discharge marker
 # consumed by `_guard_foreign_session_range` above, orthogonal to whether a
-# reviewer's OWN verdict is evidenced. Design question (c) in the bug-backlog
-# record: do not conflate the two; this section adds nothing to, and takes
-# nothing from, that mechanism.
+# reviewer's OWN verdict is evidenced. Removed outright (state/kill-ledger.md
+# K-005, 2026-08-16); this section never conflated the two and adds/takes
+# nothing from that now-deleted mechanism.
 
 _DELEGATE_REVIEWERS = frozenset(
     {"code-reviewer", "staff-eng", "code-reviewer+staff-eng", "ubt-compile"}
@@ -1178,105 +1180,21 @@ def _guard_foreign_session_range(
     it was built for (see that plan's ## Problem). Refusal STRENGTH is
     UNCHANGED: only the vouch-shaped escape disappears.
 
-    Case 1 — any commit whose OWN Session-Id trailer names a DIFFERENT
-    session: hard refusal (``ForeignSessionRangeRefused``), UNLESS the
-    offending SHA carries a chain-ancestry waiver minted for THIS chain
-    (``chain_ancestry_waivers.chain_ancestry_waived_shas`` — see below).
-    Refusal strength is otherwise UNCHANGED: still refuse unless every
-    offending SHA is covered by that one remaining evidence source. The
-    waiver (docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md
-    § C3), added 2026-07-31, is a per-SHA, per-chain waiver minted by the
-    coverage GATE (``coordinator_core.ops.coverage_gate``, C2) — NOT granted
-    by a human, and NOT this guard's own doing; this guard only OBSERVES it
-    via ``chain_ancestry_waivers.chain_ancestry_waived_shas``, scoped to
-    ``own_session_id`` (the writing session's own id, which IS the closing
-    chain's identity when this session is that chain's terminal
-    ``/workstream-complete`` — see that module's own docstring for why no
-    new derivation is needed to resolve it here). The mint fires whenever a
-    caller passes ``mint_chain_waivers=True`` and ``from_handoff`` and the
-    gate's ``result.uncovered_shas`` is non-empty — NOT gated on
-    ``result.verdict`` (the verdict leg was deliberately dropped 2026-08-07,
-    state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-artifacts.md,
-    since a chain whose only uncovered commits are planning artifacts can
-    still net verdict COVERED while genuinely owing the narrowing). In
-    practice this means: a chain-terminal session that runs its own close
-    gate against the handoff it picked up, before attempting this write,
-    mints waivers covering its predecessor's commits — the constraint this
-    guard's refusal exists under is ORDERING (gate before write), not
-    impossibility — **for a picked-up handoff whose chain walk reaches at
-    least one node other than the closing handoff itself.**
-
-    NEGATIVE SPEC — the shape that ordering does NOT rescue
-    (state/audits/2026-08-10-chain-ancestry-waiver-mint-attribution-gap.md,
-    measured in-process): predecessor commits reach ``uncovered_shas`` only
-    through a WALKED ANCESTOR node, because
-    ``coverage._derive_dag_chain_set``'s Step-3 segment attribution takes its
-    trailer-derived ``else`` branch only for non-closing nodes. For the
-    ``--from-handoff`` node ITSELF it substitutes the RUNNING session's id
-    (D3 case 3), so that node never contributes its AUTHOR's commits. When
-    the walk collapses to a single node — a picked-up handoff with no walked
-    predecessor edge, the ``predecessor: none``-on-a-continuation-handoff
-    shape — there is no ancestor node to supply them, the mint has nothing
-    to mint over, and running the gate first changes nothing. For that shape
-    the refusal IS impossibility, not ordering, and no amount of re-ordering
-    clears it; the range must be narrowed instead. Do not read the paragraph
-    above as an unconditional remedy.
-
-    NEGATIVE SPEC 2 — the covered-in-chain-foreign shape, and why it is NOT a
-    defect (ruled 2026-08-11; state/bug-backlog/2026-08-11-a-covered-in-chain-
-    commit-owned-by-another.yaml, closed by that ruling). The gate mints over
-    ``result.uncovered_shas`` only, so a commit that is simultaneously in the
-    chain walk, COVERED, and trailer-owned by another session receives no
-    waiver and is refused permanently. This is correct, not a mechanism gap:
-    ``coverage.run_coverage_gate`` derives COVERED as ``sha in reviewed_set``
-    (i.e. a covering trail record already exists) or as ledger-only
-    bookkeeping. In the first case the write this guard refuses would be a
-    SECOND record over another session's commit that its owner already
-    recorded — it credits nothing not already credited, discharges no
-    obligation, and blocks no close (DR-245's 2026-08-08 correction: the C13
-    PARTITION-MANDATORY halt for the ancestor/foreign-only case is gone, so no
-    session is stopped on account of this alone). In the second, the refused
-    write is a stranger session recording a review of another session's
-    ledger churn, which this guard should refuse on its own terms. Neither
-    relaxing the guard to accept coverage-credit as provenance (coverage
-    credit includes review-free bookkeeping — it is not an attestation) nor
-    widening the mint to covered-in-chain commits buys any crediting the
-    system does not already have. The reviewer's findings sidecar is the
-    durable evidence for this shape.
-
-    A range whose foreign-attributed SHAs are only PARTIALLY
-    covered by the waiver set still refuses, naming only the uncovered
-    remainder — this closes the chain-terminal ``/workstream-complete``
-    deadlock only for the commits a waiver actually names; the waiver needs
-    no write-side persistence step here — it was already minted,
-    permanently, by the gate.
-    Trailerlessness alone is never Case 1 (SC-DR-008 sanctions trailerless
-    commits by design).
-
-    A range naming a foreign, unwaived commit is refused AS-IS — narrowing
-    sha_range to exclude it (case-(ii) below), or writing a per-slice record
-    over this session's own commits instead, are the sanctioned paths that
-    make the WRITE itself proceed. For case (i) (a chain-terminal reviewer
-    obliged to cover baton-ancestor commits), there IS a remedy, but it is
-    upstream of this guard, not a parameter to it: running the ceremony
-    close coverage gate (``wsc-coverage-gate-runner.py coverage-gate`` /
-    ``brightline-gate``, ``--from-handoff``) against the picked-up handoff
-    BEFORE this write mints a chain-ancestry waiver keyed to THIS session,
-    which this guard then observes on retry. The binding constraint is
-    ordering — gate before write — not an absence of any remedy, SUBJECT TO
-    the walked-ancestor precondition in the negative spec above: on a
-    single-node walk that gate mints nothing and the remedy does not exist
-    for this range at all.
-
-    Separately, a refusal here is a verdict on THIS CALL SITE, not on the
-    range in the abstract. The open-loop freeze-time record
-    (``freeze-review-diff.py``) and the close-side write
-    (``coordinator-write-review-trail`` with an explicit verdict) are
-    distinct callers; once waivers exist, the close-side write can succeed
-    for the very range the freeze-time one refused
-    (cross-repo/inbox/2026-08-10-example-retrieval-repo-em-correction-chain-terminal-
-    trail-write-does-work.md — a peer read a freeze-time refusal as a
-    verdict on the range and filed a memo about a bug that was not there).
+    Case 1 (REMOVED, state/kill-ledger.md K-005, 2026-08-16 — "waiver system
+    dies") — this used to be a hard refusal for any commit whose OWN
+    Session-Id trailer names a DIFFERENT session, relaxed only by a
+    per-chain waiver minted by the coverage gate at HALT
+    (``coordinator_core.chain_ancestry_waivers``). The gate mint is gone: a
+    census of the live corpus found 1,893 waivers with ``em_disposition``
+    null on 1,889 of them, auto-issuing the exemption ~126 times a day since
+    2026-07-31 with no human ever engaging the refusal it existed to relax.
+    Deleting the mint alone would have converted an auto-bypassed block into
+    one that hard-fails writes across every live session, so the refusal
+    went with it — see docs/wiki/cost-budgets-and-the-kill-disposition.md.
+    A foreign-Session-Id-trailer commit is no longer refused by this guard on
+    that basis alone; it falls through to Case 2/3 below like any other
+    commit. Trailerlessness alone was never Case 1 (SC-DR-008 sanctions
+    trailerless commits by design), and that is unchanged.
 
     Case 2 — no foreign-trailer commit, AND every untrailered commit in
     range touches at least one path this session's own trailer-attributed
@@ -1300,7 +1218,7 @@ def _guard_foreign_session_range(
     ``scope="chain"`` — scope-blindness is deliberate (the reported defect
     was a chain-scoped record).
 
-    Cases 1 and 3 raise ``ForeignSessionRangeRefused`` (not a bare
+    Case 3 raises ``ForeignSessionRangeRefused`` (not a bare
     ``ValueError``) so a caller that cares — e.g.
     ``ceremony.tail_ops.write_review_trail`` — can route the refusal to a
     distinguishable, untruncated ``failed_critical[]`` entry instead of an
@@ -1359,116 +1277,18 @@ def _guard_foreign_session_range(
         )
         return frozenset()
 
-    trailer_cache: dict[tuple[str, Optional[str]], frozenset[str]] = {}
-    foreign_trailer_shas = session_attribution.trailer_foreign_shas(
-        sha_range, own_session_id, str(caller_worktree), trailer_cache, _git_runner,
-    )
-    if foreign_trailer_shas:
-        # Evidence source (2026-07-31, C3,
-        # docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md):
-        # a per-SHA waiver the coverage gate already minted for THIS chain
-        # (coverage_gate.py's `mint_chain_waivers and from_handoff and
-        # result.uncovered_shas` condition — not gated on `result.verdict`,
-        # dropped 2026-08-07, see
-        # state/audits/2026-08-07-review-gate-scoping-predecessor-and-planning-artifacts.md).
-        # `own_session_id` IS the closing chain's
-        # identity at this call site (see this function's own docstring) —
-        # no signature change, no new parameter, no new derivation. This
-        # guard only OBSERVES the waiver; it never mints one. The PM-vouch
-        # evidence source formerly consulted here is gone
-        # (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md § C2) —
-        # this is the ONLY remaining evidence source.
-        chain_waived = chain_ancestry_waivers.chain_ancestry_waived_shas(
-            str(caller_worktree), own_session_id,
-        ) & foreign_trailer_shas
-        waived = chain_waived
-        unvouched = foreign_trailer_shas - waived
-        if not unvouched:
-            # Fully covered: proceed. No write-side persistence step is
-            # needed for a chain-ancestry waiver — it was already minted,
-            # permanently, by the gate at HALT (C2/C1), and this guard never
-            # re-derives or re-mints it.
-            logger.info(
-                "review_trail.write: sha_range %r contains foreign-attributed "
-                "commit(s) %s covered by a gate-minted chain-ancestry waiver "
-                "for chain %s — no new waiver written here; the gate already "
-                "minted it permanently",
-                sha_range,
-                ", ".join(sorted(chain_waived)),
-                own_session_id,
-            )
-            return waived
-        offending = sorted(unvouched)
-        shown = offending[:_FOREIGN_SHA_DISPLAY_CAP]
-        remainder = len(offending) - len(shown)
-        remainder_note = f" (+{remainder} more)" if remainder else ""
-        vouched_note = (
-            f" ({len(waived)} of {len(foreign_trailer_shas)} offending SHA(s) ARE "
-            "covered by a gate-minted chain-ancestry waiver for this session, "
-            "but not all)"
-            if waived
-            else ""
-        )
-        raise ForeignSessionRangeRefused(
-            "review_trail.write: sha_range "
-            f"{sha_range!r} contains commit(s) whose own Session-Id git "
-            f"trailer names a different session: {', '.join(shown)}"
-            f"{remainder_note}{vouched_note} — refusing to write a record "
-            f"for them on that basis alone. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
-            "This session cannot record a range naming another session's "
-            "commits as-is. Two paths remain: narrow sha_range to exclude "
-            "the foreign commit(s) named above (case (ii) only — see above), "
-            "or, if this is a chain-terminal close reviewing a picked-up "
-            "handoff (case (i)), the coverage gate is the remedy — but "
-            "first answer this before running anything: does the "
-            "--from-handoff handoff have a walked predecessor edge, or "
-            "does it carry predecessor: none (every spinoff handoff does, "
-            "by construction — schema rule C2-4)? The gate attributes the "
-            "--from-handoff node to the RUNNING session, not to the session "
-            "that AUTHORED it, so predecessor: none collapses the chain "
-            "walk to one node — the gate mints nothing, this remedy does "
-            "not exist for this range (DR-294 — this is a ruled limit, not a gap), and "
-            "the reviewer's findings sidecar is the terminal evidence; do "
-            "not run the gate expecting it to "
-            "clear this refusal. If instead the handoff DOES have a walked "
-            "predecessor edge: run the ceremony close coverage gate against "
-            "that handoff BEFORE this write — wsc-coverage-gate-runner.py "
-            "coverage-gate/brightline-gate with --from-handoff (minting is "
-            "that runner's DEFAULT; it takes no --mint-chain-waivers flag "
-            "and rejects one — --no-mint is its opt-OUT. "
-            "--mint-chain-waivers belongs to review-coverage-gate.py, the "
-            "child the runner invokes, and is only needed when calling "
-            "that child directly) mints a per-SHA chain-ancestry waiver "
-            "keyed to THIS session's own id for every uncovered predecessor "
-            "commit, and this guard observes that waiver on retry. The "
-            "constraint is then ordering, not impossibility: a session "
-            "that reviews-then-writes before reaching its own close gate "
-            "hits this refusal; running the gate first and retrying the "
-            "write clears it. If this refusal is unchanged after already "
-            "running the gate with --from-handoff, do not re-run it a "
-            "third time — narrow sha_range instead. Separately — "
-            "the gate mints only for commits it counts UNCOVERED, so an "
-            "in-chain foreign commit the gate counts COVERED never "
-            "receives a waiver and this refusal is permanent for it. That "
-            "is not a gap to work around: COVERED means a covering "
-            "review-trail record already exists for that commit (or it is "
-            "ledger-only bookkeeping), so the record you are attempting "
-            "would duplicate another session's record over another "
-            "session's commit, crediting nothing that is not already "
-            "credited. Keep the reviewer's findings sidecar as the "
-            "evidence and do not re-run the gate. Also note this refusal "
-            "is a verdict on THIS call site, not on the range: the "
-            "close-side write (coordinator-write-review-trail with an "
-            "explicit verdict) may succeed for this very range once "
-            "waivers exist, even where the freeze-time open-loop record "
-            "refused it. Caveat: gate admission is not discharge — "
-            "crediting is range-based and narrowed again downstream, so "
-            "an admitted record can still credit zero commits at the "
-            "chain-terminal path (see this module's own "
-            "zero-chain-terminal-credit diagnostic, "
-            "_diagnose_zero_chain_terminal_credit / "
-            "_ALWAYS_ZERO_CREDIT_SCOPE_KINDS, for when that applies)."
-        )
+    # Case 1 — the hard refusal for a commit whose own Session-Id trailer
+    # names a different session — is REMOVED (state/kill-ledger.md K-005,
+    # 2026-08-16, "waiver system dies"). It was exempted ONLY by a
+    # gate-minted chain-ancestry waiver (coordinator_core.chain_ancestry_
+    # waivers, minted by the now-deleted coordinator_core.ops.coverage_gate
+    # mint), and that mint is gone: a census of the live corpus found 1,893
+    # waivers with em_disposition null on 1,889 of them, auto-issuing the
+    # exemption ~126 times a day with no human engagement — the refusal was
+    # defeating itself continuously since 2026-07-31. Deleting the mint
+    # while keeping this refusal would have converted an auto-bypassed block
+    # into one that hard-fails writes across every live session; both go
+    # together. See docs/wiki/cost-budgets-and-the-kill-disposition.md.
 
     known_scope_paths, saw_untrailered = _own_session_touched_paths_and_untrailered_flag(
         sha_range, own_session_id, caller_worktree,
@@ -1582,22 +1402,12 @@ def _guard_foreign_session_range(
             "absent) and the touched-path signal cannot place it in this "
             f"session's scope. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
             "There is no narrower range than one commit, so narrowing "
-            "further is not a performable remedy here. Two remedies "
-            "actually resolve this: (1) re-commit the same change through "
-            "the trailer-emitting path (ceremony.scoped_git_commit / the "
-            "normal commit machinery, not a raw git-commit or commit-tree "
-            "invocation) so the commit carries this session's own "
-            "Session-Id trailer, then retry the write against the new SHA; "
-            "or (2) if this is a chain-terminal close reviewing a picked-up "
-            "handoff, run the ceremony close coverage gate against that "
-            "handoff BEFORE this write (wsc-coverage-gate-runner.py "
-            "coverage-gate/brightline-gate --from-handoff) — it mints a "
-            "per-SHA chain-ancestry waiver keyed to this session, though "
-            "that path exists only for baton-ancestor commits with a "
-            "foreign Session-Id trailer (case 1), not for a genuinely "
-            "trailerless one. A PM vouch does NOT apply here — Case 3 never "
-            "consults it (trailerlessness alone is never Case 1, by "
-            "design)."
+            "further is not a performable remedy here. The remedy is to "
+            "re-commit the same change through the trailer-emitting path "
+            "(ceremony.scoped_git_commit / the normal commit machinery, not "
+            "a raw git-commit or commit-tree invocation) so the commit "
+            "carries this session's own Session-Id trailer, then retry the "
+            "write against the new SHA."
         )
 
     raise ForeignSessionRangeRefused(
@@ -1710,6 +1520,18 @@ _FOREIGN_NARROWED_SCOPES = frozenset({"chain", "session", "workstream-close-auto
 
 _ZERO_CREDIT_REASON_FOREIGN_SESSION = "foreign_session_narrowing"
 _ZERO_CREDIT_REASON_NON_CODE_SCOPE_KIND = "non_code_scope_kind"
+
+#: The op-result key the write-time zero-chain-terminal-credit diagnostic
+#: (`_diagnose_zero_chain_terminal_credit`) is surfaced under -- named here
+#: so callers/tests reference one symbol instead of re-typing the literal
+#: string. Latent-bug fix: this constant was referenced by
+#: `coordinator_core/ops/tests/test_review_trail_write.py` (added
+#: 7917c93b9, 2026-08-07) but never actually defined anywhere -- a
+#: mid-task session death left the drift-pin half of that commit
+#: incomplete, and the three tests that import it have raised NameError
+#: ever since. Must stay byte-identical to the literal used at the write
+#: site below and in `_build_json_record`'s docstring table.
+_ZERO_CREDIT_KEY = "chain_terminal_zero_credit_warning"
 
 
 # ---------------------------------------------------------------------------
@@ -2155,22 +1977,17 @@ def _walk_range_commit_session_trailers(
 def _resolve_write_time_vouched_shas(
     candidate_shas: FrozenSet[str], own_session_id: str, caller_worktree: Path,
 ) -> FrozenSet[str]:
-    """The same evidence source `_guard_foreign_session_range`'s Case-1
-    relaxation consults (module docstring above), resolved independently
-    against an arbitrary ``candidate_shas`` set — used here so this
-    diagnostic stays accurate for ``scope_kind="plan"``, which never runs
-    through that guard at all. Fail-safe toward "not vouched": a raising
-    lookup is treated as an empty result, matching
-    ``_guard_foreign_session_range``'s own fail-safe posture for the same
-    call.
+    """No waiver source remains (state/kill-ledger.md K-005, 2026-08-16 —
+    "waiver system dies"): this used to consult the gate-minted
+    chain-ancestry waiver `_guard_foreign_session_range`'s (now-removed)
+    Case-1 relaxation read, resolved independently against an arbitrary
+    ``candidate_shas`` set so this diagnostic stayed accurate for
+    ``scope_kind="plan"``, which never ran through that guard at all. Kept
+    as a named seam (rather than inlined at the one call site) so a future
+    caller does not have to re-derive "nothing is vouched any more" from
+    first principles.
     """
-    try:
-        chain_waived = chain_ancestry_waivers.chain_ancestry_waived_shas(
-            str(caller_worktree), own_session_id,
-        ) & candidate_shas
-    except Exception:  # noqa: BLE001 - a broken waiver lookup must narrow, never crash
-        chain_waived = frozenset()
-    return frozenset(chain_waived)
+    return frozenset()
 
 
 def _diagnose_zero_chain_terminal_credit(
@@ -2234,8 +2051,7 @@ def _diagnose_zero_chain_terminal_credit(
         "detail": (
             f"every commit named by sha_range {sha_range!r} carries a "
             f"Session-Id trailer other than this writing session's own "
-            f"({own_session_id!r}), or none at all, and none is covered by "
-            "a gate-minted chain-ancestry waiver — the "
+            f"({own_session_id!r}), or none at all — the "
             "chain-terminal discharge path's foreign-session narrowing "
             f"subtracts all of them, emptying this record's contribution "
             f"to the empty set: {', '.join(shown)}{remainder_note}."
@@ -2246,13 +2062,10 @@ def _diagnose_zero_chain_terminal_credit(
             "If this record was meant to discharge a chain-terminal "
             "coverage obligation over a predecessor session's commit(s), "
             "this session cannot record a range naming another session's "
-            "commits — the sanctioned remedy is a gate-minted "
-            "chain-ancestry waiver (minted automatically by the coverage "
-            "gate at HALT, not something this session can request) or "
-            "writing per-slice records over this session's own commits. "
-            "Narrowing sha_range further does not help here, since it is "
-            "already narrowed to a range containing none of this "
-            "session's own commits.",
+            "commits — write per-slice records over this session's own "
+            "commits instead. Narrowing sha_range further does not help "
+            "here, since it is already narrowed to a range containing "
+            "none of this session's own commits.",
         ],
     }
 
@@ -2580,23 +2393,59 @@ _MAX_UNIQUE_SUFFIX_ATTEMPTS = 10_000
 #: these must produce a SECOND on-disk record, never a silent merge — this
 #: is precisely the set a downstream consumer trusts to answer "was this
 #: code reviewed, by whom, at what breadth, and with what verdict". Every
-#: other field (``diff_loc``, ``workstream``, ``scope_kind``,
-#: ``execution_basis``, ...) is NOT load-bearing for identity purposes: a
-#: derived/incidental difference there converges on the first writer (see
-#: ``_reserve_unique_trail_path``'s "Identity and convergence" section).
+#: other field (``diff_loc``, ``workstream``, ``execution_basis``, ...) is
+#: NOT load-bearing for identity purposes: a derived/incidental difference
+#: there converges on the first writer (see ``_reserve_unique_trail_path``'s
+#: "Identity and convergence" section).
 #: Anti-scope: do not widen this set to "everything that drifted" — that
 #: is the exact upsert this plan's AC6 forbids.
-_LOAD_BEARING_IDENTITY_FIELDS = ("verdict", "reviewer", "scope", "reviewed_paths")
+#:
+#: ``scope_kind`` IS included (2026-08-15, review slice 2, C3 finding #2):
+#: it selects which review-target TYPE (``diff``/``plan``/``integration``) a
+#: record describes, and it gates whether ``reviewed_paths`` is even
+#: serialized (omitted entirely for non-``diff`` scope_kinds — see
+#: ``_build_json_record``) — so a ``scope_kind="diff"`` record written with
+#: ``reviewed_paths=None`` and a ``scope_kind="plan"``/``"integration"``
+#: record both read ``reviewed_paths -> None`` via ``.get`` and would
+#: otherwise be indistinguishable on that field alone. Nothing in
+#: ``_validate`` prevents a ``plan``/``integration`` ``sha_range`` from
+#: coincidentally containing ``".."`` (only ``scope_kind == "diff"`` is
+#: constrained to require it), so a same-session collision across scope
+#: kinds is reachable, not merely theoretical. Adding ``scope_kind`` here
+#: only makes convergence STRICTER (a scope_kind mismatch that previously
+#: converged now diverges into a second record) — the safe direction under
+#: AC6, which forbids two disagreeing records silently collapsing into one;
+#: it cannot cause an unsafe collapse, and a genuine same-scope_kind replay
+#: is unaffected (scope_kind is always identical on a true replay).
+_LOAD_BEARING_IDENTITY_FIELDS = ("verdict", "reviewer", "scope", "scope_kind", "reviewed_paths")
 
 
 def _load_bearing_fields_diverge(existing_record: dict, new_record: dict) -> bool:
     """True iff *existing_record* and *new_record* disagree on any of
     ``_LOAD_BEARING_IDENTITY_FIELDS`` — see that constant's docstring.
+
+    ``reviewed_paths`` compares order-insensitively (sorted) — it is a
+    caller-supplied path SET, not an ordered sequence, and nothing upstream
+    guarantees iteration order is stable across a retry that re-derives the
+    same set (e.g. from a different filesystem walk order). Comparing it
+    order-sensitively would defeat convergence for two logically identical
+    records — exactly the spurious-duplicate failure mode this identity
+    check exists to remove — so normalize for THIS COMPARISON ONLY. The
+    on-disk bytes (``_build_json_record``) are never touched: an emission
+    envelope other repos read consumes ``reviewed_paths`` in caller-supplied
+    order, and this normalization must not change what gets written.
     """
-    return any(
-        existing_record.get(field) != new_record.get(field)
-        for field in _LOAD_BEARING_IDENTITY_FIELDS
-    )
+    for field in _LOAD_BEARING_IDENTITY_FIELDS:
+        existing_value = existing_record.get(field)
+        new_value = new_record.get(field)
+        if field == "reviewed_paths":
+            if isinstance(existing_value, list):
+                existing_value = sorted(existing_value)
+            if isinstance(new_value, list):
+                new_value = sorted(new_value)
+        if existing_value != new_value:
+            return True
+    return False
 
 
 def _reserve_unique_trail_path(
@@ -2636,7 +2485,7 @@ def _reserve_unique_trail_path(
     ``(session_id, sha_range)`` and applies one of two rules:
 
       - AGREE on every field in ``_LOAD_BEARING_IDENTITY_FIELDS`` (verdict, reviewer,
-        scope, reviewed_paths) — CONVERGE-ON-FIRST-WRITER: return the existing path,
+        scope, scope_kind, reviewed_paths) — CONVERGE-ON-FIRST-WRITER: return the existing path,
         write nothing new. This covers both the byte-identical replay case (an
         ``apply`` pass re-firing the same directive after a later step failed) and a
         derived-field-only difference (``execution_basis`` present on one write,
@@ -2660,7 +2509,7 @@ def _reserve_unique_trail_path(
         divergent existing record.
 
     A field OUTSIDE ``_LOAD_BEARING_IDENTITY_FIELDS`` (``diff_loc``, ``workstream``,
-    ``scope_kind``, ``execution_basis``) differing alone does not block convergence —
+    ``execution_basis``) differing alone does not block convergence —
     widening identity to "everything that drifted" is the exact upsert this plan's
     anti-scope forbids (it would make a legitimate re-review with a corrected verdict
     indistinguishable from noise on an unrelated field).
@@ -2676,9 +2525,11 @@ def _reserve_unique_trail_path(
     reject; (b) a cross-session glob over the full directory is the unbounded scan
     this function's session-scoped design deliberately avoids (measured: a session
     holds ~40 trail records even when the directory holds thousands); (c) two
-    DIFFERENT sessions independently writing the same ``(session_id, sha_range)``
-    is definitionally impossible — session_id is part of the key and is this
-    writer's own resolved session_id, never a peer's. A same-``sha_range``
+    DIFFERENT sessions never produce a record sharing this writer's exact
+    ``(session_id, sha_range)`` key, by construction — ``session_id`` here is
+    always this writer's own resolved session_id, never a peer's, so the key
+    itself rules out a cross-session match rather than any runtime check
+    doing so. A same-``sha_range``
     cross-session REPLAY (the same reviewing session re-invoked under a
     different session_id, e.g. after a coordinator restart) is NOT converged by
     this function and produces a new record — that is an intentional, narrower
@@ -3236,7 +3087,7 @@ def write_review_trail_entry(
             zero_credit_diagnostic["reason"],
             zero_credit_diagnostic["detail"],
         )
-        result["chain_terminal_zero_credit_warning"] = zero_credit_diagnostic
+        result[_ZERO_CREDIT_KEY] = zero_credit_diagnostic
     return result
 
 

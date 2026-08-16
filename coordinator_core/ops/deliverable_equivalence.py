@@ -111,27 +111,87 @@ _EQUIVALENCE_ARTIFACT_RELPATH = Path("state") / "deliverable-equivalence.yaml"
 # ---------------------------------------------------------------------------
 # Per-process memoization state for load_equivalence_map — mirrors
 # deliverable_rollup.py's _central_initiatives_dir module-scope memoization
-# convention (resolve once, reuse for the process lifetime).
+# convention (resolve once, reuse for the process lifetime), keyed on
+# (worktree_root, artifact stat-key) — see `_artifact_cache_key` below.
 # ---------------------------------------------------------------------------
 
-_RESOLVED_EQUIVALENCE_MAP: Optional[Dict[str, str]] = None
-_EQUIVALENCE_MAP_RESOLVED: bool = False
-_RESOLVED_FOR_ROOT: Optional[Path] = None
+#: (worktree_root, (st_mtime_ns, st_size) or None). Review: coordinatorreview-integrator
+#: — sedge P2 fix, keyed on (mtime, size) rather than mtime alone (see
+#: `_artifact_cache_key` docstring), matching the C4 `_marker_stat_key` precedent
+#: in `_blanket_disarm.py` for the same same-tick-rewrite collision reason.
+_EquivalenceCacheKey = Tuple[Path, Optional[Tuple[int, int]]]
+
+_EQUIVALENCE_MAP_CACHE: Dict[_EquivalenceCacheKey, Dict[str, str]] = {}
+
+#: Bounded-cache cap shared by every dict-shaped memo in this module (mirrors
+#: `coordinator_core.cache._MAX_CACHE`'s "evict oldest half on overflow"
+#: idiom — the existing bounded-memo shape in this codebase, reused rather
+#: than inventing a second one). See `_evict_oldest_half` below.
+_MAX_CACHE: int = 512
+
+
+def _evict_oldest_half(cache: Dict[Any, Any]) -> None:
+    """Evict the oldest half of `cache`'s entries (by insertion order) when it
+    has reached `_MAX_CACHE` entries. Mirrors `coordinator_core.cache.
+    read_revalidated`'s own bounded-eviction idiom verbatim (same cap, same
+    "oldest half" shape) rather than introducing a distinct caching idiom for
+    this module's several dict-shaped memos.
+
+    Safe by construction for every cache this is applied to here: a cache
+    miss always falls through to a fresh, correct read/compute (never a
+    fail-open default) — eviction can only cost a redundant recompute, never
+    change what a caller observes.
+    """
+    if len(cache) < _MAX_CACHE:
+        return
+    evict_keys = list(cache.keys())[: _MAX_CACHE // 2]
+    for k in evict_keys:
+        del cache[k]
+
+
+def _artifact_cache_key(worktree_root: Path) -> _EquivalenceCacheKey:
+    """``(worktree_root, (artifact st_mtime_ns, st_size))`` — the shared memo
+    key for every memoized reader of ``state/deliverable-equivalence.yaml``
+    in this module.
+
+    Purpose (sedge P2 fix, C5): keying on root alone let a second call with a
+    DIFFERENT worktree_root within the same process silently reuse the FIRST
+    root's memoized data — a warn-then-serve-wrong-repo's-data defect, not a
+    staleness one, since invalidation cannot fix a missing key dimension.
+    Adding the artifact's own stat identity to the key (not just the root)
+    means an in-process rewrite of the artifact for the SAME root also busts
+    the memo, without requiring every caller to remember to call the
+    `_reset_*` helpers. A missing artifact keys as ``None``, distinct from any
+    real stat tuple.
+
+    Review: coordinatorreview-integrator (failopen-caches P2) — keyed on
+    ``(st_mtime_ns, st_size)`` rather than ``st_mtime`` alone. A bare float
+    mtime collides for two rapid in-process rewrites landing within the
+    filesystem's mtime resolution window (same defect class C4's
+    `_marker_stat_key` in `_blanket_disarm.py` was re-keyed to avoid, in the
+    same commit); adding `st_size` (and using the nanosecond-resolution
+    field) closes the same collision here.
+    """
+    artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
+    try:
+        st = artifact_path.stat()
+        stat_key: Optional[Tuple[int, int]] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stat_key = None
+    return (worktree_root, stat_key)
 
 
 def _reset_equivalence_map_cache() -> None:
     """Test-only helper: clear the ``load_equivalence_map`` process-scope memo.
 
-    Mirrors ``deliverable_rollup._reset_central_root_cache``. The "at most once per
-    process lifetime" memoization contract is correct under the spawn-per-call
-    execution model, where the process exits after one op, but is NOT correct under
-    pytest, where every test shares one interpreter — the first test to resolve pins
-    the map for the whole session unless this is called between tests.
+    Mirrors ``deliverable_rollup._reset_central_root_cache``. The per-process memo
+    is correct under the spawn-per-call execution model, where the process exits
+    after one op, but is NOT correct under pytest, where every test shares one
+    interpreter — the first test to resolve a given (root, mtime) key pins that
+    key's entry for the whole session unless this is called between tests.
     """
-    global _RESOLVED_EQUIVALENCE_MAP, _EQUIVALENCE_MAP_RESOLVED, _RESOLVED_FOR_ROOT
-    _RESOLVED_EQUIVALENCE_MAP = None
-    _EQUIVALENCE_MAP_RESOLVED = False
-    _RESOLVED_FOR_ROOT = None
+    global _EQUIVALENCE_MAP_CACHE
+    _EQUIVALENCE_MAP_CACHE = {}
 
 
 def _build_equivalence_map(entries: list) -> Dict[str, str]:
@@ -278,30 +338,19 @@ def load_equivalence_map(worktree_root: Path) -> Dict[str, str]:
     YAML) also degrades to ``{}`` with a logged WARNING, rather than raising and taking
     down the calling consumer's whole read path.
 
-    Note: the memo is keyed to the FIRST worktree_root this is called with in a given
-    process; a second call with a different root during the same process returns the
-    memoized map from the first (spawn-per-call processes never see more than one
-    worktree root in their lifetime, so this is not a correctness concern in
-    production — it is surfaced here only so a test iterating multiple roots knows to
-    call ``_reset_equivalence_map_cache()`` between them).
+    Memoized on ``(worktree_root, artifact stat-key)`` (see ``_artifact_cache_key``) —
+    NOT on ``worktree_root`` alone. A second call with a different root, or the same
+    root after the artifact was rewritten in-process, resolves and caches its OWN
+    entry rather than serving a different root's/version's stale data. A test
+    iterating multiple worktrees or rewriting the artifact in place may still call
+    ``_reset_equivalence_map_cache()`` to force a clean slate, but correctness no
+    longer depends on remembering to.
     """
-    global _RESOLVED_EQUIVALENCE_MAP, _EQUIVALENCE_MAP_RESOLVED, _RESOLVED_FOR_ROOT
+    global _EQUIVALENCE_MAP_CACHE
 
-    if _EQUIVALENCE_MAP_RESOLVED:
-        assert _RESOLVED_EQUIVALENCE_MAP is not None
-        # Review: coordinatorcode-reviewer-67ffaa7e Finding 4 — _RESOLVED_FOR_ROOT was
-        # assigned but never read. A later call with a different worktree_root silently
-        # returns the first root's memoized map; this makes that mismatch visible.
-        if _RESOLVED_FOR_ROOT is not None and worktree_root != _RESOLVED_FOR_ROOT:
-            logger.warning(
-                "deliverable_equivalence: load_equivalence_map called with worktree_root "
-                "%s but the memoized map was resolved for %s; returning the memoized map "
-                "for the FIRST root, not this one. Call _reset_equivalence_map_cache() "
-                "between roots if this is a test iterating multiple worktrees.",
-                worktree_root,
-                _RESOLVED_FOR_ROOT,
-            )
-        return _RESOLVED_EQUIVALENCE_MAP
+    cache_key = _artifact_cache_key(worktree_root)
+    if cache_key in _EQUIVALENCE_MAP_CACHE:
+        return _EQUIVALENCE_MAP_CACHE[cache_key]
 
     artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
 
@@ -329,9 +378,8 @@ def load_equivalence_map(worktree_root: Path) -> Dict[str, str]:
             else:
                 equivalence_map = _build_equivalence_map(entries)
 
-    _RESOLVED_EQUIVALENCE_MAP = equivalence_map
-    _EQUIVALENCE_MAP_RESOLVED = True
-    _RESOLVED_FOR_ROOT = worktree_root
+    _evict_oldest_half(_EQUIVALENCE_MAP_CACHE)
+    _EQUIVALENCE_MAP_CACHE[cache_key] = equivalence_map
     return equivalence_map
 
 
@@ -395,26 +443,24 @@ class DeliverableLedgerValidationError(ValueError):
     """
 
 
-_RESOLVED_DELIVERABLE_LEDGER: Optional[List[Dict[str, Any]]] = None
-_DELIVERABLE_LEDGER_RESOLVED: bool = False
-_LEDGER_RESOLVED_FOR_ROOT: Optional[Path] = None
+_DELIVERABLE_LEDGER_CACHE: Dict[_EquivalenceCacheKey, List[Dict[str, Any]]] = {}
 
 # Review: coordinatorcode-reviewer s1-ledger-seam Finding 2 — _ledger_artifact_readable
 # used to re-read+re-parse the whole YAML artifact on every call, unmemoized, inside
 # dual_read_deliverable_ids_for_corpus's per-record loop (N reads for N artifacts) while
 # load_deliverable_ledger right beside it was already memoized. Memoized here, reset
 # alongside the ledger memo below so tests don't see cross-test staleness.
-_LEDGER_ARTIFACT_READABLE_RESOLVED: bool = False
-_LEDGER_ARTIFACT_READABLE_CACHE: Optional[bool] = None
-_LEDGER_ARTIFACT_READABLE_FOR_ROOT: Optional[Path] = None
+_LEDGER_ARTIFACT_READABLE_CACHE: Dict[_EquivalenceCacheKey, bool] = {}
 
 # Review: coordinatorcode-reviewer s1-ledger-seam Finding 1 — dual_read_deliverable_id
 # never called validate_deliverable_ledger_rows, so a malformed row (non-string
 # deliverable_id/evidence_source) was silently skipped by _ledger_evidence_index's own
 # `continue` and surfaced as "genuine_miss" rather than the loud failure
-# DeliverableLedgerValidationError exists for. Validated once per process/ledger-load
-# (not once per artifact) via this flag, reset alongside the ledger memo.
-_DELIVERABLE_LEDGER_VALIDATED: bool = False
+# DeliverableLedgerValidationError exists for. Validated once per (root, mtime)
+# ledger-load (not once per artifact) via this set, reset alongside the ledger memo.
+# P2 fix (C5): previously a single bool, so only the FIRST root's ledger was ever
+# validated — a second root's malformed rows silently skipped validation entirely.
+_DELIVERABLE_LEDGER_VALIDATED: set = set()
 
 
 def _reset_deliverable_ledger_cache() -> None:
@@ -426,19 +472,13 @@ def _reset_deliverable_ledger_cache() -> None:
     is its own responsibility, not a mutation of the fork-equivalence one).
 
     Also clears `_ledger_artifact_readable`'s own memo and the dual-read seam's
-    once-per-load validation flag (both additive to this same close-out-ledger
-    responsibility) — see their definitions for why each exists.
+    once-per-(root, mtime) validation set (both additive to this same close-out-
+    ledger responsibility) — see their definitions for why each exists.
     """
-    global _RESOLVED_DELIVERABLE_LEDGER, _DELIVERABLE_LEDGER_RESOLVED, _LEDGER_RESOLVED_FOR_ROOT
-    global _LEDGER_ARTIFACT_READABLE_RESOLVED, _LEDGER_ARTIFACT_READABLE_CACHE, _LEDGER_ARTIFACT_READABLE_FOR_ROOT
-    global _DELIVERABLE_LEDGER_VALIDATED
-    _RESOLVED_DELIVERABLE_LEDGER = None
-    _DELIVERABLE_LEDGER_RESOLVED = False
-    _LEDGER_RESOLVED_FOR_ROOT = None
-    _LEDGER_ARTIFACT_READABLE_RESOLVED = False
-    _LEDGER_ARTIFACT_READABLE_CACHE = None
-    _LEDGER_ARTIFACT_READABLE_FOR_ROOT = None
-    _DELIVERABLE_LEDGER_VALIDATED = False
+    global _DELIVERABLE_LEDGER_CACHE, _LEDGER_ARTIFACT_READABLE_CACHE, _DELIVERABLE_LEDGER_VALIDATED
+    _DELIVERABLE_LEDGER_CACHE = {}
+    _LEDGER_ARTIFACT_READABLE_CACHE = {}
+    _DELIVERABLE_LEDGER_VALIDATED = set()
 
 
 def load_deliverable_ledger(worktree_root: Path) -> List[Dict[str, Any]]:
@@ -459,31 +499,23 @@ def load_deliverable_ledger(worktree_root: Path) -> List[Dict[str, Any]]:
     need loud-failure-on-malformed-row semantics call
     `validate_deliverable_ledger_rows` themselves on the returned rows.
 
-    Memoization hazard (research corpus Constraint 7 / Open-question 3 — read before
-    calling this from a session that also WRITES the ledger): this memo is per-process
-    and root-insensitive, exactly like `load_equivalence_map`'s. A process that writes
-    `ledger:` rows to the artifact and then calls this function again in the SAME
-    process gets the stale pre-write memo, not the freshly-written rows. Call
-    `_reset_deliverable_ledger_cache()` after any in-process write before re-reading.
-    This is a distinct memo from `load_equivalence_map`'s — writing the ledger does not
-    invalidate the fork-equivalence memo and vice versa, since the two loaders share a
-    file but not a cache.
+    Memoization (research corpus Constraint 7 / Open-question 3 — read before calling
+    this from a session that also WRITES the ledger): memoized on
+    ``(worktree_root, artifact stat-key)``, same key shape as `load_equivalence_map`'s
+    (see `_artifact_cache_key`) — NOT root-insensitive, so a rewrite of the artifact
+    changes its mtime and busts this cache entry rather than serving the pre-write
+    rows. A caller that writes the ledger via a path that does not bump mtime (rare;
+    most OSes update mtime on any write) may still call
+    `_reset_deliverable_ledger_cache()` to force a re-read. This is a distinct cache
+    from `load_equivalence_map`'s — writing the ledger does not invalidate the
+    fork-equivalence memo and vice versa, since the two loaders share a file but not
+    a cache.
     """
-    global _RESOLVED_DELIVERABLE_LEDGER, _DELIVERABLE_LEDGER_RESOLVED, _LEDGER_RESOLVED_FOR_ROOT
+    global _DELIVERABLE_LEDGER_CACHE
 
-    if _DELIVERABLE_LEDGER_RESOLVED:
-        assert _RESOLVED_DELIVERABLE_LEDGER is not None
-        if _LEDGER_RESOLVED_FOR_ROOT is not None and worktree_root != _LEDGER_RESOLVED_FOR_ROOT:
-            logger.warning(
-                "deliverable_equivalence: load_deliverable_ledger called with "
-                "worktree_root %s but the memoized ledger was resolved for %s; "
-                "returning the memoized ledger for the FIRST root, not this one. Call "
-                "_reset_deliverable_ledger_cache() between roots if this is a test "
-                "iterating multiple worktrees.",
-                worktree_root,
-                _LEDGER_RESOLVED_FOR_ROOT,
-            )
-        return _RESOLVED_DELIVERABLE_LEDGER
+    cache_key = _artifact_cache_key(worktree_root)
+    if cache_key in _DELIVERABLE_LEDGER_CACHE:
+        return _DELIVERABLE_LEDGER_CACHE[cache_key]
 
     artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
 
@@ -511,9 +543,8 @@ def load_deliverable_ledger(worktree_root: Path) -> List[Dict[str, Any]]:
             else:
                 ledger_rows = [row for row in ledger]
 
-    _RESOLVED_DELIVERABLE_LEDGER = ledger_rows
-    _DELIVERABLE_LEDGER_RESOLVED = True
-    _LEDGER_RESOLVED_FOR_ROOT = worktree_root
+    _evict_oldest_half(_DELIVERABLE_LEDGER_CACHE)
+    _DELIVERABLE_LEDGER_CACHE[cache_key] = ledger_rows
     return ledger_rows
 
 
@@ -928,31 +959,17 @@ def _ledger_artifact_readable(worktree_root: Path) -> bool:
     signal left over for a caller that needs to tell "empty ledger" apart from
     "broken ledger file" (research corpus §6's `errors` arm requirement).
 
-    Memoized per-process, keyed to the first `worktree_root` seen — mirrors
-    `load_deliverable_ledger`'s own memo (Review: coordinatorcode-reviewer
+    Memoized on ``(worktree_root, artifact stat-key)`` — mirrors
+    `load_deliverable_ledger`'s own memo shape (Review: coordinatorcode-reviewer
     s1-ledger-seam Finding 2 — this used to re-read+re-parse the artifact on
     every call inside `dual_read_deliverable_ids_for_corpus`'s per-record
     loop). Cleared by `_reset_deliverable_ledger_cache`, same as that memo.
     """
-    global _LEDGER_ARTIFACT_READABLE_RESOLVED, _LEDGER_ARTIFACT_READABLE_CACHE
-    global _LEDGER_ARTIFACT_READABLE_FOR_ROOT
+    global _LEDGER_ARTIFACT_READABLE_CACHE
 
-    if _LEDGER_ARTIFACT_READABLE_RESOLVED:
-        assert _LEDGER_ARTIFACT_READABLE_CACHE is not None
-        if (
-            _LEDGER_ARTIFACT_READABLE_FOR_ROOT is not None
-            and worktree_root != _LEDGER_ARTIFACT_READABLE_FOR_ROOT
-        ):
-            logger.warning(
-                "deliverable_equivalence: _ledger_artifact_readable called with "
-                "worktree_root %s but the memoized result was resolved for %s; "
-                "returning the memoized result for the FIRST root, not this one. "
-                "Call _reset_deliverable_ledger_cache() between roots if this is a "
-                "test iterating multiple worktrees.",
-                worktree_root,
-                _LEDGER_ARTIFACT_READABLE_FOR_ROOT,
-            )
-        return _LEDGER_ARTIFACT_READABLE_CACHE
+    cache_key = _artifact_cache_key(worktree_root)
+    if cache_key in _LEDGER_ARTIFACT_READABLE_CACHE:
+        return _LEDGER_ARTIFACT_READABLE_CACHE[cache_key]
 
     artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
     if not artifact_path.is_file():
@@ -977,9 +994,8 @@ def _ledger_artifact_readable(worktree_root: Path) -> bool:
         else:
             result = isinstance(parsed, dict)
 
-    _LEDGER_ARTIFACT_READABLE_CACHE = result
-    _LEDGER_ARTIFACT_READABLE_RESOLVED = True
-    _LEDGER_ARTIFACT_READABLE_FOR_ROOT = worktree_root
+    _evict_oldest_half(_LEDGER_ARTIFACT_READABLE_CACHE)
+    _LEDGER_ARTIFACT_READABLE_CACHE[cache_key] = result
     return result
 
 
@@ -1093,14 +1109,25 @@ def dual_read_deliverable_id(
     # malformed-but-present row then surfaced as "genuine_miss" — exactly the
     # "reads as no verdict was ever asserted, rather than broken encoding" failure
     # DeliverableLedgerValidationError's own docstring says this design exists to
-    # prevent. Validated once per process/ledger-load (not once per artifact, so
-    # this stays O(1) per corpus walk rather than O(corpus size)) via the module
-    # flag below; load_deliverable_ledger itself stays non-validating per its own
-    # documented contract.
+    # prevent. Validated once per (root, mtime)/ledger-load (not once per artifact,
+    # so this stays O(1) per corpus walk rather than O(corpus size)) via the module
+    # set below, keyed like every other memo in this section (P2 fix, C5) so a
+    # second root's ledger is validated too, not silently skipped because the
+    # FIRST root already flipped a single process-wide bool; load_deliverable_
+    # ledger itself stays non-validating per its own documented contract.
     global _DELIVERABLE_LEDGER_VALIDATED
-    if not _DELIVERABLE_LEDGER_VALIDATED:
+    validation_key = _artifact_cache_key(worktree_root)
+    if validation_key not in _DELIVERABLE_LEDGER_VALIDATED:
         validate_deliverable_ledger_rows(ledger_rows)
-        _DELIVERABLE_LEDGER_VALIDATED = True
+        # Bounded like the dict-shaped memos above (Review: coordinatorreview-
+        # integrator, failopen-caches P2) — a set has no reliable insertion
+        # order to evict "oldest half" from, so this caps via a full clear on
+        # overflow instead. Safe: an evicted key is simply re-validated once
+        # on its next call, never silently skipped (the membership test above
+        # still gates every call).
+        if len(_DELIVERABLE_LEDGER_VALIDATED) >= _MAX_CACHE:
+            _DELIVERABLE_LEDGER_VALIDATED.clear()
+        _DELIVERABLE_LEDGER_VALIDATED.add(validation_key)
 
     evidence_index = _ledger_evidence_index(ledger_rows)
 

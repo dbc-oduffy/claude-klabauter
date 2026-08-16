@@ -405,7 +405,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
 
-from coordinator_core.chain_ancestry_waivers import chain_waiver_dir
 from coordinator_core.git.divergence import diverging_paths
 from coordinator_core.hooks import auto_push
 from coordinator_core.ipc import get_op_handler, register_op
@@ -763,90 +762,6 @@ def _scan_completion_entry_scaffold_residue(
     return diagnostics
 
 
-def _pending_chain_ancestry_waiver_stage_path(worktree_root: Path, sid: str) -> list[str]:
-    """AC12/C7b -- repo-relative path of THIS session's chain-ancestry waiver
-    subdirectory, if it exists on disk, for folding into `extra_stage_paths`.
-
-    Ordering this closes: `coverage_gate._stage_chain_ancestry_waivers` mints
-    and `git add`s this same directory (`chain_waiver_dir(repo_root, sid)`,
-    `chain_id` keyed on the closing session id) on the invocation that HALTs
-    -- that invocation aborts before this op's own bookkeeping commit ever
-    runs, so the directory is merely STAGED, not committed, at that point.
-    The next invocation for the SAME `sid` (after the EM has reviewed and the
-    gate now passes) reaches this call with the directory already present on
-    disk from the earlier, aborted pass -- naming it here, on THIS pass, is
-    what actually carries it into `full_stage_paths` -> `run_commit_pipeline`'s
-    explicit-pathspec commit. Staging alone (the mint-time `git add`) is not
-    committing: this codebase's scoped commits (`git commit -- <pathspec>`)
-    only commit paths named in their own pathspec (see `_derive_trailers`'s
-    docstring for the same idiom applied to `commit.anchors`'s trailer read).
-
-    Returns an empty list when the directory does not exist (the overwhelmingly
-    common case -- no gate HALT has ever minted a waiver for this session),
-    when `sid` fails `chain_waiver_dir`'s own directory-name-safety shape check,
-    or when the directory exists but cannot be enumerated (removed or made
-    unreadable between the `is_dir()` check and `iterdir()`, or a genuine
-    permissions failure) -- all three non-fatal, mirroring the surrounding
-    best-effort tail-ops posture (review finding, 2026-07-31 code review).
-
-    Named, accepted limitation (review finding, 2026-07-31 chain-ancestry-
-    discriminator slice): this lookup, like the mint itself, keys strictly on
-    `sid` (== the closing session's own `CLAUDE_CODE_SESSION_ID`). If the
-    session that hit the HALT never resumes the ceremony itself -- a
-    context-limit kill, a handoff to a fresh EM session, a crash -- and a
-    DIFFERENT session id eventually drives the ceremony to a passing gate for
-    the same chain, that new session's `sid` never matches the old
-    `chain_id`, so this function never resolves the old directory and it is
-    never staged or committed here. It sits as a permanent untracked
-    directory under `state/review-trail/chain-ancestry-waivers/<old-sid>/`
-    with no sweep/reap path. Deliberately NOT handled by scanning for any
-    stale sibling directory instead: doing so would have one session stage
-    (and eventually commit) a DIFFERENT session's waiver directory -- exactly
-    the cross-session bleed `_guard_foreign_session_range`'s exact-chain-
-    identity check exists to prevent -- and would commit waivers whose
-    minting chain this session never verified. This is self-healing from a
-    correctness standpoint: the new session's own gate run re-derives
-    ancestry and re-mints under its own id if the chain is still UNCOVERED,
-    so the *verdict* is never wrong -- only the orphaned directory from the
-    aborted session is left behind, as disk litter, not a fail-open. See
-    `coverage_gate._stage_chain_ancestry_waivers`'s own docstring for the
-    mint-side half of this same limitation.
-    """
-    chain_dir = chain_waiver_dir(str(worktree_root), sid)
-    if chain_dir is None or not chain_dir.is_dir():
-        return []
-    # Enumerate the waiver FILES, never the directory itself: `commit_scoped`
-    # categorically rejects a directory pathspec, because a directory matches
-    # whatever is inside it AT COMMIT TIME -- including a file a peer session
-    # dropped in after this list was built. Returning the directory here made
-    # the whole bookkeeping commit fail (caught dogfooding this ceremony,
-    # 2026-07-31), which meant AC12 was not discharged at all: the waivers
-    # could never reach a commit by this path. Enumerating concrete files is
-    # what the surrounding `extra_stage_paths` entries already do.
-    #
-    # TOCTOU guard (review finding, 2026-07-31): `is_dir()` above and
-    # `iterdir()` here are two separate syscalls -- the directory can be
-    # removed, or become unreadable, in between (or just genuinely lack read
-    # permission). An uncaught OSError here would propagate up through
-    # `_run_precommit_tail` and fail the whole ceremony commit -- reproducing,
-    # via a different mechanism, the exact "one bad path aborts the entire
-    # bookkeeping commit" failure this function exists to fix. Best-effort:
-    # fall back to no staged waivers rather than fail the ceremony.
-    try:
-        return sorted(
-            rel_id(p, worktree_root)
-            for p in chain_dir.iterdir()
-            if p.is_file() and p.suffix == ".json"
-        )
-    except OSError:
-        print(
-            f"skip: _pending_chain_ancestry_waiver_stage_path: "
-            f"chain_dir.iterdir() failed for {chain_dir!r}: {sys.exc_info()[1]}",
-            file=sys.stderr,
-        )
-        return []
-
-
 def _swept_srcs_dsts(swept_renames: list[str]) -> tuple[list[str], list[str]]:
     srcs: list[str] = []
     dsts: list[str] = []
@@ -1044,19 +959,12 @@ async def _run_precommit_tail(
         timing = _TailTiming()
     results: dict[str, dict] = {}
 
-    # Fire immediately (C6): scheduling the task costs ~0ms; the actual
-    # git-log + gate-algorithm work runs concurrently with everything below,
-    # joined only at the very end of this function (see docstring above).
-    with timing.measure("precommit.coverage_gate_fire"):
-        coverage_gate_task = asyncio.create_task(
-            tail_ops.run_coverage_gate(
-                common_dir,
-                closing_session_id=sid,
-                range_arg=coverage_range,
-                from_handoff=coverage_from_handoff,
-                scope_paths=coverage_scope_paths,
-            )
-        )
+    # coverage.gate's ceremony-close fire/join was removed here (K-001,
+    # state/kill-ledger.md) -- the DAG walk it drove cost ~150-180s per
+    # close. `coverage_range`/`coverage_from_handoff`/`coverage_scope_paths`
+    # stay accepted-and-ignored, same precedent as `completion_title` above
+    # in this module's own history, so an existing caller passing them is
+    # unaffected.
 
     extra_stage_paths: list[str] = []
 
@@ -1078,17 +986,10 @@ async def _run_precommit_tail(
         results[tail_ops.OP_ROADMAP_CALLOUT] = roadmap_callout_result
         extra_stage_paths.extend(roadmap_callout_result.get("roadmap_stub_index_paths") or [])
 
-        # AC12/C7b: fold in this session's chain-ancestry waiver FILES (if any
-        # were minted on an earlier, ABORTED pass for this same sid -- see
-        # `_pending_chain_ancestry_waiver_stage_path`'s docstring for the
-        # ordering this closes). Files, not the containing directory: a
-        # directory pathspec is rejected outright by `commit_scoped`, which
-        # failed the entire bookkeeping commit until 2026-07-31. Same idiom as
-        # the two entries just above: an already-clean/no-op `git add` on a
-        # path with nothing new to stage is harmless.
-        extra_stage_paths.extend(
-            _pending_chain_ancestry_waiver_stage_path(worktree_root, sid)
-        )
+        # AC12/C7b chain-ancestry-waiver stage-path fold-in is REMOVED
+        # (state/kill-ledger.md K-005, 2026-08-16 -- "waiver system dies"):
+        # the whole mint/waiver mechanism this closed the ordering gap for
+        # is gone.
 
     with timing.measure("precommit.review_trail"):
         if isinstance(review_trail, list):
@@ -1105,38 +1006,6 @@ async def _run_precommit_tail(
             )
 
     # Join (C6): every other pre-commit step above has now run; await the
-    # task fired at the top of this function. `run_coverage_gate` never
-    # raises (it swallows its own exceptions into a `failed[]` entry -- see
-    # that function's docstring), so this await cannot introduce a new
-    # failure mode beyond what the old synchronous call already carried.
-    with timing.measure("precommit.coverage_gate_join"):
-        results[tail_ops.OP_COVERAGE_GATE] = await coverage_gate_task
-
-    # Additive receipt annotation (2026-07-22 incident: a sibling repo's ceremony
-    # receipt read `coverage.gate: UNCOVERED` as "review did not happen" when the
-    # true fact was "the caller never supplied review metadata this pass, so
-    # coverage is UNKNOWN" -- see coverage_gate.py's Negative-spec note).
-    # coverage.gate's own verdict enum is AC11-FROZEN and has no field
-    # distinguishing "no metadata supplied" from "genuinely unreviewed" by
-    # design -- widening it is a breaking wire-format change disproportionate to
-    # a receipt-quality defect, and coverage.gate has no legitimate way to know
-    # review_trail.write's internal skip reason (wrong coupling direction). This
-    # receipt-assembly layer already holds both results in the same dict, so it
-    # is the correct home for the disambiguating signal. Purely additive/optional
-    # -- old readers that ignore the field are unaffected; the verdict value
-    # itself is untouched either way.
-    # Review: staff-eng 2026-08-14 -- was `not any(skip == ...no-review-
-    # metadata... for skip in [...]skipped)`, which read True on the
-    # b_adjudication_present + incomplete-metadata path (that branch returns
-    # a `failed_critical[]` entry, never a `no-review-metadata` skip -- see
-    # `tail_ops.write_review_trail`'s own docstring) despite zero trail
-    # records having been written. `metadata_supplied` is the direct fact
-    # both `write_review_trail` and `write_review_trail_many` now report on
-    # every return path, independent of write success/failure.
-    results[tail_ops.OP_COVERAGE_GATE]["review_metadata_supplied"] = bool(
-        results[tail_ops.OP_REVIEW_TRAIL].get("metadata_supplied", False)
-    )
-
     return results, extra_stage_paths
 
 
@@ -1958,11 +1827,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     #     longer among these labels at all, not moved to a cross-referenced
     #     receipt or the C17 log below.)
     #
-    #   - The ONE existing precedent for what changes when a step genuinely
-    #     leaves: `coverage.gate` (C6) sheds the CALL (fires detached,
-    #     asyncio-level, off the blocking path) but explicitly KEEPS the
-    #     VERDICT as a D-node here (see `_run_precommit_tail`'s own C6
-    #     comments) -- the shed is the invocation, never the evidence.
+    #   - `coverage.gate` (K-001, state/kill-ledger.md) is the precedent for
+    #     what changes when a step's evidence, not merely its call site,
+    #     leaves: it no longer appears in `tail_results` at all -- no D-node,
+    #     no receipt field -- because the close path stopped invoking the op
+    #     that produced it, not because the invocation moved off-thread (C6's
+    #     asyncio shed, which kept the verdict as a D-node, is retired by this
+    #     landing).
     #
     #   - FORWARD CONTRACT -- not yet true for the remaining tracked chunks,
     #     tracked by C3b / C5 (see this plan's Landing Order / skew-tolerance

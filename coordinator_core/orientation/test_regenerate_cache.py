@@ -1411,3 +1411,77 @@ def test_cli_rejects_sweep_boot_with_pinboard_only(tmp_path):
     result = _run_cli(repo, "--invoker", "sweep-boot", "--pinboard-only", "note")
 
     assert result.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# _atomic_replace permission-bit behavior (Review: coordinator:code-reviewer
+# 9b8765ad finding 3 -- the fchmod-on-common-path and first-write-default-
+# mode behavior shipped in the C10 port with zero coverage; added here.)
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_replace_first_write_uses_fixed_default_not_umask(tmp_path, monkeypatch):
+    """No existing cache_file -> target mode is the fixed
+    `_FIRST_WRITE_DEFAULT_MODE`, and the process umask is never read/restored
+    (Review: 9b8765ad finding 2 -- the umask read/restore window this
+    replaces was itself the residual security exposure)."""
+    cache_file = tmp_path / "orientation_cache.md"
+    assert not cache_file.exists()
+
+    def _forbidden_umask(_mask):
+        raise AssertionError("os.umask must not be called on the first-write path")
+
+    monkeypatch.setattr(mod.os, "umask", _forbidden_umask)
+
+    captured = {}
+
+    def _spy_fchmod(fd, mode):
+        captured["mode"] = mode
+
+    monkeypatch.setattr(mod.os, "fchmod", _spy_fchmod, raising=False)
+    monkeypatch.setattr(mod.os, "chmod", lambda path, mode: captured.setdefault("mode", mode))
+
+    mod._atomic_replace(cache_file, "hello\n")
+
+    assert cache_file.read_text(encoding="utf-8") == "hello\n"
+    assert captured["mode"] == mod._FIRST_WRITE_DEFAULT_MODE
+
+
+def test_atomic_replace_common_path_inherits_existing_mode(tmp_path, monkeypatch):
+    """An existing cache_file -> target mode is that file's own current
+    `st_mode & 0o777`, not the fixed first-write default and not a
+    umask-derived value."""
+    cache_file = tmp_path / "orientation_cache.md"
+    cache_file.write_text("old\n", encoding="utf-8")
+    existing_mode = cache_file.stat().st_mode & 0o777
+
+    captured = {}
+    monkeypatch.setattr(
+        mod.os, "fchmod", lambda fd, mode: captured.setdefault("mode", mode), raising=False
+    )
+    monkeypatch.setattr(mod.os, "chmod", lambda path, mode: captured.setdefault("mode", mode))
+
+    mod._atomic_replace(cache_file, "new\n")
+
+    assert cache_file.read_text(encoding="utf-8") == "new\n"
+    assert captured["mode"] == existing_mode
+
+
+def test_atomic_replace_stat_permission_error_propagates(tmp_path, monkeypatch):
+    """A real stat failure on an EXISTING cache_file (Review: 9b8765ad
+    finding 4 -- narrowed from `except OSError` to `except FileNotFoundError`)
+    must propagate rather than being silently treated as first-write."""
+    cache_file = tmp_path / "orientation_cache.md"
+    cache_file.write_text("old\n", encoding="utf-8")
+
+    real_stat = Path.stat
+
+    def _denied_stat(self, *a, **kw):
+        if self == cache_file:
+            raise PermissionError("simulated stat failure")
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "stat", _denied_stat)
+
+    with pytest.raises(PermissionError):
+        mod._atomic_replace(cache_file, "new\n")

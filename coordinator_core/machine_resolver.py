@@ -71,6 +71,24 @@ cache leak into ``compute_contributor_live()`` — that function calls
 ``_git_user_email_uncached`` directly and must keep spawning fresh every
 call; see each function's own docstring.
 
+Repo-root cache-key fix (2026-08-15, C7): ``_git_user_email_cached`` was
+``lru_cache(maxsize=1)`` and ZERO-ARG, and ``_git_user_email_uncached`` ran
+`git config --get user.email` with no ``cwd=``. Under a spawn-per-call
+process this was inert (one process, one cwd), but under the warm resident
+engine (DR-315) a single process resolves contributors for clients in
+DIFFERENT repos — a missing-key COLLISION, not staleness: the first repo's
+resolved email is silently served to every other repo's resolution for the
+rest of the process. Fixed by keying the cache on the resolved repo root
+(``_resolve_repo_root``) AND passing that same root as ``cwd=`` to the
+underlying `git config` spawn, so the value cached under a given key is
+actually resolved against that key's directory. ``_resolve_repo_root``
+(``coordinator_core._repo_root_probe.resolve_repo_root``, shared with
+``person_resolver``) is memoized per AMBIENT cwd (2026-08-16, review-
+integrator P2 fix) rather than per call — see that module's own docstring
+for why a spawn on every cache-hit-computing call was itself a regression
+this fix closes, and why the memo is keyed on cwd (not a single slot) to
+avoid recreating the exact missing-key collision this note describes.
+
 Circular-import note (2026-07-22): ``coordinator_core.ops.emit._slug`` (the
 tail-sanitizer, see ``_tail_slug`` below) is imported lazily, function-local,
 rather than at module level. Importing ANY name under ``coordinator_core.ops``
@@ -98,6 +116,10 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core import _settings_home
+from coordinator_core._repo_root_probe import (
+    reset_repo_root_memo as _reset_repo_root_memo,
+    resolve_repo_root as _resolve_repo_root,
+)
 from coordinator_core.daily_branch import sanitize_slug
 
 _GIT_TIMEOUT = 10
@@ -244,6 +266,53 @@ def registry_get(key: str) -> Optional[str]:
 _registry_get = registry_get
 
 
+def merged_flat_registry() -> dict:
+    """Merge `registry.local.toml` over `registry.toml` (local wins), flattened
+    to dotted keys, via a direct `tomllib` read — no `machine-local` CLI
+    subprocess.
+
+    Promoted from `coordinator_core.ops.discover_working_repos._merged_flat_registry`
+    (2026-08-16) — the same helper, given a shared home so a MULTI-KEY caller
+    (one that needs to enumerate a whole `repos.*`/`prefix.*` namespace rather
+    than resolve a single dotted key, for which `registry_get` above is
+    already the whole answer) does not reinvent this merge per call site.
+    `repos.*` and `publish.mirrors.*.path` are confirmed root-namespace-only
+    keys (never a promoted concern-file namespace — see
+    `_machine_local.py::_flatten_nested`'s docstring and its
+    concern-namespace-exclusivity check), so the same two-file precedence
+    chain `registry_get` uses is sufficient here; no concern-file layer is
+    consulted.
+
+    Best-effort, matching every caller's never-block contract: a missing or
+    unreadable registry file degrades to `{}` for that file (see
+    `load_flat_registry_file`/`_load_toml`), never raises.
+    """
+    reg_dir = registry_dir()
+    merged: dict = {}
+    merged.update(load_flat_registry_file(reg_dir / "registry.toml"))
+    merged.update(load_flat_registry_file(reg_dir / "registry.local.toml"))
+    return merged
+
+
+def registry_value(key: str, flat: dict) -> Optional[str]:
+    """Resolve one dotted key against `flat` (a `merged_flat_registry()`
+    result), honoring the per-key `MACHINE_LOCAL_<KEY>` env override rung
+    first — mirrors `registry_get`'s precedence (env override ->
+    registry.local.toml -> registry.toml) exactly, since `merged_flat_registry`
+    itself only merges the two TOML files and never consults the environment.
+
+    Promoted alongside `merged_flat_registry` (2026-08-16) — see that
+    function's docstring. A multi-key caller iterates every matched key, so
+    the override is applied per-key here rather than inside
+    `merged_flat_registry`, which has no per-key concept.
+    """
+    env_override = os.environ.get(_env_override_key(key))
+    if env_override:
+        return env_override
+    val = flat.get(key)
+    return None if val is None else str(val)
+
+
 # ---------------------------------------------------------------------------
 # Machine resolution
 # ---------------------------------------------------------------------------
@@ -320,14 +389,33 @@ def compute_machine_live() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _git_user_email_uncached() -> str:
+# `_resolve_repo_root` is `coordinator_core._repo_root_probe.resolve_repo_root`
+# (imported above) — a per-cwd-memoized shared probe. Review:
+# review-integrator (P2, 2026-08-16) — this used to be a module-local,
+# deliberately UNcached `git rev-parse --show-toplevel` spawn: correct in
+# intent (the cwd is what varies call-to-call under the warm engine) but it
+# meant a cache HIT on `_git_user_email_cached` still paid a fresh subprocess
+# spawn just to compute the key, inverting this module's own
+# spawn-elimination thesis. The shared probe also de-duplicates the
+# near-identical copy that used to live in `person_resolver.py` (P3 nit).
+
+
+def _git_user_email_uncached(cwd: Optional[str] = None) -> str:
     """Return `git config user.email`, or "" on any failure (missing git, no config, timeout).
 
     Uncached — spawns `git config` every call. This is the sole spawn site;
-    ``compute_contributor_live()`` calls this directly (never the cached
-    wrapper below) so the `_live` contract — "bypass cached/registry state,
-    observe current reality" — holds even after the caching added below for
-    ``compute_contributor()``'s own fallback rung.
+    ``compute_contributor_live()`` calls this directly with ``cwd=None``
+    (never the cached wrapper below) so the `_live` contract — "bypass
+    cached/registry state, observe current reality" — holds even after the
+    caching added below for ``compute_contributor()``'s own fallback rung.
+    ``cwd`` lets ``_git_user_email_cached`` pin the spawn to the same
+    resolved repo root its cache is keyed on (see module docstring's
+    "Repo-root cache-key fix" note) — ``cwd=None`` inherits the process's
+    ambient directory, the original (defective) behaviour. Review:
+    review-integrator (P3 nit, 2026-08-16) — this docstring previously named
+    ``_git_user_email_for_non_live`` as the pinning call site; that function
+    never calls this one directly, it goes through ``_git_user_email_cached``
+    (which is what actually calls this with ``cwd=repo_root``).
 
     Review: code-reviewer (F4, nit) — by design, this collapses several
     operationally-distinct failure modes ("git not installed" vs. "git
@@ -339,6 +427,7 @@ def _git_user_email_uncached() -> str:
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
+            cwd=cwd,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -356,25 +445,27 @@ class _GitUserEmailResolutionFailed(Exception):
     rest of the process the way a successful resolution legitimately can."""
 
 
-@functools.lru_cache(maxsize=1)
-def _git_user_email_cached() -> str:
-    """Process-lifetime, cwd-INsensitive cache of a resolved `git config
-    user.email` (failure is not memoized — see ``_GitUserEmailResolutionFailed``).
-    ``maxsize=1`` and no cwd key: the first successful resolution in a
-    process is served to every later call regardless of ``os.chdir()`` in
-    between. Safe today because claude-klabauter is spawn-per-call with no resident
-    daemon — nothing in this codebase resolves, chdirs into a different
-    repo with a different local `user.email`, and resolves again in the
-    same process. A future long-lived or cwd-changing caller would need to
-    key this cache on ``os.getcwd()`` (or an explicit repo-root argument)
-    to stay correct; that widening is out of scope here since no live
-    caller needs it.
+@functools.lru_cache(maxsize=None)
+def _git_user_email_cached(repo_root: Optional[str]) -> str:
+    """Process-lifetime cache of a resolved `git config user.email`, keyed on
+    ``repo_root`` (failure is not memoized — see
+    ``_GitUserEmailResolutionFailed``).
 
-    Review: code-reviewer (F2, P2) — named per the reviewer's recommendation
-    rather than keying the cache, since no current caller changes cwd
-    mid-process.
+    Keyed on the resolved repo root (2026-08-15, C7) rather than
+    ``maxsize=1``/zero-arg: under the warm resident engine (DR-315) one
+    process resolves contributors for clients in different repos, so a
+    single unkeyed slot is a missing-key COLLISION — the first repo's
+    resolved email would otherwise be served to every other repo's
+    resolution for the rest of the process. ``repo_root`` is also passed
+    through as ``cwd=`` to the underlying spawn, so the cached value is
+    actually resolved against the directory it is keyed on.
+
+    Review: code-reviewer (F2, P2) — original ``maxsize=1`` was named per
+    the reviewer's recommendation on the (since superseded) assumption that
+    no caller changes cwd mid-process; the warm engine removed that
+    assumption.
     """
-    result = _git_user_email_uncached()
+    result = _git_user_email_uncached(cwd=repo_root)
     if not result:
         raise _GitUserEmailResolutionFailed()
     return result
@@ -382,19 +473,28 @@ def _git_user_email_cached() -> str:
 
 def reset_git_user_email_cache() -> None:
     """Test/diagnostic escape hatch — clears the process-local
-    ``_git_user_email_cached()`` cache. Call this in test teardown/setup for
-    any test that stubs/varies the `git config user.email` spawn, since the
-    cache is process-global and otherwise leaks a prior test's resolved
-    value into a later one."""
+    ``_git_user_email_cached()`` cache, and the shared per-cwd repo-root memo
+    (``coordinator_core._repo_root_probe``) alongside it. Call this in test
+    teardown/setup for any test that stubs/varies the `git config user.email`
+    spawn, since the cache is process-global and otherwise leaks a prior
+    test's resolved value into a later one. The repo-root memo is included
+    so a test that stubs `subprocess.run` (and therefore also answers the
+    `git rev-parse` repo-root probe) does not leak a prior test's fake
+    "resolved root" into a later one either."""
     _git_user_email_cached.cache_clear()
+    _reset_repo_root_memo()
 
 
 def _git_user_email_for_non_live() -> str:
     """Cached read used ONLY by ``compute_contributor()``'s own fallback rung
     (registry absent) — never by ``compute_contributor_live()``, which must
-    always observe current reality. See ``reset_git_user_email_cache()``."""
+    always observe current reality. Resolves the current repo root (see
+    ``_resolve_repo_root``, per-cwd-memoized) and uses it as the cache key, so
+    a warm process serving different repos never cross-serves one repo's
+    cached email to another. See ``reset_git_user_email_cache()``."""
+    repo_root = _resolve_repo_root()
     try:
-        return _git_user_email_cached()
+        return _git_user_email_cached(repo_root)
     except _GitUserEmailResolutionFailed:
         return ""
 

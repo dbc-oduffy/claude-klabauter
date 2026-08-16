@@ -5,13 +5,20 @@ Purpose: classify every dirty working-tree path as (a) session-authored
 (staged), (b) known concurrent owner, or (c) unattributable. Returns 0 when
 all dirty paths are (a) or (b). Returns 3, with case-(c) paths one per line
 on stdout, when any unattributable file remains. EOL phantoms are filtered
-before classification: a path where `git diff --quiet -- <path>` exits 0
-(worktree content equals index — a Git-for-Windows stat-staleness artifact)
-is benign, never (c).
+before classification: ONE batched `git diff --no-renames` spawn (no
+pathspec, full unified-diff body parsed by `_diff_changed_paths` — NOT
+`--name-only`, see that function's docstring for why) yields the set of
+tracked paths whose worktree content actually differs from the index; a
+tracked-unstaged path (`X == ' '`) NOT in that set is a phantom (worktree ==
+index — a Git-for-Windows stat-staleness artifact, or a
+`diff.<driver>.textconv`-normalized no-op) and is benign, never (c). This
+replaced a per-dirty-path `git diff --quiet -- <path>` spawn (unbounded in
+dirty-file count) — see negative-spec for the path-form and fail-closed
+contract of the batched call.
 
 Classification rules applied in order; first match wins for each dirty path:
-    EOL phantom : `git diff --quiet -- <path>` exits 0 -> worktree == index
-                  (stat-stale) -> skip
+    EOL phantom : path absent from the batched `_diff_changed_paths` set
+                  -> worktree == index (stat-stale) -> skip
     (a) Staged  : status XY where X != ' ' and X != '?' -> staged for this
                   session's commit -> skip
     (b) Scope   : path appears in scope: block of any state/handoffs/*.md
@@ -47,6 +54,38 @@ Negative-spec:
       the cwd-dependent `git rev-parse --show-toplevel` subprocess call
       entirely. Added so a ceremony orchestrator invoking this module
       in-process no longer needs a process-global `os.chdir()` workaround.
+    - The batched EOL-phantom call (`_diff_changed_paths`, `git diff
+      --no-renames` with NO `--name-only`/`--raw`/`--stat`/`--numstat`) is
+      deliberate: those listing flags all report a path whenever its raw
+      git-object SHA differs, IGNORING `diff.<driver>.textconv`
+      normalization — measured directly against this module's own
+      `test_eol_phantom_not_flagged_exits_zero` fixture, which configures a
+      textconv driver that renders two sides identical. Per-path `git diff
+      --quiet` (what this replaced) treats an empty post-textconv patch body
+      as "no difference"; only parsing the unified-diff BODY (`+++ b/<path>`
+      / `--- a/<path>` -> `/dev/null` pairs, plus the `Binary files ...
+      differ` line shape) reproduces that verdict in one batched call. Path
+      form still agrees with `git status --porcelain`: neither the porcelain
+      parser nor the diff body uses `-z`, and BOTH the status and diff
+      subprocess calls pass `-c core.quotepath=false` (see
+      `_diff_changed_paths` docstring) so a non-ASCII/space/quote/
+      control-char path is never C-quoted by either side -- at git's
+      default (`core.quotepath=true`) a diff header quotes the WHOLE
+      `"b/<path>"` token, not just the path, which broke a naive
+      `startswith("+++ b/")` match and silently swallowed a genuinely-dirty
+      quoted path as an EOL phantom (fail-OPEN, this module's own named
+      worst case) until this flag was added. `--no-renames` keeps the diff
+      body's `a/`/`b/` pairs 1:1 with a single path (matching
+      `parse_porcelain_paths`'s own rename-arrow collapse to the destination
+      path) instead of letting rename detection split one dirty file into an
+      old/new pair with no porcelain counterpart.
+      Fail-closed on the batched call itself: if `git diff --no-renames`
+      exits non-zero, `_diff_changed_paths` returns `None` and the phantom
+      filter is disabled entirely (no path is treated as phantom) rather
+      than defaulting to "diff empty -> every tracked-unstaged path is a
+      phantom" — the same fail-closed direction as the old per-path `git
+      diff --quiet` spawn, whose failure (returncode != 0) also left the
+      path NOT skipped.
     - Does NOT parse full YAML for the `scope:` block extraction — delegates
       to `coordinator_core.ops.extract_scope_paths._extract_scope_paths`
       (the same fixed-indentation `  - <path>` scanner `pickup_assemble`
@@ -72,6 +111,7 @@ from coordinator_core.ops.extract_scope_paths import (
     _extract_scope_paths as _shared_extract_scope_paths,
 )
 from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.state_root import (
@@ -150,6 +190,83 @@ def parse_porcelain_paths(status_out: str) -> List[Tuple[str, str]]:
             path = path.rsplit(" -> ", 1)[-1]
         pairs.append((xy, path))
     return pairs
+
+
+def _diff_changed_paths(repo_root: str) -> Optional[set]:
+    """ONE batched `git diff --no-renames` spawn (full unified-diff BODY, not
+    `--name-only`/`--raw`/`--stat`/`--numstat`) yielding the set of tracked
+    paths whose worktree content actually differs from the index, replacing
+    the old per-path `git diff --quiet -- <path>` spawn.
+
+    Why the diff BODY and not a listing flag: `--name-only`/`--raw`/`--stat`/
+    `--numstat` all report a path as changed whenever its raw git-object SHA
+    differs, IGNORING any `diff.<driver>.textconv` normalization configured
+    via `.gitattributes` -- measured directly (see this module's own tests
+    plus the sidecar for this port). `git diff --quiet` (what the per-path
+    call used) instead special-cases exactly that: when a textconv driver
+    renders both sides identical, the generated patch body is EMPTY, and
+    `--quiet`/`--exit-code` treat empty patch output as "no difference".
+    Parsing the unified-diff body (`+++ b/<path>` / `--- a/<path>` -> `/dev/
+    null` pairs, plus the `Binary files a/<path> and b/<path> differ` line
+    shape) is the only batched call that reproduces `--quiet`'s per-path
+    verdict -- a listing-only flag would silently reclassify a
+    textconv-normalized EOL phantom as case-(c) unattributable, the module's
+    own worst-failure case.
+
+    Returns None (not an empty set) if the batched call itself fails --
+    callers MUST treat None as "phantom filter disabled" (fail-closed, no
+    path treated as phantom), matching the old per-path call's failure
+    direction: a failing `git diff --quiet` invocation returned nonzero,
+    which left that path NOT skipped.
+
+    `-c core.quotepath=false`: at git's DEFAULT (`core.quotepath=true`), a
+    non-ASCII/space/quote/control-char path is C-quoted -- and in a diff
+    header the quotes wrap the WHOLE `b/<path>` token
+    (`"b/m\303\244.txt"`), not just the path, so a naive `line.startswith
+    ("+++ b/")` never matches and the path silently never enters `changed`.
+    Back in `main()`'s loop that reads as `path not in diff_paths` -> True
+    -> phantom -> skipped: a genuinely-dirty non-ASCII path swallowed as an
+    EOL phantom, fail-OPEN, this module's own named worst case (a
+    should-be-case-(c) file let through). `main()` passes the SAME flag to
+    its `git status --porcelain` call so both sides parse in the identical
+    unquoted form -- this function alone disabling quoting would just move
+    the mismatch to the other side. Residual gap, accepted: a path
+    containing a literal NEWLINE is C-quoted by git regardless of
+    `core.quotepath` (that setting only governs the >=0x80-byte/space/
+    quote/control-char behavior) -- this module's `parse_porcelain_paths`
+    still has no unquoting step, so a newline-bearing path was never
+    handled by either the old per-path call or this one.
+    """
+    result = subprocess.run(
+        ["git", "-c", "core.quotepath=false", "-C", repo_root, "diff", "--no-renames"],
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
+    if result.returncode != 0:
+        return None
+
+    changed: set = set()
+    pending_a: Optional[str] = None
+    for line in result.stdout.splitlines():
+        if line.startswith("--- a/"):
+            pending_a = line[6:]
+        elif line.startswith("--- /dev/null"):
+            pending_a = None
+        elif line.startswith("+++ b/"):
+            changed.add(line[6:])
+            pending_a = None
+        elif line.startswith("+++ /dev/null"):
+            if pending_a is not None:
+                changed.add(pending_a)
+            pending_a = None
+        elif line.startswith("Binary files ") and line.endswith(" differ"):
+            rest = line[len("Binary files ") : -len(" differ")]
+            if " and b/" in rest:
+                changed.add(rest.split(" and b/", 1)[1])
+            elif " and /dev/null" in rest and rest.startswith("a/"):
+                changed.add(rest.split(" and /dev/null", 1)[0][2:])
+    return changed
 
 
 def _build_known_scope(handoffs_dir: str, repo_root: Optional[str] = None) -> set:
@@ -253,20 +370,11 @@ def main(argv: List[str]) -> int:
     if root_arg:
         repo_root = root_arg
     else:
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                **no_console_creationflags(),
-            )
-        except OSError:
+        top = show_toplevel()
+        if not top:
             print(f"{_PROG} ({terminator}): must be run inside a git repository", file=sys.stderr)
             return 2
-        if result.returncode != 0 or not result.stdout.strip():
-            print(f"{_PROG} ({terminator}): must be run inside a git repository", file=sys.stderr)
-            return 2
-        repo_root = result.stdout.strip()
+        repo_root = top
 
     # --- Build case-(b) known-scope path set ---
     handoffs_dir = _resolve_handoffs_dir(plugin_root, repo_root)
@@ -282,13 +390,28 @@ def main(argv: List[str]) -> int:
     # the case-(b) `known_scope` set (which holds handoff FILE paths), so a
     # live peer's brand-new handoff directory reads as unattributable no
     # matter how well-known its owner is.
+    # `-c core.quotepath=false`: keeps this call's path form in agreement
+    # with `_diff_changed_paths`'s own `core.quotepath=false` diff call (see
+    # that function's docstring). Without it, a non-ASCII/space/quote/
+    # control-char path is C-quoted by porcelain but NOT by this module's
+    # `parse_porcelain_paths` (no unquoting step), and disabling quoting only
+    # on the diff side (not here) would silently reintroduce the same
+    # path-form mismatch this flag exists to close.
     status_result = subprocess.run(
-        ["git", "-C", repo_root, "status", "--porcelain", "--untracked-files=all"],
+        ["git", "-c", "core.quotepath=false", "-C", repo_root, "status", "--porcelain", "--untracked-files=all"],
         capture_output=True,
         text=True,
         **no_console_creationflags(),
     )
     status_out = status_result.stdout if status_result.returncode == 0 else ""
+
+    # Batched EOL-phantom filter: ONE `git diff --no-renames` spawn for the
+    # whole dirty set (see `_diff_changed_paths` docstring for why the diff
+    # BODY, not `--name-only`, is what agrees with the old per-path
+    # `git diff --quiet -- <path>` call). `diff_paths is None` means the
+    # batched call itself failed — fail-closed: the phantom filter is
+    # disabled (no path is treated as phantom) rather than guessed empty.
+    diff_paths = _diff_changed_paths(repo_root)
 
     for xy, path in parse_porcelain_paths(status_out):
         x_char = xy[0:1]
@@ -297,15 +420,10 @@ def main(argv: List[str]) -> int:
         if x_char != " " and x_char != "?":
             continue
 
-        # EOL phantom filter (tracked unstaged only).
-        if x_char == " ":
-            diff_result = subprocess.run(
-                ["git", "-C", repo_root, "diff", "--quiet", "--", path],
-                capture_output=True,
-                **no_console_creationflags(),
-            )
-            if diff_result.returncode == 0:
-                continue
+        # EOL phantom filter (tracked unstaged only): a path absent from the
+        # batched diff set has worktree content equal to the index.
+        if x_char == " " and diff_paths is not None and path not in diff_paths:
+            continue
 
         # (b) Known concurrent owner.
         if path in known_scope:

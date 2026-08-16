@@ -66,6 +66,7 @@ import subprocess
 import sys
 from typing import List, Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.ops.probe_onboarding_currency import (
@@ -219,23 +220,7 @@ def _resolve_repo_root(explicit: str) -> str:
     per-repo-stable probe on a hung git process."""
     if explicit:
         return explicit
-    try:
-        res = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        # Review: code-reviewer (Finding 1) — replaced a stringified fragment
-        # of the try-block's own source with a plain human sentence.
-        print(f"skip: git rev-parse --show-toplevel failed: {exc}", file=sys.stderr)
-        return ""
-    if res.returncode != 0:
-        return ""
-    return res.stdout.strip()
+    return show_toplevel() or ""
 
 
 def main(argv: List[str], default_plugin_root: Optional[str] = None) -> int:

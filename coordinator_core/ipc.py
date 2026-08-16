@@ -509,9 +509,19 @@ _CALLER_FACING_MESSAGE_MAX_LEN = 2000
 # framing of the multiplex era no longer applies; the guard is now a simple
 # per-invocation safety net.)
 #
-# Overridable at process startup via env var — integration tests set a shorter
-# value (e.g. 0.1 s) to exercise the timeout path without slowing the suite.
-# Override must be set BEFORE import (module-level constant evaluated at import).
+# Overridable via env var, resolved PER-REQUEST by `_resolve_dispatch_timeout_secs()`
+# below (C11) rather than once at import — a warm, long-lived engine process would
+# otherwise have this knob permanently pinned to whatever `COORDINATOR_
+# DISPATCH_TIMEOUT_SECS` happened to read at process start, with no way to retune
+# it without a restart. `DISPATCH_TIMEOUT_SECS` below remains a real module
+# attribute (computed once, at import, from the env as seen then) and is still
+# the value `_resolve_dispatch_timeout_secs()` falls back to when the env var is
+# absent at request time — this is deliberate, not a residual of the old
+# import-time-only design: it lets a caller (production or test) set the knob
+# either way — via the env var (picked up live, per request) or by assigning
+# `ipc.DISPATCH_TIMEOUT_SECS` directly (the fallback default) — and both take
+# effect on the very next dispatch, never requiring a fresh process. Integration
+# tests use either form to exercise the timeout path without slowing the suite.
 #
 # Note: the timeout is only effective if the handler is either:
 #   (a) an async handler that yields control (e.g. awaits I/O or asyncio.sleep), OR
@@ -638,29 +648,11 @@ except Exception:
 # a future op with a genuinely justified widened cap has a table to land in without
 # reintroducing this one's now-retired rationale.
 #
-# coverage.gate (2026-08-15, docs/plans/2026-08-15-the-close-s-three-deferred-defects-becom.md
-# § C1): re-added, NOT a regression of DEC-2's rationale. DEC-2's three retired rows
-# (ceremony.wsc_commit/wsc_resolve/wsc_tail) are FIXED-cost bookkeeping ops with a
-# regression-tested sub-2s target (test_wsc_tail_parity.py) — a widened cap there really
-# was masking a latency property that should instead be measured and enforced. coverage.gate
-# is structurally different: its cost is `_derive_dag_chain_set`'s DAG fixpoint walk, whose
-# wall-clock is O(chain_commits) git-subprocess calls with NO fixed target — a 100-commit
-# shared-branch window is expected to take longer than a 10-commit one BY DESIGN, so no
-# "under Xs" KPI bound is meaningful the way it is for wsc_tail's fixed-shape bookkeeping
-# path. Measured directly (bypassing IPC and the 30s runaway guard entirely, to isolate the
-# walk itself from any dispatch-layer effect) via
-# `coordinator_core.coverage.run_coverage_gate(from_handoff=<the 2026-08-14 chain-terminal
-# handoff that reproduced the timeout>, ...)` on this box on 2026-08-14/15: 162.8s wall-clock
-# for a 148-commit DAG chain (chain_commits=148, covered=65, uncovered=83, VERDICT=WARN — a
-# real, correct verdict, not a partial/aborted result), roughly 1.1s/commit. That is real,
-# monotonically-progressing work completing to a correct answer, not a hang — the 30s global
-# guard was firing on ordinary DAG-mode work at ~5x the size the guard's budget was ever sized
-# against. 600s gives ~3.7x headroom over the measured 162.8s baseline, sized against this
-# repo's own load norm (docs/wiki/machine-load-norm.md: 50-70 concurrent LLM sessions
-# contending for the same CPU/disk this walk's git subprocesses use) rather than the isolated
-# single-session measurement alone. Still bounded, not unlimited — a genuinely hung walk (e.g.
-# a lock wait) still gets cancelled, just at a budget matched to the work instead of one sized
-# for a different op class.
+# coverage.gate's row was removed here (K-001, state/kill-ledger.md, 2026-08-16): the
+# close path no longer invokes the op that needed this widened cap — see the kill
+# ledger for the measured cost and disposition. `coverage.gate` may still be reached
+# off the close path (mint-only plumbing behind `cmd_brightline_gate`); that caller
+# now resolves via the ordinary global runaway-guard timeout like any unlisted op.
 #
 # ceremony.scoped_git_commit (2026-08-15, live incident: a ~2116-path publish commit
 # reached the engine and died with `op timed out after 30.0s`, dest HEAD unchanged, no
@@ -697,14 +689,44 @@ except Exception:
 # pathspec-scaling op instead of one sized for a fixed-shape bookkeeping op.
 # ---------------------------------------------------------------------------
 _OP_TIMEOUT_OVERRIDES: Dict[str, float] = {
-    "coverage.gate": 600.0,
     "ceremony.scoped_git_commit": 150.0,
 }
 
 
+def _resolve_dispatch_timeout_secs() -> float:
+    """Live, per-request read of the global runaway-guard timeout (C11).
+
+    Re-reads `COORDINATOR_DISPATCH_TIMEOUT_SECS` from `os.environ` on every
+    call rather than trusting the import-time snapshot baked into the
+    `DISPATCH_TIMEOUT_SECS` module constant — in a warm, long-lived engine
+    process that constant is otherwise pinned for the process's entire life,
+    making the knob un-retunable without a restart. Falls back to the
+    `DISPATCH_TIMEOUT_SECS` module attribute (not a private closed-over copy)
+    when the env var is absent or unparsable, so a caller that sets
+    `ipc.DISPATCH_TIMEOUT_SECS` directly (as several tests do) keeps working
+    identically to before.
+    """
+    raw = os.environ.get("COORDINATOR_DISPATCH_TIMEOUT_SECS")
+    if raw is None:
+        return DISPATCH_TIMEOUT_SECS
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return DISPATCH_TIMEOUT_SECS
+
+
 def _timeout_for(method: str) -> float:
-    """Per-op dispatch timeout: _OP_TIMEOUT_OVERRIDES[method] if listed, else the global DISPATCH_TIMEOUT_SECS runaway-guard."""
-    return _OP_TIMEOUT_OVERRIDES.get(method, DISPATCH_TIMEOUT_SECS)
+    """Per-op dispatch timeout: `_OP_TIMEOUT_OVERRIDES[method]` if listed, else
+    the global runaway-guard timeout, re-resolved per request (C11) via
+    `_resolve_dispatch_timeout_secs()` rather than the import-time constant.
+    `_OP_TIMEOUT_OVERRIDES` is NOT empty despite its "RETIRED (DEC-2)" framing
+    above — `ceremony.scoped_git_commit` (150s) is a live, load-bearing entry
+    and must keep resolving here unchanged. `coverage.gate`'s row was removed
+    (K-001, state/kill-ledger.md).
+    """
+    if method in _OP_TIMEOUT_OVERRIDES:
+        return _OP_TIMEOUT_OVERRIDES[method]
+    return _resolve_dispatch_timeout_secs()
 
 
 # ---------------------------------------------------------------------------
@@ -1619,112 +1641,120 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # the merge. That is this contract's designed direction (under-declaration,
     # never a false claim) and matches the pre-DR-276 behaviour exactly.
     #
-    # Bound with a bare `set()` — no `with` block and no reset token — so the
-    # handler-invocation branches below keep their existing indentation. This is
-    # the dispatch hot path, and a 60-line re-indent to gain a context manager is
-    # churn a reviewer would have to diff line-by-line for no behavioural gain.
-    # Nothing leaks: every dispatch REBINDS the var as its first act, so an error
-    # branch that returns without unbinding cannot carry a stale list into the
-    # next dispatch — the next call's `set` shadows it before any handler can
-    # append. The failure direction if one ever did survive is a DISCARDED
-    # declaration (under-coverage), never a misattributed one.
+    # C11: bound via `ContextVar.set()`'s returned Token, reset in `finally` below
+    # (mirroring `session.declared_writes.collecting()`'s own shape, and the
+    # Token/reset pattern `contract.apply_base.session_identity()` uses for the
+    # same overlapping-dispatch problem). The prior comment here argued nothing
+    # leaks because "every dispatch REBINDS the var as its first act" — TRUE
+    # serially, FALSE under overlapping requests: two interleaved `to_thread`-
+    # offloaded dispatches share the same `ContextVar` slot in the absence of a
+    # per-dispatch Token/reset pair, so a later dispatch's bare `set()` can stomp
+    # a still-in-flight sibling's list, and unwinding via `reset()` is the only
+    # way to hand the slot back to whatever the caller's context held before this
+    # dispatch (default `None`, or an outer `collecting()` block) rather than
+    # leaving this dispatch's list bound after it returns. The failure direction
+    # is a MISATTRIBUTED write claim — exactly the direction the prior comment
+    # said could not happen.
     _declared_writes: list = []
-    _declared_writes_var.set(_declared_writes)
-    if inspect.iscoroutinefunction(handler):
-        # Async handler: wrap with per-request timeout.
-        # The timeout is only interruptible if the handler actually yields (await).
-        # Blocking I/O inside the handler must be wrapped in asyncio.to_thread
-        # at the handler's call site (AC-3 Gap-3 — enforced by CI grep gate).
-        try:
-            result = await asyncio.wait_for(
-                handler(params, repo_root=op_repo_key),
-                timeout=op_timeout,
-            )
-        except asyncio.TimeoutError:
-            _log().error(
-                "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
-            )
-            return {
-                "jsonrpc": "2.0",
-                "id": id_,
-                "error": {
-                    "code": INTERNAL_ERROR,
-                    "message": f"op timed out after {op_timeout}s",
-                },
-            }
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:
-            _log().error(
-                # %s, not %r, on exc: repr() re-escapes an already-quoted
-                # message, so a Windows path in an op's own error text reaches
-                # the operator with doubled separators
-                # ("X:\\repo\\docs\\..."). The exception TYPE is already
-                # carried by the preceding %s, so nothing is lost.
-                "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
-                exc_info=True,
-            )
-            return {
-                "jsonrpc": "2.0",
-                "id": id_,
-                "error": _handler_exception_error(exc),
-            }
-    else:
-        # Sync handler: offload to thread-pool executor so the event loop is not
-        # stalled while the sync work runs; makes the per-invocation timeout effective.
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(handler, params, repo_root=op_repo_key),
-                timeout=op_timeout,
-            )
-        except asyncio.TimeoutError:
-            _log().error(
-                "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
-            )
-            return {
-                "jsonrpc": "2.0",
-                "id": id_,
-                "error": {
-                    "code": INTERNAL_ERROR,
-                    "message": f"op timed out after {op_timeout}s",
-                },
-            }
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:
-            _log().error(
-                # %s, not %r, on exc: repr() re-escapes an already-quoted
-                # message, so a Windows path in an op's own error text reaches
-                # the operator with doubled separators
-                # ("X:\\repo\\docs\\..."). The exception TYPE is already
-                # carried by the preceding %s, so nothing is lost.
-                "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
-                exc_info=True,
-            )
-            return {
-                "jsonrpc": "2.0",
-                "id": id_,
-                "error": _handler_exception_error(exc),
-            }
-    # _mark_partition_active removed by DR-215 strip (2026-07-06) — no-op call retired.
-    #
-    # Self-report scope-touch contract (design (b) — see the module-level comment
-    # above _SCOPE_TOUCH_PATHS_KEY): strip + record BEFORE the wire envelope is
-    # built, on every dispatch path (both the async and sync handler branches
-    # above converge into this one `result` var). Fail-open by construction —
-    # never raises, never mutates `result`'s shape beyond popping the key.
-    #
-    # DR-276: fold anything the handler declared via `declare_write()` into the
-    # same key, so the two declaration styles converge before the single
-    # recorder runs. Order is preserved and duplicates are dropped here rather
-    # than in the recorder, which caps at _MAX_DECLARED_TOUCH_PATHS and would
-    # otherwise spend cap budget on repeats.
-    if _declared_writes and isinstance(result, dict):
-        merged = list(result.get(_SCOPE_TOUCH_PATHS_KEY) or []) + list(_declared_writes)
-        deduped = list(dict.fromkeys(merged))
-        result[_SCOPE_TOUCH_PATHS_KEY] = deduped
-    result = _record_self_reported_touches(result, str(request_repo) if request_repo else None)
-    return {"jsonrpc": "2.0", "id": id_, "result": result}
+    _declared_writes_token = _declared_writes_var.set(_declared_writes)
+    try:
+        if inspect.iscoroutinefunction(handler):
+            # Async handler: wrap with per-request timeout.
+            # The timeout is only interruptible if the handler actually yields (await).
+            # Blocking I/O inside the handler must be wrapped in asyncio.to_thread
+            # at the handler's call site (AC-3 Gap-3 — enforced by CI grep gate).
+            try:
+                result = await asyncio.wait_for(
+                    handler(params, repo_root=op_repo_key),
+                    timeout=op_timeout,
+                )
+            except asyncio.TimeoutError:
+                _log().error(
+                    "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
+                )
+                return {
+                    "jsonrpc": "2.0",
+                    "id": id_,
+                    "error": {
+                        "code": INTERNAL_ERROR,
+                        "message": f"op timed out after {op_timeout}s",
+                    },
+                }
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                _log().error(
+                    # %s, not %r, on exc: repr() re-escapes an already-quoted
+                    # message, so a Windows path in an op's own error text reaches
+                    # the operator with doubled separators
+                    # ("X:\\repo\\docs\\..."). The exception TYPE is already
+                    # carried by the preceding %s, so nothing is lost.
+                    "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                return {
+                    "jsonrpc": "2.0",
+                    "id": id_,
+                    "error": _handler_exception_error(exc),
+                }
+        else:
+            # Sync handler: offload to thread-pool executor so the event loop is not
+            # stalled while the sync work runs; makes the per-invocation timeout effective.
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(handler, params, repo_root=op_repo_key),
+                    timeout=op_timeout,
+                )
+            except asyncio.TimeoutError:
+                _log().error(
+                    "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
+                )
+                return {
+                    "jsonrpc": "2.0",
+                    "id": id_,
+                    "error": {
+                        "code": INTERNAL_ERROR,
+                        "message": f"op timed out after {op_timeout}s",
+                    },
+                }
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                _log().error(
+                    # %s, not %r, on exc: repr() re-escapes an already-quoted
+                    # message, so a Windows path in an op's own error text reaches
+                    # the operator with doubled separators
+                    # ("X:\\repo\\docs\\..."). The exception TYPE is already
+                    # carried by the preceding %s, so nothing is lost.
+                    "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                return {
+                    "jsonrpc": "2.0",
+                    "id": id_,
+                    "error": _handler_exception_error(exc),
+                }
+        # _mark_partition_active removed by DR-215 strip (2026-07-06) — no-op call retired.
+        #
+        # Self-report scope-touch contract (design (b) — see the module-level comment
+        # above _SCOPE_TOUCH_PATHS_KEY): strip + record BEFORE the wire envelope is
+        # built, on every dispatch path (both the async and sync handler branches
+        # above converge into this one `result` var). Fail-open by construction —
+        # never raises, never mutates `result`'s shape beyond popping the key.
+        #
+        # DR-276: fold anything the handler declared via `declare_write()` into the
+        # same key, so the two declaration styles converge before the single
+        # recorder runs. Order is preserved and duplicates are dropped here rather
+        # than in the recorder, which caps at _MAX_DECLARED_TOUCH_PATHS and would
+        # otherwise spend cap budget on repeats.
+        if _declared_writes and isinstance(result, dict):
+            merged = list(result.get(_SCOPE_TOUCH_PATHS_KEY) or []) + list(_declared_writes)
+            deduped = list(dict.fromkeys(merged))
+            result[_SCOPE_TOUCH_PATHS_KEY] = deduped
+        result = _record_self_reported_touches(result, str(request_repo) if request_repo else None)
+        return {"jsonrpc": "2.0", "id": id_, "result": result}
+    finally:
+        _declared_writes_var.reset(_declared_writes_token)
 
 
 async def dispatch_message(msg: dict) -> dict:

@@ -40,6 +40,13 @@ _JUDGMENT_POINT_CONSTRUCTOR_KEYS = set(
     ).keys()
 )
 
+#: `reportable` is emitted only when the builder classified the point (see
+#: `judgment.partition_reportable`), so it is optional on this shape rather
+#: than part of the constructor's unconditional key set. Pinned as a named
+#: exception, not by loosening the equality above -- an unexpected key is
+#: still a failure.
+_OPTIONAL_JUDGMENT_POINT_KEYS = {"reportable"}
+
 
 def _all_reader_results(monkeypatch):
     """Collect real (non-mocked-away) directive/judgment_point content by
@@ -80,7 +87,9 @@ def test_clean_ops_em_environment_judgment_points_are_built_via_the_shipped_cons
     result = rco._read_em_environment()
     assert result.judgment_points, "expected at least one judgment point (effort='high')"
     for jp in result.judgment_points:
-        assert set(jp.keys()) == _JUDGMENT_POINT_CONSTRUCTOR_KEYS
+        keys = set(jp.keys())
+        assert _JUDGMENT_POINT_CONSTRUCTOR_KEYS <= keys
+        assert keys - _JUDGMENT_POINT_CONSTRUCTOR_KEYS <= _OPTIONAL_JUDGMENT_POINT_KEYS
 
 
 def test_worktree_sweep_dirty_judgment_points_are_built_via_the_shipped_constructor(

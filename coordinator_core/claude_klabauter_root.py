@@ -89,7 +89,7 @@ _REMEDIATION = (
     "  Remediate (choose one):\n"
     "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
+    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
 )
 
 #: Rung-3 remediation text for the timeout arm — distinguishable from `_REMEDIATION`
@@ -104,8 +104,30 @@ _TIMEOUT_REMEDIATION = (
     f"{_RUNG2_TIMEOUT_SECS}s.\n"
     "  This is a hung/slow read, not a missing registry entry — re-run once the machine's "
     "load has settled.\n"
-    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
+    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
 )
+
+
+#: Process-scope memo for `coordinator_claude_klabauter_root()`'s Rung 1.5/Rung 2 answer
+#: (finding 8, staff-eng review; state/lessons/2026-07-06-tri-plane-read-ops-
+#: must-process-memoize.yaml). Per-call resolution spawns a `machine-local`
+#: subprocess on every dispatch, which blows the sub-10ms SLA of a warm,
+#: repeatedly-dispatched process — the lesson requires resolving once and
+#: memoizing at process scope. Naive SINGLE-SLOT memoization would be the
+#: same missing-key COLLISION class C7 fixes for the two git-config caches:
+#: a warm server can serve dispatches whose registry state changes mid-
+#: process (`machine-local set` landing between two calls), and a bare
+#: last-write-wins slot would silently serve a stale root to every caller
+#: after that write. Keyed on `_registry_mtime_pair`'s cheap staleness tuple
+#: instead, mirroring `_GATE_MEMO`'s shape below — a dict, not a Tuple pair
+#: of module globals, so a registry mtime change invalidates only its own
+#: key rather than colliding with whatever the last caller happened to see.
+_ROOT_MEMO: dict = {}
+
+
+def _reset_root_memo() -> None:
+    """Test-only helper: clear the process-scope root-resolution memo."""
+    _ROOT_MEMO.clear()
 
 
 def coordinator_claude_klabauter_root() -> str:
@@ -114,20 +136,34 @@ def coordinator_claude_klabauter_root() -> str:
     Returns the resolved absolute path (as read — no realpath/normalization beyond
     the source's own whitespace-strip, mirroring the bash oracle's behavior).
     Raises RuntimeError with the bash oracle's remediation text on failure.
+
+    Rung 1.5/Rung 2's answer is memoized process-scope, keyed on
+    `_registry_mtime_pair` (see `_ROOT_MEMO`) — resolved once per distinct
+    registry state per process, not once globally and not once per call.
     """
     # Rung 1: CLAUDE_KLABAUTER_ROOT already set in environment (§4b idempotency gate).
+    # Never memoized: this is a direct env read, already as cheap as a memo
+    # lookup, and honoring a caller's env override on every call is the
+    # entire point of the idempotency gate.
     existing = os.environ.get("CLAUDE_KLABAUTER_ROOT", "")
     if existing:
         return existing
 
+    ml_dir = machine_local_dir()
+    memo_key = _registry_mtime_pair(ml_dir)
+    cached = _ROOT_MEMO.get(memo_key)
+    if cached is not None:
+        return cached
+
     # Rung 1.5: cheap direct-file-read pointer, checked ahead of the expensive
     # machine-local subprocess ladder. Absence/emptiness is a normal fallback
     # state, not an error — falls through to Rung 2.
-    pointer_path = machine_local_dir() / ".claude-klabauter-root"
+    pointer_path = ml_dir / ".claude-klabauter-root"
     try:
         with open(pointer_path, "r", encoding="utf-8") as f:
             val = f.read().strip()
         if val:
+            _ROOT_MEMO[memo_key] = val
             return val
     except OSError:
         pass  # missing/unreadable pointer file — normal, falls through to Rung 2
@@ -165,9 +201,13 @@ def coordinator_claude_klabauter_root() -> str:
         if result is not None and result.returncode == 0:
             resolved = result.stdout.strip()
             if resolved:
+                _ROOT_MEMO[memo_key] = resolved
                 return resolved
 
-    # Rung 3: hard error with actionable remediation.
+    # Rung 3: hard error with actionable remediation. Deliberately NOT
+    # memoized — a transient absent-key/timeout state must not pin every
+    # later call in the process to the same hard failure once the registry
+    # is fixed up (e.g. `machine-local set` landing after this call).
     raise RuntimeError(_REMEDIATION)
 
 
@@ -294,11 +334,19 @@ def _reset_skew_advisory() -> None:
 #: (module docstring § DECISION REVERSAL) — an explicit memo with a reset
 #: seam, not an `os.environ` export, so the cache dies with the test/process
 #: boundary rather than leaking into subprocess children or across pytest
-#: cases. A single-entry cache (not an unbounded dict) is deliberate: the
-#: registry/session-root pair changes at most once per long-lived-process
-#: lifetime in practice, and an unbounded key space would never evict.
-_GATE_MEMO_KEY: Optional[Tuple[float, float, float, Optional[str]]] = None
-_GATE_MEMO_VALUE: Optional[Tuple[Optional[str], str]] = None
+#: cases.
+#:
+#: PER-KEY DICT, not a single-entry `(key, value)` pair (C10, staff-eng
+#: review finding 8): a warm server serves dispatches from DIFFERENT
+#: session roots interleaved in one process, and a bare last-write-wins
+#: slot is the same missing-key COLLISION class C7 fixes for the two
+#: git-config caches — session A's memo entry was evicted outright by
+#: session B's call, so A's next call re-walked the full gate even though
+#: its own registry state had not changed. The key space is bounded in
+#: practice (distinct registry states × distinct session roots actually
+#: served by one long-lived process), so an unbounded dict does not
+#: meaningfully grow unbounded the way e.g. a per-request cache would.
+_GATE_MEMO: "dict[Tuple[float, float, float, Optional[str]], Tuple[str, str]]" = {}
 
 #: Review: code-reviewer — two known, accepted limitations of this memo,
 #: deliberately left unaddressed rather than fixed:
@@ -311,11 +359,11 @@ _GATE_MEMO_VALUE: Optional[Tuple[Optional[str], str]] = None
 #:       as a narrow, low-likelihood window rather than closed.
 #:   (2) no lock guards the read-check-write below; under CPython's GIL the
 #:       tuple itself cannot corrupt, but two threads racing the full gate
-#:       simultaneously can both miss the memo and both pay the full walk
-#:       cost once. Benign — accepted, not fixed — but worth knowing if this
-#:       module is ever called from a threaded server context (the
-#:       module docstring's "~30 long-lived-process call sites" language
-#:       does not itself rule that out).
+#:       simultaneously for the SAME key can both miss the memo and both
+#:       pay the full walk cost once. Benign — accepted, not fixed — but
+#:       worth knowing if this module is ever called from a threaded server
+#:       context (the module docstring's "~30 long-lived-process call
+#:       sites" language does not itself rule that out).
 
 
 def _reset_gate_memo() -> None:
@@ -326,9 +374,7 @@ def _reset_gate_memo() -> None:
     first test to resolve would otherwise pin the answer for every later
     test in the same process.
     """
-    global _GATE_MEMO_KEY, _GATE_MEMO_VALUE
-    _GATE_MEMO_KEY = None
-    _GATE_MEMO_VALUE = None
+    _GATE_MEMO.clear()
 
 
 def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
@@ -444,13 +490,12 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
         str(session_root) if session_root is not None else None,
     )
 
-    global _GATE_MEMO_KEY, _GATE_MEMO_VALUE
-    if _GATE_MEMO_KEY == memo_key and _GATE_MEMO_VALUE is not None:
-        return _GATE_MEMO_VALUE
+    cached = _GATE_MEMO.get(memo_key)
+    if cached is not None:
+        return cached
 
     result = shim.resolve_claude_klabauter_root_with_class()
-    _GATE_MEMO_KEY = memo_key
-    _GATE_MEMO_VALUE = result
+    _GATE_MEMO[memo_key] = result
     return result
 
 

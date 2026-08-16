@@ -16,6 +16,7 @@ these cases too, not only a naive constant-returner.
 
 from __future__ import annotations
 
+import subprocess
 import textwrap
 
 import pytest
@@ -24,8 +25,14 @@ from coordinator_core import person_resolver, tracker_entities
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(monkeypatch):
+    """Clean the process-lifetime git-config cache across tests, and stub
+    ``_resolve_repo_root`` to a fixed sentinel so these Tier-T tests never
+    spawn a real `git rev-parse` — repo-root-keying behaviour itself is
+    covered by the dedicated collision-regression test below, which
+    overrides this stub per-case."""
     person_resolver.reset_person_resolver_git_config_cache()
+    monkeypatch.setattr(person_resolver, "_resolve_repo_root", lambda: "/fixture/repo")
     yield
     person_resolver.reset_person_resolver_git_config_cache()
 
@@ -48,7 +55,7 @@ def _write_hosts_yml(home, user: str) -> None:
 
 
 def _patch_git_config(monkeypatch, values: dict[str, str]) -> None:
-    def _fake(key: str) -> str:
+    def _fake(key: str, cwd: str | None = None) -> str:
         return values.get(key, "")
 
     monkeypatch.setattr(person_resolver, "_git_config", _fake)
@@ -224,10 +231,52 @@ def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monk
         )
 
 
+def test_git_config_cache_is_keyed_on_repo_root_not_collided(tmp_path, monkeypatch):
+    """C7: the old cache keyed on ``key`` alone was a missing-key COLLISION
+    under a process serving two different repos — the first repo's
+    resolved `user.name` would leak into the second repo's resolution.
+    Stub ``_resolve_repo_root`` to return two distinct roots across two
+    calls (simulating a warm process's cwd changing between requests) with
+    two distinct display names; each root must resolve and cache its OWN
+    value."""
+    # Two roots, repeated: resolve_operating_person calls _resolve_repo_root
+    # twice per invocation (once via user.email, once via user.name), so
+    # each simulated "request" needs its root to repeat before advancing.
+    roots = iter(["/repo/one", "/repo/one", "/repo/two", "/repo/two"])
+    monkeypatch.setattr(person_resolver, "_resolve_repo_root", lambda: next(roots))
+
+    names = {"/repo/one": "Alice", "/repo/two": "Bob"}
+
+    def _fake(key: str, cwd: str | None = None) -> str:
+        if key == "user.name":
+            return names.get(cwd, "")
+        return ""
+
+    monkeypatch.setattr(person_resolver, "_git_config", _fake)
+
+    first = person_resolver.resolve_operating_person(home=tmp_path)
+    second = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert first["display"] == "Alice"
+    assert second["display"] == "Bob"
+
+
+def test_git_config_uncached_passes_cwd_through(monkeypatch):
+    captured = {}
+
+    def _fake_run(args, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return subprocess.CompletedProcess(args, 0, stdout="v\n", stderr="")
+
+    monkeypatch.setattr(person_resolver.subprocess, "run", _fake_run)
+    person_resolver._git_config_uncached("user.email", cwd="/some/repo")
+    assert captured["cwd"] == "/some/repo"
+
+
 def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
     calls = {"count": 0}
 
-    def _fake(key: str) -> str:
+    def _fake(key: str, cwd: str | None = None) -> str:
         calls["count"] += 1
         if key == "user.name":
             return "Display Fixture"

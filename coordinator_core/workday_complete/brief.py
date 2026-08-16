@@ -813,6 +813,14 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
+            # Action-class, explicitly decided (plan's C1b correction,
+            # premise-finding sidecar channel 3): the EM dispatches a Sonnet
+            # worker off this answer, with no directive and no gate --
+            # demoting it into narration would silence a real dispatch
+            # decision. `False`, not left unmarked, so this reads as a
+            # deliberate call rather than an oversight the census could
+            # otherwise flag.
+            reportable=False,
         ),
         build_judgment_point(
             {
@@ -837,6 +845,9 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
+            # Action-class, explicitly decided -- see jp_step4b_analyst_
+            # dispatch's comment above.
+            reportable=False,
         ),
         build_judgment_point(
             {
@@ -862,6 +873,9 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
+            # Action-class, explicitly decided -- see jp_step4b_analyst_
+            # dispatch's comment above.
+            reportable=False,
         ),
         build_judgment_point(
             {
@@ -889,6 +903,10 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=True,
             round_trip="terminal",
+            # Action-class, explicitly decided -- see jp_step4b_analyst_
+            # dispatch's comment above: answering this writes a health-
+            # ledger row directly, with no directive and no gate.
+            reportable=False,
         ),
     ]
     return points
@@ -903,6 +921,9 @@ def _reported_narration_suffix(reported_judgment_points: list[dict[str, Any]]) -
     folded into `narration` instead, so the EM still sees the fact without
     being asked to answer a question that cannot change anything. No
     envelope key is added for this -- `narration` is already free-form.
+    Returns `""` when `reported_judgment_points` is empty -- callers must
+    join conditionally (see `workweek_complete.brief._reported_narration`,
+    same shape).
     """
     if not reported_judgment_points:
         return ""
@@ -915,7 +936,7 @@ def _reported_narration_suffix(reported_judgment_points: list[dict[str, Any]]) -
             bit += f" -- {rationale}"
         reported_bits.append(bit)
     return (
-        f" {len(reported_judgment_points)} point(s) gate nothing on this run and are reported, "
+        f"{len(reported_judgment_points)} point(s) gate nothing on this run and are reported, "
         f"not asked: {'; '.join(reported_bits)}."
     )
 
@@ -1022,6 +1043,18 @@ def brief(
     except Exception as exc:  # noqa: BLE001 - never fail the ceremony
         return int(WorkdayExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
+    narration = (
+        "Step 2 (RAG staleness nudge) and Step 5 (plugin validation suite) "
+        "have no consumes-manifest CLI and are NOT represented as "
+        "directives[] entries; coordinator-queue-append IS a manifest "
+        "member but is invoked by the Step 4c strategic-observer dispatch, "
+        "not the assembler, so it is also never a directives[] entry — "
+        "see this module's negative-spec."
+    )
+    reported_narration_suffix = _reported_narration_suffix(reported_judgment_points)
+    if reported_narration_suffix:
+        narration = f"{narration} {reported_narration_suffix}"
+
     envelope = build_envelope(
         artifact={"kind": "ceremony", "name": "workday-complete"},
         preflight={"consumes_manifest": list(CONSUMES_MANIFEST)},
@@ -1029,15 +1062,7 @@ def brief(
         directives=directives,
         judgment_points=judgment_points,
         decisions=decisions if decisions is not None else {},
-        narration=(
-            "Step 2 (RAG staleness nudge) and Step 5 (plugin validation suite) "
-            "have no consumes-manifest CLI and are NOT represented as "
-            "directives[] entries; coordinator-queue-append IS a manifest "
-            "member but is invoked by the Step 4c strategic-observer dispatch, "
-            "not the assembler, so it is also never a directives[] entry — "
-            "see this module's negative-spec."
-        )
-        + _reported_narration_suffix(reported_judgment_points),
+        narration=narration,
         next_move="resolve open judgment_points, then dispatch apply()",
     )
     emit(envelope)

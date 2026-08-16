@@ -3772,7 +3772,8 @@ def compute_claim_grant(
         if not holder_sid:
             return base
         evidence = _holder_evidence(
-            holder_sid, repo_root, scope=fm.get("scope"), want_activity=True
+            holder_sid, repo_root, scope=fm.get("scope"),
+            artifact_path=str(repo_root / artifact_path), want_activity=True,
         )
         # `base`'s caller-computed fields (notably `held_by_self`, `verdict`)
         # must always win over `holder_evidence()`'s fields -- merge order is
@@ -3849,7 +3850,8 @@ def compute_claim_grant(
                 }
             )
         evidence = _holder_evidence(
-            holder_sid, repo_root, scope=fm.get("scope"), want_activity=True
+            holder_sid, repo_root, scope=fm.get("scope"),
+            artifact_path=str(repo_root / artifact_path), want_activity=True,
         )
         # Same base-wins-over-evidence merge order as `_with_evidence` above
         # -- a future `holder_evidence()` key sharing a name (e.g.
@@ -5072,7 +5074,8 @@ def compute_competing_claim(
                 full_evidence = full_evidence_by_sid[holder_sid]
             elif activity_calls_used < _ACTIVITY_CANDIDATE_CAP:
                 full_evidence = _holder_evidence(
-                    holder_sid, repo_root, scope=self_scope, want_activity=True
+                    holder_sid, repo_root, scope=self_scope,
+                    artifact_path=str(repo_root / artifact_path), want_activity=True,
                 )
                 full_evidence_by_sid[holder_sid] = full_evidence
                 activity_calls_used += 1
@@ -6455,13 +6458,6 @@ def build_memo_directives(
 #: quality — see `build_untrusted_gate_judgment_point`.
 _NULL_RECOMMENDATION_REASONS = frozenset({"insufficient-evidence", "recommendation-forbidden"})
 
-#: `recommendation` carries exactly these two fields when non-null.
-#: `confidence` was considered and dropped from the schema entirely (the Director of Engineering
-#: review F10) — the least-checkable token in the surface, with no consumer
-#: that may act on it (AC5d already forbids the one automated reader that
-#: would).
-_RECOMMENDATION_FIELDS = frozenset({"disposition", "rationale"})
-
 
 def build_judgment_point(
     id: str,
@@ -6490,8 +6486,11 @@ def build_judgment_point(
     engine-computed judgment point that recognizes it cannot narrow a call
     is a different thing from one structurally barred from trying, and both
     read differently to the EM resolving it. A non-null `recommendation`
-    carries only `disposition`/`rationale` — no `confidence` (see
-    `_RECOMMENDATION_FIELDS`).
+    carries only `disposition`/`rationale` — no `confidence` (dropped from
+    the schema entirely, the Director of Engineering review F10: the least-checkable token in the
+    surface, with no consumer that may act on it — AC5d already forbids the
+    one automated reader that would). The shared seam below is what
+    enforces this shape; this module carries no field-set copy of its own.
 
     For evidence sourced from branch-writable content this engine did not
     itself compute (a memo/handoff body quoted verbatim into `evidence`),
@@ -6502,9 +6501,10 @@ def build_judgment_point(
     Composes `contract/decision_object/judgment.py::build_judgment_point`
     (the shared seam) for the actual dict construction and the
     `{disposition, rationale}`-shape/extra-field check on a non-null
-    `recommendation` (`_RECOMMENDATION_FIELDS` there is the same set as
-    this module's own) -- this wrapper keeps only the `reason`-enum check
-    the shared seam has no vocabulary for (2026-08-15 judgment-points plan,
+    `recommendation` (that seam's own `_RECOMMENDATION_FIELDS` is the sole
+    copy now — this wrapper does not duplicate it) -- this wrapper keeps
+    only the `reason`-enum check the shared seam has no vocabulary for
+    (2026-08-15 judgment-points plan,
     C6: brings this module's fork under the same census as every other
     assembler rather than leaving it duplicated).
     """
@@ -6905,8 +6905,9 @@ def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
 #: and defeat this judgment point's `recommendation=None`,
 #: `reason="insufficient-evidence"` (see `build_kind_dispatch_judgment_point`
 #: below, unchanged by this addition — guidance rides on the disposition
-#: entries, never on a `recommendation` object, which per
-#: `_RECOMMENDATION_FIELDS` carries only `disposition`/`rationale`).
+#: entries, never on a `recommendation` object, which the shared seam
+#: (`contract/decision_object/judgment.py`) restricts to
+#: `disposition`/`rationale` only).
 _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
     "ask": [
         {

@@ -23,7 +23,14 @@ launches THIS file, not merely that some `.cmd` exists.
 
 Test coverage:
   T1 .cmd sibling exists, co-located with the entrypoint
-  T2 line-1 shebang is `#!/usr/bin/env python3`
+  T2 line-1 is the retired-shebang marker comment left by C4 (2026-08-13,
+     "strip shebang and exec bit from 312 coordinator/bin/*.py entrypoints"
+     — itself downstream of the 2026-07-28 POSIX-EXEC-ASSUMPTION-GUARD PM
+     ruling that retired `gen-launcher-shim.py --ensure-unix`). This
+     assertion originally required a literal `#!/usr/bin/env python3`
+     shebang; that shape was superseded repo-wide by C4, which postdates
+     this test file (2026-07-25) — updated here to track the current
+     convention rather than assert a shape the codebase no longer carries.
   T3 the `.cmd` body invokes THIS entrypoint's filename (parity of
      behaviour, not merely of file existence)
 """
@@ -57,12 +64,20 @@ class CrossPlatformParityTests(unittest.TestCase):
         )
 
     def test_shebang_is_python3(self):
+        # C4 (2026-08-13) stripped the literal `#!/usr/bin/env python3`
+        # shebang from all 312 coordinator/bin/*.py entrypoints, per the
+        # 2026-07-28 POSIX-EXEC-ASSUMPTION-GUARD PM ruling that retired
+        # gen-launcher-shim.py --ensure-unix — exec_cli() no longer relies
+        # on a shebang or exec bit at all. Line 1 is now the retired-mode
+        # marker comment C4 left in its place.
         with open(_CLI, encoding="utf-8") as fh:
             first_line = fh.readline().rstrip("\n")
-        self.assertEqual(
-            first_line,
-            "#!/usr/bin/env python3",
-            "line-1 shebang must be the DR-076 python3 shape",
+        self.assertTrue(
+            first_line.startswith("# Unix shebang")
+            and "retired 2026-07-28" in first_line
+            and "POSIX-EXEC-ASSUMPTION-GUARD" in first_line,
+            "line-1 must be the C4 retired-shebang marker comment "
+            f"(POSIX-EXEC-ASSUMPTION-GUARD, 2026-07-28); got: {first_line!r}",
         )
 
     def test_cmd_invokes_same_entrypoint(self):

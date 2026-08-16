@@ -2629,6 +2629,22 @@ def _write_holder_meta(repo: Path, sid: str, meta: dict) -> Path:
     return sdir
 
 
+def _write_touched(repo: Path, sid: str, lines: list[str]) -> Path:
+    """Writes `<sessions-dir>/<sid>/touched.txt` — the claim_index substrate
+    `_claim_scope_overlap` now joins against, replacing this test class's
+    old transcript-`recent_paths` fixtures. Line format mirrors
+    `coordinator_core/session/tests/test_claim_neighbours.py`'s own
+    `_touch_line` helper: `"<verb> <iso-ts> <path>"`."""
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "touched.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return sdir
+
+
+def _touch_line(verb: str, path: str, when: str = "2026-08-16T10:00:00.000000Z") -> str:
+    return f"{verb} {when} {path}"
+
+
 def _write_transcript(user_claude: Path, sid: str, records: list) -> Path:
     proj_dir = user_claude / "projects" / "-fake-project"
     proj_dir.mkdir(parents=True, exist_ok=True)
@@ -2870,7 +2886,14 @@ class TestHolderEvidence:
         assert grant["verdict"] == "denied"
         assert grant["holder_live"] is True
 
-    def test_transcript_unreadable_or_absent_yields_unavailable(self, tmp_path, monkeypatch):
+    def test_no_touched_claim_yields_scope_overlap_false_not_none(self, tmp_path, monkeypatch):
+        """`recent_paths`/`scope_overlap` are decoupled post-C3 (previously
+        both had to be non-empty, or `scope_overlap` fell back to `None`
+        purely because the transcript was missing — see module docstring).
+        No transcript AND a genuinely resolved-but-unclaimed `scope` must
+        read `recent_paths` unavailable (transcript-derived, unaffected)
+        alongside `scope_overlap: False` (claim-derived, resolved-empty
+        claimant set), never `None` for either reason alone."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _write_holder_meta(repo, "s-no-transcript", {"pid": "1", "last_activity": pa._session_core.now_iso()})
@@ -2879,56 +2902,128 @@ class TestHolderEvidence:
         from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
 
         evidence = holder_evidence(
-            "s-no-transcript", repo, scope=["state/handoffs"], want_activity=True
+            "s-no-transcript", repo, scope=["state/handoffs/touched.md"], want_activity=True
         )
 
         assert evidence["recent_paths"] == []
         assert evidence["recent_paths_source"] == "unavailable"
-        assert evidence["scope_overlap"] is None
+        assert evidence["scope_overlap"] is False
 
-    def test_transcript_scope_overlap_true_and_false(self, tmp_path, monkeypatch):
+    def test_claim_derived_scope_overlap_true_and_false(self, tmp_path, monkeypatch):
+        """AC3 — `scope_overlap` now joins `scope` against `claim_index.
+        lookup()` (what a holder has actually CLAIMED, via `touched.txt`),
+        not the holder's transcript `recent_paths` — this is the exact
+        substrate swap that pins today's fix would have caught (pre-C3,
+        BOTH of the fixtures below returned `scope_overlap: None`, since
+        transcript activity is now irrelevant to this field: the old code
+        required a transcript AND a scope overlap, and this test writes no
+        transcript at all)."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _write_holder_meta(repo, "s-scoped", {"pid": "1", "last_activity": pa._session_core.now_iso()})
-        fake_home = tmp_path / "fake-home-scoped"
-        monkeypatch.setenv("HOME", str(fake_home))
-        user_claude = fake_home / ".claude"
-
-        overlap_path = str(repo / "state" / "handoffs" / "touched.md")
-        _write_transcript(
-            user_claude,
-            "s-scoped",
-            [
-                _tool_use_record("Edit", {"file_path": overlap_path}),
-            ],
-        )
+        _write_touched(repo, "s-scoped", [_touch_line("T", "state/handoffs/touched.md")])
 
         from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
 
         evidence = holder_evidence(
-            "s-scoped", repo, scope=["state/handoffs"], want_activity=True
+            "s-scoped", repo, scope=["state/handoffs/touched.md"], want_activity=True
         )
 
-        assert evidence["recent_paths_source"] == "transcript"
-        assert evidence["recent_paths"] == ["state/handoffs/touched.md"]
         assert evidence["scope_overlap"] is True
 
         _write_holder_meta(repo, "s-unrelated", {"pid": "1", "last_activity": pa._session_core.now_iso()})
-        unrelated_path = str(repo / "coordinator_core" / "unrelated.py")
-        _write_transcript(
-            user_claude,
-            "s-unrelated",
-            [
-                _tool_use_record("Edit", {"file_path": unrelated_path}),
-            ],
-        )
+        _write_touched(repo, "s-unrelated", [_touch_line("T", "coordinator_core/unrelated.py")])
 
         evidence_unrelated = holder_evidence(
-            "s-unrelated", repo, scope=["state/handoffs"], want_activity=True
+            "s-unrelated", repo, scope=["state/handoffs/touched.md"], want_activity=True
         )
 
-        assert evidence_unrelated["recent_paths"] == ["coordinator_core/unrelated.py"]
         assert evidence_unrelated["scope_overlap"] is False
+
+    def test_scope_none_is_unresolvable_scope_empty_list_is_resolved_false(self, tmp_path):
+        """The either-side-empty-collapses-to-`None` bug this re-point
+        fixes (module docstring): `scope is None` (no scope resolved at
+        all — the pre-bridge handoff case) stays the genuine unresolvable
+        `None`, but `scope == []` (an artifact that explicitly resolved to
+        an empty file set) is RESOLVED, just with nothing to overlap —
+        deterministically `False`, never `None`."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _write_holder_meta(repo, "s-any", {"pid": "1", "last_activity": pa._session_core.now_iso()})
+
+        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+
+        unresolvable = holder_evidence("s-any", repo, scope=None, want_activity=True)
+        assert unresolvable["scope_overlap"] is None
+
+        resolved_empty = holder_evidence("s-any", repo, scope=[], want_activity=True)
+        assert resolved_empty["scope_overlap"] is False
+
+    def test_artifact_path_bridges_a_handoff_via_deliverable_id(self, tmp_path, monkeypatch):
+        """AC2 via holder_evidence's `artifact_path` shape: a handoff
+        declares no `scope:` of its own — the caller passing `artifact_path`
+        (its own claimed handoff) routes `scope_overlap` through
+        `claim_neighbours.find_neighbours()`, which bridges via
+        `deliverable_id` to the plan carrying the same id and uses THAT
+        plan's `scope:`. This is the exact case that read `None` for every
+        handoff before C3 (module docstring) — a live claimant of the
+        bridged path now reads `True`."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        plan_dir = repo / "docs" / "plans"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "bridge-plan.md").write_text(
+            "---\n"
+            "title: bridge plan\n"
+            "deliverable_id: dlv-shared-thing-abc123\n"
+            "scope:\n"
+            "  - state/handoffs/touched.md\n"
+            "---\n\n# Plan\n",
+            encoding="utf-8",
+        )
+        handoff_path = _seed_handoff_with_fields(
+            repo, "bridge-handoff.md", 'deliverable_id: "dlv-shared-thing-abc123"\n'
+        )
+        _write_holder_meta(repo, "peer-sid", {"pid": "1", "last_activity": pa._session_core.now_iso()})
+        _write_touched(repo, "peer-sid", [_touch_line("T", "state/handoffs/touched.md")])
+
+        from coordinator_core.pickup_assemble import holder_evidence as he_mod
+
+        monkeypatch.setattr(
+            he_mod.claim_neighbours.liveness, "session_live",
+            lambda sid, cwd=None: sid == "peer-sid",
+        )
+
+        evidence = he_mod.holder_evidence(
+            "peer-sid",
+            repo,
+            artifact_path=str(handoff_path),
+            caller_sid="my-own-sid",
+            want_activity=True,
+        )
+
+        assert evidence["scope_overlap"] is True
+
+    def test_artifact_path_with_no_bridge_is_unresolvable(self, tmp_path):
+        """AC2's negative case: a handoff whose `deliverable_id` matches no
+        plan's is UNRESOLVABLE (`claim_neighbours.UNRESOLVABLE`) — this must
+        surface as `scope_overlap: None`, never a silently-wrong `False`
+        that would read as "checked, nobody there" (module docstring's
+        conflation this re-point exists to close)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        handoff_path = _seed_handoff_with_fields(
+            repo, "orphan-handoff.md", 'deliverable_id: "dlv-nobody-claims-this-999999"\n'
+        )
+        _write_holder_meta(repo, "peer-sid", {"pid": "1", "last_activity": pa._session_core.now_iso()})
+
+        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+
+        evidence = holder_evidence(
+            "peer-sid", repo, artifact_path=str(handoff_path), want_activity=True
+        )
+
+        assert evidence["scope_overlap"] is None
 
 
 class TestCompetingClaimEvidenceCap:
@@ -4623,6 +4718,11 @@ class TestCompetingClaim:
         }
         # `handover` is an activity-eligible disposition (want_activity=True)
         # — the extra evidence keys are present even with no real meta.json.
+        # This fixture writes NO session dir for "predecessor-sid" at all, so
+        # `holder_evidence()` returns its all-`None` default before ever
+        # reaching `_claim_scope_overlap` (the "no session dir" early-return,
+        # unchanged by C3) — `None` here is a genuine evidence gap, not the
+        # either-side-empty bug C3 fixes. Left exactly as it pinned before.
         assert candidate["recent_paths"] == []
         assert candidate["recent_paths_source"] == "unavailable"
         assert candidate["scope_overlap"] is None

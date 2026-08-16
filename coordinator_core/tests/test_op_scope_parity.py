@@ -109,7 +109,7 @@ def test_token_readers_in_dunder_all():
 
 def test_known_scoped_ops_in_worktree_scoped_ops():
     """Known worktree-scoped ops must be members of WORKTREE_SCOPED_OPS."""
-    assert "coverage.gate" in WORKTREE_SCOPED_OPS
+    assert "ci.run_pip_audit" in WORKTREE_SCOPED_OPS
     assert "handoff.has_live_children" in WORKTREE_SCOPED_OPS
     assert "hooks.nudge_foreground_agent_dispatch" in WORKTREE_SCOPED_OPS
     assert "hooks.nudge_em_code_dispatch" in WORKTREE_SCOPED_OPS
@@ -171,6 +171,99 @@ def _dr_279_enumerated_ops() -> frozenset[str]:
     match = re.search(r"## Blast radius.*?```\n(.*?)```", text, re.DOTALL)
     assert match, "DR-279's blast-radius fenced code block not found — doc structure changed"
     return frozenset(match.group(1).split())
+
+
+# ---------------------------------------------------------------------------
+# Stale-row consistency gate (2026-08-16, K-005 chain_ancestry_waivers.reap
+# cleanup) — every _OP_KEY_SCOPE key must resolve to a REGISTERED op.
+# ---------------------------------------------------------------------------
+
+# Deliberately-reserved keys with no corresponding registered op. Add an entry
+# here — with a comment naming why — rather than loosening the assertion below.
+#
+# coverage.gate / coverage.halt_on_uncovered: BOTH ops' owning module
+# (coordinator_core/ops/coverage_gate.py) was deleted by K-001
+# (state/kill-ledger.md) — genuinely dead, same class as the
+# chain_ancestry_waivers.reap row this test exists to catch. NOT removed from
+# _OP_KEY_SCOPE here because a DIFFERENT checked-in test,
+# coordinator_core/tests/test_op_classification_manifest.py::
+# test_manifest_op_keys_resolve_in_the_scope_table, asserts every op-key cell
+# in the historical audit manifest
+# (state/audits/2026-07-22-command-payload-inventory/op-classification.tsv)
+# resolves in _OP_KEY_SCOPE — and that manifest's row 25 still cites
+# "coverage.halt_on_uncovered" as its op-key. Removing these two rows makes
+# THAT test fail (verified: it passes at the pre-this-change merge-base and
+# fails only after the removal). Reconciling the audit manifest itself is a
+# separate, out-of-scope decision (whether/how to retire a historical audit
+# artifact's row) — flagged to the dispatching EM rather than resolved here.
+_SCOPE_TABLE_ALLOWLIST: frozenset[str] = frozenset(
+    {"coverage.gate", "coverage.halt_on_uncovered"}
+)
+
+
+def test_every_scope_table_key_resolves_to_a_registered_op():
+    """Every key in _OP_KEY_SCOPE must name an op that actually exists in the
+    live op registry (_REGISTRY, populated by eagerly importing
+    coordinator_core.ops).
+
+    This is the gate `find_import_closure_violations` cannot provide:
+    _OP_KEY_SCOPE is a plain dict literal, not an import, so a stale row
+    (an op whose owning module was deleted, e.g. K-005's
+    "chain_ancestry_waivers.reap" pointing at the deleted
+    coordinator_core/ops/reap_chain_ancestry_waivers.py) is invisible to any
+    import-shaped check. This test derives BOTH sides from live code —
+    _OP_KEY_SCOPE's own keys vs. _REGISTRY's own keys after a full eager
+    import — rather than hardcoding either set, so a new stale row (not just
+    today's) fails it too.
+
+    Blind spots (state explicitly, not implied by a clean run):
+      - _REGISTRY is populated by `import coordinator_core.ops`, which is
+        coordinator_core.ops.__init__.py's UNCONDITIONAL default path. If a
+        future op module is added to _EAGER_OP_MODULES but its import raises
+        (see _POISONED_MODULES in that package's __init__.py), the failing
+        module's ops silently do not register, and this test would then
+        report a false positive "stale row" for a genuinely-live op whose
+        import merely errored — that failure mode is a REAL registration
+        bug this test cannot distinguish from an actually-deleted op.
+      - Any op that registers ONLY under the lazy per-op channel
+        (coordinator_core.ops._registry_map.OP_MODULE_MAP) via a code path
+        this test never exercises (it never arms lazy mode) is still covered
+        here, because the package-init default path this test uses eagerly
+        imports every module in _EAGER_OP_MODULES regardless of lazy state —
+        but an op registered by a module that is NOT listed in
+        _EAGER_OP_MODULES at all would be invisible to both this test and to
+        production's eager-import default; that is a distinct, pre-existing
+        gap this test does not newly create or claim to close.
+    """
+    import coordinator_core.ops  # noqa: F401  (eager import populates _REGISTRY)
+    from coordinator_core.ipc import _REGISTRY, _OP_KEY_SCOPE
+
+    scope_keys = frozenset(_OP_KEY_SCOPE.keys())
+    registered = frozenset(_REGISTRY.keys())
+    stale = (scope_keys - registered) - _SCOPE_TABLE_ALLOWLIST
+    assert not stale, (
+        "op_scopes.py::_OP_KEY_SCOPE has row(s) for op(s) not in the live "
+        f"registry (owning module likely deleted): {sorted(stale)}\n"
+        "Either the op's module was removed and this row is stale (delete "
+        "it), or it is a deliberately-reserved key (add it to "
+        "_SCOPE_TABLE_ALLOWLIST above with a comment naming why)."
+    )
+
+
+# Converse direction (every registered op has a scope row) is INTENTIONALLY
+# NOT asserted here: op_scopes.py's own module docstring documents that the
+# absent-entry default ("none") is a valid, deliberate classification for
+# unclassified/test-only ops — the docstring's own words are "Default for an
+# op NOT in this table: 'none' ... All production ops are listed explicitly;
+# a missing entry is an oversight, not a silent promotion to
+# working-tree-scoped". Enforcing raw membership both ways would make every
+# newly-registered op fail this test at REGISTRATION time (before its author
+# has had a chance to classify it), which is a worse failure mode than the
+# one this gate exists to close — the stale-row direction above is the one
+# with no legitimate exception; the missing-row direction has one
+# (unclassified/test-only ops), so it stays advisory (existing coverage:
+# test_op_classification_manifest.py / the registration-quad check already
+# audit new-op completeness at review time, not import time).
 
 
 def test_dr_279_blast_radius_table_matches_live_registry():

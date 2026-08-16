@@ -228,6 +228,27 @@ def test_eol_phantom_not_flagged_exits_zero(tmp_path, isolated_plugin_root, caps
     assert rc == 0
 
 
+def test_unattributable_non_ascii_path_case_c_exits_three(tmp_path, isolated_plugin_root, capsys):
+    """Regression: `core.quotepath` at git's DEFAULT (true) C-quotes a
+    non-ASCII path, and in a diff header the quotes wrap the WHOLE `"b/
+    <path>"` token — a naive `+++ b/` prefix match never sees the path, so
+    it never enters the batched phantom-filter's `changed` set, and a
+    genuinely-dirty file is misread as `path not in diff_paths` -> phantom
+    -> skipped. Fail-OPEN: a should-be-case-(c) file silently let through,
+    this module's own named worst case. Guards `_diff_changed_paths` and
+    `main()`'s `git status --porcelain` call both passing
+    `-c core.quotepath=false` so path form agrees on both sides."""
+    repo = _make_repo(tmp_path, "t7")
+    (repo / "mä.txt").write_text("original\n")
+    _git(repo, "add", "mä.txt")
+    _git(repo, "commit", "-q", "-m", "add non-ascii tracked file")
+    (repo / "mä.txt").write_text("modified by unknown session\n")
+
+    rc, out = _run_gate(repo, "--terminator", "test", capsys=capsys)
+    assert rc == 3
+    assert "mä.txt" in out
+
+
 def test_missing_terminator_exits_two(tmp_path, isolated_plugin_root, capsys):
     repo = _make_repo(tmp_path, "t6")
     rc, out = _run_gate(repo, capsys=capsys)

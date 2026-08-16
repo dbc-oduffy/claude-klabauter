@@ -1088,3 +1088,170 @@ def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_e2e(tmp_path, capsys
     assert split is not None
     assert read_fm_field_unquoted(split.fm_text, "shipped_in") is None
     assert read_fm_field_unquoted(split.fm_text, "deployment_state") == "ready_to_fire"
+
+
+# ---------------------------------------------------------------------------
+# stamp-reopened (implemented -> landed, 2026-08-16, PM-authorized directly)
+# ---------------------------------------------------------------------------
+
+_OPEN_SPINE_FENCE = (
+    "## Tasks\n\n"
+    "```yaml plan-tasks\n"
+    "- id: C1\n"
+    "  title: First\n"
+    "  change_kind: code-edit\n"
+    "  surface: foo.py\n"
+    "  disposition: open\n"
+    "```\n\n"
+)
+
+_CLOSED_SPINE_FENCE = (
+    "## Tasks\n\n"
+    "```yaml plan-tasks\n"
+    "- id: C1\n"
+    "  title: First\n"
+    "  change_kind: code-edit\n"
+    "  surface: foo.py\n"
+    "  disposition: coded\n"
+    "```\n\n"
+)
+
+
+def test_stamp_reopened_happy_path(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "reopen-sid")
+    body = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
+    p = _write(tmp_path, "p.md", body)
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "spine still has C1 open"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'status "implemented" → landed' in out
+    assert "reopen-sid" in out
+    assert "spine still has C1 open" in out
+    text = p.read_text(encoding="utf-8")
+    split = split_frontmatter(text)
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "status") == "landed"
+    assert read_fm_field_unquoted(split.fm_text, "reopened_by") == "reopen-sid"
+    assert read_fm_field_unquoted(split.fm_text, "reopened_reason") == "spine still has C1 open"
+    assert read_fm_field_unquoted(split.fm_text, "reopened_at") is not None
+
+
+def test_stamp_reopened_refuses_without_open_spine_row(tmp_path, capsys):
+    original = f"---\ntitle: T\nstatus: implemented\n---\n\n{_CLOSED_SPINE_FENCE}Body.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "caller thinks it's wrong"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no open row" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_reopened_refuses_when_no_spine_fence_at_all(tmp_path, capsys):
+    original = "---\ntitle: T\nstatus: implemented\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "caller thinks it's wrong"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no open row" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_reopened_refuses_non_implemented_status(tmp_path, capsys):
+    original = f"---\ntitle: T\nstatus: draft\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "not implemented anyway"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "not \"implemented\"" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_reopened_requires_reason(tmp_path, capsys):
+    original = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-reopened", "--plan", str(p)])
+    assert rc == 1
+    assert "requires --reason" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_reopened_rejects_blank_reason(tmp_path, capsys):
+    original = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "   "])
+    assert rc == 1
+    assert "requires --reason" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_reopened_reports_cascade_inconsistency(tmp_path, capsys):
+    deliverable_id = "dlv-reopen-cascade-000001"
+    (tmp_path / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    _write(
+        tmp_path,
+        "state/handoffs/20260101-h.md",
+        (
+            "---\n"
+            'title: "Advanced handoff"\n'
+            "status: open\n"
+            "deployment_state: ready_to_fire\n"
+            f"deliverable_id: {deliverable_id}\n"
+            "---\n\nBody.\n"
+        ),
+    )
+    p = _write(
+        tmp_path,
+        "docs/plans/2026-01-01-plan.md",
+        (
+            "---\ntitle: T\nstatus: implemented\n"
+            f"deliverable_id: {deliverable_id}\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
+        ),
+    )
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "spine still has C1 open"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "governs this plan" in err
+    assert "ready_to_fire" in err
+    # advisory only — the handoff itself is never touched
+    handoff_text = (tmp_path / "state" / "handoffs" / "20260101-h.md").read_text(encoding="utf-8")
+    assert "deployment_state: ready_to_fire" in handoff_text
+
+
+def test_stamp_implemented_rejects_reason_flag(tmp_path, capsys):
+    original = "---\nstatus: draft\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-implemented", "--plan", str(p), "--reason", "nope"])
+    assert rc == 1
+    assert "does not accept --reason" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_superseded_rejects_reason_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
+    successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
+    rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor), "--reason", "nope"])
+    assert rc == 1
+    assert "does not accept --reason" in capsys.readouterr().err
+
+
+def test_stamp_reopened_rejects_by_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", f"---\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n")
+    rc = main(["stamp-reopened", "--plan", str(p), "--reason", "x", "--by", "some-plan.md"])
+    assert rc == 1
+    assert "does not accept --by" in capsys.readouterr().err
+
+
+def test_stamp_reopened_rejects_override_reason_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", f"---\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n")
+    rc = main(
+        ["stamp-reopened", "--plan", str(p), "--reason", "x", "--override-reason", "y"]
+    )
+    assert rc == 1
+    assert "does not accept --override-reason" in capsys.readouterr().err
+
+
+def test_unknown_verb_message_lists_stamp_reopened(capsys):
+    rc = main(["bogus-verb"])
+    assert rc == 1
+    assert "stamp-reopened" in capsys.readouterr().err

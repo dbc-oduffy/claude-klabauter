@@ -482,16 +482,10 @@ def _machine_local_repos_keys() -> list[str]:
 
 def _current_repo_root() -> str | None:
     """Return the git repo root of the cwd, or None if not inside a git repo."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True,
-        )
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
+    _ensure_engine_on_path()
+    from coordinator_core.git.repo_root import show_toplevel
+
+    return show_toplevel()
 
 
 def _stamp_completion_scaffold_liveness(repo_root: str | None) -> None:

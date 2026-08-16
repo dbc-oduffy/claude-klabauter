@@ -89,13 +89,27 @@ def test_doe_root_strips_empty_env():
 
 
 def test_doe_root_raises_when_unresolvable():
-    """doe_root() raises _DoeUnresolvable when neither env nor machine-local resolve."""
+    """doe_root() raises _DoeUnresolvable when neither env nor machine-local resolve.
+
+    Also stubs the codename-free pointer/marketplace-cache/flat-layout rungs
+    to "" — on a box with a real `.doe-root` pointer configured (e.g. this
+    dev machine, which resolves `_mp_doe_root_pointer_rung()` to a real
+    DoE-claude checkout), clearing only DOE_ROOT/REPO_DOE_CLAUDE and
+    _registry_machine_local_get leaves those filesystem-probing rungs live,
+    so "unresolvable" was not actually achievable and the test passed only
+    on a machine without that pointer configured. Mirrors
+    test_coordinator_registry.py::_clear_doe_root_env's isolation pattern.
+    """
     env_without_doe = {
-        k: v for k, v in os.environ.items() if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE")
+        k: v for k, v in os.environ.items()
+        if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE", "CLAUDE_PLUGIN_ROOT")
     }
     with (
         unittest.mock.patch.dict(os.environ, env_without_doe, clear=True),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value=None),
+        unittest.mock.patch.object(_reg, "_mp_doe_root_pointer_rung", return_value=""),
+        unittest.mock.patch.object(_reg, "_mp_marketplace_cache_rung", return_value=""),
+        unittest.mock.patch.object(_reg, "_mp_flat_layout_probe_rung", return_value=""),
     ):
         try:
             _reg.doe_root()
@@ -130,12 +144,22 @@ def test_outbox_root_env_override_wins():
 
 
 def test_outbox_root_raises_doe_unresolvable():
-    """_outbox_root() propagates _DoeUnresolvable when doe_root() cannot resolve."""
+    """_outbox_root() propagates _DoeUnresolvable when doe_root() cannot resolve.
+
+    See test_doe_root_raises_when_unresolvable's docstring — the
+    codename-free pointer/marketplace-cache/flat-layout rungs must also be
+    stubbed to "" so a real on-box `.doe-root` pointer doesn't make
+    "unresolvable" unreachable.
+    """
     env_clean = {k: v for k, v in os.environ.items()
-                 if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE", "LESSON_PROMOTE_OUTBOX_ROOT")}
+                 if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE", "LESSON_PROMOTE_OUTBOX_ROOT",
+                               "CLAUDE_PLUGIN_ROOT")}
     with (
         unittest.mock.patch.dict(os.environ, env_clean, clear=True),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value=None),
+        unittest.mock.patch.object(_reg, "_mp_doe_root_pointer_rung", return_value=""),
+        unittest.mock.patch.object(_reg, "_mp_marketplace_cache_rung", return_value=""),
+        unittest.mock.patch.object(_reg, "_mp_flat_layout_probe_rung", return_value=""),
     ):
         try:
             _lesson_cli._outbox_root()

@@ -530,7 +530,7 @@ def _dispatch_coordinator_tasks_mirror(args: list[str], repo_root: Path) -> dict
         raise UnrecognizedDirective("coordinator-tasks-mirror init: expected 2 arguments")
     basename, assertion = args[1], args[2]
     basename = _reject_path_traversal(basename, label="coordinator-tasks-mirror basename")
-    session_id = os.environ.get("COORDINATOR_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID")
+    session_id = _session_id_in_scope()
     if not session_id:
         raise NoResolvableSessionId("coordinator-tasks-mirror init: no session id in scope")
     module = _load_tasks_mirror_module()
@@ -667,6 +667,38 @@ def _session_identity(session_id: str):
     plain function returning its context manager is `with`-usable
     unchanged."""
     return apply_base.session_identity(session_id, env_vars=_SESSION_ENV_VARS)
+
+
+def _session_id_in_scope() -> Optional[str]:
+    """The id an IN-PROCESS directive handler must resolve identity from.
+
+    NEGATIVE SPEC — do not reduce this to an `os.environ` read. Since chunk
+    C6, `apply_base.session_identity` scopes the id into a `contextvars`
+    ContextVar and NEVER into `os.environ`, precisely so two overlapping
+    warm dispatches cannot overwrite each other's ambient identity. A
+    handler that reads `os.environ` directly therefore no longer sees the
+    id `_apply` resolved and entered the scope with — it sees whatever the
+    launch environment happened to carry, which is either nothing (raising
+    `NoResolvableSessionId` on a session that has a perfectly good id) or,
+    worse, a DIFFERENT session's id read as this one's.
+
+    The `os.environ` fallback is retained only for a caller that never
+    entered `_session_identity()` at all, where the launch environment IS
+    the correct source.
+
+    Spec backlink: `docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md`
+    chunk C6.
+    """
+    scoped = apply_base.current_session_env(env_vars=_SESSION_ENV_VARS)
+    for var in _SESSION_ENV_VARS:
+        val = (scoped.get(var) or "").strip()
+        if val:
+            return val
+    for var in _SESSION_ENV_VARS:
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val
+    return None
 
 
 class _UnresolvableArtifactClass(Exception):

@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.repo_root import show_toplevel
 
 _PROG = "query-session-hierarchy.sh"
 
@@ -104,20 +105,7 @@ def _engine_worktree_root() -> Optional[Path]:
     git is unavailable or this file's directory is not inside a git repo.
     """
     engine_dir = Path(__file__).resolve().parent
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(engine_dir), "rev-parse", "--path-format=absolute", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            **no_console_creationflags(),
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
-        print(f"skip: _engine_worktree_root: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    out = result.stdout.strip()
+    out = show_toplevel(str(engine_dir))
     if not out:
         return None
     return Path(out)

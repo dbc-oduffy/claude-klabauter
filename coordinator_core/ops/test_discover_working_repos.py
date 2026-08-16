@@ -371,6 +371,45 @@ class TestTierB:
         assert str(repo) in out
 
 
+class TestTierA5EnvOverride:
+    """Review: code-reviewer (F1, P1) — `_merged_flat_registry` only merges
+    the two registry TOML files and never consulted the per-key
+    `MACHINE_LOCAL_<KEY>` env override rung that `machine_resolver.
+    registry_get` honors, a silent behaviour loss vs. the old `machine-local
+    get <key>` call site. Pins that `_tier_a5` now honors the override."""
+
+    def test_env_override_redirects_a_discovered_repo(self, tmp_path: Path, monkeypatch):
+        import coordinator_core.ops.discover_working_repos as m
+
+        registered = tmp_path / "dev" / "registered-repo"
+        _init_git_repo(registered)
+        overridden = tmp_path / "dev" / "overridden-repo"
+        _init_git_repo(overridden)
+
+        reg_dir = tmp_path / "machine-local"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "registry.toml").write_text(f'"repos.sibling" = "{registered.as_posix()}"\n')
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+        monkeypatch.setenv("MACHINE_LOCAL_REPOS_SIBLING", str(overridden))
+
+        out = m._tier_a5()
+        assert out == [str(overridden)]
+
+    def test_no_override_uses_registry_value(self, tmp_path: Path, monkeypatch):
+        import coordinator_core.ops.discover_working_repos as m
+
+        registered = tmp_path / "dev" / "registered-repo"
+        _init_git_repo(registered)
+
+        reg_dir = tmp_path / "machine-local"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "registry.toml").write_text(f'"repos.sibling" = "{registered.as_posix()}"\n')
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+        out = m._tier_a5()
+        assert out == [registered.as_posix()]
+
+
 class TestMainNeverBlocks:
     def test_all_tiers_empty_exits_zero_no_stdout(self, tmp_path: Path, monkeypatch, capsys):
         monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.claude/projects
@@ -381,7 +420,7 @@ class TestMainNeverBlocks:
         import coordinator_core.ops.discover_working_repos as m
 
         monkeypatch.setattr(m, "_TIER_B_CANDIDATES", [str(tmp_path / "nonexistent")])
-        monkeypatch.setattr(m, "_resolve_machine_local", lambda: None)
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir"))
         rc = main([])
         assert rc == 0
         out = capsys.readouterr().out
@@ -399,7 +438,7 @@ class TestMainNeverBlocks:
         import coordinator_core.ops.discover_working_repos as m
 
         monkeypatch.setattr(m, "_TIER_B_CANDIDATES", [str(tmp_path / "dev")])
-        monkeypatch.setattr(m, "_resolve_machine_local", lambda: None)
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir"))
         rc = main([])
         assert rc == 0
         out = capsys.readouterr().out.strip().splitlines()

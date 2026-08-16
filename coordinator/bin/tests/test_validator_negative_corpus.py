@@ -25,14 +25,18 @@ expected-rejections.json by original design (lint-frontmatter never processes .j
 files; see README.md § NOT covered) and is excluded here for the same reason.
 
 Known gaps surfaced by this port (see module-level xfail blocks below):
-  - completion-entry (c01-c05): the completion-entry schema was never vendored under
-    coordinator_core/frontmatter/schemas/ — validate() raises ValueError("unknown
-    schema") rather than returning a rejection. Confirmed via `git log` that
-    coordinator/schemas/completion-entry.schema.json never existed anywhere in claude-klabauter's
-    history; the only trace is the orphaned coordinator/bin/tests/test-schema-completion-entry.js
-    (also never ported). This is an unported schema, not a drifted one.
   - c3-01/c3-02: added wholesale by a05cae48 (test-suite adoption) with no owning index
     or oracle anywhere in this tree or in schema.js's history — orphaned fixtures.
+
+Prior known gap, now closed: completion-entry (c01-c05) was originally unported —
+coordinator_core/frontmatter/schemas/completion-entry.schema.json did not exist when
+this module was authored, so validate() raised ValueError("unknown schema") instead of
+rejecting, and c01-c05 carried an xfail(strict) for it. Commit 62b27af07 ("loe: add the
+XXL tier, and re-vendor completion-entry.schema.json to 1.4.0") vendored the schema; it
+now correctly rejects all five c01-c05 fixtures for their targeted rule (verified by
+inspecting each fixture's validate() error against its rule_covered in
+expected-rejections.json), so the xfail markers were removed as stale rather than as a
+validator loosening — see git log on that path for the vendoring history.
 """
 from __future__ import annotations
 
@@ -54,15 +58,10 @@ _C2_INDEX_PATH = _FIXTURES_DIR / "c2-expected-reachability.json"
 _INDEX = json.loads(_INDEX_PATH.read_text(encoding="utf-8"))
 _C2_INDEX = json.loads(_C2_INDEX_PATH.read_text(encoding="utf-8"))
 
-# completion-entry has no vendored Python schema (see module docstring) — validate()
-# always raises ValueError for these, never returns a rejection verdict.
-_UNPORTED_SCHEMA_FIXTURES = {
-    "c01-loe-wrong-type.md",
-    "c02-loe-tshirt-invalid-enum.md",
-    "c03-nature-invalid-enum.md",
-    "c04-list-of-string-wrong-type.md",
-    "c05-number-or-null-in-object-wrong-type.md",
-}
+# completion-entry is now vendored under coordinator_core/frontmatter/schemas/ (see
+# module docstring) — validate() rejects c01-c05 correctly, so this set is empty. Kept
+# (not deleted) so _xfail_reason's shape stays intact if a future schema is unported.
+_UNPORTED_SCHEMA_FIXTURES: set[str] = set()
 
 # Fixtures present on disk that are documented as deliberately outside
 # expected-rejections.json's scope, with the citation for why.

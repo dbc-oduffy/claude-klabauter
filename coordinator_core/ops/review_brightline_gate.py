@@ -929,8 +929,8 @@ def _compute_chain_oracle(
     defensive file-granularity noise exclusion (see `_is_noise_path`).
 
     `indeterminate`/`notes` surface any owned baton's DAG walk that could not
-    be safely resolved — the caller (C4) rules on how that propagates to the
-    tier decision; this function never silently absorbs it into a number."""
+    be safely resolved — the caller (C4) reads this, and this function never
+    silently absorbs it into a number."""
     chain_shas: Set[str] = set()
     indeterminate = False
     notes: List[str] = []
@@ -1095,61 +1095,18 @@ def _chain_last_commit_epoch(chain_shas: Set[str]) -> Optional[int]:
     return max(times) if times else None
 
 
-def _determine_tier(
-    plan_repos: Set[str],
-    chain_commits: int,
-    chain_indeterminate: bool,
-    session_repos_written: Optional[Set[str]] = None,
-) -> Tuple[str, List[str]]:
-    """Step 7 tier ruling.
-
-    tier=A iff a deferred:false code-bearing plan row declares a repo the
-    chain walk saw ZERO commits in, or the chain walk is indeterminate on a
-    repo the plan declares — the declared-but-unwalked REPO case. The DAG
-    chain walk (`_derive_dag_chain_set`) is inherently single-repo (it walks
-    `repo_root`'s own git history) — a plan_repos entry OTHER than the bare
-    "" (this-repo) sentinel (i.e. a `claude-klabauter:`-prefixed surface) is
-    therefore structurally unwalkable by chain_oracle and always tier=A when
-    declared, independent of chain_commits.
-
-    WIDENED (XB-6): tier=A ALSO fires when `session_repos_written` (the
-    labels session_oracle actually found Session-Id-trailer commits in — see
-    `_compute_session_oracle`) names a sibling repo the PLAN never declared.
-    A repo the session demonstrably wrote into is unwalked by chain_oracle
-    for the exact same structural reason as a declared-but-unwalked plan
-    repo — chain_oracle is single-repo by construction — whether or not the
-    plan bothered to declare it. Without this, a session that commits into
-    claude-klabauter or ~/.claude WITHOUT a plan row naming that surface stays
-    tier=none/B even though real cross-repo work happened; this is precisely
-    the blind spot XB-6 exists to close.
-
-    tier=B else iff plan_oracle != chain_oracle (pure magnitude disagreement,
-    no unwalked-repo case). tier=none otherwise.
-
-    Returns `(tier, unwalked_repo_labels)` — the labels feed the basis text.
-    """
-    chain_saw_this_repo = chain_commits > 0 and not chain_indeterminate
-    repos_of_interest = set(plan_repos) | {r for r in (session_repos_written or set()) if r != ""}
-    unwalked: List[str] = []
-    for repo in sorted(repos_of_interest):
-        if repo == "":
-            if not chain_saw_this_repo:
-                unwalked.append("this-repo")
-        else:
-            unwalked.append(repo)
-    if unwalked:
-        return "A", unwalked
-    return "", []  # caller resolves B-vs-none against plan_oracle != chain_oracle
-
-
 def _from_handoff_main(rest: List[str]) -> int:
     """--from-handoff <path> [<git-range>] chain+plan terminus mode.
 
     Fully wired end-to-end (C2 plan_oracle, C3 chain_oracle, C4 session_oracle
     + ruling + emission — steps 1-8 of the contract). Emits exactly one
-    `BRIGHTLINE …` line as the LAST stdout line. Compute+emit only — this
-    module never HALTs; enforcement (tier=A hard-stop) lives in the caller
-    (wsc-coverage-gate-runner.py), not here.
+    `BRIGHTLINE …` line as the LAST stdout line. Compute+emit only. The
+    `tier` field this line used to carry (and the `if tier == "A"` halt
+    branch that read it in the caller, wsc-coverage-gate-runner.py) is
+    removed outright (state/kill-ledger.md K-004, 2026-08-16, Verdict A —
+    measured across 151 records: tier=B 135, tier=none 16, tier=A zero;
+    tier=B fell through to `return 0`, changing only a `basis` substring).
+    `chain_oracle` itself survives — see K-004's Verdict B.
     """
     if not rest or not rest[0]:
         print(f"{_PROG}: --from-handoff requires a path argument", file=sys.stderr)
@@ -1226,8 +1183,7 @@ def _from_handoff_main(rest: List[str]) -> int:
     # Problem section names `_compute_plan_oracle` as unioning across the
     # SAME owned-baton set as the chain oracle, so narrowing one side and
     # not the other would manufacture spurious plan_oracle!=chain_oracle
-    # disagreement (which `_determine_tier`'s tier=B ruling reads as
-    # meaningful) between a close-scoped chain oracle and a session-scoped
+    # disagreement between a close-scoped chain oracle and a session-scoped
     # plan oracle. `session_result` is deliberately NOT filtered — it is
     # computed from the git range/trailer, not from `owned_batons`, so this
     # discrimination does not apply to it.
@@ -1267,15 +1223,6 @@ def _from_handoff_main(rest: List[str]) -> int:
     chain_oracle = chain_result["chain_oracle"]
     session_oracle = session_result["session_oracle"]
 
-    tier, unwalked_repos = _determine_tier(
-        plan_result["plan_repos"],
-        chain_result["chain_commits"],
-        chain_result["indeterminate"],
-        session_result["session_repos_written"],
-    )
-    if not tier:
-        tier = "B" if plan_oracle != chain_oracle else "none"
-
     reviewers_suggested = max(plan_oracle, chain_oracle, session_oracle)
     reviewers_low = min(plan_oracle, chain_oracle, session_oracle)
     reviewers_required = min(reviewers_suggested, 4)  # AC17/Finding7 multi-baton headline cap
@@ -1296,12 +1243,6 @@ def _from_handoff_main(rest: List[str]) -> int:
     ]
     if ownership_undercounted:
         basis_parts.append("ownership_scan_degraded=true (owned_batons may be undercounted)")
-    if tier == "A":
-        basis_parts.append(f"tier=A declared-but-unwalked repo(s)={','.join(unwalked_repos)}")
-    elif tier == "B":
-        basis_parts.append(f"tier=B plan_oracle!=chain_oracle ({plan_oracle}!={chain_oracle})")
-    else:
-        basis_parts.append("tier=none oracles agree, no unwalked repo")
     if reviewers_suggested > reviewers_required:
         basis_parts.append(f"headline capped from raw={reviewers_suggested} to {reviewers_required}")
 
@@ -1322,7 +1263,7 @@ def _from_handoff_main(rest: List[str]) -> int:
         f"BRIGHTLINE reviewers_required={reviewers_required} "
         f"reviewers_suggested={reviewers_suggested} reviewers_low={reviewers_low} "
         f"plan_oracle={plan_oracle} chain_oracle={chain_oracle} session_oracle={session_oracle} "
-        f'tier={tier} verdict={verdict} basis="{basis}"'
+        f'verdict={verdict} basis="{basis}"'
     )
     return 0
 

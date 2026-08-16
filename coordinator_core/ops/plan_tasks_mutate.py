@@ -29,8 +29,12 @@ Verb contracts:
 
   stamp (params: plan_path, updates) — `updates` is a list of
     `{"id": <task id>, ...field-updates}` dicts; every named id must exist in
-    the current spine and every resulting row must validate, or NONE of the
-    updates are applied (all-or-nothing, one callback, one lock). Duplicate
+    the current spine and every row THIS BATCH WRITES must validate, or NONE
+    of the updates are applied (all-or-nothing, one callback, one lock). A
+    pre-existing invalid row this batch does not touch does not veto the
+    write (2026-08-16 fix — see `_validate_all`'s docstring); it is instead
+    surfaced in the reply's `warnings` list, naming its id, so a repair
+    cannot silently normalize a broken spine into looking fine. Duplicate
     `id` within one `updates` batch -> MutateAbort, no write (F2; mirrors
     add-task's fail-loud-dup discipline rather than last-write-wins).
     `absent` spine -> MutateAbort regardless of heading/fence sub-case
@@ -350,9 +354,22 @@ from coordinator_core.wire_paths import rel_id
 # ---------------------------------------------------------------------------
 
 
-def _ok(applied: bool, message: str) -> dict:
-    """Return exit_code=0 reply."""
-    return {"exit_code": 0, "applied": applied, "message": message}
+def _ok(applied: bool, message: str, *, warnings: Optional[list] = None) -> dict:
+    """Return exit_code=0 reply.
+
+    `warnings` (2026-08-16, untouched-invalid-row deadlock fix): a
+    (possibly empty/omitted) list of diagnostic strings surfaced alongside
+    a successful write — currently used to name pre-existing invalid rows
+    this mutation did NOT touch and therefore did not veto, mirroring the
+    `warnings` list shape `completion_ops.py` already establishes for
+    non-fatal diagnostics riding alongside a successful reply. Omitted
+    entirely (not an empty list) when there is nothing to report, so an
+    existing caller reading `applied`/`message` only sees no shape change.
+    """
+    reply = {"exit_code": 0, "applied": applied, "message": message}
+    if warnings:
+        reply["warnings"] = warnings
+    return reply
 
 
 def _err(message: str) -> dict:
@@ -505,8 +522,12 @@ def _validate_row(row: dict, *, governed: bool = False) -> list:
     return errors
 
 
-def _validate_all(rows: list, *, governed: bool = False) -> None:
-    """Validate every row in `rows`; raise MutateAbort on the first invalid one.
+def _validate_all(rows: list, *, governed: bool = False, touched_ids: Optional[set] = None) -> list:
+    """Validate rows in `rows`; raise MutateAbort on the first invalid TOUCHED
+    row. Returns the list of ids of pre-existing invalid rows this call did
+    NOT touch (untouched-invalid diagnostic — empty list when there are
+    none), so a caller can surface them as a warning without vetoing the
+    write.
 
     Review: code-reviewer — shared uniformly by add-task's ABSENT and LOCATED
     branches and by stamp's post-update validation loop (F3), replacing what
@@ -517,12 +538,50 @@ def _validate_all(rows: list, *, governed: bool = False) -> None:
     `governed` is PLAN-scoped and must be resolved by the caller from the
     plan's frontmatter — no row can answer it. Default False is the legacy
     predicate, i.e. today's behaviour exactly.
+
+    `touched_ids` (2026-08-16, untouched-invalid-row deadlock fix — queue
+    entry for the live repro: two rows each schema-invalid for reasons
+    unrelated to the call in question deadlocked each other's repair,
+    because this function used to validate and veto on EVERY row in the
+    spine regardless of whether the mutation touched it. A row this
+    mutation did not write could not have made that row worse, so it must
+    not be able to block the write. `None` (the default) preserves the old
+    "validate every row, veto on any" behaviour for any caller that has not
+    been updated to pass it — every in-repo caller below now passes the
+    ids it actually wrote. A row IS "touched" if its id is in the set;
+    every row this call itself just wrote must always be in that set, so
+    invariant (1) — this op may never WRITE a newly-invalid row — is
+    unchanged.
     """
+    untouched_invalid: list = []
     for row in rows:
         errors = _validate_row(row, governed=governed)
-        if errors:
+        if not errors:
+            continue
+        row_id = row.get("id")
+        if touched_ids is None or row_id in touched_ids:
             details = format_validation_errors(errors)
-            raise MutateAbort(f"schema-invalid row {row.get('id')!r}: {details}")
+            raise MutateAbort(f"schema-invalid row {row_id!r}: {details}")
+        untouched_invalid.append(row_id)
+    return untouched_invalid
+
+
+def _untouched_invalid_warnings(untouched_invalid: list) -> list:
+    """Render `_validate_all`'s untouched-invalid-row id list as the
+    `warnings` list `_ok` surfaces alongside a successful write — so a
+    repair does not silently normalize a broken spine into looking fine
+    (requirement 4 of the 2026-08-16 deadlock fix). Empty list in, empty
+    list out — `_ok` omits the key entirely when this is falsy.
+    """
+    if not untouched_invalid:
+        return []
+    ids = ", ".join(repr(i) for i in untouched_invalid)
+    return [
+        f"pre-existing schema-invalid row(s) not touched by this call, still "
+        f"invalid on disk: {ids} — this write did not veto on them because "
+        "they were not part of the mutation, but they remain broken; resolve "
+        "each with its own call."
+    ]
 
 
 def _dump_rows(rows: list) -> str:
@@ -557,7 +616,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
     if not isinstance(task, dict) or not task.get("id"):
         return _err("add-task: 'task' must be a dict with a non-empty 'id'")
 
-    _state: dict = {"applied": False, "message": ""}
+    _state: dict = {"applied": False, "message": "", "warnings": []}
 
     def mutate(old_text: str) -> str:
         result = locate_fenced_block(old_text)
@@ -575,7 +634,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
             # shared _validate_all helper in both ABSENT and LOCATED branches,
             # instead of validating `task` alone here (F3).
             try:
-                _validate_all(new_rows)
+                untouched_invalid = _validate_all(new_rows, touched_ids={task["id"]})
             except MutateAbort as exc:
                 raise MutateAbort(f"add-task: {exc.args[0] if exc.args else exc}") from exc
             body_yaml = _dump_rows(new_rows)
@@ -585,6 +644,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
                 new_text = _synthesize_tasks_section(old_text, body_yaml)
             _state["applied"] = True
             _state["message"] = f"add-task: created task spine and added task {task['id']!r}"
+            _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
             return new_text
 
         # LOCATED
@@ -598,7 +658,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
 
         new_rows = rows + [task]
         try:
-            _validate_all(new_rows)
+            untouched_invalid = _validate_all(new_rows, touched_ids={task["id"]})
         except MutateAbort as exc:
             raise MutateAbort(f"add-task: {exc.args[0] if exc.args else exc}") from exc
 
@@ -607,6 +667,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
         new_text = old_text[:start] + body_yaml + old_text[end:]
         _state["applied"] = True
         _state["message"] = f"add-task: added task {task['id']!r}"
+        _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
         return new_text
 
     try:
@@ -618,7 +679,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
     except MutateAbort as exc:
         return _err(exc.args[0] if exc.args else "add-task: mutation aborted")
 
-    return _ok(_state["applied"], _state["message"])
+    return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +738,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
                 "ruling. Refusing the whole batch — no writes applied."
             )
 
-    _state: dict = {"applied": False, "message": ""}
+    _state: dict = {"applied": False, "message": "", "warnings": []}
 
     def mutate(old_text: str) -> str:
         result = locate_fenced_block(old_text)
@@ -721,8 +782,11 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 
         # Review: code-reviewer — reuse the shared _validate_all helper for
         # stamp's final validation loop (F3), consistent with add-task.
+        # `touched_ids=set(stamped_ids)` (2026-08-16, untouched-invalid-row
+        # deadlock fix): a pre-existing invalid row this batch did not
+        # stamp must not veto the batch — see _validate_all's own docstring.
         try:
-            _validate_all(rows)
+            untouched_invalid = _validate_all(rows, touched_ids=set(stamped_ids))
         except MutateAbort as exc:
             raise MutateAbort(f"stamp: {exc.args[0] if exc.args else exc}") from exc
 
@@ -731,6 +795,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         new_text = old_text[:start] + body_yaml + old_text[end:]
         _state["applied"] = True
         _state["message"] = f"stamp: updated {len(stamped_ids)} task(s): {stamped_ids}"
+        _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
         return new_text
 
     try:
@@ -742,7 +807,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     except MutateAbort as exc:
         return _err(exc.args[0] if exc.args else "stamp: mutation aborted")
 
-    return _ok(_state["applied"], _state["message"])
+    return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
 # ---------------------------------------------------------------------------
@@ -1248,7 +1313,7 @@ def _resolve(
             return _err(f"resolve: duplicate task id in batch: {rid!r}")
         seen_ids.add(rid)
 
-    _state: dict = {"applied": False, "message": "", "all_resolved": False}
+    _state: dict = {"applied": False, "message": "", "all_resolved": False, "warnings": []}
 
     def mutate(old_text: str) -> str:
         result = locate_fenced_block(old_text)
@@ -1542,10 +1607,31 @@ def _resolve(
                 row["disposition_detail"] = disposition_detail
             resolved_ids.append(task_id)
 
+        # `touched_ids=set(resolved_ids)` (2026-08-16, untouched-invalid-row
+        # deadlock fix — the live repro this fixes: two rows in the SAME
+        # spine each schema-invalid for reasons this batch did not touch
+        # deadlocked each other's repair, because this call used to
+        # validate and veto on every row in the spine. A row this batch
+        # did not resolve could not have been made worse by it, so it must
+        # not be able to block the write — see _validate_all's own
+        # docstring.
+        #
+        # Review: code-reviewer — if `resolved_ids` is incomplete relative to
+        # what Phase 1 already wrote in-memory (Phase 2 raised partway
+        # through a `_dispatch_backlogged`/`_dispatch_spun_off` call), that
+        # mismatch never reaches this line: `locked_rmw` discards `rows` and
+        # writes nothing on ANY exception, so the mutate() closure never
+        # returns and `_validate_all` is never called with the partial set.
+        # `touched_ids` precision here is NOT what protects invariant (1)
+        # ("never write a newly-invalid row") under partial failure —
+        # `locked_rmw`'s all-or-nothing exception boundary is. A future
+        # change there that lets a partial write through would silently
+        # reintroduce that risk without this file changing at all.
         try:
-            _validate_all(rows, governed=governed)
+            untouched_invalid = _validate_all(rows, governed=governed, touched_ids=set(resolved_ids))
         except MutateAbort as exc:
             raise MutateAbort(f"resolve: {exc.args[0] if exc.args else exc}") from exc
+        _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
 
         body_yaml = _dump_rows(rows)
         start, end = result.span
@@ -1580,7 +1666,7 @@ def _resolve(
     except MutateAbort as exc:
         return _err(exc.args[0] if exc.args else "resolve: mutation aborted")
 
-    result = _ok(_state["applied"], _state["message"])
+    result = _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
     # C1 (2026-08-14, "landed fires at spine resolution"): the resolve
     # transaction above just committed. If it left no row `open`, derive
@@ -1685,7 +1771,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    batch delegates independently.
 
     Returns:
-        {"exit_code": 0, "applied": bool,  "message": str} on success or no-op.
+        {"exit_code": 0, "applied": bool,  "message": str, "warnings": list} on
+            success or no-op — "warnings" is present only when non-empty (see
+            `_ok`'s own docstring): it names any pre-existing schema-invalid
+            row this call did not touch (2026-08-16, untouched-invalid-row
+            deadlock fix).
         {"exit_code": 1, "applied": False, "error":   str} on error.
 
     P9 WORKTREE DERIVATION: repo_root arrives as the git common dir
