@@ -49,15 +49,11 @@ from typing import List, Optional
 
 from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
+from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "render-template-tree.sh"  # literal program-name prefix, matches the DoE filename
-
-
-def _resolve_machine_local() -> Optional[str]:
-    """Locate the `machine-local` CLI on PATH. Returns None if absent."""
-    return shutil.which("machine-local")
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
@@ -73,6 +69,13 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     Review: code-reviewer (2026-07-22, Finding 4) — DOE_ROOT was previously
     missing from this hand-rolled resolver, silently dropping the legacy-alias
     rung the shared coordinator_registry.doe_root() honors.
+
+    Tier 3 itself tries `registry_get` first, zero-spawn, and falls back to
+    the `machine-local get` CLI only on a miss -- `registry_get` alone
+    doesn't reach the CLI's autodiscovery/`path-exceptions.toml` rungs, and
+    this repo's own `.coordinator-dev-repo` marker proves autodiscovery is
+    live for `repos.doe_claude` on a real machine, not a hypothetical
+    (2026-08-16 review finding).
     """
     doe_root_override = os.environ.get("DOE_ROOT", "")
     if doe_root_override:
@@ -82,30 +85,28 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     if env_override:
         return env_override, 0
 
-    ml_bin = _resolve_machine_local()
-    if ml_bin is None:
+    # Zero-spawn: `registry_get` reads the same registry.local.toml over
+    # registry.toml chain `machine-local get` would, in-process (see
+    # `coordinator_core.machine_resolver.registry_get`).
+    value = _registry_get("repos.doe_claude") or ""
+    if not value:
+        ml_bin = shutil.which("machine-local")
+        if ml_bin is not None:
+            try:
+                proc = subprocess.run(
+                    [ml_bin, "get", "repos.doe_claude"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    **no_console_creationflags(),
+                )
+                if proc.returncode == 0:
+                    value = proc.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    if not value:
         print(
-            f"{_PROG}: machine-local not found -- cannot locate render-template.sh",
-            file=sys.stderr,
-        )
-        return None, 1
-
-    try:
-        proc = subprocess.run(
-            [ml_bin, "get", "repos.doe_claude"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"{_PROG}: machine-local invocation failed: {exc}", file=sys.stderr)
-        return None, 1
-
-    value = proc.stdout.strip()
-    if proc.returncode != 0 or not value:
-        print(
-            f"{_PROG}: could not resolve repos.doe_claude via machine-local",
+            f"{_PROG}: could not resolve repos.doe_claude via the registry",
             file=sys.stderr,
         )
         return None, 1

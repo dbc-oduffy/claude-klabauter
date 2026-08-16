@@ -103,6 +103,12 @@ def _engine_worktree_root() -> Optional[Path]:
     dependency on the derive module, matching the "plain CLI helper" shape
     other direct-import trampolines use). Returns ``None`` (never raises) when
     git is unavailable or this file's directory is not inside a git repo.
+
+    Review: code-reviewer (P1) — see the identical note on
+    ``session_hierarchy_derive._engine_worktree_root``: dropping
+    ``--path-format=absolute`` here is verified NOT a regression, pinned by
+    ``test_show_toplevel_spawn_fallback_matches_path_format_absolute`` in
+    ``coordinator_core/git/test_repo_root.py``.
     """
     engine_dir = Path(__file__).resolve().parent
     out = show_toplevel(str(engine_dir))

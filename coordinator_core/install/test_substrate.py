@@ -911,7 +911,9 @@ def _stub_run_dependencies(monkeypatch, tmp_path):
     settings = tmp_path / "settings-home"
 
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-    monkeypatch.setattr(substrate, "coordinator_claude_klabauter_root", lambda: str(claude_klabauter_root))
+    monkeypatch.setattr(
+        substrate, "coordinator_claude_klabauter_root_with_class", lambda: (str(claude_klabauter_root), "live-working-tree")
+    )
     monkeypatch.setattr(
         substrate, "_load_setup_template_manifest", lambda root: (["a"], [], [])
     )

@@ -83,6 +83,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.launchable import resolve_launchable
+from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
@@ -131,6 +132,13 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
     Review: code-reviewer (2026-07-22, Finding 4) — DOE_ROOT was previously
     missing from this hand-rolled resolver, silently dropping the legacy-alias
     rung the shared coordinator_registry.doe_root() honors.
+
+    Tier 3 itself tries `registry_get` first, zero-spawn, and falls back to
+    the `machine-local get` CLI only on a miss -- `registry_get` alone
+    doesn't reach the CLI's autodiscovery/`path-exceptions.toml` rungs, and
+    this repo's own `.coordinator-dev-repo` marker proves autodiscovery is
+    live for `repos.doe_claude` on a real machine, not a hypothetical
+    (2026-08-16 review finding).
     """
     doe_root_override = os.environ.get("DOE_ROOT", "")
     if doe_root_override:
@@ -140,30 +148,28 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
     if env_override:
         return env_override, 0
 
-    ml_bin = _resolve_machine_local()
-    if ml_bin is None:
-        print(
-            f"{_PROG}: machine-local not found -- cannot locate render-template-tree.sh",
-            file=sys.stderr,
-        )
-        return None, 1
-
-    try:
-        proc = subprocess.run(
-            [ml_bin, "get", "repos.doe_claude"],
-            capture_output=True,
-            text=True,
-            timeout=_MACHINE_LOCAL_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"{_PROG}: machine-local invocation failed: {exc}", file=sys.stderr)
-        return None, 1
-
-    value = proc.stdout.strip()
-    if proc.returncode != 0 or not value:
-        print(f"{_PROG}: could not resolve repos.doe_claude via machine-local", file=sys.stderr)
+    # Zero-spawn: `registry_get` reads the same registry.local.toml over
+    # registry.toml chain `machine-local get` would, in-process (see
+    # `coordinator_core.machine_resolver.registry_get`).
+    value = _registry_get("repos.doe_claude") or ""
+    if not value:
+        ml_bin = _resolve_machine_local()
+        if ml_bin is not None:
+            try:
+                proc = subprocess.run(
+                    [ml_bin, "get", "repos.doe_claude"],
+                    capture_output=True,
+                    text=True,
+                    timeout=_MACHINE_LOCAL_TIMEOUT,
+                    stdin=subprocess.DEVNULL,
+                    **_CREATIONFLAGS,
+                )
+                if proc.returncode == 0:
+                    value = proc.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    if not value:
+        print(f"{_PROG}: could not resolve repos.doe_claude via the registry", file=sys.stderr)
         return None, 1
     return value, 0
 
@@ -240,26 +246,24 @@ def _register_repo(project_name: str, target: str) -> int:
         )
         return 1
 
-    try:
-        verify = subprocess.run(
-            [ml_bin, "get", f"repos.{slug}"],
-            capture_output=True,
-            text=True,
-            timeout=_MACHINE_LOCAL_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"{_PROG}: machine-local get repos.{slug} verification failed: {exc}", file=sys.stderr)
-        return 1
-    stored = verify.stdout.strip()
+    # Round-trip verification read: in-process (zero-spawn -- see
+    # `coordinator_core.machine_resolver.registry_get`) rather than a
+    # `machine-local get` shell-out. Reads the same registry.local.toml the
+    # `set` call above just wrote, synchronously. `machine-local get` itself
+    # POSIX-normalizes its repos.* branch's return value (see
+    # `coordinator_core.ops.gen_doe_root_pointer` module docstring); the raw
+    # `registry_get` read has no such key-specific behaviour, so the same
+    # normalization is applied here explicitly to preserve the CLI's
+    # documented "repos.* round-trips as POSIX regardless of platform"
+    # contract byte-for-byte.
+    stored = (_registry_get(f"repos.{slug}") or "").replace(os.sep, "/")
     # The registry round-trips repos.* values through machine-local as
     # POSIX-separated strings regardless of platform (registry contract,
     # not a scaffold decision) -- os.path.abspath() on Windows returns
     # native backslashes, so compare both sides POSIX-normalized rather
     # than raw, or every registration on Windows fails verification.
     target_posix = target_abs.replace(os.sep, "/")
-    if verify.returncode != 0 or stored != target_posix:
+    if stored != target_posix:
         print(
             f"{_PROG}: repos.{slug} registration verify mismatch: expected {target_posix!r}, got {stored!r}",
             file=sys.stderr,

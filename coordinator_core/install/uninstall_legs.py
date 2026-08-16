@@ -66,7 +66,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.install.receipt import InstallReceipt, load_receipt
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
 from coordinator_core.ops import render_template
 from coordinator_core.hooks import platform_localize
 
@@ -1413,7 +1413,8 @@ def uninstall_remove_substrate(
         # is already gone/broken must not abort the rest of uninstall — an
         # empty derived set just means this sub-leg is a no-op.
         try:
-            agent_bin = Path(coordinator_claude_klabauter_root()) / "coordinator" / "bin"
+            _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+            agent_bin = Path(_claude_klabauter_root_str) / "coordinator" / "bin"
             derived_names = _derive_agent_helper_names(agent_bin)
         except RuntimeError:
             derived_names = ()

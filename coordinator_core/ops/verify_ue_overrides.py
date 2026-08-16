@@ -10,9 +10,10 @@ gating.md § verify-ue-overrides.sh, it is never auto-invoked by any ceremony (i
 dirs are specific to the source author's local machine layout); run manually when UE
 override drift is suspected.
 
-Requires the `machine-local` CLI resolvable (PATH, $HOME/.claude/bin/machine-local,
-or a machine-local binary co-located next to the trampoline; this module shells out
-to whatever `machine-local` name/path the caller supplies).
+Reads the machine-local registry directly, in-process, via
+`machine_resolver.registry_get` (converted 2026-08-16, C7b) -- no `machine-local`
+CLI subprocess, no PATH/settings-home/legacy-home/co-located-binary resolution
+ladder.
 
 machine-local keys consumed (must be set in registry.local.toml):
     repos.example_game_workbench_repo  — root of the example-game-workbench-repo repo
@@ -42,13 +43,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 import sys
 from typing import List, Optional, Tuple
 
-from coordinator_core._settings_home import home_dir, settings_home
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core import machine_resolver as _machine_resolver
+from coordinator_core._settings_home import home_dir
 
 # Plugins required to be enabled in every UE-context settings.json.
 _EXPECTED_KEYS = (
@@ -66,64 +65,20 @@ _EITHER_VENDOR_GAME_DEV = (
 )
 
 
-def _resolve_ml_bin(script_dir: str) -> Optional[str]:
-    """Resolve the machine-local CLI: PATH, settings-home, legacy
-    `$HOME/.claude/bin`, then a binary co-located next to the calling script.
+def _ml_get(key: str) -> Optional[str]:
+    """Resolve `key` via the direct-registry reader
+    (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess,
+    no PATH/settings-home/legacy-home/co-located-binary resolution ladder.
 
-    The settings-home rung is the canonical install (DR-072) and was missing
-    from the bash oracle's three-rung ladder this ports. That mattered once
-    `~/.claude/bin` was retired (2026-07-28): settings-home/bin is not on PATH
-    by default, so the ladder reached only a directory that no longer exists
-    and this check degraded to a skip on a stock machine.
-    """
-    on_path = shutil.which("machine-local")
-    if on_path:
-        return on_path
-    settings_bin = os.path.join(str(settings_home()), "bin", "machine-local")
-    if is_executable(settings_bin):
-        return settings_bin
-    # home_dir() (CLAUDE_HOME, else Path.home()) rather than a raw HOME env
-    # read: native Windows shells don't set HOME, and os.environ.get("HOME", "")
-    # degraded to a cwd-relative path there. This rung is now outranked by
-    # settings-home above, but the landmine is removed rather than merely
-    # dormant.
-    home_bin = os.path.join(str(home_dir()), ".claude", "bin", "machine-local")
-    if os.path.isfile(home_bin) and is_executable(home_bin):
-        return home_bin
-    local_bin = os.path.join(script_dir, "machine-local")
-    if os.path.isfile(local_bin) and is_executable(local_bin):
-        return local_bin
-    return None
-
-
-def _ml_get(ml_bin: str, key: str) -> Optional[str]:
-    """Run `<ml_bin> get <key>`; return stripped stdout on rc==0, else None.
-
-    timeout=20 bounds a single call so main()'s three unconditional calls stay
-    within the ~60s ceiling the bash oracle's outer `timeout 60` used to impose
-    on this whole script — that outer bound no longer exists now that
-    sentinel.py's P-9 probe calls main() in-process (_call_native_main has no
-    subprocess boundary of its own). A wedged `machine-local get <key>` (stuck
-    file lock, broken FUSE/network mount) would otherwise hang the caller
-    forever; a TimeoutExpired here is treated the same as any other failed
-    lookup (returns None), matching this function's existing "no signal" ->
-    None contract.
-    """
-    try:
-        res = subprocess.run(
-            [ml_bin, "get", key],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=20,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _ml_get: res = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if res.returncode != 0:
-        return None
-    return res.stdout.strip()
+    Converted 2026-08-16 (C7b): this module's own test suite
+    (`test_verify_ue_overrides.py`) now seeds the machine-local registry
+    FILE instead of faking the CLI as a real subprocess-invoked script keyed
+    on a resolved `ml_bin` path, so this in-process conversion no longer
+    silently stops exercising the fake and reading the operator's real
+    registry instead. Registry-not-found (missing key, unreadable/missing
+    file) degrades to None, matching this function's existing "no signal"
+    contract."""
+    return _machine_resolver.registry_get(key)
 
 
 def _read_enabled_plugin(settings_path: str, key: str) -> str:
@@ -149,31 +104,16 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     """CLI entrypoint: verify-ue-overrides (no positional args consumed; argv unused,
     kept for trampoline-call symmetry with other ported ops).
 
-    `script_dir` is the THIRD rung of the ML_BIN resolver — a `machine-local` binary
-    co-located next to the calling DoE script (coordinator/bin/machine-local), mirroring
-    the bash oracle's `$SCRIPT_DIR/machine-local` fallback. The DoE trampoline passes its
-    own directory here; this module's own file location (inside claude-klabauter) is NOT a valid
-    substitute and must never be used for this rung — defaults to None (rung skipped)
-    when called without it, e.g. directly from a test or a bare `python -m` invocation.
+    `script_dir` is now VESTIGIAL (converted 2026-08-16, C7b): it existed
+    solely as the third rung of a `machine-local` CLI-binary resolution
+    ladder that this module no longer runs -- `_ml_get` reads the registry
+    directly, in-process. Kept as an accepted (ignored) parameter so
+    `sentinel.py`'s existing `main(..., script_dir=str(sh_bin))` call site
+    does not need to change.
     """
-    ml_bin = _resolve_ml_bin(script_dir or "")
-
-    if ml_bin is None:
-        fallback_path = os.path.join(script_dir, "machine-local") if script_dir else "machine-local"
-        print(
-            f"ERROR: machine-local not found on PATH and not at {fallback_path}",
-            file=sys.stderr,
-        )
-        print("Remediation: verify your coordinator install — see", file=sys.stderr)
-        print(
-            "  ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/"
-            "machine-local-registry.md § Verifying registry health",
-            file=sys.stderr,
-        )
-        return 1
 
     def resolve_key(key: str) -> Optional[str]:
-        val = _ml_get(ml_bin, key)
+        val = _ml_get(key)
         if val is None:
             print(f"ERROR: machine-local key '{key}' not set on this machine", file=sys.stderr)
             print(
@@ -211,7 +151,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     home = str(home_dir())
     named_dirs: List[str] = [example_game_repo_root, example_retrieval_repo_root, os.path.join(home, ".claude")]
 
-    example_sim_repo_root = _ml_get(ml_bin, "repos.example-sim-repo")
+    example_sim_repo_root = _ml_get("repos.example-sim-repo")
     if example_sim_repo_root:
         named_dirs.append(example_sim_repo_root)
 

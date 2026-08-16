@@ -377,7 +377,10 @@ def _execute_directives(
         try:
             gate_open = _directive_gate_open(directive, jp_by_id, decisions)
         except Exception as exc:  # noqa: BLE001 - malformed envelope is per-directive
-            failed.append({"id": directive["id"], "error": f"gate evaluation error: {exc}"})
+            failed.append({
+                "id": directive["id"],
+                "error": f"gate evaluation error: {type(exc).__name__}: {exc}",
+            })
             continue
         if not gate_open:
             blocked.append(directive["id"])
@@ -408,7 +411,15 @@ def _execute_directives(
         try:
             result = _dispatch_directive(directive, stdin_text=stdin_text)
         except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
-            failed.append({"id": directive["id"], "error": str(exc)})
+            # type(exc).__name__ prefix, not bare str(exc): an
+            # io.UnsupportedOperation("fileno") formats as the single word
+            # "fileno" under str() alone, with no type and no traceback --
+            # exactly what hid the subprocess-under-capture-buffer defect
+            # run_forwarding (coordinator_core.win_portability) fixes.
+            failed.append({
+                "id": directive["id"],
+                "error": f"{type(exc).__name__}: {exc}",
+            })
             continue
         if result.get("exit_code", 0) != 0:
             error = (

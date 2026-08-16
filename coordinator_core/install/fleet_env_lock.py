@@ -79,6 +79,11 @@ from typing import Dict, List, Sequence, Set, Tuple
 
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.install.write_surface import (
+    StaticClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOURCES_PATH = _REPO_ROOT / "docs" / "install" / "fleet-env-sources.toml"
@@ -137,9 +142,109 @@ FIRST_CLASS_FLOORS: Tuple[str, ...] = ("huggingface_hub>=1.0",)
 # extra.
 _FIRST_PARTY_EXTRA_NAMES: Tuple[str, ...] = ("example-retrieval-repo-symbol-extract",)
 
+# Cross-repo floor lockstep, declared in sibling repos' own file headers and
+# enforced here because a header comment is not an artifact that discharges a
+# rule. Neither overrides file is a fleet source row, so these floors do NOT
+# reach the fleet union — they govern each repo's own installs today, which is
+# precisely why a desync is invisible from this repo's lock and surfaces later
+# as unexplained per-repo variance.
+#
+# Negative spec: this is NOT a step toward harvesting these files. A uv
+# `--overrides` file is a resolution-time instrument, not a dependency
+# declaration (same distinction docs/install/fleet-env-overrides.toml's own
+# header draws), so it must not become a [[source]] row in
+# fleet-env-sources.toml. Whether the shared lock should displace these files
+# entirely is a live PM question tracked at
+# state/improvement-queue/2026-08-16-two-sibling-repos-keep-their-torch-floor-d0c319ea81ac.yaml.
+PARITY_LOCKSTEP_GROUPS: Tuple[Dict[str, object], ...] = (
+    {
+        "packages": ("torch", "torchvision"),
+        "members": (
+            ("example_game_workbench_repo", "scripts/lib/pypi-overrides.txt"),
+            ("example_retrieval_repo", "example_retrieval_repo_scripts/pypi-overrides.txt"),
+        ),
+        "rule": (
+            "example-game-workbench-repo scripts/lib/pypi-overrides.txt header: "
+            "'Parity peer: ../example-retrieval-repo/example_retrieval_repo_scripts/pypi-overrides.txt "
+            "— floor values MUST stay in lockstep; bump them together when cu130 "
+            "wheel defaults age out.'"
+        ),
+    },
+    {
+        "packages": ("torch",),
+        "diverges": ("torchvision",),
+        "members": (
+            ("example_retrieval_repo", "example_retrieval_repo_scripts/pypi-overrides.txt"),
+            ("example_retrieval_repo", "example_retrieval_repo_scripts/constraints.txt"),
+        ),
+        "rule": (
+            "example-retrieval-repo example_retrieval_repo_scripts/pypi-overrides.txt header: "
+            "'Parity peer (torch only): constraints.txt torch line — torch "
+            "floors move together.' torchvision is EXCLUDED deliberately: "
+            "constraints.txt narrows it to ~=0.27.0 as a pip-resolver "
+            "backtracking bound (AC-A.10) while the uv overrides file keeps "
+            ">=0.25,<2, and both files document the divergence as intended."
+        ),
+    },
+)
+
 _SUPPORTED_MANIFEST_NAMES = ("pyproject.toml", "requirements.txt")
 
 _SPEC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+")
+
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="fleet-env-lock",
+    source_module="coordinator_core.install.fleet_env_lock",
+    clauses=(
+        # clauses[0] -- `run()`'s full-overwrite regeneration of
+        # `docs/install/fleet-env-requirements.in` from
+        # `fleet-env-sources.toml`. STATIC: the default target is a fixed,
+        # committed repo path; `requirements_in_path` is caller-overridable
+        # (test-only in practice) but the real writer always regenerates the
+        # same one file, never an enumerable-at-runtime set.
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="docs/install/fleet-env-requirements.in",
+                    reason=(
+                        "run(): full-overwrite regeneration of the fleet "
+                        "union's dependency-input file, driven by "
+                        "fleet-env-sources.toml; requirements_in_path param "
+                        "defaults to this path (test-only override)"
+                    ),
+                ),
+            ),
+        ),
+        # clauses[1] -- `generate_lock()`'s write of the committed lock
+        # itself, `docs/install/fleet-env.lock`. The `subprocess.run(["uv",
+        # "lock", ...])` call this same function makes is folded into this
+        # clause's reason rather than declared separately: `uv lock` writes
+        # only inside `tempfile.TemporaryDirectory(prefix="fleet-env-lock-")`
+        # (`project_dir`, plus the `uv.lock` it emits there), which is
+        # removed at the `with` block's exit before this function returns --
+        # the ephemeral synthetic project tree is never a durable surface,
+        # only the read-back-and-rewritten `lock_path` below is.
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="docs/install/fleet-env.lock",
+                    reason=(
+                        "generate_lock(): writes the `uv lock` resolution "
+                        "result (read back from the ephemeral temp project's "
+                        "generated uv.lock) to the committed lock path; "
+                        "lock_path param defaults to this path (test-only "
+                        "override). The `uv lock` subprocess spawn itself "
+                        "writes only inside the TemporaryDirectory removed "
+                        "before return -- not a separate durable surface."
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
 
 
 class FleetEnvLockError(RuntimeError):
@@ -186,16 +291,60 @@ def _resolve_repo_root(repo_key: str) -> str:
     return root
 
 
+def _flatten_dependency_group(
+    groups: Dict[str, list], group_name: str, _seen: Tuple[str, ...] = ()
+) -> List[str]:
+    """Resolve one ``[dependency-groups]`` (PEP 735) group into plain PEP 508
+    spec strings, following ``{include-group = "..."}`` entries recursively.
+    A cycle or a reference to an undeclared group is a malformed manifest —
+    fail loud rather than silently dropping the group's specs."""
+    if group_name in _seen:
+        raise FleetEnvLockError(
+            f"fleet_env_lock: [dependency-groups] cycle detected: "
+            f"{' -> '.join(_seen + (group_name,))}"
+        )
+    if group_name not in groups:
+        raise FleetEnvLockError(
+            f"fleet_env_lock: [dependency-groups] references undeclared "
+            f"group {group_name!r}"
+        )
+    specs: List[str] = []
+    for entry in groups[group_name] or []:
+        if isinstance(entry, str):
+            specs.append(entry)
+        elif isinstance(entry, dict) and "include-group" in entry:
+            specs.extend(
+                _flatten_dependency_group(
+                    groups, entry["include-group"], _seen + (group_name,)
+                )
+            )
+        else:
+            raise FleetEnvLockError(
+                "fleet_env_lock: [dependency-groups] "
+                f"{group_name!r} has an entry this parser does not "
+                f"understand (only PEP 508 strings and "
+                f"{{include-group = ...}} tables are supported): {entry!r}"
+            )
+    return specs
+
+
 def _flatten_pyproject_deps(pyproject: dict) -> List[str]:
-    """``[project.dependencies]`` plus every ``[project.optional-dependencies]``
-    group, flattened. Extras must not be dropped — the fleet's one real
-    conflict (example-retrieval-repo's ``chroma`` extra declaring ``chromadb``) lives
-    in an optional-dependencies group, not the base list."""
+    """``[project.dependencies]``, every ``[project.optional-dependencies]``
+    group, and every ``[dependency-groups]`` (PEP 735) group, flattened.
+    Extras must not be dropped — the fleet's one real conflict (example-retrieval-repo's
+    ``chroma`` extra declaring ``chromadb``) lives in an optional-dependencies
+    group, not the base list. ``[dependency-groups]`` entries may be plain
+    PEP 508 strings or ``{include-group = "..."}`` tables that reference
+    another group in the same file — both are resolved; anything else raises
+    rather than silently passing a non-string through as a spec."""
     project = pyproject.get("project", {}) or {}
     specs: List[str] = list(project.get("dependencies", []) or [])
     optional = project.get("optional-dependencies", {}) or {}
     for group_specs in optional.values():
         specs.extend(group_specs or [])
+    dependency_groups = pyproject.get("dependency-groups", {}) or {}
+    for group_name in dependency_groups:
+        specs.extend(_flatten_dependency_group(dependency_groups, group_name))
     return specs
 
 
@@ -216,6 +365,15 @@ def _parse_requirements_txt(path: Path) -> List[str]:
             # dependency spec this union can carry. The manifest itself is
             # one of the declared contributing sources, so skipping its
             # directives does not silently drop a package spec.
+            continue
+        # pip's requirements.txt format permits a trailing inline comment
+        # (`pkg>=1.0  # note`) — strip it before the spec is carried into
+        # the generated .in file, or the appended provenance comment turns
+        # the line into invalid PEP 508. Review: code-reviewer — every other
+        # ingestion path here (pyproject, override rows) is already
+        # comment-safe.
+        line = line.split("#", 1)[0].strip()
+        if not line:
             continue
         specs.append(line)
     return specs
@@ -324,6 +482,111 @@ def validate_overrides(overrides_path: Path = _OVERRIDES_PATH) -> None:
             raise FleetEnvLockError(
                 f"fleet_env_lock: override row missing {missing}: {row!r}"
             )
+
+
+def _parity_member_specs(
+    repo_key: str, manifest_rel: str, packages: Sequence[str]
+) -> Dict[str, str]:
+    """Bare version specs for ``packages`` in one parity member file.
+
+    Reuses ``_parse_requirements_txt``, so a package named only inside a
+    comment does not count as a declaration — the distinction that makes
+    example-game-repo's ``gpu_sidecar/requirements.txt:10`` torchvision mention a
+    non-declaration.
+    """
+    root = Path(_resolve_repo_root(repo_key))
+    path = root / manifest_rel
+    if not path.is_file():
+        raise FleetEnvLockError(
+            f"fleet_env_lock: parity member declared but not on disk: {path}. "
+            "A lockstep peer that moved is exactly the rot this check exists "
+            "to catch — repoint PARITY_LOCKSTEP_GROUPS (and the peer file's "
+            "own header) at the new path rather than deleting the group."
+        )
+    wanted = {name.lower() for name in packages}
+    found: Dict[str, str] = {}
+    for spec in _parse_requirements_txt(path):
+        name = _spec_name(spec)
+        if name in wanted:
+            found[name] = spec.strip()
+    return found
+
+
+def check_parity_lockstep(
+    groups: Sequence[Dict[str, object]] = (),
+) -> List[str]:
+    """Return one message per violated cross-repo floor-lockstep rule.
+
+    Two sibling repos declare, in prose headers, that their torch floors
+    MUST move together. Prose is not an artifact: a desync resolves green
+    on both sides and surfaces much later as unexplained per-repo variance.
+    This is the artifact that discharges the rule.
+
+    Skips a group whose repo is absent from the machine-local registry or
+    not cloned on this box — a fleet check must not fail on a machine that
+    simply does not carry every sibling. A repo that IS present with the
+    declared file missing raises instead: a lockstep peer that moved is the
+    rot this exists to catch, and it has already happened once — example-retrieval-repo's
+    own header names ``scripts/constraints.txt`` while the file lives at
+    ``example_retrieval_repo_scripts/constraints.txt``. The prose contract failed before
+    anyone bumped a floor.
+
+    Negative spec: deliberately NOT wired into ``generate_lock``. Neither
+    parity file is a fleet source row, so a desync between two sibling repos
+    does not make this repo's lock wrong — blocking lock regeneration on it
+    would couple an unrelated cross-repo hygiene rule to a hot path. Call it
+    from tests and fleet hygiene, not from generation.
+
+    Negative spec: ``diverges`` names packages a group deliberately does
+    NOT hold in lockstep. Example-retrieval-repo pins torchvision ``~=0.27.0`` in
+    constraints.txt (a pip-resolver backtracking bound, narrowed per
+    AC-A.10) against ``>=0.25,<2`` in its uv overrides file, and both files
+    document the divergence as intentional. Do not "repair" it.
+    """
+    violations: List[str] = []
+    for group in groups or PARITY_LOCKSTEP_GROUPS:
+        packages = tuple(group["packages"])  # type: ignore[arg-type]
+        members = tuple(group["members"])  # type: ignore[arg-type]
+        observed: List[Tuple[str, Dict[str, str]]] = []
+        for repo_key, manifest_rel in members:
+            try:
+                root = registry_get(f"repos.{repo_key}")
+            except Exception:
+                root = None
+            if not root or not Path(root).is_dir():
+                observed = []
+                break
+            observed.append(
+                (
+                    f"{repo_key}:{manifest_rel}",
+                    _parity_member_specs(repo_key, manifest_rel, packages),
+                )
+            )
+        if len(observed) < 2:
+            continue
+        for package in packages:
+            seen = {label: specs.get(package) for label, specs in observed}
+            declared = {label: spec for label, spec in seen.items() if spec}
+            if not declared:
+                continue
+            if len(declared) < len(observed):
+                missing = sorted(set(seen) - set(declared))
+                violations.append(
+                    f"{package}: declared in {sorted(declared)} but absent from "
+                    f"{missing} — lockstep group '{group['rule']}' requires every "
+                    "member to declare it, or none to."
+                )
+                continue
+            if len(set(declared.values())) > 1:
+                rendered = ", ".join(
+                    f"{label} -> {spec}" for label, spec in sorted(declared.items())
+                )
+                violations.append(
+                    f"{package}: floors desynced across a mandated lockstep "
+                    f"group ({rendered}). Rule: {group['rule']}. Bump every "
+                    "member together, or retire the group deliberately."
+                )
+    return violations
 
 
 def run(

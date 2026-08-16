@@ -236,8 +236,14 @@ def child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
     Callers that DO want the flag to reach the child (nested
     coordinator_core.invoke dispatch) should not use this — see
     `_build_subprocess_env`, which builds that env explicitly instead.
+
+    AC11 (pln-the-machine-local-registry-rea-50be37 § C5): also propagates
+    COORDINATOR_SETTINGS_HOME via `_settings_home_env` (never overwriting an
+    already-set child value), same rationale as `_build_subprocess_env` —
+    this spawns children too (e.g. `_machine_local_get`'s registry-read
+    subprocess), and they should hit rung 0 instead of re-resolving via CLI.
     """
-    env = dict(os.environ)
+    env = _settings_home_env(dict(os.environ))
     if _LAZY_OPS_INJECTED_BY_THIS_MODULE:
         env.pop(_LAZY_OPS_ENV_KEY, None)
     if overrides:
@@ -410,8 +416,27 @@ def _resolve_claude_klabauter_root() -> str:
                 Python subprocess to bin/_machine_local.py (_machine_local_get —
                 the same registry lookup coordinator_core.claude_klabauter_root's own
                 rung 2 performs, just invoked without a bash intermediary), then
-                hand resolution authority to the native module itself for
-                byte-identical behavior/remediation text once it's importable.
+                hand resolution authority to the native module itself — via
+                ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class()``
+                (the DR-132 two-tier published-engine-vs-live-working-tree gate,
+                NOT the classless ``coordinator_claude_klabauter_root()`` this call site
+                used before) — for byte-identical behavior/remediation text
+                once it's importable. This is Rung 2+'s ONLY change here: the
+                bootstrap subprocess (_machine_local_get) and the delegation
+                itself are unaffected — no new subprocess, no new resolution
+                logic (plan § C5).
+
+      PUBLISHED-ENGINE GATE COVERAGE, stated honestly: only Rung 2+ reaches
+      the gate above. Rungs 1 (env), 1.5 (pointer file), and 3
+      (self-location) all return BEFORE the oracle is ever consulted, so a
+      value resolved on any of those rungs is gate-BLIND — same as before
+      this change. Rung 1.5 in particular is the exact defect commit
+      0fdfb61d6 fixed inside `coordinator_claude_klabauter_root_with_class()` itself
+      (the pointer file pre-empting the DR-132 gate on every installed
+      machine) — that fix lives in the two-tier wrapper this rung now calls
+      into via Rung 2+, but does NOT retroactively gate Rungs 1/1.5/3 here,
+      which remain plain reads/self-location with no subprocess and no gate
+      walk, by design (HARD CONSTRAINT: no new subprocess on rungs 1/1.5/3).
       Rung 3 (NEW, TERMINAL): self-location from THIS module's own ``__file__``,
                 via the existing ``_walk_up_to_checkout`` helper — reached only
                 when rungs 1, 1.5, and 2 have all missed, immediately before the
@@ -517,14 +542,21 @@ def _resolve_claude_klabauter_root() -> str:
         sys.path.insert(0, _candidate)
     try:
         try:
-            from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+            from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
         except ImportError as exc:
             raise RuntimeError(
                 f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {_candidate!r} (from machine-local "
                 f"repos.claude_klabauter) is not a valid claude-klabauter checkout — "
                 f"coordinator_core.claude_klabauter_root not importable: {exc}"
             ) from exc
-        resolved = coordinator_claude_klabauter_root()
+        # Published-engine rung: coordinator_claude_klabauter_root_with_class() runs the
+        # DR-132 two-tier gate (published-engine-mirror vs. live-working-tree)
+        # instead of the classless coordinator_claude_klabauter_root(), which always
+        # answered live-working-tree. The (root, resolution_class) pair is
+        # returned; this rung only needs root — cc_invoke does not branch on
+        # the class (that belongs to a future consumer, not this resolution
+        # rung: engine.target is a read-site default, never diverted on here).
+        resolved, _resolution_class = coordinator_claude_klabauter_root_with_class()
     finally:
         if _injected:
             try:
@@ -897,13 +929,64 @@ def _build_subprocess_env(claude_klabauter_root: str) -> dict[str, str]:
     Passes os.environ through, sets CLAUDE_KLABAUTER_ROOT, and prepends it to PYTHONPATH only if
     not already present (idempotency fence — mirrors _cc_resolve_deps() in the shell
     transport). Shared by cc_invoke(), cc_invoke_bare(), and the op-budget dump spawn.
+
+    AC11 (pln-the-machine-local-registry-rea-50be37 § C5): also propagates
+    COORDINATOR_SETTINGS_HOME into the child env via `_settings_home_env`, so a
+    child that itself resolves settings-home (directly, or by invoking a shell
+    resolver that tries the `coordinator-settings-home` CLI before its disk
+    fallback) hits rung 0 and skips that CLI call.
     """
-    env: dict[str, str] = {**os.environ, "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root}
+    env: dict[str, str] = _settings_home_env(
+        {**os.environ, "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root}, claude_klabauter_root
+    )
     existing_pp = env.get("PYTHONPATH", "")
     _sep = os.pathsep
     if f"{_sep}{claude_klabauter_root}{_sep}" not in f"{_sep}{existing_pp}{_sep}":
         env["PYTHONPATH"] = f"{claude_klabauter_root}{_sep}{existing_pp}" if existing_pp else claude_klabauter_root
     return env
+
+
+def _settings_home_env(base_env: dict[str, str], claude_klabauter_root: str | None = None) -> dict[str, str]:
+    """Return `base_env` with COORDINATOR_SETTINGS_HOME set to the resolved
+    settings-home root, UNLESS `base_env` already carries the key.
+
+    AC11 (pln-the-machine-local-registry-rea-50be37 § C5): the actual spawn seam
+    that builds child env for claude-klabauter-owned fan-outs. `coordinator_core._settings_home
+    .settings_home()` is a pure env/home read with zero external calls (no CLI
+    spawn), so this is re-derived fresh on every call — there is no per-process
+    cache to go stale across a long-lived warm engine or EM session, which
+    trivially satisfies "re-derive per op-dispatch, not per process".
+
+    Precedence: an explicitly-set child value (differently-rooted tenant, a test
+    harness redirecting it, a deliberately-scoped operator shell) is NEVER
+    overwritten — this only fills a gap the child env does not already carry.
+
+    Import is function-local, matching this module's convention (see the
+    eager-op-registration seam note above): no coordinator_core import sits
+    above that seam at module top. `claude_klabauter_root` is inserted onto `sys.path`
+    only for the duration of the import, mirroring `_is_worktree_scoped_op`'s
+    own inject/finally-remove pattern — this function must never crash the
+    transport, so a resolution failure falls back to `base_env` unchanged.
+    """
+    if base_env.get("COORDINATOR_SETTINGS_HOME"):
+        return base_env
+
+    _root = claude_klabauter_root if claude_klabauter_root is not None else os.environ.get("CLAUDE_KLABAUTER_ROOT")
+    _injected = bool(_root) and _root not in sys.path
+    if _injected:
+        sys.path.insert(0, _root)
+    try:
+        from coordinator_core import _settings_home
+
+        return _settings_home.settings_home_child_env(base_env)
+    except Exception:
+        return base_env
+    finally:
+        if _injected:
+            try:
+                sys.path.remove(_root)
+            except ValueError:
+                pass
 
 
 _IMPORT_ERROR_TOKENS = ("importerror", "modulenotfounderror", "no module named")

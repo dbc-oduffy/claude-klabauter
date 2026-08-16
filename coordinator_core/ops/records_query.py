@@ -864,9 +864,48 @@ def _normalize_roadmap_status(fm: dict, record_type: str) -> None:
 # --where grammar — byte-exact port of query-records.js's parseClause/matchesClause/
 # compareValues (freeze-query-records-grammar.md Surface 3). OPS scan order matters:
 # '<='/'>=' must be checked before bare '<'/'>', and '!=' before nothing-else-conflicts.
-_WHERE_IN_RE = re.compile(r'^(\w+)\s+in\s*\(([^)]*)\)$', re.IGNORECASE)
-_WHERE_BARE_RE = re.compile(r'^(\w+)$')
+_WHERE_IN_RE = re.compile(r'^([\w.]+)\s+in\s*\(([^)]*)\)$', re.IGNORECASE)
+_WHERE_BARE_RE = re.compile(r'^([\w.]+)$')
 _WHERE_SCAN_OPS = ('!=', '<=', '>=', '<', '>', '=')
+
+
+def _resolve_field(fm: dict, field: str):
+    """Resolve a ``where``/``sort`` field name against frontmatter, dotted-path aware.
+
+    A literal flat key always wins: frontmatter may legitimately carry a key
+    containing a dot, and that reading is the one that was queryable before
+    dotted paths existed, so it must not change meaning now.  Only when no such
+    key exists is ``field`` split on ``.`` and walked as a nested path.
+
+    Any non-mapping encountered mid-walk (or a missing segment) yields ``None`` —
+    the same value a missing flat key yields, so callers need no new branch.
+
+    Deliberate divergence from the retired query-records.js original, which had
+    no nested-field support at all. Documented rather than smoothed because the
+    absence was not inert: ``fm.get('chain_loe.tshirt')`` returned ``None`` and
+    coerced to ``''``, so every ``=`` comparison on a dotted field returned a
+    SILENT zero rows and every ``!=`` silently matched EVERY row. That made
+    /workweek-complete Step 11's LoE high-water check — specified entirely in
+    dotted fields (``chain_loe.tshirt``, ``loe.tshirt``) and marked MANDATORY —
+    report a clean, plausible "zero entries" on every run in every repo. Found
+    by example-retrieval-repo-ue-addon-em against a 27-entry corpus whose true answer was
+    2. Note the asymmetry this repairs: ``field in (...)`` on a dotted field was
+    already a LOUD failure (SystemExit(1), the field-name regexes above), so the
+    grammar rejected the shape it could not evaluate in one place while
+    silently mis-evaluating it in another.
+    """
+    if field in fm:
+        return fm[field]
+    if '.' not in field:
+        return None
+    cursor = fm
+    for segment in field.split('.'):
+        if not isinstance(cursor, dict):
+            return None
+        if segment not in cursor:
+            return None
+        cursor = cursor[segment]
+    return cursor
 
 
 def _parse_clause(raw: str) -> dict:
@@ -908,6 +947,10 @@ def _parse_where(where_str: str) -> list[dict]:
     bare-field presence filter.  Splits on `` AND `` / `` and `` (case-
     insensitive).  A clause with no recognisable shape raises ``SystemExit(1)``
     with a stderr message (trips the caller's PATH-fallback).
+
+    A field name may be a dotted path into nested frontmatter
+    (``chain_loe.tshirt``); resolution rules and the silent-zero bug this
+    repaired are in ``_resolve_field``.
 
     Returns a list of clause dicts: ``{"field", "op", "value"}`` for scalar
     comparison ops, ``{"field", "op": "in", "values": [...]}`` for ``in``, or
@@ -959,7 +1002,7 @@ def _clause_matches(fm: dict, clause: dict) -> bool:
     """Port of query-records.js's ``matchesClause`` for one parsed clause."""
     field = clause['field']
     op = clause['op']
-    raw = fm.get(field)
+    raw = _resolve_field(fm, field)
 
     # Bare-presence filter: populated non-empty array, non-empty string, or any
     # other defined/non-null value. Checked before String()-coercion so an
@@ -1075,7 +1118,7 @@ def _sort_records(records: list[dict], sort_str: str) -> list[dict]:
     field = sort_str[1:] if desc else sort_str
 
     def _key(r: dict) -> str:
-        v = r['frontmatter'].get(field)
+        v = _resolve_field(r['frontmatter'], field)
         return '' if v is None else str(v)
 
     def _cmp(a: dict, b: dict) -> float:

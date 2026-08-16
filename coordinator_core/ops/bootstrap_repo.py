@@ -108,6 +108,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core import launchable
 from coordinator_core.git_lock_retry import run_with_lock_retry
+from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -216,31 +217,15 @@ def _content_root_rungs_2_to_4(claude_home: str) -> str:
         if os.path.isdir(candidate):
             return candidate
 
-    machine_local = os.path.join(claude_home, "bin", "machine-local")
-    # extensionless coordinator/bin sibling -- no exec bit/shebang required once
-    # launched through an interpreter, so existence alone is the precondition
-    # (see coordinator_core.launchable module docstring: POSIX-bare is not the
-    # fix here; Windows keeps resolve_launchable's .cmd-twin/shebang handling).
-    if os.path.isfile(machine_local):
-        if launchable._is_windows():
-            ml_argv = launchable.resolve_launchable(machine_local)
-        else:
-            ml_argv = [sys.executable, machine_local]
-        try:
-            proc = subprocess.run(
-                [*ml_argv, "get", "plugin.mirrors.coordinator-claude.live_path"],
-                capture_output=True,
-                text=True,
-                timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                **_CREATIONFLAGS,
-            )
-            candidate = (proc.stdout or "").strip()
-            if proc.returncode == 0 and candidate and os.path.isdir(candidate):
-                return candidate
-        except (OSError, subprocess.TimeoutExpired):
-            print(f"skip: _resolve_doe_content_root: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-            pass
+    # Zero-spawn: `registry_get` reads the same registry.local.toml over
+    # registry.toml chain the `machine-local get` CLI would, in-process --
+    # no `machine-local` binary presence check needed first (see
+    # `coordinator_core.machine_resolver.registry_get` docstring, DR-071:
+    # this is the reset-survival-safe reader, the CLI's exec bits live under
+    # the resettable `~/.claude/bin/`).
+    candidate = _registry_get("plugin.mirrors.coordinator-claude.live_path")
+    if candidate and os.path.isdir(candidate):
+        return candidate
 
     return os.path.join(claude_home, "plugins", "coordinator-claude", "coordinator")
 

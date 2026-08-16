@@ -45,10 +45,9 @@ Negative-spec:
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 import sys
 from typing import List, Optional
+from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core.install.write_surface import (
     ABSENT_ON_LEGACY_INSTALLS,
     StaticClause,
@@ -120,33 +119,22 @@ See spec backlink:
 docs/plans/2026-08-06-writer-declared-write-surface-manifest.md, chunk C3f."""
 
 
-def _resolve_machine_local() -> Optional[str]:
-    return shutil.which("machine-local")
-
-
 def resolve_claude_klabauter_clone() -> str:
-    """Tier 1: REPO_CLAUDE_KLABAUTER env. Tier 2: machine-local get repos.claude_klabauter."""
+    """Tier 1: REPO_CLAUDE_KLABAUTER env. Tier 2: the direct-registry reader
+    (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess.
+
+    Converted 2026-08-16 (C7b): the module's own test suite
+    (`coordinator_core/ops/test_install_shell_init_guard_seam.py`) already
+    isolated every test from the operator's real `REPO_CLAUDE_KLABAUTER`
+    resolution via an explicit env override; it now additionally seeds a
+    scratch machine-local registry FILE so the one test that relies on
+    tier-2 falling through (`test_graceful_skip_when_claude_klabauter_not_resolvable`)
+    cannot read the operator's REAL registry either."""
     env_override = os.environ.get("REPO_CLAUDE_KLABAUTER", "")
     if env_override:
         return env_override
-    ml_bin = _resolve_machine_local()
-    if ml_bin is None:
-        return ""
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            [ml_bin, "get", "repos.claude_klabauter"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    value = _machine_resolver.registry_get("repos.claude_klabauter")
+    return value or ""
 
 
 def _shell_coverage_note() -> str:

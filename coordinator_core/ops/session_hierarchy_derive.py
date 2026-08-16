@@ -80,6 +80,16 @@ def _engine_worktree_root() -> Optional[Path]:
     file's directory is not inside a git repo — callers treat ``None`` as
     "cannot resolve, do nothing" (same fail-soft posture as
     ``handoff_lineage_ancestry``'s absent-``repo_root`` branch).
+
+    Review: code-reviewer (P1) — pre-conversion this called
+    ``git -C <engine_dir> rev-parse --path-format=absolute --show-toplevel``;
+    ``show_toplevel()`` (``coordinator_core.git.repo_root``) does not forward
+    ``--path-format=absolute`` to its own spawn fallback. Verified NOT a
+    regression: ``--show-toplevel``'s own default (no ``--path-format`` flag
+    at all) is already absolute — confirmed against real git, see
+    ``test_show_toplevel_spawn_fallback_matches_path_format_absolute`` in
+    ``coordinator_core/git/test_repo_root.py``. ``--path-format=absolute``
+    was a no-op for this specific form even in the pre-conversion call.
     """
     engine_dir = Path(__file__).resolve().parent
     out = show_toplevel(str(engine_dir))

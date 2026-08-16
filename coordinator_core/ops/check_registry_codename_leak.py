@@ -44,14 +44,11 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from coordinator_core._settings_home import home_dir, settings_home
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
 
 # D1 keep-set — prefix-matched against slug (strip repos. prefix first).
 # 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
@@ -130,70 +127,21 @@ def _validate_no_exempt(no_exempt: Sequence[str]) -> None:
 
 
 def _resolve_registry_keys(env: dict) -> List[str]:
-    """Resolve repos.* keys — env override first, else machine-local subprocess.
+    """Resolve repos.* keys — env override first, else in-process registry read.
 
-    Mirrors the bash resolution order exactly: COORDINATOR_CODENAME_REGISTRY_KEYS
-    (space/tab/newline-separated) takes priority; else `machine-local keys` (on
-    PATH, at the canonical settings-home install, or at the legacy
-    `$HOME/.claude/bin/machine-local` fallback), filtered to lines starting
-    with `repos.`.
+    COORDINATOR_CODENAME_REGISTRY_KEYS (space/tab/newline-separated) takes
+    priority; else `merged_flat_registry` reads the same registry.local.toml
+    over registry.toml chain `machine-local keys` would enumerate, in-process
+    (zero-spawn — see `coordinator_core.machine_resolver.merged_flat_registry`),
+    filtered to keys starting with `repos.`. `repos.*` is a confirmed
+    root-namespace-only key (never a promoted concern-file namespace), so no
+    `machine-local` binary presence/resolution rung is needed first.
     """
     override = env.get("COORDINATOR_CODENAME_REGISTRY_KEYS", "")
     if override:
         return [tok for tok in re.split(r"[ \t\n]+", override.strip()) if tok]
 
-    ml_bin = shutil.which("machine-local", path=env.get("PATH"))
-    if not ml_bin:
-        # Settings-home is the canonical install (DR-072); ~/.claude/bin is the
-        # legacy rung, retired 2026-07-28 and kept only for machines predating
-        # the move. Without the settings-home rung this resolver reaches only
-        # PATH — and settings-home/bin is NOT on PATH by default — so on a
-        # stock machine it found nothing and the registry lookup was skipped
-        # with a warning that reads like an absent registry.
-        # env.get("HOME") honours test-injected HOME overrides; the
-        # home_dir() fallback keeps this rung Windows-safe (USERPROFILE-aware
-        # via Path.home()) when the injected env carries no HOME at all —
-        # native Windows shells don't set HOME, and a raw `env.get("HOME", "")`
-        # read degraded to a cwd-relative path in that case (this rung is now
-        # outranked by settings-home above, but the landmine is removed
-        # rather than left merely dormant).
-        legacy_home = env.get("HOME") or str(home_dir())
-        for candidate in (
-            os.path.join(str(settings_home()), "bin", "machine-local"),
-            os.path.join(legacy_home, ".claude", "bin", "machine-local"),
-        ):
-            if candidate and os.path.isfile(candidate) and is_executable(candidate):
-                ml_bin = candidate
-                break
-
-    if not ml_bin:
-        print(
-            f"{_PROG}: WARNING: machine-local not found; registry lookup skipped.",
-            file=sys.stderr,
-        )
-        print(
-            "  Set COORDINATOR_CODENAME_REGISTRY_KEYS to run without machine-local.",
-            file=sys.stderr,
-        )
-        return []
-
-    try:
-        proc = subprocess.run(
-            [ml_bin, "keys"],
-            capture_output=True,
-            text=True,
-            env=env,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _resolve_registry_keys: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return []
-
-    keys: List[str] = []
-    for line in (proc.stdout or "").splitlines():
-        if line.startswith("repos."):
-            keys.append(line)
-    return keys
+    return sorted(key for key in _merged_flat_registry() if key.startswith("repos."))
 
 
 def _is_probably_binary(path: Path) -> bool:

@@ -32,6 +32,16 @@ state/
 .claude/
 Saved/
 
+# A provisioned fleet environment, basename `.fleet-env` (docs/reference/
+# fleet-shared-environment-contract.md § DECISIONS). Same class as `Saved/`
+# above but a multi-GB Python environment rather than a ~190MB index -- must
+# never publish, and per `--reconcile-dest=discard`'s remedy
+# (`percolate-round.py::_reconcile_dest_discard`, `git reset --hard HEAD`
+# then `git clean -fd`, no `-x`) an ignored path survives that reconcile, so
+# ignoring it here is what keeps a provisioned environment from being
+# destroyed by the standard dirty-dest recovery path.
+.fleet-env/
+
 # --- Editor / OS detritus ---
 *.bak
 *.tmp

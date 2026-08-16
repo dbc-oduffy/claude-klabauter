@@ -64,6 +64,7 @@ guard's spirit, not its BASH_SOURCE mechanism).
 from __future__ import annotations
 
 import argparse
+import enum
 import filecmp
 import json
 import ntpath
@@ -76,7 +77,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import FrozenSet, List, Optional
+from typing import FrozenSet, List, Optional, Tuple
 
 from coordinator_core import machine_resolver
 from coordinator_core._settings_home import settings_home
@@ -99,7 +100,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.install.policy_gate import PolicyGateVerdict, evaluate_policy_gate
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
 
 # Generator-provenance declaration (generator_provenance.py). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
@@ -407,7 +408,8 @@ def _resolve_bin_templates_manifest_root() -> Path:
     colocated = Path(__file__).resolve().parents[2]
     if (colocated / "coordinator" / "lib" / "bin-templates-manifest.py").is_file():
         return colocated
-    return Path(coordinator_claude_klabauter_root())
+    _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+    return Path(_claude_klabauter_root_str)
 
 
 class _BinTemplatesManifest:
@@ -707,6 +709,30 @@ def _careful_write(
     return backup_path
 
 
+def _install_one_effective_bytes(src: Path, python_bin_substitution: Optional[str]) -> bytes:
+    """The bytes `_install_one` actually writes/compares for `src` — a plain
+    byte-substring replace of every ``__PYTHON_BIN__`` occurrence when
+    ``python_bin_substitution`` is not ``None`` (C2), else `src`'s raw
+    content unchanged. See `_install_one`'s own docstring for why this
+    function does not itself decide WHICH sources get a substitution
+    value — only what to do once one is supplied."""
+    raw = src.read_bytes()
+    if python_bin_substitution is None:
+        return raw
+    return raw.replace(b"__PYTHON_BIN__", python_bin_substitution.encode("utf-8"))
+
+
+def _install_one_content_matches(
+    src: Path, dst: Path, python_bin_substitution: Optional[str]
+) -> bool:
+    """Whether `dst` already holds `src`'s effective (post-substitution)
+    content — the substitution-aware replacement for the bare
+    ``filecmp.cmp(src, dst, shallow=False)`` every `_install_one` branch
+    used before C2. `dst` must already be known to exist; callers gate on
+    that themselves (mirrors `filecmp.cmp`'s own precondition)."""
+    return dst.read_bytes() == _install_one_effective_bytes(src, python_bin_substitution)
+
+
 def _install_one(
     src: Path, dst: Path, exec_bit: bool, warn_prefix: str, check_only: bool,
     *, force_overwrite: bool = False,
@@ -714,6 +740,7 @@ def _install_one(
     careful_manifest_relative_paths: Optional["FrozenSet[str]"] = None,
     careful_relative_path: Optional[str] = None,
     careful_install_base: Optional[Path] = None,
+    python_bin_substitution: Optional[str] = None,
 ) -> Optional[Path]:
     """Overwrite policy — code files vs config files vs caller-forced templates.
 
@@ -756,9 +783,35 @@ def _install_one(
     clause 15's resolution — see `_percolation_and_path_steps`, which
     accumulates these across both its loops and journals them once);
     ``None`` in every other case (cold creation, force-overwrite,
-    preserve-on-diff, refuse, check-only)."""
+    preserve-on-diff, refuse, check-only).
+
+    ``python_bin_substitution`` (C2, AC6/AC8) is the same shape of input as
+    ``force_overwrite``/``write_strategy``: an explicit, caller-supplied
+    value, never a name/suffix this function recognizes on its own — the
+    classification decision (which families need the substitution) stays
+    at the call site (`_install_bin_resolvers`), per this docstring's own
+    opening paragraph. When not ``None``, every literal ``__PYTHON_BIN__``
+    occurrence in ``src``'s bytes is replaced with this value before the
+    content is written OR compared against ``dst`` — this is a byte
+    substring replace, not template-aware, and is a silent no-op on any
+    source that does not carry the token (the POSIX extensionless
+    forwarders in the same static families carry no such token — see
+    `_install_bin_resolvers`'s call site comment). ``None`` (the default)
+    preserves every existing caller's byte-verbatim-copy behaviour
+    unchanged.
+
+    Negative-spec (AC6 durability): this in-file substitution is NOT the
+    durable fix by itself. DoE-claude's landed SessionStart sweep
+    (``coordinator/hooks/scripts/_bin_impl_drift.py``) byte-copies
+    ``templates/bin/`` content verbatim on a genuine template change, with
+    no re-bake step — so a template edit re-introduces the literal
+    ``__PYTHON_BIN__`` token here until the next full install re-runs this
+    function. The durable half is ``<settings-home>/bin/.python-bin``,
+    written by the shim's own runtime probe (never touched by the sweep,
+    which only iterates ``templates/bin/``) — this function does not write
+    that sidecar; see C1."""
     if check_only:
-        if dst.exists() and filecmp.cmp(src, dst, shallow=False):
+        if dst.exists() and _install_one_content_matches(src, dst, python_bin_substitution):
             print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
             return
         if dst.exists() and write_strategy in ("careful", "refuse"):
@@ -791,11 +844,14 @@ def _install_one(
         reason = "tracked template"
 
     if not dst.exists():
-        shutil.copyfile(src, dst)
+        atomic_write_bytes(
+            dst, _install_one_effective_bytes(src, python_bin_substitution),
+            preserve_mode=True,
+        )
         if exec_bit:
             dst.chmod(dst.stat().st_mode | 0o111)
     elif force_overwrite:
-        if not filecmp.cmp(src, dst, shallow=False):
+        if not _install_one_content_matches(src, dst, python_bin_substitution):
             if write_strategy == "careful":
                 if (
                     careful_relative_path is None
@@ -835,8 +891,20 @@ def _install_one(
                     "resolvable on PATH to deliver this update safely."
                 )
             else:
+                # C0: routed through atomic_write_bytes (same-directory
+                # mkstemp + os.replace) rather than a bare shutil.copyfile —
+                # the previous check-then-write (filecmp.cmp above, then a
+                # non-atomic copy here) was a TOCTOU window a peer session
+                # could observe mid-copy on exactly the hot-path files this
+                # plan exists to speed up (_machine_local.py, the .cmd
+                # shims). os.replace is atomic on both Windows and POSIX, so
+                # a concurrent reader now always observes either the old or
+                # the new complete content, never a torn write.
                 print(f"[{warn_prefix}] updated {dst.name} ({reason}; re-install overwrites)")
-                shutil.copyfile(src, dst)
+                atomic_write_bytes(
+                    dst, _install_one_effective_bytes(src, python_bin_substitution),
+                    preserve_mode=True,
+                )
                 if exec_bit:
                     dst.chmod(dst.stat().st_mode | 0o111)
         elif exec_bit:
@@ -849,7 +917,7 @@ def _install_one(
             # classes where the exec bit is load-bearing, so skipping it here
             # would silently leave the repair path non-functional.
             dst.chmod(dst.stat().st_mode | 0o111)
-    elif filecmp.cmp(src, dst, shallow=False):
+    elif _install_one_content_matches(src, dst, python_bin_substitution):
         if exec_bit:
             dst.chmod(dst.stat().st_mode | 0o111)
     else:
@@ -2184,8 +2252,37 @@ def resolve_repo_env_exports(
     return exports, warnings, errors
 
 
+class _BakedPythonBinReason(enum.Enum):
+    """Why ``_resolve_baked_python_bin_detail`` returned the value it did.
+
+    Exists because ``""`` alone is ambiguous: ``_install_bin_resolvers``'s
+    AC8 fail-loud gate must fire ONLY on ``UNRESOLVED`` -- no interpreter
+    reachable by any route, ``resolve_python_bin()``'s own "" -- and never on
+    ``LAUNCHER_ONLY``/``NO_CONSOLE_SIBLING``/``RESOLUTION_ERROR``, all three
+    of which have a working ``py -3`` runtime fallback baked into the shim
+    template and are, per this module's own docstring below, "a
+    *contractually valid* result, not a failure". Collapsing all four into a
+    bare ``""`` was C2's actual bug (docs/plans/2026-08-16-registry-read-
+    stops-costing-a-process.md AC8): it hard-failed install on a box whose
+    only Python entry point is the ``py`` launcher, a normal, supported
+    configuration that previously degraded gracefully.
+    """
+
+    RESOLVED = "resolved"
+    NOT_WINDOWS = "not-windows"
+    LAUNCHER_ONLY = "launcher-only"
+    NO_CONSOLE_SIBLING = "no-console-sibling"
+    RESOLUTION_ERROR = "resolution-error"
+    UNRESOLVED = "unresolved"
+
+
 def _resolve_baked_python_bin() -> str:
     """Resolve the interpreter to bake into ``python3.cmd`` (Step 3a).
+
+    Thin wrapper over ``_resolve_baked_python_bin_detail`` for the (common)
+    callers that only need the bake value, never the reason behind a ""
+    result -- same resolution, same return value, unchanged by the AC8 fix
+    below.
 
     Returns the absolute interpreter path to bake in, or ``""`` when none should
     be baked -- this is a *contractually valid* result, not a failure: the
@@ -2243,8 +2340,18 @@ def _resolve_baked_python_bin() -> str:
     same install dir if present; otherwise fall through to the existing "" (no-bake
     -> runtime ``py -3`` ladder) with the existing-style warning.
     """
+    return _resolve_baked_python_bin_detail()[0]
+
+
+def _resolve_baked_python_bin_detail() -> Tuple[str, _BakedPythonBinReason]:
+    """Same resolution as ``_resolve_baked_python_bin``, plus WHY a ``""``
+    result was returned -- see ``_BakedPythonBinReason`` for the case
+    catalogue and why the split exists. One probe, reported in full; callers
+    that only need the bake value use the thin wrapper above rather than
+    duplicating this function's probing logic.
+    """
     if os.name != "nt":
-        return ""
+        return "", _BakedPythonBinReason.NOT_WINDOWS
     try:
         from coordinator_core.pyresolve import (
             _WINDOWLESS_BASENAMES,
@@ -2253,8 +2360,10 @@ def _resolve_baked_python_bin() -> str:
         )
 
         py_bin, py_args = resolve_python_bin(prefer_windowless=False)
-        if not py_bin or py_bin in ("py", "pyw") or py_args:
-            return ""
+        if not py_bin:
+            return "", _BakedPythonBinReason.UNRESOLVED
+        if py_bin in ("py", "pyw") or py_args:
+            return "", _BakedPythonBinReason.LAUNCHER_ONLY
         # `py_bin` is a WINDOWS-shaped path (this branch only runs when
         # `os.name == "nt"`, real or monkeypatched); parse it with `ntpath`
         # explicitly rather than `os.path` for the same host-independence
@@ -2262,22 +2371,22 @@ def _resolve_baked_python_bin() -> str:
         if ntpath.basename(py_bin).lower() in _WINDOWLESS_BASENAMES:
             sibling = _console_sibling(py_bin)
             if sibling:
-                return sibling
+                return sibling, _BakedPythonBinReason.RESOLVED
             print(
                 f"[install-substrate] WARNING: python3.cmd interpreter resolution "
                 f"returned a windowless binary ('{py_bin}') with no console sibling "
                 "on disk; baked wrapper falls back to `py -3` launcher at runtime",
                 file=sys.stderr,
             )
-            return ""
-        return py_bin
+            return "", _BakedPythonBinReason.NO_CONSOLE_SIBLING
+        return py_bin, _BakedPythonBinReason.RESOLVED
     except Exception as exc:
         print(
             f"[install-substrate] WARNING: python3.cmd interpreter resolution failed "
             f"({exc}); baked wrapper falls back to `py -3` launcher at runtime",
             file=sys.stderr,
         )
-        return ""
+        return "", _BakedPythonBinReason.RESOLUTION_ERROR
 
 
 def resolve_hook_python_bin() -> str:
@@ -2395,7 +2504,8 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
     # in the claude-klabauter checkout, resolved via the canonical resolver, never by
     # __file__-walking or a hardcoded sibling name.
     try:
-        claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+        _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        claude_klabauter_root = Path(_claude_klabauter_root_str)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -2545,13 +2655,14 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
                 print('[machine-local]   machine-local set cockpit.meta_repo_slug "<owner/repo, e.g. myowner/my-meta-repo>"')
 
     # --- Step 3a: python3.cmd baked-interpreter rendering ---
-    python3_cmd_resolved_bin = _resolve_baked_python_bin()
+    python3_cmd_resolved_bin, _python3_cmd_bake_reason = _resolve_baked_python_bin_detail()
 
     try:
         _install_bin_resolvers(
             ml_bin, ch_bin, bin_dst,
             check_only,
             python3_cmd_resolved_bin=python3_cmd_resolved_bin,
+            python3_cmd_bake_reason=_python3_cmd_bake_reason,
         )
 
         # --- Step 3c-ii: settings-manifest.md ---
@@ -3089,6 +3200,41 @@ def _handle_ps1_gate_verdict(verdict: "PolicyGateVerdict", bin_dst: Path) -> Non
         _report_ps1_policy_gate_skip(verdict, bin_dst)
 
 
+def _write_python_bin_sidecar(bin_dst: Path, python3_cmd_resolved_bin: str) -> None:
+    """Write ``<settings-home>/bin/.python-bin`` with the resolved interpreter.
+
+    AC6's durable half (docs/plans/2026-08-16-registry-read-stops-costing-a-process.md).
+    The in-file ``__PYTHON_BIN__`` bake the static families now receive is NOT
+    durable: DoE-claude's ``coordinator/hooks/scripts/_bin_impl_drift.py`` sweep
+    byte-copies template content verbatim on a genuine template change and
+    performs no re-bake, so it overwrites that substitution. This sidecar is the
+    durable surface precisely because the sweep only iterates DoE's own
+    ``templates/bin/`` and never touches a generated file outside it.
+
+    Negative spec: writes only when the content would change, so a second
+    consecutive install stays a byte-level no-op (AC2). Skipped entirely when
+    the interpreter did not resolve — on non-Windows hosts that is the normal
+    case (there is no ``.cmd`` rung and ``_resolve_baked_python_bin`` returns
+    ``""``), and confirming that the POSIX forwarder reads the path the Windows
+    shim writes is AC5m's, tracked in the debt backlog rather than assumed here.
+    The shim's own first-run probe still writes this file; install writing it
+    removes the one cold resolution a fresh or freshly-swept box would pay.
+    """
+    if not python3_cmd_resolved_bin:
+        return
+    sidecar = bin_dst / ".python-bin"
+    eol = "\r\n" if os.name == "nt" else "\n"
+    payload = (python3_cmd_resolved_bin + eol).encode("utf-8")
+    try:
+        if sidecar.is_file():
+            existing = sidecar.read_bytes().decode("utf-8", "replace").strip()
+            if existing == python3_cmd_resolved_bin:
+                return
+    except OSError:
+        pass
+    atomic_write_bytes(sidecar, payload, preserve_mode=True)
+
+
 def _write_agent_helper_forwarders(
     agent_helper_target_map: "dict[str, str]",
     agent_cmd_dest_map: "dict[str, str]",
@@ -3181,6 +3327,7 @@ def _install_bin_resolvers(
     ml_bin: Path, ch_bin: Path, bin_dst: Path,
     check_only: bool,
     *, python3_cmd_resolved_bin: str,
+    python3_cmd_bake_reason: Optional[_BakedPythonBinReason] = None,
 ) -> None:
     # Resolved FIRST (hoisted ahead of the former Step 3b position) because
     # the bin-templates manifest (C12) — claude-klabauter's own coordinator/lib/,
@@ -3189,24 +3336,94 @@ def _install_bin_resolvers(
     # derivation that already needed this same value. Purely a reordering:
     # same resolution, same failure mode, just paid once, earlier.
     try:
-        claude_klabauter_root_resolved = Path(coordinator_claude_klabauter_root())
+        _claude_klabauter_root_resolved_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        claude_klabauter_root_resolved = Path(_claude_klabauter_root_resolved_str)
     except RuntimeError as exc:
         raise SubstrateFatalError(f"install-substrate: {exc}") from exc
 
     bin_manifest = _load_bin_templates_manifest(claude_klabauter_root_resolved)
+
+    # --- C2 (AC6/AC8): static-family interpreter substitution ---
+    # The static bin-resolver families (ml_family, ml_explicit, ch_family,
+    # platform_localize) were, before C2, a byte-verbatim `_install_one`
+    # copy with no substitution step at all — the five hand-authored `.cmd`
+    # shims (machine-local.cmd, coordinator-settings-home.cmd,
+    # platform-localize.cmd, resolve-coordinator-clone.cmd, claude-home.cmd)
+    # were structurally incapable of ever baking `__PYTHON_BIN__`, falling
+    # to the slow `where python.exe` + `findstr` runtime tier forever. This
+    # reuses `python3_cmd_resolved_bin` — the SAME resolved-interpreter
+    # value the dynamic agent-helper forwarders already receive — rather
+    # than re-deriving a second resolution.
+    #
+    # The POSIX extensionless siblings in these same families (e.g.
+    # `machine-local`, `resolve-coordinator-clone`, `coordinator-settings-
+    # home`, `claude-home`, without a `.cmd` suffix) carry no `__PYTHON_BIN__`
+    # token at all — they resolve their interpreter via `#!/usr/bin/env
+    # python3` plus their own runtime probe, never a baked token — so
+    # threading the same substitution value through every entry in these
+    # families is a no-op there by construction, not a platform branch this
+    # module has to maintain.
+    #
+    # AC8: on Windows, `python3_cmd_resolved_bin == ""` is ambiguous by
+    # itself — see `_BakedPythonBinReason`. Only `UNRESOLVED` (no
+    # interpreter reachable by ANY route) is a genuine failure; a bare
+    # py/pyw launcher, a windowless-with-no-console-sibling, or a swallowed
+    # resolution error all have a working `py -3` runtime fallback and are,
+    # per `_resolve_baked_python_bin_detail`'s own docstring, contractually
+    # valid, not a failure. This is the corrected half of AC8 (previously
+    # gated on bare emptiness, which hard-failed install on a box whose only
+    # Python entry point is the `py` launcher — a normal, supported
+    # configuration that previously degraded gracefully via the shim's own
+    # runtime probing; see docs/plans/2026-08-16-registry-read-stops-
+    # costing-a-process.md AC8's corrected Status cell).
+    #
+    # `python3_cmd_bake_reason` defaults to `None` (gate never fires) so
+    # callers that pass a placeholder `python3_cmd_resolved_bin=""` without
+    # having gone through the resolver at all (this function's many
+    # non-AC8-focused test callers) are unaffected — the ONLY production
+    # caller (`run()`'s Step 3a) always supplies the real reason. Do not
+    # "simplify" this back to gating on bare emptiness: that is the exact
+    # regression this fix removes.
+    #
+    # Non-Windows hosts never bake this family at all: there is no `.cmd`
+    # rung there, so `python3_cmd_resolved_bin` is unconditionally
+    # ""/never consulted (`_resolve_baked_python_bin` itself returns ""
+    # for `os.name != "nt"`) and that is not a failure to report.
+    if (
+        os.name == "nt"
+        and not python3_cmd_resolved_bin
+        and python3_cmd_bake_reason is _BakedPythonBinReason.UNRESOLVED
+    ):
+        raise SubstrateFatalError(
+            "install-substrate: could not resolve an absolute Python "
+            "interpreter to bake into the static bin-resolver shims "
+            "(machine-local.cmd, claude-home.cmd, coordinator-settings-home.cmd, "
+            "platform-localize.cmd, resolve-coordinator-clone.cmd). Remediation: "
+            "ensure python.exe (or the 'py' launcher) is discoverable on PATH, "
+            "then re-run coordinator:install."
+        )
+    static_python_bin_substitution: Optional[str] = (
+        python3_cmd_resolved_bin if os.name == "nt" else None
+    )
 
     def ml_family(dst_dir: Path, prefix: str) -> "list[WriteSurfaceEntry]":
         resolved: "list[WriteSurfaceEntry]" = []
         for entry in bin_manifest.ml_family:
             src = ml_bin / entry.name
             dst = dst_dir / entry.name
-            _install_one(src, dst, entry.exec_bit, prefix, check_only, force_overwrite=True)
+            _install_one(
+                src, dst, entry.exec_bit, prefix, check_only, force_overwrite=True,
+                python_bin_substitution=static_python_bin_substitution,
+            )
             resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
         return resolved
 
     def ch_family(dst_dir: Path, prefix: str) -> None:
         for f, exec_bit in _CH_FAMILY_FILES:
-            _install_one(ch_bin / f, dst_dir / f, exec_bit, prefix, check_only, force_overwrite=True)
+            _install_one(
+                ch_bin / f, dst_dir / f, exec_bit, prefix, check_only, force_overwrite=True,
+                python_bin_substitution=static_python_bin_substitution,
+            )
 
     def rm_family(dst_dir: Path, prefix: str) -> None:
         # _resolve_claude_klabauter.py is installed ONCE per bin dir, alongside every
@@ -3216,16 +3433,43 @@ def _install_bin_resolvers(
         _install_one(resolve_claude_klabauter_lib / "_resolve_claude_klabauter.py", dst_dir / "_resolve_claude_klabauter.py", False, prefix, check_only)
 
     # --- Step 3: bin/ resolvers (<settings-home>/bin/) ---
-    ml_family_resolved = ml_family(bin_dst, "machine-local")
-    if not check_only:
+    # C0: this family (ml_family + ch_family + ml_explicit) force-overwrites
+    # on content diff via `_install_one` — a peer session's session-boot
+    # self-heal, or a concurrent installer run, can be reading/writing the
+    # same `bin_dst` files at the same instant (50-70 concurrent LLMs is
+    # this box's average, per CLAUDE.md § Load norm). `held_lock` serialises
+    # that against every other holder of the SAME `bin_dst` sidecar lock —
+    # `_write_agent_helper_forwarders` below takes its own, separate,
+    # sequential acquisition of the identical target for its own write loop;
+    # the two are never held concurrently in this process (held_lock is not
+    # re-entrant — see its module docstring), so no self-deadlock. Skipped
+    # under check_only: that mode never writes, so there is nothing to
+    # serialise against (pure read/compare, safe to race).
+    if check_only:
+        ml_family_resolved = ml_family(bin_dst, "machine-local")
+        ch_family(bin_dst, "claude-home")
+        ml_explicit_resolved: "list[WriteSurfaceEntry]" = []
+        for entry in bin_manifest.ml_explicit:
+            dst = bin_dst / entry.name
+            _install_one(
+                ml_bin / entry.name, dst, entry.exec_bit, "machine-local", check_only,
+                force_overwrite=True, python_bin_substitution=static_python_bin_substitution,
+            )
+            ml_explicit_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
+    else:
+        with held_lock(bin_dst, holder_label="install-substrate-bin-family"):
+            ml_family_resolved = ml_family(bin_dst, "machine-local")
+            ch_family(bin_dst, "claude-home")
+            ml_explicit_resolved = []
+            for entry in bin_manifest.ml_explicit:
+                dst = bin_dst / entry.name
+                _install_one(
+                    ml_bin / entry.name, dst, entry.exec_bit, "machine-local", check_only,
+                    force_overwrite=True, python_bin_substitution=static_python_bin_substitution,
+                )
+                ml_explicit_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
+            _write_python_bin_sidecar(bin_dst, python3_cmd_resolved_bin)
         resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_ML_FAMILY, ml_family_resolved)
-    ch_family(bin_dst, "claude-home")
-    ml_explicit_resolved: "list[WriteSurfaceEntry]" = []
-    for entry in bin_manifest.ml_explicit:
-        dst = bin_dst / entry.name
-        _install_one(ml_bin / entry.name, dst, entry.exec_bit, "machine-local", check_only, force_overwrite=True)
-        ml_explicit_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
-    if not check_only:
         resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_ML_EXPLICIT, ml_explicit_resolved)
 
     # --- Step 3b: agent/skill bare-name helper forwarders ---
@@ -3268,12 +3512,28 @@ def _install_bin_resolvers(
     _sweep_orphaned_agent_helpers(bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only)
 
     # --- Step 3c: platform-localize hook ---
+    # C0: same force-overwrite/concurrency reasoning as the ml/ch family
+    # lock above — a separate, sequential `held_lock` acquisition of the
+    # same `bin_dst` target (the Step 3b forwarder lock above has already
+    # been released by this point, so this is not a nested/re-entrant hold).
     platform_localize_resolved: "list[WriteSurfaceEntry]" = []
-    for entry in bin_manifest.platform_localize:
-        dst = bin_dst / entry.name
-        _install_one(ml_bin / entry.name, dst, entry.exec_bit, "machine-local", check_only, force_overwrite=True)
-        platform_localize_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
-    if not check_only:
+    if check_only:
+        for entry in bin_manifest.platform_localize:
+            dst = bin_dst / entry.name
+            _install_one(
+                ml_bin / entry.name, dst, entry.exec_bit, "machine-local", check_only,
+                force_overwrite=True, python_bin_substitution=static_python_bin_substitution,
+            )
+            platform_localize_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
+    else:
+        with held_lock(bin_dst, holder_label="install-substrate-bin-family"):
+            for entry in bin_manifest.platform_localize:
+                dst = bin_dst / entry.name
+                _install_one(
+                    ml_bin / entry.name, dst, entry.exec_bit, "machine-local", check_only,
+                    force_overwrite=True, python_bin_substitution=static_python_bin_substitution,
+                )
+                platform_localize_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(dst)))
         resolution_journal.record_resolution(
             _WRITER_ID, _CLAUSE_PLATFORM_LOCALIZE, platform_localize_resolved,
         )

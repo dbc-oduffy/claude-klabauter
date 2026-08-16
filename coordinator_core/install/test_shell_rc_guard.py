@@ -68,7 +68,9 @@ def _fake_home(tmp_path, monkeypatch):
     # forces every rc-path resolution in this module to `.bashrc` and the
     # zsh/default expectations below become host-dependent.
     monkeypatch.delenv("MSYSTEM", raising=False)
-    monkeypatch.setattr(mod, "coordinator_claude_klabauter_root", lambda: "/resolved/claude-klabauter/clone")
+    monkeypatch.setattr(
+        mod, "coordinator_claude_klabauter_root_with_class", lambda: ("/resolved/claude-klabauter/clone", "live-working-tree")
+    )
     # This module's mutation-path tests exercise the cross-platform rc-file
     # write/append/idempotency/escaping logic itself, not the native-Windows
     # no-op branch (that branch has its own dedicated tests, which
@@ -180,7 +182,7 @@ def test_claude_klabauter_root_resolution_failure_skips_write_without_raising(tm
     def _raise():
         raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable")
 
-    monkeypatch.setattr(mod, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(mod, "coordinator_claude_klabauter_root_with_class", _raise)
     result = write_shell_rc_guard_block(check_only=False)
     assert result["modified"] is False
     assert result["already_present"] is False
@@ -396,7 +398,9 @@ def test_write_path_entry_guard_blocks_with_spaces_path_roundtrips(tmp_path):
 
 
 def test_claude_klabauter_clone_body_escapes_metacharacters(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_claude_klabauter_root", lambda: '/tmp/$(touch /tmp/PWNED)')
+    monkeypatch.setattr(
+        mod, "coordinator_claude_klabauter_root_with_class", lambda: ('/tmp/$(touch /tmp/PWNED)', "live-working-tree")
+    )
     result = write_shell_rc_guard_block(check_only=False)
     assert result["modified"] is True
     text = (tmp_path / ".zshrc").read_text(encoding="utf-8")
@@ -512,7 +516,7 @@ def test_journal_records_empty_tuple_on_claude_klabauter_root_resolution_failure
     def _raise():
         raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable")
 
-    monkeypatch.setattr(mod, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(mod, "coordinator_claude_klabauter_root_with_class", _raise)
     write_shell_rc_guard_block(check_only=False)
 
     resolution = _resolved(_journal_env)

@@ -64,7 +64,9 @@ import tempfile
 from typing import List, Optional
 
 from coordinator_core._settings_home import machine_local_dir, native_path_form
+from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import no_console_creationflags
 
 GENERATES = []  # writes only <settings-home>/machine-local/.doe-root, outside any git tree
 
@@ -94,7 +96,20 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     if env_override:
         return native_path_form(env_override), 0
 
-    # Tier 2: machine-local registry.
+    # Tier 2: machine-local registry. Tries `registry_get` first, in-process
+    # and zero-spawn (see `coordinator_core.machine_resolver.registry_get`),
+    # then falls back to the `machine-local get repos.doe_claude` CLI on a
+    # miss -- `registry_get` alone doesn't reach the CLI's autodiscovery/
+    # `path-exceptions.toml` rungs, and this repo's own `.coordinator-dev-repo`
+    # marker proves autodiscovery is live for repos.doe_claude on a real
+    # machine (2026-08-16 review finding). The fallback also restores this
+    # module's own negative-spec above ("shells out to the `machine-local`
+    # CLI... so the registry-merge logic has exactly one implementation"),
+    # which the zero-spawn-only conversion had silently broken.
+    resolved_raw = _registry_get("repos.doe_claude") or ""
+    if resolved_raw:
+        return native_path_form(resolved_raw), 0
+
     ml_bin = _resolve_machine_local()
     if ml_bin is None:
         print(
@@ -109,8 +124,6 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
         return None, 1
 
     try:
-        from coordinator_core.win_portability import no_console_creationflags
-
         result = subprocess.run(
             [ml_bin, "get", "repos.doe_claude"],
             capture_output=True,
@@ -187,20 +200,11 @@ def _seed_plugin_mirror_source_path(doe_root: str) -> None:
     if ml_bin is None:
         print("plugin_mirror_source_path: skipped (machine-local not found)")
         return
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        existing = subprocess.run(
-            [ml_bin, "get", "plugin.mirrors.coordinator-claude.source_path"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print("plugin_mirror_source_path: skipped (machine-local not found)")
-        return
-    if existing.returncode == 0 and existing.stdout.strip():
+    # Read tier: in-process (zero-spawn -- see
+    # `coordinator_core.machine_resolver.registry_get`) rather than shelling
+    # out to `machine-local get`. The write tier below still shells out --
+    # no in-process write substitute exists.
+    if _registry_get("plugin.mirrors.coordinator-claude.source_path"):
         print("plugin_mirror_source_path: ready (no-op)")
         return
     try:

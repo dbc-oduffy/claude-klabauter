@@ -3,9 +3,17 @@
 Port source: coordinator/commands/install.md (DoE-claude) Step 3.5a, the two
 literal bash fences at lines 731 and 747.
 Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
+
+Converted 2026-08-16 (C7b): `_registry_get` now reads the machine-local
+registry in-process (`machine_resolver.registry_get`), so the scenario that
+previously drove a fake `machine-local` CLI stub on PATH now seeds a scratch
+registry FILE instead (`MACHINE_LOCAL_REGISTRY_DIR` pointed at an empty
+`tmp_path` subdirectory, per
+`state/lessons/2026-07-17-redirect-state-home-env-to-tmp-in-unit-t-*.yaml`).
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -13,41 +21,24 @@ import pytest
 
 import coordinator_core.ops.ensure_doe_clone as edc
 from coordinator_core.ops.ensure_doe_clone import main
-from coordinator_core.testing.fake_machine_local import write_fake_executable
-
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
-pytestmark = [
-    pytest.mark.spawns_process,
-    pytest.mark.cadence,
-]
 
 
-def _make_fake_bin(tmp_path: Path, *, get_value: str = "", get_rc: int = 0) -> Path:
-    """Fake `machine-local` that answers `get repos.doe_claude` and
-    `get repos.doe_claude_url` from env-driven fixture values.
+def _seed_registry(tmp_path: Path, **pairs: str) -> Path:
+    """Write a scratch `registry.toml` under `tmp_path` and point
+    `MACHINE_LOCAL_REGISTRY_DIR` at it -- replaces the old PATH-injected
+    fake-CLI shape. Returns the registry dir (unused by callers today, kept
+    for parity with the other converted test modules' helper signature).
 
-    Fabricated via `write_fake_executable` (extensionless POSIX,
-    `.cmd`-wrapped-Python on Windows) rather than a raw `#!/bin/sh` script:
-    a bare-name shebang fake is unexecutable via Windows `CreateProcess`
-    (`fake_machine_local.py`'s own module docstring) -- this module is the
-    repo's existing cross-platform fake-CLI convention, not a new one."""
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir(exist_ok=True)
-
-    ml_body = (
-        "import os, sys\n"
-        "args = sys.argv[1:]\n"
-        "if len(args) >= 2 and args[0] == 'get' and args[1] == 'repos.doe_claude':\n"
-        f"    sys.stdout.write({get_value!r})\n"
-        f"    sys.exit({get_rc})\n"
-        "if len(args) >= 2 and args[0] == 'get' and args[1] == 'repos.doe_claude_url':\n"
-        "    sys.stdout.write(os.environ.get('FAKE_DOE_URL', ''))\n"
-        "    sys.exit(0)\n"
-        "sys.exit(9)\n"
-    )
-    write_fake_executable(bin_dir, "machine-local", ml_body)
-    return bin_dir
+    Values are TOML-escaped via `json.dumps` (TOML basic-string escaping is
+    a superset of JSON's) -- a raw Windows path value contains backslashes
+    that a naive `f'"{v}"'` would silently corrupt into invalid `\\U...`
+    escapes, which `tomllib` degrades to "registry not found" rather than
+    raising."""
+    reg_dir = tmp_path / "ml-registry"
+    reg_dir.mkdir(exist_ok=True)
+    lines = "".join(f"{json.dumps(k)} = {json.dumps(v)}\n" for k, v in pairs.items())
+    (reg_dir / "registry.toml").write_text(lines)
+    return reg_dir
 
 
 @pytest.fixture
@@ -75,11 +66,18 @@ def _fake_git_clone(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolated_env(monkeypatch):
+def _isolated_env(monkeypatch, tmp_path):
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("REPO_DOE_CLAUDE_URL", raising=False)
     monkeypatch.delenv("COORDINATOR_NON_INTERACTIVE", raising=False)
     monkeypatch.setenv("PATH", "")
+    # Scratch-scoped, always-empty-unless-seeded registry dir -- shields every
+    # test from the operator's REAL machine-local registry (C7b). A test that
+    # needs a specific registry value seeds it into this same directory via
+    # `_seed_registry(tmp_path, ...)`.
+    empty_registry = tmp_path / "ml-registry"
+    empty_registry.mkdir(exist_ok=True)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
 
 
 def test_env_override_ready_when_git_dir_present(tmp_path, monkeypatch, capsys):
@@ -144,9 +142,9 @@ def test_live_clone_fails_loud_without_resolvable_url(tmp_path, monkeypatch, cap
 
 
 def test_live_clone_succeeds_with_resolved_url(tmp_path, monkeypatch, capsys, _fake_git_clone):
+    """Both REPO_DOE_CLAUDE and REPO_DOE_CLAUDE_URL are env-overridden here,
+    so registry resolution is never reached -- no registry seed needed."""
     clone = tmp_path / "doe-clone-not-yet"
-    bin_dir = _make_fake_bin(tmp_path)
-    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/bin" + os.pathsep + "/usr/bin")
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
     monkeypatch.setenv("REPO_DOE_CLAUDE_URL", "https://example.invalid/doe-claude.git")
 
@@ -160,8 +158,7 @@ def test_live_clone_succeeds_with_resolved_url(tmp_path, monkeypatch, capsys, _f
 def test_registry_tier_resolves_clone_path(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
-    bin_dir = _make_fake_bin(tmp_path, get_value=str(clone))
-    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/bin" + os.pathsep + "/usr/bin")
+    _seed_registry(tmp_path, **{"repos.doe_claude": str(clone)})
 
     rc = main([])
 

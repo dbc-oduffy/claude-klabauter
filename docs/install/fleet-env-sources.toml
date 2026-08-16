@@ -1,0 +1,146 @@
+# Declares WHICH manifests contribute to the fleet shared environment's
+# dependency union — one row per contributing manifest, `repo` (a
+# machine-local registry key suffix, resolved as `repos.<repo>`) plus
+# `manifest` (path relative to that repo's root).
+#
+# To SHRINK the union: delete the row(s) for a repo below and re-run
+#   python3 -m coordinator_core.install.fleet_env_lock
+# `fleet-env-requirements.in` is always a full regeneration from this file —
+# never hand-edit it to drop a repo.
+#
+# Spec backlink: docs/plans/2026-08-16-one-environment-for-the-fleet.md § C2
+# Contract: docs/reference/fleet-shared-environment-contract.md
+# Source data: state/audits/2026-08-16-fleet-venv-survey.md (7 real venv
+# trees surveyed; example-game-repo's `.venv` and `.venv-sidecar` share one repo,
+# contributing two manifests between them — its main pyproject.toml and
+# gpu_sidecar/requirements.txt; its top-level requirements.txt is documented
+# stale — 12-18 declared packages, none installed, workloads moved to
+# example-retrieval-repo, never updated since — and is deliberately NOT a source row).
+#
+# `repo = "claude_klabauter"` rows below are THIS repo's own manifests,
+# resolved through the same `registry_get("repos.claude_klabauter")` seam as
+# every sibling row — never a hardcoded path. Corrected 2026-08-16 (C2
+# defect fix): the spike verdict this file's union was seeded from parsed
+# the `claude-klabauter` PUBLISH MIRROR instead of this source repo for
+# both claude_klabauter rows below — a coordinator guard bars touching that
+# mirror at all, and authoring against it inverts the publish direction.
+# The mirror's pyproject.toml is also NOT byte-identical to this repo's own
+# (8 specs there vs 11 here: this source adds `tree-sitter>=0.21,<1`,
+# `tree-sitter-pwsh>=0.38,<1`, and the `[symbols]` extra), so citing the
+# mirror silently dropped 3 real specs from the union, not just the path.
+#
+# `example-retrieval-repo-symbol-extract[tree-sitter] @ git+ssh://…` from this repo's
+# own `[symbols]` extra is DELIBERATELY EXCLUDED from the union — EM
+# ruling, C2 defect fix. It is first-party sibling wiring (the package
+# lives under example-retrieval-repo/packaging/symbol-extract), the same ground
+# `_first_party_sibling_names` already excludes contributing-repo
+# self-references on, just enumerated by name
+# (`fleet_env_lock._FIRST_PARTY_EXTRA_NAMES`) rather than matched by repo
+# key, since this package's PyPI name differs from the `example_retrieval_repo` repo
+# key. It is also an optional extra, not a base dependency, and its
+# git+ssh source would make every fleet install require ssh credentials to
+# resolve it — a cost paid fleet-wide for one repo's optional extra. The
+# other two claude_klabauter additions — `tree-sitter>=0.21,<1` and
+# `tree-sitter-pwsh>=0.38,<1`, from `[project.dependencies]` — are ordinary
+# third-party PyPI specs and DO go into the union.
+
+[[source]]
+repo = "example_retrieval_repo"
+manifest = "pyproject.toml"
+
+[[source]]
+repo = "claude_klabauter"
+manifest = "pyproject.toml"
+
+[[source]]
+repo = "claude_klabauter"
+manifest = "coordinator/bin/repomap/requirements-repomap.txt"
+
+[[source]]
+repo = "example_game_workbench_repo"
+manifest = "pyproject.toml"
+
+[[source]]
+repo = "example_game_workbench_repo"
+manifest = "gpu_sidecar/requirements.txt"
+
+[[source]]
+repo = "example_league_data_repo"
+manifest = "engine/pyproject.toml"
+
+[[source]]
+repo = "example_market_data_repo"
+manifest = "pyproject.toml"
+
+[[source]]
+repo = "experiments"
+manifest = "review-experiments/pyproject.toml"
+
+[[source]]
+repo = "example_retrieval_repo_ue_addon"
+manifest = "pyproject.toml"
+
+[[source]]
+repo = "example_retrieval_repo_ue_addon"
+manifest = "requirements.txt"
+
+# --- Dispositions: manifests considered and ruled OUT ---------------------
+#
+# Six dependency-declaring manifests were found outside this file's union
+# (improvement-queue 2026-08-16-six-dependency-declaring-manifests-sit-o-
+# b3fac154a324). The defect that item named was that nothing recorded a
+# decision about them, not that rows were missing — the PM is actively
+# challenging this union's membership and expects it to SHRINK, so a row is
+# added only where the evidence shows genuine venv-plane consumption. This
+# section is that record.
+#
+# whoami/pyproject.toml (DoE-claude repo, coordinator/whoami/pyproject.toml,
+# resolved via repos.doe_claude — never a literal drive letter) — OUT. Purpose
+# (a): whoami is structurally bound to the settings-home `.coordinator-venv`
+# and this plan's anti-scope forbids repointing that venv (see
+# docs/plans/2026-08-16-one-environment-for-the-fleet.md § Anti-scope). The
+# earlier survey note that whoami "targets the shared coordinator venv"
+# refers to that venv, not this file's fleet environment.
+#
+# example-cockpit-repo/deploy/embed-service/requirements.txt — OUT. Ruled by C0
+# (docs/reference/fleet-shared-environment-contract.md § DECISIONS (a)): a
+# `python:3.13-slim` container that its own requirements.txt says explicitly
+# does NOT install from example-retrieval-repo's pyproject ("Honour the ranges, ignore
+# the index"). Not a venv-plane consumer; cannot be evidence for this union.
+#
+# example-cockpit-repo/addons/coordinator-cockpit-addon/pyproject.toml and
+# example-cockpit-repo/addons/coordinator-knowledge-addon/pyproject.toml — OUT,
+# undetermined pending the owning repo. Both declare `example-retrieval-repo` itself as
+# a dependency and their own source comments describe installation into "the
+# host venv (via setup.sh pip -e)" — a co-tenant venv local to example-retrieval-repo's
+# own process, not this file's fleet environment. That `setup.sh` does not
+# exist on disk yet (coordinator-knowledge-addon/tests/test_channel_
+# registration.py skips gracefully pending it, "C3 install setup.sh author
+# runs in parallel with C4 (this test file)"), so there is no built install
+# path to inspect and no way to confirm which venv the addons actually
+# target. Ruled OUT rather than guessed; revisit once setup.sh lands and
+# names its venv.
+#
+# experiments/research-pipeline-benchmark/requirements.txt — OUT,
+# undetermined pending the owning repo. `experiments` already contributes
+# via review-experiments/pyproject.toml, but this is a disjoint sibling
+# directory: its README's "How to Run" invokes `python -m harness....`
+# directly with no venv/install step documented anywhere in the directory
+# (no README venv instruction, no setup script, no `.venv`). No evidence
+# either way that it resolves against a venv at all, let alone this fleet
+# environment. Ruled OUT rather than guessed.
+#
+# example-retrieval-repo/packaging/{download-corpus,token-sweep}/pyproject.toml — OUT,
+# same ground as example-retrieval-repo-symbol-extract's existing exclusion above: each
+# is an explicit "SEPARATE build target from the root example-retrieval-repo
+# pyproject.toml", packaged for pinned-git-ref installation by an external
+# consumer's own environment, not resolved by example-retrieval-repo's own venv. They
+# are distributables example-retrieval-repo produces, not manifests describing code
+# that runs from a venv on a fleet machine.
+#
+# Zero-manifest repos: example-store-repo, example-stats-repo, example-repo carry Python but
+# declare zero dependencies anywhere in their trees. No union built from
+# declared manifests can ever cover them (docs/plans/2026-08-16-one-
+# environment-for-the-fleet.md § Out of scope records this as theirs to fix,
+# not this environment's shape) — stated here so the bound is visible where
+# the union itself is defined.

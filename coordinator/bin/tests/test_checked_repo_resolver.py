@@ -409,7 +409,6 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         "day-coverage-sweep.py",
         "emit-cockpit-snapshot.py",
         "goal-close-day.py",
-        "migrate-lessons-md-to-yaml.py",
         "priority-set.py",
         "prune-closed-bugs.py",
         "prune-closed-improvements.py",

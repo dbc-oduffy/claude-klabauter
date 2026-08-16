@@ -178,30 +178,74 @@ def _root_derivation_flag(text: str) -> str | None:
     return None
 
 
-def _scan_file(rel_posix: str, text: str) -> list[tuple[str, int]]:
+class _ScopeCallVisitor(ast.NodeVisitor):
+    """Walks with a def/class-name stack so each matched call can be tagged
+    with its ENCLOSING SCOPE (`"<module>"`, `"func"`, or `"Class.method"`)
+    rather than only its raw line number.
+
+    Review: code-reviewer (P2) -- `KNOWN_UNCONVERTED_SITES` previously keyed
+    on exact `path:lineno`, so any unrelated edit that shifted line numbers
+    ABOVE a listed site (a docstring tweak, an added import) produced a
+    spurious "stale: X, new: Y" failure for the same logical site, not a
+    real regression. Every measured site here is exactly one root-derivation
+    call per enclosing function (see the fixture-derived qualnames next to
+    `KNOWN_UNCONVERTED_SITES` below), so `path:qualname` is unique per site
+    today and stays stable across line-shifting edits that don't touch the
+    call's own function -- while still catching a genuinely NEW site (which
+    lands in a qualname not already in the frozenset) and still catching a
+    site that MOVES to a different function (same reason: new qualname).
+    Line number is still carried alongside for human-readable reporting, just
+    no longer part of the identity key.
+    """
+
+    def __init__(self) -> None:
+        self._stack: list[str] = []
+        self.hits: list[tuple[str, int]] = []  # (qualname, lineno)
+
+    def _qualname(self) -> str:
+        return ".".join(self._stack) if self._stack else "<module>"
+
+    def _enter_scope(self, node: ast.AST, name: str) -> None:
+        self._stack.append(name)
+        self.generic_visit(node)
+        self._stack.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+        self._enter_scope(node, node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+        self._enter_scope(node, node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+        self._enter_scope(node, node.name)
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+        if _spawn_func_name(node) is not None:
+            try:
+                unparsed = ast.unparse(node)
+            except Exception:
+                unparsed = ""
+            if _root_derivation_flag(unparsed) is not None:
+                self.hits.append((self._qualname(), node.lineno))
+        self.generic_visit(node)
+
+
+def _scan_file(rel_posix: str, text: str) -> list[tuple[str, str, int]]:
+    """Returns `(rel_posix, qualname, lineno)` per hit -- see
+    `_ScopeCallVisitor` for why identity keys on qualname, not lineno."""
     if rel_posix in _SURFACE_MODULES:
         return []
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return []
-    hits: list[tuple[str, int]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if _spawn_func_name(node) is None:
-            continue
-        try:
-            unparsed = ast.unparse(node)
-        except Exception:
-            continue
-        if _root_derivation_flag(unparsed) is not None:
-            hits.append((rel_posix, node.lineno))
-    return hits
+    visitor = _ScopeCallVisitor()
+    visitor.visit(tree)
+    return [(rel_posix, qualname, lineno) for qualname, lineno in visitor.hits]
 
 
-def _collect_all_hits() -> list[tuple[str, int]]:
-    hits: list[tuple[str, int]] = []
+def _collect_all_hits() -> list[tuple[str, str, int]]:
+    hits: list[tuple[str, str, int]] = []
     for root in (_REPO_ROOT / "coordinator_core", _REPO_ROOT / "coordinator" / "bin"):
         discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE)
         for rel_posix, file_path in discovered:
@@ -272,16 +316,21 @@ def _collect_all_hits() -> list[tuple[str, int]]:
 # New entries are REFUSED (`test_inventory_is_exhaustive_and_matches_known_
 # sites` below): the fix for a new site is to convert it, never to add a row
 # here.
+#
+# Review: code-reviewer (P2) -- keyed on `path:qualname` (the site's
+# enclosing function/class.method, `<module>` if module-level), NOT
+# `path:lineno` -- see `_ScopeCallVisitor`'s docstring for why. Each entry
+# below is exactly one root-derivation call per named function today.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/assert-cwd.py:50",
-        "coordinator/bin/check-bin-sh-polyglot.py:129",
-        "coordinator/bin/coordinator-prepare-commit-msg.py:203",
-        "coordinator/bin/coordinator-prepare-commit-msg:204",
-        "coordinator/bin/cross-repo-memo.py:2540",
-        "coordinator_core/frontmatter/schema_validate.py:6530",
-        "coordinator_core/git_scope.py:158",
-        "coordinator_core/subagent_sandbox/engine.py:300",
+        "coordinator/bin/assert-cwd.py:main",
+        "coordinator/bin/check-bin-sh-polyglot.py:_show_toplevel",
+        "coordinator/bin/coordinator-prepare-commit-msg.py:_resolve_git_dir",
+        "coordinator/bin/coordinator-prepare-commit-msg:_resolve_git_dir",
+        "coordinator/bin/cross-repo-memo.py:_receiver_repo_unusable_reason",
+        "coordinator_core/frontmatter/schema_validate.py:_lint_find_repo_root",
+        "coordinator_core/git_scope.py:foreign_repo_unusable_reason",
+        "coordinator_core/subagent_sandbox/engine.py:_resolve_git_root_uncached",
     }
 )
 
@@ -304,6 +353,7 @@ def _worktree_root(start):
 '''
     hits = _scan_file("coordinator_core/ops/_fixture_unconverted.py", fixture)
     assert hits, "collector failed to flag the known pre-conversion --show-toplevel shape"
+    assert hits[0][1] == "_worktree_root"  # qualname is the enclosing function
 
 
 def test_collector_fires_on_git_common_dir_shape() -> None:
@@ -319,6 +369,7 @@ def _common_dir(root):
 '''
     hits = _scan_file("coordinator_core/ops/_fixture_unconverted.py", fixture)
     assert hits, "collector failed to flag the known pre-conversion --git-common-dir shape"
+    assert hits[0][1] == "_common_dir"  # qualname is the enclosing function
 
 
 def test_collector_silent_on_converted_archive_stamp() -> None:
@@ -365,12 +416,23 @@ def test_inventory_is_exhaustive_and_matches_known_sites() -> None:
     """The live census must equal `KNOWN_UNCONVERTED_SITES` exactly -- a
     new, unlisted hit fails closed (regrowth caught), and a listed site
     that no longer appears must be removed (burn-down is visible, not
-    silently stale)."""
-    hits = {f"{path}:{lineno}" for path, lineno in _collect_all_hits()}
+    silently stale).
+
+    Keyed on `path:qualname`, not `path:lineno` -- see `_ScopeCallVisitor`'s
+    docstring (code-reviewer P2): an unrelated line-shifting edit inside the
+    same enclosing function must NOT fail this test, while a call that is
+    genuinely new (or that moves to a different function) still must."""
+    all_hits = _collect_all_hits()
+    hits = {f"{path}:{qualname}" for path, qualname, _lineno in all_hits}
     stale = KNOWN_UNCONVERTED_SITES - hits
     new = hits - KNOWN_UNCONVERTED_SITES
     assert not stale, f"sites converted but still listed -- remove from KNOWN_UNCONVERTED_SITES: {sorted(stale)}"
-    assert not new, (
-        f"new git-root-derivation rev-parse shell-out(s) -- convert to "
-        f"coordinator_core.git.repo_root, do not add here: {sorted(new)}"
-    )
+    if new:
+        # Render with line numbers for the human fixing this, even though
+        # line number is not part of the identity key.
+        by_key = {f"{path}:{qualname}": lineno for path, qualname, lineno in all_hits}
+        detail = [f"{key} (line {by_key[key]})" for key in sorted(new)]
+        raise AssertionError(
+            "new git-root-derivation rev-parse shell-out(s) -- convert to "
+            f"coordinator_core.git.repo_root, do not add here: {detail}"
+        )

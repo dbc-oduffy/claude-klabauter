@@ -14,11 +14,17 @@ FRESH random shuffle per round, so every primitive's samples are drawn from
 the same interleaved span of wall-clock time and ambient-load drift lands on
 all of them roughly equally rather than biasing one.
 
-Inexpressibility, not a warning: `run_interleaved()` raises ValueError for
-`len(primitives) < 2`. There is no lower-arity entrypoint in this module that
-would let a caller draw N samples of a single primitive and call it a
-benchmark -- a single-primitive block-sampled number is not just discouraged,
-it cannot be produced through this API at all.
+Inexpressibility, not a warning -- but only of this module's entrypoint: this
+module offers no lower-arity function that would let a caller draw N samples of
+a single primitive and call it a benchmark; `run_interleaved()` raises
+ValueError for `len(primitives) < 2` rather than silently permitting the
+block-sampled shape. That claim is about the entrypoint's own surface, not
+about `Primitive` generally: `Primitive` is a plain public dataclass with a
+callable `invoke` field, and nothing stops a caller from looping
+`primitive.invoke()` directly, outside this module, to reproduce exactly the
+block-sampled measurement described above. Read "inexpressible" as "not
+reachable through `run_interleaved()`", not as "impossible with this
+module's types in hand". (Flagged by code review, 2026-08-16.)
 
 Reuse, not re-authoring: sample reduction goes through
 `coordinator_core.benchmarks.harness._percentile` (the same nearest-rank

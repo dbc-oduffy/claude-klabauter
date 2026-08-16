@@ -1,6 +1,15 @@
 """coordinator_core.git.remote_url -- remote-URL derivation, the one git
 fact `coordinator_core.git.repo_root` does not expose.
 
+Cross-reference (review nit, 2026-08-16): the "Derivation method" section
+below restates chunk C3's body in
+docs/plans/2026-08-16-a-process-per-predicate.md nearly verbatim, and no
+test ties the two together. Kept duplicated deliberately -- this module's
+docstring is this repo's RAG-bait/negative-spec convention and must stand
+alone for a reader who never opens the plan -- but if the derivation
+rationale changes, update BOTH C3's body and this docstring in the same
+commit; they are two copies of one claim, not two independent ones.
+
 Scope (prior-art-check, Claim #3, verdict CONFLICT -- folded in): repo root
 and git dir already ship the non-spawning, cwd-keyed-memoized, `.git`-FILE-
 aware parent-walk this module would otherwise have had to rebuild

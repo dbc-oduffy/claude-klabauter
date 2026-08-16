@@ -101,10 +101,11 @@ divergences as DATA, not per-script code branches — see snippet_sync.verify):
                       snippet_sync.verify for the full dialect semantics.
 
 Negative-spec: this module does filesystem reads (registry.toml, file-exists
-conditional probes) and one best-effort subprocess call (machine-local
-key resolution) — it is NOT a pure function like normalize_snippet or
-sentinel_blocks. Callers needing determinism should pass an explicit
-machine_local_bin=None to disable the subprocess path.
+conditional probes) and one best-effort in-process registry lookup
+(machine-local key resolution via `machine_resolver.registry_get` — no
+`machine-local` CLI subprocess) — it is NOT a pure function like
+normalize_snippet or sentinel_blocks. Callers needing determinism should
+pass an explicit machine_local_bin=None to disable the lookup path.
 
 Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
 DR backlink: DoE docs/decisions/2026-06-15-snippet-registry-shape.md
@@ -113,10 +114,11 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
+
+from coordinator_core.machine_resolver import registry_get
 
 logger = logging.getLogger(__name__)
 
@@ -459,32 +461,29 @@ def get_snippet_meta(data: dict[str, Any], name: str) -> dict[str, Any]:
 def _ml_get(key: str, machine_local_bin: Optional[str]) -> str:
     """Best-effort machine-local key resolution. Empty string on any failure —
     absent sibling repos / absent resolver are routine, not fatal.
+
+    Reads via ``coordinator_core.machine_resolver.registry_get`` (direct
+    tomllib merge of ``registry.local.toml`` over ``registry.toml``,
+    plus the per-key env-override rung) in-process — no ``machine-local``
+    CLI subprocess. ``machine_local_bin`` is retained as the caller's
+    disable switch only (``None``/falsy means "do not resolve", matching
+    the module docstring's `machine_local_bin=None` determinism contract)
+    and is no longer used as a spawn target.
     """
     if not machine_local_bin:
         return ""
     try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            [machine_local_bin, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            **no_console_creationflags(),
-        )
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except (OSError, subprocess.SubprocessError) as exc:
-        # Debug (not warning): absent sibling repos / absent machine-local
-        # resolver is routine on many machines, not a fault — see docstring.
+        value = registry_get(key)
+    except Exception as exc:  # pragma: no cover — registry_get is best-effort by contract
+        # Debug (not warning): absent sibling repos / absent registry value
+        # is routine on many machines, not a fault — see docstring.
         logger.debug(
-            "snippet-registry: machine-local resolver %r unavailable for key %r "
+            "snippet-registry: machine-local registry lookup unavailable for key %r "
             "(%s: %s) — treating as empty",
-            machine_local_bin, key, type(exc).__name__, exc,
+            key, type(exc).__name__, exc,
         )
         return ""
+    return value or ""
 
 
 def effective_content_root(plugin_root: Path, content_root: Optional[Path]) -> Path:

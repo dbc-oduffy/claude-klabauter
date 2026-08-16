@@ -109,37 +109,30 @@ Spec backlink: docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md
              + docs/plans/2026-07-09-resolver-unification-v3split-01.md § C3
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Negative-spec (faithfully reproduced from the bash oracle -- do NOT "fix" mid-port):
-    - Rung 2's machine-local invocation captures stdout+returncode only; any
-      exception locating/running the `machine-local` binary (not on PATH, OSError,
-      timeout) is folded into "rung 2 failed, fall through" exactly like the bash
-      oracle's `2>/dev/null || _ml_rc=$?` discard-and-continue shape -- no distinct
+    - Rung 2 folds every registry-read failure (key absent, unreadable/missing
+      registry file) into "rung 2 failed, fall through" -- no distinct
       "operational failure" vs "missing key" branch survives the port (the bash
       oracle's own header comment claims that distinction exists via rc=1 vs rc=2,
-      but the implementation never actually branches on the rc value beyond
-      `-eq 0`, so there is nothing differentiated to preserve).
-    - Rung 2.5 and rung 3 are UNCONDITIONAL best-effort: any subprocess failure
-      (non-zero exit, missing binary, timeout) degrades to empty string and falls
-      through to the next rung, matching the oracle's `|| _resolved_fallback=""` /
-      `|| true` shape.
-    - `machine-local` is resolved via bare PATH lookup (`shutil.which`), matching
-      the bash oracle's bare `machine-local get ...` invocation (no co-located
-      sibling-binary fallback attempted, unlike gen_doe_root_pointer.py's Tier 2 --
-      the bash oracle here never had that optimization to begin with).
+      but the implementation never actually branched on that beyond presence, so
+      there is nothing differentiated to preserve).
+    - Rung 2.5 and rung 3 are UNCONDITIONAL best-effort: any resolution failure
+      degrades to empty string and falls through to the next rung, matching the
+      oracle's `|| _resolved_fallback=""` / `|| true` shape.
+    - Rungs 2 and 2.5 read the machine-local registry directly, in-process, via
+      `machine_resolver.registry_get` (converted 2026-08-16, C7b) -- no
+      `machine-local` CLI subprocess or PATH lookup; see `_machine_local_get`'s
+      own docstring.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
+from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core import resolve_coordinator_clone as _resolve_coordinator_clone
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file as _cf_read_doe_root_pointer_file
-
-_SUBPROCESS_TIMEOUT_SECS = 15
 
 # Published-manifest relpath (OSS flat layout). The private DoE-repo layout
 # nests the same relpath under `coordinator/`. Shared by the codename-free
@@ -148,28 +141,18 @@ _CF_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.js
 
 
 def _machine_local_get(key: str) -> Optional[str]:
-    """Run `machine-local get <key>`, returning stripped stdout on success (rc==0,
-    non-empty) or None on any failure (missing binary, non-zero exit, timeout,
-    empty output). Mirrors the bash oracle's discard-and-continue shape."""
-    ml_bin = shutil.which("machine-local")
-    if ml_bin is None:
-        return None
-    try:
-        result = subprocess.run(
-            [ml_bin, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0:
-        return None
-    resolved = (result.stdout or "").strip()
-    return resolved or None
+    """Resolve `key` via the direct-registry reader
+    (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess.
+
+    Converted 2026-08-16 (C7b): the module's own test suite
+    (`coordinator_core/ops/test_coordinator_doe_root.py`) now seeds the
+    machine-local registry FILE (`MACHINE_LOCAL_REGISTRY_DIR` + a scratch
+    `registry.toml`) instead of faking the CLI as a real subprocess-invoked
+    stub, so this in-process conversion no longer silently stops exercising
+    those fakes. Registry-not-found (missing key, unreadable/missing file)
+    degrades to None -- same "no signal" contract the subprocess shape had
+    for a missing binary, non-zero exit, or empty stdout."""
+    return _machine_resolver.registry_get(key)
 
 
 def _cf_manifest_present(root: str) -> bool:

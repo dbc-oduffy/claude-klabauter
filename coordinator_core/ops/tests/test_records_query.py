@@ -58,6 +58,7 @@ from coordinator_core.ops.records_query import (
     _collect_type_records,
     _handler,
     _load_record,
+    _matches_where,
     _normalize_roadmap_status,
     _parse_handoff_ledger_blocks,
     _parse_where,
@@ -498,6 +499,78 @@ class TestWhereGrammarOperators:
         """A bare field name (no operator) becomes an 'exists' presence filter."""
         result = _parse_where("origin_goal_id")
         assert result == [{"field": "origin_goal_id", "op": "exists"}]
+
+
+class TestDottedFieldPaths:
+    """A dotted field name resolves into nested frontmatter, on every operator.
+
+    Regression pin for the silent-zero: ``fm.get('chain_loe.tshirt')`` returned
+    None and coerced to '', so ``=`` matched NOTHING and ``!=`` matched
+    EVERYTHING, with no error either way. /workweek-complete Step 11's MANDATORY
+    LoE high-water check is specified entirely in dotted fields, so it reported a
+    plausible "zero entries" on every run in every repo. Reported by
+    example-retrieval-repo-ue-addon-em against a 27-entry corpus whose true answer was 2.
+
+    Every assertion below fails on the pre-fix code — the equality cases by
+    returning False, the ``!=`` cases by returning True, and the ``in`` case by
+    raising SystemExit(1) from the field-name regex.
+    """
+
+    FM = {
+        "status": "pending-release",
+        "chain_loe": {"tshirt": "XL"},
+        "loe": {"tshirt": "S"},
+        "chain_terminal": True,
+        "nested": {"a": {"b": "deep"}},
+        "scalar": "not-a-mapping",
+        "literal.dot": "flat-key-wins",
+    }
+
+    def _match(self, where: str) -> bool:
+        return _matches_where(self.FM, _parse_where(where))
+
+    def test_dotted_equality_matches(self):
+        assert self._match("chain_loe.tshirt=XL") is True
+
+    def test_dotted_equality_rejects_wrong_value(self):
+        """The fix must not make dotted fields match indiscriminately."""
+        assert self._match("chain_loe.tshirt=XXL") is False
+
+    def test_dotted_inequality_is_not_vacuously_true(self):
+        assert self._match("chain_loe.tshirt!=XL") is False
+        assert self._match("chain_loe.tshirt!=XXL") is True
+
+    def test_dotted_in_operator_parses_and_filters(self):
+        """``in (...)`` on a dotted field was a hard SystemExit(1) before the fix."""
+        assert _parse_where("chain_loe.tshirt in (XL,XXL)") == [
+            {"field": "chain_loe.tshirt", "op": "in", "values": ["XL", "XXL"]}
+        ]
+        assert self._match("chain_loe.tshirt in (XL,XXL)") is True
+        assert self._match("loe.tshirt in (XL,XXL)") is False
+
+    def test_workweek_complete_step11_clause_shape(self):
+        """The exact conjunction Step 11's high-water check issues."""
+        assert self._match("chain_loe.tshirt=XL AND chain_terminal=true") is True
+        assert self._match("loe.tshirt=XL AND chain_terminal=true") is False
+
+    def test_dotted_bare_presence_filter(self):
+        assert self._match("chain_loe.tshirt") is True
+        assert self._match("chain_loe.missing") is False
+
+    def test_arbitrary_depth(self):
+        assert self._match("nested.a.b=deep") is True
+
+    def test_literal_dotted_key_takes_precedence(self):
+        """A frontmatter key containing a literal dot keeps its pre-fix meaning."""
+        assert self._match("literal.dot=flat-key-wins") is True
+
+    def test_walk_through_non_mapping_is_absent_not_error(self):
+        """A dotted path through a scalar yields absent, never a raise."""
+        assert self._match("scalar.nope=x") is False
+        assert self._match("missing.entirely=x") is False
+
+    def test_parent_mapping_does_not_match_leaf_value(self):
+        assert self._match("chain_loe=XL") is False
 
     def test_genuinely_unparseable_clause_still_exits(self, capsys):
         """A clause matching NEITHER an operator NOR a bare-\\w+ field name still exits(1)."""

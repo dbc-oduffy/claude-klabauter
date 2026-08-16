@@ -1686,6 +1686,98 @@ class TestChildEnvLeakGuard(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "0", proc.stderr)
 
 
+class TestSpawnSeamSettingsHomePropagation(unittest.TestCase):
+    """AC11 (pln-the-machine-local-registry-rea-50be37 § C5): pins the actual
+    spawn seam -- `child_env()` / `_build_subprocess_env()` -- not just the leaf
+    `coordinator_core._settings_home.settings_home_child_env()` they delegate
+    to via `_settings_home_env()`. `test_settings_home_child_env_inheritance.py`
+    proves the leaf function works; nothing there proves this module's two
+    call sites actually invoke it. Reverting either call site (back to a plain
+    `dict(os.environ)` / `{**os.environ, ...}`) must fail every test below.
+    """
+
+    def setUp(self) -> None:
+        self._env_patch = unittest.mock.patch.dict(os.environ, {}, clear=False)
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
+        os.environ.pop("COORDINATOR_SETTINGS_HOME", None)
+
+    def test_child_env_propagates_resolved_settings_home(self) -> None:
+        """child_env() must fill COORDINATOR_SETTINGS_HOME from the resolved
+        settings-home root when the parent's own os.environ lacks it."""
+        claude_home = tempfile.mkdtemp()
+        os.environ["CLAUDE_HOME"] = claude_home
+        expected = str(Path(claude_home) / ".coordinator-claude-settings")
+
+        self.assertNotIn(
+            "COORDINATOR_SETTINGS_HOME", os.environ,
+            "test precondition: parent os.environ must not already carry the var",
+        )
+
+        result = _mod.child_env()
+
+        self.assertEqual(
+            result.get("COORDINATOR_SETTINGS_HOME"), expected,
+            "child_env() did not propagate the resolved settings-home root -- "
+            "the seam's _settings_home_env() call may have been reverted",
+        )
+
+    def test_build_subprocess_env_propagates_resolved_settings_home(self) -> None:
+        """_build_subprocess_env() -- the coordinator_core.invoke spawn seam --
+        must fill COORDINATOR_SETTINGS_HOME the same way child_env() does."""
+        claude_home = tempfile.mkdtemp()
+        os.environ["CLAUDE_HOME"] = claude_home
+        expected = str(Path(claude_home) / ".coordinator-claude-settings")
+
+        result = _mod._build_subprocess_env("/fake/claude-klabauter/root")
+
+        self.assertEqual(
+            result.get("COORDINATOR_SETTINGS_HOME"), expected,
+            "_build_subprocess_env() did not propagate the resolved settings-home "
+            "root -- the seam's _settings_home_env() call may have been reverted",
+        )
+
+    def test_child_env_never_overwrites_an_explicit_child_value(self) -> None:
+        """(c) precedence, pinned at the seam level: an operator-scoped
+        COORDINATOR_SETTINGS_HOME already in os.environ survives untouched,
+        even though CLAUDE_HOME would resolve to a different root."""
+        os.environ["CLAUDE_HOME"] = tempfile.mkdtemp()
+        operator_scoped = str(Path(tempfile.mkdtemp()) / "operator-scoped")
+        os.environ["COORDINATOR_SETTINGS_HOME"] = operator_scoped
+
+        result = _mod.child_env()
+
+        self.assertEqual(result.get("COORDINATOR_SETTINGS_HOME"), operator_scoped)
+
+    def test_real_child_observes_propagated_settings_home_via_child_env(self) -> None:
+        """End-to-end: a real child spawned with env=cc_invoke.child_env(),
+        from a parent whose os.environ lacks COORDINATOR_SETTINGS_HOME but
+        resolves one via CLAUDE_HOME, must observe the resolved value. This is
+        the one assertion that would actually catch the propagation call
+        sites being removed from cc_invoke.py -- a plain `dict(os.environ)`
+        copy would carry no such key across to the child."""
+        claude_home = tempfile.mkdtemp()
+        expected = str(Path(claude_home) / ".coordinator-claude-settings")
+        env = os.environ.copy()
+        env.pop("COORDINATOR_SETTINGS_HOME", None)
+        env["CLAUDE_HOME"] = claude_home
+        script = (
+            f"import sys; sys.path.insert(0, {str(_LIB_DIR)!r}); "
+            f"sys.path.insert(0, {str(_REPO_ROOT)!r}); import cc_invoke; "
+            "import subprocess; "
+            "r = subprocess.run([sys.executable, '-c', "
+            "'import os; print(os.environ.get(\"COORDINATOR_SETTINGS_HOME\"))'], "
+            "env=cc_invoke.child_env(), capture_output=True, text=True); "
+            "print(r.stdout.strip())"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=15, env=env,
+            **no_console_creationflags(),
+        )
+        self.assertEqual(proc.stdout.strip(), expected, proc.stderr)
+
+
 class TestRepoFlagScopeGate(unittest.TestCase):
     """Regression: commit bd0e52a36154 (DR-279) made coordinator_core.invoke exit
     non-zero when --repo is passed to a "none"-scoped op — but cc_invoke.py passed

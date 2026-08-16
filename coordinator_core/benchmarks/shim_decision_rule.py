@@ -154,6 +154,7 @@ Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C7.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -262,7 +263,12 @@ def calibrate_aa_noise_floor(
         stats = run_interleaved([arm_a, arm_b], n=n_rounds)
         a_stat = getattr(stats["aa_arm_a"], GATING_STATISTIC)
         b_stat = getattr(stats["aa_arm_b"], GATING_STATISTIC)
-        if a_stat == 0:
+        # Review (2026-08-16): tolerance, not exact-zero equality -- a near-zero
+        # but nonzero p90 (plausible for a fast in-process draw under thread/GC
+        # noise) divides down into a huge reduction_fraction swing instead of
+        # being skipped as degenerate. 1e-6ms is well below any real timer
+        # resolution on this box, so it only catches the genuinely-degenerate case.
+        if math.isclose(a_stat, 0.0, abs_tol=1e-6):
             continue
         reductions.append(1.0 - (b_stat / a_stat))
     return reductions
@@ -394,6 +400,61 @@ class ShimDecisionRecord:
         ShimDecisionRecord. Round-trip pair: to_json()."""
         data = json.loads(payload)
         return ShimDecisionRecord(**data)
+
+
+def is_free(record: ShimDecisionRecord) -> bool:
+    """True when *record*'s two arms are indistinguishable at this box's
+    measured noise floor -- i.e. the shim costs nothing detectable.
+
+    ADDITIVE, and deliberately not a change to `evaluate()`. `evaluate()`
+    adjudicates "is the shim CHEAPER", was pre-registered before any number
+    existed, and its verdict on that question stands untouched. This answers
+    a DIFFERENT question that the plan originally conflated with it: "is the
+    compatibility shim FREE". A compat layer's job is to cost nothing, never
+    to be cheaper, so `evaluate()` returning `fail` for a small negative
+    reduction is correct about its own question and useless about this one --
+    it scores -0.0963 (a 1.10x ratio, well inside the A/A noise floor)
+    identically to -0.5123 (a genuine 1.6x regression), because its wash band
+    is one-sided (0 <= r < margin) by construction.
+
+    The threshold is `AA_CALIBRATION_NOISE_FLOOR`, the same measured constant
+    `CHEAPER_THAN_MARGIN` is derived from: a difference smaller than what two
+    IDENTICAL arms already produced on this box is not a difference anyone
+    can claim to have measured, in either direction.
+
+    PROVENANCE — THIS FUNCTION WAS WRITTEN AFTER THE NUMBER, AND A READER
+    MUST NOT MISTAKE IT FOR PRE-REGISTERED. `evaluate()` and its constants
+    were frozen at 4b8151bf2 before any shim was measured. This predicate,
+    and the AC6a/b/c split it serves, were authored at 272ed39cd -- AFTER
+    9401f9aae had already recorded the in-process shim at -0.0963 and
+    `evaluate()` had called it `fail`. The argument for it (a compatibility
+    layer's job is to cost nothing, not to be cheaper, so an asymmetric
+    cheaper-than test is the wrong instrument) is sound on its own terms and
+    would have been sound before the measurement -- but it was not made
+    before the measurement, and it was made in response to a result its
+    author did not like. That is the precise bias pre-registration exists to
+    exclude. Flagged by code review (2026-08-16) rather than self-caught,
+    which is itself the relevant evidence about how much to trust it.
+
+    WEAKNESS OF THE THRESHOLD, stated because it is easy to miss and it
+    limits every claim built on this predicate. The floor is 0.4625, so
+    `is_free` returns True for anything from a 46% improvement to a 46%
+    REGRESSION. A shim 40% more expensive than what it replaces passes this
+    test. So a True here does NOT establish that a shim is free; it
+    establishes only that no LARGE regression was detected at this box's
+    noise. The in-process shim's -0.0963 is consistent with free and equally
+    consistent with a real 10% regression this apparatus cannot resolve.
+    Read AC6b as "no large regression detected", never as "proven free" --
+    and if a tighter claim is ever needed, it needs a quieter box or a
+    paired design, not a smaller constant here.
+
+    Discharges AC6b of docs/plans/2026-08-16-a-process-per-predicate.md, at
+    that reduced strength.
+    """
+    r = record.reduction_fraction
+    if r is None:
+        return False
+    return abs(r) < AA_CALIBRATION_NOISE_FLOOR
 
 
 def evaluate(

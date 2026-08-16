@@ -495,11 +495,35 @@ def _validate_json_schema_node(
     if 'anyOf' in schema:
         any_of = schema['anyOf']
         if isinstance(any_of, list):
-            matches_any = any(
-                len(_validate_json_schema_node(value, sub, root_schema, path)) == 0
+            branch_errors = [
+                _validate_json_schema_node(value, sub, root_schema, path)
                 for sub in any_of
-            )
+            ]
+            matches_any = any(len(errs) == 0 for errs in branch_errors)
             if not matches_any:
+                # Discriminator (message-text-only fix — see this repo's
+                # CLAUDE.md note on this file's leniency-is-contract status;
+                # no accept/reject behavior changes here, `matches_any` above
+                # already decided pass/fail): a branch whose OWN `type`
+                # keyword the value already satisfies, but that still
+                # produced errors, failed on a narrower constraint (pattern,
+                # enum, minLength, ...) — the "expected string or null (got
+                # str)" wording below reads as a validator bug for that case,
+                # because the value's type was never in question. Surface
+                # that branch's own error instead of the generic
+                # type-mismatch message.
+                type_matched_errors = [
+                    errs for sub, errs in zip(any_of, branch_errors)
+                    if 'type' not in sub or _json_type_ok(value, sub['type'])
+                ]
+                if type_matched_errors:
+                    closest = type_matched_errors[0][0]
+                    errors.append({
+                        'field': field,
+                        'error': closest['error'],
+                        'hint': closest.get('hint', ''),
+                    })
+                    return errors
                 type_hints = ' or '.join(
                     s.get('type') or (str(s.get('enum')) if 'enum' in s else str(s))
                     for s in any_of
@@ -5542,18 +5566,27 @@ _GLOB_OVERRIDES: dict[str, str] = {
 #: claim when this landed; the two sets must not be allowed to drift.
 _PLAN_DIR_INDEX_FILENAMES: frozenset[str] = frozenset({'INDEX.md', 'README.md'})
 
+#: Record directories whose glob admits every `*.md` beneath them, so a
+#: directory index authored in one is otherwise routed to that directory's
+#: record schema and reported as a record missing every required field.
+_RECORD_DIR_INDEX_PREFIXES: tuple[str, ...] = ('docs/plans/', 'docs/decisions/')
+
 
 def _is_plan_dir_index_routing_excluded(normalised_repo_rel_path: str, frontmatter: dict | None) -> bool:
     """True when `normalised_repo_rel_path` (already backslash-normalised) is
-    a `docs/plans/INDEX.md` or `docs/plans/README.md` directory index with no
-    declared `kind:` — see `match_schema`'s second-amendment docstring.
+    an `INDEX.md`/`README.md` directory index in one of
+    `_RECORD_DIR_INDEX_PREFIXES` with no declared `kind:` — see `match_schema`'s
+    second-amendment docstring.
     Shared by `match_schema` (per-file resolution) and `_run_tree_walk`'s
     whole-tree collection loop (:6519 area), which otherwise falls back to
     validating an unresolved file against whichever schema's glob collected
     it — a fallback that would silently defeat this exclusion for the
     whole-tree lint if the two call sites diverged.
     """
-    if not (normalised_repo_rel_path.startswith('docs/plans/') and normalised_repo_rel_path.count('/') == 2):
+    in_record_dir = any(
+        normalised_repo_rel_path.startswith(prefix) for prefix in _RECORD_DIR_INDEX_PREFIXES
+    )
+    if not (in_record_dir and normalised_repo_rel_path.count('/') == 2):
         return False
     basename = normalised_repo_rel_path.rsplit('/', 1)[-1]
     no_declared_kind = frontmatter is None or frontmatter.get('kind') is None
@@ -6510,14 +6543,21 @@ def validate_frontmatter_obj(fm_dict: dict, schema_obj: dict) -> dict:
 
 _LINT_SIDECAR_RE = re.compile(
     r'\.(prior-art-check|docs-check|coverage-check|plan-coverage-check|'
-    r'plan-review-check|schema-migration-audit|review-[^./]+|[^./]*-review|review)\b'
+    r'plan-review-check|schema-migration-audit|review-[^./]+|[^./]*-review|review|'
+    r'phase0|node-map)\b'
 )
 
 
 def _lint_is_sidecar_file(repo_rel: str) -> bool:
     """Port of lint-frontmatter.js isSidecarFile — review-worker sidecars are
     exempt from parent-directory schema validation (see module-level SIDECAR_RE
-    comment in the deleted oracle for the full rationale)."""
+    comment in the deleted oracle for the full rationale).
+
+    `phase0`/`node-map` extend the deleted oracle's set: a plan's phase-0
+    inventory and node-map are companion deliverables carrying only
+    `plan_id`/`deliverable_id`, not plans in their own right, and routing them
+    to `plan` reports every required plan field as missing.
+    """
     return bool(_LINT_SIDECAR_RE.search(repo_rel))
 
 

@@ -318,20 +318,34 @@ def _resolve_claude_klabauter_root() -> tuple[Path | None, str]:
     if val:
         return Path(val), "env CLAUDE_KLABAUTER_ROOT"
 
-    # Rung 2 — machine-local registry (authoritative coordinator-side path)
+    # Rung 2 — machine-local registry (authoritative coordinator-side path).
+    # Read in-process via coordinator_core.machine_resolver.registry_get (a
+    # direct registry.local.toml/registry.toml tomllib read) rather than
+    # shelling out to `machine-local get` -- this script lives inside the
+    # very repo it is trying to locate (<claude-klabauter-root>/bin/
+    # claude-klabauter-doctor-probe.py), so the same git-root candidate rung 3 derives
+    # below is tried first as a sys.path anchor for the import. Lazy,
+    # probe-local import per this module's own negative-spec (see module
+    # docstring).
     try:
-        r = subprocess.run(
-            ["machine-local", "get", "repos.claude_klabauter"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip()), "machine-local repos.claude_klabauter"
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        # machine-local not on PATH, timed out, or errored -- not fatal,
-        # just fall through to the next rung in the resolution ladder.
+        candidate = Path(__file__).resolve().parent.parent
+        candidate_str = str(candidate)
+        added = candidate_str not in sys.path
+        if added:
+            sys.path.insert(0, candidate_str)
+        try:
+            from coordinator_core.machine_resolver import registry_get
+
+            val = registry_get("repos.claude_klabauter")
+        finally:
+            if added:
+                sys.path.remove(candidate_str)
+        if val:
+            return Path(val), "machine-local repos.claude_klabauter"
+    except Exception:
+        # coordinator_core not importable from the candidate root, or the
+        # key is unresolved -- not fatal, just fall through to the next
+        # rung in the resolution ladder.
         pass
 
     # Rung 3 — git-root auto-discovery from this script's location.
@@ -531,46 +545,36 @@ def _run_probe_registry_key() -> _ProbeResult:
             skipped=True,
         )
 
-    # Check machine-local availability (coordinator soft-dep gate)
+    # Read the registered value in-process via
+    # coordinator_core.machine_resolver.registry_get (direct
+    # registry.local.toml/registry.toml tomllib read) rather than shelling
+    # out to `machine-local get` -- machine_local_cmd's resolvability (just
+    # confirmed above) is the coordinator soft-dep gate; the value itself
+    # is a registry read, not a shim-liveness check. Lazy, probe-local
+    # import per this module's own negative-spec (see module docstring).
     try:
-        r = subprocess.run(
-            [machine_local_cmd, "get", "repos.claude_klabauter"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except FileNotFoundError:
-        # machine-local absent → coordinator-claude not installed → key not needed.
-        return _ProbeResult(
-            probe="claude-klabauter.registry.key",
-            status=_PASS,
-            detail=(
-                "machine-local not found — coordinator-claude absent; "
-                "repos.claude_klabauter registration not required (shim not installed)."
-            ),
-            remediation="—",
-            required=False,
-            skipped=True,
-        )
-    except subprocess.TimeoutExpired:
-        return _ProbeResult(
-            probe="claude-klabauter.registry.key",
-            status=_DEGRADED,
-            detail="machine-local timed out after 5 s querying repos.claude_klabauter.",
-            remediation="Investigate machine-local health; try: machine-local get repos.claude_klabauter",
-        )
-    except OSError as exc:
+        candidate = Path(__file__).resolve().parent.parent
+        candidate_str = str(candidate)
+        added = candidate_str not in sys.path
+        if added:
+            sys.path.insert(0, candidate_str)
+        try:
+            from coordinator_core.machine_resolver import registry_get
+
+            val = registry_get("repos.claude_klabauter")
+        finally:
+            if added:
+                sys.path.remove(candidate_str)
+    except Exception as exc:
         return _ProbeResult(
             probe="claude-klabauter.registry.key",
             status=_BROKEN,
-            detail=f"Failed to run machine-local: {exc}",
-            remediation="Verify machine-local is installed and executable.",
+            detail=f"Failed to read repos.claude_klabauter from the registry: {exc}",
+            remediation="Verify machine-local is installed and the registry is readable.",
         )
 
-    # machine-local is present — evaluate its output.
-    if r.returncode == 0 and r.stdout.strip():
-        val = r.stdout.strip()
+    # machine-local is present — evaluate the registered value.
+    if val:
         return _ProbeResult(
             probe="claude-klabauter.registry.key",
             status=_PASS,
@@ -582,10 +586,7 @@ def _run_probe_registry_key() -> _ProbeResult:
     return _ProbeResult(
         probe="claude-klabauter.registry.key",
         status=_BROKEN,
-        detail=(
-            f"machine-local get repos.claude_klabauter returned exit={r.returncode} "
-            f"with empty output (stderr={r.stderr.strip()!r}). Key not registered."
-        ),
+        detail="repos.claude_klabauter not registered in the machine-local registry.",
         remediation=(
             "Register the key by running scripts/setup.py, or manually: "
             "machine-local set repos.claude_klabauter /path/to/claude-klabauter"
@@ -2111,6 +2112,106 @@ def _resolve_settings_home() -> Path:
     return Path(home) / ".coordinator-claude-settings"
 
 
+def _run_probe_engine_target_rollout() -> _ProbeResult:
+    """Probe claude-klabauter.registry.engine_target_rollout — REQUIRED=False, INFO-only.
+
+    C8 (docs/plans/2026-08-16-one-engine-for-the-whole-box.md), AC20: an
+    unreadable/absent `engine.target` never diverts a session's resolved
+    engine (that read-site default lives in
+    `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::resolve_engine_target`,
+    untouched here) — but AC20 also disposes of the "silent rollout no-op"
+    day-one consequence by making the absent state MEANINGFUL: since C8's
+    installer (`scripts/setup.py::register_claude_klabauter_root`) now writes
+    `engine.target` on the SAME pass that registers
+    `repos.claude_klabauter`, a machine holding the mirror key with no
+    `engine.target` can only be one thing — not yet rolled onto this
+    chunk's installer, never a deliberate opt-out (absence is never an
+    opt-out, since opting out is itself a WRITTEN value). This probe
+    enumerates that set.
+
+    Verdict shape — reports, never blocks (C8's body, verbatim):
+      - `repos.claude_klabauter` unregistered -> INFO, nothing to enumerate
+        (a klabauter mirror is the precondition; a plain claude-klabauter-only box
+        with no mirror is out of scope for this probe).
+      - `repos.claude_klabauter` registered AND `engine.target` present ->
+        INFO, rolled out.
+      - `repos.claude_klabauter` registered AND `engine.target` absent ->
+        INFO (never DEGRADED/BROKEN) naming the not-yet-rolled-out box —
+        `_INFO` is excluded from the worst-of rank reduction
+        (`_local_reduce_overall`), so this can never move the fleet verdict
+        off PASS by itself, matching the doctor-probe design's status
+        vocabulary contract.
+
+    Negative-spec: does not write `engine.target` itself (read-only
+    diagnostic, matching every other probe in this module) and does not
+    interpret `engine.target`'s VALUE — presence is the only signal AC20
+    depends on.
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions
+    become an INFO/skipped envelope, never an unhandled crash.
+    """
+    probe_id = "claude-klabauter.registry.engine_target_rollout"
+    try:
+        candidate = Path(__file__).resolve().parent.parent
+        candidate_str = str(candidate)
+        added = candidate_str not in sys.path
+        if added:
+            sys.path.insert(0, candidate_str)
+        try:
+            from coordinator_core.machine_resolver import registry_get
+
+            klabauter_mirror = registry_get("repos.claude_klabauter")
+            engine_target = registry_get("engine.target")
+        finally:
+            if added:
+                sys.path.remove(candidate_str)
+    except Exception as exc:
+        return _ProbeResult(
+            probe=probe_id,
+            status=_INFO,
+            detail=f"Unexpected error reading the registry: {type(exc).__name__}: {exc}",
+            remediation="—",
+            required=False,
+            skipped=True,
+        )
+
+    if not klabauter_mirror:
+        return _ProbeResult(
+            probe=probe_id,
+            status=_INFO,
+            detail="repos.claude_klabauter not registered — no mirror to check engine.target rollout against.",
+            remediation="—",
+            required=False,
+            data={"repos.claude_klabauter": None, "engine.target": engine_target or None},
+        )
+
+    if engine_target:
+        return _ProbeResult(
+            probe=probe_id,
+            status=_INFO,
+            detail=f"engine.target = {engine_target!r} — install-class default rolled out.",
+            remediation="—",
+            required=False,
+            data={"repos.claude_klabauter": klabauter_mirror, "engine.target": engine_target},
+        )
+
+    return _ProbeResult(
+        probe=probe_id,
+        status=_INFO,
+        detail=(
+            "repos.claude_klabauter is registered with no engine.target — "
+            "not yet rolled out."
+        ),
+        remediation=(
+            "Run python3 scripts/setup.py to write the install-class engine.target "
+            "default (candidate for a claude-klabauter developer box, main for a "
+            "claude-klabauter install)."
+        ),
+        required=False,
+        data={"repos.claude_klabauter": klabauter_mirror, "engine.target": None},
+    )
+
+
 def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.root.pointer — REQUIRED=False (WARN, not hard FAIL) on absence.
 
@@ -2854,6 +2955,7 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_generator_output_staleness(claude_klabauter_root))
     results.append(_run_probe_commitments_recheck(claude_klabauter_root))
     results.append(_run_probe_root_pointer(claude_klabauter_root))
+    results.append(_run_probe_engine_target_rollout())
     results.append(_run_probe_invoke_latency(claude_klabauter_root))
     results.append(_run_probe_orphaned_execnet_gateways())
     results.append(_run_probe_launch_chain())

@@ -74,8 +74,10 @@ is the inverse: removes the registry entry and deletes the `.pth` file
 immediately if present (AC6b).
 
 Rebuild durability: `_replay_sibling_bindings` is called UNCONDITIONALLY
-after every rebuild (never on the healthy fast path, where nothing was
-destroyed) and always consults the registry itself
+into the build tree BEFORE `_swap_in_new_env` publishes it (never on the
+healthy fast path, where nothing was destroyed), so the swap's rename stays
+the single atomic publish point and a reader spawning right after the swap
+never sees a bindings-less window. It always consults the registry itself
 (`_replay_registered_bindings`) — replay does not depend on any other module
 having imported this one first or having set a global. `BINDING_REPLAY_HOOK`
 remains as a module-level `Optional[Callable[[Path], None]]`, `None` by
@@ -92,7 +94,13 @@ by `coordinator_core.locked_write.held_lock` — the same locking primitive
 mechanism. The registry lock and the site-packages lock are two distinct,
 never-nested lock targets (registry mutation completes and releases before
 any site-packages write begins) to respect `held_lock`'s non-reentrancy
-contract.
+contract. `_replay_registered_bindings` reads the registry via
+`_load_binding_registry` WITHOUT holding the registry lock — this is safe,
+not an omission: `_atomic_write_registry_unlocked`'s mkstemp+`os.replace`
+makes every write atomic, so a concurrent `register_sibling_binding`/
+`deregister_sibling_binding` on another process can only make this read see
+the pre- or post-mutation registry cleanly, never a torn one. Review:
+coordinatorcode-reviewer-97d5c433 finding 8.
 
 Negative-spec:
   - Does NOT read the `fleet_env.root` registry key itself — delegates to
@@ -144,6 +152,12 @@ from coordinator_core.install.fleet_env_lock import (
 from coordinator_core.install.fleet_env_resolve import (
     FleetEnvResolutionError,
     resolve_fleet_env_fallback_root,
+)
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    StaticClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -200,6 +214,121 @@ def _pth_basename(repo: str, sibling: str) -> str:
     return f"{repo}_{sibling}_sibling.pth"
 
 
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="fleet-env",
+    source_module="coordinator_core.install.fleet_env",
+    clauses=(
+        # clauses[0] -- the environment tree itself. `ensure_fleet_env`
+        # populates a fresh `.build-<pid>-<hex>` sibling via
+        # `_provision_uv_environment` (`uv sync --frozen` under
+        # `UV_PROJECT_ENVIRONMENT=build_dir`), then `_swap_in_new_env`
+        # `os.rename`s it into `env_root` (never an in-place mutation of the
+        # live tree). SHAPED: `env_root` is resolved at runtime via C1+C5
+        # (`resolve_environment_root`), never a literal constant here.
+        ShapedClause(
+            discovered_by="ensure_fleet_env (env_root via resolve_environment_root)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<fleet-env-root>/",
+                reason=(
+                    "build-dir populated by `uv sync --frozen` then "
+                    "rename-swapped into env_root by _swap_in_new_env; the "
+                    "vacated old tree is moved to a .stale-<pid>-<hex> "
+                    "sibling and reclaimed (immediately on POSIX, deferred "
+                    "via _sweep_orphaned_swap_dirs on Windows)"
+                ),
+            ),
+        ),
+        # clauses[1] -- `.build-*`/`.stale-*` orphaned siblings of env_root,
+        # `shutil.rmtree`'d by `_sweep_orphaned_swap_dirs` before every
+        # rebuild attempt. SHAPED for the same reason as clauses[0]: rooted
+        # under the runtime-resolved env_root's own parent.
+        ShapedClause(
+            discovered_by="_sweep_orphaned_swap_dirs (env_root.parent)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<fleet-env-root>.build-*/ , <fleet-env-root>.stale-*/",
+                effect="delete",
+                reason=(
+                    "best-effort reclaim of a prior process's abandoned "
+                    "build/stale sibling directories, run under the build "
+                    "lock before starting a fresh rebuild"
+                ),
+            ),
+        ),
+        # clauses[2] -- the build-lock sidecar, `<env_root>.lock`, O_CREAT'd
+        # by `ensure_fleet_env` and never unlinked (the advisory flock
+        # releases on close, but the file persists) -- same durable-sidecar
+        # shape as `ensure_venv.WRITE_SURFACE`'s clauses[5].
+        ShapedClause(
+            discovered_by="ensure_fleet_env (build lock sidecar)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<fleet-env-root>.lock",
+                reason=(
+                    "build-lock sidecar, O_CREAT'd by ensure_fleet_env and "
+                    "never unlinked; the flock releases on close but the "
+                    "file remains"
+                ),
+            ),
+        ),
+        # clauses[3] -- sibling `.pth` files written into the resolved
+        # environment's site-packages by `_write_pth_unlocked`, called from
+        # `register_sibling_binding` (immediate bind) and
+        # `_replay_registered_bindings` (unconditional post-rebuild replay).
+        # SHAPED: both the env root and the `<repo>_<sibling>_sibling.pth`
+        # basename are runtime-derived from caller/registry inputs.
+        ShapedClause(
+            discovered_by="_write_pth_unlocked (register_sibling_binding / _replay_registered_bindings)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<fleet-env-root>/site-packages/<repo>_<sibling>_sibling.pth",
+                reason=(
+                    "one .pth file per registered sibling binding, pointing "
+                    "at the caller-supplied absolute sibling_root"
+                ),
+            ),
+        ),
+        # clauses[4] -- the inverse of clauses[3]: `_delete_pth_unlocked`,
+        # called from `deregister_sibling_binding`, immediately deletes the
+        # corresponding `.pth` file if the environment already exists.
+        ShapedClause(
+            discovered_by="_delete_pth_unlocked (deregister_sibling_binding)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<fleet-env-root>/site-packages/<repo>_<sibling>_sibling.pth",
+                effect="delete",
+                reason="deregister_sibling_binding: removes a sibling's .pth file immediately, not deferred to the next rebuild",
+            ),
+        ),
+        # clauses[5] -- the binding registry itself,
+        # `<settings-home>/machine-local/fleet-env-bindings.json`, written by
+        # `_atomic_write_registry_unlocked` (mkstemp+os.replace) from
+        # `register_sibling_binding`/`deregister_sibling_binding`. STATIC:
+        # unlike clauses[3]/[4], the registry's own path is a fixed basename
+        # under settings-home -- only the settings-home root varies by
+        # machine, the same "<settings-home>/..." template shape as
+        # `ensure_venv.WRITE_SURFACE`'s clauses[0]/[5].
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="<settings-home>/machine-local/fleet-env-bindings.json",
+                    reason=(
+                        "binding registry: a versioned JSON list of "
+                        "{repo, sibling, path} entries, atomically "
+                        "mkstemp+os.replace-written by "
+                        "_atomic_write_registry_unlocked; entries are added "
+                        "by register_sibling_binding and removed by "
+                        "deregister_sibling_binding"
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
 class FleetEnvError(RuntimeError):
     """Any condition that must stop provisioning rather than silently
     accept an unhealthy or partially-built environment."""
@@ -242,7 +371,19 @@ def resolve_environment_root(
     `FleetEnvResolutionError` surface as this module's `FleetEnvError` with
     the ladder's actionable remediation text preserved verbatim."""
     resolve_fleet_env_root = _load_c1_resolver()
-    primary_candidate = resolve_fleet_env_root()
+    try:
+        primary_candidate = resolve_fleet_env_root()
+    except Exception as exc:
+        # C1's resolver is out of this module's write scope, so an
+        # unexpected failure there (e.g. an OS-level error reading the
+        # registry key) must still surface as FleetEnvError, never a raw
+        # exception — callers (including scripts/setup.py) catch only
+        # FleetEnvError per the install-never-fails-outside-it contract.
+        # Review: coordinatorcode-reviewer-97d5c433 finding 4.
+        raise FleetEnvError(
+            f"fleet_env: C1 resolver ({_C1_RESOLVER_PATH}) raised "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     try:
         return resolve_fleet_env_fallback_root(
             primary_candidate, settings_home_factory=settings_home_factory
@@ -513,13 +654,40 @@ def _atomic_write_registry_unlocked(registry_path: Path, bindings: "list[dict]")
 
 
 def _write_pth_unlocked(site_packages: Path, repo: str, sibling: str, path_str: str) -> None:
-    """Write one `.pth` file. Caller MUST already hold the `held_lock` on
-    `site_packages` — this has no locking of its own (see
+    """Write one `.pth` file atomically (mkstemp+`os.replace`, mirroring
+    `_atomic_write_registry_unlocked` above). Caller MUST already hold the
+    `held_lock` on `site_packages` — this has no locking of its own (see
     `register_sibling_binding`/`_replay_registered_bindings`, the only two
     callers, each of which acquires that lock exactly once around
-    potentially many of these calls)."""
+    potentially many of these calls).
+
+    Plain `Path.write_text` is not safe here even under `held_lock`: CPython's
+    `site` module reads `.pth` files at interpreter startup and does not
+    consult this module's advisory lock, so a reader interpreter spawning
+    during a truncate-then-write window could observe a partial/empty file.
+    `os.replace` is a single directory-entry swap on both POSIX and Windows,
+    so a concurrent reader always sees either the old or the new complete
+    content, never a torn write. Review: coordinatorcode-reviewer-97d5c433 finding 2."""
     site_packages.mkdir(parents=True, exist_ok=True)
-    (site_packages / _pth_basename(repo, sibling)).write_text(path_str + "\n", encoding="utf-8")
+    dest = site_packages / _pth_basename(repo, sibling)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(site_packages))
+    try:
+        os.write(tmp_fd, (path_str + "\n").encode("utf-8"))
+        os.close(tmp_fd)
+        tmp_fd = -1
+        os.replace(tmp_path, str(dest))
+        tmp_path = None
+    finally:
+        if tmp_fd != -1:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def _delete_pth_unlocked(site_packages: Path, repo: str, sibling: str) -> None:
@@ -664,15 +832,27 @@ def _replay_registered_bindings(env_root: Path, *, registry_path: Path) -> "list
     return [b for b in bindings if not Path(b["path"]).exists()]
 
 
-def _replay_sibling_bindings(env_root: Path) -> None:
+def _replay_sibling_bindings(
+    env_root: Path,
+    *,
+    settings_home_factory: "Callable[[], Path]" = _default_settings_home,
+) -> None:
     """Always consults the binding registry directly — see module docstring
     "Binding registry (C6)". This does NOT depend on any other module
     having been imported first or having set a global: the registry lives
-    in this module, and this function is called unconditionally after every
-    rebuild (never on the healthy fast path, where the tree was never
+    in this module, and this function is called unconditionally during
+    every rebuild (never on the healthy fast path, where the tree was never
     destroyed and any prior bindings are still present). `BINDING_REPLAY_HOOK`,
-    if set, runs afterward as an additional extension point only."""
-    registry_path = _binding_registry_path()
+    if set, runs afterward as an additional extension point only.
+
+    `settings_home_factory` MUST be threaded from the caller (`ensure_fleet_env`)
+    rather than defaulted here — every sibling function in this module
+    (`resolve_environment_root`, `register_sibling_binding`,
+    `deregister_sibling_binding`) forwards an injected factory so a caller
+    that isolated itself via a `tmp_path`-backed factory stays isolated on
+    this path too; a bare `_binding_registry_path()` call would silently
+    fall through to the real machine settings-home. Review: coordinatorcode-reviewer-97d5c433 finding 1."""
+    registry_path = _binding_registry_path(settings_home_factory)
     dangling = _replay_registered_bindings(env_root, registry_path=registry_path)
     for binding in dangling:
         print(
@@ -716,12 +896,34 @@ def ensure_fleet_env(
     if _fleet_env_healthy(python_bin):
         return "ready"
 
-    env_root.parent.mkdir(parents=True, exist_ok=True)
+    # Both the parent mkdir and the lock-sidecar open are plain filesystem
+    # calls made before any guarded region — on a read-only install
+    # location, a full disk, or a permission-denied path they raise a bare
+    # OSError, which scripts/setup.py's `except FleetEnvError` (the
+    # advisory-not-fatal contract for this step) does not catch. Wrap both
+    # so this function honours its own docstring: "Raises FleetEnvError...
+    # on any failure". Review: coordinatorE-reviewer finding 4 (fix-now,
+    # relayed to review-integrator mid-pass).
     lock_path = Path(str(env_root) + ".lock")
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        env_root.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError as exc:
+        raise FleetEnvError(
+            f"fleet_env: could not prepare the environment root or its lock "
+            f"sidecar ({lock_path}): {type(exc).__name__}: {exc}. Check disk "
+            "space and write permission on that location, or repoint it: "
+            "machine-local set fleet_env.root <writable-path>."
+        ) from exc
     acquired = False
     try:
-        acquired = _plat_try_lock(fd)
+        try:
+            acquired = _plat_try_lock(fd)
+        except OSError as exc:
+            raise FleetEnvError(
+                f"fleet_env: could not acquire the build lock at {lock_path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         if not acquired:
             raise FleetEnvContention(
                 "[fleet-env] another session is rebuilding the fleet environment; "
@@ -748,8 +950,25 @@ def ensure_fleet_env(
             shutil.rmtree(build_dir, ignore_errors=True)
             raise
 
-        _swap_in_new_env(env_root, build_dir)
-        _replay_sibling_bindings(env_root)
+        # Replay registered bindings into the BUILD tree before the swap
+        # (never after), so `_swap_in_new_env`'s rename stays the single
+        # atomic publish point: a reader spawning right after the swap sees
+        # an environment that already carries every registered binding,
+        # rather than a window where the swap has landed but bindings have
+        # not replayed yet. Review: coordinatorcode-reviewer-97d5c433 finding 3.
+        try:
+            _replay_sibling_bindings(build_dir, settings_home_factory=settings_home_factory)
+            _swap_in_new_env(env_root, build_dir)
+        except OSError as exc:
+            # Same leak class as the pre-lock mkdir/open above: `os.rename`
+            # (the swap) and the `.pth` mkstemp/replace (the replay) are
+            # plain filesystem calls that can raise OSError on a read-only
+            # or permission-denied target — must not escape as a raw
+            # exception past this function's own FleetEnvError contract.
+            raise FleetEnvError(
+                f"fleet_env: could not publish the rebuilt environment at "
+                f"{env_root}: {type(exc).__name__}: {exc}"
+            ) from exc
         return "rebuilt"
     finally:
         if acquired:

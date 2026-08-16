@@ -40,8 +40,8 @@ def _patch_env(monkeypatch, *, claude_klabauter_root: Path, settings_home: Path,
     # monkeypatch there, so patch the source modules' own attributes
     # instead, exactly as any other lazy-import caller would observe.
     monkeypatch.setattr(
-        "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root",
-        lambda: str(claude_klabauter_root),
+        "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class",
+        lambda: (str(claude_klabauter_root), "live-working-tree"),
     )
     monkeypatch.setattr(
         "coordinator_core._settings_home.settings_home",
@@ -129,7 +129,7 @@ class TestFailureDegradesSilently:
             raise RuntimeError("no claude-klabauter root")
 
         monkeypatch.setattr(
-            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root", _raise,
+            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class", _raise,
         )
         monkeypatch.setattr(
             "coordinator_core._settings_home.settings_home",

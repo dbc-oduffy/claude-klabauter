@@ -73,8 +73,6 @@ from __future__ import annotations
 
 import filecmp
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 from typing import List, Optional
@@ -396,21 +394,33 @@ def main(argv: List[str]) -> int:
         env_override = os.environ.get("REPO_DOE_CLAUDE", "")
         doe_resolved = bool(env_override)
         if not doe_resolved:
-            ml_bin = shutil.which("machine-local")
-            if ml_bin is not None:
-                try:
-                    from coordinator_core.win_portability import no_console_creationflags
+            from coordinator_core.machine_resolver import registry_get as _registry_get
 
-                    result = subprocess.run(
-                        [ml_bin, "get", "repos.doe_claude"],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        **no_console_creationflags(),
-                    )
-                    doe_resolved = result.returncode == 0 and bool(result.stdout.strip())
-                except OSError:
-                    doe_resolved = False
+            doe_resolved = bool(_registry_get("repos.doe_claude"))
+            if not doe_resolved:
+                # `registry_get` alone misses the CLI's autodiscovery/
+                # `path-exceptions.toml` rungs -- fall back to the CLI on a
+                # registry miss so this install gate doesn't skip the shim
+                # write for a DoE clone the CLI would still resolve
+                # (2026-08-16 review finding, repos.* 4-rung ladder).
+                import shutil
+                import subprocess
+
+                ml_bin = shutil.which("machine-local")
+                if ml_bin is not None:
+                    try:
+                        from coordinator_core.win_portability import no_console_creationflags
+
+                        result = subprocess.run(
+                            [ml_bin, "get", "repos.doe_claude"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            **no_console_creationflags(),
+                        )
+                        doe_resolved = result.returncode == 0 and bool(result.stdout.strip())
+                    except OSError:
+                        doe_resolved = False
         if not doe_resolved:
             print("claude_shim: skipped (DoE clone not resolved — complete step 3.5a first)")
             return 0

@@ -132,7 +132,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
 from coordinator_core.install.write_surface import (
     ShapedClause,
     WriteSurfaceDeclaration,
@@ -426,7 +426,7 @@ def write_shell_rc_guard_block(
                 f"for sentinel_id={sentinel_id!r}"
             )
         try:
-            claude_klabauter_clone = coordinator_claude_klabauter_root()
+            claude_klabauter_clone, _resolution_class = coordinator_claude_klabauter_root_with_class()
         except RuntimeError as exc:
             print(f"[shell-rc-guard] skip: could not resolve claude-klabauter clone root: {exc}", file=sys.stderr)
             # Discovery (the claude-klabauter clone root) came up empty — resolved

@@ -15,13 +15,30 @@ registry carries ONLY ``repos.claude_klabauter`` (no ``claude_klabauter`` key,
 no ``.claude-klabauter-root`` file), points ``MACHINE_LOCAL_REGISTRY_DIR`` at it, and
 clears ``CLAUDE_KLABAUTER_ROOT``/``CLAUDE_PROJECT_DIR`` from the child env — so rungs
 1/1.5/2 all genuinely miss and only the published rung can answer. It then
-loads the MIRROR's own ``coordinator_core/claude_klabauter_root.py`` (never this
-repo's) by path in a subprocess, asserts it resolves class
-``RESOLUTION_RESOLVED_ENGINE`` at the mirror root, and execs a real,
-side-effect-free op (``coordinator/bin/publish-resolve-target.py --help``)
-FROM the mirror's own ``coordinator/bin/`` — confirming
-``_load_shim()``'s partial-checkout ``RuntimeError`` does not fire and the
-op produces its normal (exit-0, non-empty stdout) output.
+loads the MIRROR's own ``coordinator_core/claude_klabauter_root.py`` (never
+this repo's ``claude_klabauter_root.py``) by path in a subprocess, asserts it resolves
+class ``resolved-engine`` at the mirror root, and execs a real,
+side-effect-free op (``coordinator/bin/archive-stamp-cli.py --help``) FROM
+the mirror's own ``coordinator/bin/`` — confirming the partial-checkout
+guard does not fire and the op produces its normal (exit-0, non-empty
+stdout) output.
+
+IMPORTANT — the publish pipeline REDACTS the "claude-klabauter" codename as it syncs.
+Source-side names never appear in the mirror:
+
+- ``coordinator_core/claude_klabauter_root.py`` publishes as
+  ``coordinator_core/claude_klabauter_root.py`` (function
+  ``coordinator_claude_klabauter_root_with_class`` publishes as
+  ``coordinator_claude_klabauter_root_with_class``).
+- ``coordinator/lib/resolve-claude-klabauter/`` publishes as
+  ``coordinator/lib/resolve-claude-klabauter/``, and inside it
+  ``_resolve_claude_klabauter.py`` publishes as ``_resolve_claude_klabauter.py``.
+
+A prior version of this test checked for the SOURCE-side names inside the
+mirror and for ``coordinator/bin/publish-resolve-target.py`` (a publish-side
+tool, deliberately never allowlisted into the mirror) — both conditions can
+never be true post-publish, which pinned both tests below to SKIP forever.
+Do not reintroduce either check.
 
 Negative-spec: does NOT hardcode the mirror's absolute path anywhere in this
 file (AC12) — resolved at test-collection time from the live
@@ -47,6 +64,16 @@ from typing import Optional
 
 import pytest
 
+# Both cases spawn a real interpreter to resolve from the published mirror
+# under genuinely unreachable live-tree rungs -- an in-process resolution
+# would prove nothing, since the rungs under test are the ones a same-process
+# import has already satisfied. The spawn is the point, so the file is tiered
+# onto the cadence suite rather than the fast one.
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 _SHIM_PATH = _REPO_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
 
@@ -71,11 +98,16 @@ def _registered_mirror_root() -> Optional[str]:
 
 
 def _mirror_carries_required_files(mirror_root: str) -> bool:
+    """Checks the mirror's REAL published (redacted) shape — never the
+    source-side "claude-klabauter" names, which the publish pipeline renames away."""
     root = Path(mirror_root)
     return (
         (root / "coordinator_core" / "claude_klabauter_root.py").is_file()
-        and (root / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py").is_file()
-        and (root / "coordinator" / "bin" / "publish-resolve-target.py").is_file()
+        and (
+            root / "coordinator" / "lib" / "resolve-claude-klabauter"
+            / "_resolve_claude_klabauter.py"
+        ).is_file()
+        and (root / "coordinator" / "bin" / "archive-stamp-cli.py").is_file()
     )
 
 
@@ -84,10 +116,12 @@ def _skip_reason(mirror_root: Optional[str]) -> Optional[str]:
         return "no published engine mirror registered (repos.claude_klabauter) on this box"
     if not _mirror_carries_required_files(mirror_root):
         return (
-            f"published mirror at '{mirror_root}' is missing coordinator_core/claude_klabauter_root.py, "
-            "the resolve-claude-klabauter shim, or coordinator/bin/publish-resolve-target.py — a publish "
-            "round is needed: run `python coordinator/bin/publish.py claude-klabauter` (or the "
-            "matching lib-target row) from claude-klabauter before this pin can execute"
+            f"published mirror at '{mirror_root}' is missing "
+            "coordinator_core/claude_klabauter_root.py, the redacted "
+            "resolve-claude-klabauter shim, or coordinator/bin/archive-stamp-cli.py — a "
+            "publish round is needed: run `python coordinator/bin/publish.py "
+            "claude-klabauter` (or the matching lib-target row) from claude-klabauter "
+            "before this pin can execute"
         )
     return None
 
@@ -112,9 +146,9 @@ import sys
 from pathlib import Path
 
 mirror_root = Path(sys.argv[1])
-claude_klabauter_root_path = mirror_root / "coordinator_core" / "claude_klabauter_root.py"
+root_module_path = mirror_root / "coordinator_core" / "claude_klabauter_root.py"
 
-spec = importlib.util.spec_from_file_location("_c2_mirror_claude_klabauter_root", claude_klabauter_root_path)
+spec = importlib.util.spec_from_file_location("_c2_mirror_claude_klabauter_root", root_module_path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
@@ -126,17 +160,40 @@ print("RESOLVED_CLASS=" + resolution_class)
 
 @pytest.mark.skipif(_SKIP_REASON is not None, reason=str(_SKIP_REASON))
 def test_repointed_resolution_resolves_class_from_mirror_only():
-    """With live-tree rungs unreachable (no CLAUDE_KLABAUTER_ROOT, no resolvable
-    repos.claude_klabauter, no .claude-klabauter-root), the mirror's OWN claude_klabauter_root.py
-    still resolves — and classifies the answer RESOLUTION_RESOLVED_ENGINE,
-    proving the published rung (not an accidental live-tree hit) answered."""
+    """The mirror's OWN ``claude_klabauter_root.py`` classifies its answer
+    ``resolved-engine`` when the DR-132 gate confirms the running session is
+    NOT itself a registered engine-working-repo, proving the published rung
+    (not an accidental live-tree hit) answered.
+
+    IMPORTANT — ``claude_klabauter_root.py`` is a genuinely different module
+    from source-side ``claude_klabauter_root.py``, not a straight redacted rename of
+    it: ``claude_klabauter_root.py`` disambiguates a distinct "am I the live tree"
+    rung (``repos.claude_klabauter`` / ``CLAUDE_KLABAUTER_ROOT``) from a distinct
+    "published mirror" rung (``repos.claude_klabauter``). This module is
+    self-referential — it resolves the identity of the repo it ships
+    inside — and has only ONE registry key (``repos.claude_klabauter``) for
+    both purposes; whether that key's answer counts as "resolved-engine" vs
+    "live-working-tree" is instead decided by the DR-132
+    ``engine.working_repos.*`` gate (``_is_engine_working_repo``), not by a
+    second, CLAUDE_KLABAUTER_ROOT-style key. Do NOT "fix" this by trying to make
+    ``repos.claude_klabauter`` absent-yet-present — that key must stay set
+    for either class to resolve at all. The unreachability this row proves
+    is: the running session is confirmed NOT the registered working repo
+    (``CLAUDE_PROJECT_DIR`` set to a directory that is registered as a
+    working repo's sibling, never the working repo itself), so step 1 of
+    ``resolve_claude_klabauter_root_with_class`` fires the published branch
+    rather than falling through to the live-tree ladder."""
     with tempfile.TemporaryDirectory() as td:
         scratch = Path(td)
         settings_home = scratch / "settings-home"
         ml_dir = settings_home / "machine-local"
         ml_dir.mkdir(parents=True)
+        not_the_working_repo = scratch / "not-the-working-repo"
+        not_the_working_repo.mkdir()
+        registered_other_working_repo = scratch / "some-other-registered-working-repo"
         (ml_dir / "registry.local.toml").write_text(
-            f'"repos.claude_klabauter" = {_mirror_root()!r}\n',
+            f'"repos.claude_klabauter" = {_mirror_root()!r}\n'
+            f'"engine.working_repos.other" = {str(registered_other_working_repo)!r}\n',
             encoding="utf-8",
         )
         cwd = scratch / "no-git-here"
@@ -147,7 +204,14 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
 
         env = dict(os.environ)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
-        env.pop("CLAUDE_PROJECT_DIR", None)
+        env.pop("CLAUDE_KLABAUTER_ROOT", None)
+        # Set (not cleared) to a directory that is NOT the registered
+        # working repo above — this is what lets `_is_engine_working_repo`
+        # return the CONFIRMED `False` this module's gate requires, rather
+        # than the `None` ("undeterminable") a missing/absent session root
+        # would produce, which would fall through to the live-tree ladder
+        # instead of proving the published rung answered.
+        env["CLAUDE_PROJECT_DIR"] = str(not_the_working_repo)
         env["MACHINE_LOCAL_REGISTRY_DIR"] = str(ml_dir)
 
         result = subprocess.run(
@@ -170,12 +234,19 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
 
 @pytest.mark.skipif(_SKIP_REASON is not None, reason=str(_SKIP_REASON))
 def test_real_op_executes_from_mirror_under_unreachable_live_tree():
-    """Runs a real, side-effect-free op (publish-resolve-target.py --help)
+    """Runs a real, side-effect-free op (archive-stamp-cli.py --help)
     straight out of the mirror's own coordinator/bin/, under the same
-    unreachable-live-tree env as above. Asserts the shim's
-    _load_shim()-adjacent partial-checkout RuntimeError does NOT fire (exit
-    0, no traceback on stderr) and the op produces its normal output."""
-    target = Path(_mirror_root()) / "coordinator" / "bin" / "publish-resolve-target.py"
+    unreachable-live-tree env as above. Asserts no partial-checkout error
+    fires (exit 0, no traceback on stderr) and the op produces its normal
+    argparse usage output.
+
+    archive-stamp-cli.py is chosen because (unlike
+    publish-resolve-target.py, which is a publish-side tool deliberately
+    never allowlisted into the mirror) it IS genuinely published, is
+    side-effect-free under ``--help`` (prints its subcommand usage banner
+    and exits 0 without touching any handoff/archive state), and is
+    confirmed present via ``_mirror_carries_required_files`` above."""
+    target = Path(_mirror_root()) / "coordinator" / "bin" / "archive-stamp-cli.py"
 
     with tempfile.TemporaryDirectory() as td:
         scratch = Path(td)

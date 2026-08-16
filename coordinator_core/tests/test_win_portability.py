@@ -24,6 +24,7 @@ from coordinator_core.win_portability import (
     is_executable,
     join_path_list,
     no_console_creationflags,
+    run_forwarding,
     same_path,
     split_path,
     split_path_list,
@@ -331,3 +332,149 @@ def test_same_path_case_insensitive_on_windows(tmp_path, monkeypatch):
     # happening to match some other way.
     assert os.path.normcase(missing_upper) == os.path.normcase(missing_lower)
     assert same_path(missing_upper, missing_lower) is True
+
+
+# ---------------------------------------------------------------------------
+# run_forwarding -- fileno-safe subprocess.run wrapper. Regression coverage
+# for the workday-complete/workday-start assembler defect: `_invoke_cli_main`
+# (coordinator_core/workday_complete/apply.py) redirects sys.stdout/
+# sys.stderr to io.StringIO for every in-process directive dispatch, and a
+# bare `subprocess.run(stdout=sys.stderr, stderr=sys.stderr)` needs a real
+# `fileno()` on whatever it's handed -- it raises before the child is ever
+# spawned, which is exactly what made branch consolidation (`workday-
+# complete-step3-consolidate.py`'s sync-main step) unrunnable through the
+# assembler path.
+# ---------------------------------------------------------------------------
+
+
+def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-line\n", returncode=0):
+    script = tmp_path / "run_forwarding_child.py"
+    script.write_text(
+        "import sys\n"
+        f"sys.stdout.write({stdout_text!r})\n"
+        f"sys.stderr.write({stderr_text!r})\n"
+        f"sys.exit({returncode})\n"
+    )
+    return str(script)
+
+
+def test_bare_subprocess_run_reproduces_the_original_break(tmp_path):
+    """Proves the defect exists before asserting the fix: a bare
+    subprocess.run call against a fileno-less StringIO target raises
+    io.UnsupportedOperation -- the exact exception whose bare str() collapses
+    to the single word "fileno" in workday_complete.apply's failed[] entries."""
+    import io
+    import subprocess
+
+    child = _write_child_script(tmp_path)
+    buf = io.StringIO()
+    with pytest.raises(io.UnsupportedOperation):
+        subprocess.run([sys.executable, child], stdout=buf, stderr=buf)
+
+
+def test_run_forwarding_reaches_a_plain_capture_buffer(tmp_path):
+    import io
+
+    child = _write_child_script(tmp_path, stdout_text="plain stdout\n", stderr_text="plain stderr\n")
+    buf = io.StringIO()
+    proc = run_forwarding([sys.executable, child], stdout=buf, stderr=buf)
+    assert proc.returncode == 0
+    forwarded = buf.getvalue()
+    assert "plain stdout" in forwarded
+    assert "plain stderr" in forwarded
+
+
+def test_run_forwarding_under_redirect_stderr_reaches_the_buffer(tmp_path):
+    """Directive-dispatch shape: sys.stderr swapped for a StringIO via
+    contextlib.redirect_stderr (mirrors `_invoke_cli_main`'s own capture),
+    called with stdout=sys.stderr/stderr=sys.stderr exactly as all four
+    production call sites pass it."""
+    import contextlib
+    import io
+
+    child = _write_child_script(tmp_path, stdout_text="child stdout\n", stderr_text="child stderr\n")
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        proc = run_forwarding([sys.executable, child], stdout=sys.stderr, stderr=sys.stderr)
+    assert proc.returncode == 0
+    forwarded = buf.getvalue()
+    assert "child stdout" in forwarded
+    assert "child stderr" in forwarded
+
+
+def test_run_forwarding_returncode_propagates_nonzero(tmp_path):
+    import io
+
+    child = _write_child_script(tmp_path, returncode=3)
+    buf = io.StringIO()
+    proc = run_forwarding([sys.executable, child], stdout=buf, stderr=buf)
+    assert proc.returncode == 3
+
+
+def test_run_forwarding_check_true_raises_after_forwarding(tmp_path):
+    """check=True must still raise CalledProcessError on a non-zero exit,
+    but only AFTER the captured output has already reached the buffer --
+    delegating `check` straight to the inner subprocess.run call would raise
+    before this function's own forwarding step ever runs, dropping the text
+    on exactly the failure path a caller most wants to see it on."""
+    import io
+    import subprocess
+
+    child = _write_child_script(tmp_path, stdout_text="before-raise\n", stderr_text="", returncode=1)
+    buf = io.StringIO()
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        run_forwarding([sys.executable, child], stdout=buf, stderr=buf, check=True)
+    assert "before-raise" in buf.getvalue()
+    assert exc_info.value.returncode == 1
+
+
+def test_run_forwarding_passthrough_unchanged_for_real_fileno_stream(monkeypatch):
+    """A stream WITH a usable fileno() must be passed straight through,
+    unchanged -- the existing inherit-the-console behaviour for every call
+    site not running under a capture buffer must be preserved bit-for-bit,
+    never routed through PIPE."""
+    import subprocess
+
+    class _FakeConsoleStream:
+        def fileno(self):
+            return 5
+
+    calls: dict = {}
+
+    def _fake_run(argv, **kwargs):
+        calls.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    real_stream = _FakeConsoleStream()
+    proc = run_forwarding(["ignored"], stdout=real_stream, stderr=real_stream)
+    assert proc.returncode == 0
+    assert calls["stdout"] is real_stream
+    assert calls["stderr"] is real_stream
+    assert "text" not in calls
+
+
+def test_run_forwarding_merges_stderr_into_stdout_for_same_fileno_less_target(monkeypatch):
+    """When stdout and stderr target the SAME fileno-less object (every
+    current production call site passes stdout=sys.stderr, stderr=sys.stderr
+    under the capture buffer), the child's stderr must merge into stdout at
+    the OS level (stderr=subprocess.STDOUT) rather than being captured as a
+    second independent PIPE -- two reassembled-after-the-fact pipes cannot
+    preserve the child's actual write interleaving order; a single merged
+    stream can."""
+    import io
+    import subprocess
+
+    calls: dict = {}
+
+    def _fake_run(argv, **kwargs):
+        calls.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, stdout="merged output\n")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    buf = io.StringIO()
+    proc = run_forwarding(["ignored"], stdout=buf, stderr=buf)
+    assert proc.returncode == 0
+    assert calls["stdout"] == subprocess.PIPE
+    assert calls["stderr"] == subprocess.STDOUT
+    assert buf.getvalue() == "merged output\n"

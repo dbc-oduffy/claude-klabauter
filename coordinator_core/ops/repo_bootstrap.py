@@ -54,10 +54,16 @@ Machine-local CLI resolution: PATH first (`shutil.which`), then
 `coordinator_core.ops.register_discovered_repos._resolve_machine_local` uses,
 duplicated locally (not imported) because that function's second parameter
 (`self_dir`, a DoE-trampoline-supplied sibling-file directory) has no meaning
-here; this op has no DoE-side trampoline in its call chain. Per the plan's
-mandated-resolvers table, a `repos.*` key is not the `coordinator.*` hot path,
-so resolution goes through the `machine-local` CLI (canonical), never the
-direct-TOML `machine_resolver.registry_get` short-circuit.
+here; this op has no DoE-side trampoline in its call chain. A `repos.<slug>` key is resolved by the CLI through a 4-rung ladder --
+`REPO_<SLUG>` env, marker-based autodiscovery, `path-exceptions.toml`, then
+`registry.local.toml` -- that `machine_resolver.registry_get` alone does not
+reproduce (2026-08-16 review finding, generalizing the
+`check_machine_local_regeneratability.py:277` correctness exception to the
+whole `repos.*` key class). `_machine_local_get` below tries `registry_get`
+first, zero-spawn, and falls back to the CLI only on a miss, so the
+`already_registered` idempotency check in `clone_and_register_sibling_repo`
+still sees a sibling repo the CLI would find via autodiscovery or
+`path-exceptions.toml` as registered, instead of attempting to re-clone it.
 
 Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
 Oracle backlink: state/audits/2026-07-22-command-payload-inventory/{op-classification,distinct-ops-new}.tsv
@@ -78,6 +84,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import home_dir, normalize_native_path, settings_home
+from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.clone_sibling_repo import (
     CloneSiblingRepoError,
@@ -119,9 +126,17 @@ def _resolve_machine_local_bin() -> Optional[str]:
 
 
 def _machine_local_get(machine_local_bin: str, key: str) -> Optional[str]:
-    """`machine-local get <key>` — returns the stripped stdout value, or None
-    on any failure (missing key, non-zero exit, timeout, or a spawn error).
-    A None return means "treat as not registered", never "error"."""
+    """Resolve `key` via `machine_resolver.registry_get` first -- zero-spawn,
+    in-process read of the same registry.local.toml over registry.toml chain
+    the `machine-local get <key>` CLI's final rung consults. Falls back to
+    the `machine-local get <key>` CLI subprocess only on a miss, to pick up
+    the CLI's autodiscovery and `path-exceptions.toml` rungs `registry_get`
+    never consults (repos.* is a 4-rung ladder, not a flat registry read --
+    2026-08-16 review finding; see module docstring). A None return means
+    "treat as not registered", never "error"."""
+    value = _registry_get(key)
+    if value is not None:
+        return value
     try:
         proc = subprocess.run(
             [machine_local_bin, "get", key],

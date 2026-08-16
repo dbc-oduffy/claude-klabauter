@@ -11,6 +11,15 @@ Never touches a real rc file — every rc path in this suite is under
 tmp_path, and REPO_CLAUDE_KLABAUTER is set explicitly per test so resolution
 never falls through to the operator's real machine-local registry.
 
+Converted 2026-08-16 (C7b): `resolve_claude_klabauter_clone`'s tier-2 rung now reads
+the machine-local registry in-process (`machine_resolver.registry_get`).
+The autouse `_isolate_env` fixture below additionally points
+`MACHINE_LOCAL_REGISTRY_DIR` at an empty, scratch `tmp_path` subdirectory so
+the one test that relies on tier-2 falling through
+(`test_graceful_skip_when_claude_klabauter_not_resolvable`) cannot read the
+operator's REAL registry either -- per
+`state/lessons/2026-07-17-redirect-state-home-env-to-tmp-in-unit-t-*.yaml`.
+
 Spec backlink: coordinator/commands/install.md § 3.5b.1 [DoE-claude repo]
 """
 
@@ -37,11 +46,14 @@ def claude_klabauter_clone(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch):
+def _isolate_env(monkeypatch, tmp_path):
     """Never let resolution fall through to the real machine-local registry
     or the real $SHELL/$HOME — every test sets what it needs explicitly."""
     monkeypatch.delenv("REPO_CLAUDE_KLABAUTER", raising=False)
     monkeypatch.delenv("COORDINATOR_SHIM_RC", raising=False)
+    empty_registry = tmp_path / "ml-registry"
+    empty_registry.mkdir(exist_ok=True)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
 
 
 # ---------------------------------------------------------------------------

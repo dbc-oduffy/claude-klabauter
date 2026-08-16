@@ -501,6 +501,20 @@ _ALLOWLIST: dict[str, str] = {
     # --- Known gaps: genuinely write-reaching, genuinely undeclared today.
     # Out of this dispatch's scope to fix (writer WRITE_SURFACE authorship
     # is explicitly out-of-scope) — reported to the dispatching EM instead.
+    "host_sampler_scheduler.py": (
+        "KNOWN GAP, taxonomy-blocked: the only Python-level write is a "
+        "`tempfile.mkstemp()` XML file removed in the same `finally` block, "
+        "which is exempt on its own. The real machine mutation is the "
+        "Windows Task Scheduler entry `schtasks /Create` registers (and "
+        "`schtasks /Delete` removes) — durable state outside the repo that "
+        "SHOULD be declared, but no member of the frozen eight-kind "
+        "`WRITE_SURFACE_KINDS` vocabulary describes an OS scheduler task, "
+        "and that tuple is externally agreed with DoE (2026-08-06 "
+        "acceptance memo). Closing this needs a ninth kind ratified "
+        "cross-repo first, not a kind invented here; see "
+        "`coordinator_core/install/write_surface.py`'s own note that a new "
+        "kind is never invented locally without updating that tuple."
+    ),
 }
 
 

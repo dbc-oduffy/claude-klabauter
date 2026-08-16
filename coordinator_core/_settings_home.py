@@ -29,6 +29,21 @@ Public surface (pinned contract — do not change without updating consumers):
     def claude_config_dir() -> Path: ...
     def check_claude_config_divergence() -> None: ...  # raises ClaudeConfigDivergenceError
     class ClaudeConfigDivergenceError(RuntimeError): ...
+    def settings_home_child_env(base_env) -> dict: ...
+
+`settings_home_child_env()` (added 2026-08-16, pln-the-machine-local-registry-rea-50be37
+§ C5) is the child-env propagation half of AC11: cockpit's finding is that a
+resolver ladder tries the `coordinator-settings-home` CLI before its disk
+fallback (~420ms once per process, upstream of every registry read). We may
+not reorder that ladder (cross-language contract, DoE's call) — what claude-klabauter
+owns is its OWN subprocess environment. Whoever spawns a fan-out resolves
+settings-home once, cheaply, via this module's zero-external-call
+`settings_home()`, and passes it to children via `settings_home_child_env()`
+so a child hits rung 0 (`COORDINATOR_SETTINGS_HOME` already set) and never
+invokes the CLI itself. The actual spawn seam that calls this is
+`coordinator/bin/lib/cc_invoke.py` (`_build_subprocess_env` /
+`child_env`) — see that module for the sys.path-injection wrapper a
+bootstrap-phase caller needs before this package is importable.
 
 `claude_config_dir()` (added 2026-08-08, CLAUDE_CONFIG_DIR resolution seam) closes a naming
 mismatch, not a new resolver: `CLAUDE_HOME` is a coordinator invention naming the *parent* of
@@ -130,6 +145,32 @@ def settings_home() -> Path:
     if override:
         return _require_rooted("COORDINATOR_SETTINGS_HOME", override)
     return _home_dir() / ".coordinator-claude-settings"
+
+
+def settings_home_child_env(base_env: dict) -> dict:
+    """Return a copy of `base_env` with COORDINATOR_SETTINGS_HOME set to the
+    resolved settings-home root, UNLESS `base_env` already carries the key.
+
+    AC11: the propagation half of "resolve settings-home once per process
+    tree and inherit it downward" — see module docstring's public-surface
+    entry for this function. `settings_home()` performs zero external calls,
+    so this is cheap to call fresh on every spawn; there is nothing to cache
+    and therefore nothing that can go stale across a long-lived warm engine
+    or EM session ("re-derive per op-dispatch, not per process" holds
+    trivially — every call re-derives, there is no per-process memo).
+
+    Precedence, load-bearing: an explicitly-set child value (a
+    differently-rooted tenant, a test harness redirecting it, a deliberately-
+    scoped operator shell) is NEVER overwritten. This only fills a gap the
+    child env does not already carry — the wrong-root failure mode Anti-scope
+    refuses for a persisted variable applies just as much to an overwritten
+    child-env one.
+    """
+    if base_env.get("COORDINATOR_SETTINGS_HOME"):
+        return dict(base_env)
+    env = dict(base_env)
+    env["COORDINATOR_SETTINGS_HOME"] = str(settings_home())
+    return env
 
 
 def machine_local_dir() -> Path:

@@ -1560,6 +1560,27 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     return repo_root, "git-root auto-discovery"
 
 
+def _git_current_branch(tree: Path) -> str | None:
+    """The tree's checked-out local branch name, or `None` on any failure
+    (git absent, not a work tree, detached HEAD) — advisory-only caller
+    (Finding 2, staff-eng C8 review): a `None` here means "say nothing",
+    never a refusal."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(tree), "symbolic-ref", "--short", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            **_NO_CONSOLE,
+        )
+    except OSError:
+        return None
+    if proc is None or proc.returncode != 0 or not proc.stdout:
+        return None
+    branch = proc.stdout.strip()
+    return branch or None
+
+
 def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | None:
     """Discover an existing klabauter checkout so a `claude-klabauter` install
     can auto-arm DR-132's published-mirror key (AC1) — NEVER guess one
@@ -1624,11 +1645,38 @@ def register_claude_klabauter_root(
         untouched, not an error (AC2). PM ruling 2026-08-12: a claude-klabauter
         developer's machine is auto-armed for the dual-boot; a klabauter
         install user must never encounter the concept (see the branch
-        below).
-      - claude-klabauter: machine-local set repos.claude_klabauter ONLY —
-        neither claude_klabauter key is written, and the dual-boot auto-arm
-        above does NOT apply here — this branch is unchanged in behaviour
-        and output. Per the agreed cross-repo contract
+        below). C8: when the klabauter checkout is discovered, a FURTHER
+        write lands in the same pass — `engine.target = "candidate"` (PM
+        ruling 2026-08-16: a claude-klabauter developer's box defaults to the nightly
+        channel). `publish.mirrors.claude_klabauter.track_ref =
+        "origin/candidate"` (the fact that actually selects which channel
+        the mirror tracks — `engine.target` alone is inert on DoE's
+        resolver, see C8's plan chunk) is declared ONLY when the discovered
+        checkout is ALSO this box's already-registered publish mirror
+        (`publish.mirrors.claude_klabauter.path`, `same_path`-equal) —
+        the installer never inspects or moves a git tree it merely
+        discovered, so it never declares a track_ref it cannot vouch for
+        (staff-eng C8 review, Finding 2). When the write lands and the
+        mirror's actual checked-out branch disagrees, an advisory line
+        names the exact runnable reconciliation
+        (`klabauter-channel.py --set candidate`) — never a failure, never a
+        move performed here. A claude-klabauter box with no discoverable klabauter
+        checkout, or one that is not this box's registered mirror,
+        acquires no track_ref.
+      - claude-klabauter: machine-local set repos.claude_klabauter AND
+        `engine.target = "main"` (PM ruling 2026-08-16: installing klabauter
+        itself targets the full release) — neither claude_klabauter key nor
+        `track_ref` is written; a consumer never publishes, so `track_ref`
+        stays publish-side only. The dual-boot auto-arm above does NOT apply
+        here — this branch is otherwise unchanged in behaviour and output.
+        ASSUMES a fresh clone checked out on the remote default (`main`) —
+        very probably true for the fresh-install case this branch targets,
+        silently false for an install from an existing checkout on a
+        feature branch (staff-eng C8 review, Finding 13). Not enforced:
+        nothing refuses, nothing writes a new key; an advisory line prints
+        the clone's actual ref when it disagrees with the "main" being
+        declared, turning the silent assumption visible.
+        Per the agreed cross-repo contract
         (cross-repo/inbox/2026-08-05-doe-claude-em-klabauter-location-
         belongs-in-the-registry-not-a-pointer-file.md), the registry
         carries the published engine's location and an absent key makes a
@@ -1666,7 +1714,19 @@ def register_claude_klabauter_root(
     covers every key for the resolved identity identically: neither
     `engine.working_repos.claude_klabauter` nor the auto-armed
     `repos.claude_klabauter` is a separate registration with its own
-    fallback — each is a further write inside the same guard.
+    fallback path.
+
+    NOT atomic (staff-eng C8 review, Finding 5): the writes are a
+    sequential per-key `machine-local set` subprocess loop that exits(1) on
+    the first failure — ordered fail-loud with a safe partial state, not an
+    all-or-nothing transaction. `key_values`' insertion order is chosen so
+    a partial failure always leaves the safer residue: `engine.target` (and
+    `track_ref`, when declared) are written BEFORE `repos.claude_klabauter`
+    on both identity branches, so a mid-loop failure leaves target-without-
+    mirror (inert) rather than mirror-without-target (a false positive on
+    the DR-132 gate). The probe added alongside this chunk
+    (`bin/claude-klabauter-doctor-probe.py`) is the backstop for that residue, not a
+    substitute for the ordering.
 
     `engine.working_repos.*` is DoE's key-namespace (schema authored on their
     plane, `machine-local-registry.md` §324); our half is this install-time
@@ -1685,9 +1745,44 @@ def register_claude_klabauter_root(
     plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
     plugin_root_str = str(plugin_root) if plugin_root else None
 
+    # Deferred advisory callables (Findings 2 + 13, staff-eng C8 review):
+    # each spawns `git` to compare a tree's actual ref against what is
+    # about to be declared. Deliberately NOT invoked until AFTER the
+    # machine-local-present check below -- the degrade path (machine-local
+    # absent, --skip-dep-check --accept-missing-deps-risk) must spawn
+    # NOTHING (existing contract, scripts/test_setup.py), and an advisory
+    # about a key that was never actually written would be noise anyway.
+    pending_advisories: list = []
+
     identity = resolve_repo_identity(repo_root)
     if identity == "claude-klabauter":
-        key_values = {"repos.claude_klabauter": str(claude_klabauter_root_resolved)}
+        # Review: staff-eng 2026-08-16 C8 Finding 13 — "installing
+        # klabauter targets main" rests on an
+        # UNSTATED assumption -- that a fresh clone is checked out on the
+        # remote default (`main`). Nothing here inspects the clone's
+        # actual ref or writes a track_ref (correctly -- a consumer never
+        # publishes), so an install from an existing checkout on a feature
+        # branch would silently declare `main` while the box runs
+        # something else. Made visible, not fixed: print the clone's
+        # actual checked-out ref so the assumption is a line an operator
+        # can see, not a silent guess.
+        key_values = {
+            "engine.target": "main",
+            "repos.claude_klabauter": str(claude_klabauter_root_resolved),
+        }
+
+        def _klabauter_identity_advisory() -> None:
+            actual_branch = _git_current_branch(claude_klabauter_root_resolved)
+            if actual_branch is not None and actual_branch != "main":
+                print()
+                print(
+                    f"[ADVISORY] this klabauter checkout is on {actual_branch!r}, not "
+                    "'main' -- engine.target is being declared 'main' per the "
+                    "install-class default regardless (a fresh clone assumption; "
+                    "see register_claude_klabauter_root's docstring)."
+                )
+
+        pending_advisories.append(_klabauter_identity_advisory)
     elif identity == "claude-klabauter":
         key_values = {
             "repos.claude_klabauter": str(claude_klabauter_root_resolved),
@@ -1695,7 +1790,36 @@ def register_claude_klabauter_root(
         }
         discovered_klabauter = _discover_klabauter_root(repo_root, plugin_root_str)
         if discovered_klabauter:
+            key_values["engine.target"] = "candidate"
             key_values["repos.claude_klabauter"] = discovered_klabauter
+            # Review: staff-eng 2026-08-16 C8 Finding 2 — only declare a
+            # track_ref for a tree that IS this
+            # box's registered publish mirror -- a track_ref written for
+            # an undiscovered/mismatched mirror is a dangling declaration
+            # that breaks the next publish round (a registered mirror) or
+            # targets a mirror that was never registered at all. Never
+            # move the tree here -- moving a discovered git checkout the
+            # installer merely found is a publish-plane action this
+            # installer does not own.
+            from coordinator_core.machine_resolver import registry_get
+            from coordinator_core.win_portability import same_path
+
+            mirror_path = registry_get("publish.mirrors.claude_klabauter.path")
+            if mirror_path and same_path(discovered_klabauter, mirror_path):
+                key_values["publish.mirrors.claude_klabauter.track_ref"] = "origin/candidate"
+
+                def _track_ref_advisory(discovered_klabauter=discovered_klabauter) -> None:
+                    current_branch = _git_current_branch(Path(discovered_klabauter))
+                    if current_branch is not None and current_branch != "candidate":
+                        print()
+                        print(
+                            "[ADVISORY] publish.mirrors.claude_klabauter.track_ref now "
+                            f"declares 'origin/candidate', but {discovered_klabauter} is "
+                            f"checked out on {current_branch!r}. Reconcile with:"
+                        )
+                        print("    python coordinator/bin/klabauter-channel.py --set candidate")
+
+                pending_advisories.append(_track_ref_advisory)
     else:
         print(file=sys.stderr)
         print(
@@ -1775,6 +1899,8 @@ def register_claude_klabauter_root(
             print(f"    machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
         print(f"PASS [registration] {key} = {value}")
+    for advisory in pending_advisories:
+        advisory()
     return claude_klabauter_root_resolved
 
 
@@ -2453,6 +2579,37 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
     register_host_sampler_task(repo_root)
 
 
+def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
+    """Install-chain step: provision the fleet shared Python environment
+    (`coordinator_core.install.fleet_env.ensure_fleet_env`, C4/C6).
+
+    ADVISORY, non-fatal (mirrors `install_host_sampler_task`/
+    `install_precommit_hook`'s shape) — the environment is multi-GB and this
+    step can hit no network, no disk, or a read-only install location; a
+    provisioning failure must fall through to a printed [ADVISORY], never
+    fail the rest of setup. Re-run remediation names a runnable script
+    (cold-path convention), not a slash command, since no session exists at
+    this point in the install chain.
+    """
+    print()
+    print("--- Install: fleet shared Python environment ---")
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    from coordinator_core.install.fleet_env import FleetEnvError, ensure_fleet_env
+
+    try:
+        status = ensure_fleet_env()
+    except FleetEnvError as exc:
+        print(f"[ADVISORY] fleet environment provisioning failed: {exc}", file=sys.stderr)
+        print(
+            f"  Re-run manually: {sys.executable} -m coordinator_core.install.fleet_env",
+            file=sys.stderr,
+        )
+        return
+    print(f"fleet shared environment: {status}")
+
+
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
@@ -2523,6 +2680,7 @@ def main(argv: list[str]) -> int:
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
+        install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved)
 
     print()
     if probe_hard_failure:

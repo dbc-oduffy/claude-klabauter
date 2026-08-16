@@ -365,6 +365,89 @@ def test_execute_directives_failing_directive_still_reported_as_failed(
 
 
 # ---------------------------------------------------------------------------
+# Exception-message shape (apply.py:379/apply.py:411) — a bare `str(exc)` on
+# an `io.UnsupportedOperation` formats as the single word "fileno", with no
+# type and no traceback; this is what hid the subprocess-under-capture-
+# buffer defect (`win_portability.run_forwarding`'s own test module has the
+# isolated reproduction) behind an opaque diagnostic for every ceremony run.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_exception_error_string_names_the_exception_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raising_loader(cli_name: str) -> ModuleType:
+        raise RuntimeError("boom detail")
+
+    monkeypatch.setattr(wc_apply, "_load_cli_module", _raising_loader)
+
+    directives = [_directive("d_plain", "fake-cli")]
+    _, report = wc_apply._execute_directives(directives, [], {})
+
+    (entry,) = report["failed"]
+    assert entry["error"] == "RuntimeError: boom detail"
+
+
+def test_gate_evaluation_error_string_names_the_exception_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _bad_gate(directive: Any, jp_by_id: Any, decisions: Any) -> bool:
+        raise ValueError("malformed envelope")
+
+    monkeypatch.setattr(wc_apply, "_directive_gate_open", _bad_gate)
+
+    directives = [_directive("d_plain", "fake-cli", depends_on="jp_x")]
+    judgment_points = [{"id": "jp_x", "dispositions": []}]
+    _, report = wc_apply._execute_directives(directives, judgment_points, {})
+
+    (entry,) = report["failed"]
+    assert entry["error"] == "gate evaluation error: ValueError: malformed envelope"
+
+
+# ---------------------------------------------------------------------------
+# Capture-buffer subprocess regression (the original defect this dispatch
+# fixes): a directive's CLI spawning a child process via
+# `win_portability.run_forwarding(stdout=sys.stderr, stderr=sys.stderr, ...)`
+# while running under `_invoke_cli_main`'s own `contextlib.redirect_stderr`
+# capture (`sys.stderr` is an `io.StringIO` there, with no `fileno()`). A
+# bare `subprocess.run` in the same shape raises `io.UnsupportedOperation`
+# before the child is ever spawned — see `coordinator_core/tests/
+# test_win_portability.py::test_bare_subprocess_run_reproduces_the_original_
+# break` for the isolated proof; this exercises the same shape through the
+# real directive-dispatch seam end to end.
+# ---------------------------------------------------------------------------
+
+
+def test_directive_subprocess_via_run_forwarding_reaches_capture_buffer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    from coordinator_core.win_portability import run_forwarding
+
+    child_script = tmp_path / "child.py"
+    child_script.write_text(
+        "import sys\nsys.stderr.write('child ran\\n')\nsys.exit(0)\n"
+    )
+
+    def main_fn(argv: list[str]) -> int:
+        proc = run_forwarding(
+            [sys.executable, str(child_script)], stdout=sys.stderr, stderr=sys.stderr,
+        )
+        return proc.returncode
+
+    modules = {"fake-cli": _fake_module(main_fn, "fake_cli")}
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_plain", "fake-cli")]
+    exit_code, report = wc_apply._execute_directives(directives, [], {})
+
+    assert report["landed"] == ["d_plain"]
+    assert report["failed"] == []
+    result = next(r for r in report["results"] if r["id"] == "d_plain")
+    assert "child ran" in result["stderr"]
+    assert exit_code == int(wc_apply.WorkdayApplyExitCode.SUCCESS)
+
+
+# ---------------------------------------------------------------------------
 # best_effort / degraded — 2026-08-08 "a best-effort directive cannot fail a
 # ceremony". A `best_effort: True` directive that exits non-zero must land
 # in `report["degraded"]`, never `report["failed"]`, and must not move the

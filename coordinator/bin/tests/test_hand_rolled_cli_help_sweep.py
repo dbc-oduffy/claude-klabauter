@@ -61,7 +61,9 @@ pytestmark = [
 _SWEPT_HELP_ENTRYPOINTS = (
     "backlog-grind-assemble.py",
     "consolidate-assemble.py",
+    "coordinator-assemble.py",
     "coordinator-fold-execution-record.py",
+    "coordinator-gate.py",
     "coordinator-safe-name.py",
     "handoff-carry-gate.py",
     "handoff-gate-aging.py",
@@ -128,6 +130,12 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "assert-no-terminal-plans-in-live.py",
     "assert-plan-sizing-citation.py",
     "audit-enabled-plugins.py",
+    # Restored 2026-08-16: pruned from this list alongside C2's 14 genuinely
+    # caller-less migrate-*/backfill-* deletions, but this entry point was
+    # NOT deleted -- workday-complete-step9 and workweek_complete/brief.py
+    # both reach it, so it kept its .py and its .cmd rung. The prune matched
+    # the deletion set's shape rather than the deletion set.
+    "backfill-week-changelog-gaps.py",
     "audit-roadmap.py",
     "autonomous-verb.py",
     "baton-assemble.py",

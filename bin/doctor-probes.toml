@@ -112,6 +112,25 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Run python3 scripts/setup.py (authoritative standalone path) to register repos.claude_klabauter; if coordinator-claude is absent, no key is required"
 
+[[probe]]
+id = "claude-klabauter.registry.engine_target_rollout"
+cluster = "registry"
+weight = "cheap"
+interactivity = "silent"
+fix = "none"
+symptom_keywords = ["engine.target not yet rolled out", "repos.claude_klabauter registered without engine.target", "not-yet-rolled-out set", "AC20"]
+# triage=false: purely informational (see body) -- never a functional-headline
+# probe and no live path depends on its outcome.
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_engine_target_rollout"
+required = false
+# severity_if_fail is notional (staff-eng C8 review, Finding 12): this
+# probe's own status is always INFO, never DEGRADED -- C8's body: "It
+# reports, never blocks." Kept for schema completeness (the enum admits no
+# INFO value); matches the resident-debris probe's same convention below.
+severity_if_fail = "degraded"
+remediation = "Run python3 scripts/setup.py to write the install-class engine.target default (candidate for a claude-klabauter developer box, main for a claude-klabauter install)"
+
 # ---------------------------------------------------------------------------
 # Cluster: install — coordinator_core import, engine bootstrap, and
 #                    command-type health (version, coverage seam, debris)

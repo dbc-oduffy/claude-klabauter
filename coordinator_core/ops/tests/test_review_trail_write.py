@@ -1726,13 +1726,13 @@ class TestForeignSessionScopeGuard:
     def test_foreign_refusal_message_names_remedy_not_absolute_impossibility(
         self, tmp_path
     ) -> None:
-        """Regression: the case-1 refusal message must not claim there is no
-        remedy at all — a chain-terminal session that runs its own close
-        coverage gate against the picked-up handoff BEFORE this write mints
-        a chain-ancestry waiver that clears the guard on retry (ordering,
-        not impossibility). This misled real sessions into concluding the
-        review-owed close pattern is structurally unrecordable — see this
-        module's docstring update for the full incident context."""
+        """Regression: the refusal message must not claim there is no
+        remedy at all. The chain-ancestry-waiver mint this docstring
+        formerly described was removed outright by K-005
+        (state/kill-ledger.md, 2026-08-16) — the surviving remedy is
+        re-committing through the trailer-emitting path (see the raise
+        site) rather than any waiver/retry ordering. See this module's
+        docstring update for the full incident context."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)

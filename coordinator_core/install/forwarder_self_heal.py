@@ -125,9 +125,10 @@ def _self_heal_forwarders_inner() -> None:
         _write_agent_cmd_forwarder,
         _write_agent_forwarder,
     )
-    from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+    from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
 
-    claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+    _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+    claude_klabauter_root = Path(_claude_klabauter_root_str)
     agent_bin = claude_klabauter_root / "coordinator" / "bin"
     bin_dst = settings_home() / "bin"
 

@@ -34,10 +34,12 @@ Negative-spec (deliberate divergence from the bash oracle):
       This is not a behavior change (the computed VALUE is identical); it
       only drops a redundant subprocess hop that only existed because the
       bash caller had no Python of its own.
-    - `machine-local` itself remains an external CLI (still bash-resident,
-      not yet ported) -- this module shells out to it via subprocess exactly
-      as the bash script did, preserving the registry-only idempotency
-      contract (`machine-local keys`, never `machine-local has`).
+    - The idempotency check (`machine-local keys` in the bash oracle) now
+      reads `coordinator_core.machine_resolver.merged_flat_registry`
+      in-process (2026-08-16) -- zero-spawn, same registry-layers-ONLY
+      semantics (never the env layer `machine-local has` would consult).
+      The persistent write (`machine-local set`) is unchanged: still an
+      external CLI subprocess, no in-process write substitute exists.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
 from coordinator_core.win_portability import no_console_creationflags
 
 _KEY = "fan_out.large_wave_threshold"
@@ -74,26 +77,17 @@ def _ml_argv() -> List[str]:
     ]
 
 
-def _machine_local_keys() -> Tuple[str, int]:
-    """Run `machine-local keys`, degrading to empty output on any failure.
+def _key_already_captured() -> bool:
+    """Whether `_KEY` is already set in the registry.
 
-    Mirrors the bash script's `machine-local keys 2>/dev/null || true` --
-    a missing/erroring `machine-local` (OSS user partway through setup, or a
-    CI runner without it on PATH) degrades to "key absent -> write" instead
-    of aborting.
+    Zero-spawn: `merged_flat_registry` reads the same registry.local.toml
+    over registry.toml chain `machine-local keys` would enumerate, in-process
+    -- no `machine-local` CLI subprocess (see
+    `coordinator_core.machine_resolver.merged_flat_registry`). Best-effort,
+    matching the prior degrade-to-"key absent" contract: a missing/unreadable
+    registry file degrades to `{}`, never raises.
     """
-    try:
-        proc = subprocess.run(
-            [*_ml_argv(), "keys"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            **no_console_creationflags(),
-        )
-    except (OSError, FileNotFoundError):
-        print(f"skip: _machine_local_keys: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return ("", 0)
-    return (proc.stdout or "", proc.returncode)
+    return _KEY in _merged_flat_registry()
 
 
 def capture(check_only: bool = False) -> Tuple[str, int]:
@@ -102,9 +96,7 @@ def capture(check_only: bool = False) -> Tuple[str, int]:
     Returns (stdout_text, rc):
       rc 0 on all normal paths (pre-existing / would-write / written).
     """
-    keys_out, _rc = _machine_local_keys()
-    existing_keys = keys_out.splitlines()
-    if _KEY in existing_keys:
+    if _key_already_captured():
         return ("fan_out_threshold: pre-existing\n", 0)
 
     value = _compute_value()

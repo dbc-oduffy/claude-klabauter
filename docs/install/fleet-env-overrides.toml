@@ -1,0 +1,31 @@
+# Fleet-environment resolution overrides. An override is a resolution-time
+# uv instrument (expands the acceptable version set, per uv's own docs) —
+# NOT a fix. Every entry below REQUIRES `owner` and `expires`; a test fails
+# if either is absent (AC3, docs/plans/2026-08-16-one-environment-for-the-fleet.md).
+# An override without an owner and an expiry is a latent runtime failure
+# wearing a green resolution (docs/reference/fleet-shared-environment-contract.md).
+#
+# Do NOT add a `huggingface_hub` override here — the PM ruling raising that
+# floor belongs in `fleet-env-requirements.in` as a first-class floor
+# (coordinator_core/install/fleet_env_lock.py's `_FIRST_CLASS_FLOORS`), not
+# as override scaffolding.
+#
+# NEVER override `Pillow` downward. Its `>=12.2.0,<13.0` floor in
+# fleet-env-requirements.in is a SECURITY floor, not a preference: the PSD
+# integer-overflow out-of-bounds-write class (CVE-2026-25990, -40192, -42308,
+# -42309, -42310, -42311). A prior `<12.0` bound actively blocked the fix.
+# Reported by example-game-workbench-repo, 2026-08-16, via
+# cross-repo/inbox/2026-08-16-example-game-repo-em-sidecar-dep-set-overlay-answer.md.
+# An override lowering it would resolve green and reintroduce an RCE class.
+
+# RETIRED 2026-08-16 — the chromadb row that stood here is gone because its own
+# retirement condition was met, not because anyone waived it. It forced
+# `>=1.4,<1.5` while example-retrieval-repo declared `>=1.5,<1.6` and ran 1.4.1. Example-retrieval-repo
+# corrected its declaration at source (their commit ed3f6db09, "deps: carry
+# chromadb>=1.4,<1.5 — the 1.5 bump escaped nothing"), so all three declarations
+# in the union now agree and there is no conflict left to override. This is what a
+# dated override is FOR: scaffolding that comes down when its owner fixes the
+# thing, rather than quietly becoming permanent.
+#
+# The file is deliberately left with zero override rows. That is the correct
+# steady state, not an empty-file bug.

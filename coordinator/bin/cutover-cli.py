@@ -97,12 +97,25 @@ def _repo_root_for(record_path: str) -> str:
     """
     abs_record = os.path.abspath(record_path)
     start_dir = os.path.dirname(abs_record) if os.path.isfile(abs_record) else abs_record
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root and claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
-    from coordinator_core.git.repo_root import show_toplevel
+    # Review: code-reviewer (P2) -- pre-conversion this whole resolution was
+    # wrapped in `try/except (subprocess.CalledProcessError, OSError): return
+    # os.getcwd()`. The conversion dropped the wrapper, leaving only the
+    # trailing `or os.getcwd()` to catch `show_toplevel()` returning `None`
+    # -- an import/path-resolution failure (missing CLAUDE_KLABAUTER_ROOT, broken
+    # coordinator_core install) now propagated as an unhandled exception
+    # instead of degrading to cwd. Restored to match every sibling
+    # converted `bin/*.py` site in this same commit (reap-sessions.py,
+    # sweep-boot.py, reaper-resting-batons.py, etc.), which all wrap this
+    # exact resolution in `try/except Exception` for the same reason.
+    try:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root and claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.git.repo_root import show_toplevel
 
-    return show_toplevel(start_dir) or os.getcwd()
+        return show_toplevel(start_dir) or os.getcwd()
+    except Exception:
+        return os.getcwd()
 
 
 def _run_gate_shaped_op(op_key: str, record_path: str) -> int:

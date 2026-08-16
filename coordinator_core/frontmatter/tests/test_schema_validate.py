@@ -5570,6 +5570,69 @@ class TestAllOfKeyword:
         assert errors[0]['error'] == 'required field missing'
 
 
+class TestAnyOfKeyword:
+    def test_matching_branch_passes(self):
+        schema = {'anyOf': [{'type': 'string'}, {'type': 'null'}]}
+        assert _validate_json_schema_node('x', schema, schema, 'field') == []
+        assert _validate_json_schema_node(None, schema, schema, 'field') == []
+
+    def test_genuine_type_mismatch_names_every_branch_type(self):
+        # No branch's own `type` matches — the real "wrong shape entirely"
+        # case, where the generic "expected X or Y (got Z)" message is
+        # correct and must be kept.
+        schema = {'anyOf': [{'type': 'string'}, {'type': 'null'}]}
+        errors = _validate_json_schema_node(5, schema, schema, 'predecessor_id')
+        assert len(errors) == 1
+        assert errors[0]['error'] == (
+            'value does not match any allowed schema; expected string or null (got int)'
+        )
+
+    def test_type_matched_but_pattern_failed_names_the_pattern_not_the_type(self):
+        # DoE memo's motivating case: predecessor_id's `anyOf: [{type: string,
+        # pattern: ...}, {type: null}]` on a wrong-shaped-but-still-a-string
+        # value. Before this fix this reported "expected string or null (got
+        # str)" — a message that reads as a validator bug, since the value's
+        # type was never in question; only the pattern branch failed. The
+        # fix must name the pattern failure instead of the generic
+        # type-mismatch text, and must NOT reuse the "does not match any
+        # allowed schema" phrasing that belongs to the genuine-type-mismatch
+        # case above.
+        schema = {
+            'anyOf': [
+                {'type': 'string', 'pattern': r'^\d{4}-\d{2}-\d{2}_\d{6}_[a-z0-9-]+$'},
+                {'type': 'null'},
+            ],
+        }
+        errors = _validate_json_schema_node('not-a-handoff-id', schema, schema, 'predecessor_id')
+        assert len(errors) == 1
+        assert 'does not match any allowed schema' not in errors[0]['error']
+        assert 'does not match pattern' in errors[0]['error']
+        assert 'not-a-handoff-id' in errors[0]['error']
+
+    def test_type_matched_but_enum_failed_names_the_enum_not_the_type(self):
+        # Same discriminator, different narrower constraint — proves the fix
+        # is general (any sibling keyword the type-matched branch fails on),
+        # not special-cased to `pattern`.
+        schema = {'anyOf': [{'type': 'string', 'enum': ['a', 'b']}, {'type': 'null'}]}
+        errors = _validate_json_schema_node('z', schema, schema, 'field')
+        assert len(errors) == 1
+        assert 'does not match any allowed schema' not in errors[0]['error']
+        assert 'invalid enum value' in errors[0]['error']
+
+    def test_sibling_keywords_still_checked_after_a_successful_anyof_match(self):
+        # Fall-through discipline (mirrors the analogous oneOf test below):
+        # a satisfied anyOf must not short-circuit the node's own sibling
+        # keywords.
+        schema = {
+            'type': 'object',
+            'anyOf': [{'required': ['a']}, {'required': ['zzz']}],
+            'required': ['b'],
+        }
+        errors = _validate_json_schema_node({'a': 1}, schema, schema, '')
+        assert [e['field'] for e in errors] == ['b']
+        assert errors[0]['error'] == 'required field missing'
+
+
 class TestOneOfKeyword:
     def test_exactly_one_match_ok(self):
         schema = {'oneOf': [{'type': 'string'}, {'type': 'number'}]}

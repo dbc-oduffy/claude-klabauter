@@ -3,9 +3,17 @@ Tests for coordinator_core.ops.coordinator_doe_root.
 
 Mirrors the bash oracle's own test coverage (T1-T5) plus a rung-2.5-specific
 case (T6) the bash suite exercises only indirectly via T3's fallthrough.
-Scenarios are driven the same way the bash tests drive them: a fake
-`machine-local` stub placed first on PATH, environment variables scoped per-test via
-monkeypatch, and a fresh `os.environ["REPO_DOE_CLAUDE"]` state.
+
+Converted 2026-08-16 (C7b): rungs 2/2.5 now read the machine-local registry
+in-process (`machine_resolver.registry_get`), so scenarios that previously
+drove a fake `machine-local` CLI stub placed first on PATH now seed a
+scratch registry FILE instead (`MACHINE_LOCAL_REGISTRY_DIR` pointed at an
+empty `tmp_path` subdirectory, per
+`state/lessons/2026-07-17-redirect-state-home-env-to-tmp-in-unit-t-*.yaml`
+-- reading the operator's REAL registry is the defect this removes, not a
+shortcut to reuse). Every test gets an isolated, empty registry dir via the
+autouse `_clean_env` fixture below; a test that needs a specific rung-2/2.5
+value writes it into that same directory via `_seed_registry`.
 
 Port of: coordinator-doe-root.test.sh (DoE 09e5e5f9, 2026-07-19)
 
@@ -18,27 +26,34 @@ same-process re-resolution guard is now an explicit module-scope memo, which
 
 from __future__ import annotations
 
+import json
 import os
-import stat
-import textwrap
 
 import pytest
 
 from coordinator_core.ops import coordinator_doe_root as mod
-from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 
 
-def _write_stub(path, python_body: str) -> str:
-    """Write a fake `machine-local` CLI at `path`, resolved via `shutil.which` in
-    `coordinator_doe_root.py` -- see `coordinator_core.testing.fake_machine_local`
-    for the Windows PATHEXT/exec rationale. `python_body` is Python source (reads
-    `sys.argv[1:]`), not a shell script -- callers below were ported from bash
-    stub bodies to Python bodies for cross-platform execution."""
-    return str(write_fake_machine_local(path, python_body))
+def _seed_registry(reg_dir, **pairs: str) -> None:
+    """Write/append dotted `key = "value"` rows into `reg_dir/registry.toml` --
+    the scratch-scoped registry file `MACHINE_LOCAL_REGISTRY_DIR` (set by the
+    autouse `_clean_env` fixture) points `machine_resolver.registry_get` at,
+    replacing the old PATH-injected fake-CLI shape.
+
+    Values are TOML-escaped via `json.dumps` (TOML basic-string escaping is
+    a superset of JSON's) -- a raw Windows path value contains backslashes
+    that a naive `f'"{v}"'` would silently corrupt into invalid `\\U...`
+    escapes, which `tomllib` degrades to "registry not found" rather than
+    raising."""
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    path = reg_dir / "registry.toml"
+    existing = path.read_text() if path.exists() else ""
+    lines = "".join(f"{json.dumps(k)} = {json.dumps(v)}\n" for k, v in pairs.items())
+    path.write_text(existing + lines)
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path):
     # Reset the module-scope resolution memo before AND after each test: it is
     # interpreter-lifetime state (correct under spawn-per-call, shared under pytest),
     # so a value pinned by one test would otherwise leak into the next. Mirrors the
@@ -47,35 +62,31 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    # Scratch-scoped, always-empty-unless-seeded registry dir -- shields every
+    # test from the operator's REAL machine-local registry (the defect C7b
+    # removes). Individual tests seed a value into this same directory via
+    # `_seed_registry(tmp_path / "ml-registry", ...)`.
+    empty_registry = tmp_path / "ml-registry"
+    empty_registry.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
     yield
     mod._reset_doe_root_cache()
 
 
 def test_t1_env_short_circuit_no_machine_local_call(tmp_path, monkeypatch):
-    stubdir = tmp_path / "t1-stub"
-    stubdir.mkdir()
-    sentinel = tmp_path / "t1-called"
-    _write_stub(
-        str(stubdir),
-        "import pathlib\n"
-        f"pathlib.Path({str(sentinel)!r}).touch()\n"
-        "print('/should-not-be-returned')\n",
-    )
+    """Rung 1 (REPO_DOE_CLAUDE env) short-circuits before rung 2 is ever
+    consulted -- the registry is left unseeded (still empty, per the autouse
+    fixture) so a resolved value could only come from the env override."""
     monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/fake-doe-root")
-    monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     result = mod.coordinator_doe_root()
 
     assert result == "/tmp/fake-doe-root"
-    assert not sentinel.exists()
 
 
 def test_t2_registry_resolution(tmp_path, monkeypatch):
-    stubdir = tmp_path / "t2-stub"
-    stubdir.mkdir()
     expected = "/x/DoE-claude"
-    _write_stub(str(stubdir), f"print({expected!r})\n")
-    monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
+    _seed_registry(tmp_path / "ml-registry", **{"repos.doe_claude": expected})
 
     result = mod.coordinator_doe_root()
 
@@ -85,13 +96,9 @@ def test_t2_registry_resolution(tmp_path, monkeypatch):
 
 
 def test_t3_fail_loud_returns_none_and_remediation(tmp_path, monkeypatch, capsys):
-    stubdir = tmp_path / "t3-stub"
-    stubdir.mkdir()
-    _write_stub(str(stubdir), "import sys\nsys.exit(1)\n")
     fake_home = tmp_path / "t3-empty-home"
     fake_home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
-    monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     result = mod.coordinator_doe_root()
     assert result is None
@@ -106,46 +113,43 @@ def test_t4_memo_idempotency_second_call_skips_machine_local(tmp_path, monkeypat
     """Renamed from `test_t4_export_idempotency_...` (2026-07-21): the
     single-machine-local-call property is now carried by the module-scope memo
     rather than by the retired `os.environ["REPO_DOE_CLAUDE"]` export. The
-    assertion is unchanged -- only the mechanism under it moved."""
-    stubdir = tmp_path / "t4-stub"
-    stubdir.mkdir()
-    sentinel = tmp_path / "t4-call-count"
-    _write_stub(
-        str(stubdir),
-        "with open(" + repr(str(sentinel)) + ", 'a') as _f:\n"
-        "    _f.write('called\\n')\n"
-        "print('/x/DoE-claude')\n",
-    )
-    monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
+    assertion is unchanged -- only the mechanism under it moved.
+
+    Converted 2026-08-16 (C7b): the "one call" property is no longer a
+    subprocess-invocation count -- it is a call count on the in-process
+    `machine_resolver.registry_get` seam, wrapped here so the memo's
+    single-resolution contract stays observable without a subprocess."""
+    _seed_registry(tmp_path / "ml-registry", **{"repos.doe_claude": "/x/DoE-claude"})
+    call_count = {"n": 0}
+    real_registry_get = mod._machine_resolver.registry_get
+
+    def _counting_registry_get(key):
+        call_count["n"] += 1
+        return real_registry_get(key)
+
+    monkeypatch.setattr(mod._machine_resolver, "registry_get", _counting_registry_get)
 
     first = mod.coordinator_doe_root()
     second = mod.coordinator_doe_root()
 
     assert first == "/x/DoE-claude"
     assert second == "/x/DoE-claude"
-    # B1 review fix (2026-08-08): the stub resolves rung 2 (repos.doe_claude)
+    # B1 review fix (2026-08-08): the registry resolves rung 2 (repos.doe_claude)
     # immediately, so neither the codename-free ladder (now rung 2.75, tried
-    # only when rungs 2/2.5 both fail) nor rung 2.5 itself is ever reached on
-    # this stub. The property this test guards -- exactly one machine-local
-    # call per outer resolution, and zero further calls on the memoized
-    # second call -- now holds with the count it always should have had: 1.
-    assert sentinel.read_text().count("called\n") == 1
+    # only when rungs 2/2.5 both fail) nor rung 2.5 itself is ever reached.
+    # The property this test guards -- exactly one registry read per outer
+    # resolution, and zero further reads on the memoized second call -- now
+    # holds with the count it always should have had: 1.
+    assert call_count["n"] == 1
 
 
 def test_t5_rung3_pointer_file_fallback_via_clone_root_script(tmp_path, monkeypatch):
     """C11 (2026-07-21): rung 3 (`_resolve_via_clone_root_script`) now calls the
     native `coordinator_core.resolve_coordinator_clone.resolve_clone_root()` port
     in-process instead of shelling to a fake `resolve-coordinator-clone.sh`. The
-    on-disk fake script below is left in place but is NOT invoked -- the native
-    resolver's own `.doe-root`-pointer-plus-`.git` rung resolves directly to
-    `fake_doe_root`, exercising the same rung-3 fallback path this test was
-    originally written to characterize, just through the ported module rather
-    than a subprocess.
+    registry is left unseeded (rungs 2/2.5 fail naturally), exercising the same
+    rung-3 fallback path this test was originally written to characterize.
     """
-    stubdir = tmp_path / "t5-stub"
-    stubdir.mkdir()
-    _write_stub(str(stubdir), "import sys\nsys.exit(1)\n")
-
     fake_home = tmp_path / "t5-fake-home"
     fake_doe_root = tmp_path / "t5-fake-doe-root"
     (fake_home / ".claude").mkdir(parents=True)
@@ -154,7 +158,6 @@ def test_t5_rung3_pointer_file_fallback_via_clone_root_script(tmp_path, monkeypa
     (fake_home / ".claude" / ".doe-root").write_text(str(fake_doe_root))
 
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
-    monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     result = mod.coordinator_doe_root()
 
@@ -168,28 +171,15 @@ def test_t5_rung3_pointer_file_fallback_via_clone_root_script(tmp_path, monkeypa
 
 
 def test_t6_rung25_live_path_fallback(tmp_path, monkeypatch):
-    """Rung 2 (repos.doe_claude) empty, rung 2.5 (live_path) resolves."""
-    stubdir = tmp_path / "t6-stub"
-    stubdir.mkdir()
-    _write_stub(
-        str(stubdir),
-        textwrap.dedent(
-            """\
-            import sys
-            argv2 = sys.argv[2] if len(sys.argv) > 2 else None
-            if argv2 == "repos.doe_claude":
-                sys.exit(1)
-            if argv2 == "plugin.mirrors.coordinator-claude.live_path":
-                print("/x/live-path-doe")
-                sys.exit(0)
-            sys.exit(1)
-            """
-        ),
+    """Rung 2 (repos.doe_claude) empty, rung 2.5 (live_path) resolves -- only
+    the live_path key is seeded into the scratch registry."""
+    _seed_registry(
+        tmp_path / "ml-registry",
+        **{"plugin.mirrors.coordinator-claude.live_path": "/x/live-path-doe"},
     )
     fake_home = tmp_path / "t6-empty-home"
     fake_home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
-    monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     result = mod.coordinator_doe_root()
 

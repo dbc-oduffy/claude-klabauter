@@ -589,7 +589,7 @@ def test_seed_registry_missing_claude_klabauter_root_warns_and_returns(monkeypat
     def _raise(*a, **k):
         raise RuntimeError("simulated CLAUDE_KLABAUTER_ROOT resolution failure")
 
-    monkeypatch.setattr(fr, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(fr, "coordinator_claude_klabauter_root_with_class", _raise)
 
     fr._seed_machine_local_registry(confirm=True, non_interactive=True)
 
@@ -863,7 +863,7 @@ def test_journal_empty_entries_on_missing_claude_klabauter_root(monkeypatch, _jo
     def _raise(*a, **k):
         raise RuntimeError("simulated CLAUDE_KLABAUTER_ROOT resolution failure")
 
-    monkeypatch.setattr(fr, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(fr, "coordinator_claude_klabauter_root_with_class", _raise)
 
     fr._seed_machine_local_registry(confirm=True, non_interactive=True)
 

@@ -7,6 +7,7 @@ Spec backlink: docs/plans/2026-08-06-eliminate-claude-klabauter-s-non-test-subpr
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -322,6 +323,42 @@ def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_pat
     )
     assert prefix_result.returncode == 0
     assert prefix_result.stdout.strip() == ""
+
+
+def test_show_toplevel_spawn_fallback_matches_path_format_absolute(tmp_path):
+    # Review: code-reviewer (P1) -- `show_toplevel()`'s spawn fallback (real
+    # git, only reached when the walk finds no `.git`) omits
+    # `--path-format=absolute`, unlike the pre-conversion call sites in
+    # `session_hierarchy_derive.py`/`session_hierarchy_query.py`, which
+    # passed both flags together. Pins that this is NOT a behavior
+    # regression: `--show-toplevel`'s OWN default (with no `--path-format`
+    # at all) is already absolute, so `--path-format=absolute` is a no-op
+    # for this specific form -- confirmed here against real git rather than
+    # asserted from the docs alone, so a future git version that changed
+    # this default would fail this test instead of silently reintroducing
+    # the regression class the reviewer flagged.
+    repo = tmp_path / "path_format_repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
+    plain = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+    absolute = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--show-toplevel"],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+    assert plain.returncode == 0 and absolute.returncode == 0
+    assert plain.stdout.strip() == absolute.stdout.strip()
+    # And the module's own resolution (walk here, since `git init` created a
+    # real `.git`; the spawn fallback is only reached when no `.git` is
+    # found -- see other tests in this file for that path) agrees with real
+    # git's own (already-absolute) default for this form. Compared as
+    # resolved Paths, not strings -- git emits forward slashes even on
+    # Windows, which is a separator-style difference, not an absoluteness
+    # one.
+    assert Path(plain.stdout.strip()).is_absolute()
+    assert Path(repo_root.show_toplevel(str(repo))).resolve() == Path(plain.stdout.strip()).resolve()
 
 
 def test_git_common_dir_empty_on_success_does_not_return_resolved_cwd(tmp_path, monkeypatch):

@@ -119,7 +119,9 @@ __all__ = [
     "join_path_list",
     "split_path",
     "no_console_creationflags",
+    "no_console_passthrough_kwargs",
     "same_path",
+    "run_forwarding",
 ]
 
 StrPath = Union[str, "os.PathLike[str]"]
@@ -423,3 +425,126 @@ def no_console_passthrough_kwargs() -> dict:
         if fd >= 0:
             kwargs[key] = fd
     return kwargs
+
+
+def _has_usable_fileno(stream: object) -> bool:
+    """True if ``stream`` carries a real OS-level file descriptor
+    ``subprocess`` can inherit directly. Mirrors ``coordinator/lib/
+    spawn-hidden.py::_resolve_stdio_stream``'s own fileno probe (same
+    ``AttributeError``/``ValueError``/``OSError`` guard shape), but that
+    function's DEVNULL fallback is the wrong disposition for
+    ``run_forwarding`` below -- see that function's docstring."""
+    fileno = getattr(stream, "fileno", None)
+    if fileno is None:
+        return False
+    try:
+        fd = fileno()
+    except (AttributeError, ValueError, OSError):
+        return False
+    return fd is not None and fd >= 0
+
+
+def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object = None, **kwargs) -> "subprocess.CompletedProcess":
+    """``subprocess.run`` wrapper for a caller whose intended ``stdout``/
+    ``stderr`` target may be a fileno-less, Python-level stream (an
+    ``io.StringIO`` capture buffer, e.g. under `contextlib.redirect_stderr`)
+    rather than a real console handle.
+
+    THE DEFECT THIS REPLACES: ``subprocess.run(..., stdout=sys.stderr,
+    stderr=sys.stderr)`` needs an OS-level ``fileno()`` on whatever it is
+    handed, unconditionally -- ``subprocess`` inherits handles, it does not
+    write through a Python file object. When the caller's ``sys.stderr`` has
+    already been swapped for a capture buffer (as
+    ``coordinator_core.workday_complete.apply._invoke_cli_main`` does for
+    every in-process directive dispatch), the call raises
+    ``io.UnsupportedOperation("fileno")`` before the child is ever spawned --
+    silently, because the surrounding halt contract catches the exception
+    per-directive and the diagnostic collapses to the single word
+    ``fileno`` (see ``apply.py``'s own exception-formatting fix, same
+    dispatch). Every call site this function replaces is unconditionally
+    reachable through that capture path.
+
+    NOT ``coordinator/lib/spawn-hidden.py::_resolve_stdio_stream``'s
+    disposition: that function substitutes ``subprocess.DEVNULL`` for a
+    fileno-less stream, which is correct THERE because its caller is a
+    detached/console-less launcher relaying to nothing an operator will
+    ever read. Doing the same here would silently discard the child's
+    entire output a second time, under a different mechanism -- the
+    capture-buffer caller DOES want the text, just routed through the
+    buffer rather than an OS handle. So: capture via ``subprocess.PIPE``
+    and forward the captured text onto the Python-level stream after the
+    child exits, never DEVNULL.
+
+    A stream that DOES carry a usable ``fileno()`` is passed through
+    completely unchanged -- the existing inherit-the-console behavior for
+    every call site not running under a capture buffer is preserved
+    bit-for-bit; this function is a no-op wrapper for that caller.
+
+    Same-target ordering: when ``stdout`` and ``stderr`` are the SAME
+    fileno-less object (every current call site passes
+    ``stdout=sys.stderr, stderr=sys.stderr`` under the capture buffer), the
+    child's stderr is merged into stdout (``stderr=subprocess.STDOUT``)
+    rather than captured as a second independent PIPE -- two independent
+    pipes reassembled after the fact cannot preserve the interleaving
+    order the child actually wrote in, merging at the OS level can.
+
+    ``check=True`` is honored, but not by delegating it to the inner
+    ``subprocess.run`` call: that would raise ``CalledProcessError`` before
+    this function's own forwarding step ever runs, silently dropping the
+    captured text on the exact failure path a caller most wants to see it
+    on. Instead ``check`` is popped, the inner call always runs without it,
+    output is forwarded, and only THEN is ``CalledProcessError`` raised
+    (carrying the same captured ``stdout``/``stderr`` `subprocess.run`
+    itself would have attached) if the child's `returncode` is non-zero.
+
+    Returns the `subprocess.CompletedProcess` unchanged otherwise --
+    `returncode` propagates exactly as a direct `subprocess.run` call
+    would, which existing callers branch on.
+    """
+    import subprocess
+
+    check = kwargs.pop("check", False)
+    run_kwargs = dict(kwargs)
+
+    stdout_needs_capture = stdout is not None and not _has_usable_fileno(stdout)
+    stderr_needs_capture = stderr is not None and not _has_usable_fileno(stderr)
+    same_target = stdout is not None and stdout is stderr and stdout_needs_capture
+
+    forward_stdout = None
+    if stdout is not None:
+        if stdout_needs_capture:
+            run_kwargs["stdout"] = subprocess.PIPE
+            forward_stdout = stdout
+        else:
+            run_kwargs["stdout"] = stdout
+
+    forward_stderr = None
+    if stderr is not None:
+        if same_target:
+            run_kwargs["stderr"] = subprocess.STDOUT
+        elif stderr_needs_capture:
+            run_kwargs["stderr"] = subprocess.PIPE
+            forward_stderr = stderr
+        else:
+            run_kwargs["stderr"] = stderr
+
+    if (forward_stdout is not None or forward_stderr is not None) and not (
+        "text" in run_kwargs or "encoding" in run_kwargs or run_kwargs.get("universal_newlines")
+    ):
+        # A capture-buffer target is always a text stream (io.StringIO) --
+        # decode the child's output the same way `subprocess.run` would if
+        # the caller had asked for text mode explicitly, unless the caller
+        # already made an explicit text/encoding choice of its own.
+        run_kwargs["text"] = True
+
+    proc = subprocess.run(argv, **run_kwargs)
+
+    if forward_stdout is not None and proc.stdout:
+        forward_stdout.write(proc.stdout)
+    if forward_stderr is not None and proc.stderr:
+        forward_stderr.write(proc.stderr)
+
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, argv, proc.stdout, proc.stderr)
+
+    return proc

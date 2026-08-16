@@ -69,6 +69,11 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 from coordinator_core._settings_home import settings_home as _default_settings_home
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
 
 _FALLBACK_BASENAME = ".fleet-env"
 
@@ -76,6 +81,43 @@ _REMEDIATION = (
     "fleet_env_resolve: no writable location found for the fleet environment "
     "(registry candidate and the settings-home fallback both failed). "
     "Set a valid location: machine-local set fleet_env.root <writable-path>."
+)
+
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="fleet-env-resolve",
+    source_module="coordinator_core.install.fleet_env_resolve",
+    clauses=(
+        # clauses[0] -- `_is_writable_root`'s writability probe. Does NOT
+        # create or provision the environment itself (see module docstring's
+        # negative-spec) -- the ONE real write this ladder performs is a
+        # uniquely-named directory it `mkdir()`s inside the nearest existing
+        # ancestor of whichever rung is being tested (the registry
+        # candidate, or `<settings-home>/.fleet-env`), then `rmdir()`s in a
+        # `finally` block. SHAPED: the probed root is caller-supplied
+        # (rung 1) or settings-home-derived (rung 2), never a literal
+        # constant, and the probe's own name embeds pid/id/monotonic-ns.
+        # Not folded into the sandbox_check-style "lands inside a
+        # tempfile.mkdtemp() sandbox" exemption: the ancestor directory
+        # itself is a REAL candidate root on the machine (the registry value
+        # or settings-home), not a throwaway temp tree -- a failed rmdir
+        # (caught, best-effort) can leave the probe directory behind.
+        ShapedClause(
+            discovered_by="_is_writable_root (candidate-root writability probe)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<candidate-root-ancestor>/.fleet-env-writable-probe-<pid>-<id>-<monotonic-ns>",
+                reason=(
+                    "resolve_fleet_env_fallback_root's rung-writability "
+                    "check: mkdir()s then rmdir()s a uniquely-named probe "
+                    "directory inside the nearest existing ancestor of the "
+                    "registry candidate (rung 1) or "
+                    "<settings-home>/.fleet-env (rung 2); rmdir failure is "
+                    "caught and swallowed (best-effort cleanup only)"
+                ),
+            ),
+        ),
+    ),
 )
 
 
@@ -117,6 +159,13 @@ def _is_writable_root(path: Path) -> bool:
     is the only reliable cross-platform answer and it works identically on
     POSIX.
     """
+    if path.exists() and not path.is_dir():
+        # A stray non-directory file already occupies the candidate leaf
+        # (e.g. a prior partial/corrupted install) — the ancestor being
+        # writable doesn't make this root usable; `_swap_in_new_env`'s
+        # rename-swap expects a directory (or nothing) at env_root, not a
+        # file. Review: coordinatorcode-reviewer-97d5c433 finding 5.
+        return False
     ancestor = _nearest_existing_ancestor(path)
     if ancestor is None:
         return False

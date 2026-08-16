@@ -44,39 +44,29 @@ Negative-spec (deliberately NOT covered here):
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 import sys
-from typing import List, Optional
+from typing import List
 
+from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core.session.declared_writes import declare_write
 
 _PROG = "ensure-doe-clone"
 
 
-def _resolve_machine_local() -> Optional[str]:
-    return shutil.which("machine-local")
-
-
 def _registry_get(key: str) -> str:
-    """Best-effort ``machine-local get <key>`` — empty string on any failure."""
-    ml_bin = _resolve_machine_local()
-    if ml_bin is None:
-        return ""
-    try:
-        result = subprocess.run(
-            [ml_bin, "get", key],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    """Resolve `key` via the direct-registry reader
+    (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess.
+    Empty string on any failure (missing key, unreadable/missing registry
+    file), matching the prior best-effort contract.
+
+    Converted 2026-08-16 (C7b): the module's own test suite
+    (`coordinator_core/ops/test_ensure_doe_clone.py`) now seeds the
+    machine-local registry FILE instead of faking the CLI as a real
+    subprocess-invoked stub."""
+    value = _machine_resolver.registry_get(key)
+    return value or ""
 
 
 def resolve_doe_clone() -> str:

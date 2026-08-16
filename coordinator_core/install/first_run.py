@@ -77,7 +77,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
@@ -359,7 +359,8 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     print("[post-toolchain] Seeding machine-local registry...")
 
     try:
-        claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+        claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        claude_klabauter_root = Path(claude_klabauter_root_str)
     except RuntimeError as exc:
         print(f"[post-toolchain] WARNING: cannot resolve CLAUDE_KLABAUTER_ROOT to locate machine-local: {exc}", file=sys.stderr)
         print("  Register repos manually later: machine-local set repos.<name> <path>")
@@ -484,7 +485,8 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # silently skipping the preflight and stumbling into those steps would
     # produce a much more confusing failure downstream.
     try:
-        claude_klabauter_root_for_preflight = Path(coordinator_claude_klabauter_root())
+        claude_klabauter_root_for_preflight_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        claude_klabauter_root_for_preflight = Path(claude_klabauter_root_for_preflight_str)
     except RuntimeError as exc:
         print(f"[post-toolchain] ERROR: cannot resolve CLAUDE_KLABAUTER_ROOT for setup preflight: {exc}", file=sys.stderr)
         return EXIT_FAIL
