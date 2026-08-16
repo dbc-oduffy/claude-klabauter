@@ -75,7 +75,13 @@ Negative-spec (retired transport patterns — DO NOT reintroduce):
     - Unix domain sockets are retired (DR-215); this module does NOT open one.
     - IPC authentication tokens are retired (DR-215); this module does NOT read one.
     - This is a TWO-STATE router (seam-present / seam-absent); there is no daemon-aware
-      third state. Do NOT add one.
+      third state IN THIS ROUTER, and none should be added here. DR-315 (2026-08-15)
+      authorizes a demand-driven warm engine process on the seam-present side of this
+      same two-state split — that is a property of what coordinator_core.invoke's own
+      process does once seam-present dispatch reaches it (a client-side pipe-first,
+      spawn-on-FileNotFoundError decision inside the engine's own entry paths), not a
+      third state this router discriminates on. route()'s State-1/State-2 shape is
+      unchanged by DR-315 and stays two states.
     - find_spec is an INTENTIONAL improvement over the retired shell facade's full-import
       probe; do NOT replace it with an execute-import to "match" the old bash behavior.
 """

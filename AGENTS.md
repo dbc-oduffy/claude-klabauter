@@ -14,6 +14,19 @@ It is also the engine that a coordinator-claude install depends on. If you were 
 that install chain, this is the prerequisite step, not the whole job — finish here, then
 return to the chain.
 
+## Release channels
+
+We ship two branches, and we're forthright about both rather than mentioning only one:
+
+- **`main`** — the release channel. **Install from `main`, unless whoever dispatched you
+  explicitly named `candidate`.**
+- **`candidate`** — public, and our nightly. We (the makers) run `candidate` ourselves, for
+  maximum dogfooding before changes reach `main`. It's open for anyone to track, but most users
+  should stay on `main`.
+
+If you cloned this repository without specifying a branch, you are already on `main` — do
+nothing further about channel selection.
+
 ## Install
 
 **Prerequisite:** Python 3.11+. No Node runtime is required, for any part of this.

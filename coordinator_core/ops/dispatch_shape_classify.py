@@ -329,7 +329,7 @@ Was this a serial grind (one agent handling chunks sequentially), or an intentio
 pilot-then-expand shape, or did the EM author some chunks inline?
 
 If serial grind: consider re-dispatching with true fan-out parallelism — e.g.
-  bash ~/.claude/plugins/coordinator-claude/coordinator/bin/fan-out-dispatch.sh <tsv>
+  bash ~/.claude/plugins/coordinator/bin/fan-out-dispatch.sh <tsv>
 
 If intentional (pilot-then-expand / inline EM / other valid shape): no action needed.
 

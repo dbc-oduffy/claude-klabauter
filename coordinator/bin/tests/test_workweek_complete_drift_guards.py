@@ -6,8 +6,10 @@ the M3 chunk WWC-3 port of five genuine bash-logic fences out of
 DoE-claude's `coordinator/commands/workweek-complete.md`:
 description-length/enabledPlugins-drift advisory dispatch, the change-aware
 dep-manifest CVE-recheck (manifest-presence gate + 14-day window), the
-schema-drift-gate three-way rc branch, the repo-wide ShellCheck sweep loop,
-and the console-flash / multi-event-hook guard dispatch pairs.
+schema-drift-gate three-way rc branch, and the console-flash /
+multi-event-hook guard dispatch pairs. The repo-wide ShellCheck sweep
+(`shellcheck-sweep` subcommand) was removed 2026-08-16 as advisory prose
+that could not pay for its spawn cost — see state/kill-ledger.md K-102.
 
 Coverage:
   test_enabled_plugins_skips_when_settings_json_absent
@@ -20,9 +22,6 @@ Coverage:
   test_schema_drift_gate_error
   test_schema_drift_gate_unexpected_rc_treated_as_error
   test_schema_drift_gate_missing_sibling_is_error
-  test_shellcheck_sweep_clean_repo
-  test_shellcheck_sweep_reports_findings
-  test_shellcheck_sweep_not_installed_skips_cleanly
   test_console_flash_guard_missing_sibling_skips_cleanly
   test_multi_event_hook_guard_missing_sibling_skips_cleanly
 """
@@ -33,7 +32,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from shutil import which
 
 import pytest
 
@@ -225,61 +223,6 @@ def test_schema_drift_gate_missing_sibling_is_error(
     monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
     rc = _mod.main(["schema-drift-gate"])
     assert rc == 2
-
-
-# ---------------------------------------------------------------------------
-# shellcheck-sweep — Step 6 repo-wide loop
-# ---------------------------------------------------------------------------
-
-
-_SHELLCHECK_MISSING = which("shellcheck") is None
-
-
-@pytest.mark.skipif(_SHELLCHECK_MISSING, reason="shellcheck not installed on this machine")
-def test_shellcheck_sweep_clean_repo(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _init_repo(tmp_path)
-    clean_script = tmp_path / "clean.sh"
-    clean_script.write_text('#!/usr/bin/env bash\necho "hello"\n', encoding="utf-8")
-    _git(str(tmp_path), "add", "clean.sh")
-    _git(str(tmp_path), "commit", "-q", "-m", "add clean script")
-
-    rc = _mod.main(["shellcheck-sweep", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "all .sh files clean" in out
-
-
-@pytest.mark.skipif(_SHELLCHECK_MISSING, reason="shellcheck not installed on this machine")
-def test_shellcheck_sweep_reports_findings(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _init_repo(tmp_path)
-    dirty_script = tmp_path / "dirty.sh"
-    # Unquoted variable expansion — a reliable ShellCheck SC2086 trigger.
-    dirty_script.write_text(
-        '#!/usr/bin/env bash\nfoo=$1\necho $foo\n', encoding="utf-8"
-    )
-    _git(str(tmp_path), "add", "dirty.sh")
-    _git(str(tmp_path), "commit", "-q", "-m", "add dirty script")
-
-    rc = _mod.main(["shellcheck-sweep", "--repo-root", str(tmp_path)])
-    assert rc == 1
-    out = capsys.readouterr().out
-    # The bash "-:" stdin marker must have been rewritten to the real path.
-    assert "dirty.sh:" in out
-    assert "-:" not in out.split("dirty.sh:")[0][-3:]
-
-
-def test_shellcheck_sweep_not_installed_skips_cleanly(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(_mod, "_which", lambda _name: None)
-    rc = _mod.main(["shellcheck-sweep", "--repo-root", str(tmp_path)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "not installed" in out
 
 
 # ---------------------------------------------------------------------------

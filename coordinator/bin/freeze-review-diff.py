@@ -228,37 +228,6 @@ _DEFAULT_RECORD_REVIEWER = "code-reviewer"
 _DEFAULT_RECORD_SCOPE = "session"
 
 
-def _paths_contributing_nothing(repo_root: Path, range_: str, paths: list[str]) -> list[str]:
-    """Which ``--paths`` entries matched no change in ``range_``.
-
-    A pathspec that matches nothing is indistinguishable, in the frozen diff,
-    from one the reviewer simply had no findings on — the slice is smaller than
-    the caller asked for and nothing says so. The common cause is a path that
-    moved: a concurrent archival sweep renames the file mid-session, the old
-    path stops matching, and its content silently leaves the review slice.
-
-    Returned for a stderr warning, never an error: a path legitimately unchanged
-    across the range is a valid outcome, same as the whole-diff empty case.
-    A failed or timed-out probe yields no entry — this check may under-report,
-    but must never invent an omission that would send a reviewer hunting.
-    """
-    missing: list[str] = []
-    for path in paths:
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(repo_root), "diff", "--name-only", range_, "--", path],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                **no_console_creationflags(),
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if proc.returncode == 0 and not proc.stdout.strip():
-            missing.append(path)
-    return missing
-
-
 def _diff_loc(diff_path: str) -> int:
     """Line count of the frozen diff, for the record's ``diff_loc`` field.
 
@@ -406,19 +375,6 @@ def main(argv: list[str]) -> int:
             f"(paths={args.paths or 'all'}) — froze an empty diff, not an error",
             file=sys.stderr,
         )
-    elif args.paths:
-        uncovered = _paths_contributing_nothing(repo_root, args.range_, args.paths)
-        if uncovered:
-            print(
-                f"{_PROG}: warning: {len(uncovered)} of {len(args.paths)} --paths "
-                f"entries matched no change in {args.range_!r} and contributed "
-                f"nothing to this slice: {', '.join(uncovered)}. The frozen diff is "
-                "narrower than requested. If the path moved (a concurrent archival "
-                "sweep is the usual cause), re-freeze against its current location — "
-                "a reviewer cannot tell an omitted file from a clean one.",
-                file=sys.stderr,
-            )
-
     print(result["diff_path"])
 
     if args.no_trail_record:

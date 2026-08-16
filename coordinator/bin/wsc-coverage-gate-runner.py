@@ -214,6 +214,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import contextvars
 import json
 import os
 import re
@@ -234,6 +235,7 @@ from coordinator_core.ops.list_review_trail_records import (  # noqa: E402
 from coordinator_core.workstream_complete.directives_review import (  # noqa: E402
     CHAIN_VERDICT_PARTITION_MANDATORY as _CHAIN_VERDICT_PARTITION_MANDATORY,
     EXECUTION_BASIS_NOT_RECORDED,
+    ChainAttributionWindow,
     build_chain_slices,
     chain_partition_execution_basis_report,
     chain_partition_uncovered_shas,
@@ -391,6 +393,52 @@ def _resolve_repo_root() -> str | None:
 _DAG_SHAS_CACHE: dict[str, tuple[str, list[str]] | None] = {}
 
 
+#: Plan C4 (docs/plans/2026-08-15-composition-invocation-budgets.md) —
+#: per-run `_commit_touched_paths` cache, keyed by sha, shared across this
+#: close's `_classify_bookkeeping_shas` call sites (`_resolve_dag_
+#: candidates`, `_resolve_chain_planning_shas`, `_resolve_chain_spec_
+#: dispatch_exempt_shas`, `_classify_uncovered_shas`) so a sha's touched-
+#: paths batch is fetched at most once per close, not once per resolver.
+#: A `contextvars.ContextVar` rather than a plain module-global: several
+#: existing tests replace `_resolve_chain_code_shas`/`_resolve_chain_
+#: planning_shas`/etc. wholesale via `monkeypatch.setattr(_mod,
+#: "_resolve_chain_code_shas", lambda from_handoff: ...)`, so threading the
+#: cache through an added call parameter would break every one of those
+#: call sites' arity — the cache must reach the resolvers without widening
+#: their signature.
+#:
+#: `_reset_touched_paths_cache` (called once, at the top of `cmd_
+#: brightline_gate`'s PARTITION-MANDATORY block, before any of the four
+#: sibling resolvers run) REPLACES this ContextVar's value with a brand
+#: new empty dict — it does not need a `with`/`finally` teardown, because
+#: every entry is a pure, content-addressed `sha -> touched-paths`
+#: mapping: even if a stale dict from an EARLIER close in this same
+#: process were consulted, no entry in it could ever be wrong for a
+#: DIFFERENT close (same repo, same shas). The reset call still means the
+#: cache does not, in practice, outlive one close: each new close's first
+#: sibling call overwrites the ContextVar with its own fresh dict, so the
+#: previous close's dict becomes unreachable (dropped) at that point,
+#: never consulted again. It is also never shared across the ~16
+#: concurrent sessions this tree carries — each is its own process with
+#: its own ContextVar default. Outside any call to `_reset_touched_paths_
+#: cache`, `.get()` returns `None` and every resolver falls back to its
+#: own call-local `{}`, exactly as it did before C4.
+_TOUCHED_PATHS_CACHE: contextvars.ContextVar[dict[str, "frozenset[str]"] | None] = (
+    contextvars.ContextVar("_TOUCHED_PATHS_CACHE", default=None)
+)
+
+
+def _reset_touched_paths_cache() -> dict[str, "frozenset[str]"]:
+    """Start a fresh, empty plan-C4 touched-paths cache for the close about
+    to run, discarding whatever any prior close in this process left behind
+    (see `_TOUCHED_PATHS_CACHE`'s own docstring for why no explicit
+    teardown is needed). Returns the new dict for callers that also want a
+    direct handle on it."""
+    cache: dict[str, "frozenset[str]"] = {}
+    _TOUCHED_PATHS_CACHE.set(cache)
+    return cache
+
+
 def _derive_dag_shas(from_handoff: str) -> tuple[str, list[str]] | None:
     """The chain's own UNFILTERED DAG sha set — every commit `_derive_dag_
     chain_set` places in this chain, ceremony bookkeeping and handoff-
@@ -431,7 +479,15 @@ def _resolve_dag_candidates(from_handoff: str) -> tuple[str, list[str]] | None:
     Returns `(repo_root, candidates)`, or `None` on any resolution failure —
     extracted verbatim from `_resolve_chain_tip_sha`'s prior body so that
     function's own behavior and return value are unchanged by this
-    refactor."""
+    refactor.
+
+    Shares plan C4's per-close touched-paths cache via `_TOUCHED_PATHS_
+    CACHE` (the ContextVar, not an added parameter — see that variable's
+    own docstring for why: several existing tests replace this module's
+    resolvers wholesale with single-argument lambdas, and widening the call
+    signature would break every one of those call sites). Outside a
+    `_reset_touched_paths_cache` call, falls back to a call-local `{}`,
+    exactly as before C4."""
     resolved = _derive_dag_shas(from_handoff)
     if resolved is None:
         return None
@@ -444,7 +500,10 @@ def _resolve_dag_candidates(from_handoff: str) -> tuple[str, list[str]] | None:
     # legitimate candidate exactly as it was before this class existed.
     # Only exhaust_set (today's bookkeeping semantics, unchanged) is
     # excluded.
-    exhaust_set, _planning_set, _note = _classify_bookkeeping_shas(dag_shas, repo_root, {})
+    cache = _TOUCHED_PATHS_CACHE.get()
+    if cache is None:
+        cache = {}
+    exhaust_set, _planning_set, _note = _classify_bookkeeping_shas(dag_shas, repo_root, cache)
     candidates = [sha for sha in dag_shas if sha not in exhaust_set]
     if not candidates:
         # Every chain commit is bookkeeping-only — fall back to the full
@@ -491,17 +550,25 @@ def _resolve_chain_planning_shas(from_handoff: str) -> list[str]:
     the session-oracle path. Returns `[]` on any resolution failure,
     mirroring `_resolve_chain_code_shas`'s own fail-safe posture: this
     backs a discharge-widening leg that must degrade toward "no planning
-    credit available", never crash the gate."""
+    credit available", never crash the gate.
+
+    Shares plan C4's per-close touched-paths cache via `_TOUCHED_PATHS_
+    CACHE` — see `_resolve_dag_candidates`'s docstring for why a ContextVar,
+    not an added parameter."""
     resolved = _derive_dag_shas(from_handoff)
     if resolved is None:
         return []
     repo_root, dag_shas = resolved
-    _exhaust_set, planning_set, _note = _classify_bookkeeping_shas(dag_shas, repo_root, {})
+    cache = _TOUCHED_PATHS_CACHE.get()
+    if cache is None:
+        cache = {}
+    _exhaust_set, planning_set, _note = _classify_bookkeeping_shas(dag_shas, repo_root, cache)
     return [sha for sha in dag_shas if sha in planning_set]
 
 
 def _resolve_chain_spec_dispatch_exempt_shas(
-    from_handoff: str, uncovered_planning_shas: list[str],
+    from_handoff: str,
+    uncovered_planning_shas: list[str],
 ) -> tuple[frozenset[str], dict[str, str]]:
     """The live-path twin of `coverage.run_coverage_gate`'s spec-dispatch
     PLANNING exemption (`coverage._spec_dispatch_exempt_planning_shas`),
@@ -519,16 +586,22 @@ def _resolve_chain_spec_dispatch_exempt_shas(
     degrades to `(frozenset(), {})` — no exemption available — mirroring
     every other resolver in this module's fail-safe posture: this backs a
     discharge-widening leg that must never manufacture an exemption from
-    incomplete data, only ever narrow toward "still owed"."""
+    incomplete data, only ever narrow toward "still owed".
+
+    Shares plan C4's per-close touched-paths cache via `_TOUCHED_PATHS_
+    CACHE` — see `_resolve_dag_candidates`'s docstring for why a ContextVar,
+    not an added parameter."""
     if not uncovered_planning_shas:
         return frozenset(), {}
     resolved = _derive_dag_shas(from_handoff)
     if resolved is None:
         return frozenset(), {}
     repo_root, dag_shas = resolved
-    touched_paths_cache: dict[str, frozenset[str]] = {}
+    cache = _TOUCHED_PATHS_CACHE.get()
+    if cache is None:
+        cache = {}
     bookkeeping_set, planning_set, _note = _classify_bookkeeping_shas(
-        dag_shas, repo_root, touched_paths_cache
+        dag_shas, repo_root, cache
     )
     try:
         trail_paths = _list_review_trail_paths()
@@ -539,7 +612,7 @@ def _resolve_chain_spec_dispatch_exempt_shas(
         frozenset(dag_shas),
         bookkeeping_set,
         planning_set,
-        touched_paths_cache,
+        cache,
         trail_paths,
         repo_root,
     )
@@ -573,12 +646,19 @@ def _resolve_chain_code_shas(from_handoff: str) -> list[str]:
     internally — rather than hand-rolling a second one. Returns `[]` on any
     resolution failure (mirrors `_resolve_chain_tip_sha`'s own fail-safe
     posture: this backs a diagnostics-only union-coverage leg that must
-    degrade toward "leg (b) unavailable", never crash the gate)."""
+    degrade toward "leg (b) unavailable", never crash the gate).
+
+    Shares plan C4's per-close touched-paths cache via `_TOUCHED_PATHS_
+    CACHE` — see `_resolve_dag_candidates`'s docstring for why a ContextVar,
+    not an added parameter."""
+    cache = _TOUCHED_PATHS_CACHE.get()
+    if cache is None:
+        cache = {}
     resolved = _resolve_dag_candidates(from_handoff)
     if resolved is None:
         return []
     repo_root, candidates = resolved
-    touched_by_sha, _note = _commit_touched_paths(candidates, repo_root, {})
+    touched_by_sha, _note = _commit_touched_paths(candidates, repo_root, cache)
     code_shas = []
     for sha in candidates:
         paths = touched_by_sha.get(sha) or frozenset()
@@ -918,12 +998,125 @@ def _resolve_vouched_shas(session_id: str | None) -> frozenset[str]:
     return result
 
 
+#: Module-level memo for `_resolve_chain_attribution_window`, keyed on
+#: `repo_root` — a chain-terminal close resolves the window exactly once
+#: per process (see that function's own docstring). `False` (not present
+#: in the dict) means "not yet attempted"; a present entry of `None` means
+#: "attempted and failed" (merge-base unresolvable, or the bulk walk
+#: raised) — memoized too, so a failing resolution is not retried once per
+#: surviving trail record.
+_CHAIN_ATTRIBUTION_WINDOW_CACHE: dict[str, "ChainAttributionWindow | None"] = {}
+
+
+def _git_run_no_optional_locks(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
+    """`chain_attribution.GitRunner`-shaped wrapper that inserts
+    `--no-optional-locks` immediately after `git` for every read-only
+    invocation this resolver makes (docs/wiki/machine-load-norm.md) —
+    this fleet runs dozens of concurrent sessions against the same
+    working tree, and an unguarded `git log`/`git merge-base` can block on
+    (or be blocked by) a peer's index lock for no reason, since neither
+    call here ever mutates the index. Delegates to
+    `_git_run_for_session_attribution` for the actual Windows-safe
+    subprocess shape (`CREATE_NO_WINDOW`, no shell, never raises)."""
+    if cmd and cmd[0] == "git":
+        cmd = [cmd[0], "--no-optional-locks", *cmd[1:]]
+    return _git_run_for_session_attribution(cmd, cwd)
+
+
+def _resolve_merge_base_head_range(repo_root: str) -> str | None:
+    """`<merge-base(origin/main, HEAD)>..HEAD` — the same default range
+    `coverage.run_coverage_gate`'s flat-mode fallback resolves (see that
+    module's own `git merge-base origin/main HEAD` call), reused here as
+    the ONE covering range C6a's `ChainAttributionWindow` is built over.
+    Returns `None` on any git failure or empty merge-base output — never a
+    partial/best-guess range; a caller failing to resolve this must fall
+    back to the pre-window per-record path, never synthesize a narrower
+    range that could fail to cover a sha in play."""
+    rc, out, _err = _git_run_no_optional_locks(
+        ["git", "merge-base", "origin/main", "HEAD"], repo_root,
+    )
+    if rc != 0:
+        return None
+    merge_base = out.strip()
+    if not merge_base:
+        return None
+    return f"{merge_base}..HEAD"
+
+
+def _resolve_chain_attribution_window(repo_root: str | None) -> "ChainAttributionWindow | None":
+    """C6b wiring (docs/plans/2026-08-15-composition-invocation-budgets.md):
+    resolves ONE `ChainAttributionWindow` over `merge-base(origin/main,
+    HEAD)..HEAD` for this process, then hands it to
+    `chain_partition_uncovered_shas` as `chain_window` at the PARTITION-
+    MANDATORY call site in `cmd_brightline_gate`.
+
+    WINDOW-COVERAGE PRECONDITION (see `ChainAttributionWindow`'s own
+    docstring and `chain_attribution.foreign_shas_from_window`'s): this
+    function's `commit_map` is built from ONE
+    `chain_attribution.bulk_commit_attribution_map` walk over exactly the
+    range `_resolve_merge_base_head_range` resolves — the SAME range
+    `grep_attributed_for_session` (a closure over
+    `chain_attribution.bulk_grep_attributed_shas`) is scoped to. Neither
+    leg is widened, truncated, or lazily populated relative to the other:
+    a sha this window's `commit_map` does not contain is a sha outside
+    `merge-base..HEAD` entirely, never a sha inside that range this
+    resolver merely chose not to fetch. `_record_membership_shas` (the
+    window's only consumer) already treats a sha absent from `commit_map`
+    as "the window fast path does not apply to this record" and falls
+    back to the per-record `narrow_foreign_shas` spawn rather than reading
+    absence as foreign — this resolver's job is only to make that fallback
+    the exception, not the rule, for an ordinary close.
+
+    Returns `None` (never raises) on an unresolvable `repo_root`, an
+    unresolvable merge-base, or any exception from the underlying bulk
+    walk (`session_attribution.GitLogFailed` on a non-zero `git log`, or
+    any other failure) — every caller already treats `chain_window=None`
+    as byte-identical to the pre-C6a/C6b behaviour (a per-record spawn
+    fallback), so a failed resolution here degrades performance, never
+    correctness.
+
+    Memoized per `repo_root` in `_CHAIN_ATTRIBUTION_WINDOW_CACHE` for the
+    lifetime of this process — one resolution (two git spawns: the
+    merge-base lookup plus the bulk `git log` walk) per close, not one per
+    surviving trail record, mirroring every other resolver cache in this
+    file."""
+    key = repo_root or ""
+    if key in _CHAIN_ATTRIBUTION_WINDOW_CACHE:
+        return _CHAIN_ATTRIBUTION_WINDOW_CACHE[key]
+    result: "ChainAttributionWindow | None" = None
+    if repo_root:
+        sha_range = _resolve_merge_base_head_range(repo_root)
+        if sha_range:
+            try:
+                commit_map = chain_attribution.bulk_commit_attribution_map(
+                    sha_range, repo_root, _git_run_no_optional_locks,
+                )
+            except Exception:  # noqa: BLE001 - a broken window walk must fall back, never crash the gate
+                commit_map = None
+            if commit_map is not None:
+                def _grep_attributed_for_session(
+                    session_id: str | None,
+                    _range: str = sha_range,
+                    _repo_root: str = repo_root,
+                ) -> frozenset[str]:
+                    return chain_attribution.bulk_grep_attributed_shas(
+                        _range, session_id, _repo_root, _git_run_no_optional_locks,
+                    )
+
+                result = ChainAttributionWindow(
+                    commit_map=commit_map,
+                    grep_attributed_for_session=_grep_attributed_for_session,
+                )
+    _CHAIN_ATTRIBUTION_WINDOW_CACHE[key] = result
+    return result
+
+
 def _clear_process_caches() -> None:
     """Test-only reset hook for every module-level, never-cleared-in-
     production process cache this file owns (`_RANGE_SHAS_CACHE`,
     `_DAG_SHAS_CACHE`, `_FOREIGN_SHAS_CACHE`, `_GREP_ATTRIBUTED_SHAS_CACHE`,
-    `_VOUCHED_SHAS_CACHE`) — review-integrator finding N2. Each is a correct,
-    intentional design for
+    `_VOUCHED_SHAS_CACHE`, `_CHAIN_ATTRIBUTION_WINDOW_CACHE`) —
+    review-integrator finding N2. Each is a correct, intentional design for
     production (spawn-per-call, one short-lived process per gate run —
     nothing outlives it to be poisoned), but a cross-test contamination
     hazard for any test suite that calls the real resolvers more than once
@@ -938,6 +1131,7 @@ def _clear_process_caches() -> None:
     _FOREIGN_SHAS_CACHE.clear()
     _GREP_ATTRIBUTED_SHAS_CACHE.clear()
     _VOUCHED_SHAS_CACHE.clear()
+    _CHAIN_ATTRIBUTION_WINDOW_CACHE.clear()
 
 
 def _describe_uncovered_shas(shas: list[str], repo_root: str | None) -> list[str]:
@@ -970,7 +1164,8 @@ def _describe_uncovered_shas(shas: list[str], repo_root: str | None) -> list[str
 
 
 def _classify_uncovered_shas(
-    shas: list[str], repo_root: str | None,
+    shas: list[str],
+    repo_root: str | None,
 ) -> tuple[list[str], list[str]]:
     """Split `shas` into `(planning, code)`, in input order, using the SAME
     classifier the gate itself already applies to decide `chain_code_shas`
@@ -986,10 +1181,17 @@ def _classify_uncovered_shas(
     `repo_root=None`, or an empty `shas`, degrades to `([], list(shas))` —
     every sha reads as unclassified CODE, the message's prior behavior,
     rather than guessing at a classification this diagnostic couldn't
-    resolve."""
+    resolve.
+
+    Shares plan C4's per-close touched-paths cache via `_TOUCHED_PATHS_
+    CACHE` — see `_resolve_dag_candidates`'s docstring for why a ContextVar,
+    not an added parameter."""
     if not repo_root or not shas:
         return [], list(shas)
-    _exhaust_set, planning_set, _note = _classify_bookkeeping_shas(shas, repo_root, {})
+    cache = _TOUCHED_PATHS_CACHE.get()
+    if cache is None:
+        cache = {}
+    _exhaust_set, planning_set, _note = _classify_bookkeeping_shas(shas, repo_root, cache)
     planning = [sha for sha in shas if sha in planning_set]
     code = [sha for sha in shas if sha not in planning_set]
     return planning, code
@@ -1099,7 +1301,7 @@ def _basis_weighable_clause(fields: dict) -> str:
 
 def _resolve_broadly_reviewed_shas(
     trail_records: list[dict],
-    chain_code_shas: list[str],
+    chain_code_shas: frozenset[str] | list[str],
     chain_dag_shas: list[str],
     chain_planning_shas: list[str],
 ) -> frozenset[str]:
@@ -1117,6 +1319,18 @@ def _resolve_broadly_reviewed_shas(
     docs/wiki/review-scale.md — "consume verdicts, don't re-derive them";
     this reuses the existing seam rather than writing a second, independent
     coverage classifier.
+
+    AC3 (plan C3) — `chain_code_shas` is deliberately the CALLER's already-
+    capped, already-displayed sha set (<=30: 3 buckets x cap 10), not the
+    full chain code-obligation set. `chain_partition_uncovered_shas` ->
+    `_collect_discharging_range_shas` short-circuits its trail-record walk
+    the moment `covered` names every entry of the sha set it was asked
+    about — that ceiling is what this narrowing shrinks, bounding the
+    number of records (and their `resolve_range_shas` git spawns) this
+    walk pays for. Coverage credit stays capped at the queried set
+    (`_record_membership_shas`'s contract), so narrowing never changes the
+    answer for a sha actually in the query — it only stops crediting shas
+    nobody asked about, which were never displayed anyway.
 
     Never read by `chain_partition_uncovered_shas`, `discharged`, or the
     verdict — this is a second, standalone call whose return value only
@@ -1958,6 +2172,22 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
             )
         dag_resolved = _derive_dag_shas(args.from_handoff)
         trail_records = _load_trail_records()
+        # Per-run touched-paths cache (plan C4, docs/plans/2026-08-15-
+        # composition-invocation-budgets.md): reset the shared `_TOUCHED_
+        # PATHS_CACHE` ContextVar to a fresh dict for THIS close, so the
+        # four sibling resolvers below (`_resolve_chain_code_shas`,
+        # `_resolve_chain_planning_shas`, `_resolve_chain_spec_dispatch_
+        # exempt_shas`, `_classify_uncovered_shas`) share one `git log
+        # --no-walk --name-only` batch per sha instead of one each. See
+        # `_TOUCHED_PATHS_CACHE`'s own docstring for why a reset (not a
+        # `with`/`finally` scope) is sufficient: the cache is a pure,
+        # content-addressed sha->paths map, so it never needs explicit
+        # teardown, and the reset here means it cannot outlive this close
+        # in practice — the previous close's dict, if any, becomes
+        # unreachable at this line. Never module-global: a ContextVar, not
+        # a plain module attribute, and this tree carries ~16 concurrent
+        # sessions, each its own process with its own ContextVar default.
+        _reset_touched_paths_cache()
         chain_code_shas = _resolve_chain_code_shas(args.from_handoff)
         chain_dag_shas = _resolve_chain_dag_shas(args.from_handoff)
         dag_resolution_failed = dag_resolved is None
@@ -1966,6 +2196,17 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
         # below and the execution-basis-report companion below it — same
         # `from_handoff` input, same repo state (Review: code-reviewer).
         chain_planning_shas = _resolve_chain_planning_shas(args.from_handoff)
+        # C6b wiring (docs/plans/2026-08-15-composition-invocation-budgets.md):
+        # the ONE `merge-base(origin/main, HEAD)..HEAD` window this close's
+        # `narrow_foreign_shas` fan-out can answer from, in-memory, instead of
+        # per surviving trail record. `chain_repo_root` is `dag_resolved`'s
+        # own `repo_root` half (already resolved above, same process, same
+        # cwd) — never re-derived. `None` (an unresolvable merge-base, or any
+        # failure in the underlying bulk walk) degrades byte-identically to
+        # every pre-C6a/C6b caller: `chain_partition_uncovered_shas` below
+        # takes the per-record `narrow_foreign_shas` spawn path unchanged.
+        chain_repo_root = dag_resolved[0] if dag_resolved is not None else _resolve_repo_root()
+        chain_window = _resolve_chain_attribution_window(chain_repo_root)
         if chain_owes_no_code_review:
             uncovered: list[str] = []
             discharged = True
@@ -1976,6 +2217,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     narrow_foreign_shas=_resolve_foreign_session_shas,
                     vouched_shas=_resolve_vouched_shas,
                     chain_planning_shas=chain_planning_shas,
+                    chain_window=chain_window,
                 )
                 if chain_code_shas and chain_dag_shas
                 else []
@@ -2072,16 +2314,6 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 foreign_shas, own_shas = _partition_foreign_uncovered_shas(
                     uncovered, closing_session_id,
                 )
-                # AC7 (plan C4) — an aiming aid only: which of the shas
-                # about to be listed below already carry a discharging
-                # review-trail verdict recorded outside this chain's
-                # narrower (foreign/vouched-scoped) credit rule. Computed
-                # once, read-only, and never fed back into `uncovered`,
-                # `discharged`, `code_shas_only`, or any other count above.
-                broadly_reviewed = _resolve_broadly_reviewed_shas(
-                    trail_records, chain_code_shas, chain_dag_shas,
-                    chain_planning_shas,
-                )
                 # AC4/Seam 2/3 — the recordable partition on the SAME
                 # evidence source the write guard consults
                 # (`_resolve_vouched_shas`), computed ONCE here and reused
@@ -2095,6 +2327,36 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 waived_foreign = [s for s in foreign_shas if s in vouched]
                 unwaived_foreign = [s for s in foreign_shas if s not in vouched]
                 recordable_shas = frozenset(own_shas) | frozenset(waived_foreign)
+                # AC7 (plan C4) / AC3 (plan C3) — an aiming aid only: which
+                # of the shas about to be listed below already carry a
+                # discharging review-trail verdict recorded outside this
+                # chain's narrower (foreign/vouched-scoped) credit rule.
+                # Computed once, read-only, and never fed back into
+                # `uncovered`, `discharged`, `code_shas_only`, or any other
+                # count above. Narrowed to the <=30 shas the three buckets
+                # below actually display (cap=10 x 3) — NOT the full
+                # `chain_code_shas` — because `_resolve_broadly_reviewed_
+                # shas`'s own short-circuit
+                # (`_collect_discharging_range_shas`'s `covered >=
+                # chain_code_sha_set` break) fires on the SIZE OF THE QUERY
+                # SET, so a smaller query set here directly bounds the
+                # number of trail records (and their `resolve_range_shas`
+                # git spawns) this walk pays for. Coverage credit is capped
+                # at the queried set (`_record_membership_shas`'s "coverage
+                # credit capped at chain_code_shas" contract), so narrowing
+                # the query never changes the answer FOR A QUEUED SHA — it
+                # only stops crediting shas nobody asked about, which are
+                # never displayed anyway.
+                cap = 10
+                _displayed_shas = (
+                    frozenset(code_shas_only[:cap])
+                    | frozenset(planning_shas[:cap])
+                    | frozenset(unwaived_foreign[:cap])
+                )
+                broadly_reviewed = _resolve_broadly_reviewed_shas(
+                    trail_records, _displayed_shas, chain_dag_shas,
+                    chain_planning_shas,
+                )
                 waiver_records = (
                     chain_ancestry_waiver_records(repo_root, closing_session_id)
                     if repo_root and closing_session_id
@@ -2136,7 +2398,6 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     "verdict (no record's range names them):",
                     file=sys.stderr,
                 )
-                cap = 10
                 if code_shas_only:
                     print(f"  {len(code_shas_only)} code commit(s):", file=sys.stderr)
                     for line in _annotate_already_reviewed(

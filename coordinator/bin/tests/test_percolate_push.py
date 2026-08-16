@@ -63,6 +63,14 @@ _STATUS_FEATURE_BRANCH_AHEAD_AND_BEHIND = (
     "# branch.oid deadbeef\n# branch.head feature-x\n"
     "# branch.upstream origin/feature-x\n# branch.ab +1 -3\n"
 )
+_STATUS_CANDIDATE_BRANCH_AHEAD_1 = (
+    "# branch.oid deadbeef\n# branch.head candidate\n"
+    "# branch.upstream origin/candidate\n# branch.ab +1 -0\n"
+)
+_STATUS_CANDIDATE_BRANCH_AHEAD_0 = (
+    "# branch.oid deadbeef\n# branch.head candidate\n"
+    "# branch.upstream origin/candidate\n# branch.ab +0 -0\n"
+)
 _STATUS_DETACHED_HEAD = "# branch.oid deadbeef\n# branch.head (detached)\n"
 _STATUS_ZERO_COMMITS = (
     "# branch.oid (initial)\n# branch.head main\n"
@@ -456,6 +464,111 @@ def test_non_default_branch_opens_and_merges_pr_with_explicit_strategy(tmp_path,
     # explicit merge-strategy flag present — `gh pr merge --auto` alone
     # does not select one.
     assert "--merge" in merge_calls[0]
+
+
+def test_release_channel_branch_pushes_and_never_invokes_gh(tmp_path, monkeypatch):
+    """A declared release channel (`candidate`) takes the identical
+    push-only, no-`gh` path as the default branch -- a publish round
+    landing on `candidate` must never open or merge a PR into `main`."""
+    rc, spy, dest = _run_push(
+        tmp_path, monkeypatch, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_1, symref_stdout=_SYMREF_MAIN
+    )
+    assert rc == _mod._EXIT_OK
+    gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
+    assert gh_calls == []
+    push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert len(push_calls) == 1
+    assert push_calls[0] == ["git", "-C", dest, "push"]
+
+
+def test_non_default_non_channel_branch_still_opens_and_merges_pr(tmp_path, monkeypatch):
+    """Regression pin for arm 2's implementation (widening the no-gh
+    condition): a non-default branch that is also NOT a declared channel
+    must still take the ordinary open-and-merge PR path in full, not have
+    that path silently swallowed by the widened predicate."""
+    status = (
+        "# branch.oid deadbeef\n# branch.head feature-y\n"
+        "# branch.upstream origin/feature-y\n# branch.ab +1 -0\n"
+    )
+    rc, spy, dest = _run_push(
+        tmp_path, monkeypatch, status_stdout=status, symref_stdout=_SYMREF_MAIN
+    )
+    assert rc == _mod._EXIT_OK
+    gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
+    auth_calls = [c for c in gh_calls if c[1:3] == ["auth", "status"]]
+    create_calls = [c for c in gh_calls if c[1:3] == ["pr", "create"]]
+    merge_calls = [c for c in gh_calls if c[1:3] == ["pr", "merge"]]
+    assert len(auth_calls) == 1
+    assert create_calls == [["gh", "pr", "create", "--fill", "--head", "feature-y"]]
+    assert merge_calls == [["gh", "pr", "merge", "feature-y", "--merge"]]
+
+
+def test_channel_declaration_consulted_not_inferred_from_non_default(tmp_path, monkeypatch):
+    """A test that would still pass under `branch_head != default_branch ->
+    push only` is not testing the declared-channel-set predicate. Here the
+    branch is non-default AND not a member of the real `_RELEASE_CHANNELS`
+    set (`candidate`) -- so if the implementation ever regressed to
+    inferring channel-ness from "not the default", this would wrongly take
+    the no-gh path. Membership in an arbitrarily-named declared set is what
+    must be consulted: monkeypatching `_RELEASE_CHANNELS` to name this
+    branch specifically proves the code reads the set, not the branch name
+    or "non-default" alone."""
+    monkeypatch.setattr(_mod, "_RELEASE_CHANNELS", frozenset({"release-only"}))
+    status = (
+        "# branch.oid deadbeef\n# branch.head release-only\n"
+        "# branch.upstream origin/release-only\n# branch.ab +1 -0\n"
+    )
+    rc, spy, dest = _run_push(
+        tmp_path, monkeypatch, status_stdout=status, symref_stdout=_SYMREF_MAIN
+    )
+    assert rc == _mod._EXIT_OK
+    gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
+    assert gh_calls == []
+    push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert len(push_calls) == 1
+
+
+def test_channel_declaration_consulted_negative_pairing_same_branch_unpatched_set(tmp_path, monkeypatch):
+    """Negative pairing for the test above (Review: coordinator:code-reviewer
+    P2 -- the positive case alone still passes under a `branch_head !=
+    default_branch` implementation, since `"release-only" != "main"` is true
+    regardless of `_RELEASE_CHANNELS` membership). Same branch name,
+    `_RELEASE_CHANNELS` left at its real value (`{"candidate"}`, so
+    `"release-only"` is NOT a member) -- the PR leg must fire. Only the two
+    tests together prove the code is sensitive to `_RELEASE_CHANNELS`
+    membership rather than to "non-default" alone: a `!=`-based
+    implementation would pass the positive case but fail this one, since it
+    would take the push-only path here too."""
+    status = (
+        "# branch.oid deadbeef\n# branch.head release-only\n"
+        "# branch.upstream origin/release-only\n# branch.ab +1 -0\n"
+    )
+    rc, spy, dest = _run_push(
+        tmp_path, monkeypatch, status_stdout=status, symref_stdout=_SYMREF_MAIN
+    )
+    assert rc == _mod._EXIT_OK
+    gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
+    auth_calls = [c for c in gh_calls if c[1:3] == ["auth", "status"]]
+    create_calls = [c for c in gh_calls if c[1:3] == ["pr", "create"]]
+    merge_calls = [c for c in gh_calls if c[1:3] == ["pr", "merge"]]
+    assert len(auth_calls) == 1
+    assert create_calls == [["gh", "pr", "create", "--fill", "--head", "release-only"]]
+    assert merge_calls == [["gh", "pr", "merge", "release-only", "--merge"]]
+
+
+def test_release_channel_branch_with_nothing_to_push_exits_nothing_to_push_message(tmp_path, monkeypatch, capsys):
+    """Covers the second of the two sites C1 amended: the nothing-to-push
+    early return, not just the PR-leg guard."""
+    rc, spy, dest = _run_push(
+        tmp_path, monkeypatch, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_0, symref_stdout=_SYMREF_MAIN
+    )
+    assert rc == _mod._EXIT_OK
+    err = capsys.readouterr().err
+    assert "nothing to push" in err
+    gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
+    assert gh_calls == []
+    push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert push_calls == []
 
 
 def test_ahead_zero_on_non_default_branch_still_runs_pr_leg(tmp_path, monkeypatch):

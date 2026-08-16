@@ -160,6 +160,18 @@ below is a claude-klabauter artifact that coordinator-claude's doctrine reads an
 
 ---
 
+## Release channels
+
+We ship two branches, and we're forthright about both rather than mentioning only one:
+
+- **`main`** — the release channel. This is what you should install from.
+- **`candidate`** — public, and our nightly. We (the makers) run `candidate` ourselves, for
+  maximum dogfooding before changes reach `main`. It's open for anyone to track, but most users
+  should stay on `main`.
+
+`INSTALL.md` and `AGENTS.md` both install from `main` by default; nothing here asks you to pick a
+branch.
+
 ## Install
 
 **Prerequisite:** Python 3.11+. **The install command lives in

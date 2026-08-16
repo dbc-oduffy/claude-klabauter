@@ -20,6 +20,19 @@ installing this one is one joint installation, not two independent ones — from
 session with coordinator-claude present, its setup flow walks the whole install chain and
 delegates here for this leg.
 
+## Release channels
+
+We ship two branches, and we're forthright about both rather than mentioning only one:
+
+- **`main`** — the release channel. This install path installs from `main`, and that is what
+  you should install from.
+- **`candidate`** — public, and our nightly. We (the makers) run `candidate` ourselves, for
+  maximum dogfooding before changes reach `main`. It's open for anyone to track, but most users
+  should stay on `main`.
+
+The commands below all operate on whatever branch your clone is checked out to — a plain clone
+of this repository lands on `main`.
+
 ## Are you an agent or a human?
 
 **If you are an AI agent** dispatched to install this repository: run the non-interactive path

@@ -550,7 +550,7 @@ _REMEDIATION = (
     "  Remediate (choose one):\n"
     "    machine-local set repos.doe_claude /path/to/DoE-claude\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c\n"
+    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c\n"
 )
 
 

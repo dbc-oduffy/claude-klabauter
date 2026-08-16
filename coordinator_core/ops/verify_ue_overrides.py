@@ -166,7 +166,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
         )
         print("Remediation: verify your coordinator install — see", file=sys.stderr)
         print(
-            "  ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/"
+            "  ~/.claude/plugins/coordinator/docs/wiki/"
             "machine-local-registry.md § Verifying registry health",
             file=sys.stderr,
         )
@@ -229,7 +229,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
                 file=sys.stderr,
             )
             print(
-                "  Remediation: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/"
+                "  Remediation: ~/.claude/plugins/coordinator/docs/wiki/"
                 "machine-local-registry.md § Verifying registry health",
                 file=sys.stderr,
             )

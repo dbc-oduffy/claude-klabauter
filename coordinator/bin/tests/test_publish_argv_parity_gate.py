@@ -240,6 +240,53 @@ def build_directive():
         ok = publish.dispatch_end_of_run_argv_parity_gate([repo_root], target_filtered=False)
         assert ok is True
 
+    def test_partial_baseline_match_still_fails_on_the_new_token(self, tmp_path, monkeypatch, capsys):
+        """A pairing that already has ONE baselined token must still fail
+        when it picks up a SECOND, NEW token -- the baseline relaxation is
+        per-TOKEN, not per-pairing. Guards against a regression that widens
+        the subset check to "pairing already has a baseline entry" instead
+        of "this exact token is in the baseline"."""
+        repo_root = _make_repo(tmp_path)
+        _write(repo_root, "coordinator/bin/known-cli.py", _KNOWN_CLI_SOURCE)
+        _write(
+            repo_root,
+            "coordinator_core/two_flag_assembler.py",
+            '''
+def build_directive(sid, subject):
+    args = [
+        "--sid", sid, "--subject", subject,
+        "--not-declared-flag", "--also-new-flag",
+    ]
+    return {"id": "d1", "cli": "known-cli", "args": args, "depends_on": None}
+''',
+        )
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(
+            json.dumps(
+                {
+                    "entries": [
+                        {
+                            "module": "coordinator_core/two_flag_assembler.py",
+                            "directive_id": "d1",
+                            "cli": "known-cli",
+                            "unresolved": False,
+                            "unaccepted": ["--not-declared-flag"],
+                            "undeclared_required": [],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(publish, "_SOURCE_ARGV_PARITY_BASELINE_PATH", baseline_path)
+
+        ok = publish.dispatch_end_of_run_argv_parity_gate([repo_root], target_filtered=False)
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "argv-parity gate FAILED" in captured.err
+        assert "--also-new-flag" in captured.err
+        assert "--not-declared-flag" not in captured.err
+
     def test_origin_tag_reports_destination_only_for_non_git_tree(self, tmp_path, capsys):
         """A synthetic fixture tree is never a git work tree, so
         `_argv_parity_pairing_origin` cannot resolve it and reports

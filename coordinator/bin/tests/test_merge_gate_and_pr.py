@@ -4,18 +4,11 @@ Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-p
   (M3 chunk MTM-2). Source: DoE-claude
   coordinator/skills/merging-to-main/SKILL.md §§ Step 1.5, Step 1.65, Step 4.
 
-Coverage (C10, docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md
-— VERDICT=UNCOVERED no longer exists; below-threshold is VERDICT=WARN, which
-never halts):
-  coverage-gate:
-    - VERDICT=COVERED passes through the underlying exit code (0).
-    - VERDICT=WARN passes through the underlying exit code (0) — never
-      halts — and prints the coordinator:review-code remediation offer.
-    - VERDICT=WARN + --override still exits 0 and notes the flag is a no-op
-      (nothing left to override).
-    - VERDICT=WARN + COORDINATOR_OVERRIDE_COVERAGE_GATE=1 still exits 0 and
-      notes the same no-op.
-    - INDETERMINATE (exit 2, no VERDICT= in stdout) propagates the exit code.
+K-001 (state/kill-ledger.md): the `coverage-gate` subcommand this file used
+to test was removed — its sole job was relaying `review-coverage-gate.py`'s
+VERDICT line, and the verdict computation it wrapped is dead (WARN on 40 of
+40 closes, zero effect). See merge-gate-and-pr.py's own docstring.
+
   pr-body:
     - composes ship verdict + release notes + commit log, omits demo path
       section when absent.
@@ -48,87 +41,6 @@ def _load_module():
 
 
 _mod = _load_module()
-
-
-# ---------------------------------------------------------------------------
-# coverage-gate
-# ---------------------------------------------------------------------------
-
-def _run_gate(monkeypatch, returncode, stdout, stderr, argv):
-    monkeypatch.setattr(
-        _mod,
-        "_run_review_coverage_gate",
-        lambda range_arg: (returncode, stdout, stderr),
-    )
-    return _mod.main(["coverage-gate", *argv])
-
-
-def test_coverage_gate_covered_passes(monkeypatch, capsys):
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=abc..HEAD chain_commits=3 covered=3 uncovered=0 VERDICT=COVERED\n",
-        "",
-        [],
-    )
-    assert rc == 0
-
-
-def test_coverage_gate_warn_does_not_halt(monkeypatch, capsys, clean_override_env):
-    """C10: below-threshold is VERDICT=WARN, exit_code 0 from the underlying
-    gate — this subcommand must pass that through unchanged, never resolving
-    to a halt (pre-C10 this same fixture, spelled VERDICT=UNCOVERED, halted
-    with exit 1 — see git history)."""
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=abc..HEAD chain_commits=3 covered=1 uncovered=2 "
-        "coverage_ratio=0.33 VERDICT=WARN\n",
-        "uncovered: deadbeef some commit\n",
-        [],
-    )
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "WARN: review-coverage gate below threshold" in captured.err
-    assert "Remediation offer: dispatch coordinator:review-code" in captured.err
-
-
-def test_coverage_gate_warn_flag_override_is_noop(monkeypatch, capsys, clean_override_env):
-    """--override is accepted for backward compatibility but does nothing —
-    WARN already exits 0; there is nothing left to bypass (C10 anti-scope:
-    no widened/new override surface)."""
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=abc..HEAD chain_commits=3 covered=1 uncovered=2 "
-        "coverage_ratio=0.33 VERDICT=WARN\n",
-        "uncovered: deadbeef some commit\n",
-        ["--override"],
-    )
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "has no effect — the coverage gate no longer halts" in captured.err
-
-
-def test_coverage_gate_warn_env_override_is_noop(monkeypatch, capsys, clean_override_env):
-    monkeypatch.setenv("COORDINATOR_OVERRIDE_COVERAGE_GATE", "1")
-    rc = _run_gate(
-        monkeypatch, 0,
-        "range=abc..HEAD chain_commits=3 covered=1 uncovered=2 "
-        "coverage_ratio=0.33 VERDICT=WARN\n",
-        "uncovered: deadbeef some commit\n",
-        [],
-    )
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "has no effect — the coverage gate no longer halts" in captured.err
-
-
-def test_coverage_gate_indeterminate_propagates(monkeypatch, capsys):
-    rc = _run_gate(
-        monkeypatch, 2,
-        "",
-        "note: could not resolve merge-base\n",
-        [],
-    )
-    assert rc == 2
 
 
 # ---------------------------------------------------------------------------
@@ -216,15 +128,3 @@ def test_active_branch_guard_gh_failure_halts(monkeypatch, capsys):
     rc = _mod.main(["active-branch-guard", "--pr", "123"])
     assert rc == 1
     assert "could not read commit timestamps" in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# fixtures
-# ---------------------------------------------------------------------------
-
-import pytest  # noqa: E402
-
-
-@pytest.fixture
-def clean_override_env(monkeypatch):
-    monkeypatch.delenv("COORDINATOR_OVERRIDE_COVERAGE_GATE", raising=False)
