@@ -13,7 +13,7 @@ pointed at a per-test directory so sidecar writes (which resolve through
 
 Spec backlink: C3 of `docs/plans/2026-08-17-the-advisory-reads-the-harness.md`.
 
-Run: coordinator/.venv/bin/python3 -m pytest coordinator/bin/tests/test_statusline.py -q -p no:xdist
+Run: /Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -m pytest coordinator/bin/tests/test_statusline.py -q -p no:xdist
 """
 
 from __future__ import annotations
