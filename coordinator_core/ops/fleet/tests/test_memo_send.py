@@ -2935,6 +2935,45 @@ class TestSupersedesRedelivery:
         assert redelivered.endswith(".md")
         assert "supersedes" in redelivered
 
+    def test_redelivery_filename_never_carries_the_senders_absolute_path(self):
+        """example-cockpit-repo-em, 2026-08-17: `--supersedes <absolute path>` slugged
+        the whole reference, writing the sender's own home-directory layout into
+        the receiver's committed tree and producing a 190-char basename. Only the
+        predecessor's basename identifies it; the directory prefix must not
+        survive, on either separator style.
+        """
+        today = "2026-08-17"
+        sender = "example-cockpit-repo-em"
+        topic = "settings-home-ladder-rung-order-is-yours-to-call"
+        predecessor = f"{today}-{sender}-{topic}.md"
+        for ref in (
+            f"/Users/example-operator/X/DoE-claude/cross-repo/inbox/{predecessor}",
+            f"C:\\Users\\example-operator\\X\\DoE-claude\\cross-repo\\inbox\\{predecessor}",
+            f"cross-repo/inbox/{predecessor}",
+        ):
+            redelivered = _redelivery_filename(today, sender, topic, ref)
+            assert "users" not in redelivered, (
+                f"sender-machine path leaked into the receiver filename for "
+                f"{ref!r}: {redelivered}"
+            )
+            assert "doe-claude" not in redelivered, (
+                f"predecessor's directory prefix leaked for {ref!r}: {redelivered}"
+            )
+            assert "inbox" not in redelivered, (
+                f"predecessor's directory prefix leaked for {ref!r}: {redelivered}"
+            )
+            assert "--supersedes-" in redelivered
+            assert redelivered.endswith(".md")
+            assert len(redelivered) < 140, (
+                f"redelivery basename must stay inside a sane Windows path "
+                f"budget: {len(redelivered)} chars — {redelivered}"
+            )
+            # Every separator style must reduce to the SAME disambiguator — the
+            # predecessor's identity, not the path that happened to name it.
+            assert redelivered == _redelivery_filename(
+                today, sender, topic, predecessor,
+            ), f"{ref!r} must derive the same filename as the bare basename"
+
     def test_second_same_day_redelivery_of_same_topic_fails_loud(self, tmp_path, monkeypatch):
         """Finding 3 (2026-07-21 codereview slicelaneA-memo-tool-rebuild): the
         redelivery-path check-then-write (`redelivery_path.exists()` followed by

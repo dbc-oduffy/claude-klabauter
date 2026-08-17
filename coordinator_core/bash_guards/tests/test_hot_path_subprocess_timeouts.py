@@ -62,10 +62,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SUBPROCESS_SPAWN_ATTRS = {"run", "Popen", "check_output", "call"}
 
 #: Explicit, NAMED exemption list -- a call landing here is a visible
-#: decision (module, function, reason), never a silent omission. Empty
-#: today: every discovered call site in this chain now carries a timeout.
+#: decision (module, function, reason), never a silent omission.
 #: Shape: {(module_dotted_name, enclosing_function_name): "reason"}.
-_EXEMPT: Dict[Tuple[str, str], str] = {}
+_EXEMPT: Dict[Tuple[str, str], str] = {
+    ("coordinator_core.win_portability", "run_forwarding"): (
+        "Not on the hot path. This sweep's reachability is MODULE-level, not "
+        "call-graph-level: `win_portability` is imported by the chain for its "
+        "console-suppression primitives, which is what drags every function in "
+        "the module into scope. `run_forwarding` itself has no production "
+        "caller anywhere in coordinator_core (only a test), so no dispatch path "
+        "reaches this spawn. It is also a pass-through wrapper that forwards "
+        "**kwargs verbatim, so a timeout belongs to the CALLER: hard-coding one "
+        "here would silently cap every future caller's budget, which is a "
+        "different defect rather than a fix. CONDITION ON THIS EXEMPTION -- if a "
+        "hot-path caller is ever added, it must pass timeout= explicitly and "
+        "this entry must be re-examined rather than inherited."
+    ),
+}
 
 
 def _module_file(mod_name: str) -> "Path | None":
@@ -301,3 +314,36 @@ def test_reachable_modules_includes_every_named_fix_site():
         "coordinator_core.bash_guards.commit_tripwires",
     ):
         assert expected in modules, f"{expected} missing from the discovered import graph"
+
+
+def test_run_forwarding_exemption_premise_still_holds():
+    """Pin the fact the `run_forwarding` exemption rests on.
+
+    That entry is justified by "no production caller reaches this spawn". An
+    exemption is only as good as its premise, and this one is a fact about the
+    tree that a future commit can silently falsify — someone wiring
+    `run_forwarding` into a guard would inherit a timeout exemption nobody
+    re-examined, which is exactly the silent-omission shape `_EXEMPT` exists to
+    prevent.
+
+    NEGATIVE SPEC: this does not assert `run_forwarding` is unused forever. It
+    asserts that if it gains a NON-TEST caller, someone is forced back to the
+    exemption to re-justify it.
+    """
+    offenders = []
+    for path in _REPO_ROOT.joinpath("coordinator_core").rglob("*.py"):
+        name = path.name
+        if name.startswith("test_") or "/tests/" in path.as_posix():
+            continue
+        if path.as_posix().endswith("coordinator_core/win_portability.py"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "run_forwarding(" in text:
+            offenders.append(str(path.relative_to(_REPO_ROOT)))
+
+    assert not offenders, (
+        "run_forwarding gained a production caller, so the _EXEMPT entry's premise "
+        f"('no production caller reaches this spawn') no longer holds: {offenders}. "
+        "Either pass timeout= at that call site, or rewrite the exemption reason to "
+        "match the new reality — do not leave it inherited."
+    )

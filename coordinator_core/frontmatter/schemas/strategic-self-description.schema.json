@@ -190,7 +190,7 @@
       }
     },
     "dependencyEdge": {
-      "description": "A single `depends_on[]` entry: a repoIdentityTuple plus an OPTIONAL `strength` member (v1.3.0, cross-repo-memo 2026-07-20 Defect 1). Added so blast-radius / retirement-impact consumers can discriminate a hard runtime dependency from a weak/install-surface coupling instead of every declared edge rendering with equal weight. `strength` is optional and absence-allowed — pre-1.3.0 instances (bare identity tuples, or an empty `depends_on: []`) remain valid; a repo populating `depends_on[]` is expected to set `strength` on each edge going forward, not required to backfill retroactively.",
+      "description": "A single `depends_on[]` entry: a repoIdentityTuple plus an OPTIONAL `strength` member (v1.3.0, cross-repo-memo Defect 1). Added so blast-radius / retirement-impact consumers can discriminate a hard runtime dependency from a weak/install-surface coupling instead of every declared edge rendering with equal weight. `strength` is optional and absence-allowed — pre-1.3.0 instances (bare identity tuples, or an empty `depends_on: []`) remain valid; a repo populating `depends_on[]` is expected to set `strength` on each edge going forward, not required to backfill retroactively.",
       "allOf": [{ "$ref": "#/$defs/repoIdentityTuple" }],
       "properties": {
         "strength": {

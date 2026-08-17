@@ -949,18 +949,23 @@ def test_brightline_gate_uncovered_message_labels_planning_only_set_as_planning(
     assert "code commit(s):" not in err
 
 
-def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
+def test_brightline_gate_uncovered_message_names_all_foreign_set_recordable(
     monkeypatch, tmp_path, capsys,
 ):
     """An uncovered set that is entirely foreign to the closing session
     (every commit authored by a predecessor session — the sibling
-    deadlock's actual shape) must narrate the unrecordable-by-construction
-    case, must NOT print the ordinary REMEDY line — no per-commit write
-    this session could make would ever discharge them — and, with no
-    `own_shas` entry to halt on, communicates rather than halting (exit 0).
-    The retired vouch-waiver sanctioned exit must be gone from the message
-    entirely, while the rest of the uncovered-set diagnostic (the header,
-    the code/foreign split, and the basis line) survives its removal."""
+    deadlock's actual shape) communicates rather than halting (exit 0),
+    with no `own_shas` entry to halt on, and names the write that
+    discharges the ancestry.
+
+    Negative-spec (2026-08-17, doe-claude-em memo "the review ran clean but
+    could not be recorded"): this text must not say the commits are
+    unrecordable, and must not name a chain-ancestry waiver. Both were true
+    only while `_guard_foreign_session_range`'s Case 1 refusal existed;
+    state/kill-ledger.md K-005 removed it, after which the old wording sent
+    every closing EM to prose narration while the record was available —
+    and the gate could no longer tell a reviewed chain from an unreviewed
+    one."""
     chain_code_shas = ["foreign1", "foreign2"]
     _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
     monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
@@ -986,9 +991,11 @@ def test_brightline_gate_uncovered_message_names_all_foreign_set_unrecordable(
     assert rc == 0
     err = capsys.readouterr().err
     assert "UNCOVERED: 2 of 2 chain code commit(s)" in err
-    assert "2 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
+    assert "2 of these 2 commit(s) were authored by a predecessor session" in err
+    assert "coordinator-write-review-trail --sha-range" in err
+    assert "unrecordable" not in err
+    assert "waiver" not in err
     assert "Sanctioned exits: a PM vouch waiver, or /handoff." not in err
-    assert "REMEDY: record a per-commit" not in err
     assert 'basis: "' in err
 
 
@@ -1243,8 +1250,8 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
     """A mixed uncovered set — one own-session code commit, one foreign
     code commit, one own-session planning commit — must partition BOTH
     axes correctly: classification counts stay accurate, only the foreign
-    subset is called unrecordable, and REMEDY names only the remaining
-    (genuinely undischarged, own-session) count."""
+    subset gets the predecessor-session narration, and REMEDY names only the
+    remaining (genuinely undischarged, own-session) count."""
     chain_code_shas = ["codeown", "codeforeign", "planown"]
     _patch_brightline_no_persist_seam(monkeypatch, tmp_path)
     monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
@@ -1270,20 +1277,26 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
     assert "UNCOVERED: 3 of 3 chain code commit(s)" in err
     assert "2 code commit(s):" in err
     assert "1 planning-artifact commit(s) (owe a plan review, not a code review):" in err
-    assert "1 of these 3 commit(s) are unrecordable by an ordinary review-trail write" in err
+    assert "1 of these 3 commit(s) were authored by a predecessor session" in err
     assert "REMEDY: record a per-commit review-trail verdict for each of the remaining 2" in err
 
 
 # ---------------------------------------------------------------------------
 # 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-doe-claude-em-
 # brightline-unrecordable-narration-is-false.md): the foreign partition of the
-# uncovered-set diagnostic must consult the chain-ancestry waiver store before
-# asserting unrecordability. A waived foreign sha IS recordable — the write
-# guard honours the waiver this same runner mints — and the message must name
-# the per-commit `<sha>^..<sha>` form that works. Degradation direction is
-# inverted from this file's usual narrowing posture: an empty/failed waiver
-# lookup falls back to the old unrecordable wording, never to a false
-# recordable claim.
+# uncovered-set diagnostic must not assert unrecordability falsely, and must
+# name the per-commit `<sha>^..<sha>` form that works.
+#
+# 2026-08-17 (cross-repo/inbox/2026-08-17-doe-claude-em-chain-ancestry-review-
+# ran-clean.md): the waiver-conditioned half of that fix is gone. K-005 removed
+# `_guard_foreign_session_range`'s Case 1 refusal, so EVERY foreign-attributed
+# commit is recordable by an ordinary write over its own concrete range and
+# `_resolve_vouched_shas` returns empty forever. The old partition therefore
+# rendered the unrecordable wording unconditionally, and a chain terminal that
+# HAD reviewed its ancestry was told to narrate the gap in prose instead of
+# recording it — leaving the gate unable to distinguish a reviewed chain from
+# an unreviewed one. The pins below are the negative-spec against that wording
+# returning.
 # ---------------------------------------------------------------------------
 
 
@@ -1306,32 +1319,33 @@ def _patch_foreign_narration_case(monkeypatch, tmp_path, chain_code_shas, foreig
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
 
 
-def test_brightline_gate_all_foreign_waived_narrates_recordable_with_per_commit_range(
+def test_brightline_gate_all_foreign_narrates_the_write_that_discharges_them(
     monkeypatch, tmp_path, capsys,
 ):
-    """The refuted case from the memo: every uncovered commit is foreign but
-    every one carries a gate-minted chain-ancestry waiver for this chain, so
-    each IS recordable. The message must say so and must name the concrete-
-    endpoint per-commit form; the false unrecordable claim must be gone."""
+    """Every uncovered commit foreign to the closing session: each IS
+    recordable post-K-005, so the message names the concrete-endpoint
+    per-commit write and never claims the write is refused."""
     chain_code_shas = ["foreign1", "foreign2"]
     _patch_foreign_narration_case(
         monkeypatch, tmp_path, chain_code_shas,
-        foreign=set(chain_code_shas), vouched=set(chain_code_shas),
+        foreign=set(chain_code_shas), vouched=set(),
     )
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "2 of these 2 commit(s) are foreign-session" in err
-    assert "recordable via a chain-ancestry waiver" in err
+    assert "2 of these 2 commit(s) were authored by a predecessor session" in err
     assert 'coordinator-write-review-trail --sha-range "<sha>^..<sha>" --scope chain' in err
-    assert "unrecordable by an ordinary review-trail write" not in err
+    assert "unrecordable" not in err
 
 
-def test_brightline_gate_all_foreign_unwaived_keeps_unrecordable_wording(
+def test_brightline_gate_foreign_narration_never_names_a_waiver_or_a_refusal(
     monkeypatch, tmp_path, capsys,
 ):
-    """No waiver for any foreign sha — today's unrecordable wording is
-    correct and must survive verbatim, with no recordable claim."""
+    """Negative-spec pin (2026-08-17 memo). No wording may send the closing
+    EM to prose narration as the discharge, name a chain-ancestry waiver, or
+    assert the foreign-session guard refuses the range — the mechanism behind
+    all three is deleted (state/kill-ledger.md K-005), and the false claim is
+    what let a reviewed chain and an unreviewed one terminate identically."""
     chain_code_shas = ["foreign1", "foreign2"]
     _patch_foreign_narration_case(
         monkeypatch, tmp_path, chain_code_shas,
@@ -1340,45 +1354,37 @@ def test_brightline_gate_all_foreign_unwaived_keeps_unrecordable_wording(
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "2 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
-    assert "recordable via a chain-ancestry waiver" not in err
+    for banned in (
+        "waiver",
+        "unrecordable",
+        "guard refuses",
+        "no record this session writes can discharge",
+        "narration IS the discharge",
+    ):
+        assert banned not in err, f"retired chain-ancestry wording resurfaced: {banned!r}"
 
 
-def test_brightline_gate_mixed_waiver_partitions_foreign_set_both_ways(
+def test_brightline_gate_foreign_shas_are_marked_recordable_in_chain_slices(
     monkeypatch, tmp_path, capsys,
 ):
-    """One waived foreign sha and one unwaived: both sub-partitions render,
-    each with its own count, and neither claim swallows the other."""
-    chain_code_shas = ["foreignwaived", "foreignbare"]
-    _patch_foreign_narration_case(
-        monkeypatch, tmp_path, chain_code_shas,
-        foreign=set(chain_code_shas), vouched={"foreignwaived"},
-    )
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "1 of these 2 commit(s) are foreign-session" in err
-    assert "1 of these 2 commit(s) are unrecordable by an ordinary review-trail write" in err
-
-
-def test_brightline_gate_waiver_lookup_failure_degrades_to_unrecordable(
-    monkeypatch, tmp_path, capsys,
-):
-    """Inverted fail-safe: an empty waiver-lookup result (the shape
-    `_resolve_vouched_shas` returns for an unreadable store, a missing repo
-    root, or any raising reader) must degrade to the pre-existing
-    unrecordable wording — never invent recordability."""
-    chain_code_shas = ["foreign1"]
+    """The persisted `chain_slices` payload must agree with the narration:
+    a foreign-attributed sha is `recordable: True`, since the refusal that
+    made it False is removed. A disagreeing pair is how the prose and the
+    record drifted apart in the first place."""
+    chain_code_shas = ["foreign1", "foreign2"]
+    captured: dict = {}
     _patch_foreign_narration_case(
         monkeypatch, tmp_path, chain_code_shas,
         foreign=set(chain_code_shas), vouched=set(),
     )
-    monkeypatch.setattr(_mod, "_resolve_vouched_shas", lambda session_id: frozenset())
-    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "1 of these 1 commit(s) are unrecordable by an ordinary review-trail write" in err
-    assert "recordable via a chain-ancestry waiver" not in err
+    def _capture(uncovered, *, recordable_shas, waiver_records):
+        captured["recordable"] = frozenset(recordable_shas)
+        return []
+
+    monkeypatch.setattr(_mod, "build_chain_slices", _capture)
+    _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    capsys.readouterr()
+    assert captured["recordable"] == frozenset(chain_code_shas)
 
 
 # The mint-confirmation discriminator ("the chain-ancestry waiver mint
@@ -2603,7 +2609,7 @@ def test_all_planning_foreign_uncovered_chain_prints_communicate_only_note(
     err = capsys.readouterr().err
     assert rc == 0
     assert "NOTE: brightline verdict=PARTITION-MANDATORY" in err
-    assert "communicate-only gate here, not a halt." in err
+    assert "communicate-only gate here, not a halt" in err
     assert "2 planning-artifact commit(s) (owe a plan review, not a code review):" in err
     assert "REMEDY (foreign/predecessor commits)" not in err
 

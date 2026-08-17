@@ -49,6 +49,11 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-commit",
     "check-test-suite-invocation",
     "block-subagent-grant-acquisition",
+    # Near-exact sibling of the entry above (dispatch.py registers it
+    # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
+    # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
+    # PORT of block_subagent_grant_acquisition.py").
+    "block-subagent-guard-grant",
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`

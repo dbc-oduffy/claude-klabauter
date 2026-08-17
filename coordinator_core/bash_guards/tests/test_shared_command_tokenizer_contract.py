@@ -638,3 +638,57 @@ class TestPrivilegeWrapperBypassClosed:
                 block_stash_destruction.check(_payload(prefix + "git stash drop"))
                 is not None
             ), "regressed on %r" % prefix
+
+
+class TestExtractCommandSubstitutionsIsQuoteAwareWhileBalancing:
+    """`_extract_command_substitutions`'s inner paren-balance walk once tracked
+    only backslashes and parens, never quote state, so a quoted `)` inside a
+    substitution desynced the depth counter and truncated the extracted span --
+    silently dropping everything after it from `subs`.
+
+    Pinned at the tokenizer, not through a guard verdict: `resolve_command_positions`
+    calls this helper and `dispatch.py` runs that before EVERY guard dispatch, so
+    a downstream end-to-end assertion would only cover the callers that happen to
+    exist today. Real bash re-tokenizes inside `$(...)` with normal quote rules
+    and finds the true closing paren; a desync here is the tokenizer disagreeing
+    with the shell in the unsafe direction.
+    """
+
+    def test_quoted_close_paren_does_not_truncate_the_span(self):
+        _neutralized, subs = _command_tokenizer._extract_command_substitutions(
+            """echo "$(echo ')' ; sh -c 'x')" """
+        )
+        assert len(subs) == 1, "expected one substitution, got %r" % (subs,)
+        # Pre-fix this captured the truncated fragment `echo '` and dropped the
+        # wrapper entirely; the wrapper's presence is the whole point.
+        assert "sh -c 'x'" in subs[0], "span truncated at the quoted `)`: %r" % (subs[0],)
+
+    def test_quoted_open_paren_does_not_extend_the_span(self):
+        _neutralized, subs = _command_tokenizer._extract_command_substitutions(
+            """echo "$(echo '(' )" tail"""
+        )
+        assert len(subs) == 1, "expected one substitution, got %r" % (subs,)
+        assert "tail" not in subs[0], "span over-ran its closing paren: %r" % (subs[0],)
+
+    def test_double_quoted_paren_inside_single_quoted_span_is_literal(self):
+        _neutralized, subs = _command_tokenizer._extract_command_substitutions(
+            '''echo "$(echo '")"' ; sh -c 'x')"'''
+        )
+        assert len(subs) == 1, "expected one substitution, got %r" % (subs,)
+        assert "sh -c 'x'" in subs[0], "nested-quote desync: %r" % (subs[0],)
+
+    def test_single_quotes_still_suppress_substitution(self):
+        """The pre-existing correct behaviour the fix must not perturb."""
+        _neutralized, subs = _command_tokenizer._extract_command_substitutions(
+            """echo '$(sh -c "x")'"""
+        )
+        assert subs == [], "single-quoted text must yield no substitutions: %r" % (subs,)
+
+    def test_unterminated_substitution_still_captures_to_end(self):
+        """Degrades toward scanning MORE text, never toward silently dropping it
+        -- the safe direction, and the fix must keep it."""
+        _neutralized, subs = _command_tokenizer._extract_command_substitutions(
+            """echo "$(sh -c 'x'"""
+        )
+        assert len(subs) == 1, "expected one substitution, got %r" % (subs,)
+        assert "sh -c 'x'" in subs[0], "unterminated span dropped content: %r" % (subs[0],)

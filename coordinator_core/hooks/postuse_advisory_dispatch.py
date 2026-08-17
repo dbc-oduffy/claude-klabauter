@@ -41,13 +41,13 @@ import json
 import os
 import re
 import time
-from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.hooks import nudge_unauthorized_handoff
 from coordinator_core.session.autonomous_sentinel import sentinel_path
+from coordinator_core.session.context_usage_sidecar import read_usage
 
 
 def _tempfile():
@@ -69,22 +69,10 @@ def _tempfile():
     import tempfile
     return tempfile
 
-# ---------------------------------------------------------------------------
-# Module-level compiled regex — model detection (context-pressure, Phase 2).
-#
-# Mirrors context-pressure-advisory.sh:
-#   grep -m1 -oE '"model"[[:space:]]*:[[:space:]]*"claude-[^"]*"'
-#   | grep -oE 'claude-[^"]*' | head -1
-#
-# The [^"]* character class is load-bearing: terminates at the closing quote
-# AND guarantees model_id contains no embedded quote. Do not widen to .*.
-# ---------------------------------------------------------------------------
-_MODEL_RE = re.compile(r'"model"\s*:\s*"(claude-[^"]*)"')
-
 #: Generator-provenance declaration: every durable-state write in this
-#: module (advisory-hook-state-<sid>.json, sonnet-generation-monitor-seen
-#: .json, rt-bark-once-<sid>, first-agent-dispatch-advisory-<sid>) lands
-#: under tempfile.gettempdir() — never a tracked repo artifact.
+#: module (advisory-hook-state-<sid>.json, rt-bark-once-<sid>,
+#: first-agent-dispatch-advisory-<sid>) lands under tempfile.gettempdir() —
+#: never a tracked repo artifact.
 GENERATES: list = []
 
 # ---------------------------------------------------------------------------
@@ -102,68 +90,6 @@ GENERATES: list = []
 # the tier-aware threshold block in _check_context_pressure_sync.
 # ---------------------------------------------------------------------------
 _AUTO_COMPACT_CEILING_TOKENS_1M = 500_000
-
-# ---------------------------------------------------------------------------
-# Context window resolution — two tiers. Whether tier B (family default)
-# alone covers a routine new release, or a new tier-A exception is required,
-# DIFFERS BY FAMILY — this is not symmetric, and getting the asymmetry
-# backwards is exactly how the wrong "sonnet-5" entry happened before:
-#
-#   - Opus: PM-confirmed 2026-07-24 — presume ALL FUTURE Opus generations
-#     get 1M, no per-generation confirmation needed. A future Opus 4.9
-#     resolves via the family default with zero maintenance.
-#   - Sonnet: PM-confirmed 2026-07-24 — do NOT presume forward. Sonnet has
-#     historically had 1M access granted to a generation and later
-#     withdrawn, so each Sonnet generation's window must be individually
-#     confirmed before it's promoted out of the 200k family default. A
-#     future Sonnet 7 stays at 200k until someone actually confirms
-#     otherwise — silence is not confirmation.
-#
-# These figures are specifically the Claude CODE windows (not claude.ai
-# chat, which this hook never runs under), per
-# https://support.claude.com/en/articles/8606394-how-large-is-the-context-window-on-paid-claude-plans
-# (confirmed against this PM's own Max-plan account, 2026-07-24). The PM's
-# own quoted list of confirmed-1M-in-Claude-Code models: "Claude Sonnet 5,
-# Fable 5, Opus 4.8, Opus 4.7, and Opus 4.6" — note Mythos is NOT on this
-# list despite an earlier, wrong version of this table assuming it (same
-# unreliable-cached-catalog mistake as the original sonnet-5/Mythos
-# conflation); it is deliberately absent from both tables below and falls
-# through to the generous safe default if ever encountered. Sonnet 4.6 ALSO
-# gets 1M per the source, but ONLY with usage credits enabled on every plan
-# tier, Max included (except usage-based Enterprise) — deliberately NOT
-# added as an exception, since assuming credits are on would be a guess
-# this hook can't verify (this PM does not use credits); it resolves via
-# the 200k Sonnet family default.
-#
-# Tier A — _GENERATION_EXCEPTIONS: named generations whose window diverges
-# from their family default. Checked first (most specific wins). Add a row
-# here only when a new release's window is PM-confirmed (or sourced from the
-# support article above) to genuinely differ from its family — never on an
-# assumed/cached model-catalog figure, and never on a plan/credits state this
-# hook can't introspect (no live signal — see
-# docs/wiki/hook-model-context-window-maintenance.md). Sonnet 5 is the one
-# row today.
-#
-# Tier B — _FAMILY_DEFAULTS: one row per model family, checked after
-# exceptions. Opus is safe to generalize forward (see above); Sonnet is not
-# — its 200k default is the conservative floor every unconfirmed generation
-# falls back to, not a "known convention" the way Opus's 1M is.
-# ---------------------------------------------------------------------------
-_GENERATION_EXCEPTIONS: tuple[tuple[str, int], ...] = (
-    ("[1m]", 1_000_000),
-    ("-1m", 1_000_000),
-    ("sonnet-5", 1_000_000),  # Claude Code, paid plan, no credits caveat
-)
-
-_FAMILY_DEFAULTS: tuple[tuple[str, int], ...] = (
-    ("opus", 1_000_000),
-    ("fable", 1_000_000),
-    ("sonnet", 200_000),
-    ("haiku", 200_000),
-    # "mythos" deliberately absent -- not on the PM's confirmed list; an
-    # encountered "claude-mythos-*" id falls through to the generous safe
-    # default (COORDINATOR_DEFAULT_CONTEXT_WINDOW) rather than a guess.
-)
 
 # ---------------------------------------------------------------------------
 # Durable per-session advisory state (file-backed).
@@ -297,206 +223,6 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
     return ""
 
 
-def _extract_last_usage_tokens(transcript_path: str, tail_bytes: int = 300_000) -> Optional[int]:
-    """Return real context-window occupancy (input + cache_creation + cache_read tokens)
-    from the most recent assistant-turn usage block in the transcript, or None if no
-    usage block is found in the tail window.
-
-    Reads only the trailing `tail_bytes` of the transcript rather than the whole file —
-    a live session's transcript can be tens of MB and only the latest turn's usage figure
-    is needed. A tail read may truncate the first captured line mid-record; that partial
-    line simply fails json.loads and is skipped, never raises.
-    """
-    try:
-        size = os.path.getsize(transcript_path)
-        with open(transcript_path, "rb") as fh:
-            if size > tail_bytes:
-                fh.seek(size - tail_bytes)
-            data = fh.read()
-    except Exception:
-        return None
-
-    try:
-        text = data.decode("utf-8", errors="replace")
-    except Exception:
-        return None
-
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if not line or '"usage"' not in line:
-            continue
-        try:
-            record = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(record, dict) or record.get("type") != "assistant":
-            continue
-        usage = record.get("message", {}).get("usage")
-        if not isinstance(usage, dict):
-            continue
-        try:
-            total = (
-                int(usage.get("input_tokens", 0))
-                + int(usage.get("cache_creation_input_tokens", 0))
-                + int(usage.get("cache_read_input_tokens", 0))
-            )
-        except (TypeError, ValueError):
-            continue
-        if total > 0:
-            return total
-    return None
-
-
-def _resolve_context_window(model_id: str) -> int:
-    """Resolve the context-window size (in tokens) for a model_id.
-
-    Four-tier resolution, most-specific/override-able first. A routine new
-    model release that follows its family's established window size resolves
-    at tier 3 with NO code change required — only a release that breaks its
-    family's convention needs a tier-2 addition.
-
-      1. COORDINATOR_MODEL_CONTEXT_WINDOWS env var (JSON substring→int map) — an
-         ops-level override so any model can be patched same-day without a
-         code change/release cycle here.
-      2. _GENERATION_EXCEPTIONS — named generations whose window diverges from
-         their family default in Claude Code specifically. Sonnet 5 gets
-         boosted to 1M there with no credits caveat (support.claude.com
-         8606394), diverging from every other Sonnet generation's 200k.
-         Sonnet 4.6 ALSO gets 1M per that source, but only with usage
-         credits enabled — deliberately not added as an exception, since
-         this hook can't verify credits are on and assuming so would be a
-         guess (this PM doesn't use credits; Sonnet 4.6 resolves to the
-         200k family default here).
-      3. _FAMILY_DEFAULTS — one row per model family (opus/fable/sonnet/
-         haiku; "mythos" deliberately absent — not on the PM's confirmed
-         list). Covers every generation of that family not flagged as an
-         exception above — this is what makes an ordinary Opus release
-         (an Opus 4.9, ...) maintenance-free. Sonnet is asymmetric: its
-         200k default is a conservative floor, not a convention safe to
-         extend forward — a new Sonnet generation stays at 200k until
-         individually confirmed otherwise (Sonnet has a history of 1M
-         access granted then withdrawn), never assumed from the pattern.
-         maintenance-free.
-      4. COORDINATOR_DEFAULT_CONTEXT_WINDOW env var (default "1000000") for a
-         model_id matching no family at all — deliberately generous so a
-         genuinely unrecognized model fails toward not panicking.
-    """
-    override_raw = os.environ.get("COORDINATOR_MODEL_CONTEXT_WINDOWS")
-    if override_raw:
-        try:
-            overrides = json.loads(override_raw)
-            if isinstance(overrides, dict):
-                for substr, window in overrides.items():
-                    if substr in model_id:
-                        try:
-                            return int(window)
-                        except (TypeError, ValueError):
-                            continue
-        except Exception:
-            pass  # malformed override — fall through to tiers 2-4, never raise
-
-    for substr, window in _GENERATION_EXCEPTIONS:
-        if substr in model_id:
-            return window
-
-    for substr, window in _FAMILY_DEFAULTS:
-        if substr in model_id:
-            return window
-
-    return int(os.environ.get("COORDINATOR_DEFAULT_CONTEXT_WINDOW", "1000000"))
-
-
-# ---------------------------------------------------------------------------
-# Unrecognised-Sonnet-generation monitoring (C1b, 2026-07-24 invariant intact).
-#
-# OBSERVABILITY ONLY -- this does NOT change _resolve_context_window's
-# resolution logic, invert the Opus/Sonnet asymmetry, or touch
-# _GENERATION_EXCEPTIONS/_FAMILY_DEFAULTS. An unrecognised Sonnet model_id
-# still correctly resolves to the 200k family default (the conservative,
-# intentional behaviour) -- this only notices and reports the fact so a
-# human can decide whether it deserves a _GENERATION_EXCEPTIONS row.
-#
-# The residual gap this closes: every non-excepted Sonnet model_id resolves
-# to 200k by design, forever -- that's true of both a brand-new, never-seen
-# generation AND an old, already-well-understood one (claude-sonnet-4-5, for
-# example, is *supposed* to sit at 200k and always will). Naively logging on
-# every non-excepted Sonnet id would fire constantly for that common,
-# already-understood case -- pure noise, not a signal a human could act on.
-# So the roster below seeds the *currently known* generations as "already
-# reviewed", and this fires only the first time a Sonnet model_id this
-# process has never durably recorded before is seen -- i.e. a genuinely new
-# generation landing unrecognised, not a repeat sighting of an existing one.
-#
-# Durable across sessions (a new model release is a rare, cross-session
-# event, not a per-session one) via a plain JSON list in tempdir, same
-# best-effort/fail-open posture as the rest of this module's file-backed
-# state: a lost tempdir (reboot, cleaner) just means the roster reseeds and
-# the advisory may fire once more than strictly necessary -- never silence
-# forever, never a crash.
-# ---------------------------------------------------------------------------
-
-_KNOWN_SONNET_GENERATIONS: tuple[str, ...] = (
-    "sonnet-4-5",
-    "sonnet-4-6",
-    "sonnet-5",
-)
-
-
-def _sonnet_monitor_state_path(tmpdir: str) -> str:
-    return os.path.join(tmpdir, "sonnet-generation-monitor-seen.json")
-
-
-def _check_unrecognised_sonnet_generation(tmpdir: str, model_id: str) -> Optional[str]:
-    """Return a one-time advisory the first time a never-before-seen Sonnet
-    model_id resolves via the 200k family default, or None otherwise.
-
-    Never raises -- fail-open on all I/O errors (degrades to "may re-fire",
-    never to a crash or a permanently-suppressed signal).
-    """
-    if "sonnet" not in model_id:
-        return None
-    if any(gen in model_id for gen in _KNOWN_SONNET_GENERATIONS):
-        return None
-    if any(substr in model_id for substr, _ in _GENERATION_EXCEPTIONS):
-        return None  # already has an explicit, human-confirmed window -- not a gap
-
-    path = _sonnet_monitor_state_path(tmpdir)
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            seen = json.load(fh)
-        if not isinstance(seen, list):
-            seen = []
-    except Exception:
-        seen = []
-
-    if model_id in seen:
-        return None
-
-    seen.append(model_id)
-    try:
-        fd, tmp_path = _tempfile().mkstemp(
-            dir=tmpdir, prefix=".sonnet-generation-monitor-", suffix=".tmp"
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(seen, fh)
-        os.replace(tmp_path, path)
-    except Exception:
-        # Best-effort -- if the write fails, this may fire again next time
-        # the same model_id is seen, which is the safe direction (never
-        # permanently silenced by a write failure).
-        pass
-
-    return (
-        f"SONNET GENERATION MONITOR: unrecognised Sonnet model_id '{model_id}' resolved via"
-        f" the 200k Sonnet family default, not a confirmed _GENERATION_EXCEPTIONS row. Per"
-        f" the Opus/Sonnet asymmetry (Opus generalizes forward safely; Sonnet does not --"
-        f" see the _GENERATION_EXCEPTIONS/_FAMILY_DEFAULTS comment above), this may actually"
-        f" have a larger window (Sonnet 5 has 1M in Claude Code) but has not been"
-        f" human-confirmed yet. If confirmed, add a _GENERATION_EXCEPTIONS row for it. This"
-        f" fires once per newly-observed model_id on this machine."
-    )
-
-
 # ---------------------------------------------------------------------------
 # runtime_threshold_minutes (mirrors lib/runtime-thresholds.sh)
 # ---------------------------------------------------------------------------
@@ -547,13 +273,18 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         transcript hasn't shrunk >=15% since PreCompact fired, treat as a false
         alarm and consume silently.
 
-    Phase 2: Throttled (5 min) threshold warnings.
+    Phase 2: Throttled (5 min) threshold warnings, sidecar-sourced.
         Self-throttle + bark-once guards persisted to a durable per-session JSON
         state file (_load_advisory_state / _save_advisory_state) — survives the
         fresh-process-per-fire execution model (see the module-level state-
-        management comment above _advisory_state_path). Model detected from
-        transcript → context_window → byte thresholds. Bark-once guards keyed by
-        transcript hash.
+        management comment above _advisory_state_path). Occupancy and window
+        size come from `coordinator_core.session.context_usage_sidecar.read_usage`
+        — a pass-through statusline is this sidecar's sole writer — never from
+        the transcript (see the module Anti-scope comment above Phase 2 below).
+        A missing or unusable reading escalates through a bounded UNKNOWN
+        ladder (1st/3rd/10th consecutive miss) rather than repeating identical
+        text forever. Bark-once guards keyed by a hash of transcript_path
+        (stable for the life of a session — this never opens the transcript).
     """
     if not session_id:
         return ""
@@ -655,7 +386,10 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
             )
 
     # -----------------------------------------------------------------------
-    # Phase 2: Throttled threshold warnings
+    # Phase 2: Throttled threshold warnings, sourced from the context-usage
+    # sidecar (coordinator_core.session.context_usage_sidecar) — never the
+    # transcript. Anti-scope: no tail scan, no count_tokens call, no default
+    # window. Sidecar-absence (or an unusable reading) is UNKNOWN, full stop.
     # -----------------------------------------------------------------------
     throttle_seconds = 300  # 5 minutes
 
@@ -671,236 +405,218 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     cp_state["throttle_last_check"] = time.time()
     _save_advisory_state(tmpdir, session_id, cp_state)
 
-    if not transcript_path or not os.path.isfile(transcript_path):
-        return ""
-
-    # --- Model detection (mirrors context-pressure-advisory.sh) ---
-    # Read line-by-line; stop at the first matching line (grep -m1 behaviour).
-    model_id = ""
+    # --- Bark-once key: a hash of transcript_path, not its contents. This
+    # never opens the transcript — transcript_path is stable for the life of
+    # a session, so the hash is effectively a per-session dedup key, same
+    # shape as before the sidecar rewire.
     try:
-        with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                m = _MODEL_RE.search(line)
-                if m:
-                    model_id = m.group(1)
-                    break
-    except Exception:
-        # model_id stays "" -- the context-window lookup below falls back
-        # to its default-model bucket rather than skipping the threshold
-        # check entirely.
-        pass
-
-    # --- Unrecognised-Sonnet-generation monitor (observability only; see the
-    # comment block above _check_unrecognised_sonnet_generation). Checked
-    # before threshold logic and, when it fires, takes this call's advisory
-    # slot -- it's a durable one-time-per-model_id signal, not a per-session
-    # dedup, so it never competes with the normal advisory/critical firings
-    # for the same transcript_hash on a later call.
-    sonnet_monitor_text = _check_unrecognised_sonnet_generation(tmpdir, model_id)
-    if sonnet_monitor_text:
-        return sonnet_monitor_text
-
-    # --- Context window by model family (mirrors :171-197) ---
-    context_window = _resolve_context_window(model_id)
-
-    # --- Thresholds (tier-aware — mirrors DoE 07eb7599's shell-side recalibration) ---
-    #
-    # 1M-context tier: _AUTO_COMPACT_CEILING_TOKENS_1M (500K) is a FIXED
-    # Anthropic-side ceiling, not a proportion of the window — a flat 50%
-    # threshold on a 1M window lands exactly ON that ceiling (500K = 500K),
-    # firing critical level with the auto-compact cut instead of ahead of
-    # it. Anchor to absolute tokens below the ceiling instead: critical at
-    # 450K (50K headroom for the handoff's own tool calls to finish before
-    # the involuntary cut), advisory at 400K ("start wrapping up"). This
-    # anchoring is deliberately NOT re-derived from context_window, so a
-    # future window-size change on this tier cannot silently reintroduce
-    # the collision.
-    #
-    # Sub-1M tiers (Sonnet/Haiku 200K default): compaction is still
-    # observed ~window-proportional here, with no fixed-ceiling collision
-    # to guard against — retain the 40%/50%-of-window model unchanged.
-    if context_window >= 1_000_000:
-        advisory_tokens = 400_000
-        critical_tokens = 450_000
-    else:
-        advisory_tokens = context_window * 40 // 100
-        critical_tokens = context_window * 50 // 100
-
-    bytes_per_token = 7
-
-    advisory_bytes = advisory_tokens * bytes_per_token
-    critical_bytes = critical_tokens * bytes_per_token
-
-    # Env-var overrides for testing/recalibration.
-    try:
-        advisory_bytes = int(os.environ["CONTEXT_ADVISORY_THRESHOLD"])
-    except (KeyError, ValueError):
-        # Unset/non-numeric override -- silently keep the computed default;
-        # this is an opt-in testing/recalibration knob, not user-facing
-        # config, so an absent or malformed value is the common case.
-        pass
-    try:
-        critical_bytes = int(os.environ["CONTEXT_CRITICAL_THRESHOLD"])
-    except (KeyError, ValueError):
-        # Same rationale as the advisory-threshold override above: unset/non-numeric
-        # is the common case, silently keep the computed default.
-        pass
-
-    # --- Transcript file size ---
-    try:
-        file_size = os.path.getsize(transcript_path)
-    except Exception:
-        return ""  # transcript vanished/unreadable mid-read (race with rotation) -- no advisory this call
-
-    if file_size == 0:
-        return ""
-
-    # --- Transcript hash for in-memory bark-once guards ---
-    try:
-        transcript_hash = hashlib.md5(transcript_path.encode()).hexdigest()
+        transcript_hash = (
+            hashlib.md5(transcript_path.encode()).hexdigest() if transcript_path else session_id
+        )
     except Exception:
         transcript_hash = session_id
 
     # --- Autonomous run detection (read-only; sentinel written by EM/user, not this op) ---
     autonomous_run = os.path.isfile(str(sentinel_path(session_id)))
 
-    model_str = model_id if model_id else "unknown"
+    reading = read_usage(session_id, now=time.time())
+    context_window_block = reading.context_window if reading is not None else None
 
-    # Tier-aware description of where auto-compaction fires, for the warning
-    # text below. Mirrors DoE 07eb7599's compact_desc.
-    if context_window >= 1_000_000:
-        compact_desc = (
-            f"auto-compaction fires at a fixed ~{_AUTO_COMPACT_CEILING_TOKENS_1M // 1000}K"
-            f" tokens on this 1M tier"
-        )
-    else:
-        compact_desc = "auto-compaction is observed near ~60% of the window"
+    # --- Occupancy sum: EXACT match to the deleted extractor's basis so the
+    # preserved 400K/450K anchors stay calibrated (AC4). output_tokens is
+    # deliberately excluded.
+    current_usage = (
+        context_window_block.get("current_usage")
+        if isinstance(context_window_block, dict)
+        else None
+    )
+    occupancy_tokens = None
+    if isinstance(current_usage, dict):
+        try:
+            occupancy_tokens = (
+                int(current_usage["input_tokens"])
+                + int(current_usage["cache_creation_input_tokens"])
+                + int(current_usage["cache_read_input_tokens"])
+            )
+        except (KeyError, TypeError, ValueError):
+            occupancy_tokens = None
 
-    # Real usage blocks are ground truth from the Anthropic API and are already
-    # being written to the transcript per assistant turn, so no bytes/token
-    # calibration constant is needed for the common case — the byte-proxy constant
-    # `bytes_per_token` (or any recalibrated replacement) is a fallback-only guess
-    # that historically ran ~2x too low on JSON/tool-schema-heavy sessions. Don't
-    # let a future session "clean up" this fallback by deleting the primary
-    # usage-block path below.
-    usage_tokens = _extract_last_usage_tokens(transcript_path)
+    window_size = (
+        context_window_block.get("context_window_size")
+        if isinstance(context_window_block, dict)
+        else None
+    )
+    window_usable = isinstance(window_size, (int, float)) and window_size > 0
 
-    if usage_tokens is not None:
-        est_pct_tokens = usage_tokens * 100 // context_window
+    used_percentage = (
+        context_window_block.get("used_percentage")
+        if isinstance(context_window_block, dict)
+        else None
+    )
+    pct_usable = isinstance(used_percentage, (int, float))
 
-        # --- Critical check first (higher priority) — token-accurate path ---
-        #
-        # Compared against the absolute critical_tokens threshold (tier-aware,
-        # not est_pct_tokens/critical_pct) — on the 1M tier this is the anchored
-        # 450K figure, strictly below _AUTO_COMPACT_CEILING_TOKENS_1M, not a
-        # recomputed 50%-of-window figure that would collide with it.
-        if usage_tokens >= critical_tokens and transcript_hash not in cp_state.get("critical_fired", []):
+    age_seconds = reading.age_seconds if reading is not None else None
+
+    # --- AC4 full path: both the token sum and the window size are usable.
+    # Tier-aware absolute-token thresholds, unchanged from before the rewire.
+    if occupancy_tokens is not None and window_usable:
+        cp_state["unmeasured_streak"] = 0
+
+        context_window = int(window_size)
+        if context_window >= 1_000_000:
+            advisory_tokens = 400_000
+            critical_tokens = 450_000
+        else:
+            advisory_tokens = context_window * 40 // 100
+            critical_tokens = context_window * 50 // 100
+
+        display_pct = int(used_percentage) if pct_usable else occupancy_tokens * 100 // context_window
+
+        if context_window >= 1_000_000:
+            compact_desc = (
+                f"auto-compaction fires at a fixed ~{_AUTO_COMPACT_CEILING_TOKENS_1M // 1000}K"
+                f" tokens on this 1M tier"
+            )
+        else:
+            compact_desc = "auto-compaction is observed near ~60% of the window"
+
+        age_note = f" (measured {int(age_seconds)}s ago)" if age_seconds is not None else ""
+
+        if occupancy_tokens >= critical_tokens and transcript_hash not in cp_state.get("critical_fired", []):
             _mark_advisory_fired(cp_state, transcript_hash, critical=True)
             _save_advisory_state(tmpdir, session_id, cp_state)
 
             if autonomous_run:
                 return (
-                    f"CONTEXT PRESSURE — HIGH ({model_str}): est. ~{est_pct_tokens}% of window used"
-                    f" — measured from the transcript's own Anthropic API usage blocks"
-                    f" (input + cache_creation + cache_read tokens), not a byte-size estimate."
+                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block"
+                    f" (input + cache_creation + cache_read tokens)."
                     f" Compaction is close — {compact_desc}. Autonomous run active —"
                     f" continuing per PM instruction. Verify all progress is in TaskList and"
                     f" committed to disk. Compaction will compress context but tasks persist."
-                    f" (Transcript-derived: {usage_tokens} tokens vs {context_window}-token window)"
+                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
                 )
             else:
                 return (
-                    f"CONTEXT PRESSURE — HIGH ({model_str}): est. ~{est_pct_tokens}% of window used"
-                    f" — measured from the transcript's own Anthropic API usage blocks"
-                    f" (input + cache_creation + cache_read tokens), not a byte-size estimate."
+                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block"
+                    f" (input + cache_creation + cache_read tokens)."
                     f" Note: {compact_desc}."
                     f" If this estimate looks right for the work you've done, consider running"
                     f" /handoff soon — the handoff itself consumes context, so leave headroom."
-                    f" (Transcript-derived: {usage_tokens} tokens vs {context_window}-token window)"
+                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
                 )
 
-        # --- Advisory check — token-accurate path ---
-        # Compared against the absolute advisory_tokens threshold (tier-aware,
-        # same rationale as the critical check above).
-        if usage_tokens >= advisory_tokens and transcript_hash not in cp_state.get("advisory_fired", []):
+        if occupancy_tokens >= advisory_tokens and transcript_hash not in cp_state.get("advisory_fired", []):
             _mark_advisory_fired(cp_state, transcript_hash, critical=False)
             _save_advisory_state(tmpdir, session_id, cp_state)
 
             if autonomous_run:
                 return (
-                    f"CONTEXT PRESSURE — ADVISORY ({model_str}): est. ~{est_pct_tokens}% of window used"
-                    f" — measured from the transcript's own Anthropic API usage blocks"
-                    f" (input + cache_creation + cache_read tokens), not a byte-size estimate."
+                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block"
+                    f" (input + cache_creation + cache_read tokens)."
                     f" Context usage is getting heavy. Autonomous run: checkpoint state"
                     f" to disk at the next natural boundary so the run is resumable."
-                    f" (Transcript-derived: {usage_tokens} tokens vs {context_window}-token window)"
+                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
                 )
             else:
                 return (
-                    f"CONTEXT PRESSURE — ADVISORY ({model_str}): est. ~{est_pct_tokens}% of window used"
-                    f" — measured from the transcript's own Anthropic API usage blocks"
-                    f" (input + cache_creation + cache_read tokens), not a byte-size estimate."
+                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block"
+                    f" (input + cache_creation + cache_read tokens)."
                     f" Context usage is getting heavy. Consider completing the current"
                     f" task unit, then running /handoff. This is informational — no action required"
                     f" yet."
-                    f" (Transcript-derived: {usage_tokens} tokens vs {context_window}-token window)"
+                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
                 )
 
+        _save_advisory_state(tmpdir, session_id, cp_state)
         return ""
 
-    # --- No usage block found: FAIL LOUD, do not guess a percentage. ------
-    #
-    # C1 decision (2026-07-27, executor judgment recorded per plan instruction):
-    # this op is dispatched via a FRESH process per PostToolUse fire (see the
-    # module-level state-management comment above _advisory_state_path) with
-    # no resident daemon -- the whole point of folding these checks into one
-    # in-process op was eliminating spawns/round-trips on the hot PostToolUse
-    # path. Calling POST /v1/messages/count_tokens here would add a
-    # synchronous network round-trip (latency + availability + an API-key
-    # requirement this hook process cannot assume it has -- Claude Code
-    # subscription auth does not guarantee a usable ANTHROPIC_API_KEY in this
-    # process's environment) to a path that already fires on every tool call
-    # once throttled. That cost is paid on EVERY fallback fire, not just the
-    # rare one, so count_tokens was rejected as the fallback here (it stays
-    # available as a manual/offline calibration tool, just not wired into this
-    # hot path). The old 7-bytes/token proxy is removed instead of replaced --
-    # it was silently confident and ~2x too low on JSON-heavy sessions, which
-    # is worse than admitting we don't know. This branch never estimates a
-    # percentage; it says plainly that none is available.
-    #
-    # The old critical/advisory byte thresholds are kept ONLY as a "worth
-    # mentioning at all" size gate (large transcript, still no usage data is
-    # unusual and worth a heads-up) -- never as an input to a displayed
-    # percentage. Same bark-once dedup as before, so this fires at most once
-    # per transcript per tier.
-    if file_size >= critical_bytes and transcript_hash not in cp_state.get("critical_fired", []):
-        _mark_advisory_fired(cp_state, transcript_hash, critical=True)
-        _save_advisory_state(tmpdir, session_id, cp_state)
+    # --- AC13a: a usable percentage but no usable window size. The sub-1M
+    # percentage model (40%/50% of window) is what `used_percentage` already
+    # is, so it applies directly — no compact_desc (tier is unknown), no
+    # absolute-token parenthetical (no window to express it against).
+    if pct_usable:
+        cp_state["unmeasured_streak"] = 0
 
+        display_pct = int(used_percentage)
+        age_note = f" (measured {int(age_seconds)}s ago)" if age_seconds is not None else ""
+
+        if display_pct >= 50 and transcript_hash not in cp_state.get("critical_fired", []):
+            _mark_advisory_fired(cp_state, transcript_hash, critical=True)
+            _save_advisory_state(tmpdir, session_id, cp_state)
+
+            if autonomous_run:
+                return (
+                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block; no window"
+                    f" size was reported, so this is percentage-only. Autonomous run active —"
+                    f" continuing per PM instruction. Verify all progress is in TaskList and"
+                    f" committed to disk. Compaction will compress context but tasks persist."
+                )
+            else:
+                return (
+                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block; no window"
+                    f" size was reported, so this is percentage-only."
+                    f" If this estimate looks right for the work you've done, consider running"
+                    f" /handoff soon — the handoff itself consumes context, so leave headroom."
+                )
+
+        if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
+            _mark_advisory_fired(cp_state, transcript_hash, critical=False)
+            _save_advisory_state(tmpdir, session_id, cp_state)
+
+            if autonomous_run:
+                return (
+                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block; no window"
+                    f" size was reported, so this is percentage-only. Context usage is getting"
+                    f" heavy. Autonomous run: checkpoint state to disk at the next natural"
+                    f" boundary so the run is resumable."
+                )
+            else:
+                return (
+                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
+                    f" — measured via the harness's own context_window usage block; no window"
+                    f" size was reported, so this is percentage-only. Context usage is getting"
+                    f" heavy. Consider completing the current task unit, then running /handoff."
+                    f" This is informational — no action required yet."
+                )
+
+        _save_advisory_state(tmpdir, session_id, cp_state)
+        return ""
+
+    # --- AC13b / AC5 / AC15: no sidecar, or a sidecar carrying neither figure
+    # usable. Never a guessed denominator, never a fabricated percentage.
+    # Escalates in urgency at the 1st/3rd/10th consecutive throttled miss,
+    # then holds silent — see the module docstring's Phase 2 note.
+    streak = cp_state.get("unmeasured_streak", 0) + 1
+    cp_state["unmeasured_streak"] = streak
+    _save_advisory_state(tmpdir, session_id, cp_state)
+
+    if streak == 1:
         return (
-            f"CONTEXT PRESSURE — UNKNOWN ({model_str}): no Anthropic API usage block was"
-            f" found in the trailing transcript window, so context usage cannot be measured."
-            f" The transcript is already large enough that this is worth flagging explicitly"
-            f" rather than silently guessing a number — the previous byte-size proxy has been"
-            f" removed because it ran ~2x too low on JSON/tool-schema-heavy sessions, which is"
-            f" worse than no estimate at all. Use your own judgment on how much of the session"
-            f" is left, or /handoff proactively if in doubt; the estimate will resume once a"
-            f" usage block reappears in the transcript."
-            f" (Transcript: {file_size} bytes, no usage-derived token count available)"
+            "CONTEXT PRESSURE — UNKNOWN: no measurable context-usage reading is"
+            " available for this session (no sidecar, or an unusable one)."
+            " Use your own judgment on session length, or /handoff if in doubt."
         )
-
-    if file_size >= advisory_bytes and transcript_hash not in cp_state.get("advisory_fired", []):
-        _mark_advisory_fired(cp_state, transcript_hash, critical=False)
-        _save_advisory_state(tmpdir, session_id, cp_state)
-
+    if streak == 3:
+        elapsed_min = (streak - 1) * throttle_seconds // 60
         return (
-            f"CONTEXT PRESSURE — UNKNOWN ({model_str}): no Anthropic API usage block was"
-            f" found in the trailing transcript window, so context usage cannot be measured."
-            f" This is informational — the transcript has grown large enough to be worth"
-            f" noting, but no percentage is given because none can be measured reliably."
-            f" Use your own judgment on session length; the estimate will resume once a usage"
-            f" block reappears in the transcript."
-            f" (Transcript: {file_size} bytes, no usage-derived token count available)"
+            f"CONTEXT PRESSURE — UNKNOWN: still no measurable context-usage reading"
+            f" after ~{elapsed_min} minutes of this session."
+            f" Use your own judgment on session length, or /handoff if in doubt."
+        )
+    if streak == 10:
+        elapsed_min = (streak - 1) * throttle_seconds // 60
+        return (
+            f"CONTEXT PRESSURE — UNKNOWN: still no measurable context-usage reading"
+            f" after ~{elapsed_min} minutes of this session. Treat this as a standing"
+            f" limitation for this session, not a transient blip."
+            f" Use your own judgment on session length, or /handoff if in doubt."
         )
 
     return ""

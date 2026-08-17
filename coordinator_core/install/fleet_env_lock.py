@@ -93,7 +93,7 @@ _LOCK_PATH = _REPO_ROOT / "docs" / "install" / "fleet-env.lock"
 
 # Contract doc § DECISIONS "The Python minor" — pinned explicitly, never
 # inherited from the authoring machine's own interpreter.
-LOCK_PYTHON_MINOR = "3.12"
+LOCK_PYTHON_MINOR = "3.14"
 
 # Contract doc § DECISIONS (a) "Platform contract, decided" — win32, linux,
 # and darwin are all live fleet targets; `uv lock`'s `environments` setting

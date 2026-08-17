@@ -73,7 +73,7 @@
     },
     "initiative": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "FK to state/initiatives/<id>.yaml; nullable — absent≡null. Spec backlink: docs/plans/2026-07-04-initiative-govern-sweep-prioritize-doe-d.md § C0"
+      "description": "FK to state/initiatives/<id>.yaml; nullable — absent≡null. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C0"
     },
     "system": {
       "type": "object",

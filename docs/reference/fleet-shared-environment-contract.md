@@ -129,9 +129,20 @@ fail to invalidate."* Reading `coordinator/bin/lib/machine_local_resolve.py` and
 `machine_local_impl_path()` and `resolve_machine_local_bin()` both re-derive their answer on every
 call, with no module-level memo. `fleet_env.root`'s own read path (C1's resolver, C5's fallback
 ladder) is new code with no such cache either. Residency in `registry.local.toml` is chosen here
-because it is the doctrinally correct location for this value's shape (per-machine, operator-set,
-no live source) — not because a memoization hazard forces it. If C1 or C5 introduces caching later,
-this reasoning must be re-checked against that addition specifically.
+because it is the doctrinally correct location for this value's shape (per-machine, no live
+source) — not because a memoization hazard forces it. If C1 or C5 introduces caching later, this
+reasoning must be re-checked against that addition specifically.
+
+**Amendment (C4): the key is installer-seeded, not purely operator-set.** The residency argument
+above (per-machine, no live source) holds regardless of *who* writes the value — it was written
+against an initial design where only an operator ever set this key by hand. C4
+(`scripts/setup.py::_seed_fleet_env_root_from_klabauter`) changed that: on every install run, once
+`register_claude_klabauter_root` has registered `repos.claude_klabauter` in the same pass, the installer
+seeds `fleet_env.root = <klabauter-root>/.fleet-env` if the key currently reads absent. An operator
+retains full control — a key that already carries a value (operator-set, or seeded by a prior run)
+is never overwritten — but a fresh install with a discoverable klabauter checkout no longer requires
+a hand-run `machine-local set` to land the environment at its contracted location. See § "Setting
+the key on a machine," below, for the corrected operator-vs-installer split.
 
 **The key returns a PATH.** Its value is the fleet environment's root directory. Two distinct
 resolver contracts exist in this repo and C1 must pick deliberately:
@@ -205,14 +216,43 @@ cross-reference — only that the registry's absent state is not itself that mec
 
 ### The Python minor
 
-**Pinned: 3.12.** The fleet's strictest declared floor is `>=3.12` (`experiments/review-experiments`),
-so 3.12 is the lowest admissible minor across every contributing manifest. The spike measured 3.12
-and 3.13 as pin-for-pin identical across all 231 (Windows-only) distributions, so this choice is
-free with respect to resolution outcome — pinning the floor rather than inheriting whatever minor
-happens to be on the box that runs `uv lock` keeps the lock's Python identity independent of the
-authoring machine, and keeps headroom: pinning the floor rather than the newest available minor
-means the environment stays buildable on any fleet machine whose system/uv-managed Python has not
-yet picked up 3.13.
+**Pinned: 3.14** (`coordinator_core/install/fleet_env_lock.py::LOCK_PYTHON_MINOR`, five consumption
+sites: this module's own `requires-python` emission and its `uv lock --python` argv,
+`fleet_env.py`'s import of the constant, its `uv sync --python` argv, and its derivation of
+`lib/python{minor}/site-packages` as a real filesystem path). PM ruling, 2026-08-17: flipped from
+3.12 under a controlled install surface — *"this is really dumb"* on the prior pin. Measured: the
+fleet's contracted health-probe set (`_FLEET_ENV_IMPORT_PROBES`) resolves to 90 packages at 3.12,
+3.13, and 3.14 alike, and `torch` ships cp314 wheels (2.13.0), so nothing in the union blocks the
+newer minor.
+
+**Why the prior 3.12 pin is retired, not merely bumped.** It existed to keep the environment
+*"buildable on any fleet machine whose system/uv-managed Python has not yet picked up 3.13"* — a
+hedge against machines this design did not control. Under the controlled install surface (this
+plan's C1–C11), the fleet machine's own interpreter is provisioned by the installer, not
+discovered as-is, so that hedge no longer applies. Pinning the newest broadly-available minor
+(3.14) costs nothing in resolution outcome and matches the machine interpreters this fleet
+actually runs.
+
+**Platform scope, decided alongside the flip (2026-08-17):** macOS arm64 is the supported mac
+target; Intel macOS (x86_64) is out of support. The torch 2.13.0 cp314 wheel gap on macOS x86_64 is
+therefore not a risk against any supported platform — dropped from scope entirely, not carried as a
+known risk. Windows/Linux fallout from the flip is accepted risk, tracked separately (this plan's
+Windows probe chunk); it does not gate this pin.
+
+**Rollback, verified.** If the flip strands a platform, the pin reverts by: (1) set
+`LOCK_PYTHON_MINOR = "3.12"` in `fleet_env_lock.py` (the sole edit — all five consumption sites
+re-derive from it); (2) regenerate the lock at 3.12
+(`python3 -m coordinator_core.install.fleet_env_lock --emit-lock`, requires a `python3.12`
+resolvable by `uv`); (3) delete the stranded `.fleet-env` tree (or let
+`coordinator_core.install.fleet_env.ensure_fleet_env()`'s health probe detect the now-mismatched
+`lib/python3.14/site-packages` path and rebuild — the rename-swap rebuild never mutates the live
+tree in place, so a failed rebuild attempt cannot corrupt a still-running environment). This restores
+exactly the pre-flip state: the 3.12 lock content, the 3.12 `requires-python` floor, and the
+`lib/python3.12/site-packages` derivation `fleet_env.py::_site_packages_dir` uses. Verified by
+inspection of the rename-swap contract (`fleet_env._swap_in_new_env`) and by confirming
+`LOCK_PYTHON_MINOR` is this module's only literal minor pin — no test currently asserts the constant's
+value, so a rollback edit is not caught by CI; treat the regenerated lock's own health-probe pass as
+the verification step.
 
 ## Resolving the key (C1)
 
@@ -239,14 +279,29 @@ gets one; this is the normal rollout-window state, not an error. For the full pr
 operator distinguishes "not rolled out yet" from "opted out," see § The day-one absent-key
 property (AC5b), above.
 
-Setting the key on a machine (operator action, not part of this CLI):
+**Setting the key on a machine — installer-seeded by default, operator-overridable.** As of C4,
+`scripts/setup.py`'s install chain seeds this key itself
+(`_seed_fleet_env_root_from_klabauter`, called from `install_fleet_shared_environment`,
+immediately before `ensure_fleet_env()` runs and after `register_claude_klabauter_root` has registered
+`repos.claude_klabauter` in the same pass): if `fleet_env.root` reads absent AND
+`repos.claude_klabauter` is registered, the installer writes
+`fleet_env.root = <klabauter-root>/.fleet-env` and never touches the key again on a machine where
+it already carries a value. This is `fleet-env.py`'s own CLI reading a key it did not write — the
+CLI itself remains read-only (`get` only, see above); the write comes from the install chain, not
+from this script. An operator can still set (or override) the key directly, and always wins over
+the seed — the installer only fills an absent key, it never re-asserts one that already has a
+value:
 
 ```
 machine-local set fleet_env.root <absolute-path-to-.fleet-env>
 ```
 
+A machine with no discoverable klabauter checkout (`repos.claude_klabauter` unregistered) gets no
+seed and falls through to `fleet-env.py`'s absent-key behaviour above, same as before C4.
 `fleet-env.py` does not implement a fallback location for the absent case — that is
-`coordinator_core/install/fleet_env_resolve.py`'s ladder (C5), a distinct module from this one.
+`coordinator_core/install/fleet_env_resolve.py`'s ladder (C5), a distinct module from this one and
+from the C4 seed above: C5's ladder runs only when rung 1 (this key, seeded or not) is unusable,
+never as a substitute for seeding it.
 
 ## Provisioning the environment (C4)
 

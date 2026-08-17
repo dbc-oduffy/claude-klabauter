@@ -339,9 +339,9 @@ is the one class-(b) site with a real subprocess call and is entered below.
 - cls: f
   path: coordinator/bin/static-check
   enclosing: run_pyright
-  argv0: pyright
+  argv0: <dynamic>
   ordinal: 0
-  argv_digest: null
+  argv_digest: "aacb8d29a475"
   reason: "optional 3rd-party static-verification tool, PATH-resolved only, degrades to UNAVAILABLE + exit 0 when absent"
   ruled_on: "2026-08-11"
 ```

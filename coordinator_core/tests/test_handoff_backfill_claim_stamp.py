@@ -24,7 +24,6 @@ own fixture model (one throwaway repo per test, explicit construction).
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import sys
 from pathlib import Path
@@ -145,8 +144,12 @@ def repo(tmp_path) -> _Repo:
     return _Repo(root)
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    """`_backfill_handler` is a plain `def` (sync branch, dispatch-timeout
+    enforceable — see its own docstring); this passthrough keeps every call
+    site below unchanged rather than rewriting each `_run(_backfill_handler(...))`
+    into a bare call."""
+    return result
 
 
 # ---------------------------------------------------------------------------

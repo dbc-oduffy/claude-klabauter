@@ -1,6 +1,6 @@
 """
 coordinator_core.plugin_health.sentinel — coordinator-doctor probe suite (P-1..P-19
-plus P-23, minus the pre-existing P-16/P-20/P-21/P-22 manifest/sentinel skew
+plus P-20/P-21/P-23, minus the pre-existing P-16/P-22 manifest/sentinel skew
 documented below) and the
 --full-mode `doctor-last-run.json` sentinel writer that scan-addon-health.sh
 (coordinator_core.plugin_health.scan) consumes.
@@ -64,10 +64,11 @@ probe block at all — the manifest is ahead of the sentinel body. This port fai
 reproduces that skew (no probe_p16 function exists here either); fixing it would be a
 behavior change outside this port's parity-preserving scope. P-20/P-21/P-22 were added
 to the manifest post-port (bash-version gate, durable-root-pointer confirmation,
-publish-targets drift) and carry the same skew — no probe_p20/p21/p22 function exists
-here, so `--full` silently never evaluates them. Observed while adding P-23 (claude-doe
-wrapper drift, wired up below); out of this change's scope to close — flagged here so
-the gap is discoverable rather than re-found from scratch.
+publish-targets drift) and initially carried the same skew — no probe_p20/p21/p22
+function existed here, so `--full` silently never evaluated them. P-20 (bash-version
+gate) and P-21 (durable-root-pointer confirmation) are now wired (probe_p20/probe_p21
+below, 2026-08-17); P-22 (publish-targets drift) remains unwired and is tracked in
+`_UNWIRED_PROBE_IDS` alongside P-16.
 
 Contract to preserve — LOAD-BEARING, cross-plugin (not one of the 8 T0-frozen
 contracts, but equally so): the sentinel JSON schema (ran_at, verdict, red_probes,
@@ -100,6 +101,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import normalize_native_path, settings_home
+from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.install import check_install_singularity
 from coordinator_core.install._shared import require_home
 from coordinator_core.ipc import register_op
@@ -238,12 +240,14 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
 #
 # P-16 is a documented, deliberate byte-parity skew inherited from the bash port.
 # P-20/P-21/P-22 were added to the manifest with no matching wiring here and went
-# unnoticed because nothing compared the two sets.
+# unnoticed because nothing compared the two sets. P-20 (bash-version gate) and
+# P-21 (durable-root-pointer confirmation) are now wired (probe_p20/probe_p21) and
+# have been dropped from this ledger; P-22 (publish-targets drift) remains unwired.
 #
 # This list is a debt ledger, not an escape hatch: shrink it by wiring a probe,
 # never grow it to silence a new one.
 # Guard: coordinator/tests/test_doctor_manifest_ssot.py
-_UNWIRED_PROBE_IDS = ("P-16", "P-20", "P-21", "P-22")
+_UNWIRED_PROBE_IDS = ("P-16", "P-22")
 
 
 def _is_runnable_file(path: Path) -> bool:
@@ -1397,6 +1401,97 @@ def probe_p19(lib_dir: Optional[Path], coordinator_root: Optional[Path]) -> List
     return []
 
 
+def probe_p20() -> List[ProbeNote]:
+    """Verify the bash resolved FIRST on PATH is version >= 4 (macOS ships 3.2
+    at /bin/bash, ahead of any homebrew bash unless PATH is fixed).
+
+    Deliberately judges `shutil.which("bash")` — the same PATH-resolution
+    order any shell script or `bash -c` caller gets — never `sys.executable`
+    or the interpreter running this probe suite; the whole point is what a
+    caller invoking bare `bash` would get, not what this Python process
+    happens to run under (see docs/wiki/doctor-probe-design.md § A Probe
+    Must Walk the Same Resolution Path as the Runtime Tool It Vouches For).
+
+    No bash on PATH is not the same finding as an OLD bash on PATH: on
+    Windows there is legitimately no bash on PATH by default (no coordinator
+    tooling requires one there), so absence there is a clean pass, not a
+    degradation. On POSIX, bash is near-universally present (it is the
+    macOS/Linux default shell binary); an absence there is unusual enough
+    that this probe cannot assert either "old" or "modern" and reports
+    `inconclusive` rather than fabricating a verdict for a condition (no
+    bash at all) the manifest's remediation text does not describe.
+    """
+    bash_path = shutil.which("bash")
+    if bash_path is None:
+        if os.name == "nt":
+            return []
+        return _inconclusive("P-20", "no bash found on PATH — cannot judge its version")
+    try:
+        from coordinator_core.win_portability import no_console_creationflags
+
+        proc = subprocess.run(
+            [bash_path, "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _inconclusive("P-20", f"could not run {bash_path} -c ... — {_exec_detail(exc)}")
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not out:
+        return _inconclusive(
+            "P-20", f"{bash_path} produced no usable BASH_VERSINFO output (rc={proc.returncode})"
+        )
+    try:
+        major = int(out.splitlines()[0].strip())
+    except ValueError:
+        return _inconclusive("P-20", f"could not parse bash version output from {bash_path}: {out!r}")
+    if major < 4:
+        return [
+            ProbeNote(
+                "P-20",
+                "red",
+                f"bash resolved first on PATH ({bash_path}) is version {major} (<4) — "
+                "install a modern bash (brew install bash) and ensure its install prefix "
+                "precedes /bin on PATH; re-run /coordinator:install to re-verify",
+            )
+        ]
+    return []
+
+
+def probe_p21() -> List[ProbeNote]:
+    """Verify a durable coordinator-root pointer exists (DR-072).
+
+    Delegates to `coordinator_core.doe_root_pointer.read_doe_root_pointer_file()`
+    — the shared durable-then-legacy file-rungs reader every other `.doe-root`
+    pointer consumer in this codebase already uses — rather than re-deriving
+    the two candidate paths (`<settings-home>/machine-local/.doe-root`, then
+    `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`) here. That helper checks the
+    durable location FIRST and returns as soon as it finds non-empty content
+    there, so a pass on the durable location structurally never reaches the
+    legacy fallback.
+
+    Deliberately the file-rungs-only reader, not the registry-first
+    `read_doe_root_pointer()`: this probe's manifest-declared symptom is the
+    absence of the pointer FILE itself (DR-072), not the resolved coordinator
+    root by any means — `repos.doe_claude` registry presence is a different
+    condition covered by P-3/P-4, not this probe's concern.
+    """
+    if read_doe_root_pointer_file():
+        return []
+    return [
+        ProbeNote(
+            "P-21",
+            "red",
+            "no durable coordinator-root pointer found: checked "
+            f"{settings_home() / 'machine-local' / '.doe-root'} (DR-072 durable location) "
+            "and the legacy fallback ${CLAUDE_HOME:-$HOME}/.claude/.doe-root — re-run "
+            "/coordinator:install to re-seed the durable coordinator-root pointer",
+        )
+    ]
+
+
 def _resolve_wrapper_home() -> Path:
     """Resolve the home probe_p23 checks the installed wrapper against,
     through the SAME ladder `_install_claude_doe_wrapper`
@@ -1789,6 +1884,8 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     _run_probe("P-14", lambda: probe_p14(ml_cmd, ch_cmd, sh_bin))
     _run_probe("P-18", lambda: probe_p18(original_claude_home))
     _run_probe("P-19", lambda: probe_p19(lib_dir_sibling, coordinator_root))
+    _run_probe("P-20", lambda: probe_p20())
+    _run_probe("P-21", lambda: probe_p21())
     _run_probe(
         "P-23",
         lambda: probe_p23(
@@ -1848,9 +1945,29 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     # --- Subset mode (triage / cluster / probe / symptom) ---
     stdout_lines.append(f"[coordinator-doctor] MODE={mode} verdict={verdict}")
 
-    if red_probes or amber_probes:
-        all_failing = " ".join(red_probes + amber_probes)
-        stdout_lines.append(f"  Failing: {all_failing}")
+    # Presentation-only split (verdict/JSON schema untouched): an
+    # inconclusive(...) note is carried on the amber severity bucket
+    # DELIBERATELY (see _inconclusive's docstring — the sentinel JSON schema
+    # cannot grow a fourth bucket), but "Failing" is the wrong word for a
+    # probe that never ran at all. List genuinely-failing ids separately from
+    # inconclusive-only ones so a triage run whose only notes are
+    # inconclusive(...) never claims anything failed.
+    failing_probe_ids: List[str] = []
+    inconclusive_probe_ids: List[str] = []
+    for pid in red_probes + amber_probes:
+        if pid in failing_probe_ids or pid in inconclusive_probe_ids:
+            continue
+        msgs = [n.message for n in notes if n.id == pid and n.severity in ("red", "amber")]
+        if msgs and all(m.startswith("inconclusive(") for m in msgs):
+            inconclusive_probe_ids.append(pid)
+        else:
+            failing_probe_ids.append(pid)
+
+    if failing_probe_ids or inconclusive_probe_ids:
+        if failing_probe_ids:
+            stdout_lines.append(f"  Failing: {' '.join(failing_probe_ids)}")
+        if inconclusive_probe_ids:
+            stdout_lines.append(f"  Inconclusive (did not run): {' '.join(inconclusive_probe_ids)}")
         stdout_lines.append(f"  Hint: {hint}")
     else:
         stdout_lines.append("  All selected probes passed.")

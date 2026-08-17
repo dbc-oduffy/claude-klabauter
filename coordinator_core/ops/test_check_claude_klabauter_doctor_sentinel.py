@@ -196,3 +196,126 @@ def test_tolerant_of_sentinel_carrying_vendor_drift_key(tmp_path, monkeypatch, c
         "[health] claude-klabauter-doctor: AMBER — re-vendor improvement-queue.schema.json. "
         "Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
     )
+
+
+def test_amber_advisory_only_renders_advisory_not_amber(tmp_path, monkeypatch, capsys):
+    """A non-required-only degradation (advisory_only=True) must render as
+    ADVISORY, not the bare AMBER band a real prerequisite failure gets.
+
+    Root-cause regression case: claude-klabauter.schema.vendor_drift is required=False,
+    but `_local_reduce_overall`/`reduce_overall` drag `envelope.overall` to
+    DEGRADED regardless of `required`, so the sentinel's AMBER verdict was
+    visually identical to a required-probe failure until `advisory_only` was
+    threaded through.
+    """
+    _write_sentinel(
+        tmp_path,
+        {
+            "verdict": "AMBER",
+            "red_probes": [],
+            "hint": "claude-klabauter.schema.vendor_drift — verify the DoE clone",
+            "ts": int(time.time()),
+            "schema_version": 1,
+            "plugin": "claude-klabauter",
+            "advisory_only": True,
+        },
+    )
+    monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
+    rc = mod.main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.strip() == (
+        "[health] claude-klabauter-doctor: ADVISORY (non-gating) — claude-klabauter.schema.vendor_drift — "
+        "verify the DoE clone. Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
+    )
+    assert "AMBER" not in out
+
+
+def test_red_advisory_only_renders_advisory_not_red(tmp_path, monkeypatch, capsys):
+    """Same distinction for RED/BROKEN: a required=False probe can also drive
+    `overall` to BROKEN (e.g. Claude-klabauter.invoke.smoke's timeout case); advisory_only
+    must suppress the RED band there too."""
+    _write_sentinel(
+        tmp_path,
+        {
+            "verdict": "RED",
+            "red_probes": ["claude-klabauter.invoke.smoke"],
+            "hint": "re-run the smoke probe",
+            "ts": int(time.time()),
+            "schema_version": 1,
+            "plugin": "claude-klabauter",
+            "advisory_only": True,
+        },
+    )
+    monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
+    rc = mod.main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.strip() == (
+        "[health] claude-klabauter-doctor: ADVISORY (non-gating) (claude-klabauter.invoke.smoke) — "
+        "re-run the smoke probe. Run python bin/claude-klabauter-doctor-probe.py --triage for details."
+    )
+    assert "RED" not in out
+
+
+def test_amber_required_failure_still_renders_amber(tmp_path, monkeypatch, capsys):
+    """A real required-probe failure (advisory_only absent/False) must render
+    exactly as before this change — no regression to the gating case."""
+    _write_sentinel(
+        tmp_path,
+        {"verdict": "AMBER", "red_probes": ["p1"], "hint": "fix p1", "ts": int(time.time())},
+    )
+    monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
+    rc = mod.main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.strip() == "[health] claude-klabauter-doctor: AMBER — fix p1. Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
+    assert "ADVISORY" not in out
+
+
+def test_red_required_failure_still_renders_red(tmp_path, monkeypatch, capsys):
+    """A real required-probe RED failure with advisory_only explicitly False
+    must render exactly as before."""
+    _write_sentinel(
+        tmp_path,
+        {
+            "verdict": "RED",
+            "red_probes": ["p1", "p2"],
+            "hint": "run doctor",
+            "ts": int(time.time()),
+            "advisory_only": False,
+        },
+    )
+    monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
+    rc = mod.main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.strip() == "[health] claude-klabauter-doctor: RED (p1,p2) — run doctor. Run python bin/claude-klabauter-doctor-probe.py --triage for details."
+    assert "ADVISORY" not in out
+
+
+def test_old_sentinel_lacking_advisory_only_key_renders_as_before(tmp_path, monkeypatch, capsys):
+    """An OLD sentinel written before `advisory_only` existed (key wholly
+    absent) must behave identically to today's pre-change behavior — no
+    crash, no new ADVISORY band, plain AMBER."""
+    _write_sentinel(
+        tmp_path,
+        {
+            "verdict": "AMBER",
+            "red_probes": [],
+            "hint": "claude-klabauter.schema.vendor_drift — verify the DoE clone",
+            "ts": int(time.time()),
+            "schema_version": 1,
+            "plugin": "claude-klabauter",
+            "vendor_drift": {"status": "INDETERMINATE", "checked": 12, "drifted": [], "indeterminate": ["x.schema.json"]},
+        },
+    )
+    monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
+    rc = mod.main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.strip() == (
+        "[health] claude-klabauter-doctor: AMBER — claude-klabauter.schema.vendor_drift — verify the DoE clone. "
+        "Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
+    )
+    assert "ADVISORY" not in out

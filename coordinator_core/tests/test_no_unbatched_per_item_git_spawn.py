@@ -57,14 +57,22 @@ measured the transitive deep tail at 32% TP with no static discriminator separat
 false positives at any depth -- deliberately excluded here, tracked instead as G2's named
 residual.
 
-THREE STRUCTURAL DISCRIMINATORS (measured: 32.4% naive FP -> 4.2% with all three applied, zero
-true positives lost). Those rates were measured in 2026-08-08 against the GIT-ONLY collector and
-have NOT been re-measured for the widened one -- the discriminators are argv0-independent, so
-there is no reason to expect them to move, but that is an argument, not a measurement, and it
-should not be cited as one. What was actually checked at the AC11 re-freeze is narrower and
-worth exactly what it is: the 83 newly-added keys were read individually, and the single
-false-positive class found (a helper sharing a spawn's line) was closed in route a rather than
-frozen into the inventory:
+STRUCTURAL DISCRIMINATORS -- SIX TOTAL, not the three this heading historically named (measured:
+32.4% naive FP -> 4.2% with discriminators 1-3 applied, zero true positives lost). Those rates
+were measured in 2026-08-08 against the GIT-ONLY collector and have NOT been re-measured for the
+widened one -- the discriminators are argv0-independent, so there is no reason to expect them to
+move, but that is an argument, not a measurement, and it should not be cited as one. What was
+actually checked at the AC11 re-freeze is narrower and worth exactly what it is: the 83
+newly-added keys were read individually, and the single false-positive class found (a helper
+sharing a spawn's line) was closed in route a rather than frozen into the inventory.
+
+Discriminators 1-3 are listed below; 4 (chunking-stride iterables) and 5 (verb-gated dispatch
+chokepoints) are documented at their definition sites further down rather than repeated here --
+a pre-existing drift between this heading's enumeration and the module's actual count that this
+change does not take on fixing. Discriminator 6 (varying argv0, added 2026-08-17) is listed here
+in full because it belongs to the same "does this loop even qualify" family as 1-3: it is NOT
+covered by the 32.4%/4.2% figures above (those predate it by nine days) and its own FP rate has
+never been measured -- state plainly rather than let it inherit a number it did not earn.
 
   1. Loop-ITERABLE-expression exclusion. A `for`/comprehension's `iter` expression is evaluated
      ONCE, before the first iteration -- a call appearing there is not a per-item spawn. This
@@ -77,6 +85,16 @@ frozen into the inventory:
      calendar walks bounded by a constant, a human, or a fixed window, never by input size --
      `while` loops are excluded wholesale (only 11 hits repo-wide carried this shape; the
      false-negative exposure is accepted, matching this collector's stated bias).
+  6. Varying-argv0 exclusion. A loop that spawns a DIFFERENT PROGRAM on each iteration cannot be
+     batched into one call -- there is no single argv0 for the batch to share. Decided by a
+     bounded one-hop taint pass, seeded from the enclosing loop's own target names and grown by
+     one `ast.Assign`/`ast.AnnAssign` fixed-point hop per round (`_tainted_names_for_loop`): the
+     call's own `argv[0]` (`_argv0_expr`, the two shapes measured to occur -- a `List` literal,
+     or `<List> + <rest>`) qualifies for exclusion when it references a tainted name
+     (`_argv0_varies_with_loop_target`). NOT FP-measured against the 32.4%/4.2% figures above --
+     added 2026-08-17, retiring two `_EXEMPT_SITES` entries this pass mechanically decides
+     (`path_resolution_report._check_windows`, `cruft_sweep.sweep_toolchain_caches`); see that
+     constant's own comment for what still requires human judgment.
 
 SIX DETECTION ROUTES (per gate-substrate.md Task C), restricted to the high-precision stratum:
 
@@ -242,10 +260,45 @@ _RUNNER_KWARG_NAMES: frozenset[str] = frozenset(
 )
 _RUNNER_NAME_PREFIXES: tuple[str, ...] = ("run", "git", "spawn")
 
-#: Known, LIVE, outstanding exemptions -- keyed on (relpath, lineno), matching the sibling
-#: gates' convention. Empty by construction here: G1 ships no gating assertion, so nothing is
-#: exempted yet. G2 (next wave) is where a real exemption register, if any, would live.
-_EXEMPT_SITES: set[tuple[str, int]] = set()
+#: Known, LIVE, outstanding exemptions -- what remains AFTER the varying-argv0 discriminator
+#: (see module docstring, discriminator 4). G1's comment here reserved this register for G2
+#: ("where a real exemption register, if any, would live"); G2 landed it, and this pass retired
+#: the two entries the discriminator now decides mechanically
+#: (`path_resolution_report._check_windows`, `cruft_sweep.sweep_toolchain_caches` -- both were
+#: "argv0 varies per item" claims a static pass can verify). What survives here is UNBATCHABLE
+#: for a reason NO STATIC PASS CAN SEE -- the measured subject IS the per-item spawn loop, not a
+#: property of the call site's own AST -- so growing this register back up with a mechanically
+#: decidable reason is a regression, not a convenience.
+#:
+#: Keyed on (relpath, enclosing function, callee) -- the SAME key `_KNOWN_SITES` and `AmpSite.key`
+#: use, NOT the sibling gates' (relpath, lineno). A lineno pin in this repo is stale-by-default:
+#: it silently drifts onto an unrelated call on the next edit above it, and a drifted exemption
+#: fails OPEN (the real site re-fires, an innocent one goes quiet) rather than merely failing.
+#: Three separate lineno pins in this same test tree had drifted off their subjects by 2026-08-17.
+#:
+#: An entry here is a claim that the site is UNBATCHABLE BY CONSTRUCTION -- not "expensive but
+#: accepted", not "not now". That is the whole discriminator: `_KNOWN_SITES` is a burn-down
+#: worklist for sites that CAN be batched and have not been, and growing it to absorb new code
+#: destroys the class-regrowth property the standing gate exists to buy. A site that could be
+#: batched belongs there (or fixed); a site that cannot belongs here, with the reason.
+#:
+#: Negative spec: do NOT add a site here because the loop is short, because the caller is a
+#: benchmark, or because the spawn is off a hot path. `benchmarks/floor.py` and
+#: `benchmarks/harness.py` sit in `_KNOWN_SITES`, not here -- being a benchmark is not the
+#: exemption; being a benchmark WHOSE MEASURED SUBJECT IS THE SPAWN ITSELF is.
+_EXEMPT_SITES: set[tuple[str, str, str]] = {
+    # 2026-08-17 -- the spawn loop IS the measurement. `_spawn_n_processes` times N sequential
+    # `python -c "import <module>"` children as the fan-in arm's control; batching the N imports
+    # into one child measures a different quantity and voids the comparison the module exists for.
+    ('coordinator_core/benchmarks/shim_fanin_measure.py', '_spawn_n_processes', 'run'),
+    # 2026-08-17 -- one FRESH login shell per entrypoint is the subject under test: the probe
+    # reports how each entrypoint resolves on the PATH a login shell builds. The two spawns per
+    # entrypoint were already folded into one combined `-lc` payload; folding ACROSS entrypoints
+    # would report one shell's resolution N times. NOT decided by the varying-argv0 discriminator
+    # -- `shell` (argv0) is loop-invariant here; only the script text varies, which the four
+    # measured argv0 shapes do not reach.
+    ('coordinator_core/install/path_resolution_report.py', '_check_posix', 'run'),
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -394,6 +447,197 @@ def _is_chunking_stride_iterable(node: ast.expr) -> bool:
     if isinstance(step, ast.Constant) and step.value == 1:
         return False
     return True
+
+
+# --------------------------------------------------------------------------
+# Discriminator 6: varying-argv0 exclusion (see module docstring). A loop that spawns a
+# DIFFERENT PROGRAM per iteration cannot be batched into one call -- there is no single argv0
+# for the batch to share.
+#
+# Spec backlink: docs/plans/2026-08-17-the-amplification-gate-decides-varying-argv0-itself.md,
+# chunk C1. Measured against the four real sites that motivated it (this plan's sizing object,
+# `premise.evidence`): accepts `cruft_sweep.sweep_toolchain_caches` (argv0 `resolved`) and
+# `path_resolution_report._check_windows` (argv0 `where`); rejects `path_resolution_report.
+# _check_posix` (argv0 loop-invariant -- the shell is fixed, only the script text varies) and
+# `shim_fanin_measure._spawn_n_processes` (argv0 is `sys.executable`, never the loop target).
+# NOT measured for false-positive rate the way discriminators 1-3 above are -- see module
+# docstring.
+# --------------------------------------------------------------------------
+
+
+def _names_in(node: ast.expr) -> set[str]:
+    """Every `ast.Name` identifier referenced anywhere inside `node`."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _loop_target_names(target: ast.expr) -> set[str]:
+    """The set of names a `for`/`async for` (or comprehension generator) target binds --
+    `for a, b in ...` binds both. Same three lines as `test_no_spawn_per_item_loop.py:146`'s
+    `_loop_target_names`; kept as a local copy rather than a cross-module import, matching this
+    module's stated pinned-API discipline (see module docstring's "Reuse from spawn_policy") --
+    the shape is trivial enough that a coupling neither gate's contract asks for is not worth
+    the drift-tracking a shared import would need."""
+    return _names_in(target)
+
+
+def _paired_assign_elements(
+    target: ast.expr, value: ast.expr
+) -> list[tuple[ast.expr, ast.expr]] | None:
+    """Element-wise `(target, value)` pairs for an unpacking assignment whose two sides are
+    statically correlatable -- both `Tuple`/`List`, equal length, no `Starred` on either side
+    (a star absorbs an unknown span, so positions stop lining up). `None` for every other
+    shape, which is the signal to fall back to the coarse whole-RHS rule.
+
+    Exists so `_tainted_names_for_loop` does not taint `b` in `a, b = item, "always-git"` --
+    see its docstring for why over-tainting is the dangerous direction for a suppressor."""
+    if not (
+        isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+    ):
+        return None
+    if len(target.elts) != len(value.elts):
+        return None
+    if any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)):
+        return None
+    return list(zip(target.elts, value.elts))
+
+
+def _tainted_names_for_loop(loop: ast.AST, seed: set[str]) -> frozenset[str]:
+    """Fixed-point taint set over `loop`'s subtree: starts at `seed` (the loop target's own
+    names) and grows by one `ast.Assign`/`ast.AnnAssign` hop per round -- a local becomes
+    tainted when its RHS mentions anything already tainted. Bounded at 10 rounds, matching the
+    measured prototype this discriminator was sized against; every real site converges in one
+    or two rounds.
+
+    Deliberately narrow, per this discriminator's own measured scope (plan Anti-scope): one
+    `ast.Assign`/`ast.AnnAssign` hop, nothing deeper.
+
+    BROADER IS THE UNSAFE DIRECTION HERE, and an earlier version of this docstring had it
+    exactly backwards (Review: code-reviewer 2026-08-17, BLOCK). Every other discriminator in
+    this module ACCEPTS work -- for those, over-inclusion costs a false positive the gate
+    reports and a human dismisses. This one SUPPRESSES, so an over-broad taint set silences a
+    real amplification site and nothing downstream ever notices. "It can only make more names
+    eligible for suppression" is the harm, not the safety argument. Any future discriminator
+    whose action is EXCLUDE inherits this inversion: check it explicitly.
+
+    Concretely, that reasoning shipped a real false suppression:
+
+        for item in items:
+            a, b = item, "always-git"
+            subprocess.run([b, "--version"])   # argv0 is CONSTANT -- must stay reported
+
+    The whole-RHS test saw `item` in the tuple and tainted BOTH `a` and `b`, so a loop-invariant
+    argv0 read as varying. Fixed by correlating targets to values ELEMENT-WISE when both sides
+    are same-length `Tuple`/`List` (`_paired_assign_elements`); every other shape keeps the
+    coarse whole-RHS rule, which is correct for them -- unpacking an opaque call result really
+    can carry the taint into any element.
+
+    RESIDUAL, stated rather than fixed: this pass is flow-INSENSITIVE (an `ast.walk` over the
+    subtree, no statement ordering). A name assigned from the loop target and then REBOUND to
+    something invariant later in the body stays tainted for a call sitting between the two.
+    That is the same over-suppression direction as the bug above, with a narrower trigger, and
+    closing it needs statement ordering this discriminator's scope deliberately excludes."""
+    tainted = set(seed)
+    for _ in range(10):
+        grew = False
+        for node in ast.walk(loop):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            if value is None:
+                continue
+            if not (_names_in(value) & tainted):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                pairs = _paired_assign_elements(t, value)
+                if pairs is None:
+                    newly = _names_in(t)
+                else:
+                    newly = {
+                        name
+                        for sub_target, sub_value in pairs
+                        if _names_in(sub_value) & tainted
+                        for name in _names_in(sub_target)
+                    }
+                for name in newly:
+                    if name not in tainted:
+                        tainted.add(name)
+                        grew = True
+        if not grew:
+            break
+    return frozenset(tainted)
+
+
+def _argv0_expr(
+    argv_arg: ast.expr, bindings: dict[str, ast.expr] | None = None
+) -> ast.expr | None:
+    """`argv[0]` as an expression, for the shapes measured to occur at a real per-item spawn
+    call site: a `List` literal's first element, `<List> + <rest>` (recurse left -- the
+    `[resolved] + list(prune_argv)` idiom), or a bare `Name` resolved one hop through
+    `bindings` (the real `cruft_sweep.sweep_toolchain_caches` shape: `dry_argv = [resolved] +
+    list(dry_run_argv)` as its own statement, THEN `subprocess.run(dry_argv, ...)` -- the List/
+    BinOp shape sits one assignment away from the call site, not on it). `None` for anything
+    else -- declining rather than guessing is deliberate, this chunk's hard constraint is no
+    fallback escape hatch: a site this pass cannot decide must not be suppressed."""
+    if isinstance(argv_arg, ast.List) and argv_arg.elts:
+        return argv_arg.elts[0]
+    if isinstance(argv_arg, ast.BinOp) and isinstance(argv_arg.op, ast.Add):
+        return _argv0_expr(argv_arg.left, bindings)
+    if bindings and isinstance(argv_arg, ast.Name) and argv_arg.id in bindings:
+        return bindings[argv_arg.id]
+    return None
+
+
+def _loop_argv0_bindings(loop: ast.AST) -> dict[str, ast.expr]:
+    """Name -> its resolved `argv0` expression, for every single-target `ast.Assign`/
+    `ast.AnnAssign` in `loop`'s subtree whose RHS itself resolves via `_argv0_expr` -- the
+    one-hop intermediate-variable idiom (`dry_argv = [resolved] + list(dry_run_argv)`) that a
+    call site passing the bare `Name` (`subprocess.run(dry_argv, ...)`) needs resolved before
+    `_argv0_expr` can see a List/BinOp shape at all. Threaded through as `bindings` so a chain
+    of two such assignments resolves transitively; real sites only ever use one hop."""
+    bindings: dict[str, ast.expr] = {}
+    for node in ast.walk(loop):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        head = _argv0_expr(value, bindings)
+        if head is not None:
+            bindings[targets[0].id] = head
+    return bindings
+
+
+def _argv0_varies_with_loop_target(
+    call: ast.Call, tainted: frozenset[str], bindings: dict[str, ast.expr] | None = None
+) -> bool:
+    """True when `call`'s own first positional argument's `argv[0]` (`_argv0_expr`, resolved
+    through `bindings`) references a name in `tainted` -- the enclosing loop's target itself,
+    or a local the loop body derives from it in one assignment hop (`_tainted_names_for_loop`).
+    When true, the site is unbatchable by construction: no single argv0 exists for a batched
+    call to share, so there is nothing for the sibling `test_no_spawn_per_item_loop` gate's
+    remedy (hoist to one call outside the loop) to hoist.
+
+    Callers must restrict this to a call that IS itself the recognized spawn syscall (route
+    a's own condition, `node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES`) --
+    `args[0]` at a b/c/d/e/f-route call site is a WRAPPER's own parameter, not an OS-level
+    argv, and applying this discriminator there produced a false suppression (a verb-gated
+    chokepoint call like `_run_git([verb, '--quiet'], root)`, where `verb` is the loop target
+    but is a git SUBCOMMAND, not a program name) -- see this module's self-test
+    `test_discriminator_verb_gated_requires_a_statically_known_verb`.
+
+    `tainted` empty (no enclosing qualifying loop, or a comprehension with no assignment
+    possible) or `call` with no positional args both decline rather than guess -- see
+    `_argv0_expr`'s docstring for the same discipline applied to the extraction itself."""
+    if not tainted or not call.args:
+        return False
+    head = _argv0_expr(call.args[0], bindings)
+    if head is None:
+        return False
+    return bool(_names_in(head) & tainted)
 
 
 # --------------------------------------------------------------------------
@@ -729,6 +973,15 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         self._literal_names = literal_names
         self._in_qualifying_loop_depth = 0
         self.marked_calls: set[tuple[int, int]] = set()
+        #: (lineno, col_offset) -> taint set of the NEAREST enclosing qualifying loop, for
+        #: discriminator 6 (varying-argv0). Populated alongside `marked_calls`, never for a key
+        #: absent from it. See `_tainted_names_for_loop`.
+        self.call_loop_taint: dict[tuple[int, int], frozenset[str]] = {}
+        #: (lineno, col_offset) -> the same loop's one-hop argv0 bindings (`_loop_argv0_
+        #: bindings`), for the intermediate-variable idiom `_argv0_expr` resolves through.
+        self.call_argv0_bindings: dict[tuple[int, int], dict[str, ast.expr]] = {}
+        self._loop_taint_stack: list[frozenset[str]] = []
+        self._loop_argv0_bindings_stack: list[dict[str, ast.expr]] = []
 
     def _scope_boundary(self, node: ast.AST) -> None:
         saved = self._in_qualifying_loop_depth
@@ -752,14 +1005,25 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         # Discriminator 1: iter is evaluated outside any loop context this loop introduces.
         self.visit(node.iter)
         if _is_constant_literal_iterable(node.iter, self._literal_names) or _is_chunking_stride_iterable(node.iter):
-            # Discriminators 2 and 4: excluded wholesale -- body still visited (a nested
-            # qualifying loop inside it may exist), but WITHOUT this loop's own context pushed.
+            # Discriminators 2 and 4 (chunking-stride): excluded wholesale -- body still
+            # visited (a nested qualifying loop inside it may exist), but WITHOUT this loop's
+            # own context pushed.
             for stmt in node.body:
                 self.visit(stmt)
             return
         self._in_qualifying_loop_depth += 1
+        # Discriminator 6 (varying-argv0): seed from this loop's own target, grow by one
+        # assignment hop over its body. Pushed/popped in lockstep with loop depth so a call
+        # marked while this loop is active resolves against its taint, never an outer or
+        # unrelated loop's.
+        self._loop_taint_stack.append(
+            _tainted_names_for_loop(node, _loop_target_names(node.target))
+        )
+        self._loop_argv0_bindings_stack.append(_loop_argv0_bindings(node))
         for stmt in node.body:
             self.visit(stmt)
+        self._loop_argv0_bindings_stack.pop()
+        self._loop_taint_stack.pop()
         self._in_qualifying_loop_depth -= 1
 
     def visit_For(self, node: ast.For) -> None:
@@ -792,6 +1056,11 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
             self._visit_comp_elt(node)
             return
         self._in_qualifying_loop_depth += 1
+        # Discriminator 6: a comprehension has no statements, so no assignment-hop growth is
+        # possible -- taint is exactly the generator-0 target's own names, first generator
+        # only (matching discriminator 2's stated blind spot above).
+        self._loop_taint_stack.append(frozenset(_loop_target_names(generators[0].target)))
+        self._loop_argv0_bindings_stack.append({})
         for gen in generators[1:]:
             self.visit(gen.iter)
             for if_clause in gen.ifs:
@@ -799,6 +1068,8 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         for if_clause in generators[0].ifs:
             self.visit(if_clause)
         self._visit_comp_elt(node)
+        self._loop_argv0_bindings_stack.pop()
+        self._loop_taint_stack.pop()
         self._in_qualifying_loop_depth -= 1
 
     def _visit_comp_elt(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> None:
@@ -822,7 +1093,11 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._in_qualifying_loop_depth > 0:
-            self.marked_calls.add((node.lineno, node.col_offset))
+            key = (node.lineno, node.col_offset)
+            self.marked_calls.add(key)
+            if self._loop_taint_stack:
+                self.call_loop_taint[key] = self._loop_taint_stack[-1]
+                self.call_argv0_bindings[key] = self._loop_argv0_bindings_stack[-1]
         self.generic_visit(node)
 
 
@@ -919,17 +1194,32 @@ def find_unbatched_per_item_spawns(
             key = (node.lineno, node.col_offset)
             if key not in loop_visitor.marked_calls:
                 continue
-            if (relpath, node.lineno) in _EXEMPT_SITES:
-                continue
 
             enclosing = enclosing_by_call.get(key, "<module>")
             callee = _call_callee_name(node)
+            if (relpath, enclosing, callee) in _EXEMPT_SITES:
+                continue
+            is_direct_spawn_call = node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES
+            # Discriminator 6: argv0 derives from this call's own enclosing loop target (or an
+            # in-loop assignment hop off it) -- unbatchable by construction, same suppression
+            # point as `_EXEMPT_SITES` above so it applies to both the standing gate and the
+            # `designed_red` burn-down worklist that share this collector. Restricted to a call
+            # that IS ITSELF the recognized spawn syscall (route a's own condition): `args[0]`
+            # at a b/c/d/e/f-route call site is a wrapper's own parameter, not an OS-level argv
+            # -- see `_argv0_varies_with_loop_target`'s docstring for the false-suppression this
+            # guard exists to prevent.
+            if is_direct_spawn_call and _argv0_varies_with_loop_target(
+                node,
+                loop_visitor.call_loop_taint.get(key, frozenset()),
+                loop_visitor.call_argv0_bindings.get(key),
+            ):
+                continue
             route: str | None = None
 
             # route a-direct: the call itself is a recognized spawn. Both halves are
             # required -- the line carries a detected spawn AND this call is the spawn on it,
             # not a helper sharing the line (see `_SPAWN_API_NAMES`).
-            if node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES:
+            if is_direct_spawn_call:
                 route = "a-direct"
 
             if route is None and callee is not None:
@@ -1101,6 +1391,24 @@ class _EnclosingTracker(ast.NodeVisitor):
 #:        fix: `coordinator/bin/coordinator-safe-commit` gained a `.py` extension, and this
 #:        inventory keys on the path, so the same three sites re-entered under new keys.
 #:
+#: 2026-08-17, -1 key: `coordinator/bin/lib/coordinator_registry.py` `<module>` `run` retired as
+#:   MISCLASSIFIED, not fixed and not exempted -- the distinction is the point. Discriminator 6
+#:   surfaced it, and reading the site shows it was never amplification -- but NOT for the reason
+#:   first recorded here (Review: code-reviewer 2026-08-17, WARN; the original note claimed
+#:   "breaks on first hit, so at most one spawn", which is not what the code does). The `break`
+#:   fires only on SUCCESS: a candidate that exists but answers with empty stdout falls through
+#:   and the next existing candidate spawns its own `subprocess.run`. What actually makes it
+#:   non-amplifying is that `machine_local_bin_candidates()`
+#:   (`coordinator/bin/lib/machine_local_impl_resolve.py`) returns a FIXED-SIZE list -- two bases,
+#:   up to ~four with the Windows `.cmd`-first expansion -- so the spawn count is bounded by a
+#:   CONSTANT, never by input size. That is the same exclusion class discriminator 3 already
+#:   accepts for `while` loops, not a single-spawn claim. Recorded at length because the wrong
+#:   version was load-bearing prose that would have been cited later: a first-hit-wins resolution
+#:   ladder reads like a per-item spawn loop, and reads like a single spawn once you notice the
+#:   `break` -- both readings are wrong, and only the candidate list's size settles it. A burn-down
+#:   worklist carrying a site that cannot be burned down overstates the debt; removing it is a
+#:   correction to the ledger, never a graduation.
+#:
 #: The prior freeze (2026-08-08, 85 keys) and its published inventory --
 #: `state/audits/2026-08-08-git-amplification-gate-known-sites.md` -- describe the GIT-ONLY
 #: collector. That audit is still an accurate record of that run; it is not a description of
@@ -1125,7 +1433,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ('coordinator/bin/cross-repo-memo.py', '_verify_delivery_landed', 'run'),
         ('coordinator/bin/emit-goal-from-artifact.py', 'main', 'run'),
         ('coordinator/bin/lib/cli_shared.py', 'resolve_from_repo', 'machine_local_get'),
-        ('coordinator/bin/lib/coordinator_registry.py', '<module>', 'run'),
         ('coordinator/bin/merge-release-notes-derive.py', '_contains_all', '_git'),
         (
             'coordinator/bin/merge-release-notes-derive.py',
@@ -1502,6 +1809,25 @@ def test_no_new_amplification_sites_outside_known_inventory():
     new_site_keys = observed - _KNOWN_SITES
     new_violations = [site for site in violations if site.key in new_site_keys]
     assert not new_site_keys, "\n\n".join(_format_violation(site) for site in new_violations)
+
+
+def test_every_exemption_still_names_a_live_site(monkeypatch):
+    """Self-invalidation for `_EXEMPT_SITES` -- the leg the sibling `_EXEMPT_SITES` in
+    `test_no_hardcoded_paths.py` lacks and `_PRODUCTION_EXEMPT_SITES` in
+    `test_no_bare_chain_terminal_literal.py` has. An exemption that no longer matches anything
+    is not harmless: it is a standing, reviewed-looking claim about code that has since been
+    batched, renamed, or deleted, and it silently pre-approves whatever next takes that key.
+
+    Re-scan with the register emptied; every entry must reappear as a real violation. A failure
+    here is a DELETE, not a re-key -- the site it named is gone."""
+    declared = set(_EXEMPT_SITES)
+    monkeypatch.setitem(globals(), "_EXEMPT_SITES", set())
+    unexempted = {site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())}
+    dead = declared - unexempted
+    assert not dead, (
+        "these _EXEMPT_SITES entries no longer match any detected site -- delete them:\n"
+        + "\n".join(f"  {key}" for key in sorted(dead))
+    )
 
 
 @pytest.mark.designed_red
@@ -2050,6 +2376,92 @@ def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
+
+
+def test_discriminator_varying_argv0_direct_loop_target_not_flagged(tmp_path):
+    """Discriminator 6, AC5 first direction (direct): argv0 IS the loop target itself --
+    each iteration spawns a different program by construction, so there is no single call to
+    batch into."""
+    fixture = tmp_path / "disc_argv0_direct.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(programs):\n"
+        "    for program in programs:\n"
+        "        subprocess.run([program, '--version'])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_varying_argv0_via_assignment_hop_not_flagged(tmp_path):
+    """Discriminator 6, AC5 first direction (assignment hop): argv0 is a local the loop body
+    derives from the loop target in one assignment -- `resolved = _resolve_toolchain_tool(row)`
+    -- matching the real `cruft_sweep.sweep_toolchain_caches` shape this discriminator retires
+    from `_EXEMPT_SITES`."""
+    fixture = tmp_path / "disc_argv0_hop.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _resolve(row):\n"
+        "    return row['path']\n"
+        "\n"
+        "def check(rows):\n"
+        "    for row in rows:\n"
+        "        resolved = _resolve(row)\n"
+        "        subprocess.run([resolved, '--version'])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_varying_argv0_invariant_argv0_still_flagged(tmp_path):
+    """Discriminator 6, AC5 negative control: argv0 is LOOP-INVARIANT (always `sys.executable`
+    in spirit, here a fixed literal) while a later argv element varies with the loop target --
+    the batchable shape this whole module exists to flag. Proves the discriminator checks
+    argv0 specifically and does not just disable route a wholesale."""
+    fixture = tmp_path / "disc_argv0_invariant.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(names):\n"
+        "    for name in names:\n"
+        "        subprocess.run(['git', 'show', name])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert len(violations) == 1
+    assert violations[0].route == "a-direct"
+
+
+def test_discriminator_varying_argv0_unpacked_constant_argv0_still_flagged(tmp_path):
+    """Discriminator 6, the negative control that actually bites (Review: code-reviewer
+    2026-08-17, BLOCK + nit). The sibling control above uses a LITERAL argv0, so `_argv0_expr`
+    returns a `Constant` with no names at all and the test passes whether or not the taint set
+    is computed correctly -- it cannot catch an over-broad one.
+
+    This one puts a NAME in argv0 that the taint pass must decline to taint: `b` is bound, in a
+    tuple unpacking that also binds the loop target to `a`, to a constant. Before the
+    element-wise correlation in `_paired_assign_elements`, the whole-RHS rule tainted both names
+    and this real per-item spawn was silently suppressed. Regression test for exactly that."""
+    fixture = tmp_path / "disc_argv0_unpacked_constant.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(items):\n"
+        "    for item in items:\n"
+        "        a, b = item, 'always-git'\n"
+        "        subprocess.run([b, '--version', a])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert len(violations) == 1, (
+        "argv0 `b` is bound to a constant in the same unpacking that binds the loop target to "
+        "`a` -- suppressing this site means the taint set is over-broad again"
+    )
+    assert violations[0].route == "a-direct"
 
 
 def test_deep_tail_not_flagged(tmp_path):

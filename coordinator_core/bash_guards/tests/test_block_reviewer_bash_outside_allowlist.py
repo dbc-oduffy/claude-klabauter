@@ -1332,6 +1332,22 @@ def test_windows_spaced_username_coordinator_doc_new_cmd_allows(monkeypatch):
     _allow(cmd, monkeypatch)
 
 
+def test_windows_spaced_username_coordinator_doc_new_py_allows(monkeypatch):
+    # Review: coordinator:code-reviewer, Finding 2 follow-up (2026-08-17) --
+    # the scaffolder's real on-disk name carries a literal ``.py`` suffix
+    # (Divergence 19), which the embedded-space rewrite passes did not
+    # recognize (only the bare name plus ``.exe``/``.cmd``). This is the
+    # false-deny shape that regressed: a ``Program Files``-style absolute
+    # path with an embedded space, ending in ``coordinator-doc-new.py``
+    # (no launcher suffix) -- must fold into one shlex token and allow,
+    # same as the ``.cmd`` twin above.
+    cmd = (
+        r"C:\Users\John Doe\.coordinator-claude-settings\bin\coordinator-doc-new.py"
+        " --type review-findings"
+    )
+    _allow(cmd, monkeypatch)
+
+
 def test_windows_quoted_spaced_username_git_allows(monkeypatch):
     cmd = r'"C:\Users\John Doe\Git\bin\git.exe" show HEAD'
     _allow(cmd, monkeypatch)
@@ -1826,3 +1842,100 @@ def test_c1b_bare_python_family_alias_still_denies_with_unchanged_remedy(bare_sp
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "python3 -m pytest -q" in reason
     assert "misspelled" in reason
+
+
+# ---------------------------------------------------------------------------
+# Divergence 19 (2026-08-17): the real deployed scaffolder script is named
+# ``coordinator-doc-new.py`` (see the module's own ``token_matches_binary``
+# migration comment, which already cites the on-disk ``.cmd`` twin as
+# ``coordinator-doc-new.py.cmd``) -- ``_first_token_is_allowlisted_binary``
+# previously matched only the bare ``coordinator-doc-new`` spelling, so every
+# absolute-path / ``python3``-prefixed / quoted dispatch of the REAL script
+# false-denied. Fix: a second, independent boundary-anchored match against
+# ``scaffolder_binary + ".py"``. These are the deny-side adversarial tests
+# proving the fix does not also admit a NON-sanctioned command dressed up in
+# one of the newly-recognized forms -- a naive over-permissive fix (e.g.
+# `first_token.endswith(binary + ".py")` with no boundary check, or a bare
+# substring test) would wrongly ALLOW every case below.
+# ---------------------------------------------------------------------------
+
+
+def test_py_suffix_hyphen_boundary_bypass_denies(monkeypatch):
+    # "evil-coordinator-doc-new.py" must not boundary-match via a bare
+    # endswith()/substring check on the new ".py" leg -- no path separator
+    # precedes the shared suffix, so the normalized basename of the whole
+    # token is itself, unchanged, and it is not the sanctioned identity.
+    result = _deny("evil-coordinator-doc-new.py --type review-findings", monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "coordinator-doc-new" in reason
+
+
+def test_py_suffix_hyphen_boundary_bypass_python3_prefixed_denies(monkeypatch):
+    result = _deny(
+        "python3 evil-coordinator-doc-new.py --type review-findings", monkeypatch
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "coordinator-doc-new" in reason
+
+
+def test_py_suffix_hyphen_boundary_bypass_quoted_denies(monkeypatch):
+    _deny('"evil-coordinator-doc-new.py" --type review-findings', monkeypatch)
+
+
+def test_py_suffix_longer_extension_not_exact_suffix_denies(monkeypatch):
+    # "coordinator-doc-new.python" contains "coordinator-doc-new.py" as a
+    # PREFIX of its own basename, not as the basename itself -- the match is
+    # whole-basename equality (via token_matches_binary), never a prefix
+    # test, so this must still deny.
+    _deny("coordinator-doc-new.python --type review-findings", monkeypatch)
+
+
+def test_py_suffix_inside_semicolon_chain_denies_metacharacter(monkeypatch):
+    # The real script name appearing after a `;` must not smuggle a second
+    # command through -- the metacharacter gate still fires first,
+    # regardless of what the newly-recognized ".py" leg would allow in
+    # isolation.
+    result = _deny(
+        f"ls; {_CLAUDE_KLABAUTER_ABS_PATH} --type review-findings", monkeypatch
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "shell-chaining metacharacter" in reason
+
+
+def test_py_suffix_inside_pipeline_non_allowlisted_first_segment_denies(monkeypatch):
+    # A pipeline whose FIRST segment is not itself Tier-A/B-allowlisted must
+    # still deny even though the second segment is the real (.py-suffixed)
+    # scaffolder invocation -- the pipeline carve-out requires EVERY segment
+    # to qualify, and Tier B is not pipeline-eligible at all (see
+    # `_segment_is_tier_a_allowlisted`).
+    result = _deny(
+        f"rm -rf / | {_CLAUDE_KLABAUTER_ABS_PATH} --type review-findings", monkeypatch
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "pipeline segment" in reason
+
+
+def test_py_suffix_command_substitution_denies(monkeypatch):
+    # A command substitution naming the real script must still deny --
+    # the ".py" leg only widens WHAT the first token may equal, never
+    # exempts a live substitution.
+    result = _deny(
+        f"echo $({_CLAUDE_KLABAUTER_ABS_PATH} --type review-findings)", monkeypatch
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "shell-chaining metacharacter" in reason
+
+
+def test_py_suffix_missing_type_arg_still_denies(monkeypatch):
+    # The ".py" leg only affects binary-identity matching -- Tier B's
+    # separate `--type review-findings` requirement is untouched.
+    result = _deny(_CLAUDE_KLABAUTER_ABS_PATH, monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "--type review-findings" in reason
+
+
+def test_py_suffix_lookalike_double_extension_denies(monkeypatch):
+    # "coordinator-doc-new.py.evil" is neither the bare identity nor the
+    # exact ".py"-suffixed identity -- its basename does not equal either
+    # allowlisted spelling, so it must deny.
+    _deny("coordinator-doc-new.py.evil --type review-findings", monkeypatch)

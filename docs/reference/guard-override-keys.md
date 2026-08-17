@@ -70,9 +70,10 @@ prompt.
 3. **`<ENV_VAR>=1`, set before the harness/hook process launches.**
    Guard-specific — each guard reads its own var. Not named inline in guard
    output; look the guard up by name in the § "Override keys, by guard"
-   table below to find its key. **Pre-launch only.** Nothing reachable from
-   inside a live session sets a variable this guard process will see (see
-   Security context, leg 1).
+   table below to find its key. **Pre-launch only — unsettable from inside a
+   live session.** The var is read once at hook-process spawn; nothing
+   reachable from inside a running session sets a variable this guard
+   process will see (see Security context, leg 1).
 4. **The in-session guard-unlock sentinel**, a one-shot file the operator
    drops for the exact `(session_id, guard_name)` pair that just denied —
    see § In-session unlock below. Unlike routes 1–3, this one is reachable
@@ -407,6 +408,7 @@ rationale.
 | `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL` (Write/Edit leg) | `block-dev-repo-sentinel-write` | `write_guards/block_dev_repo_sentinel_write.py` |
 | `COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY` (Bash leg) | `block-subagent-plan-body-write` | `bash_guards/block_subagent_plan_body_bash_write.py` |
 | `COORDINATOR_OVERRIDE_COMPLETION_MONOLITH` | `block-completion-monolith-write` | `write_guards/block_completion_monolith_write.py` |
+| `COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE` | `block-confined-agent-write` | `write_guards/block_confined_agent_write.py` |
 | `COORDINATOR_OVERRIDE_CONSUMED_HANDOFF_EDIT` | `block-consumed-handoff-edit` | `write_guards/block_consumed_handoff_edit.py` |
 | `COORDINATOR_OVERRIDE_WIKI_MIRROR` | `block-dev-side-mirror-wiki` | `write_guards/block_dev_side_mirror_wiki.py` |
 | `COORDINATOR_OVERRIDE_REVIEW_INTEGRATION_PENDING` | `block-em-hand-edit-pending-review-integration` | `write_guards/block_em_hand_edit_pending_review_integration.py` |

@@ -114,6 +114,7 @@ from coordinator_core.hooks import (
     nudge_harness_directive_dispatch as _hook_nudge_harness_directive_dispatch,
 )
 from coordinator_core.hooks import nudge_unrouted_sizing as _hook_nudge_unrouted_sizing
+from coordinator_core.ops import peer_notice_send as _ops_peer_notice_send
 from coordinator_core.write_guards import engine as write_guards_engine
 
 # ---------------------------------------------------------------------------
@@ -836,6 +837,39 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         "block-subagent-guard-grant",
         "block-subagent-guard-grant-control",
         "python3 -m coordinator_core.session.em_guard_grant read",
+        False,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    # AC2 coverage-gap closer, 2026-08-17. The comment above called
+    # `block-subagent-grant-acquisition` a "still a named
+    # REGISTER_COVERAGE_EXEMPTIONS gap, not touched here"; it is reachable from
+    # `_build_guard_chain`, so AC2 counted it as an uncovered guard and this
+    # module's own `test_ac2_every_reachable_guard_has_a_corpus_row` failed on
+    # it. That failure was INVISIBLE to every directory-scoped run — see this
+    # module's header note on `python_files` — which is why the gap outlived
+    # the sibling row that closed the identical shape for
+    # `block-subagent-guard-grant` above.
+    #
+    # A real fire+control pair rather than an exemption: it is genuinely
+    # fireable, verified live here and already proven by the identical row in
+    # `test_confinement_deny_band_shape._EXTRA_FIRING_ROWS`. Identity-gated on
+    # the raw presence of `agent_id`, per its own module docstring's
+    # "IDENTITY-GATE POSTURE" section.
+    CorpusRow(
+        "block-subagent-grant-acquisition",
+        "block-subagent-grant-acquisition-fire",
+        'python3 -m coordinator_core.session.claude_md_grant grant pm "test reason"',
+        True,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    CorpusRow(
+        "block-subagent-grant-acquisition",
+        "block-subagent-grant-acquisition-control",
+        "python3 -m coordinator_core.session.claude_md_grant read",
         False,
         _DENY,
         False,
@@ -2186,9 +2220,20 @@ def _wg_terminal_artifact_edit_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -
     target = scratch_dir / "docs" / "plans" / "foo.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("---\nstatus: implemented\n---\nbody\n", encoding="utf-8")
+    # `new_string` must carry a forward-binding instruction tell (`_INSTRUCTION_RE`
+    # — must/should/do not/going forward). The guard checks the Edit's DELTA, not
+    # the file, and deliberately stays silent for ordinary prose: recording
+    # correspondence or history against a delivered plan is legitimate, and only
+    # an instruction meant to constrain FUTURE work is what this guard targets.
+    # A payload of plain text ("body2") exercised the silent path while the row
+    # asserted a speaker, so the row failed on the fixture rather than on the guard.
     return {
         "tool_name": "Edit",
-        "tool_input": {"file_path": "docs/plans/foo.md", "old_string": "body", "new_string": "body2"},
+        "tool_input": {
+            "file_path": "docs/plans/foo.md",
+            "old_string": "body",
+            "new_string": "body\n\nAnti-scope: future sessions must not widen this surface.\n",
+        },
         "cwd": str(scratch_dir),
     }
 
@@ -2242,6 +2287,37 @@ def _wg_outbox_draft_frontmatter_shape_fire(
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": "state/memo-outbox/foo.md", "content": content},
+        "cwd": str(scratch_dir),
+    }
+
+
+def _wg_peer_notice_unread_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Sends a real peer notice (via `peer_notice_send._peer_notice_send`,
+    the same op the guard's own dedicated test file uses) addressed to
+    `session_id`, then returns the Edit payload for that same session --
+    `nudge_peer_notice_unread.check` surfaces it as `additionalContext`.
+    `main_worktree_root`/`harness_registry.snapshot` are monkeypatched the
+    same way `test_nudge_peer_notice_unread.py::_send` does, scoped to
+    this row's own scratch dir."""
+    (scratch_dir / ".git").mkdir()
+    session_id = "peer-notice-corpus-row"
+    mp.setattr(_ops_peer_notice_send, "main_worktree_root", lambda p: scratch_dir)
+    mp.setattr(_ops_peer_notice_send.harness_registry, "snapshot", lambda: {})
+    _ops_peer_notice_send._peer_notice_send(
+        {
+            "target_session_id": session_id,
+            "artifact_path": "a.py",
+            "message": "I am editing this function",
+            "from_session_id": "sender-1",
+        },
+        repo_root=scratch_dir,
+    )
+    return {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "whatever.py"},
+        "session_id": session_id,
         "cwd": str(scratch_dir),
     }
 
@@ -2381,6 +2457,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         _wg_outbox_draft_frontmatter_shape_fire,
     ),
     WriteGuardRow("nudge_outbox_draft_frontmatter_shape", "control", False, _wg_benign),
+    WriteGuardRow("nudge_peer_notice_unread", "fire", True, _wg_peer_notice_unread_fire),
+    WriteGuardRow("nudge_peer_notice_unread", "control", False, _wg_benign),
     WriteGuardRow(
         "nudge_plan_sidecar_family_split", "fire", True, _wg_plan_sidecar_family_split_fire
     ),
@@ -2626,6 +2704,8 @@ from coordinator_core.hooks import nudge_named_agent_report_delivery as _hook_nu
 from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_unauthorized_handoff
 from coordinator_core.hooks import postuse_advisory_dispatch as _hook_postuse_advisory_dispatch
 from coordinator_core.hooks import example_retrieval_repo_detect as _hook_example_retrieval_repo_detect
+from coordinator_core.hooks import receiver_state_sensor as _hook_receiver_state_sensor
+from coordinator_core.hooks import subagent_sidecar_fill_check as _hook_subagent_sidecar_fill_check
 from coordinator_core.hooks import suggest_sonnet_research as _hook_suggest_sonnet_research
 from coordinator_core.hooks import ue_knowledge_distrust as _hook_ue_knowledge_distrust
 from coordinator_core.hooks import agent_completion_log as _hook_agent_completion_log
@@ -3009,6 +3089,53 @@ def _fire_track_touched_files_noop() -> Optional[Dict[str, Any]]:
     )
 
 
+# --- (23) receiver_state_sensor -- write-only Stop/SubagentStop bookkeeping
+# op; module docstring: "Always returns no_advisory() unconditionally -- the
+# product is the on-disk write side-effect." No branch anywhere in the
+# handler ever composes agent-facing text, so this is control-only (same
+# shape as track_dispatched_agents/track_touched_files above), never a real
+# fire row -- there is no rendered text for a fire cell to exist for.
+# Verified live with params={} (missing session_id -> the early no_advisory()
+# branch, before any I/O).
+def _fire_receiver_state_sensor_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_receiver_state_sensor._handler({}, repo_root=None))
+    )
+
+
+# --- (24) subagent_sidecar_fill_check -- real firing row: a sidecar left
+# `status: open` with no agent-authored body (only a heading + HTML comment,
+# both stripped by detect_unfilled_sidecar's own content check) under
+# state/subagent-share/<session_id>/ flags, and the handler returns
+# post_advisory() naming the runnable check.
+def _fire_subagent_sidecar_fill_check() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-sfc-") as scratch:
+        scratch_dir = Path(scratch)
+        (scratch_dir / ".git").mkdir()
+        session_id = "sidecar-fill-check-corpus-row"
+        share_dir = scratch_dir / "state" / "subagent-share" / session_id
+        share_dir.mkdir(parents=True)
+        (share_dir / "coordinatorexecutor-deadbeef.md").write_text(
+            "---\nstatus: open\n---\n\n## Run Report\n<!-- fill this in -->\n",
+            encoding="utf-8",
+        )
+        payload = {"session_id": session_id}
+        return _to_envelope_or_none(
+            _hook_subagent_sidecar_fill_check._handler(payload, repo_root=str(scratch_dir))
+        )
+
+
+def _fire_subagent_sidecar_fill_check_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-sfc-ctrl-") as scratch:
+        scratch_dir = Path(scratch)
+        (scratch_dir / ".git").mkdir()
+        session_id = "sidecar-fill-check-corpus-row-control"
+        payload = {"session_id": session_id}
+        return _to_envelope_or_none(
+            _hook_subagent_sidecar_fill_check._handler(payload, repo_root=str(scratch_dir))
+        )
+
+
 # --- (22) ue_knowledge_distrust -- real firing row: `run(cwd, plugin_root)`
 # returns a non-empty UE-mistrust banner when a `.uproject` file is found under
 # cwd. Fired against a scratch dir with a synthetic `.uproject`; `plugin_root`
@@ -3174,6 +3301,19 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow("track_dispatched_agents", "noop-control", False, _fire_track_dispatched_agents_noop),
     HookRow("track_touched_files", "noop-control", False, _fire_track_touched_files_noop),
+    HookRow("receiver_state_sensor", "noop-control", False, _fire_receiver_state_sensor_noop),
+    HookRow(
+        "subagent_sidecar_fill_check",
+        "fire-open-unfilled-sidecar",
+        True,
+        _fire_subagent_sidecar_fill_check,
+    ),
+    HookRow(
+        "subagent_sidecar_fill_check",
+        "control-no-flagged-sidecar",
+        False,
+        _fire_subagent_sidecar_fill_check_control,
+    ),
     HookRow("ue_knowledge_distrust", "fire-uproject-detected", True, _fire_ue_knowledge_distrust),
     HookRow("ue_knowledge_distrust", "control-no-uproject", False, _fire_ue_knowledge_distrust_control),
     HookRow("coordinator_reminder", "fire-quick-orient", True, _fire_coordinator_reminder),

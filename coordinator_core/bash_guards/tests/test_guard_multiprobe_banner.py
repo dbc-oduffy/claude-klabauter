@@ -66,6 +66,7 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_multiprobe_banner as guard
 from coordinator_core.bash_guards._dialect import Dialect
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
 
 #: Same bridge-to-C8 skip pattern as
 #: `test_command_tokenizer_length_ceiling.py`'s own `requires_powershell_
@@ -172,7 +173,13 @@ class TestMultiProbeBannerVerdict:
         # identical fix (commit 39eedda26) rather than a second hardcoded
         # literal.
         assert dc._bt_python3_invocation() + " -c" in ctx
-        assert "COORDINATOR_OVERRIDE_MULTIPROBE_BANNER" in ctx
+        # RETARGETED (2026-08-17, override-key message-register ruling): a
+        # guard message names the guard that fired and nothing else about
+        # its override -- no key (docs/reference/guard-override-keys.md,
+        # opening sentence). `operator_override_note` no longer interpolates
+        # the bare `COORDINATOR_OVERRIDE_MULTIPROBE_BANNER` key; it renders
+        # a doc pointer only. Asserting the literal key was stale.
+        assert OVERRIDE_KEYS_DOC in ctx
 
     def test_banner_command_advises_on_posix(self):
         out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)

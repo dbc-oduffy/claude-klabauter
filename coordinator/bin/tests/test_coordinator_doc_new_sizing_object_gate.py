@@ -381,6 +381,17 @@ class ScaffoldSizingMintsDeliverableIdTest(unittest.TestCase):
 
             schema = json.loads(schema_path.read_text(encoding="utf-8"))
             jsonschema.validate(doc, schema)
+            # C3 companion to C1's commented `name:` affordance: the key
+            # must stay inert (commented) in scaffold output until an
+            # operator uncomments it -- a live `name` key here would mean
+            # the affordance leaked into real output, not merely offered.
+            self.assertNotIn(
+                "name",
+                doc,
+                "scaffolded sizing-object emitted a live `name` key -- "
+                "C1's `name:` affordance must stay a commented skeleton "
+                "line, not a real emitted field",
+            )
 
     def test_deliverable_id_flag_is_carried_verbatim_never_reminted(self):
         """AC3: `--deliverable-id <id>` on the sizing type is a carry --

@@ -299,6 +299,76 @@ def test_a_rebrief_by_the_holder_is_resuming_not_contention(
     assert grant["reason"] == "you already hold this"
 
 
+def test_a_live_foreign_holder_denies_a_memo_brief_with_a_standdown(
+    tmp_path, as_session, holder_reads_live
+):
+    """Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-
+    memo-claim-fires-after-the-em-can-already-act.md): a DENIED grant against
+    a live foreign holder must halt the SECOND session's brief before the memo
+    body is worth reading — a stand-down (`directives: []`), never the full
+    actionable object `test_the_incident_shape_second_session_is_denied_at_
+    brief` above already proves the grant resolves `denied` for."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_memo(repo, "m1.md")
+
+    as_session("sid-first")
+    pa.brief("cross-repo/inbox/m1.md", repo_root=repo, claim_at_brief=True)
+
+    holder_reads_live(True)
+    as_session("sid-second")
+    second = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, claim_at_brief=True)
+
+    obj = second.decision_object
+    assert obj["directives"] == []
+    assert second.exit_code == pa.EXIT_BUSINESS_FAIL
+    assert obj["gates"]["claim"]["holder"] == "sid-first"
+    assert obj["gates"]["claim_grant"]["verdict"] == "denied"
+    assert obj["gates"]["claim_grant"]["held_by_self"] is False
+
+
+def test_a_memo_rebrief_by_the_holder_is_resuming_not_contention(
+    tmp_path, as_session, holder_reads_live
+):
+    """Mirrors `test_a_rebrief_by_the_holder_is_resuming_not_contention`
+    (handoff branch) for a memo: a re-brief in the SAME session must come
+    back `held_by_self: True`, `already_satisfied: True`, actionable — never
+    the stand-down. `compute_claim_grant`'s row 2 already handles this."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_memo(repo, "m1.md")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    pa.brief("cross-repo/inbox/m1.md", repo_root=repo, claim_at_brief=True)
+    again = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, claim_at_brief=True)
+
+    obj = again.decision_object
+    grant = obj["gates"]["claim_grant"]
+    assert grant["verdict"] == "granted"
+    assert grant["held_by_self"] is True
+    assert obj["directives"] != []
+    assert obj["directives"][0]["already_satisfied"] is True
+
+
+def test_an_uncontended_memo_brief_carries_claim_gates(tmp_path, as_session):
+    """Key-presence contract the pickup skill consumes (documented alongside
+    `held_by_self` / `already_satisfied`, see the handoff branch's equivalent
+    gates): `gates.claim` and `gates.claim_grant` must be present on an
+    ordinary uncontended memo brief, not just on the handoff branch."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_memo(repo, "m1.md")
+    as_session("sid-a")
+
+    result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, claim_at_brief=True)
+
+    gates = result.decision_object["gates"]
+    assert "claim" in gates
+    assert "claim_grant" in gates
+    assert gates["claim_grant"]["held_by_self"] is True
+
+
 def test_repeated_rebriefs_are_byte_identical(tmp_path, as_session, holder_reads_live):
     """Steady-state idempotency: once the claim is held, further briefs of the
     same artifact with the same decisions resolve identically."""

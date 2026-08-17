@@ -282,6 +282,11 @@ class TestResolverExceptionMapping:
         Mirrors test_memo_resolver.py's TestReadRegistryReposFailLoud corrupt-file
         fixture, but exercised through the handler's own exception->envelope path.
         """
+        # `repo_root` reaches `main_worktree_root` as the socket-authoritative
+        # common dir, which refuses to guess a worktree for a path that is
+        # neither named `.git` nor has one beneath it — a bare tmp_path dies
+        # there before the registry read this test is about.
+        (tmp_path / ".git").mkdir()
         claude_home = tmp_path / "claude-home"
         machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
         machine_local.mkdir(parents=True)
@@ -303,6 +308,9 @@ class TestResolverExceptionMapping:
         Mirrors test_memo_resolver.py's TestAmbiguousCentralReceiver fixture; `to`
         is itself one of the ambiguous central ids.
         """
+        # See the sibling test: `main_worktree_root` refuses a bare tmp_path as
+        # the common dir, ahead of the ambiguity this test asserts on.
+        (tmp_path / ".git").mkdir()
         claude_home = _make_claude_home(
             tmp_path,
             {

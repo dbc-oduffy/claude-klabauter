@@ -109,12 +109,14 @@ _ALLOWLISTED_RELPATHS = {
         "whoami importability probe (purpose a)",
     "coordinator/bin/repo-setup-args-and-register.py":
         "whoami probe (purpose a), fires only during repo-setup",
-    # Purpose (c), consented-to by PM ruling 2026-08-14: the opt-in
-    # `--allow-venv-fallback` branch of `provision_deps` (C1). Reaching the
-    # venv here requires an explicit install-time flag, not an automatic
-    # degradation -- the exact shape this plan makes the venv fallback take.
+    # Purpose (c), consented-to by PM ruling 2026-08-14 (DR-307) and narrowed
+    # 2026-08-17 (DR-317, machine-first-install-surface plan, C2): the opt-in
+    # `--allow-venv-fallback` branch of `provision_deps`, now break-glass-only
+    # and PEP-668-excluded -- reaching the venv here requires an explicit
+    # install-time flag on every run, never an automatic degradation and
+    # never reached for a PEP-668 refusal.
     "scripts/setup.py":
-        "provision_deps' opt-in --allow-venv-fallback branch (purpose c, C1)",
+        "provision_deps' opt-in --allow-venv-fallback branch (purpose c, C2)",
     # Reclaims the venv on uninstall -- deletion, not dependency resolution.
     "coordinator_core/install/uninstall_legs.py":
         "reclaims the venv on uninstall",

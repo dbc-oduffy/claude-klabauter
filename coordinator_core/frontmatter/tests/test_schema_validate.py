@@ -2017,6 +2017,30 @@ class TestSizingObjectDeliverableSpineFields:
         version = tuple(int(p) for p in schema['x-schema-version'].split('.'))
         assert version >= (1, 8, 0), schema['x-schema-version']
 
+    def test_name_valid_short_label_ok(self):
+        fm = self._minimal_sizing_object(name='Deliverable spine name check')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'name' for e in errors), errors
+
+    def test_name_absent_ok(self):
+        """name is NOT in `required` -- absence means no label was written,
+        never that the sizing is unnamed-by-policy."""
+        fm = self._minimal_sizing_object()
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'name' for e in errors), errors
+
+    def test_name_over_60_chars_rejected(self):
+        fm = self._minimal_sizing_object(name='x' * 61)
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert any(e['field'] == 'name' for e in errors), errors
+
+    def test_name_null_rejected(self):
+        """Unlike the required-and-nullable fork/xl_exit, name has no null
+        arm -- null is a type violation, not a valid absence encoding."""
+        fm = self._minimal_sizing_object(name=None)
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert any(e['field'] == 'name' for e in errors), errors
+
 
 class TestPlanCorpusValidatesAgainstBumpedSchema:
     """No-regression differential over the ENTIRE docs/plans/*.md corpus
@@ -3323,8 +3347,18 @@ _QUEUE_SCHEMA_PINS = {
     #   parity; the id-form is DoE-ratified (fa72d1642) and belongs applied
     #   upstream in their tree. Also closes the pin/bytes split that 8e86e361c
     #   opened by committing the pin moves without these bytes.
-    'bug-backlog': "0f97800e53a0d0b8b5352b384c13974edd24de76",
-    'cross-repo-commitment': "472774939940d4372886359778bc0a174c102c26",
+    # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
+    #   the sweep. Discharges the hold recorded in cross-repo memo
+    #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
+    #   us-to-stop.md
+    'bug-backlog': "2d81501bfaed77ed433a2a160e69f4e51684d992",
+    # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
+    #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
+    'cross-repo-commitment': "cd70f651f95503ac2d8979b6900ba905c910a75a",
     # Pin moved 2026-08-14 to 13f3307000d4685243d60220145fc494383a0839 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
     #   C7 (4b8e485c6) rewrote cross-repo citations to repo-qualified ids
@@ -3341,7 +3375,14 @@ _QUEUE_SCHEMA_PINS = {
     #   parity; the id-form is DoE-ratified (fa72d1642) and belongs applied
     #   upstream in their tree. Also closes the pin/bytes split that 8e86e361c
     #   opened by committing the pin moves without these bytes.
-    'debt-backlog': "0f97800e53a0d0b8b5352b384c13974edd24de76",
+    # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
+    #   the sweep. Discharges the hold recorded in cross-repo memo
+    #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
+    #   us-to-stop.md
+    'debt-backlog': "2d81501bfaed77ed433a2a160e69f4e51684d992",
     # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
@@ -3395,8 +3436,25 @@ _QUEUE_SCHEMA_PINS = {
     #   parity; the id-form is DoE-ratified (fa72d1642) and belongs applied
     #   upstream in their tree. Also closes the pin/bytes split that 8e86e361c
     #   opened by committing the pin moves without these bytes.
-    'improvement-queue': "0f97800e53a0d0b8b5352b384c13974edd24de76",
-    'lesson-entry': _C1_LANDING_SHA,
+    # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
+    #   the sweep. Discharges the hold recorded in cross-repo memo
+    #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
+    #   us-to-stop.md
+    'improvement-queue': "2d81501bfaed77ed433a2a160e69f4e51684d992",
+    # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
+    #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
+    # Pin moved 2026-08-17 to 2d81501bfaed77ed433a2a160e69f4e51684d992 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
+    #   DoE landed the stable-id spec-backlink sweep (DoE-claude@3f9df69d9 +
+    #   34e6ddef3); re-vendoring the nine held-back schemas plus the rest of
+    #   the sweep. Discharges the hold recorded in cross-repo memo
+    #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
+    #   us-to-stop.md
+    'lesson-entry': "2d81501bfaed77ed433a2a160e69f4e51684d992",
     'lessons-outbox': _C1_LANDING_SHA,
     # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
@@ -3430,7 +3488,10 @@ _QUEUE_SCHEMA_PINS = {
     #   reviewed_range is byte-unchanged in this bump and independently re-
     #   verified so: the six honest attestations, the ..HEAD hybrid and the --
     #   placeholder all still reject against it.
-    'review-findings': "f08e2984e0434eb3a0b79e895541b82a89dd138c",
+    # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
+    'review-findings': "cd70f651f95503ac2d8979b6900ba905c910a75a",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -3445,7 +3506,12 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
     #   DoE 1.3.0 adds optional execution_basis; parity gate red per memo
     #   2026-08-13-doe-claude-em-bump-class-deliberately-absent.md
-    'review-trail': "6466d871410baa349c1836286d5a8a1f1b5b5bcb",
+    # Pin moved 2026-08-17 to eebef71dc77e7ea6e4e462892625b276a015639c (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   PM-authorised major re-vendor: sha_range closed to hex-range grammar
+    #   (1.3.0 -> 2.0.0), per DoE memo 2026-08-15-doe-claude-em-review-trail-
+    #   schema-2-0-0-revendor.md
+    'review-trail': "eebef71dc77e7ea6e4e462892625b276a015639c",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the

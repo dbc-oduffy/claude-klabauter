@@ -32,6 +32,10 @@ Responsibilities:
      accepted the risk. Fail loud ONLY when machine-local IS present but the set
      fails, or when the override pair was not supplied.
   4. Verification: `import coordinator_core` from CLAUDE_KLABAUTER_ROOT.
+  4b. Verification: PowerShell dialect guard ARMED state (`check_dialect_guard_armed`) —
+      makes a disarmed `_dialect.py` (ImportError -> SILENT) loud at install time,
+      naming the interpreter(s) probed. Non-fatal; does not arm the guard (see C2 of
+      docs/plans/2026-08-17-machine-first-install-surface.md).
   5. Post-install health probe (bin/claude-klabauter-doctor-probe.py --step-zero) as best-effort.
   6. Install claude-klabauter's OWN `.git/hooks/pre-commit` gate chain (staged-rollback
      detector; see coordinator_core.ops.install_claude_klabauter_precommit_hook) as best-effort —
@@ -52,7 +56,7 @@ Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLAB
 Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-root <path>] [--coordinator-root <path>]
-                            [--break-system-packages] [--allow-venv-fallback] [--with-test-deps]
+                            [--allow-venv-fallback] [--with-test-deps]
                             [--register-only] [--check] [--help]
 
 Negative-spec:
@@ -60,12 +64,23 @@ Negative-spec:
   array declares its REQUIRED deps. This script DERIVES that list from
   pyproject.toml at run time (tomllib) rather than hardcoding it, so the
   provisioned set cannot drift from the declared set as deps are added/removed.
-  It installs them at MACHINE level by default (so any interpreter can invoke
-  coordinator_core without resolving a venv); the settings-home coordinator
-  venv (coordinator_core.install.ensure_venv) is reachable ONLY via the
-  explicit --allow-venv-fallback opt-in, never automatically — a machine-
-  level install failure without that flag exits non-zero naming both real
-  remediations. See § Dependency provisioning below.
+  MACHINE-FIRST (PM ruling 2026-08-17, superseding DR-307's healthy-venv
+  prior-consent branch and the retired --break-system-packages flag): the
+  installer enumerates the PREDICTABLE set of interpreters declared
+  consumers actually resolve to (at minimum its own resolved interpreter and
+  bare `python3` on PATH — see `enumerate_provisioning_candidates`) and
+  plain `pip install`s the declared deps AND the claude-klabauter package itself
+  (`-e .`, so `[project.scripts]` console entrypoints materialise) into
+  EACH, with NO override flag ever passed. A candidate found PEP-668
+  externally-managed is a DESIGNED REFUSAL (exit 96,
+  EXIT_INTERPRETER_UNSUPPORTED), naming that interpreter and the consumer
+  that resolves to it — never an automatic fallback and never
+  --break-system-packages, which no longer exists. The settings-home
+  coordinator venv (coordinator_core.install.ensure_venv) remains reachable
+  ONLY via the explicit --allow-venv-fallback opt-in, and only for a
+  genuine machine-level install failure that is NOT a PEP-668 refusal — a
+  guarded interpreter is swapped, never fallen back from. See §
+  Dependency provisioning below.
   Does NOT install the [project.optional-dependencies].test extra by default —
   the installer's job is the ENGINE, not the dev loop, and pytest plugins
   auto-load into every OTHER repo's pytest run on the same interpreter, so
@@ -92,7 +107,9 @@ Negative-spec:
   for each rung's rationale and precedence.
   Does NOT shell out to bash/PowerShell anywhere in this file — the whole
   installer is naked Python (subprocess is used only to invoke OTHER Python
-  interpreters/venvs and the `machine-local` / `pip` executables).
+  interpreters/venvs, the `machine-local` / `pip` executables, and — only
+  after explicit interactive consent — `brew` to remove a guarded Homebrew
+  Python, see `_offer_homebrew_removal`).
 """
 
 from __future__ import annotations
@@ -101,9 +118,11 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 
@@ -144,6 +163,35 @@ EXIT_HEALTH_PROBE_HARD_FAILURE = 94
 # dependency checks are.
 EXIT_REPO_IDENTITY_UNRESOLVED = 95
 
+# Exit-code 96: a DESIGNED REFUSAL, not a failure. The installer must provision
+# the predictable set of interpreters declared consumers actually resolve to --
+# including the bare `python3` DoE-claude's `hooks.json` registers hooks under --
+# and one of them is externally-managed (PEP 668), so provisioning it would
+# require an override this installer will never pass. Refusing IS the correct
+# outcome; the remediation names a supported interpreter.
+#
+# WHY A RESERVED CODE RATHER THAN STDERR PROSE: DoE-claude's settings-home
+# post-condition (the declare half of the 4b declare/prove split, memo
+# 2026-08-17-doe-claude-em-coordinator-install-entry-resolve-from-manifest.md
+# § Question 2) is phrased outcome-conditional -- provisioned, OR a designed
+# refusal -- and both conform. A test can only tell those apart from a genuine
+# break if the discriminator is machine-readable: prose drifts, so a test pinned
+# to a phrase fails on a wording change and passes on a real break. Declared in
+# `docs/install/agent-install-manifest.json`'s entry_point_contract as
+# `refusal_exit_code` so the contract carries it, not just this constant.
+#
+# NEGATIVE SPEC: never reuse this for a genuine provisioning failure. A caller
+# that cannot distinguish "refused by design, box needs a supported interpreter"
+# from "the install broke" is exactly what this code exists to prevent, and
+# widening it to mean both restores the ambiguity at the price of having spent a
+# code on it.
+#
+# EMITTER: the machine-first-install-surface plan's C2 owns the raise site (that
+# plan carries the PM ruling this refusal implements). Reserved and contracted
+# here so C2 uses this value rather than minting a second one, and so DoE can
+# write their post-condition against a literal today.
+EXIT_INTERPRETER_UNSUPPORTED = 96
+
 # Windows-only: suppresses the console-popup a subprocess spawn otherwise
 # triggers when this installer is invoked from a headless/GUI parent
 # (agent dispatch, packaging installer). getattr(...) resolves to 0 (no-op)
@@ -165,12 +213,13 @@ Options:
   --accept-missing-deps-risk         Accept hallucination risk from missing deps (pair with --skip-dep-check)
   --claude-klabauter-root <path>               Explicit CLAUDE_KLABAUTER_ROOT override (default: CLAUDE_KLABAUTER_ROOT env -> repo-root)
   --coordinator-root <path>          Explicit coordinator-claude root override (default: COORDINATOR_CLAUDE_ROOT env -> sibling-dir)
-  --break-system-packages            Explicit opt-in: pass pip --break-system-packages on a PEP-668
-                                      externally-managed machine, instead of falling back to a venv
-  --allow-venv-fallback              Explicit opt-in: on ANY machine-level dependency install
-                                      failure, fall back to the settings-home coordinator venv
-                                      instead of exiting non-zero. Without this flag the fallback
-                                      is never reached automatically.
+  --allow-venv-fallback               Explicit opt-in, break-glass only: on a machine-level
+                                      dependency install failure that is NOT a PEP-668 refusal,
+                                      fall back to the settings-home coordinator venv instead of
+                                      exiting non-zero. Never reached automatically, and never
+                                      reached for a PEP-668 externally-managed interpreter — that
+                                      is always a designed refusal (exit 96), not a failure to
+                                      fall back from.
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
   --register-only                    Skip Step Zero + dep check; run registration + verification only
@@ -245,7 +294,6 @@ class Args:
         self.agent_mode = False
         self.skip_dep_check = False
         self.accept_risk = False
-        self.break_system_packages = False
         self.allow_venv_fallback = False
         self.with_test_deps = False
         self.register_only = False
@@ -270,8 +318,6 @@ def parse_args(argv: list[str]) -> Args:
             args.skip_dep_check = True
         elif tok == "--accept-missing-deps-risk":
             args.accept_risk = True
-        elif tok == "--break-system-packages":
-            args.break_system_packages = True
         elif tok == "--allow-venv-fallback":
             args.allow_venv_fallback = True
         elif tok == "--with-test-deps":
@@ -499,76 +545,390 @@ def _run_pip(argv: list[str]) -> subprocess.CompletedProcess:
     )
 
 
-def provision_deps(
-    claude_klabauter_root: Path, py: str, break_system_packages: bool, allow_venv_fallback: bool
-) -> tuple[str, list[str]]:
-    """Derive coordinator_core's declared deps from pyproject.toml and ensure
-    they're importable — machine-level pip install by default.
-    `--break-system-packages` opts into retrying the machine-level install on
-    PEP-668 refusal specifically (still machine-level, never the venv).
-    `--allow-venv-fallback` is a SEPARATE, narrower opt-in: on ANY OTHER
-    machine-level install failure (PEP-668 refusal with no
-    --break-system-packages, or any other failure e.g. permission-denied on
-    a locked-down system interpreter), fall back to the settings-home
-    coordinator venv ONLY when this flag was passed. Without it, such a
-    failure exits non-zero naming both real remediations (fix the
-    machine-level install, or re-run with --allow-venv-fallback) — the venv
-    is `ensure_venv.py`'s own tree (`coordinator_whoami` lives there), not a
-    private fallback, so reaching it is an explicit install-time choice, not
-    an automatic degradation (PM ruling 2026-08-14).
+@dataclass(frozen=True)
+class InterpreterCandidate:
+    """One member of the PREDICTABLE set of interpreters a declared
+    consumer resolves to (PM ruling 2026-08-17: "'every' might be too
+    strong a word, but 'predictable/likely' is straightforward") — a
+    label for print output, the resolved interpreter path, and every
+    consumer that resolves to it.
 
-    Both flags passed AND the --break-system-packages retry itself fails:
-    the venv fallback is still reached — both flags passed IS an explicit
-    choice of both, not a request for a harder failure mode (PM ruling
-    2026-08-14; Review: code-reviewer 415489f6, the both-flags edge case).
+    `consumers` is a TUPLE, never a single string: realpath-deduping (see
+    `enumerate_provisioning_candidates`) can merge two independently-named
+    roles — e.g. the installer's own interpreter AND bare `python3` on
+    PATH — into ONE candidate, on a box where both names resolve to the
+    same file. Review (team-lead, 2026-08-17): collapsing to a single
+    `consumer` field silently dropped every consumer but the first-merged
+    one from BOTH the refusal output and the Homebrew-removal offer's
+    pre-offer enumeration — on exactly the box where the dropped consumer
+    (hooks.json's bare `python3`, running the dialect guard) is the whole
+    reason this plan exists. A candidate must carry every consumer that
+    resolves to it, and every print site must render all of them, not the
+    first."""
 
-    The two flags stay distinct rather than one flag doing both jobs:
-    --break-system-packages consents to a narrower, still-machine-level
-    retry (defeat PEP-668's refusal, same interpreter, same site-packages);
-    --allow-venv-fallback consents to a materially different thing (hand
-    dependency resolution to a shared mutable venv another purpose already
-    owns). Collapsing them would mean passing --break-system-packages also
-    silently authorizes the venv on a NON-PEP-668 failure it was never asked
-    about.
+    label: str
+    path: str
+    consumers: tuple[str, ...]
 
-    An EXISTING, already-importable fallback venv (see the second fast-path
-    below) is treated as prior consent from a previous install and is used
-    unconditionally, flag or no flag — this flag only gates provisioning a
-    NEW use of the fallback, so an operator who already opted in on an
-    earlier run is not broken by this change.
-    Returns (engine_python, import_names).
+
+def enumerate_provisioning_candidates(installer_py: str) -> list[InterpreterCandidate]:
+    """The predictable, consumer-resolved interpreter set this installer
+    provisions — at minimum the installer's own resolved interpreter and
+    bare `python3` on PATH (what coordinator-claude's `hooks.json`
+    registers every bash-guard hook under, and what the PowerShell dialect
+    guard `coordinator_core/bash_guards/_dialect.py` runs beneath — see
+    `check_dialect_guard_armed`, which checks the same two interpreters for
+    the same reason).
+
+    Deduped by realpath: a box where both names resolve to the SAME
+    interpreter is provisioned once, not twice — but the merge UNIONS
+    every role's label and consumer text into that one candidate rather
+    than keeping only the first-added role's. First-wins would silently
+    drop a consumer from view exactly when dedup matters most (a shared
+    realpath is common — Homebrew symlinks its versioned Cellar binary
+    under both `/opt/homebrew/bin/python3` and, often, the resolved
+    installer interpreter itself)."""
+    order: list[str] = []
+    paths: dict[str, str] = {}
+    labels: dict[str, list[str]] = {}
+    consumers: dict[str, list[str]] = {}
+
+    def _add(path: str, label: str, consumer: str) -> None:
+        real = os.path.realpath(path)
+        if real not in paths:
+            order.append(real)
+            paths[real] = path
+            labels[real] = []
+            consumers[real] = []
+        if label not in labels[real]:
+            labels[real].append(label)
+        if consumer not in consumers[real]:
+            consumers[real].append(consumer)
+
+    _add(
+        installer_py,
+        "installer interpreter",
+        "scripts/setup.py's own resolved interpreter (resolve_python())",
+    )
+
+    bare_python3 = shutil.which("python3")
+    if bare_python3:
+        _add(
+            bare_python3,
+            "bare python3 on PATH",
+            "hooks.json (coordinator-claude) registers every bash-guard hook "
+            "under bare `python3`; the PowerShell dialect guard "
+            "(coordinator_core/bash_guards/_dialect.py) runs beneath it",
+        )
+
+    return [
+        InterpreterCandidate(
+            label=" + ".join(labels[real]),
+            path=paths[real],
+            consumers=tuple(consumers[real]),
+        )
+        for real in order
+    ]
+
+
+def _is_externally_managed(interpreter: str, timeout: float = 10.0) -> bool:
+    """PEP 668 marker-file probe under `interpreter` — checked BEFORE any
+    install is attempted, per this chunk's ruling ("resolve interpreter ->
+    verify NOT externally-managed -> install"), not inferred after the
+    fact from a failed pip install's stderr. A side-effect-free stat, not
+    a write attempt. Fails OPEN (False) on any probe error — the real pip
+    install in `provision_deps` is still the ultimate authority, and a
+    mid-install PEP-668 refusal this probe missed is still caught and
+    still refuses there."""
+    program = (
+        "import os, sysconfig\n"
+        "stdlib = sysconfig.get_path('stdlib')\n"
+        "print(1 if os.path.exists(os.path.join(stdlib, 'EXTERNALLY-MANAGED')) else 0)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [interpreter, "-c", program],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
+        )
+        return proc.returncode == 0 and proc.stdout.strip() == "1"
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _is_homebrew_python(interpreter: str) -> bool:
+    """True iff `interpreter` resolves (through symlinks) into a Homebrew
+    Cellar — the guarded-by-default shape on macOS this ruling's Homebrew-
+    removal offer exists for."""
+    resolved = os.path.realpath(interpreter)
+    return "/Cellar/python" in resolved
+
+
+def _homebrew_python_formula(interpreter: str) -> str | None:
+    """The Homebrew formula name (e.g. `python@3.14`) owning `interpreter`,
+    parsed from its resolved Cellar path, or `None` if it is not a
+    Homebrew-Cellar-rooted interpreter."""
+    resolved = os.path.realpath(interpreter)
+    match = re.search(r"Cellar/([^/]+)/", resolved)
+    return match.group(1) if match else None
+
+
+_HOMEBREW_REMOVALS_FILENAME = "homebrew-python-removals.json"
+
+
+def _record_homebrew_removal(
+    settings_home_path: Path, formula: str, interpreter: str, consumers: list[str]
+) -> None:
+    """Append-only JSON log of what `_offer_homebrew_removal` actually
+    removed, so the removal is recoverable knowledge even though the
+    package itself is gone — the PM ruling's "records what it removed in
+    the install record" requirement. Deliberately a small, self-contained
+    log file rather than routed through `coordinator_core.install.receipt`
+    — that module's WriteSurfaceDeclaration/ClauseResolution machinery is
+    built for the install-chain's own declared, repeatable writers; this is
+    a single, rare, consent-gated destructive action with no writer of its
+    own, and reusing that machinery here would be more apparatus than the
+    fact warrants. Advisory: a write failure here must not fail the install
+    that already happened."""
+    log_path = settings_home_path / _HOMEBREW_REMOVALS_FILENAME
+    try:
+        existing = json.loads(log_path.read_text(encoding="utf-8")) if log_path.is_file() else []
+    except (OSError, json.JSONDecodeError):
+        existing = []
+    if not isinstance(existing, list):
+        existing = []
+    existing.append(
+        {
+            "formula": formula,
+            "interpreter": interpreter,
+            "consumers": consumers,
+            "removed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"  [ADVISORY] could not write Homebrew-removal record to {log_path}: {exc}", file=sys.stderr)
+
+
+def _offer_homebrew_removal(
+    candidate: InterpreterCandidate, settings_home_path: Path
+) -> bool:
+    """Offer, interactively, to `brew uninstall` a guarded Homebrew Python
+    that a declared consumer resolves to. PM-authorized 2026-08-17,
+    INCLUDING on `--i-am-agent` — the offer still fires there; it does not
+    require a human at an interactive terminal, only an explicit affirmative
+    answer to proceed, which `--i-am-agent`'s typically-closed stdin already
+    defaults to declining via the EOFError branch below.
+
+    Defaults to NO: silence, EOF, or any non-affirmative response declines
+    — an explicit affirmative token (`y`/`yes`) is required to proceed.
+    Enumerates EVERY declared consumer resolving to this interpreter BEFORE
+    asking (`candidate.consumers` — a realpath-deduped candidate can carry
+    more than one; see `InterpreterCandidate`'s docstring for why this must
+    never collapse to just the first), so the answer is informed rather
+    than reflexive. Records what was removed (`_record_homebrew_removal`,
+    all consumers) so the action is recoverable knowledge. Never removes an
+    interpreter it did not offer on, and never removes more than the one
+    formula named — no transitive/dependency cleanup.
+
+    Returns True iff the operator explicitly affirmed AND the removal
+    itself succeeded."""
+    if not _is_homebrew_python(candidate.path):
+        return False
+    formula = _homebrew_python_formula(candidate.path)
+    if formula is None:
+        return False
+
+    print()
+    print(f"  {candidate.path} is a Homebrew-managed Python (formula: {formula}).")
+    print("  Declared consumer(s) resolving to it:")
+    for consumer in candidate.consumers:
+        print(f"    - {consumer}")
+    print("  This installer did not install this Python. Removing it is destructive")
+    print(f"  and irreversible ('brew uninstall {formula}').")
+    try:
+        answer = input(f"  Uninstall Homebrew's {formula} now? [y/N]: ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        print("  Declined — leaving Homebrew Python in place.")
+        return False
+
+    try:
+        proc = subprocess.run(
+            ["brew", "uninstall", formula],
+            timeout=120,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  FAIL: brew uninstall failed to run: {exc}", file=sys.stderr)
+        return False
+    if proc.returncode != 0:
+        print(f"  FAIL: brew uninstall {formula} exited {proc.returncode}:", file=sys.stderr)
+        print(f"  {proc.stdout}\n{proc.stderr}", file=sys.stderr)
+        return False
+
+    print(f"  PASS: Homebrew {formula} uninstalled.")
+    _record_homebrew_removal(settings_home_path, formula, candidate.path, list(candidate.consumers))
+    return True
+
+
+def _engine_installed(interpreter: str, import_names: list[str]) -> bool:
+    """True iff BOTH the declared deps AND the claude-klabauter package itself
+    (`coordinator_core`, pip-installed as a distribution — not merely
+    importable via a sys.path insert elsewhere) are present under
+    `interpreter`.
+
+    Supersedes a bare `deps_importable` fast path. After this chunk removes
+    the healthy-venv prior-consent branch, "deps importable, package not
+    pip-installed" is the COMMON upgrade state on every EXISTING box — the
+    machine interpreter already has the dependency set provisioned from a
+    prior `provision_deps` run, but no prior run ever `pip install -e .`'d
+    the claude-klabauter package itself. A fast path keyed on import alone would
+    report PASS and skip the install that materializes `[project.scripts]`
+    console entrypoints (C3's dependency), on an exit-0 install."""
+    if not deps_importable(interpreter, import_names):
+        return False
+    program = (
+        "import importlib.metadata as m\n"
+        "try:\n"
+        "    m.version('coordinator_core')\n"
+        "except m.PackageNotFoundError:\n"
+        "    raise SystemExit(1)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [interpreter, "-c", program],
+            timeout=10.0,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **_NO_CONSOLE,
+        )
+        return proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _fallback_to_venv(
+    claude_klabauter_root: Path,
+    settings_home_path: Path,
+    venv_dir: Path,
+    venv_py: Path,
+    dep_specs: list[str],
+    import_names: list[str],
+) -> str:
+    """Provision the settings-home coordinator venv (purpose (c),
+    `docs/reference/shared-fleet-venv-contract.md`) with the DECLARED
+    THIRD-PARTY DEPS ONLY — deliberately NOT `-e <claude_klabauter_root>`. The
+    contract doc is explicit that an editable `coordinator_core` in this
+    venv is "NOT guaranteed" and "a rebuild drops it"; this stays true
+    here rather than being contradicted by a new install-chain call site.
+    Reaching this function at all means machine-first provisioning failed
+    for a NON-PEP-668 reason with `--allow-venv-fallback` passed — a
+    guarded (PEP-668) interpreter never reaches here (see
+    `provision_deps`; a guarded interpreter is a designed refusal, exit 96,
+    with no fallback of any kind).
+
+    Idempotent: an already-healthy venv (deps importable there) is left
+    alone rather than re-installed on every run. This also covers the case
+    where `provision_deps`'s per-candidate loop calls this function more
+    than once in a single run (one call per failing non-first candidate,
+    all sharing the one settings-home `venv_py`) — the second call's
+    `deps_importable` check sees the venv the first call just provisioned
+    and no-ops, so repeated calls converge rather than re-installing."""
+    if venv_py.exists() and deps_importable(str(venv_py), import_names):
+        print(f"PASS [deps] fallback venv already provisioned ({venv_dir}) — no-op.")
+        return str(venv_py)
+
+    if str(claude_klabauter_root) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root))
+    from coordinator_core.install.ensure_venv import EnsureVenvError, ensure_coordinator_venv
+
+    try:
+        venv_status = ensure_coordinator_venv(
+            claude_klabauter_root, settings_home_path, claude_home=os.environ.get("CLAUDE_HOME")
+        )
+    except EnsureVenvError as exc:
+        print(f"FAIL [deps] settings-home coordinator venv provisioning failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"  settings-home coordinator venv: {venv_status}")
+
+    try:
+        venv_pip = _run_pip([str(venv_py), "-m", "pip", "install", *dep_specs])
+    except subprocess.TimeoutExpired:
+        print(f"FAIL [deps] venv fallback pip install timed out after 600s under {venv_py}.", file=sys.stderr)
+        sys.exit(1)
+    print(venv_pip.stdout, end="")
+    if venv_pip.returncode != 0 or not deps_importable(str(venv_py), import_names):
+        print("FAIL [deps] venv fallback install failed — see output above.", file=sys.stderr)
+        sys.exit(1)
+    print(f"PASS [deps] venv fallback install succeeded ({venv_dir}).")
+    return str(venv_py)
+
+
+def provision_deps(claude_klabauter_root: Path, py: str, allow_venv_fallback: bool) -> tuple[str, list[str]]:
+    """Machine-first dependency provisioning (PM ruling 2026-08-17,
+    superseding DR-307's healthy-venv prior-consent branch and retiring
+    `--break-system-packages` entirely — see this file's module docstring
+    Negative-spec and docs/decisions/DR-3xx-machine-first-install-surface.md).
+
+    Order: enumerate the predictable, consumer-resolved interpreter set
+    (`enumerate_provisioning_candidates`) -> verify NONE is PEP-668
+    externally-managed (`_is_externally_managed`, checked BEFORE any
+    install attempt) -> plain `pip install` of the declared deps AND the
+    claude-klabauter package itself (`-e <claude_klabauter_root>`, so `[project.scripts]`
+    console entrypoints materialise — C3's dependency) into EACH candidate
+    -> verify (`_engine_installed`). No override flag is ever passed.
+
+    A guarded (PEP-668) candidate is a DESIGNED REFUSAL: exits
+    `EXIT_INTERPRETER_UNSUPPORTED` (96) naming the interpreter and the
+    consumer that resolves to it. This is unconditional — `allow_venv_fallback`
+    does NOT reach the venv here; the anti-scope is explicit ("when an
+    interpreter raises a guard, swap the interpreter", never narrow the
+    blast radius with an override flag). On macOS with Homebrew's guarded
+    `python3`, the operator is offered (interactively, PM-authorized,
+    including on `--i-am-agent`) to `brew uninstall` it —
+    `_offer_homebrew_removal` — but the refusal for THIS run stands either
+    way; a fresh supported interpreter still needs to be installed and the
+    installer re-run.
+
+    `allow_venv_fallback` survives as explicit break-glass ONLY for a
+    genuine machine-level install failure that is NOT PEP-668 (permission-
+    denied, network, disk) — `_fallback_to_venv` provisions ONLY the
+    third-party deps there, deliberately never `-e .` (see that function's
+    docstring); `coordinator-invoke`/`coordinator-cockpit-emit-schema`
+    remain unmaterialized on that degraded path, which is the accepted
+    shape of a break-glass fallback, not a defect.
+
+    Idempotence keys on `_engine_installed` (deps importable AND
+    `coordinator_core` pip-installed as a distribution), not on import
+    alone — see that function's docstring for why a bare import check would
+    silently skip the `pip install -e .` this chunk exists to run.
 
     `claude_klabauter_root` is the FLAG -> ENV -> repo-root resolved CLAUDE_KLABAUTER_ROOT (see
-    `resolve_claude_klabauter_root`), not necessarily the script's own on-disk location
-    — Review: code-reviewer 2026-07-21 Finding 7 (P2): a packaging installer
-    that stages this script somewhere other than the real CLAUDE_KLABAUTER_ROOT and
-    passes `--claude-klabauter-root` needs dependency derivation/sys.path insertion to
-    follow that override, not silently fall back to script-location-derived
-    repo_root.
+    `resolve_claude_klabauter_root`), not necessarily the script's own on-disk
+    location — Review: code-reviewer 2026-07-21 Finding 7 (P2).
 
-    Negative-spec: the machine-level attempt below is a PLAIN `pip install`
-    with NO `--user` flag. `--user` targets `site.getusersitepackages()`,
-    which is resolved from `HOME` (POSIX) / `USERPROFILE` (Windows) at
-    interpreter-startup time, not baked into the interpreter's own install
-    location — empirically, `HOME=/tmp/x python3 -c "import site;
-    print(site.getusersitepackages())"` returns a DIFFERENT path than the
-    same command with the real HOME, for the identical interpreter. Any real
-    entry point invoked under a HOME other than the one active at install
-    time (a hooked/sandboxed subprocess, a CI runner, a service account —
-    the production trampoline is DoE's cc_invoke.py, which spawns
-    `[sys.executable, "-m", "coordinator_core.invoke", ...]` using whatever
-    HOME the CALLING process has) would resolve an EMPTY site-packages dir
-    and crash with ModuleNotFoundError on a machine where `--user` had
-    "succeeded." A plain (non---user) install lands under `sys.prefix`,
-    which is fixed to the interpreter's own install path and is therefore
-    HOME-independent; the settings-home venv fallback below is likewise
-    HOME-independent (anchored to `coordinator_core._settings_home.settings_home()`,
-    not repo_root — claude-klabauter does not own a `<claude-klabauter>/.venv`, D3/D4). Neither
-    branch may reintroduce a HOME-resolved target. See
+    Negative-spec: every machine-level attempt below is a PLAIN `pip
+    install` with NO `--user` flag — see
     docs/decisions/2026-07-21-coordinator-core-dependency-and-environment-boundary.md
-    § D2 (machine-level install is the sanctioned primary path)."""
+    § D2 for why `--user` is HOME-dependent and therefore wrong here.
+
+    Returns `(engine_python, import_names)` — `engine_python` is the
+    resolved interpreter for the FIRST candidate (the installer's own),
+    which is what every downstream verification/PATH step in `main()`
+    uses; every OTHER candidate (e.g. bare `python3`) is still provisioned
+    in the loop below even though its resolved interpreter is not returned,
+    because arming the dialect guard under it (ruling 1) does not require
+    reporting it back to the caller."""
     print()
-    print("--- Dependency provisioning (derived from pyproject.toml) ---")
+    print("--- Dependency provisioning (machine-first, derived from pyproject.toml) ---")
 
     pyproject = claude_klabauter_root / "pyproject.toml"
     if not pyproject.is_file():
@@ -587,25 +947,13 @@ def provision_deps(
     if str(claude_klabauter_root) not in sys.path:
         sys.path.insert(0, str(claude_klabauter_root))
     from coordinator_core._settings_home import settings_home
-    from coordinator_core.install.ensure_venv import (
-        EnsureVenvError,
-        ensure_coordinator_venv,
-        venv_python_path,
-    )
+    from coordinator_core.install.ensure_venv import venv_python_path
 
-    engine_py = py
-    # Fallback venv: the settings-home `.coordinator-venv` (shared with
-    # coordinator-claude's own venv, via coordinator_core.install.ensure_venv)
-    # — NOT a `<claude-klabauter>/.venv`. Claude-klabauter does not own its own venv (D3/D4,
-    # DR-commit 286f94b7); see docs/decisions/2026-07-21-coordinator-core-dependency-and-environment-boundary.md.
-    #
     # Review: code-reviewer 2026-07-21 Finding 6 (P2) — settings_home()
     # resolves through `CLAUDE_HOME`/`Path.home()`, and `Path.home()` raises
     # `RuntimeError` when neither `HOME` (POSIX) nor `USERPROFILE` (Windows)
-    # is resolvable — exactly the HOME-stripped-sandbox shape this fix set
-    # out to be robust against. Fail loud with an actionable message instead
-    # of a bare traceback (not a design change — D3/D4 still forces
-    # settings-home as the fallback venv location).
+    # is resolvable. Fail loud with an actionable message instead of a bare
+    # traceback.
     try:
         settings_home_path = settings_home()
     except RuntimeError as exc:
@@ -615,131 +963,113 @@ def provision_deps(
     venv_dir = settings_home_path / ".coordinator-venv"
     venv_py = venv_python_path(venv_dir)
 
-    if deps_importable(py, import_names):
-        print(f"PASS [deps] {' '.join(import_names)} already importable under {py} — no-op.")
-        return engine_py, import_names
+    candidates = enumerate_provisioning_candidates(py)
+    print(f"Predictable consumer-resolved interpreter set ({len(candidates)}):")
+    for candidate in candidates:
+        print(f"  - {candidate.label}: {candidate.path}")
+        print("      consumers:")
+        for consumer in candidate.consumers:
+            print(f"        - {consumer}")
 
-    if venv_py.exists() and deps_importable(str(venv_py), import_names):
-        print(f"PASS [deps] {' '.join(import_names)} already importable under existing fallback venv ({venv_dir}) — no-op.")
-        return str(venv_py), import_names
+    guarded = [c for c in candidates if _is_externally_managed(c.path)]
+    if guarded:
+        print()
+        for c in guarded:
+            print(f"  GUARDED (PEP 668 externally-managed): {c.label} ({c.path})", file=sys.stderr)
+            print("    consumers:", file=sys.stderr)
+            for consumer in c.consumers:
+                print(f"      - {consumer}", file=sys.stderr)
 
-    print(f"{' '.join(import_names)} not importable under {py} — attempting machine-level install.")
-    # No --user: HOME-independent by construction (see docstring negative-spec
-    # above). Lands under sys.prefix, not a HOME-resolved user-site dir.
-    try:
-        pip_proc = _run_pip([py, "-m", "pip", "install", *dep_specs])
-    except subprocess.TimeoutExpired:
-        print(f"FAIL [deps] pip install timed out after 600s under {py}.", file=sys.stderr)
-        sys.exit(1)
-    print(pip_proc.stdout, end="")
+        removed_any = False
+        for c in guarded:
+            if _offer_homebrew_removal(c, settings_home_path):
+                removed_any = True
 
-    if pip_proc.returncode == 0:
-        print("PASS [deps] machine-level install (pip, HOME-independent) succeeded.")
-    else:
-        # Review: code-reviewer 415489f6 — the both-flags-passed, retry-still-fails
-        # edge case was a dead end (hard exit, no path to the venv the operator
-        # explicitly consented to via --allow-venv-fallback). Factored out so both
-        # the --break-system-packages retry-failure path and the plain PEP-668/
-        # other-failure path reach the same consented fallback, instead of one
-        # inlined copy that only the latter could reach. Defined here (P3,
-        # code-reviewer ebc1ac14) rather than above the success check, since the
-        # closure only makes sense once failure is known and is never invoked on
-        # the success path.
-        def _fallback_to_venv() -> str:
-            try:
-                venv_status = ensure_coordinator_venv(
-                    claude_klabauter_root,
-                    settings_home_path,
-                    claude_home=os.environ.get("CLAUDE_HOME"),
-                )
-            except EnsureVenvError as exc:
-                print(f"FAIL [deps] settings-home coordinator venv provisioning failed: {exc}", file=sys.stderr)
-                sys.exit(1)
-            print(f"  settings-home coordinator venv: {venv_status}")
+        print(file=sys.stderr)
+        print(
+            "FAIL [deps] refusing to provision a PEP-668 externally-managed interpreter — "
+            "no override flag is ever passed.",
+            file=sys.stderr,
+        )
+        print(
+            "  Remediation: install a supported (non-externally-managed) interpreter for the "
+            "consumer(s) named above — a python.org release or a uv-managed Python — then re-run "
+            "this installer. On stock Linux, distro python3 is externally-managed by policy; this "
+            "is the expected default there too, not an edge case.",
+            file=sys.stderr,
+        )
+        if removed_any:
+            print(
+                "  A guarded Homebrew Python was removed above at your consent — install its "
+                "replacement, then re-run.",
+                file=sys.stderr,
+            )
+        if allow_venv_fallback:
+            print(
+                "  --allow-venv-fallback was also passed: this refusal is unconditional and does "
+                "not honour it — a PEP-668 guard is swapped, never fallen back from.",
+                file=sys.stderr,
+            )
+        sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
 
-            try:
-                venv_pip = _run_pip([str(venv_py), "-m", "pip", "install", *dep_specs])
-            except subprocess.TimeoutExpired:
-                print(f"FAIL [deps] venv fallback pip install timed out after 600s under {venv_py}.", file=sys.stderr)
-                sys.exit(1)
-            print(venv_pip.stdout, end="")
-            if venv_pip.returncode != 0:
-                print("FAIL [deps] venv fallback install failed — see output above.", file=sys.stderr)
-                sys.exit(1)
-            print(f"PASS [deps] venv fallback install succeeded ({venv_dir}).")
-            return str(venv_py)
-
-        pip_output = pip_proc.stdout.lower()
-        is_pep668 = "externally-managed-environment" in pip_output
-
-        if is_pep668 and break_system_packages:
-            print()
-            print(f"  pip refused: PEP 668 externally-managed environment ({py}).", file=sys.stderr)
-            print("  --break-system-packages passed — retrying with explicit consent.", file=sys.stderr)
-            try:
-                pip2 = _run_pip([py, "-m", "pip", "install", "--break-system-packages", *dep_specs])
-            except subprocess.TimeoutExpired:
-                print(f"FAIL [deps] pip install --break-system-packages timed out after 600s under {py}.", file=sys.stderr)
-                sys.exit(1)
-            print(pip2.stdout, end="")
-            if pip2.returncode == 0:
-                print("PASS [deps] machine-level install (--break-system-packages, explicit consent) succeeded.")
-            elif not allow_venv_fallback:
-                print("FAIL [deps] pip install --break-system-packages also failed — see output above.", file=sys.stderr)
-                sys.exit(1)
-            else:
-                # Both flags passed and the machine-level retry still failed —
-                # both flags passed IS an explicit choice of both (PM ruling
-                # 2026-08-14), so the venv fallback is reached here too, not
-                # only from the plain-PEP-668/other-failure branch below.
-                print()
-                print("FAIL [deps] pip install --break-system-packages also failed — see output above.", file=sys.stderr)
-                print(f"  --allow-venv-fallback passed — falling back to the settings-home coordinator venv at {venv_dir}.", file=sys.stderr)
-                engine_py = _fallback_to_venv()
-        elif not allow_venv_fallback:
-            print()
-            if is_pep668:
-                print("  Machine Python is externally-managed (PEP 668) — plain pip install is blocked.", file=sys.stderr)
-            else:
-                print("  Machine-level pip install failed for a reason other than PEP 668 (see output above).", file=sys.stderr)
-            print("  Remediation — pick ONE:", file=sys.stderr)
-            print("    - fix the machine-level install (see pip output above; --break-system-packages if PEP-668)", file=sys.stderr)
-            print(f"    - re-run with --allow-venv-fallback to use the settings-home coordinator venv at {venv_dir}", file=sys.stderr)
-            sys.exit(1)
+    engine_py: str | None = None
+    for index, candidate in enumerate(candidates):
+        if _engine_installed(candidate.path, import_names):
+            print(
+                f"PASS [deps] {' '.join(import_names)} and coordinator_core already installed "
+                f"under {candidate.label} ({candidate.path}) — no-op."
+            )
+            resolved = candidate.path
         else:
-            # Fallback to the settings-home coordinator venv, HOME-independent
-            # by construction — not just on PEP 668 refusal, but on ANY
-            # machine-level install failure (e.g. permission-denied on a
-            # locked-down system interpreter that isn't PEP-668-flagged), and
-            # only when --allow-venv-fallback was explicitly passed (PM
-            # ruling 2026-08-14: reaching the venv is an install-time choice,
-            # not an automatic degradation). The prior version fell back
-            # automatically on any failure; that made the venv reachable
-            # with no consent, which is what this gate removes.
-            print()
-            if is_pep668:
-                print("  Machine Python is externally-managed (PEP 668) — plain pip install is blocked.")
-            else:
-                print("  Machine-level pip install failed for a reason other than PEP 668 (see output above).")
-            print(f"  --allow-venv-fallback passed — falling back to the settings-home coordinator venv at {venv_dir}.")
-            print("  This is a FALLBACK, not the primary mechanism — no consumer should need to resolve this venv.")
-            print()
-            if is_pep668:
-                print("  To install at machine level instead, on the next run pick ONE of:")
-                print("    - python3 scripts/setup.py --break-system-packages   (explicit opt-in; we will not do this silently)")
-                print("    - pipx (https://pipx.pypa.io) if your interpreter is pipx-managed")
-                print("    - your OS/distro package manager")
-                print()
-            engine_py = _fallback_to_venv()
+            print(f"Provisioning {candidate.label} ({candidate.path}) — machine-level, no --user, no override flag.")
+            try:
+                pip_proc = _run_pip([candidate.path, "-m", "pip", "install", *dep_specs, "-e", str(claude_klabauter_root)])
+            except subprocess.TimeoutExpired:
+                print(f"FAIL [deps] pip install timed out after 600s under {candidate.path}.", file=sys.stderr)
+                sys.exit(1)
+            print(pip_proc.stdout, end="")
 
-    # Verify, don't trust — an install that reports exit 0 but leaves a module
-    # unimportable (partial install, wrong target interpreter) is exactly the
-    # failure class this defect was: don't report success on an unverified install.
-    if not deps_importable(engine_py, import_names):
-        print(f"FAIL [deps] {' '.join(import_names)} still not importable under {engine_py} after install reported success.", file=sys.stderr)
-        print(f"  Remediation: run manually: {engine_py} -m pip install {quote_specs(dep_specs)}", file=sys.stderr)
-        sys.exit(1)
-    print(f"PASS [deps] verified importable under {engine_py}.")
+            pip_output = pip_proc.stdout.lower()
+            if "externally-managed-environment" in pip_output:
+                # The marker-file probe above said unguarded, but pip itself
+                # refused mid-install — still a designed refusal, never an
+                # override, never a fallback (see docstring).
+                print(
+                    f"FAIL [deps] {candidate.label} ({candidate.path}) refused: PEP 668 "
+                    "externally-managed (discovered mid-install) — no override flag is ever passed.",
+                    file=sys.stderr,
+                )
+                sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
+
+            if pip_proc.returncode != 0 or not _engine_installed(candidate.path, import_names):
+                if not allow_venv_fallback:
+                    print(
+                        f"FAIL [deps] machine-level install failed under {candidate.path} — "
+                        "see output above.",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "  Remediation — pick ONE: fix the machine-level install, or re-run with "
+                        f"--allow-venv-fallback (settings-home venv at {venv_dir}, third-party deps only).",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                print(
+                    f"  --allow-venv-fallback passed — falling back to the settings-home "
+                    f"coordinator venv at {venv_dir} for {candidate.label}.",
+                    file=sys.stderr,
+                )
+                resolved = _fallback_to_venv(
+                    claude_klabauter_root, settings_home_path, venv_dir, venv_py, dep_specs, import_names
+                )
+            else:
+                print(f"PASS [deps] {candidate.label} ({candidate.path}) provisioned and verified.")
+                resolved = candidate.path
+
+        if index == 0:
+            engine_py = resolved
+
+    assert engine_py is not None  # candidates always has >=1 entry (the installer itself)
     return engine_py, import_names
 
 
@@ -827,10 +1157,11 @@ def _probe_dist_versions(interpreter: str, dist_names: list[str]) -> dict[str, s
         return {name: None for name in dist_names}
 
 
-def _install_test_deps(engine_py: str, specs: list[str], break_system_packages: bool) -> None:
+def _install_test_deps(engine_py: str, specs: list[str]) -> None:
     """pip-install the test extra under `engine_py` — the interpreter
-    `provision_deps` already resolved and verified (the machine interpreter, or
-    the settings-home fallback venv when the machine one was unusable).
+    `provision_deps` already resolved and verified (a machine-first
+    candidate, or the settings-home fallback venv when every machine
+    candidate was unusable and `--allow-venv-fallback` was passed).
 
     Deliberately does NOT repeat provision_deps' venv-bootstrap ladder, and
     that is a settings-path constraint before it is a DRY one. The fallback
@@ -841,8 +1172,13 @@ def _install_test_deps(engine_py: str, specs: list[str], break_system_packages: 
     between them lands test tooling under an interpreter the suite never runs
     from. Taking `engine_py` as given is what keeps this function free of any
     home/settings-path resolution of its own — no `expanduser`, no
-    `Path.home()`, no hand-built `~/...`. The PEP-668 retry is kept because
-    --break-system-packages must mean the same thing for both arrays.
+    `Path.home()`, no hand-built `~/...`.
+
+    No PEP-668 retry: `--break-system-packages` no longer exists anywhere in
+    this installer (machine-first-install-surface plan, C2) — a guarded
+    interpreter is swapped, never bypassed with an override flag, and that
+    applies to this extra the same as the required set `provision_deps`
+    already refuses on.
 
     Fails loud: this path only runs when the operator explicitly passed
     --with-test-deps, and silently half-installing the tooling is how F2
@@ -857,26 +1193,16 @@ def _install_test_deps(engine_py: str, specs: list[str], break_system_packages: 
 
     if proc.returncode != 0:
         is_pep668 = "externally-managed-environment" in proc.stdout.lower()
-        if not (is_pep668 and break_system_packages):
-            print("FAIL [test-deps] test-extra install failed — see output above.", file=sys.stderr)
-            if is_pep668:
-                print(
-                    "  Machine Python is externally-managed (PEP 668). Re-run with "
-                    "--with-test-deps --break-system-packages to consent explicitly.",
-                    file=sys.stderr,
-                )
-            sys.exit(1)
-        print(f"  pip refused: PEP 668 externally-managed environment ({engine_py}).", file=sys.stderr)
-        print("  --break-system-packages passed — retrying with explicit consent.", file=sys.stderr)
-        try:
-            retry = _run_pip([engine_py, "-m", "pip", "install", "--break-system-packages", *specs])
-        except subprocess.TimeoutExpired:
-            print(f"FAIL [test-deps] pip install --break-system-packages timed out after 600s under {engine_py}.", file=sys.stderr)
-            sys.exit(1)
-        print(retry.stdout, end="")
-        if retry.returncode != 0:
-            print("FAIL [test-deps] --break-system-packages retry also failed — see output above.", file=sys.stderr)
-            sys.exit(1)
+        print("FAIL [test-deps] test-extra install failed — see output above.", file=sys.stderr)
+        if is_pep668:
+            print(
+                "  Machine Python is externally-managed (PEP 668). No override flag is ever "
+                "passed — provision under a supported (non-externally-managed) interpreter "
+                "instead (a python.org release or a uv-managed Python), then re-run with "
+                "--with-test-deps.",
+                file=sys.stderr,
+            )
+        sys.exit(1)
 
 
 def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args) -> None:
@@ -906,7 +1232,7 @@ def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args)
     print(f"Derived test specs: {' '.join(specs)}")
 
     if args.with_test_deps:
-        _install_test_deps(engine_py, specs, args.break_system_packages)
+        _install_test_deps(engine_py, specs)
 
     floors = [_parse_floor(spec) for spec in specs]
     installed = _probe_dist_versions(engine_py, [dist for dist, _ in floors])
@@ -1939,6 +2265,111 @@ def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, eng
     print(f"PASS [verification] coordinator_core importable from {claude_klabauter_root_resolved} ({engine_py})")
 
 
+def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: str) -> None:
+    """Install-time ARMED check for the PowerShell dialect guard
+    (`coordinator_core/bash_guards/_dialect.py`) — makes a disarmed guard
+    LOUD at install time instead of leaving it silently degraded.
+
+    `_dialect.py`'s ImportError -> SILENT routing stays legal AT RUNTIME (a
+    guard may decline to rule on PowerShell rather than crash the hot
+    path). What must never stay quiet is an INSTALL that leaves that state
+    undetected. This function does not arm the guard — that's a later
+    chunk's job, provisioning the predictable set of consumer-resolved
+    interpreters (docs/plans/2026-08-17-machine-first-install-surface.md
+    § C2) — it only reports the current state, loudly, naming the
+    interpreter(s) probed.
+
+    Reuses `_dialect.probe_armed`, which exercises the guard's OWN code
+    path (`_powershell_tokens`) rather than opening a second, parallel
+    signal path — a disarmed result durably logs through the existing
+    `_log_dialect_parser_unavailable` observability record exactly as it
+    would in production.
+
+    Checks TWO interpreters, both load-bearing for the defect this closes:
+      - `engine_py`, the interpreter dependency provisioning resolved above.
+      - bare `python3` on PATH, because `hooks.json` registers every bash
+        guard hook under exactly that bare name — checking only `engine_py`
+        would miss the actual disarmed case on a box where `engine_py`
+        happens to be a healthy fallback venv (the exact shape measured
+        2026-08-17: ARMED under `.coordinator-venv`, SILENT under bare
+        `python3`).
+
+    Never fatal: no exit-code change. Anti-scope forbids verifying a
+    dependency by importing it under the WRONG interpreter — `probe_armed`
+    always subprocesses into the named interpreter rather than checking
+    `sys.executable`/the current process.
+    """
+    print()
+    print("--- Verification: PowerShell dialect guard ARMED state ---")
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    from coordinator_core.bash_guards._dialect import (
+        dialect_parser_unavailable_log_path,
+        probe_armed,
+    )
+
+    # Grouped by RESOLVED interpreter path, not label: bare `python3` and
+    # `engine_py` are the same file on a box where the fallback venv IS the
+    # engine interpreter, and probing that path twice wastes a real child
+    # spawn for a foregone result. Dedup shape mirrors `bin/claude-klabauter-doctor-
+    # probe.py::_run_probe_dialect_guard_armed`'s `bare_python3 !=
+    # sys.executable` guard (reviewer finding) -- but unlike that probe's
+    # two-entry dict, BOTH consumer labels must still reach the printed
+    # line when they collapse onto one path, since each names a distinct
+    # reason this check exists (dependency-provisioning target vs. what
+    # `hooks.json` actually runs guards under) — collapsing the labels
+    # themselves, not just the probe call, would silently drop the second
+    # reason from the record.
+    interpreter_labels: dict[str, list[str]] = {}
+    interpreter_labels.setdefault(engine_py, []).append("engine (dependency-provisioning) interpreter")
+    bare_python3 = shutil.which("python3")
+    if bare_python3:
+        interpreter_labels.setdefault(bare_python3, []).append(
+            "bare python3 on PATH (what hooks.json runs guards under)"
+        )
+    else:
+        print(
+            "  [ADVISORY] bare python3 not found on PATH — cannot probe the "
+            "interpreter hooks.json resolves guard hooks under."
+        )
+
+    any_disarmed = False
+    any_missing_package = False
+    for interpreter, labels in interpreter_labels.items():
+        label = " / ".join(labels)
+        armed, detail = probe_armed(interpreter, claude_klabauter_root_resolved)
+        if armed:
+            print(f"PASS [dialect-guard]  {label} ({interpreter}): {detail}")
+        else:
+            any_disarmed = True
+            if "cause: missing-package" in detail:
+                any_missing_package = True
+            print(f"WARN [dialect-guard]  {label} ({interpreter}): {detail}", file=sys.stderr)
+
+    if any_disarmed:
+        print(file=sys.stderr)
+        print(
+            "  The PowerShell dialect guard is DISARMED under at least one interpreter "
+            "named above — PowerShell command classification silently stops there "
+            "(runtime SILENT routing, legal by design; see _dialect.py).",
+            file=sys.stderr,
+        )
+        print(f"  Durable record: {dialect_parser_unavailable_log_path()}", file=sys.stderr)
+        if any_missing_package:
+            print(
+                "  Remediation: install tree_sitter and tree_sitter_pwsh under the named "
+                "interpreter(s), e.g.: <interpreter> -m pip install tree_sitter tree_sitter_pwsh",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  Cause is not a missing package (see the cause tag in the detail above) — "
+                "inspect the reported cause before assuming a package install fixes this.",
+                file=sys.stderr,
+            )
+
+
 def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent_mode: bool) -> bool:
     """Verification — post-install health probe (bin/claude-klabauter-doctor-probe.py).
 
@@ -2579,9 +3010,71 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
     register_host_sampler_task(repo_root)
 
 
-def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
+def _seed_fleet_env_root_from_klabauter(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """C4: seed `fleet_env.root` from the already-registered `repos.claude_klabauter`
+    (`register_claude_klabauter_root` ran earlier in this same `main()` pass — see call order
+    in `main`) so the fleet environment lands at the contract's documented location
+    (`<klabauter-root>/.fleet-env`, `docs/reference/fleet-shared-environment-contract.md`
+    § "The environment's location") without requiring a hand-run `machine-local set`.
+
+    Seeds, never overwrites: an operator-set (or previously-seeded) `fleet_env.root`
+    is left untouched — this function only fills the key when it reads absent, which
+    is the normal day-one state this contract already names (§ "The day-one absent-key
+    property"). No new fallback rung: `coordinator_core/install/fleet_env_resolve.py`'s
+    ladder is unchanged; this only populates rung 1's registry candidate before that
+    ladder ever runs, so it need not fall to rung 2 (`<settings-home>/.fleet-env`).
+
+    ADVISORY, non-fatal (same shape as `install_machine_identity`) — a missing
+    `machine-local` CLI or an unregistered `repos.claude_klabauter` (no discoverable
+    klabauter checkout on this box) both leave the key unset rather than erroring;
+    `ensure_fleet_env`'s own C5 fallback still resolves a usable root in that case.
+    """
+    from coordinator_core.install._shared import resolve_machine_local_cli
+    from coordinator_core.machine_resolver import registry_get
+
+    if registry_get("fleet_env.root"):
+        return  # operator-set or already seeded — never overwritten here.
+    klabauter_root = registry_get("repos.claude_klabauter")
+    if not klabauter_root:
+        return  # no discoverable klabauter checkout yet — nothing to seed from.
+
+    fleet_env_root = str(Path(klabauter_root) / ".fleet-env")
+
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    machine_local_argv = resolve_machine_local_cli(str(plugin_root) if plugin_root else None)
+    if machine_local_argv is None:
+        print("[ADVISORY] machine-local not found — cannot seed fleet_env.root.")
+        print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}")
+        return
+
+    try:
+        proc = subprocess.run(
+            machine_local_argv + ["set", "fleet_env.root", fleet_env_root],
+            timeout=15,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[ADVISORY] fleet_env.root seeding failed to launch: {exc}", file=sys.stderr)
+        print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}", file=sys.stderr)
+        return
+    if proc.returncode != 0:
+        print(f"[ADVISORY] fleet_env.root seeding failed (exit {proc.returncode}).", file=sys.stderr)
+        print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}", file=sys.stderr)
+        return
+    print(f"PASS [fleet-env] seeded fleet_env.root = {fleet_env_root} (from repos.claude_klabauter)")
+
+
+def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
     """Install-chain step: provision the fleet shared Python environment
     (`coordinator_core.install.fleet_env.ensure_fleet_env`, C4/C6).
+
+    Seeds `fleet_env.root` from `repos.claude_klabauter` first (C4 —
+    `_seed_fleet_env_root_from_klabauter`), so a fresh install lands the
+    environment at the contract's documented location on the FIRST run
+    instead of falling to C5's settings-home rung and requiring a hand
+    fix-up. Runs before `ensure_fleet_env()` unconditionally — seeding is a
+    fast registry read/write, never gated behind the provisioning outcome.
 
     ADVISORY, non-fatal (mirrors `install_host_sampler_task`/
     `install_precommit_hook`'s shape) — the environment is multi-GB and this
@@ -2598,6 +3091,8 @@ def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_reso
         sys.path.insert(0, str(claude_klabauter_root_resolved))
     from coordinator_core.install.fleet_env import FleetEnvError, ensure_fleet_env
 
+    _seed_fleet_env_root_from_klabauter(repo_root, claude_klabauter_root_resolved, args)
+
     try:
         status = ensure_fleet_env()
     except FleetEnvError as exc:
@@ -2608,6 +3103,57 @@ def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_reso
         )
         return
     print(f"fleet shared environment: {status}")
+
+
+def install_verify_settings_home(claude_klabauter_root_resolved: Path) -> None:
+    """Install-chain step: report whether `<settings-home>` is actually
+    complete, not merely whether each of its individual population steps
+    (bin-forwarder install, `.percolate-identity`, machine identity
+    registry, `.claude-klabauter-root` pointer, etc.) exited 0 earlier in this same
+    `main()` pass.
+
+    docs/plans/2026-08-17-machine-first-install-surface.md § C5: population
+    was previously emergent — each contributor lands its own piece with no
+    single verified statement that the whole is complete. This step is that
+    statement, using `coordinator_core.install.settings_home_report` (shared
+    with `bin/claude-klabauter-doctor-probe.py`'s `claude-klabauter.settings_home.complete`
+    probe, so a cold re-check after this process exits uses the same
+    oracle, not a second one that can drift).
+
+    ADVISORY, non-fatal (mirrors every other post-registration step in
+    `main`) — an incomplete settings home does not abort the rest of setup;
+    it is reported so the operator (or the doctor probe, later) can act on
+    it, per the plan's "checkable, not silently emergent" ask.
+    """
+    print()
+    print("--- Install: settings-home completeness ---")
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.install.settings_home_report import (
+        check_settings_home,
+        format_report_lines,
+    )
+
+    try:
+        settings_home_path = settings_home()
+    except RuntimeError as exc:
+        print(f"[ADVISORY] cannot resolve settings-home — skipping completeness check: {exc}", file=sys.stderr)
+        return
+
+    report = check_settings_home(settings_home_path, claude_klabauter_root_resolved)
+    for line in format_report_lines(report):
+        print(line)
+
+    if report.complete:
+        print(f"PASS [settings-home] complete at {settings_home_path}")
+    else:
+        print(
+            f"[ADVISORY] settings-home at {settings_home_path} is incomplete — "
+            "re-run scripts/setup.py to fill the gaps reported above.",
+            file=sys.stderr,
+        )
 
 
 def main(argv: list[str]) -> int:
@@ -2656,7 +3202,7 @@ def main(argv: list[str]) -> int:
         check_git_version()
 
     engine_py, import_names = provision_deps(
-        claude_klabauter_root_resolved, py, args.break_system_packages, args.allow_venv_fallback
+        claude_klabauter_root_resolved, py, args.allow_venv_fallback
     )
 
     if not args.register_only:
@@ -2671,6 +3217,7 @@ def main(argv: list[str]) -> int:
 
     claude_klabauter_root_resolved = register_claude_klabauter_root(claude_klabauter_root_resolved, claude_klabauter_root_source, repo_root, args)
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
+    check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
 
     if not args.register_only:
@@ -2680,7 +3227,8 @@ def main(argv: list[str]) -> int:
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
-        install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved)
+        install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)
+        install_verify_settings_home(claude_klabauter_root_resolved)
 
     print()
     if probe_hard_failure:

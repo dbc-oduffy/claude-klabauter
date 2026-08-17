@@ -805,30 +805,62 @@ def compute_offer(
 # ---------------------------------------------------------------------------
 
 
-def _default_groups(safe_paths: List[str], session_id: str) -> List[CommitGroup]:
+def _default_groups(
+    safe_paths: List[str], session_id: str, invoker: Optional[str] = None
+) -> List[CommitGroup]:
     """Mechanical grouping used ONLY when the caller supplies no explicit
-    `groups` — i.e. an unattended trigger (a SessionEnd hook) with no
-    EM/human judgment in the loop. Groups by the path's top-two segments (a
-    coarse subsystem boundary — `coordinator/skills`, `state/handoffs`, a
-    bare top-level dir when there's only one segment) rather than either
-    extreme the PM named as worse than no automation: one mega-commit
-    spanning unrelated subsystems, or one commit per file. An EM-run
-    ceremony (e.g. `/handoff`) should draft real per-group descriptions and
-    pass explicit `groups` instead of relying on this fallback — grouping
-    "like an engineer would" needs judgment this mechanical layer doesn't
-    have; this default only bounds the mechanical case, it doesn't aspire to
-    replace authored judgment.
+    `groups` — i.e. no EM/human judgment authored a per-group description for
+    THIS call. That covers two materially different callers, distinguished
+    by ``invoker``: an unattended trigger (a SessionEnd hook, ``"unattended"``)
+    with nobody watching, and an EM-run ceremony (``"attended"``, e.g.
+    `/quick-wrap` step 1) that chose to skip authoring per-group descriptions
+    and fall back to this mechanical bucketing on purpose. Groups by the
+    path's top-two segments (a coarse subsystem boundary —
+    `coordinator/skills`, `state/handoffs`, a bare top-level dir when there's
+    only one segment) rather than either extreme the PM named as worse than
+    no automation: one mega-commit spanning unrelated subsystems, or one
+    commit per file. An EM-run ceremony with real judgment to spend should
+    still prefer drafting real per-group descriptions and passing explicit
+    `groups` instead of relying on this fallback — grouping "like an
+    engineer would" needs judgment this mechanical layer doesn't have; this
+    default only bounds the mechanical case, it doesn't aspire to replace
+    authored judgment.
+
+    ``invoker`` resolves the commit's own framing three ways — see the
+    module's dispatching memo (example-cockpit-repo-em, 2026-08-17) for the
+    incident this fixes: a deliberate, curated ceremony commit landing in
+    history confidently mislabelled as an unattended accident, because this
+    function previously asserted the stop-event story unconditionally.
+
+      - ``"unattended"`` — the real SessionEnd-hook shape. Subject/prose
+        frame this as a stop-event safety net: nobody committed the work,
+        this call exists so it is not lost. Byte-for-byte the same wording
+        this function has always produced.
+      - ``"attended"`` — an EM ceremony chose this fallback. The GROUPING is
+        mechanical (no per-group description was authored this call), but
+        the commit's EXISTENCE is deliberate — the session is still running
+        and chose to commit. Prose says so; it must NOT claim the session
+        ended or that anything was rescued.
+      - ``None`` (default) — the caller did not declare which shape this is.
+        This function then asserts NOTHING about why the commit happened —
+        it does not know, and guessing either way risks the same
+        mislabelling this fix exists to retire. Subject matches
+        ``"attended"``'s (still short/bounded); prose names the grouping as
+        an uncurated mechanical bucketing without a stop-event or ceremony
+        claim either way.
 
     Subject/body split (PM framing, 2026-07-31: "if I have to commit, it's a
-    safety [net] because someone forgot to commit" — this is a SAFETY NET,
-    not the primary/deliberate commit path a session makes during its own
-    work). The subject stays SHORT and BOUNDED — file count + subsystem key
-    + short session id, never an enumerated file list (unbounded at N
-    paths, unreadable in a `git log --oneline`). The full path list, and
-    which subsystem key grouped them, live in the BODY (`prose`), where
-    length costs nothing and a future archaeologist reading `git log` (not
-    `--oneline`) gets the complete picture plus the honest safety-net
-    framing rather than a commit dressed up as a deliberate, curated change.
+    safety [net] because someone forgot to commit" — the origin framing,
+    still exactly true for ``"unattended"``; the ``"attended"``/``None``
+    shapes above are this function's later, narrower correction, not a
+    reversal of it). The subject stays SHORT and BOUNDED across all three
+    shapes — file count + subsystem key + short session id, never an
+    enumerated file list (unbounded at N paths, unreadable in a `git log
+    --oneline`). The full path list, and which subsystem key grouped them,
+    live in the BODY (`prose`) in every shape, where length costs nothing and
+    a future archaeologist reading `git log` (not `--oneline`) gets the
+    complete picture plus the honest framing rather than a commit dressed up
+    as something it isn't.
     """
     if not safe_paths:
         return []
@@ -850,18 +882,45 @@ def _default_groups(safe_paths: List[str], session_id: str) -> List[CommitGroup]
 
     groups: List[CommitGroup] = []
     for key, paths in buckets.items():
-        subject = "auto-commit: %d file(s) rescued at session stop (session %s, %s)" % (
-            len(paths), session_id[:6], key
-        )
-        prose = (
-            "Stop-event safety net, not a deliberate change — these files were left "
-            "uncommitted when session %s ended without committing them itself. This "
-            "commit exists so the work is not lost, not to curate history; the good "
-            "archaeological commits are the deliberate ones a session makes while it "
-            "is still running. See docs/wiki/scoped-safety-commits.md § 3b.\n\n"
-            "Grouped under %r (this session's own touch-list claim, subsystem-"
-            "bucketed):\n%s"
-        ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
+        if invoker == "unattended":
+            subject = "auto-commit: %d file(s) rescued at session stop (session %s, %s)" % (
+                len(paths), session_id[:6], key
+            )
+            prose = (
+                "Stop-event safety net, not a deliberate change — these files were left "
+                "uncommitted when session %s ended without committing them itself. This "
+                "commit exists so the work is not lost, not to curate history; the good "
+                "archaeological commits are the deliberate ones a session makes while it "
+                "is still running. See docs/wiki/scoped-safety-commits.md § 3b.\n\n"
+                "Grouped under %r (this session's own touch-list claim, subsystem-"
+                "bucketed):\n%s"
+            ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
+        elif invoker == "attended":
+            subject = "auto-commit: %d file(s) (session %s, %s)" % (
+                len(paths), session_id[:6], key
+            )
+            prose = (
+                "Ceremony commit, mechanically grouped — session %s chose this "
+                "fallback rather than authoring per-group descriptions, so the "
+                "GROUPING below is mechanical (subsystem-bucketed), not the commit's "
+                "existence: this is a deliberate commit an EM ceremony made while "
+                "still running, not a stop-event rescue.\n\n"
+                "Grouped under %r (this session's own touch-list claim, subsystem-"
+                "bucketed):\n%s"
+            ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
+        else:
+            subject = "auto-commit: %d file(s) (session %s, %s)" % (
+                len(paths), session_id[:6], key
+            )
+            prose = (
+                "Mechanically grouped, invoker undeclared — session %s did not "
+                "declare whether this call is attended or unattended, so this "
+                "commit asserts nothing about why it happened, only how the paths "
+                "below were bucketed (subsystem-grouped, no per-group description "
+                "authored this call).\n\n"
+                "Grouped under %r (this session's own touch-list claim, subsystem-"
+                "bucketed):\n%s"
+            ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
         groups.append({"paths": paths, "message": subject, "prose": prose})
     return groups
 
@@ -1089,6 +1148,7 @@ async def auto_commit_session_async(
     session_id: str,
     cwd: Optional[str] = None,
     groups: Optional[List[CommitGroup]] = None,
+    invoker: Optional[str] = None,
 ) -> AutoCommitReport:
     """Compute this session's safe pathspec and commit+push it — NO
     confirmation step, by explicit PM ruling. ``groups`` lets a caller with
@@ -1096,14 +1156,21 @@ async def auto_commit_session_async(
     grouping/messages; any path in a supplied group that is NOT in this
     session's own computed ``safe_paths`` is silently dropped from its group
     — the auto-commit boundary is COMPUTED, never caller-widened. ``None``
-    (the default — the unattended-trigger case) uses ``_default_groups``.
+    (the default) uses ``_default_groups``.
+
+    ``invoker`` is consulted ONLY on the ``groups is None`` path — threaded
+    straight through to ``_default_groups`` to resolve that fallback's
+    commit framing (``"attended"`` / ``"unattended"`` / ``None`` — see that
+    function's own docstring for the three-way split). A caller supplying
+    explicit ``groups`` already authored its own framing in ``prose``, so
+    ``invoker`` is inert there.
     """
     offer = compute_offer(session_id, cwd)
     safe_set = set(offer["safe_paths"])
 
     dropped_groups: List[DroppedGroup] = []
     if groups is None:
-        resolved_groups = _default_groups(offer["safe_paths"], session_id)
+        resolved_groups = _default_groups(offer["safe_paths"], session_id, invoker)
     else:
         resolved_groups = []
         for g in groups:
@@ -1153,11 +1220,12 @@ def auto_commit_session(
     session_id: str,
     cwd: Optional[str] = None,
     groups: Optional[List[CommitGroup]] = None,
+    invoker: Optional[str] = None,
 ) -> AutoCommitReport:
     """Sync wrapper — a single ``asyncio.run()`` drives the whole call
     (matches the single-event-loop convention other in-process op composers
     use, e.g. ``coordinator_core.ops.promote_shipped_in_flight_stubs``)."""
-    return asyncio.run(auto_commit_session_async(session_id, cwd, groups))
+    return asyncio.run(auto_commit_session_async(session_id, cwd, groups, invoker))
 
 
 # ---------------------------------------------------------------------------
@@ -1578,9 +1646,19 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
     return "\n".join(lines)
 
 
+_VALID_INVOKERS = ("attended", "unattended")
+
+_USAGE = (
+    "usage: safe-commit-offer [--session <id>] [--root <path>] [--json]\n"
+    "                          [--message <subject>] [--groups-json <file>]\n"
+    "                          [--invoker <attended|unattended>] [--dry-run]"
+)
+
+
 def main(argv: List[str]) -> int:
     """CLI: ``safe-commit-offer [--session <id>] [--root <path>] [--json]
-    [--message <subject>] [--groups-json <file>] [--dry-run]``.
+    [--message <subject>] [--groups-json <file>]
+    [--invoker <attended|unattended>] [--dry-run]``.
 
     No confirmation step of any kind — this is the mutating auto-commit
     entrypoint, meant to be called from an unattended trigger (a SessionEnd
@@ -1593,6 +1671,18 @@ def main(argv: List[str]) -> int:
     ``--groups-json <file>`` — a JSON list of ``{"paths": [...], "message":
     "..."}`` objects for a caller (e.g. an EM ceremony) with real per-group
     judgment. Neither given — the mechanical `_default_groups` fallback.
+
+    ``--invoker <attended|unattended>`` — declares which shape THIS call is,
+    consulted only by the mechanical `_default_groups` fallback (i.e. only
+    when neither `--message` nor `--groups-json` is given — those build
+    explicit groups themselves, so `--invoker` is inert alongside either).
+    ``"unattended"`` is the real SessionEnd-hook trigger: stop-event
+    safety-net framing. ``"attended"`` is an EM ceremony (e.g. `/quick-wrap`)
+    that chose this mechanical grouping over authoring its own: a deliberate
+    commit, mechanically bucketed. Omitted entirely — this CLI asserts
+    nothing about why the commit happened, only how the paths were bucketed;
+    see `_default_groups`'s own docstring for the full three-way contract.
+    Any other value is a usage error.
 
     Exit codes: 0 — ran (an empty result is itself a valid "nothing to
     commit" outcome, INCLUDING the benign already-committed no-op — that
@@ -1610,6 +1700,7 @@ def main(argv: List[str]) -> int:
     dry_run = False
     message: Optional[str] = None
     groups_json_path: Optional[str] = None
+    invoker: Optional[str] = None
 
     i = 0
     while i < len(argv):
@@ -1626,6 +1717,9 @@ def main(argv: List[str]) -> int:
         elif tok == "--groups-json" and i + 1 < len(argv):
             groups_json_path = argv[i + 1]
             i += 2
+        elif tok == "--invoker" and i + 1 < len(argv):
+            invoker = argv[i + 1]
+            i += 2
         elif tok == "--json":
             as_json = True
             i += 1
@@ -1633,16 +1727,19 @@ def main(argv: List[str]) -> int:
             dry_run = True
             i += 1
         elif tok in ("-h", "--help"):
-            print(
-                "usage: safe-commit-offer [--session <id>] [--root <path>] [--json]\n"
-                "                          [--message <subject>] [--groups-json <file>]\n"
-                "                          [--dry-run]",
-                file=sys.stderr,
-            )
+            print(_USAGE, file=sys.stderr)
             return 2
         else:
             print("safe-commit-offer: unrecognized argument %r" % tok, file=sys.stderr)
             return 2
+
+    if invoker is not None and invoker not in _VALID_INVOKERS:
+        print(
+            "safe-commit-offer: --invoker must be one of %s (got %r)"
+            % (", ".join(_VALID_INVOKERS), invoker),
+            file=sys.stderr,
+        )
+        return 2
 
     session_id = explicit_session or core.resolve_session_id(explicit_root)
     if not session_id:
@@ -1685,7 +1782,7 @@ def main(argv: List[str]) -> int:
             print("safe-commit-offer: cannot read --groups-json: %s" % exc, file=sys.stderr)
             return 2
 
-    report = auto_commit_session(session_id, explicit_root, groups)
+    report = auto_commit_session(session_id, explicit_root, groups, invoker)
     worktree_root = core.git_root(explicit_root) or explicit_root or "."
 
     if as_json:

@@ -29,13 +29,14 @@ Consequences of that definition (each covered by
   regardless of what follows `python3` -- comment lines are skipped
   entirely, before the followed-by check ever runs.
 
-Known exempt fixture: `coordinator/lib/claude-home/claude-home.cmd` line 23
-(`REM templates/bin/python3.cmd and coordinator/bin/coordinator-lesson-add.cmd.`)
-is exempt TWICE under this definition -- it is a REM line, and the token is
-followed by `.`. No path-based allowlist exists or is needed for it; the
-definition alone handles it. Adding a per-file exemption to make this guard
-green would be treating a matcher bug as a legitimate exception -- if a real
-violation ever needs suppressing, fix the matcher's definition instead.
+Known exempt fixture: `coordinator/lib/claude-home/claude-home.cmd` has a line
+mentioning `templates/bin/python3.cmd` (line number not pinned here -- located
+by content, since it has already moved once) that is exempt TWICE under this
+definition -- it is a REM line, and the token is followed by `.`. No
+path-based allowlist exists or is needed for it; the definition alone handles
+it. Adding a per-file exemption to make this guard green would be treating a
+matcher bug as a legitimate exception -- if a real violation ever needs
+suppressing, fix the matcher's definition instead.
 
 Scope: `coordinator/lib/**/*.cmd` only (not `coordinator/bin`, not
 `templates/`) -- this guard's scope tracks its dispatch chunk exactly and
@@ -125,13 +126,21 @@ def test_no_bare_python3_in_lib_cmd_files():
 
 def test_claude_home_cmd_python3_mention_stays_exempt():
     """Pins the one known python3 occurrence in the tree
-    (`coordinator/lib/claude-home/claude-home.cmd` line 23) as exempt on
-    both grounds the definition provides -- REM comment line, and the token
-    is immediately followed by `.` -- with no path-based allowlist
-    involved."""
+    (`coordinator/lib/claude-home/claude-home.cmd`, located by content --
+    the first line mentioning `python3` -- rather than a hardcoded line
+    number, since an unrelated edit above it should not break this test)
+    as exempt on both grounds the definition provides -- REM comment line,
+    and the token is immediately followed by `.` -- with no path-based
+    allowlist involved."""
     fixture_path = _LIB_ROOT / "claude-home" / "claude-home.cmd"
     lines = fixture_path.read_text(encoding="utf-8").splitlines()
-    target_lineno = 23
+    target_lineno = next(
+        (lineno for lineno, line in enumerate(lines, start=1) if "python3" in line),
+        None,
+    )
+    assert target_lineno is not None, (
+        f"Expected a python3 mention somewhere in {fixture_path}; none found."
+    )
     target_line = lines[target_lineno - 1]
 
     assert "python3" in target_line

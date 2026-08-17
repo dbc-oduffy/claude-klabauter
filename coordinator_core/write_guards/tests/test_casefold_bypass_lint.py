@@ -83,6 +83,30 @@ function is tainted, not just the textually-last one) fixed this and
 surfaced 4 more genuine equality-comparison instances of the same class
 (two `.resolve()`'d paths compared with `==`, no fold on either side).
 
+A fourth pass, triaging the two `is_unc = normalized.startswith("//")`
+sites in `block_subagent_grant_record_write.py` and
+`block_subagent_guard_grant_write.py` (plus each module's paired
+`_collapse_traversal` re-check), found a third false-positive class: a
+`.startswith(...)` call whose literal argument is unchanged by casefolding
+(a path-scheme marker like `"//"`) has nothing for `casefold_path` to fold
+-- flagging it would demand a wrapper that changes zero bytes of runtime
+behavior. `_is_caseless_literal_arg` tests that property directly --
+`node.value.casefold() == node.value` -- rather than a proxy for it; an
+earlier "no alphabetic character" spelling (`str.isalpha()`) was rejected
+during integration because it is not the exact invariant: `str.isalpha()`
+is `False` for some Unicode code points (e.g. `'Ⅳ'`, Roman numeral four,
+category Nl) whose `casefold()` is NOT a no-op, so the proxy would have
+wrongly exempted a `.startswith('Ⅳ')`-shaped check. This is a
+receiver-side taint on a literal with no case, not the
+containment-against-an-untainted-root shape the gate targets, so
+`_is_caseless_literal_arg` narrows the `startswith` branch the same way
+`Compare.left`-only narrowed the `in`/`not in` branch above. It does NOT
+touch the `==`/`!=`/`in` branches, and it does not exempt a `startswith`
+call whose literal is changed by casefolding (`test_gate_still_
+catches_startswith_against_a_lettered_literal` below is the regression
+guard, and `test_gate_still_catches_startswith_against_a_case_sensitive_
+unicode_literal` covers the Unicode edge case directly).
+
 The result, run against this corpus at authoring time: 8 genuine hits, 0
 false positives -- see `_casefold_bypass_lint_baseline.py` for the ledger
 and why they are debt, not sanctioned exemptions.
@@ -191,6 +215,40 @@ def _is_norm_call(node: ast.AST) -> bool:
     return False
 
 
+def _is_caseless_literal_arg(node: ast.AST) -> bool:
+    """True for a string-constant `.startswith(...)` argument that
+    casefolding leaves unchanged (e.g. ``"//"``, ``"\\\\\\\\"``) -- a
+    path-scheme marker check, not a containment comparison. A comparison
+    against a literal casefolding cannot change can't be walked around by
+    case variance; flagging it would demand a `casefold_path(...)` wrapper
+    that changes nothing, the "pointless" case the dispatch brief for this
+    triage explicitly called out.
+
+    Tests the exact property directly (`node.value.casefold() ==
+    node.value`) rather than the "no alphabetic character" proxy
+    (`str.isalpha()`) an earlier spelling used: `str.isalpha()` returns
+    `False` for some Unicode code points -- e.g. `'Ⅳ'` (Roman numeral
+    four, category Nl) -- whose `casefold()` is NOT a no-op, so that proxy
+    would wrongly exempt a `.startswith('Ⅳ')`-shaped check. See
+    `test_gate_still_catches_startswith_against_a_case_sensitive_unicode_
+    literal` below.
+
+    Found triaging `block_subagent_grant_record_write.py` /
+    `block_subagent_guard_grant_write.py`'s `_normalize_path` /
+    `_collapse_traversal`: both use
+    ``is_unc = normalized.startswith("//")`` to detect a UNC-root marker
+    on an already backslash-to-slash-normalized (hence taint-triggering)
+    path, then re-test the same literal after collapsing repeated slashes.
+    Neither is a security-boundary containment check -- see this module's
+    False-positive strategy section, third class.
+    """
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.casefold() == node.value
+    )
+
+
 def _is_casefold_call(node: ast.AST) -> bool:
     """True for `.casefold()`, `casefold_path(...)`, or an aliased import
     (`_casefold_path`, or any `...casefold_path` attribute access) -- the
@@ -277,6 +335,12 @@ class _ComparisonScan(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         self.generic_visit(node)
         if isinstance(node.func, ast.Attribute) and node.func.attr == "startswith":
+            if node.args and _is_caseless_literal_arg(node.args[0]):
+                # Scheme-marker check against a literal with no case to
+                # fold (e.g. `.startswith("//")`) -- see
+                # `_is_caseless_literal_arg` for why this is not the bug
+                # shape this gate targets.
+                return
             operands = [node.func.value, *node.args[:1]]
             if any(self._operand_tainted(o) for o in operands):
                 self.hits.append(node.lineno)
@@ -539,3 +603,83 @@ def test_gate_is_silent_on_the_three_fixed_guards():
     }
     hits = [f for f in _all_findings() if f[0] in fixed_guards]
     assert hits == [], f"Gate found bypass site(s) in an already-fixed guard: {hits}"
+
+
+# Reconstructed from `block_subagent_grant_record_write.py::_normalize_path`
+# -- the exact false-positive shape the fourth false-positive-strategy pass
+# (module docstring) found: a UNC-root scheme marker check on a tainted
+# (backslash-to-slash-normalized) variable, compared against a literal
+# with no case to fold.
+_UNC_MARKER_SNIPPET = '''
+def _normalize_path(file_path):
+    normalized = file_path.replace("\\\\", "/")
+    is_unc = normalized.startswith("//")
+    return is_unc
+'''
+
+
+def test_gate_is_silent_on_caseless_literal_startswith():
+    """A `.startswith("//")` check against a tainted variable must NOT fire
+    -- `"//"` has no case, so folding it changes nothing, and flagging it
+    would demand a `casefold_path(...)` wrapper with zero behavioral
+    effect (see `_is_caseless_literal_arg`)."""
+    findings = _scan_source("synthetic_unc_marker.py", _UNC_MARKER_SNIPPET)
+    assert findings == [], (
+        f"Gate false-positived on a caseless-literal (scheme-marker) "
+        f"startswith check: {findings}"
+    )
+
+
+# Negative control for the exemption above: the same tainted-receiver shape,
+# but the literal now carries a letter -- a real containment-style check
+# this gate must keep catching, proving `_is_caseless_literal_arg` did not
+# widen into a blanket startswith exemption.
+_LETTERED_LITERAL_SNIPPET = '''
+def _gate(cand):
+    normalized = cand.replace("\\\\", "/")
+    return normalized.startswith("/Users")
+'''
+
+
+def test_gate_still_catches_startswith_against_a_lettered_literal():
+    """Companion regression guard: a `.startswith(...)` literal that DOES
+    contain a letter is a real containment-style comparison and must still
+    fire un-casefolded -- the caseless-literal exemption must stay narrow
+    to that one marker-check shape, not swallow ordinary path-prefix
+    bugs."""
+    findings = _scan_source("synthetic_lettered_literal.py", _LETTERED_LITERAL_SNIPPET)
+    assert findings, (
+        "Gate failed to flag an un-casefolded startswith against a lettered "
+        "(non-scheme-marker) literal -- the caseless-literal exemption in "
+        "_is_caseless_literal_arg over-widened."
+    )
+
+
+# Regression control for the invariant `_is_caseless_literal_arg` tests:
+# 'Ⅳ' (U+2163, Roman numeral four, Unicode category Nl) returns `False` for
+# `str.isalpha()` -- the proxy an earlier spelling of this predicate used --
+# yet `'Ⅳ'.casefold() != 'Ⅳ'` ('Ⅳ'.casefold() == 'ⅳ'), so the `isalpha`
+# proxy would have wrongly exempted this literal. Proves the predicate
+# tests the actual "casefolding changes nothing" property, not the proxy.
+_UNICODE_CASE_SENSITIVE_LITERAL_SNIPPET = '''
+def _gate(cand):
+    normalized = cand.replace("\\\\", "/")
+    return normalized.startswith("Ⅳ")
+'''
+
+
+def test_gate_still_catches_startswith_against_a_case_sensitive_unicode_literal():
+    """A `.startswith(...)` literal with no alphabetic character (fails
+    `str.isalpha()` for every code point) but whose `casefold()` is NOT a
+    no-op must still fire un-casefolded -- proves `_is_caseless_literal_arg`
+    tests `casefold() == value` directly rather than the `isalpha` proxy,
+    which would have silently exempted this literal and let a
+    Unicode-cased-marker bypass through uncaught."""
+    findings = _scan_source(
+        "synthetic_unicode_case_sensitive.py", _UNICODE_CASE_SENSITIVE_LITERAL_SNIPPET
+    )
+    assert findings, (
+        "Gate failed to flag an un-casefolded startswith against a "
+        "case-sensitive Unicode literal ('Ⅳ', casefold() != value) -- "
+        "the caseless-literal exemption regressed to the isalpha() proxy."
+    )

@@ -24,6 +24,7 @@ trees are out of scope for an import-time guard.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,3 +54,33 @@ def test_every_swept_module_compiles():
             failures.append(f"{path.relative_to(_REPO_ROOT)}: {exc}")
 
     assert not failures, "SyntaxError in swept module(s):\n" + "\n".join(failures)
+
+
+def test_every_swept_module_is_free_of_syntax_warnings():
+    """A `SyntaxWarning` (e.g. an unescaped backslash in a non-raw string
+    literal) is tomorrow's `SyntaxError` -- CPython has repeatedly promoted
+    invalid-escape-sequence warnings to hard errors across major versions.
+    Catching it here, on the same swept population as
+    `test_every_swept_module_compiles`, means a future interpreter upgrade
+    cannot silently turn a warning this suite already ignored into an import
+    failure nobody saw coming.
+    """
+    failures: list[str] = []
+    for path in _iter_py_files():
+        try:
+            source = path.read_bytes()
+        except OSError:
+            continue
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                compile(source, str(path), "exec")
+            except SyntaxError:
+                continue
+            for w in caught:
+                if issubclass(w.category, SyntaxWarning):
+                    failures.append(
+                        f"{path.relative_to(_REPO_ROOT)}:{w.lineno}: {w.message}"
+                    )
+
+    assert not failures, "SyntaxWarning in swept module(s):\n" + "\n".join(failures)

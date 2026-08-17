@@ -127,7 +127,16 @@ class TestHardDenyNeverCounted:
         out = dispatch.evaluate_payload_json(json.dumps(payload))
 
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert not (tmp_path / "state" / "subagent-share").exists()
+        # The invariant is that a hard deny is never counted as an ADVISORY —
+        # not that it leaves no trace at all. `record_deny_fire` was added as
+        # the deny-path mirror and writes `deny-fire-counts.jsonl` into this
+        # same per-session directory by design, so asserting the directory's
+        # absence stopped testing the invariant and started testing the absence
+        # of a feature. Narrowed to the advisory stream, which is what
+        # "never counted" is about; the two files exist precisely so the streams
+        # never mix.
+        session_dir = tmp_path / "state" / "subagent-share" / "sess-c21"
+        assert not (session_dir / "advisory-fire-counts.jsonl").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")

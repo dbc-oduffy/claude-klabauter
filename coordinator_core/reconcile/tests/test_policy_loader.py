@@ -625,13 +625,6 @@ def test_overlay_with_malformed_floor_not_treated_as_absent_even_unset(
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-#: The real DoE-owned fleet floor this repo's `CLAUDE_PLUGIN_ROOT` resolves
-#: to in a live session -- sibling repo, read-only from here (see Anti-scope:
-#: this file is NEVER written by claude-klabauter). Used only so these three tests
-#: exercise the real merge against the real floor rather than an unresolved
-#: `CLAUDE_PLUGIN_ROOT`, which would report `malformed` for an unrelated
-#: reason (floor not found) and mask what these tests actually pin.
-_REAL_PLUGIN_ROOT = _REPO_ROOT.parent / "DoE-claude" / "coordinator"
 
 
 def test_this_repo_resolves_armed_from_the_real_overlay(monkeypatch) -> None:

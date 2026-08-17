@@ -1543,12 +1543,18 @@ def test_ac4_gate_directive_carries_no_depends_on_and_precedes_tail_in_build_ord
     import coordinator_core.workstream_complete as wsc_module
 
     build_directives_src = inspect.getsource(wsc_module.build_directives)
+    # Matched on the callee NAME only, never the argument list. Pinning the full
+    # call text meant an ordinary signature change broke an ordering assertion
+    # that has nothing to do with arguments: `build_wsc_tail_directive` gained a
+    # `partition_mandatory=` argument and went multi-line in bbde301af, and this
+    # test then failed with a bare `ValueError: substring not found` — for two
+    # days, invisible to the fast tier because this module is cadence-tiered.
+    # The ordering property is what matters here, so match the least that
+    # establishes it.
     gate_call_idx = build_directives_src.index(
-        "build_chain_plan_brightline_gate_directive(gate.consumed_handoff)"
+        "build_chain_plan_brightline_gate_directive("
     )
-    tail_call_idx = build_directives_src.index(
-        "build_wsc_tail_directive(gate.sid, effective_decisions)"
-    )
+    tail_call_idx = build_directives_src.index("build_wsc_tail_directive(")
     assert gate_call_idx < tail_call_idx, (
         "d-run-chain-plan-brightline-gate must be appended to the directive "
         "list strictly before d-run-wsc-tail — if this ever inverts, the "

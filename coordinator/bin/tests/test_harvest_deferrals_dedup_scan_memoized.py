@@ -69,9 +69,9 @@ def _manifest_spawn_budget() -> dict:
 
 def test_dedup_scan_root_resolution_memoized_across_candidate_rows() -> None:
     """5 candidate rows must cost exactly the manifest's
-    `resolution_calls_for_5_candidate_rows` total calls to the three
+    `resolution_calls_for_5_candidate_rows` total SPAWNS across the three
     underlying resolution primitives (`_repo_root`/`doe_root`/`_claude_klabauter_root`),
-    not 3x that count."""
+    not 5x that count."""
     module = _load_harvest_module()
 
     calls = {"repo_root": 0, "doe_root": 0, "claude_klabauter_root": 0}
@@ -115,6 +115,13 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows() -> None:
         f"expected exactly {expected} total resolution calls across 5 "
         f"candidate rows (memoized), got {total_calls}: {calls!r}"
     )
-    assert calls["repo_root"] == 1
+    # `_repo_root()` spawns ZERO times since eacbba04a routed it through
+    # `coordinator_core.git.repo_root.show_toplevel`, which walks for the
+    # ordinary case and spawns only when the walk finds no `.git` entry — this
+    # fixture runs inside a real repo, so the walk always answers. The
+    # memoization this test exists to protect is asserted by the two counters
+    # below plus the total; a repo_root count above 0 would mean the walk
+    # regressed to a spawn, not that memoization broke.
+    assert calls["repo_root"] == 0
     assert calls["doe_root"] == 1
     assert calls["claude_klabauter_root"] == 1

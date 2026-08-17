@@ -52,9 +52,18 @@ neither guard's detector logic references the other's sink, so the two never
 double-fire on the SAME resolution -- one always names its own mechanism,
 never the sibling's.
 
-Allowlist is enumerated by relpath only -- never a comment, never a
-path-prefix heuristic. Extending it requires a one-line reason in this file,
-same discipline as `_ALLOWLISTED_RELPATHS` in the node-shellout precedent.
+Allowlist is enumerated at two granularities -- never a comment, never a
+path-prefix heuristic. `_ALLOWLISTED_RELPATHS` exempts a whole file (for a
+module that IS the resolver); `_ALLOWLISTED_FUNCTION_SITES` exempts one
+named function inside an otherwise-governed file, so a large module carrying
+exactly one sanctioned site does not get blanket immunity for everything else
+in it. Extending either requires a stated reason in this file, same discipline
+as `_ALLOWLISTED_RELPATHS` in the node-shellout precedent.
+
+The function-granular carve-out exists for the WRITER-vs-RESOLVER distinction:
+this guard stops consumers re-deriving the fleet-env location, but whatever
+SEEDS `fleet_env.root` must construct that path to store it, and cannot ask the
+resolver for a value it is itself establishing.
 
 Known gaps (this guard is a literal/AST-shaped detector, not a policy
 auditor): dynamic dispatch (`getattr(module, "_machine_local_get")(...)`),
@@ -106,6 +115,24 @@ _ALLOWLISTED_RELPATHS = {
     # this same read.
     "coordinator/bin/fleet-env.py":
         "C1's resolve_fleet_env_root -- the resolver itself, not a bypass",
+}
+
+# Function-granular allowlist, keyed (relpath, enclosing function). Whole-file
+# membership above is too coarse for a large module that legitimately contains
+# exactly one sanctioned site: allowlisting `scripts/setup.py` outright would
+# blanket-exempt the entire installer, and this guard's own discipline is that
+# a carve-out is never implied by a path prefix.
+#
+# The distinction that earns an entry here is WRITER vs RESOLVER. This guard
+# exists to stop consumers RE-DERIVING the fleet-env location instead of asking
+# the resolver. A site that WRITES the `fleet_env.root` key must construct the
+# path -- that is what seeding means -- and cannot call the resolver to learn a
+# value it is itself establishing.
+_ALLOWLISTED_FUNCTION_SITES = {
+    ("scripts/setup.py", "_seed_fleet_env_root_from_klabauter"):
+        "C4's seeder -- the WRITER of fleet_env.root, deriving the contracted "
+        "<klabauter-root>/.fleet-env value to store it. Not a consumer "
+        "bypassing the resolver.",
 }
 
 
@@ -267,15 +294,35 @@ def _is_venv_creation_shape(call: ast.Call, name: str | None, mapping: dict[str,
 
 
 class FleetDependencyResolutionVisitor(ast.NodeVisitor):
-    """Collects (lineno, description) for every fleet-dependency-resolution
-    violation found in one parsed module: a hardcoded `.fleet-env` literal
-    reaching a resolution sink, a direct `fleet_env.root` key read, or a
-    fleet-labelled per-repo venv-creation call."""
+    """Collects (lineno, description, enclosing_function) for every
+    fleet-dependency-resolution violation found in one parsed module: a
+    hardcoded `.fleet-env` literal reaching a resolution sink, a direct
+    `fleet_env.root` key read, or a fleet-labelled per-repo venv-creation call.
+
+    The enclosing function is carried so `_ALLOWLISTED_FUNCTION_SITES` can
+    exempt one sanctioned site without exempting its whole module. It is the
+    INNERMOST enclosing def (or None at module scope), so a nested helper never
+    inherits its parent's carve-out."""
 
     def __init__(self, mapping: dict[str, list[str]], import_aliases: dict[str, str]) -> None:
         self._mapping = mapping
         self._import_aliases = import_aliases
-        self.violations: list[tuple[int, str]] = []
+        self._func_stack: list[str] = []
+        self.violations: list[tuple[int, str, str | None]] = []
+
+    @property
+    def _enclosing_function(self) -> str | None:
+        return self._func_stack[-1] if self._func_stack else None
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._func_stack.append(node.name)
+        self.generic_visit(node)
+        self._func_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._func_stack.append(node.name)
+        self.generic_visit(node)
+        self._func_stack.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
         name = _call_name(node.func)
@@ -292,6 +339,7 @@ class FleetDependencyResolutionVisitor(ast.NodeVisitor):
                         node.lineno,
                         "direct fleet_env.root key read bypassing "
                         "resolve_fleet_env_root",
+                        self._enclosing_function,
                     ))
                     break
 
@@ -308,6 +356,7 @@ class FleetDependencyResolutionVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"{kind} ({name}) resolved through a hardcoded "
                         ".fleet-env path",
+                        self._enclosing_function,
                     ))
                     break
 
@@ -320,6 +369,7 @@ class FleetDependencyResolutionVisitor(ast.NodeVisitor):
                 self.violations.append((
                     node.lineno,
                     "per-repo venv creation labelled for fleet dependencies",
+                    self._enclosing_function,
                 ))
 
         self.generic_visit(node)
@@ -334,6 +384,7 @@ class FleetDependencyResolutionVisitor(ast.NodeVisitor):
             self.violations.append((
                 node.lineno,
                 "sys.executable repointed at a hardcoded .fleet-env path",
+                self._enclosing_function,
             ))
         self.generic_visit(node)
 
@@ -372,7 +423,9 @@ def find_per_repo_fleet_dependency_resolutions(roots: tuple[Path, ...]) -> list[
             import_aliases = _collect_import_aliases(tree)
             visitor = FleetDependencyResolutionVisitor(mapping, import_aliases)
             visitor.visit(tree)
-            for lineno, description in visitor.violations:
+            for lineno, description, funcname in visitor.violations:
+                if (relpath, funcname) in _ALLOWLISTED_FUNCTION_SITES:
+                    continue
                 violations.append((relpath, lineno, description))
     return violations
 

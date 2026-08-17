@@ -233,3 +233,109 @@ class TestWriteDoctorSentinelVendorDriftKey:
         assert written["vendor_drift"] == {
             "status": "UNKNOWN", "checked": None, "drifted": [], "indeterminate": []
         }
+
+
+class TestSentinelAdvisoryOnly:
+    """`_sentinel_advisory_only` distinguishes a non-required-only DEGRADED/BROKEN
+    overall (e.g. Claude-klabauter.schema.vendor_drift, required=False) from a real
+    required-probe failure — the AMBER/RED-vs-ADVISORY rendering distinction
+    `check_claude_klabauter_doctor_sentinel` reads via the additive `advisory_only` key.
+    """
+
+    def test_only_non_required_probe_degraded_is_advisory_only(self) -> None:
+        mod = _require_module()
+        envelope = _envelope([
+            {"probe": "claude-klabauter.root.resolve", "status": "PASS", "detail": "", "remediation": "", "required": True},
+            {
+                "probe": "claude-klabauter.schema.vendor_drift", "status": "DEGRADED", "detail": "1/12 diverge",
+                "remediation": "re-vendor", "required": False,
+            },
+        ])
+        envelope["overall"] = "DEGRADED"
+
+        assert mod._sentinel_advisory_only(envelope) is True
+
+    def test_required_probe_degraded_is_not_advisory_only(self) -> None:
+        mod = _require_module()
+        envelope = _envelope([
+            {"probe": "claude-klabauter.coverage.seam", "status": "DEGRADED", "detail": "unwritable", "remediation": "chmod", "required": True},
+            {
+                "probe": "claude-klabauter.schema.vendor_drift", "status": "DEGRADED", "detail": "1/12 diverge",
+                "remediation": "re-vendor", "required": False,
+            },
+        ])
+        envelope["overall"] = "DEGRADED"
+
+        assert mod._sentinel_advisory_only(envelope) is False
+
+    def test_required_probe_broken_is_not_advisory_only(self) -> None:
+        """A required probe BROKEN (RED path) is also a real failure, not advisory."""
+        mod = _require_module()
+        envelope = _envelope([
+            {"probe": "claude-klabauter.core.import", "status": "BROKEN", "detail": "import failed", "remediation": "fix", "required": True},
+        ])
+        envelope["overall"] = "BROKEN"
+
+        assert mod._sentinel_advisory_only(envelope) is False
+
+    def test_non_required_probe_broken_is_advisory_only(self) -> None:
+        """A non-required probe can also drive `overall` to BROKEN (e.g.
+        claude-klabauter.invoke.smoke's timeout case) — that must read as advisory too."""
+        mod = _require_module()
+        envelope = _envelope([
+            {"probe": "claude-klabauter.invoke.smoke", "status": "BROKEN", "detail": "timed out", "remediation": "re-run", "required": False},
+        ])
+        envelope["overall"] = "BROKEN"
+
+        assert mod._sentinel_advisory_only(envelope) is True
+
+    def test_green_overall_is_not_advisory_only(self) -> None:
+        mod = _require_module()
+        envelope = _envelope([
+            {"probe": "claude-klabauter.root.resolve", "status": "PASS", "detail": "", "remediation": "", "required": True},
+        ])
+        envelope["overall"] = "PASS"
+
+        assert mod._sentinel_advisory_only(envelope) is False
+
+    def test_malformed_envelope_never_raises(self) -> None:
+        mod = _require_module()
+        assert mod._sentinel_advisory_only({"probes": "not-a-list", "overall": "DEGRADED"}) is False
+
+
+class TestWriteDoctorSentinelAdvisoryOnlyKey:
+    """`_write_doctor_sentinel` writes the additive `advisory_only` key."""
+
+    def test_sentinel_carries_advisory_only_true_for_non_required_degradation(
+        self, tmp_path: Path
+    ) -> None:
+        mod = _require_module()
+        envelope = _envelope([
+            {
+                "probe": "claude-klabauter.schema.vendor_drift", "status": "DEGRADED", "detail": "UNKNOWN",
+                "remediation": "verify the DoE clone", "required": False,
+                "data": {"status": "INDETERMINATE", "checked": 12, "drifted": [], "indeterminate": ["x.schema.json"]},
+            },
+        ])
+        envelope["overall"] = "DEGRADED"
+
+        mod._write_doctor_sentinel(envelope, tmp_path)
+
+        written = json.loads((tmp_path / "state" / "doctor-last-run.json").read_text(encoding="utf-8"))
+        assert written["advisory_only"] is True
+        assert written["verdict"] == "AMBER"
+
+    def test_sentinel_carries_advisory_only_false_for_required_failure(
+        self, tmp_path: Path
+    ) -> None:
+        mod = _require_module()
+        envelope = _envelope([
+            {"probe": "claude-klabauter.coverage.seam", "status": "DEGRADED", "detail": "unwritable", "remediation": "chmod", "required": True},
+        ])
+        envelope["overall"] = "DEGRADED"
+
+        mod._write_doctor_sentinel(envelope, tmp_path)
+
+        written = json.loads((tmp_path / "state" / "doctor-last-run.json").read_text(encoding="utf-8"))
+        assert written["advisory_only"] is False
+        assert written["verdict"] == "AMBER"

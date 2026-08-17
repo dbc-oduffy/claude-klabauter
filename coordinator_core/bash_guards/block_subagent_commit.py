@@ -3217,6 +3217,23 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.prune_closed_bugs",          # fleet/prune_bugs.py -- archive_and_commit(...)
         "handoff.archive_transition",       # handoff_archive_transition.py -- archive_and_commit(...)
         "handoff.ship_and_archive",         # handoff_ship_archive.py -- delegates to archive_shipped_handoffs._handle_act (archive_and_commit)
+        # Fourth pass (2026-08-17), found by this file's own
+        # test_committing_op_names_covers_registry_sink_scan rather than by a
+        # human grep -- the mechanical enforcement of the BINDING RULE above
+        # working as designed. Each verified against its handler's source
+        # before being added, not taken from the failure message:
+        "deliverable.cascade_terminal",      # ops/deliverable_cascade.py -- commit_scoped(...)
+        "fleet.archive_terminal_sizings",    # ops/fleet/archive_sizings.py -- archive_and_commit(...)
+        # NOTE: "repo_setup.validate_target_root" was added here in the
+        # fourth pass above and then removed (coordinator:code-reviewer,
+        # 2026-08-17): its handler (`bootstrap_repo._validate_target_root_op`)
+        # is purely read-only -- no commit-sink call anywhere in that
+        # function or module. The scan's `"commit_scoped(" in source` hit was
+        # a false positive: that literal string appears only inside a
+        # COMMENT (bootstrap_repo.py's module-level rationale for why this
+        # file does NOT route through `commit_scoped`), not a real call. See
+        # `_COMMIT_SINK_CALL_MARKERS`'s substring-scan limit below, now fixed
+        # to require an actual `ast.Call` site.
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"

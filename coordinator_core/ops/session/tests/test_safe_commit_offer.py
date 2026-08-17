@@ -697,7 +697,10 @@ class TestAutoCommitSession:
         """Regression guard for the enumerated-filenames-in-subject shape:
         the subject must stay short/bounded regardless of file count, and
         the full path list + safety-net framing must land in the commit
-        BODY, not the subject."""
+        BODY, not the subject. Passes ``invoker="unattended"`` explicitly —
+        the real SessionEnd-hook shape this test exercises; see
+        TestDefaultGroupsInvokerFraming for the attended/undeclared
+        counterparts, which do not carry safety-net framing."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         paths = []
@@ -708,7 +711,9 @@ class TestAutoCommitSession:
             scope.touch("mine", p, cwd=str(repo))
             paths.append(p)
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.auto_commit_session(
+            "mine", cwd=str(repo), invoker="unattended"
+        )
 
         assert len(report["groups"]) == 1
         subject = report["groups"][0]["message"]
@@ -1675,3 +1680,91 @@ class TestMemoSendDeclaresOutboxWrites:
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(sender))
         assert ledger_rel in offer["safe_paths"]
+
+
+# ---------------------------------------------------------------------------
+# (g) --invoker framing (example-cockpit-repo-em memo, 2026-08-17): a deliberate
+# ceremony commit through the mechanical `_default_groups` fallback must not
+# be mislabelled as an unattended stop-event rescue. `invoker=None` — the
+# undeclared case — must assert nothing about why the commit happened.
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultGroupsInvokerFraming:
+    def test_unattended_keeps_stop_event_subject_and_prose(self):
+        # Regression lock for the real SessionEnd path — byte-for-byte the
+        # original framing.
+        groups = safe_commit_offer._default_groups(["a.py"], "sess123456", "unattended")
+        assert len(groups) == 1
+        subject = groups[0]["message"]
+        prose = groups[0]["prose"]
+        assert subject == "auto-commit: 1 file(s) rescued at session stop (session sess12, (repo root))"
+        assert "Stop-event safety net" in prose
+        assert "ended without committing them itself" in prose
+        assert "docs/wiki/scoped-safety-commits.md § 3b" in prose
+
+    def test_attended_has_no_stop_event_claim(self):
+        groups = safe_commit_offer._default_groups(["a.py"], "sess123456", "attended")
+        assert len(groups) == 1
+        subject = groups[0]["message"]
+        prose = groups[0]["prose"]
+        assert subject == "auto-commit: 1 file(s) (session sess12, (repo root))"
+        assert "rescued at session stop" not in prose
+        assert "ended without committing them itself" not in prose
+        assert "deliberate" in prose
+
+    def test_undeclared_invoker_has_no_stop_event_claim(self):
+        groups = safe_commit_offer._default_groups(["a.py"], "sess123456", None)
+        assert len(groups) == 1
+        subject = groups[0]["message"]
+        prose = groups[0]["prose"]
+        # Subject matches the attended shape (still short/bounded).
+        assert subject == "auto-commit: 1 file(s) (session sess12, (repo root))"
+        assert "rescued at session stop" not in prose
+        assert "ended without committing them itself" not in prose
+        # Nor may it claim the opposite (deliberate/ceremony) framing —
+        # undeclared means undeclared, not defaulted either way.
+        assert "ceremony" not in prose.lower()
+
+    def test_default_invoker_argument_is_none_shaped(self):
+        # Calling without the keyword at all reproduces the undeclared shape.
+        groups = safe_commit_offer._default_groups(["a.py"], "sess123456")
+        assert "rescued at session stop" not in groups[0]["prose"]
+
+
+class TestGroupsSuppliedPathIgnoresInvoker:
+    def test_explicit_groups_path_never_consults_invoker(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        report = safe_commit_offer.auto_commit_session(
+            "mine",
+            str(repo),
+            groups=[{"paths": ["a.py"], "message": "hand-authored subject"}],
+            invoker="unattended",
+        )
+        assert len(report["groups"]) == 1
+        assert report["groups"][0]["message"] == "hand-authored subject"
+        # Neither invoker-specific framing string leaked into an
+        # explicit-groups commit — `_default_groups` was never called.
+        assert "rescued at session stop" not in report["groups"][0]["message"]
+
+
+class TestMainInvokerFlag:
+    def test_rejects_unknown_invoker_value(self):
+        exit_code = safe_commit_offer.main(["--invoker", "bogus"])
+        assert exit_code == 2
+
+    def test_accepts_attended_and_unattended(self, tmp_path, capsys):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        for value in ("attended", "unattended"):
+            (repo / ("f_%s.py" % value)).write_text(value)
+            scope.touch("mine", "f_%s.py" % value, cwd=str(repo))
+            exit_code = safe_commit_offer.main(
+                ["--session", "mine", "--root", str(repo), "--invoker", value]
+            )
+            assert exit_code == 0
+        capsys.readouterr()

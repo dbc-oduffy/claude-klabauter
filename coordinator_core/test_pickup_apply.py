@@ -296,6 +296,53 @@ class TestExitCodeContract:
         assert report["landed"] == []
         assert report["claim_grant"]["verdict"] == "denied"
 
+    def test_claim_denied_live_holder_no_durable_stamp_early_check(self, tmp_path):
+        """The handoff-branch counterpart to `TestMemoClaimSameSessionReentry
+        ::test_different_session_live_holder_still_blocks_denied_unchanged` --
+        a LIVE foreign brief-stage holder (registered live, fresh claim dir,
+        no `claimed_by` frontmatter stamp) routes through `brief()`'s own
+        live-claim-holder stand-down (`pickup_assemble.__init__.py`'s handoff
+        branch, ~L8260), which returns `directives: []` and, absent a
+        durable stamp, `judgment_points: []` too (`gates.liveness_signal`
+        never fires off a claim-dir-only lock). That combination lands in
+        `apply()`'s early check (no judgment_points, non-OK brief exit, no
+        directives) -- unlike `test_claim_denied` above, whose NOT-live
+        holder never reaches this branch at all (`compute_claim_gate`
+        reports `holder: None` for a not-live claim, so the stand-down's
+        `claim["holder"] is not None` guard never fires and the run instead
+        reaches `_execute_directives`' own pre-loop `claim_grant` gate
+        unchanged). This case was unasserted before the memo/handoff parity
+        fix (cross-repo/inbox/2026-08-17-doe-claude-em-memo-claim-fires-
+        after-the-em-can-already-act.md) -- that silence is why the early
+        check's coarsening (treating a genuine denial as "brief did not
+        resolve a plan") went unnoticed for the handoff branch too.
+        """
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        foreign_sid = "sid-foreign-live-handoff"
+        _register_live_session(repo, foreign_sid)
+        _write_foreign_fresh_claim(repo, "handoff", "h1.md", foreign_sid)
+
+        exit_code, report = pa_apply.apply(
+            "state/handoffs/h1.md", session_id="sid-mine-handoff", repo_root=repo
+        )
+
+        assert exit_code == pa_apply.APPLY_EXIT_CLAIM_DENIED
+        assert report["landed"] == []
+        claim_grant = report["claim_grant"]
+        assert claim_grant["verdict"] == "denied"
+        assert claim_grant["holder"] == foreign_sid
+        assert claim_grant["holder_live"] is True
+        assert claim_grant["held_by_self"] is False
+
+        brief_result = pa_apply.brief("state/handoffs/h1.md", repo_root=repo)
+        obj = brief_result.decision_object
+        assert obj["directives"] == []
+        assert obj["judgment_points"] == []
+        assert obj["gates"]["claim_grant"] == claim_grant
+
     def test_transport_failure_no_repo_root(self, tmp_path):
         # tmp_path is deliberately NOT a git worktree.
         exit_code, report = pa_apply.apply(
@@ -1440,23 +1487,28 @@ class TestMemoClaimSameSessionReentry:
         my_sid = "sid-mine"
         artifact_path = "cross-repo/inbox/m1.md"
 
+        # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-
+        # memo-claim-fires-after-the-em-can-already-act.md) moved this denial
+        # from apply()'s OWN pre-loop blanket `claim_grant` gate to `brief()`'s
+        # early stand-down -- exactly mirroring the pre-existing handoff
+        # branch (verified live-reproduced: an equivalent handoff race through
+        # `apply()`, a live brief-stage holder with no durable frontmatter
+        # stamp yet, already resolves the SAME way today). No durable stamp
+        # exists yet here either (the foreign session only holds the
+        # brief-stage/claim-dir lock, never applied), so `gates.liveness_
+        # signal` never fires and `brief()`'s stand-down carries no judgment
+        # points. Coarsening fix (2026-08-17, this same memo, see `apply.py`'s
+        # early-check comment): `apply()`'s early check (no judgment_points,
+        # non-OK brief exit, no directives) used to read that unconditionally
+        # as "brief did not resolve an actionable plan" -- `APPLY_EXIT_
+        # TRANSPORT_FAIL` -- discarding the genuine denied `claim_grant`
+        # `brief()` had already resolved. It now classifies off `gates.
+        # claim_grant` first, so a real contention reports `APPLY_EXIT_
+        # CLAIM_DENIED` with the denial detail attached to `report`, exactly
+        # as the pre-loop blanket gate (`_execute_directives` /
+        # `apply_base.execute_directives`) already does for a denial
+        # discovered later in the same run.
         exit_code, report = pa_apply.apply(artifact_path, session_id=my_sid, repo_root=repo)
-
-        # Unchanged: the pre-loop blanket claim_grant gate denies before any
-        # directive (including d1) ever dispatches -- a live, non-lineage-
-        # related different-session holder has always blocked here and still
-        # does. `reason` is asserted on SHAPE (names the foreign holder, does
-        # not claim self-holdership), not on an exact string: `9bc811a0`
-        # (C19/held_by_self) widened `compute_claim_grant`'s live-holder
-        # reason to fold in `_holder_evidence`'s activity-recency finding, so
-        # the exact wording is now evidence-dependent (e.g. "no recent file
-        # activity found ... may be a stale claim" is itself part of the
-        # live-and-contended verdict, not a sign the block loosened) --
-        # pinning to the old fixed string was already stale the moment that
-        # landed. `held_by_self` (the field that change introduced) is the
-        # precise machine-readable assertion this test exists to make: this
-        # is contention by a DIFFERENT session, never mistaken for
-        # self-reentry.
         assert exit_code == pa_apply.APPLY_EXIT_CLAIM_DENIED
         assert report["landed"] == []
         claim_grant = report["claim_grant"]
@@ -1466,6 +1518,11 @@ class TestMemoClaimSameSessionReentry:
         assert claim_grant["held_by_self"] is False
         assert foreign_sid in claim_grant["reason"]
         assert "you already hold this" not in claim_grant["reason"]
+
+        brief_result = pa_apply.brief(artifact_path, repo_root=repo)
+        obj = brief_result.decision_object
+        assert obj["directives"] == []
+        assert obj["gates"]["claim_grant"] == claim_grant
 
         # The predicate this fix introduces must never widen to a
         # different session's holder, live or dead -- it only ever answers

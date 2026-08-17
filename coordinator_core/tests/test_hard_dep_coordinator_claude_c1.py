@@ -376,7 +376,17 @@ def test_setup_py_register_claude_klabauter_root_happy_path_registers_both_keys(
 
     def _fake_run(argv, timeout=None, **kwargs):
         calls.append(argv)
-        return setup_mod.subprocess.CompletedProcess(argv, returncode=0)
+        # stdout/stderr default to None on CompletedProcess, but every caller
+        # reachable through this patch asks for capture (`_shared._run_quiet`
+        # passes `capture_output=True` and then `.strip()`s the result), and
+        # patching an attribute on the shared `subprocess` module object
+        # reaches those callers too, not just `setup_mod`'s own. A fake that
+        # captures nothing therefore hands real code a None it cannot get from
+        # real `subprocess.run`, and the test fails inside production code on
+        # `'NoneType' has no attribute 'strip'` rather than on its own subject.
+        return setup_mod.subprocess.CompletedProcess(
+            argv, returncode=0, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
     repo_root = _claude_klabauter_repo_root(tmp_path)
@@ -384,7 +394,14 @@ def test_setup_py_register_claude_klabauter_root_happy_path_registers_both_keys(
     result = setup_mod.register_claude_klabauter_root(repo_root, "git-root auto-discovery", repo_root, args)
     assert result == repo_root
 
+    # The two leading reads are `_discover_klabauter_root`'s registry ladder
+    # (DR-132 auto-arm): both `ml_get` candidates are evaluated eagerly, and
+    # neither resolves here (the fake returns an empty stdout), so no third
+    # `set` is armed. Asserting the whole call list rather than just the two
+    # writes is deliberate — it is what would catch an unexpected extra spawn.
     assert calls == [
+        ["machine-local", "get", "repos.claude_klabauter"],
+        ["machine-local", "get", "publish.mirrors.claude_klabauter.path"],
         ["machine-local", "set", "repos.claude_klabauter", str(repo_root)],
         ["machine-local", "set", "engine.working_repos.claude_klabauter", str(repo_root)],
     ]

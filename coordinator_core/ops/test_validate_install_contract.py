@@ -581,3 +581,298 @@ def test_repo_root_derives_default_manifest_path(tmp_path, capsys):
     )
     rc = main(["--repo-root", str(repo_root)])
     assert rc == 0, capsys.readouterr().err
+
+
+def test_repo_root_probes_claude_klabauter_layout_when_doe_layout_absent(tmp_path, capsys):
+    """claude-klabauter's own layout (`docs/install/...`, no `coordinator/` prefix) must
+    resolve by default too — regression for the relpath that was hardcoded to
+    the DoE-claude layout only, which made a no-args run in THIS repo always
+    land on "no manifest declared" and exit 0 (green-by-skip on the guard for
+    claude-klabauter's own manifest)."""
+    repo_root = tmp_path / "repo"
+    manifest_dir = repo_root / "docs" / "install"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "agent-install-manifest.json").write_text(
+        json.dumps(_compliant_manifest()), encoding="utf-8"
+    )
+    rc = main(["--repo-root", str(repo_root)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "OK:" in out
+    assert str(manifest_dir / "agent-install-manifest.json") in out
+
+
+def test_repo_root_prefers_doe_layout_when_both_present(tmp_path, capsys):
+    """Both layouts probed, DoE-shaped first — matches the oracle's one and
+    only prior default, so every existing DoE-shaped caller's behavior stays
+    byte-identical."""
+    repo_root = tmp_path / "repo"
+    doe_dir = repo_root / "coordinator" / "docs" / "install"
+    doe_dir.mkdir(parents=True)
+    doe_manifest = doe_dir / "agent-install-manifest.json"
+    doe_manifest.write_text(json.dumps(_compliant_manifest()), encoding="utf-8")
+
+    claude_klabauter_dir = repo_root / "docs" / "install"
+    claude_klabauter_dir.mkdir(parents=True)
+    (claude_klabauter_dir / "agent-install-manifest.json").write_text(
+        json.dumps({"packageability_compliance": {"declared": False}}), encoding="utf-8"
+    )
+
+    rc = main(["--repo-root", str(repo_root)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert str(doe_manifest) in out
+
+
+def test_repo_root_skip_message_names_both_probed_paths(tmp_path, capsys):
+    repo_root = tmp_path / "repo"
+    rc = main(["--repo-root", str(repo_root)])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "SKIP: no agent-install-manifest.json declared at any of:" in err
+    assert str(repo_root / "coordinator" / "docs" / "install" / "agent-install-manifest.json") in err
+    assert str(repo_root / "docs" / "install" / "agent-install-manifest.json") in err
+
+
+# ---------------------------------------------------------------------------
+# Point 2 — declared setup-script paths must resolve on disk
+#
+# Regression origin: DoE-claude's manifest reported `packageability-compliant`
+# while its declared Point-2 entry point had left the repo entirely. Point 2
+# verified that the field and its flags were DECLARED, never that the path
+# resolved, so a migration of 1135 files moved the target and nothing noticed.
+# ---------------------------------------------------------------------------
+
+
+def _manifest_with_setup_script(**paths) -> dict:
+    manifest = _compliant_manifest()
+    manifest["standalone_setup_script"] = dict(paths)
+    return manifest
+
+
+def test_point2_declared_posix_setup_script_must_exist(tmp_path, capsys):
+    (tmp_path / "scripts").mkdir()
+    manifest = _manifest_with_setup_script(posix="scripts/gone.py")
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: standalone_setup_script.posix" in err
+    assert "scripts/gone.py" in err
+
+
+def test_point2_declared_windows_setup_script_must_exist(tmp_path, capsys):
+    """The Windows leg is checked with equal force. A repoint that resolves only
+    `posix` leaves Windows installing from a path that does not exist, and this
+    repo treats both platforms as first-class."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(posix="scripts/setup.py", windows="scripts/setup.ps1")
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: standalone_setup_script.windows" in err
+
+
+def test_point2_resolving_setup_script_paths_pass(tmp_path, capsys):
+    """Quiet on clean — a check that fires on a healthy manifest is muted within
+    a week."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(posix="scripts/setup.py", windows="scripts/setup.py")
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    assert rc == 0, capsys.readouterr().err
+
+
+def test_point2_stats_the_programmatic_entry_point_too(tmp_path, capsys):
+    """The authoritative witness gets stat-ed, not just the fallback.
+
+    Point 2 treats `programmatic_entry_point` as authoritative — when present it
+    wins outright and `standalone_setup_script` is not consulted for the witness
+    check at all — yet the declared-path stat originally covered only
+    `standalone_setup_script`. So the field the contract trusts MOST was the one
+    field nothing verified, and a manifest could pass Point 2 while its
+    authoritative entry point had left the repo. Found live against DoE-claude's
+    manifest on 2026-08-17: its `programmatic_entry_point.posix` names a file
+    present in neither their working tree nor the published mirror.
+    """
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(posix="scripts/setup.py")
+    manifest["programmatic_entry_point"] = {
+        "posix": "scripts/install-maximalist.py",
+        "entry_point_contract": {"check_only_flag": "--check-only"},
+    }
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: programmatic_entry_point.posix" in err
+    assert "scripts/install-maximalist.py" in err
+
+
+def test_point2_resolving_programmatic_entry_point_passes(tmp_path, capsys):
+    """Quiet on clean, and proves the failure above is the path check firing —
+    not the new field being rejected outright."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    (scripts / "install-maximalist.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(posix="scripts/setup.py")
+    manifest["programmatic_entry_point"] = {
+        "posix": "scripts/install-maximalist.py",
+        "entry_point_contract": {"check_only_flag": "--check-only"},
+    }
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    assert rc == 0, capsys.readouterr().err
+
+
+def test_point2_object_valued_platform_leg_fails_not_skips(tmp_path, capsys):
+    """The cross-repo object form must not buy a silent pass.
+
+    Regression for the bypass this guard was itself vulnerable to: the `str`
+    check exists to protect the `Path` join, and treating a non-string as
+    "nothing to verify" let an object-valued leg skip the stat entirely — the
+    manifest then passed Point 2 declaring an entry point nothing confirmed.
+    Silent green, from the check written to close silent green.
+    """
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(
+        posix={"repo": "claude_klabauter", "path": "scripts/setup.py"},
+        windows="scripts/setup.py",
+    )
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: standalone_setup_script.posix" in err
+    assert "dict" in err
+
+
+def test_point2_empty_string_platform_leg_fails(tmp_path, capsys):
+    """An empty string is DECLARED but unusable — the same vacuous pass in a
+    cheaper disguise, and it must fail rather than skip."""
+    manifest = _manifest_with_setup_script(posix="")
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: standalone_setup_script.posix" in err
+
+
+def test_point2_object_valued_programmatic_entry_point_leg_fails_not_skips(tmp_path, capsys):
+    """The object-form bypass applies to the authoritative witness too.
+
+    `_stat_declared_paths` is one shared helper parametrized by field — the
+    `standalone_setup_script` regression above proved the str-guard fires: this
+    is the same case for `programmatic_entry_point`, the field Point 2 trusts
+    MOST and the one a live manifest (DoE-claude, 2026-08-17) actually had
+    unresolved.
+    """
+    manifest = _compliant_manifest()
+    manifest["programmatic_entry_point"] = {
+        "posix": {"repo": "claude_klabauter", "path": "scripts/install-maximalist.py"},
+        "entry_point_contract": {"check_only_flag": "--check-only"},
+    }
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: programmatic_entry_point.posix" in err
+    assert "dict" in err
+
+
+def test_point2_empty_string_programmatic_entry_point_leg_fails(tmp_path, capsys):
+    """Same vacuous-pass-in-cheaper-disguise case as `standalone_setup_script`,
+    for the authoritative witness field."""
+    manifest = _compliant_manifest()
+    manifest["programmatic_entry_point"] = {
+        "posix": "",
+        "entry_point_contract": {"check_only_flag": "--check-only"},
+    }
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: programmatic_entry_point.posix" in err
+
+
+def test_point2_declared_windows_programmatic_entry_point_must_exist(tmp_path, capsys):
+    """The Windows leg is checked with equal force on the authoritative witness
+    too — mirrors `test_point2_declared_windows_setup_script_must_exist`, which
+    only ever exercised `standalone_setup_script`."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "install-maximalist.py").write_text("", encoding="utf-8")
+    manifest = _compliant_manifest()
+    manifest["programmatic_entry_point"] = {
+        "posix": "scripts/install-maximalist.py",
+        "windows": "scripts/install-maximalist.ps1",
+        "entry_point_contract": {"check_only_flag": "--check-only"},
+    }
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "FAIL [point-2]: programmatic_entry_point.windows" in err
+
+
+def test_point2_absent_platform_leg_stays_a_legitimate_skip(tmp_path, capsys):
+    """Negative-spec boundary: the fix above must not turn an ABSENT key into a
+    failure. A platform served another way declares nothing, and the remediation
+    text for a bad value explicitly offers key removal as a fix — so removing it
+    has to actually work."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(posix="scripts/setup.py")
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    assert rc == 0, capsys.readouterr().err
+
+
+def test_point2_ignores_non_path_keys_on_the_setup_script_block(tmp_path, capsys):
+    """`_comment_*` keys and any future non-path metadata are not paths and must
+    not be stat-ed — only the declared platform legs are."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.py").write_text("", encoding="utf-8")
+    manifest = _manifest_with_setup_script(
+        posix="scripts/setup.py",
+        _comment_standalone_setup_script="prose that is not a path",
+    )
+    path = _write_manifest(tmp_path, manifest)
+
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+
+    assert rc == 0, capsys.readouterr().err

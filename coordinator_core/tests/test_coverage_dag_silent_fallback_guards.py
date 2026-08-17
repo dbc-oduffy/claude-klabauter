@@ -24,6 +24,14 @@ Sites closed:
     result.notes capture — see the Tier 2 comment block at its definition.
 
 Routed from state/bug-backlog/2026-07-22-coverage-gate-silent-fallbacks-design-call.yaml.
+
+K-001 note (state/kill-ledger.md): `run_coverage_gate` and its verdict were
+removed under kill-ledger entry K-001. The one test below asserting on
+`run_coverage_gate`'s public result surface (VERDICT=INDETERMINATE,
+exit_code=2) was deleted as dead code; the internal guard it wrapped —
+`cov._derive_dag_chain_set` raising INDETERMINATE with a note on a
+resolve_live_session_ids() failure — is still pinned directly by the
+sibling test above it.
 """
 
 from __future__ import annotations
@@ -116,32 +124,6 @@ def test_resolve_live_session_ids_failure_is_indeterminate_with_note(
     assert any(
         "resolve_live_session_ids raised RuntimeError" in note for note in result.notes
     ), f"expected a note naming the exception type; got {result.notes!r}"
-
-
-def test_run_coverage_gate_reports_indeterminate_on_live_sids_failure(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Caller-visible surface: run_coverage_gate must return VERDICT=INDETERMINATE
-    (exit_code=2) when resolve_live_session_ids() raises during the DAG fixpoint —
-    asserting the public result surface, not just the internal dataclass.
-    """
-    repo = _make_closing_only_repo(tmp_path)
-    closing = repo / "state" / "handoffs" / "closing.md"
-
-    def _boom():
-        raise RuntimeError("liveness backend unavailable")
-
-    monkeypatch.setattr(cov, "resolve_live_session_ids", _boom)
-
-    result = cov.run_coverage_gate(
-        repo_root=str(repo), from_handoff=str(closing.resolve())
-    )
-
-    assert result.verdict == "INDETERMINATE"
-    assert result.exit_code == 2
-    assert any(
-        "resolve_live_session_ids raised RuntimeError" in note for note in result.notes
-    ), f"expected the raised-exception note on the caller-visible result; got {result.notes!r}"
 
 
 def test_handoff_session_live_surfaces_note_on_read_failure(tmp_path: Path) -> None:

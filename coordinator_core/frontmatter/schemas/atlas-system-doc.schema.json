@@ -4,7 +4,7 @@
   "x-schema-name": "atlas-system-doc",
   "x-schema-version": "1.0.0",
   "applies_to": "docs/architecture/systems/*.md",
-  "description": "Per-system architecture atlas document — one file per tracked system boundary, authored inside docs/architecture/systems/. Carries two distinct clocks per the two-clock split (atlas-watch-script-convention.md): last_mapped (survey clock, full bootstrap only) and last_attested (targeted audit clock, on-diff passes). Produced by /architecture-survey (both clocks) and /architecture-audit (last_attested only). Spec backlink: docs/wiki/canonical-artifact-shapes.md § Atlas documents.",
+  "description": "Per-system architecture atlas document — one file per tracked system boundary, authored inside docs/architecture/systems/. Carries two distinct clocks per the two-clock split (atlas-watch-script-convention.md): last_mapped (survey clock, full bootstrap only) and last_attested (targeted audit clock, on-diff passes). Produced by /architecture-survey (both clocks) and /architecture-audit (last_attested only). Spec backlink: coordinator/docs/wiki/canonical-artifact-shapes.md § Atlas documents.",
   "type": "object",
   "required": [],
   "properties": {

@@ -26,15 +26,21 @@ stay green even if the handler regressed to joining `state/` directly onto
 the gitdir (the exact P1 this suite now guards against — see
 `TestGitdirShapeRegression`).
 
-All handlers are async; asyncio.run() is used directly in sync test functions —
-no pytest-asyncio dependency, matching this package's other hooks.* tests.
+`_handler` is a plain `def` (sync branch, dispatch-timeout enforceable — see
+its own docstring), so `_run` below is a passthrough rather than an
+asyncio.run() wrapper — kept as a named seam so call sites need no change.
 """
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
+
+import pytest
+
+# SPAWN-RATCHET Rule 2/4: _git_init below spawns a real `git init` for every
+# test in this file. See coordinator_core/tests/test_no_new_spawning_tests.py.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git_init(worktree_root: Path) -> None:
@@ -52,8 +58,8 @@ def _gitdir(worktree_root: Path) -> Path:
     return worktree_root / ".git"
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    return result
 
 
 _OPEN_UNFILLED = """---

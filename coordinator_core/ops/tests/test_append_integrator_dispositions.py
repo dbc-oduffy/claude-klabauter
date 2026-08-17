@@ -40,6 +40,11 @@ _FINDINGS_BODY = (
     "rationale: dead import, safe to drop.\n\n"
 )
 
+_NO_FINDINGS_BODY = (
+    "## Findings\n\n"
+    "None.\n\n"
+)
+
 _UNFILLED_FINDINGS_BODY = (
     "## Findings\n\n"
     "<!-- One entry per finding: `- [severity] <finding> "
@@ -228,6 +233,57 @@ class TestFindingsCheckIsScopedToTheFindingsSection:
         message = str(excinfo.value)
         assert "have the reviewer replace" in message
         assert "## Findings" in message
+
+    def test_no_findings_records_an_empty_block(self, tmp_path):
+        """A reviewer that filled its findings section and declared none is a
+        legitimate outcome; without a recordable path the only way to close the
+        loop is to invent a finding."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_NO_FINDINGS_BODY,
+        )
+        result = mod.append_dispositions(sidecar, {}, git_root=tmp_path, no_findings=True)
+        assert result["already_dispositioned"] is False
+        text = sidecar.read_text(encoding="utf-8")
+        assert "## Integrator Dispositions" in text
+        # The claim cannot be verified against reviewer prose at write time, so
+        # the block records that it was made — a zero-finding close stays
+        # greppable instead of looking identical to a lazy one.
+        assert "no_findings: true" in text
+
+    def test_ordinary_block_carries_no_no_findings_marker(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        assert "no_findings" not in sidecar.read_text(encoding="utf-8")
+
+    def test_no_ids_without_the_flag_is_still_refused(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_NO_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError, match="no finding ids supplied"):
+            mod.append_dispositions(sidecar, {}, git_root=tmp_path)
+
+    def test_no_findings_with_ids_is_refused(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError, match="finding ids were supplied"):
+            mod.append_dispositions(
+                sidecar, {"applied": ["F1"]}, git_root=tmp_path, no_findings=True
+            )
+
+    def test_no_findings_does_not_bypass_the_unfilled_scaffold_check(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_UNFILLED_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError, match="unfilled scaffold"):
+            mod.append_dispositions(sidecar, {}, git_root=tmp_path, no_findings=True)
 
     def test_real_reviewer_summary_and_finding_subheadings_appendable(self, tmp_path):
         """Pins the real producer layout: `## Findings` immediately followed

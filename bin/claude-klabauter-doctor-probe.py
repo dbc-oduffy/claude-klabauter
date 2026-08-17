@@ -650,6 +650,331 @@ def _run_probe_core_import(claude_klabauter_root: Path) -> _ProbeResult:
         )
 
 
+_DIALECT_GUARD_ARMED_PROBE = "claude-klabauter.dialect_guard.armed"
+
+
+def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.dialect_guard.armed — OPTIONAL (required=False); never gating.
+
+    Reports whether `coordinator_core/bash_guards/_dialect.py`'s PowerShell
+    dialect guard is ARMED (`tree_sitter`/`tree_sitter_pwsh` importable and
+    parsing) under the interpreter(s) that actually run bash guard hooks.
+    That module's ImportError -> SILENT routing is legal at runtime by
+    design — a guard may decline to rule on PowerShell rather than crash —
+    but a DISARMED state going undetected forever is the defect this probe
+    exists to end (docs/plans/2026-08-17-machine-first-install-surface.md
+    § C1). This probe does NOT arm the guard — that's a later chunk's job
+    (§ C2) — it only reports, loudly, what state the guard is in.
+
+    Reuses `coordinator_core.bash_guards._dialect.probe_armed`, which
+    exercises the guard's OWN code path (`_powershell_tokens`) rather than
+    a second, parallel check — a disarmed result durably logs through the
+    existing `_log_dialect_parser_unavailable` observability record. This
+    probe reads that same record's path (`dialect_parser_unavailable_log_
+    path()`) for its remediation, rather than inventing a second one.
+
+    Checks bare `python3` on PATH — what `hooks.json` runs every bash guard
+    hook under — plus `sys.executable` (the interpreter running THIS
+    probe), since a healthy result under the probe's own interpreter alone
+    would miss the actual disarmed case on a box where that interpreter is
+    a fallback venv, not what hooks actually run under.
+
+    `required=False` throughout: a disarmed guard is the CURRENT, still-
+    legal runtime state (until the install-chain arms it), so this must
+    never punish an otherwise-healthy install to DEGRADED-required. status
+    is PASS when every checked interpreter is ARMED, DEGRADED otherwise.
+    """
+    if claude_klabauter_root is None:
+        return _ProbeResult(
+            probe=_DIALECT_GUARD_ARMED_PROBE,
+            status=_INFO,
+            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
+            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+            required=False,
+            skipped=True,
+        )
+
+    root_str = str(claude_klabauter_root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+    try:
+        from coordinator_core.bash_guards._dialect import (
+            dialect_parser_unavailable_log_path,
+            probe_armed,
+        )
+    except ImportError as exc:
+        return _ProbeResult(
+            probe=_DIALECT_GUARD_ARMED_PROBE,
+            status=_INFO,
+            detail=f"Probe skipped — coordinator_core.bash_guards._dialect not importable: {exc}",
+            remediation="Resolve coordinator_core importability first (see claude-klabauter.core.import).",
+            required=False,
+            skipped=True,
+        )
+
+    interpreters: dict[str, str] = {"probe interpreter (sys.executable)": sys.executable}
+    bare_python3 = shutil.which("python3")
+    if bare_python3 and bare_python3 != sys.executable:
+        interpreters["bare python3 on PATH (what hooks.json runs guard hooks under)"] = bare_python3
+
+    checked: dict[str, Any] = {}
+    disarmed: list[str] = []
+    for label, interpreter in interpreters.items():
+        armed, detail = probe_armed(interpreter, claude_klabauter_root)
+        checked[label] = {"interpreter": interpreter, "armed": armed, "detail": detail}
+        if not armed:
+            disarmed.append(f"{label} ({interpreter}): {detail}")
+
+    data = {"checked": checked, "durable_record": str(dialect_parser_unavailable_log_path())}
+
+    if not disarmed:
+        return _ProbeResult(
+            probe=_DIALECT_GUARD_ARMED_PROBE,
+            status=_PASS,
+            detail=f"PowerShell dialect guard ARMED under all {len(interpreters)} checked interpreter(s).",
+            remediation="—",
+            required=False,
+            data=data,
+        )
+
+    # `probe_armed`'s detail carries a `cause: missing-package` /
+    # `cause: not-a-missing-package` tag (reviewer finding: a remediation
+    # that always names the missing-grammar-package fix, regardless of
+    # which of `_powershell_tokens`'s three SILENT cases fired, sends an
+    # operator to fix the wrong thing once a parser regression -- not a
+    # missing package -- is what's live).
+    any_missing_package = any(
+        "cause: missing-package" in entry["detail"]
+        for entry in checked.values()
+        if not entry["armed"]
+    )
+    remediation = (
+        "Install tree_sitter and tree_sitter_pwsh under the named interpreter(s), "
+        "e.g.: <interpreter> -m pip install tree_sitter tree_sitter_pwsh"
+        if any_missing_package
+        else "Cause is not a missing package (see the cause tag in each detail above) — "
+        "inspect the reported cause before assuming a package install fixes this."
+    )
+
+    return _ProbeResult(
+        probe=_DIALECT_GUARD_ARMED_PROBE,
+        status=_DEGRADED,
+        detail=(
+            "PowerShell dialect guard DISARMED under: " + "; ".join(disarmed)
+            + f". Durable record: {data['durable_record']}"
+        ),
+        remediation=remediation,
+        required=False,
+        data=data,
+    )
+
+
+_SETTINGS_HOME_COMPLETE_PROBE = "claude-klabauter.settings_home.complete"
+
+
+def _run_probe_settings_home_complete(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.settings_home.complete — OPTIONAL (required=False); never gating.
+
+    Reports whether `<settings-home>` (`~/.coordinator-claude-settings`) is
+    actually populated, per `coordinator_core.install.settings_home_report`
+    — the same enumeration+check `scripts/setup.py :: install_verify_settings_home`
+    uses, so a cold re-check here and the install-time report line share one
+    oracle rather than two that can drift apart (docs/plans/
+    2026-08-17-machine-first-install-surface.md § C5).
+
+    Every sub-check is a live `Path.exists()`/dir-listing read against the
+    resolved settings-home path — never a read of a self-reported manifest
+    the installer itself wrote (see that module's docstring for why). A
+    disarmed/incomplete settings home is a real, currently-reachable state
+    (a partial install, an interrupted `scripts/setup.py` run, a manually
+    pruned `bin/`) rather than something this probe can fix — it only
+    reports, loudly, what is actually on disk. required=False: an
+    incomplete settings home does not represent a broken claude-klabauter *engine*,
+    so this must never punish an otherwise-healthy install to a required
+    DEGRADED.
+    """
+    if claude_klabauter_root is None:
+        return _ProbeResult(
+            probe=_SETTINGS_HOME_COMPLETE_PROBE,
+            status=_INFO,
+            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
+            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+            required=False,
+            skipped=True,
+        )
+
+    root_str = str(claude_klabauter_root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install.settings_home_report import check_settings_home
+    except ImportError as exc:
+        return _ProbeResult(
+            probe=_SETTINGS_HOME_COMPLETE_PROBE,
+            status=_INFO,
+            detail=f"Probe skipped — coordinator_core.install.settings_home_report not importable: {exc}",
+            remediation="Resolve coordinator_core importability first (see claude-klabauter.core.import).",
+            required=False,
+            skipped=True,
+        )
+
+    try:
+        settings_home_path = settings_home()
+    except RuntimeError as exc:
+        return _ProbeResult(
+            probe=_SETTINGS_HOME_COMPLETE_PROBE,
+            status=_INFO,
+            detail=f"Probe skipped — settings-home unresolvable: {exc}",
+            remediation="Resolve COORDINATOR_SETTINGS_HOME/CLAUDE_HOME/HOME first.",
+            required=False,
+            skipped=True,
+        )
+
+    report = check_settings_home(settings_home_path, claude_klabauter_root)
+    data = {
+        "settings_home": str(settings_home_path),
+        "fixed_missing": [m.label for m in report.fixed_missing],
+        "forwarder_expected": report.forwarder_expected,
+        "forwarder_present": report.forwarder_present,
+        "forwarder_missing_count": len(report.forwarder_missing),
+        "forwarder_derivation_error": report.forwarder_derivation_error,
+    }
+
+    if report.complete:
+        return _ProbeResult(
+            probe=_SETTINGS_HOME_COMPLETE_PROBE,
+            status=_PASS,
+            detail=f"Settings home complete at {settings_home_path} "
+                   f"({report.forwarder_present}/{report.forwarder_expected} bin/ forwarders present).",
+            remediation="—",
+            required=False,
+            data=data,
+        )
+
+    problems: list[str] = [m.label for m in report.fixed_missing]
+    if report.forwarder_derivation_error is not None:
+        problems.append(f"bin/ forwarder set undeterminable: {report.forwarder_derivation_error}")
+    elif report.forwarder_missing:
+        problems.append(
+            f"{len(report.forwarder_missing)}/{report.forwarder_expected} bin/ forwarders missing "
+            f"(e.g. {', '.join(report.forwarder_missing[:5])})"
+        )
+
+    return _ProbeResult(
+        probe=_SETTINGS_HOME_COMPLETE_PROBE,
+        status=_DEGRADED,
+        detail=f"Settings home at {settings_home_path} is incomplete: " + "; ".join(problems),
+        remediation="Re-run scripts/setup.py from claude-klabauter — its "
+                     "'Install: settings-home completeness' step re-lands the missing members.",
+        required=False,
+        data=data,
+    )
+
+
+_ENTRYPOINTS_PATH_RESOLVED_PROBE = "claude-klabauter.entrypoints.path_resolved"
+
+
+def _run_probe_entrypoints_path_resolved(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.entrypoints.path_resolved — OPTIONAL (required=False); never gating.
+
+    Reports whether `coordinator-invoke` and `coordinator-cockpit-emit-schema`
+    actually RESOLVE and EXECUTE on PATH after install
+    (docs/plans/2026-08-17-machine-first-install-surface.md § C3). This is
+    the "chain-walk" leg of that chunk's PATH-resolution probe — the
+    "standalone script" leg is
+    `coordinator_core.install.path_resolution_report`'s own CLI. Both call
+    the same `check_entrypoint_path_resolution` oracle so the two never
+    drift apart, matching this file's existing dialect-guard/settings-home
+    probes' one-oracle-two-consumers shape.
+
+    required=False: a resolution failure here means the settings-home `bin/`
+    forwarders (a later install step than CLAUDE_KLABAUTER_ROOT resolution) have not
+    landed yet or PATH has not been refreshed in this shell — a real,
+    currently-reachable partial-install state, not a broken engine.
+
+    On Windows this probe's result reflects THIS process's inherited
+    environment, not a live re-read of `HKCU\\Environment` — see
+    `path_resolution_report._windows_caveat`'s docstring. A FAIL here on
+    Windows inside a long-lived session is not conclusive; the caveat is
+    surfaced in `data.platform_caveat` rather than silently omitted.
+    """
+    if claude_klabauter_root is None:
+        return _ProbeResult(
+            probe=_ENTRYPOINTS_PATH_RESOLVED_PROBE,
+            status=_INFO,
+            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
+            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+            required=False,
+            skipped=True,
+        )
+
+    root_str = str(claude_klabauter_root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+    try:
+        from coordinator_core.install.path_resolution_report import check_entrypoint_path_resolution
+    except ImportError as exc:
+        return _ProbeResult(
+            probe=_ENTRYPOINTS_PATH_RESOLVED_PROBE,
+            status=_INFO,
+            detail=f"Probe skipped — coordinator_core.install.path_resolution_report not importable: {exc}",
+            remediation="Resolve coordinator_core importability first (see claude-klabauter.core.import).",
+            required=False,
+            skipped=True,
+        )
+
+    report = check_entrypoint_path_resolution()
+    data: dict[str, Any] = {
+        "platform": report.platform,
+        "method": report.method,
+        "checks": {
+            c.name: {"resolved_path": c.resolved_path, "executed_ok": c.executed_ok, "detail": c.detail}
+            for c in report.checks
+        },
+        "platform_caveat": report.platform_caveat,
+        "transport_error": report.transport_error,
+    }
+
+    if report.transport_error is not None:
+        return _ProbeResult(
+            probe=_ENTRYPOINTS_PATH_RESOLVED_PROBE,
+            status=_INFO,
+            detail=f"Probe could not run: {report.transport_error}",
+            remediation="Re-run manually: python3 -m coordinator_core.install.path_resolution_report",
+            required=False,
+            skipped=True,
+            data=data,
+        )
+
+    if report.all_ok:
+        return _ProbeResult(
+            probe=_ENTRYPOINTS_PATH_RESOLVED_PROBE,
+            status=_PASS,
+            detail=f"Both entrypoints resolve and execute on PATH ({report.method}).",
+            remediation="—",
+            required=False,
+            data=data,
+        )
+
+    failing = [c.name for c in report.checks if not (c.resolved_path and c.executed_ok)]
+    detail = f"Entrypoint(s) not resolving/executing on PATH: {', '.join(failing)} ({report.method})."
+    if report.platform_caveat:
+        detail += f" CAVEAT: {report.platform_caveat}"
+    return _ProbeResult(
+        probe=_ENTRYPOINTS_PATH_RESOLVED_PROBE,
+        status=_DEGRADED,
+        detail=detail,
+        remediation="Re-run scripts/setup.py from claude-klabauter, then open a NEW shell/session "
+                     "before re-checking — a PATH write only takes effect in a shell started after it.",
+        required=False,
+        data=data,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Probe 4: coverage seam
 # ---------------------------------------------------------------------------
@@ -2945,6 +3270,9 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     # Command-type static checks (DR-215 rebuild § C1b). Each accepts claude_klabauter_root
     # (Path | None) and self-handles the unresolved case. Manifest triage flags +
     # _apply_selector govern which appear in --triage / --cluster; run_probes runs all.
+    results.append(_run_probe_dialect_guard_armed(claude_klabauter_root))
+    results.append(_run_probe_settings_home_complete(claude_klabauter_root))
+    results.append(_run_probe_entrypoints_path_resolved(claude_klabauter_root))
     results.append(_run_probe_coverage_seam(claude_klabauter_root))
     results.append(_run_probe_resident_debris(claude_klabauter_root))
     results.append(_run_probe_worktree_bloat(claude_klabauter_root))
@@ -3261,6 +3589,42 @@ def _sentinel_vendor_drift(envelope: dict[str, Any]) -> dict[str, Any]:
     return {"status": "UNKNOWN", "checked": None, "drifted": [], "indeterminate": []}
 
 
+def _sentinel_advisory_only(envelope: dict[str, Any]) -> bool:
+    """True iff the envelope's DEGRADED/BROKEN overall is driven entirely by
+    non-required probe rows — i.e. no required-probe row is BROKEN or DEGRADED.
+
+    Root cause this key exists to fix: `_local_reduce_overall` (and its shared
+    twin `coordinator_core.doctor_envelope.reduce_overall`) take a RAN probe's
+    `status` into the worst-of reduction regardless of `required` — a
+    required=False DEGRADED probe (e.g. Claude-klabauter.schema.vendor_drift) drags
+    `envelope.overall` to DEGRADED exactly like a real prerequisite failure
+    would. `_sentinel_verdict` then maps that to AMBER (or BROKEN to RED) with
+    no way for a reader to tell the two cases apart. This function reconstructs
+    the distinction from the already-enriched `required` field the envelope
+    rows carry (`_build_enriched_envelope`), so `check_claude_klabauter_doctor_sentinel`
+    can render ADVISORY instead of a bare AMBER/RED when nothing required
+    actually failed.
+
+    Returns False for a GREEN/INFO envelope (the distinction is moot), False
+    whenever any required probe row is itself BROKEN or DEGRADED (real
+    failure — render as before), and False on any malformed envelope shape —
+    the safe default is "render as a real failure", never a silent ADVISORY
+    downgrade of something this function failed to classify.
+
+    Never raises — mirrors `_sentinel_vendor_drift`'s own contract.
+    """
+    try:
+        overall = str(envelope.get("overall") or "")
+        if overall not in (_BROKEN, _DEGRADED):
+            return False
+        for row in envelope.get("probes", []):
+            if row.get("status") in (_BROKEN, _DEGRADED) and row.get("required") is True:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path) -> None:
     """Write state/doctor-last-run.json from this run's envelope.
 
@@ -3283,6 +3647,11 @@ def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path
     schema_drift_watch.py's "Public seam" docstring paragraph for why a commit-time
     gate should prefer calling scan_vendored_schema_drift() live over reading this
     (necessarily daily-stale) sentinel value.
+
+    `advisory_only` is another such additive key (2026-08-17): True iff the
+    verdict/red_probes/hint above reflect a non-required-only degradation (see
+    `_sentinel_advisory_only`). A reader tolerating its absence (older sentinel,
+    pre-key) must fall back to today's un-distinguished AMBER/RED rendering.
 
     Sentinel-write cadence is UNCHANGED by this key: still only `--triage` and full
     runs write this file (see the call site below) — `--step-zero`, `--probe`, and
@@ -3308,6 +3677,7 @@ def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path
             "schema_version": 1,
             "plugin": "claude-klabauter",
             "vendor_drift": _sentinel_vendor_drift(envelope),
+            "advisory_only": _sentinel_advisory_only(envelope),
         }
         sentinel_path = claude_klabauter_root / "state" / "doctor-last-run.json"
         sentinel_path.parent.mkdir(parents=True, exist_ok=True)

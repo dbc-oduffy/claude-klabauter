@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from coordinator_core.ops.generate_repomap import _resolve_python_cmd, _trusted_root, main
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +124,15 @@ def test_main_default_args_when_no_argv(tmp_path, monkeypatch):
     assert rc == 0
     cmd = captured["cmd"]
     assert cmd[-7:] == [str(gen), "--project-root", ".", "--budget", "4000", "--profile", "balanced"]
-    assert captured["kwargs"] == no_console_creationflags()
+    # Compared against the helper the code actually calls
+    # (`generate_repomap` uses `no_console_passthrough_kwargs`, because the
+    # generator's output is meant to reach the operator). Asserting
+    # `no_console_creationflags()` here passed only when pytest's capture left
+    # `sys.stdout`/`sys.stderr` without a `fileno()` — under fd-level capture
+    # the passthrough helper contributes real fds and the two stopped matching.
+    # Both sides now evaluate the same helper in this same process, so the
+    # assertion is capture-mode-agnostic.
+    assert captured["kwargs"] == no_console_passthrough_kwargs()
 
 
 def test_main_passthrough_args_take_precedence(tmp_path, monkeypatch):

@@ -1379,7 +1379,16 @@ def _first_result(
         return None
 
     session_repo_root = _git_show_toplevel(cwd=cwd) or cwd
-    is_cross_repo_write = os.path.normcase(os.path.abspath(repo_root)) != os.path.normcase(
+    # `os.path.normcase` is a no-op on POSIX (macOS APFS included) -- it
+    # only folds case on Windows. On a case-insensitive-but-case-preserving
+    # filesystem a `repo_root` and `session_repo_root` that differ only in
+    # case would compare unequal here and this write would be wrongly
+    # classified as cross-repo, downgrading a would-be in-repo hard-deny to
+    # advisory-only (see the DR-277 comment above `target_dir` for why that
+    # distinction is a real security boundary, not cosmetic). Route through
+    # the module's designated helper instead, per
+    # `coordinator_core/write_guards/_case_fold_path.py`'s docstring.
+    is_cross_repo_write = casefold_path(os.path.abspath(repo_root)) != casefold_path(
         os.path.abspath(session_repo_root)
     )
     if _forensics is not None:

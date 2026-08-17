@@ -406,8 +406,6 @@ Negative-spec (hard-won):
 from __future__ import annotations
 
 import importlib
-import inspect
-import json
 import os
 import types as _types
 from pathlib import Path
@@ -1657,6 +1655,14 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # said could not happen.
     _declared_writes: list = []
     _declared_writes_token = _declared_writes_var.set(_declared_writes)
+    # `inspect` is imported HERE, not at module scope: it costs 13 modules on the
+    # engine's cold-start path (ast/dis/tokenize/opcode/annotationlib/weakref and
+    # friends) for one predicate call. This module is measured against a
+    # module-count ceiling — `coordinator_core/benchmarks/import-budget-manifest.json`
+    # `/entrypoints/coordinator_core.ipc`. After the first dispatch it is a
+    # `sys.modules` hit, so the per-call cost is a dict lookup. Do NOT hoist it
+    # back to module scope to tidy the import block.
+    import inspect
     try:
         if inspect.iscoroutinefunction(handler):
             # Async handler: wrap with per-request timeout.

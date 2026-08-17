@@ -1472,17 +1472,17 @@ set "_cachedir=%LOCALAPPDATA%\\coordinator"
 if exist "%_cachedir%\\" goto :cache_write
 mkdir "%_cachedir%" 2>nul
 :cache_write
-set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
+set "_tmpdir=%_cachedir%\\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
 2>nul mkdir "%_tmpdir%"
 if not errorlevel 1 goto :cache_write_got_dir
-set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
+set "_tmpdir=%_cachedir%\\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
 2>nul mkdir "%_tmpdir%"
 if not errorlevel 1 goto :cache_write_got_dir
-set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
+set "_tmpdir=%_cachedir%\\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
 2>nul mkdir "%_tmpdir%"
 if errorlevel 1 goto :run_baked
 :cache_write_got_dir
-set "_tmpfile=%_tmpdir%\python-bin-cache.tmp"
+set "_tmpfile=%_tmpdir%\\python-bin-cache.tmp"
 REM The cache file holds a BARE path, not a quoted one. `echo "%_py%">file`
 REM wrote the quotes literally, so the file's content was not itself a usable
 REM path -- only this forwarder's own reader could consume it, and only because
@@ -1844,11 +1844,20 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
                 # iteration-order luck -- it carries the gen-launcher-shim.py
                 # --ensure-unix provenance line the extensionless sibling
                 # lacks, and matches the .py-CLI convention every other
-                # install-path decision already assumes. This branch is now
-                # exercised only by the synthetic fixture test (no live
-                # on-disk instance) -- kept as a guard against a future
-                # occurrence of the same shape, not to tolerate a known
-                # defect.
+                # install-path decision already assumes.
+                #
+                # NEGATIVE SPEC -- this branch is NOT dormant. An earlier
+                # version of this comment claimed it was "exercised only by
+                # the synthetic fixture test (no live on-disk instance)";
+                # that is false and cost real debugging time. It has a live
+                # pair today (`coordinator-prepare-commit-msg`) and fires on
+                # the CLEAN path, unprompted by any failure. Two consumers
+                # already depend on knowing that: `forwarder_self_heal`
+                # captures stdout+stderr so session boot does not print this
+                # every time, and `settings_home_report` redirects stdout so
+                # the JSON doctor probe's contract survives it. The `print`
+                # below therefore reaches any caller that has not arranged
+                # otherwise -- check the tree before assuming it is quiet.
                 dropped = existing if py_twin == n else n
                 print(
                     f"[install-substrate] WARNING: duplicate CLI pair for "
@@ -2052,6 +2061,27 @@ def _run_hardware_audit(check_only: bool) -> None:
         return
     from coordinator_core.ops.detect_hardware import main as _detect_hardware_main
 
+    # detect_hardware's `machine-local set` children write straight to this
+    # process's inherited fd (no_console_passthrough_kwargs, real fds, not
+    # sys.stdout) — an unbuffered write that races every `print()` this
+    # module and its callers made before this point. Redirected output is
+    # block-buffered, so without this flush the whole block of "[install-
+    # substrate] ..." / "[machine-local] ..." lines queued so far surfaces
+    # AFTER the child's write instead of before it. detect_hardware.py flushes
+    # around its OWN prints for the same reason; this flush covers everything
+    # queued upstream of this call.
+    #
+    # NOT the only raw-fd `subprocess.run` site in this module: the fnm
+    # curl-install leg's `subprocess.run(["bash", "-s", ...])` (below, the
+    # fnm-provisioning function) also inherits the real fd with no
+    # `capture_output`/`stdout=` kwarg. It needs no flush of its own only
+    # because its immediately preceding `print(..., flush=True)` already
+    # flushes independently, and `subprocess.run` blocks — nothing prints
+    # after it returns for that flush to reorder against. A future raw-fd
+    # `subprocess.run` site is not ruled out by this comment or that one;
+    # each such site is safe (or not) on its own terms, not because this is
+    # "the" raw-fd site in this module.
+    sys.stdout.flush()
     hw_rc = _detect_hardware_main([])
     if hw_rc != 0:
         print("[setup] WARNING: hardware audit failed — re-run install or set hardware.* keys manually", file=sys.stderr)

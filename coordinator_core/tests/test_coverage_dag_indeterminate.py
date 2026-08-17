@@ -70,11 +70,17 @@ construction, also a real non-merge commit that `--grep` would find), so only
 its final `git log --all --no-merges --grep=...` call is monkeypatched to
 force the zero-match condition; the preceding add-commit + trailer lookups
 stay real.
+
+K-001 note (state/kill-ledger.md): `run_coverage_gate` and its verdict were
+removed under kill-ledger entry K-001. The one test below asserting the
+ancestor-skip note survives on `run_coverage_gate`'s COVERED return path
+was deleted as dead code covering a removed function — `_derive_dag_chain_set`
+itself, which produces that note, is still pinned directly by the other
+tests in this file.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 from typing import List
@@ -305,83 +311,6 @@ def test_derive_dag_chain_set_already_merged_null_attribution_closing_node(
         and "ancestor segment skipped" not in note
         for note in result.notes
     ), f"expected a 'no add-commit found (attribution gap)' note; got {result.notes!r}"
-
-
-def test_run_coverage_gate_covered_path_surfaces_ancestor_skip_note(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Review: code-reviewer P1 — dag_result.notes (e.g. the ancestor-skip
-    note) must survive to the operator on EVERY run_coverage_gate return
-    path, not only the indeterminate short-circuit. Prior to the fix, a
-    non-indeterminate DAG-mode result (closing node clean, ratio at/above
-    threshold -> COVERED) dropped the note entirely -- an operator would see
-    a plain COVERED verdict with no trace that a DAG ancestor segment was
-    never walked, which is worse than the INDETERMINATE it silently replaced.
-
-    `_derive_dag_chain_set` is monkeypatched (mirrors
-    test_coverage_dag_scope_paths.py's `_patch_dag_chain_set` shape) to
-    return the exact non-indeterminate, note-carrying shape the real
-    attribution-gap ancestor case produces, over a real one-commit repo. A
-    trail record fully reviews that one commit so the verdict resolves
-    COVERED (uncovered_shas empty) -- the exact path the finding names.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-
-    (repo / "base.py").write_text("print(0)\n")
-    _git(["add", "base.py"], repo)
-    _git(["commit", "-m", "base commit"], repo)
-
-    (repo / "src.py").write_text("print(1)\n")
-    _git(["add", "src.py"], repo)
-    _git(["commit", "-m", "closing node commit"], repo)
-    closing_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
-
-    ancestor_skip_note = (
-        "ancestor.md: no add-commit found (attribution gap) — ancestor "
-        "segment skipped"
-    )
-
-    def _fake_derive(from_handoff, repo_root, closing_session_id=""):
-        return cov._DagChainResult(
-            shas=[closing_sha],
-            indeterminate=False,
-            notes=[ancestor_skip_note],
-        )
-
-    monkeypatch.setattr(cov, "_derive_dag_chain_set", _fake_derive)
-
-    trail_dir = repo / "state" / "review-trail"
-    trail_dir.mkdir(parents=True)
-    (trail_dir / f"record_{closing_sha[:8]}.json").write_text(
-        json.dumps(
-            {
-                "sha_range": f"{closing_sha}^..{closing_sha}",
-                "reviewer": "code-reviewer",
-                "scope": "session",
-                "scope_kind": "diff",
-                "verdict": "ok",
-                "diff_loc": 1,
-                "session_id": "00000000-0000-0000-0000-000000000001",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    fake_handoff = str((repo / "state" / "handoffs" / "closing.md"))
-    result = cov.run_coverage_gate(from_handoff=fake_handoff, repo_root=str(repo))
-
-    assert result.verdict == "COVERED", (
-        f"expected COVERED (fully reviewed closing node); "
-        f"verdict_line={result.verdict_line!r} notes={result.notes!r}"
-    )
-    assert not result.uncovered_shas, result.uncovered_shas
-    assert ancestor_skip_note in result.notes, (
-        f"the ancestor-skip note must survive to the operator on the "
-        f"COVERED path, not only the INDETERMINATE short-circuit; "
-        f"notes={result.notes!r}"
-    )
 
 
 def test_derive_dag_chain_set_vacuous_match(tmp_path: Path, monkeypatch) -> None:

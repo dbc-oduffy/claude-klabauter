@@ -231,6 +231,21 @@ def test_display_gap_report_undefined_deepening_faithful_oracle_quirk():
     )
 
 
+def test_display_sizing_prefers_name_falls_back_to_link_path_never_intent():
+    """coordinator_core/text/query_record_display.py::_display_sizing — not in
+    the oracle's TYPE_DISPLAY table (sizing-object postdates the JS port).
+    `name` is a short label; falling back to `intent` (multi-sentence prose)
+    would blow out a markdown list, exactly the failure `name` was added to
+    fix — the highest-value assertion here is that `intent` never surfaces."""
+    fn = TYPE_DISPLAY["sizing-object"]
+    assert fn("state/sizings/x.yaml", {"name": "Widget Sizing", "intent": "A very long prose."}) == (
+        "- [Widget Sizing](state/sizings/x.yaml)"
+    )
+    fallback = fn("state/sizings/x.yaml", {"intent": "A very long multi-sentence prose blurb."})
+    assert fallback == "- [state/sizings/x.yaml](state/sizings/x.yaml)"
+    assert "A very long multi-sentence prose blurb." not in fallback
+
+
 def test_default_display_fallback_uses_link_path_not_basename():
     """bin/query-records.js:1616 — the generic fallback's `fm.title || p` falls
     back to the (already-relativized) link path itself, NOT `path.basename(p)`
@@ -433,6 +448,17 @@ def test_coverage_audit_fixture_round_trip(tmp_path):
         "- [2026-07-22-widget-coverage-audit.md](docs/research/2026-07-22-widget-coverage-audit.md) "
         "— present: 5, absent: 2"
     )
+
+
+def test_sizing_fixture_round_trip_yaml_whole_file(tmp_path):
+    _write_yaml(
+        tmp_path / "state" / "sizings" / "s1.yaml",
+        "name: Widget Sizing\nintent: A very long multi-sentence prose blurb.\n",
+    )
+    records = query_records("sizing-object", tmp_path, limit=0)
+    expansion = format_records(records, {"type": "sizing-object", "format": "markdown-list"},
+                                root=tmp_path, from_dir=tmp_path)
+    assert expansion == "- [Widget Sizing](state/sizings/s1.yaml)"
 
 
 def test_tracker_and_roadmap_fall_back_to_default_display(tmp_path):

@@ -65,7 +65,7 @@ from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KIND
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
 # single-literal-source discipline.
 # ---------------------------------------------------------------------------
-MEMO_SCHEMA_VERSION = "1.5.0"
+MEMO_SCHEMA_VERSION = "1.6.0"
 
 #: Generator-provenance declaration: emit_schemas() writes both of these
 #: fixed tracked artifacts to this module's own directory by default.
@@ -101,6 +101,13 @@ GENERATES = [
 # ---------------------------------------------------------------------------
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
+    "1.5.0 -> 1.6.0 catches the constant up to a shape drift: commit "
+    "0bf6d576e added `sent_by` to both emitted schemas without moving "
+    "MEMO_SCHEMA_VERSION off 1.5.0, so the emitter stamped two different "
+    "shapes with one version string until this bump (DoE-claude "
+    "2026-08-17 cross-repo memo, DR-097 § 3). Purely additive: one new "
+    "optional property, never required — no previously-valid memo becomes "
+    "invalid. "
     "1.4.0 -> 1.5.0 added the append-only supersede-disposition field quartet "
     "(`disposition_superseded`, `superseding_note`, `superseding_realized_by`, "
     "`superseded_at`) to both schemas, plus the "

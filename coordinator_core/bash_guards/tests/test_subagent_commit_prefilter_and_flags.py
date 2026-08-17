@@ -351,6 +351,18 @@ def test_newly_added_committing_ops_all_members_of_the_set():
 # which this scan cannot see without also statically tracing call graphs
 # across modules) -- that class of gap needs a human re-grep, same as the
 # one that found this op by hand. An honest partial guard, not a full one.
+#
+# AST, not substring (coordinator:code-reviewer, 2026-08-17): the scan used
+# to be ``any(marker in source for marker in _COMMIT_SINK_CALL_MARKERS)`` --
+# a whole-module substring test that can't tell a real call site from the
+# same text sitting in a comment or a string. It produced exactly one false
+# positive live: ``repo_setup.validate_target_root`` was flagged and added
+# to ``_COMMITTING_OP_NAMES`` because ``bootstrap_repo.py`` has the literal
+# text ``commit_scoped(`` inside a comment explaining why that module does
+# NOT call it; the handler itself is read-only. The scan below instead
+# parses each module and looks for an actual ``ast.Call`` node whose callee
+# name matches a sink -- comments, strings, and docstrings can no longer
+# match.
 # ---------------------------------------------------------------------------
 
 _COMMIT_SINK_CALL_MARKERS = (
@@ -360,6 +372,13 @@ _COMMIT_SINK_CALL_MARKERS = (
     "commit_with_message_file(",
 )
 
+#: Bare callee names derived from ``_COMMIT_SINK_CALL_MARKERS`` by stripping
+#: the trailing ``(`` -- one source of truth for both the marker strings
+#: (kept for their doc value in the frozenset above) and the AST scan below.
+_COMMIT_SINK_CALL_NAMES = frozenset(
+    marker[:-1] for marker in _COMMIT_SINK_CALL_MARKERS
+)
+
 #: Ops confirmed (by hand, this review) to reach a real commit only via
 #: cross-module delegation -- outside what the static single-module source
 #: scan below can see. Named here, not silently absorbed, so the scan's
@@ -367,6 +386,35 @@ _COMMIT_SINK_CALL_MARKERS = (
 #: independently finding it would be a real regression in this test's own
 #: coverage, not just a passing test.
 _KNOWN_DELEGATION_ONLY_COMMITTING_OPS = frozenset({"handoff.ship_and_archive"})
+
+
+def _source_calls_a_commit_sink(source: str) -> bool:
+    """True iff ``source`` contains a real call site (``ast.Call``) whose
+    callee resolves to one of ``_COMMIT_SINK_CALL_NAMES`` -- either a bare
+    name (``commit_scoped(...)``) or an attribute access
+    (``module.commit_scoped(...)``). Text inside a comment, string, or
+    docstring is invisible to this walk by construction: ``ast.parse``
+    never emits a ``Call`` node for it.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            callee = func.id
+        elif isinstance(func, ast.Attribute):
+            callee = func.attr
+        else:
+            continue
+        if callee in _COMMIT_SINK_CALL_NAMES:
+            return True
+    return False
 
 
 def test_committing_op_names_covers_registry_sink_scan():
@@ -396,13 +444,34 @@ def test_committing_op_names_covers_registry_sink_scan():
             except Exception:
                 source = ""
             seen_modules[module_path] = source
-        if any(marker in source for marker in _COMMIT_SINK_CALL_MARKERS):
+        if _source_calls_a_commit_sink(source):
             missing.append(op_name)
 
     assert not missing, (
         "op(s) registered with a direct commit-sink call but absent from "
         f"_COMMITTING_OP_NAMES: {missing}"
     )
+
+
+def test_commit_sink_scan_ignores_comment_and_string_occurrences():
+    """Regression pin for the false positive this scan produced live
+    (``repo_setup.validate_target_root``, coordinator:code-reviewer,
+    2026-08-17): a sink name sitting in a comment or a string literal must
+    not be mistaken for a real call site.
+    """
+    commented = "# this module deliberately does not call commit_scoped(...)\n"
+    stringed = 'DOC = "see commit_scoped() in git_native for the real thing"\n'
+    docstringed = (
+        'def handler():\n'
+        '    """Does not call commit_scoped() -- read only."""\n'
+        "    return {}\n"
+    )
+    assert not _source_calls_a_commit_sink(commented)
+    assert not _source_calls_a_commit_sink(stringed)
+    assert not _source_calls_a_commit_sink(docstringed)
+
+    real_call = "def handler():\n    return commit_scoped(paths, msg_path, root)\n"
+    assert _source_calls_a_commit_sink(real_call)
 
 
 # ---------------------------------------------------------------------------

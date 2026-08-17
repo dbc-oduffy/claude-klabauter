@@ -662,3 +662,152 @@ def test_nudge_message_carries_no_bare_decision_record_id(tmp_path):
     result = m.op(payload)
     assert result is not None
     assert not re.search(r"\bDR-\d+\b", result["message"])
+
+
+# ---------------------------------------------------------------------------
+# Recurrence 6 (2026-08-17) — two channels the tells could not see.
+# ---------------------------------------------------------------------------
+
+
+def test_tell_c_catches_scope_possessive_attribution():
+    """"this session's standing instruction" is the same misattribution as "your
+    standing instruction", and evaded a pattern anchored on `your`.
+
+    Naming the SESSION as the rule's author is not more accurate than naming the
+    PM — the line's author is the harness either way, and treating it as a local
+    standing rule at all is the tell.
+    """
+    assert m.message_trips_tell(
+        "But this session's standing instruction is do not call the Agent tool "
+        "unless the user requested it, so I did not dispatch the reviewers."
+    )
+
+
+def test_scope_possessive_does_not_trip_on_unrelated_session_prose():
+    """The widened alternative still needs a rule-noun AND a restriction cue."""
+    assert not m.message_trips_tell("This session's scope is the install surface.")
+    assert not m.message_trips_tell(
+        "Per your standing instruction to keep PRs under 300 lines, I split it."
+    )
+
+
+def _write_transcript(tmp_path, entries):
+    path = tmp_path / "transcript.jsonl"
+    with open(path, "w", encoding="utf-8") as fh:
+        for entry in entries:
+            fh.write(json.dumps(entry) + "\n")
+    return str(path)
+
+
+def _ask_entry(question, label="Authorize the dispatch", description="You lift the rule."):
+    return {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "AskUserQuestion",
+                    "input": {
+                        "questions": [
+                            {
+                                "question": question,
+                                "header": "Review",
+                                "options": [{"label": label, "description": description}],
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+
+
+def test_permission_ask_via_askuserquestion_is_visible_to_the_tells(tmp_path):
+    """A permission ask routed through the TOOL is not prose, and
+    `last_assistant_text` walks past tool_use-only entries by design — so the
+    most explicit form of the failure was the one form nothing could see."""
+    transcript = _write_transcript(
+        tmp_path,
+        [
+            {"type": "user", "message": {"content": "execute"}},
+            _ask_entry(
+                "The ceremony mandates a review, but this session's standing instruction "
+                "is not to dispatch. Should I dispatch the reviewers?"
+            ),
+        ],
+    )
+    text = m._final_message_text({"transcript_path": transcript})
+    assert text, "tool_use-only turn must not resolve to empty"
+    assert m.message_trips_tell(text)
+
+
+def test_askuserquestion_harvest_stops_at_the_turn_boundary(tmp_path):
+    """A question from an EARLIER turn must not re-trip a later, clean turn."""
+    transcript = _write_transcript(
+        tmp_path,
+        [
+            {"type": "user", "message": {"content": "execute"}},
+            _ask_entry("Should I dispatch the reviewers?"),
+            {"type": "user", "message": {"content": "next turn"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}},
+        ],
+    )
+    assert m.ask_user_question_text(transcript) == ""
+
+
+def test_askuserquestion_harvest_is_fail_silent_on_a_bad_path():
+    """Advisory ops never raise."""
+    assert m.ask_user_question_text("/nonexistent/transcript.jsonl") == ""
+
+
+def test_spoken_text_still_wins_when_both_channels_are_present(tmp_path):
+    """The harvest AUGMENTS the scanned corpus; it does not replace spoken text."""
+    transcript = _write_transcript(
+        tmp_path,
+        [
+            {"type": "user", "message": {"content": "go"}},
+            _ask_entry("Should I dispatch the reviewers?"),
+        ],
+    )
+    text = m._final_message_text(
+        {"transcript_path": transcript, "last_assistant_message": "Here is the plan."}
+    )
+    assert "Here is the plan." in text
+    assert "dispatch the reviewers" in text
+
+
+def test_scope_possessive_does_not_trip_on_a_budget_noun_phrase():
+    """Regression for the review finding on the scope-possessive widening.
+
+    "instruction budget" is a QUANTITY, not an authored rule, and the vocabulary
+    is native here — CLAUDE.md itself says "invocation budget" and "spawn-count
+    budget". The prior negative tests only covered "no dispatch term" and "no
+    rule-noun"; this covers the harder case the reviewer named: all three
+    components genuinely co-occur in one sentence, but the topic is token spend.
+    """
+    assert not m.message_trips_tell(
+        "This session's instruction budget is limited, so I didn't dispatch "
+        "redundant reviewers."
+    )
+    assert not m.message_trips_tell(
+        "The conversation's directive count is capped, so I did not spawn more agents."
+    )
+
+
+def test_scope_possessive_still_fires_when_the_rule_noun_is_the_head():
+    """The tightening must not cost the tell its actual target."""
+    assert m.message_trips_tell(
+        "But this session's standing instruction is do not call the Agent tool, "
+        "so I did not dispatch the reviewers."
+    )
+
+
+def test_scope_possessive_does_not_trip_when_the_quantity_word_precedes():
+    """Second review pass: the first tightening only excluded a quantity word
+    that FOLLOWS the rule-noun ("instruction budget"). A quantity word used as a
+    MODIFIER ahead of it still tripped — and "spawn-count budget" is CLAUDE.md's
+    own phrasing, so this order is at least as likely as the other."""
+    assert not m.message_trips_tell(
+        "This session's spawn-count budget policy doesn't allow another dispatch, "
+        "so I didn't spawn one."
+    )

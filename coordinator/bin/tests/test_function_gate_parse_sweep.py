@@ -504,6 +504,13 @@ class TestEntrypointGateDataLists:
                 # entrant not code drift.
                 "coordinator/bin/chunk-commits",
                 "coordinator/bin/with-suite-mutex",
+                # coordinator-claude mirror gate, 2026-08-16 (12/13 -> 13/13):
+                # newly reaching the mirror via the multi-source `bin` entry.
+                # Verified in-tree, not taken on the reporting sibling's word:
+                # no args -> rc=2 with its own "expected at least one path."
+                # + usage block, which is its documented usage-error code, not
+                # the rc=3 its trampoline reserves for transport failure.
+                "coordinator/bin/claim-neighbours",
             }
         )
 
@@ -534,11 +541,17 @@ class TestEntrypointGateDataLists:
         # Measured 2026-08-14 against a PUBLISHED coordinator-claude payload
         # (not this source tree) -- `_canonical_gate_entrypoint_id`'s layout
         # canonicalisation makes these keys match there for the first time.
-        # All five rc=1 for the same root cause: engine-dependent
-        # distribution via cc_invoke env/registry rungs the gate's hermetic
-        # env strips. Re-pinned here, entrants not code drift.
+        # All rc=1 for the same root cause: engine-dependent distribution via
+        # cc_invoke env/registry rungs the gate's hermetic env strips.
+        # Re-pinned here, entrants not code drift.
+        #
+        # Five as authored, four now: `coordinator/bin/coordinator-ensure-
+        # hooks-fleet` drained 2026-08-16 -- it started CLEAN against a
+        # published payload and the gate fails closed on a waiver that no
+        # longer fires, so the entry itself blocked the round (doe-claude-em,
+        # claude-klabauter `f0009090d`). Same self-draining rule as the two removals
+        # noted above, not a regression.
         measured_2026_08_14 = {
-            "coordinator/bin/coordinator-ensure-hooks-fleet",
             "coordinator/bin/coordinator-queue-close",
             "coordinator/bin/plan-tasks-resolve",
             "coordinator/bin/plan-tasks-stamp",

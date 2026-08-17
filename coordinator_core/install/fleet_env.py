@@ -57,7 +57,12 @@ the PM-ruled `huggingface_hub` floor) without making every provisioning run
 pay for probing all ~250 packages. This is also documented in
 `docs/reference/fleet-shared-environment-contract.md` § Provisioning the
 environment (C4) — that is the promise this constant discharges; the two
-must not drift apart independently.
+must not drift apart independently. `_fleet_env_healthy` also gates on the
+target interpreter's own `sys.version_info` matching `LOCK_PYTHON_MINOR` —
+added as a follow-up to C6 (which flipped the minor 3.12 -> 3.14 and
+regenerated the lock without any propagation path to an already-provisioned
+box): import success alone cannot detect a stale minor, since an old
+environment imports its own contracted modules just fine.
 
 Binding registry (C6): a sibling repo binds through exactly one call,
 `register_sibling_binding(repo, sibling, sibling_root)`, which (1) persists a
@@ -409,14 +414,34 @@ def _env_python_path(env_dir: Path) -> Path:
 
 
 def _fleet_env_healthy(python_bin: Path) -> bool:
-    """Healthy iff `python_bin` is executable AND every module named in
-    `_FLEET_ENV_IMPORT_PROBES` imports successfully under it. Executes under
-    the TARGET interpreter, never in-process — a different interpreter's
-    site-packages is not importable from this one (same isolation-boundary
-    rationale `ensure_venv._venv_healthy` documents and cites)."""
+    """Healthy iff `python_bin` is executable AND its interpreter's own
+    `sys.version_info` minor matches `LOCK_PYTHON_MINOR` AND every module
+    named in `_FLEET_ENV_IMPORT_PROBES` imports successfully under it.
+
+    The minor check is executed under the TARGET interpreter (`sys.version_info`
+    inside the same subprocess as the import probe below, not a second spawn)
+    rather than inferred from the environment's `lib/python3.X/` directory
+    name: a directory-name read is itself an unverified declaration — exactly
+    the "it runs" oracle this check exists to replace — while asking the
+    interpreter what it actually is cannot drift from the truth. A prior
+    version of this environment stayed reported "healthy" after C6 flipped
+    `LOCK_PYTHON_MINOR` from 3.12 to 3.14 and regenerated the lock, because
+    only executability and imports were checked and a 3.12 environment
+    imports its own contracted modules just fine — the flip never propagated
+    to any existing box. Everything below still executes under the TARGET
+    interpreter, never in-process — a different interpreter's site-packages
+    is not importable from this one (same isolation-boundary rationale
+    `ensure_venv._venv_healthy` documents and cites)."""
     if not is_executable(python_bin):
         return False
-    probe = "; ".join(f"import {mod}" for mod in _FLEET_ENV_IMPORT_PROBES)
+    minor_check = (
+        "import sys; "
+        f"_want = {LOCK_PYTHON_MINOR!r}; "
+        "_got = '%d.%d' % (sys.version_info.major, sys.version_info.minor); "
+        "assert _got == _want, "
+        "'python minor mismatch: found ' + _got + ', contract requires ' + _want"
+    )
+    probe = minor_check + "; " + "; ".join(f"import {mod}" for mod in _FLEET_ENV_IMPORT_PROBES)
     try:
         proc = subprocess.run(
             [str(python_bin), "-c", probe],

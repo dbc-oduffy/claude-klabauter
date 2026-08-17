@@ -3,6 +3,8 @@
   "$id": "https://coordinator.local/schemas/cross-repo-commitment.schema.json",
   "x-schema-name": "cross-repo-commitment",
   "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 added the optional `declaration` object (typed sibling-notification-duty carrier, C11).",
   "applies_to": "state/cross-repo-commitments/*.yaml",
   "match_mode": "whole-document-yaml",
   "description": "Cross-repo commitment record — tracks a commitment made in the course of cross-repo communication (memo/ask/reply) through to fulfillment or withdrawal. Unknown fields in cross-repo-commitment records are tolerated (not rejected). Matches improvement-queue.yaml posture — forward-compatible as optional fields are added without invalidating existing records.",

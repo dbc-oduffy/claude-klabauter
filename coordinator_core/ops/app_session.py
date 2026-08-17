@@ -32,8 +32,13 @@ shrank the whole plan):
     for diagnostic redaction and the metachar advisory tripwire — a launch
     command is a spawned process built from operator-authored config, so both
     matter MORE here than at the ceremony seam, not less.
-  - `no_console_creationflags()` (coordinator_core.win_portability) for
-    Windows console-popup suppression — never a hand-rolled CREATE_NO_WINDOW.
+  - `no_console_passthrough_kwargs()` (coordinator_core.win_portability) for
+    Windows console-popup suppression — never a hand-rolled CREATE_NO_WINDOW,
+    and the passthrough variant rather than `no_console_creationflags()`: the
+    launched app's stdout/stderr are inherited, never captured or logged here,
+    so the creationflags-only helper would suppress the popup and then bind the
+    app's handles to that window-less console, losing every line it prints on
+    Windows.
   - `stable_pid_alive()` (coordinator_core.session.core) for the PID +
     second-identity-signal (create_time epoch) re-validation this whole
     plan exists to enforce (PIDs are recycled on Windows; a bare PID check
@@ -102,7 +107,7 @@ from coordinator_core.resolve_validation_cmd import (
     metachar_warn,
     redact_for_diag,
 )
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 try:
     from coordinator.bin.lib.win_argv import win_safe_shlex_split
@@ -391,7 +396,7 @@ def _launch(params: dict, repo_root: Optional[Path] = None) -> dict:
     proc = subprocess.Popen(
         argv,
         cwd=root,
-        **no_console_creationflags(),
+        **no_console_passthrough_kwargs(),
     )
 
     start_epoch = None

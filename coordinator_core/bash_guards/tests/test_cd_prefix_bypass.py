@@ -197,8 +197,20 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
     monkeypatch.setattr(
         module, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
     )
+    # `expected_em_session_id` is OPTIONAL in production (added 2026-08-14 as a
+    # review finding, so the resolved identity can be cross-checked against the
+    # dispatching EM's session). The double must accept it: a stub narrower than
+    # the real signature raises TypeError at call time, which surfaces as the
+    # guard erroring rather than as the verdict under test. `**kw` (not a
+    # named `expected_em_session_id=""` param) so the double survives the NEXT
+    # signature change too, not just this one -- same convention already used
+    # by the sibling double in
+    # `test_block_reviewer_bash_outside_allowlist_named_dispatch_effective_type.py`'s
+    # `_capturing(git_root, agent_id, **kw)`.
     monkeypatch.setattr(
-        module, "_read_backpointer_subagent_type", lambda git_root, agent_id: subagent_type
+        module,
+        "_read_backpointer_subagent_type",
+        lambda git_root, agent_id, **kw: subagent_type,
     )
 
 
@@ -370,6 +382,205 @@ class TestDestructiveGitOrphanSubshellResolvedReset:
 
     def test_bypass_matrix(self):
         _assert_bypass_resistant(_decision, "git reset --hard $(echo HEAD~3)")
+
+
+class TestDestructiveGitOrphanShellCWrapperBypass:
+    """BX-13 (2026-08-17, guard-bypass-triage Finding 1): `check_destructive_
+    git_orphan` ran `_strip_ws_quoted_spans` -- which deletes a whitespace-
+    containing quoted span wholesale as inert prose -- BEFORE its own
+    `\\bgit\\b` gate. A `sh -c 'git reset --hard $(...)'` payload is a single
+    such span, so the entire command vanished before the gate ever saw a
+    `git` token, and CHECK 1's subshell-target deny was never reached.
+    Reproduced through the real dispatcher with NO `agent_id` in the
+    payload (`_decision`'s default) -- this guard is registered
+    CONFINEMENT_DENY, `matchers=("Bash",)`, and is NOT identity-gated, so
+    the untagged EM-main-loop path is exactly the one that was bypassable.
+    """
+
+    def test_sh_c_wrapped_subshell_reset_denied(self):
+        assert _decision("sh -c 'git reset --hard $(echo HEAD~3)'") == "deny"
+
+    def test_bash_c_wrapped_subshell_reset_denied(self):
+        assert _decision("bash -c 'git reset --hard $(echo HEAD~3)'") == "deny"
+
+    def test_absolute_path_sh_c_wrapped_subshell_reset_denied(self):
+        assert _decision("/bin/sh -c 'git reset --hard $(echo HEAD~3)'") == "deny"
+
+    def test_sh_c_wrapped_unrelated_command_still_allows(self):
+        """Negative control: the unwrap must not turn every `sh -c` payload
+        into a deny -- only one that is itself a real destructive-git shape.
+        """
+        assert _decision('sh -c "echo hello"') == "allow"
+
+    def test_inert_prose_about_git_reset_still_allows(self):
+        """Negative control, different failure direction: quoted prose that
+        merely MENTIONS a destructive command must stay inert -- this is
+        the exact case `_strip_ws_quoted_spans` exists to allow, and the
+        fix above must not turn it into an over-broad deny."""
+        assert _decision('echo "reviewing git reset --hard conventions"') == "allow"
+
+    def test_no_agent_id_path_is_the_reproduced_one(self):
+        """`_decision` with no `payload_extra` already omits `agent_id` --
+        this guard is not identity-gated, so asserting that explicitly
+        documents the untagged path is the one this test suite covers,
+        matching the live-bypass reproduction (main-loop / unidentified
+        caller, `block_subagent_destructive_action`'s identity-gated unwrap
+        never runs)."""
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "sh -c 'git reset --hard $(echo HEAD~3)'"},
+            "session_id": "sess1",
+            "cwd": "/repo",
+        }
+        assert "agent_id" not in payload
+        out = dispatch.evaluate_payload_json(json.dumps(payload))
+        assert out is not None
+        hso = out.get("hookSpecificOutput", {}) if isinstance(out, dict) else {}
+        assert hso.get("permissionDecision") == "deny"
+
+
+class TestCdPrefixShellCUnwrapGap:
+    """BX-13 follow-up (2026-08-17): `_shell_c_unwrap_payloads` looked for
+    the wrapper interpreter ONLY at token position 0 of the command it was
+    handed. A `cd /tmp && sh -c '<payload>'` (or any other separator ahead
+    of the wrapper) tokenized to `['cd', '/tmp', '&&', 'sh', '-c',
+    '<payload>']`; position 0 is `cd`, so the wrapper was never found and
+    the payload was never unwrapped/re-scanned -- a live bypass of every
+    one of the six checks that share this helper (`check_no_verify`,
+    `check_destructive_git_orphan`, `check_destructive_rm`,
+    `_check_destructive_git_revert_full`, `check_blanket_git_add`,
+    `check_runaway_find`), confirmed live against `check_destructive_git_
+    orphan` via direct probe before this fix landed.
+
+    Covers the shared helper (`dispatch_checks._shell_c_unwrap_payloads`),
+    not one single check: the `cd &&` shape against `check_destructive_git_
+    orphan`, a second separator (`;`) against the same check, a
+    quoted-separator negative control (the `&&` must not be treated as a
+    boundary when it is DATA inside a quoted string), and the same `cd &&`
+    shape against a SECOND call site (`check_destructive_rm`) so the fix is
+    pinned as the shared-helper fix it is, not a single-check patch.
+    """
+
+    def test_cd_and_prefixed_sh_c_wrapped_subshell_reset_denied(self):
+        assert (
+            _decision("cd /tmp && sh -c 'git reset --hard $(echo HEAD~3)'")
+            == "deny"
+        )
+
+    def test_cd_semicolon_prefixed_sh_c_wrapped_subshell_reset_denied(self):
+        assert (
+            _decision("cd /tmp; sh -c 'git reset --hard $(echo HEAD~3)'")
+            == "deny"
+        )
+
+    def test_quoted_ampersand_ampersand_is_not_a_segment_boundary(self):
+        """Negative control: `&&` INSIDE a quoted string is data, not a
+        separator -- the fix must not treat every quoted occurrence of a
+        separator character as a segment boundary, which would turn this
+        into a false deny (echo's argument is inert prose, never executed).
+        """
+        assert (
+            _decision('echo "cd /tmp && sh -c \'git reset --hard HEAD~3\'"')
+            == "allow"
+        )
+
+    def test_cd_and_prefixed_sh_c_wrapped_rm_denied(self):
+        """Second call site (`check_destructive_rm`) hit by the same
+        shared-helper gap -- pins the fix at the helper, not one check."""
+        assert (
+            _decision("cd /tmp && sh -c 'rm -rf $(echo /tmp/some-target)'")
+            == "deny"
+        )
+
+    def test_dollar_paren_wrapped_sh_c_reset_denied(self):
+        """LIVE BYPASS (2026-08-17, follow-up): a wrapper hidden inside an
+        unquoted `$(...)` command substitution was invisible to
+        `_shell_c_unwrap_payloads` -- the shared tokenizer has no
+        `$(...)`-aware grouping, so `$(sh` glues onto one token and the
+        segment loop's head-of-segment wrapper check never sees `sh`.
+        `echo $(sh -c '<payload>')` genuinely executes the subshell, so this
+        must deny exactly like the un-substituted `sh -c '<payload>'` form.
+        """
+        assert (
+            _decision("echo $(sh -c 'git reset --hard $(echo HEAD~3)')")
+            == "deny"
+        )
+
+    def test_backtick_wrapped_sh_c_reset_denied(self):
+        """Same shape, backtick form of command substitution."""
+        assert (
+            _decision("echo `sh -c 'git reset --hard $(echo HEAD~3)'`")
+            == "deny"
+        )
+
+    def test_single_quoted_dollar_paren_is_literal_data_not_substitution(self):
+        """Negative control: a `$(...)` INSIDE single quotes is literal
+        text, never executed -- must not be unwrapped/re-scanned, which
+        would turn this into a false deny (the whole thing is one inert
+        echo argument)."""
+        assert (
+            _decision("echo '$(sh -c \"git reset --hard $(echo HEAD~3)\")'")
+            == "allow"
+        )
+
+    def test_nested_dollar_paren_wrapped_sh_c_reset_denied(self):
+        """Nesting: the wrapper sits inside a `$(...)` that is itself
+        nested inside an outer `$(...)` -- must unwrap to the existing
+        depth bound, not require unbounded nesting support."""
+        assert (
+            _decision(
+                "echo $(echo $(sh -c 'git reset --hard $(echo HEAD~3)'))"
+            )
+            == "deny"
+        )
+
+    def test_double_quoted_dollar_paren_wrapped_sh_c_reset_denied(self):
+        """A wrapper's own `-c` payload can legitimately contain a
+        `$(...)` a downstream check still needs verbatim -- confirms the
+        segment loop keeps scanning raw `cmd`, not a neutralized copy that
+        would blank the subshell-resolved-target marker `check_destructive_
+        git_orphan`'s CHECK 1 relies on to deny on sight."""
+        assert (
+            _decision('/bin/sh -c "git reset --hard $(echo HEAD~3)"')
+            == "deny"
+        )
+
+
+class TestQuotedParenDesyncBypass:
+    """P0 (2026-08-17, tokenizer quote-desync): `_extract_command_
+    substitutions`'s (`_command_tokenizer.py`) inner paren-balance walk
+    tracked only `\\`/`(`/`)`, never quote state -- unlike the outer walk in
+    the SAME function. A quoted `)` inside a substitution's real content
+    (`$(echo ')' ; sh -c '<payload>')`) desynced the depth counter and
+    truncated the extracted span BEFORE the true closing paren, silently
+    dropping everything after that point from `subs` -- including the
+    `sh -c '<payload>'` this file's sibling class already proves gets
+    recursively re-scanned when the substitution is extracted whole.
+
+    The bug bites only when the SEGMENT loop cannot independently split the
+    text into its own segment (outer double quotes keep the whole thing one
+    shlex token) AND a quoted paren desyncs the substitution walk -- the
+    unquoted-outer sibling below is the control proving the segment loop's
+    own real shlex splitting was masking the same underlying desync (it
+    happens to still deny via the segment loop finding `sh` at a fresh
+    segment head after the real, unquoted `;`), not fixing it.
+    """
+
+    def test_quoted_paren_inside_double_quoted_substitution_still_denies(self):
+        payload = "git reset --hard $(echo HEAD~3)"
+        cmd = 'echo "$(echo \')\' ; sh -c \'' + payload + '\')"'
+        assert _decision(cmd) == "deny"
+
+    def test_quoted_paren_inside_unquoted_substitution_still_denies(self):
+        """Control: same quoted-paren desync shape, but with the `$(...)`
+        left unquoted at the outer level -- the segment loop's own shlex
+        split already exposes the `;`-separated `sh -c` segment
+        independently, so this must deny regardless of the substitution
+        walk's own fix, confirming the double-quoted case above is the one
+        the fix actually closes."""
+        payload = "git reset --hard $(echo HEAD~3)"
+        cmd = "echo $(echo ')' ; sh -c '" + payload + "')"
+        assert _decision(cmd) == "deny"
 
 
 class TestDestructiveRmSubshellResolvedTarget:

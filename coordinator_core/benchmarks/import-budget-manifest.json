@@ -4,13 +4,13 @@
   "note": "Sibling manifest to budget-manifest.json -- see import_budget.py's module docstring for why this is a sibling file rather than a new field on budget-manifest.json's {schema_version, min_gating_sample_count, defaults, overrides} schema.",
   "entrypoints": {
     "coordinator_core.hooks": {
-      "baseline_module_count": 109,
-      "baseline_elapsed_ms": 23.36,
-      "headroom": 14,
+      "baseline_module_count": 114,
+      "baseline_elapsed_ms": 26.01,
+      "headroom": 9,
       "module_count_ceiling": 123,
-      "measured_at": "2026-08-13",
+      "measured_at": "2026-08-17",
       "measured_on": "darwin (macOS) -- structural proxy only, not a Windows measurement",
-      "note": "Re-measured this session (median of 5 fresh-subprocess samples): 111 -> 109 modules, a small, unexplained drift within noise, not attributed to any landed change. Headroom convention preserved from the 2026-08-06 value (~13% of baseline) rather than re-derived, per this dispatch's re-baseline-not-optimize scope. This is still the EAGER default path -- see lazy_channel_note for the COORDINATOR_CORE_LAZY_OPS=1 figure (24 modules, ~8ms), which this manifest does not gate on.",
+      "note": "Re-measured this session (median of 5 fresh-subprocess samples): 111 -> 109 modules, a small, unexplained drift within noise, not attributed to any landed change. Headroom convention preserved from the 2026-08-06 value (~13% of baseline) rather than re-derived, per this dispatch's re-baseline-not-optimize scope. This is still the EAGER default path -- see lazy_channel_note for the COORDINATOR_CORE_LAZY_OPS=1 figure (24 modules, ~8ms), which this manifest does not gate on. Re-measured 2026-08-17 under Python 3.14.6 (median of 5 fresh-subprocess samples) so this entry records the interpreter its baseline belongs to -- the 2026-08-13 figures did not, and a module-count baseline is only meaningful against a named interpreter. `module_count_ceiling` is DELIBERATELY UNCHANGED by that re-measure: re-deriving the ceiling from a lower baseline is a separate tightening call, not a bookkeeping update, and folding it in here would have hidden it inside a diagnostics commit. Ceiling HELD at 123 across the 2026-08-17 re-baseline; headroom restated as the true gap (9) rather than re-derived from the ~13% convention, because re-deriving would have RAISED this ceiling to 129 and a re-baseline must never loosen a tripwire.",
       "measured_paths": [
         "coordinator_core/__init__.py",
         "coordinator_core/_hook_envelope.py",
@@ -54,16 +54,19 @@
         "coordinator_core/session/scope.py",
         "coordinator_core/win_portability.py"
       ],
-      "measured_paths_note": "Derived 2026-08-13 by running `import coordinator_core.hooks` in a fresh subprocess (no COORDINATOR_CORE_LAZY_OPS) and collecting every `coordinator_core.*` entry in sys.modules with a `__file__`, mapped to repo-relative paths. This is the eager-default import surface (see lazy_channel_note); it is fewer than the 109 baseline_module_count because that figure includes stdlib/third-party modules pulled in transitively, which are out of scope for a checked-in provenance list. Regenerate by re-running the same one-liner against this entrypoint whenever the list is suspected stale."
+      "measured_paths_note": "Derived 2026-08-13 by running `import coordinator_core.hooks` in a fresh subprocess (no COORDINATOR_CORE_LAZY_OPS) and collecting every `coordinator_core.*` entry in sys.modules with a `__file__`, mapped to repo-relative paths. This is the eager-default import surface (see lazy_channel_note); it is fewer than the 109 baseline_module_count because that figure includes stdlib/third-party modules pulled in transitively, which are out of scope for a checked-in provenance list. Regenerate by re-running the same one-liner against this entrypoint whenever the list is suspected stale.",
+      "baseline_own_module_count": 45,
+      "baseline_stdlib_module_count": 69,
+      "measured_under_python": "3.14.6"
     },
     "coordinator_core.write_guards.engine": {
-      "baseline_module_count": 69,
-      "baseline_elapsed_ms": 13.76,
-      "headroom": 11,
+      "baseline_module_count": 70,
+      "baseline_elapsed_ms": 13.61,
+      "headroom": 10,
       "module_count_ceiling": 80,
-      "measured_at": "2026-08-13",
+      "measured_at": "2026-08-17",
       "measured_on": "darwin (macOS) -- structural proxy only, not a Windows measurement",
-      "note": "2026-08-10 REGRESSION, FIXED, not absorbed: commit 670cf7878 (C2, unenumerated-agent-type confinement) added a MODULE-LEVEL `from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster` to coordinator_core/bash_guards/_helpers.py, which write_guards.engine imports transitively -- that single import dragged in the coordinator_core.hooks package __init__'s full eager registration (18 hooks.* submodules), doubling this entrypoint's cost 69 -> 142 (measured 2026-08-13, prior to fix). A same-day prior dispatch, not yet knowing this was a regression, raised this ceiling to 165 to accommodate the 142 figure -- that accommodation was WRONG (it would have recorded a regression as the new normal) and is reverted by this entry. Fix (2026-08-13, same session): resolve_roster is now imported lazily inside `_helpers.is_confined_by_roster_absence` (and its bash_guards/block_subagent_plan_body_bash_write.py twin site), cached on the module's own `resolve_roster` attribute -- same shape as coordinator_core.session.core._psutil() -- so the existing `monkeypatch.setattr(_helpers, \"resolve_roster\", ...)` test surface keeps working. Re-measured post-fix (median of 5 fresh-subprocess samples): write_guards.engine is back to the exact 2026-08-06 baseline, 69 modules. Baseline/headroom restored to the pre-regression 2026-08-06 values (headroom 11, ~16% of baseline) rather than kept at the inflated interim numbers. NOTE: coordinator_core.bash_guards.dispatch (no manifest entry here; see test_hot_path_hook_import_budget.py's own hardcoded ceiling for that entrypoint) carried a THIRD site of the same defect shape -- coordinator_core/write_guards/block_subagent_plan_body_write.py's own module-level resolve_roster import, reachable from bash_guards.dispatch via block_subagent_plan_body_bash_write's _resolve_subagent_identity import. That site was ALSO fixed on the same lazy-accessor pattern (2026-08-13, same session, EM-inline), closing the last eager pull: bash_guards.dispatch measured 202 -> 159 modules, back under its 165 ceiling, and write_guards.engine / bash_guards.dispatch now drag ZERO coordinator_core.hooks.* submodules. All three sites are lazy; a fourth module-level `from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster` anywhere reachable from these entrypoints re-opens this regression.",
+      "note": "2026-08-10 REGRESSION, FIXED, not absorbed: commit 670cf7878 (C2, unenumerated-agent-type confinement) added a MODULE-LEVEL `from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster` to coordinator_core/bash_guards/_helpers.py, which write_guards.engine imports transitively -- that single import dragged in the coordinator_core.hooks package __init__'s full eager registration (18 hooks.* submodules), doubling this entrypoint's cost 69 -> 142 (measured 2026-08-13, prior to fix). A same-day prior dispatch, not yet knowing this was a regression, raised this ceiling to 165 to accommodate the 142 figure -- that accommodation was WRONG (it would have recorded a regression as the new normal) and is reverted by this entry. Fix (2026-08-13, same session): resolve_roster is now imported lazily inside `_helpers.is_confined_by_roster_absence` (and its bash_guards/block_subagent_plan_body_bash_write.py twin site), cached on the module's own `resolve_roster` attribute -- same shape as coordinator_core.session.core._psutil() -- so the existing `monkeypatch.setattr(_helpers, \"resolve_roster\", ...)` test surface keeps working. Re-measured post-fix (median of 5 fresh-subprocess samples): write_guards.engine is back to the exact 2026-08-06 baseline, 69 modules. Baseline/headroom restored to the pre-regression 2026-08-06 values (headroom 11, ~16% of baseline) rather than kept at the inflated interim numbers. NOTE: coordinator_core.bash_guards.dispatch (no manifest entry here; see test_hot_path_hook_import_budget.py's own hardcoded ceiling for that entrypoint) carried a THIRD site of the same defect shape -- coordinator_core/write_guards/block_subagent_plan_body_write.py's own module-level resolve_roster import, reachable from bash_guards.dispatch via block_subagent_plan_body_bash_write's _resolve_subagent_identity import. That site was ALSO fixed on the same lazy-accessor pattern (2026-08-13, same session, EM-inline), closing the last eager pull: bash_guards.dispatch measured 202 -> 159 modules, back under its 165 ceiling, and write_guards.engine / bash_guards.dispatch now drag ZERO coordinator_core.hooks.* submodules. All three sites are lazy; a fourth module-level `from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster` anywhere reachable from these entrypoints re-opens this regression. Re-measured 2026-08-17 under Python 3.14.6 (median of 5 fresh-subprocess samples) so this entry records the interpreter its baseline belongs to -- the 2026-08-13 figures did not, and a module-count baseline is only meaningful against a named interpreter. `module_count_ceiling` is DELIBERATELY UNCHANGED by that re-measure: re-deriving the ceiling from a lower baseline is a separate tightening call, not a bookkeeping update, and folding it in here would have hidden it inside a diagnostics commit. Ceiling HELD at 80 across the 2026-08-17 re-baseline; headroom restated as the true gap (10).",
       "measured_paths": [
         "coordinator_core/__init__.py",
         "coordinator_core/bash_guards/__init__.py",
@@ -77,16 +80,19 @@
         "coordinator_core/write_guards/__init__.py",
         "coordinator_core/write_guards/engine.py"
       ],
-      "measured_paths_note": "Derived 2026-08-13 by running `import coordinator_core.write_guards.engine` in a fresh subprocess and collecting every `coordinator_core.*` entry in sys.modules with a `__file__`, mapped to repo-relative paths. Includes `coordinator_core/bash_guards/_helpers.py` -- exactly the one-level-away module whose 2026-08-10 module-level import (commit 670cf7878) regressed this entrypoint's module count without ever touching engine.py directly; a path-list scoped to engine.py's own file would have missed the regression entirely. Regenerate by re-running the same one-liner against this entrypoint whenever the list is suspected stale."
+      "measured_paths_note": "Derived 2026-08-13 by running `import coordinator_core.write_guards.engine` in a fresh subprocess and collecting every `coordinator_core.*` entry in sys.modules with a `__file__`, mapped to repo-relative paths. Includes `coordinator_core/bash_guards/_helpers.py` -- exactly the one-level-away module whose 2026-08-10 module-level import (commit 670cf7878) regressed this entrypoint's module count without ever touching engine.py directly; a path-list scoped to engine.py's own file would have missed the regression entirely. Regenerate by re-running the same one-liner against this entrypoint whenever the list is suspected stale.",
+      "baseline_own_module_count": 12,
+      "baseline_stdlib_module_count": 58,
+      "measured_under_python": "3.14.6"
     },
     "coordinator_core.ipc": {
-      "baseline_module_count": 44,
-      "baseline_elapsed_ms": 10.07,
-      "headroom": 12,
-      "module_count_ceiling": 56,
-      "measured_at": "2026-08-13",
+      "baseline_module_count": 18,
+      "baseline_elapsed_ms": 2.69,
+      "headroom": 8,
+      "module_count_ceiling": 26,
+      "measured_at": "2026-08-17",
       "measured_on": "darwin (macOS) -- structural proxy only, not a Windows measurement",
-      "note": "Re-measured this session (median of 5 fresh-subprocess samples): 43 -> 44 modules, within noise of the 2026-08-06 baseline, no landed change attributed. Headroom convention preserved from the 2026-08-06 value (12, ~28% of baseline) rather than re-derived, per this dispatch's re-baseline-not-optimize scope; per the prior note's own reasoning, a ceiling far above a dropped baseline stops catching regrowth, so the ceiling moves with the baseline (55 -> 56) rather than staying pinned to the old number.",
+      "note": "Re-measured this session (median of 5 fresh-subprocess samples): 43 -> 44 modules, within noise of the 2026-08-06 baseline, no landed change attributed. Headroom convention preserved from the 2026-08-06 value (12, ~28% of baseline) rather than re-derived, per this dispatch's re-baseline-not-optimize scope; per the prior note's own reasoning, a ceiling far above a dropped baseline stops catching regrowth, so the ceiling moves with the baseline (55 -> 56) rather than staying pinned to the old number. Re-measured 2026-08-17 under Python 3.14.6 (median of 5 fresh-subprocess samples) so this entry records the interpreter its baseline belongs to -- the 2026-08-13 figures did not, and a module-count baseline is only meaningful against a named interpreter. `module_count_ceiling` is DELIBERATELY UNCHANGED by that re-measure: re-deriving the ceiling from a lower baseline is a separate tightening call, not a bookkeeping update, and folding it in here would have hidden it inside a diagnostics commit. Ceiling TIGHTENED 56 -> 26 on 2026-08-17. The six single-call-site imports this entrypoint used to carry at module scope (tempfile/hashlib/datetime in locked_write, inspect and a dead json here, subprocess in git/repo_root's spawn fallback) are now function-local, taking the measured graph from 63 to 18. Leaving the ceiling at 56 would have left 38 modules of silent room -- enough to re-absorb every one of those imports without the tripwire firing, i.e. a gate that passes while the thing it protects is undone. Headroom 8 is sized to absorb ordinary work while still breaching on a stdlib family landing (the compression/bz2/lzma family that caused the 3.14 breach is ~20 modules, inspect's is ~13).",
       "measured_paths": [
         "coordinator_core/__init__.py",
         "coordinator_core/git/__init__.py",
@@ -99,7 +105,10 @@
         "coordinator_core/session/declared_writes.py",
         "coordinator_core/win_portability.py"
       ],
-      "measured_paths_note": "Derived 2026-08-13 by running `import coordinator_core.ipc` in a fresh subprocess and collecting every `coordinator_core.*` entry in sys.modules with a `__file__`, mapped to repo-relative paths. Regenerate by re-running the same one-liner against this entrypoint whenever the list is suspected stale."
+      "measured_paths_note": "Derived 2026-08-13 by running `import coordinator_core.ipc` in a fresh subprocess and collecting every `coordinator_core.*` entry in sys.modules with a `__file__`, mapped to repo-relative paths. Regenerate by re-running the same one-liner against this entrypoint whenever the list is suspected stale.",
+      "baseline_own_module_count": 10,
+      "baseline_stdlib_module_count": 8,
+      "measured_under_python": "3.14.6"
     }
   }
 }

@@ -40,7 +40,6 @@ Anti-scope: do NOT restore daemon machinery; do NOT restore version-skew subsyst
 from __future__ import annotations
 
 import functools
-import hashlib
 import os
 from pathlib import Path
 from typing import Optional
@@ -294,6 +293,11 @@ def _compute_core_version() -> str:
     diagnosable, so a false-positive skew traces directly to the unreadable path rather than
     reading as an unexplained restart trigger.
     """
+    # Function-local: this module is imported by `coordinator_core.ipc`, whose
+    # cold-start module count is ceilinged in
+    # `coordinator_core/benchmarks/import-budget-manifest.json`. Do not hoist.
+    import hashlib
+
     pkg_dir = Path(__file__).parent
     hasher = hashlib.sha256()
 

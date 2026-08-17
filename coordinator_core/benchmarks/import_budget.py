@@ -63,11 +63,17 @@ _PROBE_TIMEOUT_S = 30
 
 
 class ImportCost(NamedTuple):
-    """One fresh-interpreter measurement of an entrypoint's import cost."""
+    """One fresh-interpreter measurement of an entrypoint's import cost.
+
+    `own_module_count` is the `coordinator_core.*` share of `module_count`
+    (`module_count - own_module_count` is therefore the stdlib/third-party share).
+    `None` only when parsing a two-field line from an older probe.
+    """
 
     entrypoint: str
     module_count: int
     elapsed_ms: float
+    own_module_count: Optional[int] = None
 
 
 def load_manifest(manifest_path: Path = _MANIFEST_PATH) -> dict:
@@ -134,9 +140,68 @@ def measure_import_subprocess(entrypoint: str, python: Optional[str] = None) -> 
         raise RuntimeError(
             f"import probe for entrypoint {entrypoint!r} exited {result.returncode}: {result.stderr}"
         )
-    module_count_str, elapsed_ms_str = result.stdout.strip().split()
+    fields = result.stdout.strip().split()
+    module_count_str, elapsed_ms_str = fields[0], fields[1]
+    own_module_count = int(fields[2]) if len(fields) > 2 else None
     return ImportCost(
         entrypoint=entrypoint,
         module_count=int(module_count_str),
         elapsed_ms=float(elapsed_ms_str),
+        own_module_count=own_module_count,
+    )
+
+
+def resolve_baseline_python(entrypoint: str, manifest: Optional[dict] = None) -> Optional[str]:
+    """Resolve the interpreter version an entrypoint's baseline was measured under.
+
+    Returns `None` for an entry that predates the field (2026-08-17). Missing is a
+    diagnostic gap, not a gate failure -- `resolve_ceiling` stays the sole gating
+    resolver, so a `None` here can never turn a green ceiling red.
+    """
+    if manifest is None:
+        manifest = load_manifest()
+    entry = manifest.get("entrypoints", {}).get(entrypoint)
+    if entry is None:
+        raise KeyError(f"no import-budget entry for entrypoint {entrypoint!r}")
+    return entry.get("measured_under_python")
+
+
+def running_python_version() -> str:
+    """This interpreter's `<major>.<minor>.<micro>`, the shape recorded in the manifest."""
+    return ".".join(str(part) for part in sys.version_info[:3])
+
+
+def interpreter_drift_note(entrypoint: str, manifest: Optional[dict] = None) -> str:
+    """Render the interpreter-drift clause for a ceiling-breach message, or ''.
+
+    Why this exists: the breach message used to assert "a failure here means a real
+    import-cost regrowth, not a tight-pin false positive". On 2026-08-17 that was
+    false and cost an investigation -- `coordinator_core.ipc` breached 56 with no
+    code change, because Python 3.14 routed `bz2`/`lzma` onto the new `compression`
+    package that `shutil` -> `tempfile` drags in, growing the stdlib graph under a
+    baseline frozen on an earlier interpreter. A module-count ceiling is
+    interpreter-version-sensitive by construction; the gate stays a hard block
+    (a stdlib module costs the same Windows per-file AV scan as one of ours), but it
+    must not name only one of the two possible causes.
+    """
+    baseline_python = resolve_baseline_python(entrypoint, manifest=manifest)
+    running = running_python_version()
+    if baseline_python is None:
+        return (
+            f" This entry records no `measured_under_python`, so interpreter drift cannot be "
+            f"ruled out from disk; you are on {running}."
+        )
+    if baseline_python == running:
+        return (
+            f" Baseline and this run are both on Python {running}, so interpreter stdlib "
+            f"drift is ruled out -- this is real regrowth."
+        )
+    return (
+        f" Baseline was measured under Python {baseline_python}; you are on {running}. "
+        f"A stdlib refactor between those versions can breach a frozen ceiling with no "
+        f"code change (precedent: 3.14 moved bz2/lzma onto `compression`, reached via "
+        f"shutil <- tempfile). Compare `own_module_count` against the baseline's before "
+        f"concluding regrowth: if the `coordinator_core.*` share is flat, the growth is "
+        f"the interpreter's, and the fix is deferring the stdlib import that reaches it, "
+        f"not widening the ceiling."
     )

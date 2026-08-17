@@ -235,13 +235,10 @@ flock (one sidecar per directory rather than per file).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import tempfile
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -311,6 +308,11 @@ def _lock_key(target: Path) -> str:
     extra slashes all resolve to the same key.  The 40-char hex fits comfortably
     in any filesystem path without truncation.
     """
+    # Function-local: this module sits on `coordinator_core.ipc`'s cold-start
+    # import path, which is measured against a module-count ceiling
+    # (`coordinator_core/benchmarks/import-budget-manifest.json`). Do not hoist.
+    import hashlib
+
     real = os.path.realpath(str(target))
     return hashlib.sha1(real.encode()).hexdigest()
 
@@ -585,6 +587,14 @@ def locked_rmw(
 
             # Atomic write: mkstemp in the same directory so os.replace is
             # guaranteed to be same-filesystem (avoids cross-device link errors).
+            # Function-local, and the single largest saving on this module's
+            # cold-start path: `tempfile` drags in `shutil` -> `bz2`/`lzma`,
+            # which on Python 3.14 route through the new `compression` package
+            # (`compression.zstd` included) — ~20 modules for one `mkstemp`.
+            # Ceiling: `coordinator_core/benchmarks/import-budget-manifest.json`
+            # `/entrypoints/coordinator_core.ipc`. Do not hoist.
+            import tempfile
+
             target_dir = target_path.parent
             target_dir.mkdir(parents=True, exist_ok=True)
             tmp_fd, tmp_path = tempfile.mkstemp(dir=str(target_dir))
@@ -649,6 +659,9 @@ def _write_holder_metadata(lock_fd: int, holder_label: str) -> None:
     length so a shorter payload never leaves trailing bytes from a longer
     previous one (defends the "corrupt sidecar" read path).
     """
+    # Function-local — see `_lock_key`'s note on this module's cold-start budget.
+    from datetime import datetime, timezone
+
     payload = json.dumps(
         {
             "pid": os.getpid(),

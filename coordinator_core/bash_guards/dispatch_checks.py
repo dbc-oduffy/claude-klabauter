@@ -146,6 +146,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _normalize_windows_argv0_head_path_with_spaces,
 )
 from coordinator_core.bash_guards._command_tokenizer import (
+    _extract_command_substitutions as _bt_extract_command_substitutions,
     _skip_wrapper_own_argv,
     exceeds_tokenizable_ceiling as _bt_exceeds_tokenizable_ceiling,
     segments_from_tokens_simple as _bt_segments_from_tokens_simple,
@@ -216,28 +217,13 @@ _MAX_SHELL_C_UNWRAP_DEPTH = 4
 _BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 
 
-def _shell_c_unwrap_payloads(cmd: str, depth: int = 0) -> List[str]:
-    """Return the nested command-text payload(s) of any `sh -c`/`bash -c`/
-    `zsh -c`/`dash -c`/`ksh -c` invocation in `cmd` (optionally `env`-/
-    assignment-prefixed), so a caller can re-run ITS OWN matcher against the
-    ACTUAL executed text too. Fails safe: returns `[]` (nothing extra to
-    scan, never a crash or a false deny) on unparseable input or nesting
-    past `_MAX_SHELL_C_UNWRAP_DEPTH`. Deliberately scans the WHOLE `cmd`
-    (not per `;`/`&`/`|`-segment) -- a single-segment `sh -c '...'` is the
-    confirmed live shape; multi-segment chaining ahead of the wrapper is
-    already caught by each caller's own segment loop before this helper is
-    ever consulted.
-    """
-    if depth > _MAX_SHELL_C_UNWRAP_DEPTH:
-        return []
-    if _bt_exceeds_tokenizable_ceiling(cmd):
-        # DoS bound inherited from `_command_tokenizer`, not a local tuning
-        # knob -- takes the same `[]` branch unparseable input already takes.
-        return []
-    try:
-        tokens = shlex.split(cmd, posix=True)
-    except ValueError:
-        return []
+def _shell_c_unwrap_single_segment(tokens: List[str]) -> Optional[str]:
+    """The single-segment scan `_shell_c_unwrap_payloads` used to run
+    against the WHOLE command text (pre-cd-prefix-bypass-fix): find a
+    wrapper interpreter (optionally `env`-/assignment-prefixed) at the head
+    of `tokens` and return its `-c` payload, or `None` if `tokens` is not a
+    wrapper invocation. `tokens` is one caller-supplied segment's token
+    list -- this function does no splitting or tokenizing of its own."""
     i = 0
     while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
         i += 1
@@ -249,20 +235,160 @@ def _shell_c_unwrap_payloads(cmd: str, depth: int = 0) -> List[str]:
         ):
             i += 1
     if i >= len(tokens):
-        return []
+        return None
     head = os.path.basename(tokens[i].replace("\\", "/"))
     head = re.sub(r"\.exe$", "", head, flags=re.IGNORECASE)
     if head not in _SHELL_C_WRAPPER_INTERPRETERS:
-        return []
+        return None
     rest = tokens[i + 1 :]
     c_flag_positions = [j for j in range(len(rest)) if _BUNDLED_C_FLAG_RE.match(rest[j])]
     if not c_flag_positions:
-        return []
+        return None
     idx = c_flag_positions[0]
     if idx + 1 >= len(rest):
+        return None
+    return rest[idx + 1]
+
+
+def _shell_c_unwrap_payloads(cmd: str, depth: int = 0) -> List[str]:
+    """Return the nested command-text payload(s) of any `sh -c`/`bash -c`/
+    `zsh -c`/`dash -c`/`ksh -c` invocation in `cmd` (optionally `env`-/
+    assignment-prefixed), so a caller can re-run ITS OWN matcher against the
+    ACTUAL executed text too. Fails safe: returns `[]` (nothing extra to
+    scan, never a crash or a false deny) on unparseable input or nesting
+    past `_MAX_SHELL_C_UNWRAP_DEPTH`.
+
+    Bug fix (2026-08-17, cd-prefix unwrap gap): the wrapper was previously
+    looked for ONLY at token position 0 of the whole `cmd` text, on the
+    premise that multi-segment chaining ahead of the wrapper was "already
+    caught by each caller's own segment loop before this helper is ever
+    consulted" -- that premise was false. None of the six call sites
+    (`check_no_verify`, `check_destructive_git_orphan`, `check_destructive_
+    rm`, `_check_destructive_git_revert_full`, `check_blanket_git_add`,
+    `check_runaway_find`) segments `cmd` before calling this helper; each
+    hands it the raw command text once. `cd /tmp && sh -c '<payload>'`
+    therefore tokenized to `['cd', '/tmp', '&&', 'sh', '-c', '<payload>']`,
+    and the position-0 check saw `cd`, never `sh` -- a live bypass of every
+    one of those six checks, confirmed via direct probe.
+
+    Now segments `cmd` itself via the same quote-aware tokenizer/segmenter
+    every other guard in this package shares (`tokenize_full_command` +
+    `segments_from_tokens_simple`, `_command_tokenizer.py`) and looks for
+    the wrapper at the head of EACH segment, not just the first. This is
+    strictly additive: a bare `sh -c '...'` (no leading segment) still
+    matches on its own now-single segment exactly as before, and a quoted
+    `;`/`&`/`|` (`echo "a && b"`) is never treated as a segment boundary,
+    because the shared tokenizer already respects quoting -- unlike this
+    function's PRIOR `shlex.split(cmd, posix=True)` call, which had no
+    `punctuation_chars` set and so never split on separators at all
+    (relying entirely on position 0 instead). A payload found in ANY
+    segment is unwrapped and recursively re-scanned, same as before.
+
+    Bug fix (2026-08-17, command-substitution unwrap gap): `echo $(sh -c
+    '<payload>')` and the backtick equivalent still bypassed every caller --
+    the shared tokenizer has no `$(...)`-aware grouping (a deliberate scope
+    boundary, not fixed here: it is load-bearing for 5+ other guard
+    modules), so a wrapper hidden inside a command substitution was never a
+    real segment head and never reached `_shell_c_unwrap_single_segment`.
+    Fixed WITHOUT touching the shared tokenizer's grouping: the existing
+    segment loop below still runs on `cmd` completely unmodified (see its
+    own comment for why -- a wrapper's `-c` payload can legitimately CONTAIN
+    a `$(...)` a downstream caller still needs verbatim), and a SEPARATE
+    pass runs this package's own `_extract_command_substitutions`
+    (`_command_tokenizer.py`, already used by `resolve_command_positions`
+    for the identical reason) over that same `cmd` to pull out every
+    unquoted top-level `$(...)`/backtick span, quote-aware -- `echo
+    '$(...)'` (single-quoted, literal data) yields no substitutions at all,
+    while `echo "$(...)"` (double-quoted) still yields one, matching real
+    shell semantics where only single quotes suppress substitution. Each
+    extracted inner command text is recursed into via this SAME function
+    (one extra `depth`), so a wrapper nested inside a substitution is
+    unwrapped exactly like a wrapper nested inside another wrapper's payload
+    already was -- same `_MAX_SHELL_C_UNWRAP_DEPTH` bound, and nested
+    `$(...)` spans (paren-balanced by `_extract_command_substitutions`)
+    unwrap one level per recursion rather than all at once. Each `subs`
+    entry is a strictly-smaller substring of `cmd`, but NOT necessarily
+    disjoint from the segment loop's own view of `cmd`: a double-quoted
+    wrapper `-c` payload that itself contains a `$(...)` gets that inner
+    substitution discovered TWICE -- once when the segment loop's own
+    `_shell_c_unwrap_single_segment` recurses into the whole `-c` payload
+    text (which still contains the `$(...)` verbatim, per the comment
+    below), and again here when the substitution walk finds the same
+    `$(...)` independently in `cmd`. This is harmless (bounded by
+    `_MAX_SHELL_C_UNWRAP_DEPTH`, and it makes this function OVER-scan a
+    payload, never under-scan one) but it is real double-work, not a
+    partition -- see the fuller note further down where this was found and
+    the comment corrected (n04, this file).
+    """
+    if depth > _MAX_SHELL_C_UNWRAP_DEPTH:
         return []
-    payload = rest[idx + 1]
-    return [payload] + _shell_c_unwrap_payloads(payload, depth + 1)
+    if _bt_exceeds_tokenizable_ceiling(cmd):
+        # DoS bound inherited from `_command_tokenizer`. NOT redundant with
+        # `tokenize_full_command`'s own internal ceiling check below now
+        # that `_extract_command_substitutions` also runs over `cmd` before
+        # this function returns: that helper is a manual scan with no
+        # ceiling of its own, so this explicit gate is what stops it (and
+        # not just the tokenizer call) from ever seeing an over-ceiling `cmd`.
+        return []
+    tokens = _bt_tokenize_full_command(cmd)
+    if tokens is None:
+        return []
+    payloads: List[str] = []
+    for seg_tokens in _bt_segments_from_tokens_simple(tokens):
+        payload = _shell_c_unwrap_single_segment(seg_tokens)
+        if payload is None:
+            continue
+        payloads.append(payload)
+        payloads.extend(_shell_c_unwrap_payloads(payload, depth + 1))
+    # Command substitutions: scanned on the UNTOUCHED `cmd`, never on a
+    # neutralized copy fed to the segment loop above. An earlier version of
+    # this fix tokenized a neutralized `cmd` (each `$(...)`/backtick span
+    # collapsed to one space) for BOTH the segment loop and the substitution
+    # walk, on the theory that this kept the two scans a disjoint partition
+    # of `cmd`. That neutralization is wrong for THIS loop specifically: a
+    # wrapper's own `-c` payload can legitimately CONTAIN a `$(...)` a
+    # downstream caller still needs to see verbatim (`/bin/sh -c "git reset
+    # --hard $(echo HEAD~3)"` -- `check_destructive_git_orphan`'s own CHECK 1
+    # denies a subshell-resolved reset target on sight, but only if the
+    # unwrapped payload it re-scans still HAS the `$(...)` in it; neutralizing
+    # it first silently downgraded the target to the "no bare token found"
+    # default of `HEAD`, turning a hard deny into a false allow). So the
+    # segment loop above always sees `cmd` verbatim, preserving every
+    # wrapper payload's real text unmodified.
+    #
+    # The substitution walk below is a SEPARATE, ADDITIONAL pass over that
+    # same `cmd` text, not a second consumer of the segment loop's already-
+    # tokenized `tokens` -- needed because `tokenize_full_command` has no
+    # `$(...)`-aware grouping (a shared-tokenizer scope boundary, not fixed
+    # here), so a BARE, unquoted `$(sh -c '...')` glues `$(` onto the
+    # wrapper's own name (`'$(sh'` as one token) and the segment loop above
+    # can never see `sh` at a segment head to begin with -- confirmed via
+    # `tokenize_full_command("echo $(sh -c '...')")` returning a single
+    # `['echo', '$(sh', '-c', "...)"]` segment, head `echo`, no wrapper
+    # match. `_extract_command_substitutions` is quote-aware exactly like
+    # the segment loop's own tokenizer (single-quoted `$(...)` is literal
+    # data and yields no substitution; double-quoted and bare `$(...)` both
+    # do, matching real shell semantics), so each extracted inner command
+    # text is recursed into via this SAME function at `depth + 1`. This
+    # scans `cmd`'s bytes a second time at THIS level (once for segments,
+    # once for substitutions) -- a bounded constant-factor duplication of
+    # the CURRENT level's work, not a per-level multiplier. Each `subs`
+    # entry is a strictly-smaller substring of `cmd`, but NOT provably
+    # disjoint from what the segment loop above already recursed into: a
+    # double-quoted wrapper `-c` payload containing its own `$(...)` is
+    # recursed into once by the segment loop (the whole payload, `$(...)`
+    # and all -- see the comment above on why it is left verbatim) and
+    # again here (the `$(...)` alone, found independently by this
+    # substitution walk). Confirmed live (2026-08, n04): harmless -- still
+    # bounded by `_MAX_SHELL_C_UNWRAP_DEPTH`, and the duplication makes this
+    # function OVER-scan such a payload, never under-scan one -- but it is
+    # real overlapping work, not a clean partition, so total work across the
+    # bounded recursion is linear in `cmd`'s length times the depth bound
+    # with a bounded constant-factor overhead, never exponential.
+    _, subs = _bt_extract_command_substitutions(cmd)
+    for sub in subs:
+        payloads.extend(_shell_c_unwrap_payloads(sub, depth + 1))
+    return payloads
 
 
 def _strip_q(t: str) -> str:
@@ -1667,6 +1793,22 @@ def check_destructive_git_orphan(
         return None
     cmd = _crlf_strip(cmd)
     cmd = _join_backslash_newlines(cmd)
+    if _override("COORDINATOR_ALLOW_ORPHAN"):
+        return None
+
+    # BX-13 (2026-08-17, confirmed live bypass -- guard-bypass-triage
+    # Finding 1): captured BEFORE the heredoc/quoted-span stripping below,
+    # which deletes a whitespace-containing `sh -c '...'`/`bash -c "..."`
+    # payload WHOLESALE as "inert prose" -- the exact mechanism that
+    # correctly allows `echo "reviewing git commit conventions"` -- so
+    # `sh -c 'git reset --hard $(echo HEAD~3)'` never reached the `\bgit\b`
+    # gate this function used to have here at all. Rescanned via
+    # `_shell_c_unwrap_payloads` (this module's own copy of
+    # `block_subagent_commit.py`'s `_wrapped_shell_c_payloads` -- see that
+    # constant's docstring above) AFTER the segment loop below, near the
+    # bottom of this function, same shape `check_no_verify`/
+    # `check_destructive_rm` already use for the identical bug class.
+    raw_cmd = cmd
     # Prose-heredoc-body stripping runs BEFORE `_strip_ws_quoted_spans` --
     # that scanner's whitespace-containing-span rule can otherwise mangle a
     # multi-line heredoc body containing an unpaired quote char, corrupting
@@ -1682,10 +1824,11 @@ def check_destructive_git_orphan(
     # source-string literal it would otherwise mistake for shell free text).
     cmd = _restore_protected_quotes(cmd)
 
-    if not re.search(r"\bgit\b", cmd):
-        return None
-    if _override("COORDINATOR_ALLOW_ORPHAN"):
-        return None
+    # No top-level `\bgit\b` fast-path return here (deliberately removed,
+    # BX-13 fix): the per-segment gate at the top of the loop below already
+    # skips every git-free segment, and a hard early return here is exactly
+    # what let the `sh -c` bypass above short-circuit past the rescan at the
+    # bottom of this function before it could ever run.
 
     # Per-call memo, keyed on the exact (cwd, args) pair actually run --
     # see `_new_git_memo` docstring for why this is sound and why it is
@@ -1900,6 +2043,19 @@ def check_destructive_git_orphan(
                                 )
                                 + _branch_trailer
                             )
+
+    # BX-13 rescan (see comment near `raw_cmd` above): unwrap any
+    # `sh -c`/`bash -c`/etc. payload from the RAW, pre-stripping command text
+    # and re-run this SAME function against it, so a wrapped `git reset
+    # --hard $(...)` (or force-push, or force-delete-branch) gets the full
+    # CHECK 1-3 treatment rather than a second, independently-drifting
+    # implementation. Bounded recursion: `_shell_c_unwrap_payloads` itself
+    # caps nesting depth and fails safe (`[]`) on unparseable input, so this
+    # can only ADD coverage, never loop or crash.
+    for _shell_payload in _shell_c_unwrap_payloads(raw_cmd):
+        _result = check_destructive_git_orphan(_shell_payload, session_id, payload, git_root)
+        if _result is not None:
+            return _result
 
     return None
 

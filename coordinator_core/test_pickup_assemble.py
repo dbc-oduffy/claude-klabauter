@@ -6362,15 +6362,22 @@ class TestDropSubcommandRouting:
 # ---------------------------------------------------------------------------
 # `gates` key-set disjointness across classifications (AC3, C3/C6) — a
 # handoff/spinoff `brief()` payload must never carry the memo-only
-# `gates.addressee` key, and a memo payload must never carry the
-# handoff/spinoff-only `gates.claim`/`gates.claim_grant` keys. Regression for
-# the removed unconditional `"addressee": {}` placeholder on the handoff MAIN
-# success-path `gates_obj` (74e4d938).
+# `gates.addressee` key. Regression for the removed unconditional
+# `"addressee": {}` placeholder on the handoff MAIN success-path `gates_obj`
+# (74e4d938).
+#
+# `claim`/`claim_grant` used to be handoff/spinoff-only and were asserted
+# absent from every memo payload here; the memo/handoff parity fix
+# (cross-repo/inbox/2026-08-17-doe-claude-em-memo-claim-fires-after-the-em-
+# can-already-act.md) makes `brief()`'s memo branch compute and emit both,
+# matching the handoff branch, so they are dropped from this set below —
+# this file's own `TestGatesKeySetDisjointness` was itself the asymmetry a
+# live peer's brief-stage claim on a memo went unnarrated behind.
 # ---------------------------------------------------------------------------
 
 #: Keys that belong ONLY to the handoff/spinoff `gates` shape — never legal
 #: on a memo payload.
-_HANDOFF_ONLY_GATE_KEYS = {"claim", "claim_grant", "gate_check", "execution_stamp_match", "successor"}
+_HANDOFF_ONLY_GATE_KEYS = {"gate_check", "execution_stamp_match", "successor"}
 
 #: Keys that belong ONLY to the memo `gates` shape — never legal on a
 #: handoff/spinoff payload.

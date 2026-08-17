@@ -184,6 +184,26 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     )
     + " Both entrypoints fall through to the published-engine last-resort branch "
     "instead, returning resolved-engine rather than live-working-tree.",
+    # Backfilled 2026-08-17. These two arrived with DoE's rung-0 work
+    # (`cd0d8bf38` added the rung and the first case, `742821db9` the second),
+    # which landed 2026-08-08 — a day AFTER this table was authored in
+    # `a00a6e864`, so they were never added to it. Both fixture cases set
+    # `REPO_CLAUDE_KLABAUTER` with `CLAUDE_KLABAUTER_ROOT: null`, and claude-klabauter reads neither
+    # rung on this path (the shim has no env rungs; the C4a wrapper's rung is
+    # `CLAUDE_KLABAUTER_ROOT`-only), so they fail for EXACTLY the divergence above and
+    # nothing else — verified against the live fixture, not inferred from the
+    # failure text. `strict=True` keeps this honest: give claude-klabauter a
+    # `REPO_CLAUDE_KLABAUTER` rung and these XPASS and fail loudly.
+    "explicit-env-override-beats-registered-published-engine": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
+        cid="explicit-env-override-beats-registered-published-engine"
+    )
+    + " Both entrypoints fall through to the published-engine last-resort branch "
+    "instead, returning resolved-engine rather than live-working-tree.",
+    "engine-target-readable-still-beaten-by-healthy-rung0-override": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
+        cid="engine-target-readable-still-beaten-by-healthy-rung0-override"
+    )
+    + " Both entrypoints fall through to the published-engine last-resort branch "
+    "instead, returning resolved-engine rather than live-working-tree.",
     "undeterminable-session-root-resolves-live-tree-never-diverts": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="undeterminable-session-root-resolves-live-tree-never-diverts"
     )

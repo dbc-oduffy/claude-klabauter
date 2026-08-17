@@ -119,8 +119,15 @@ def detect_slug_prefix_fork_families(worktree_root: Path) -> List[Dict[str, Any]
 
 
 @register_op("deliverable.fork_detect")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "deliverable.fork_detect" handler — read-only fork-family detector.
+
+    Deliberately a plain `def`, not `async def`: it does no awaiting, so it
+    routes through `ipc.dispatch_message`'s SYNC branch where its dispatch
+    timeout is actually enforceable (`test_async_handler_discipline.py`'s
+    zero-await rule — see that gate's module docstring for the incident this
+    prevents, and this module's own comment history for the prior async
+    shape).
 
     No required params.
 

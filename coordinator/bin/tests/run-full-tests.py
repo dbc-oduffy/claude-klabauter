@@ -124,13 +124,14 @@ SHELL_SUITES = [
     # test-terminator-suite-green.sh — EXCLUDED (cascades from
     # test-step-number-stability.sh), see module docstring.
     # test-verify-no-console-flash.sh — SUPERSEDED, see module docstring.
-    # Re-admitted 2026-07-22 (debash-probes): unit test for the sanctioned
-    # bash-self-probe survivor (invoking-shell-bash4-probe.sh, DR-079/2026-07-22
-    # claude-klabauter memo — genuine keep, no Python substitute). Ported harness
-    # 2026-08-13 (C8b Group D) to invoking-shell-bash4-probe.test.py — the
-    # harness itself has no under-test property, only the probe it drives
-    # does; the probe stays shell, untouched. Run direct, verified 12/12 pass.
-    ("coordinator/scripts/lib/invoking-shell-bash4-probe.test.py", "python3"),
+    # invoking-shell-bash4-probe.test.py — RETIRED from this runner 2026-08-17,
+    # converted to `coordinator/scripts/lib/test_invoking_shell_bash4_probe.py`
+    # and collected by pytest via the `coordinator/scripts` testpaths admit. It
+    # was the last dotted `.test.py` straggler of the 2026-07-25/07-28 migration,
+    # and being outside the test tree was ALSO what made it trip
+    # `test_no_unsanctioned_shell_spawn` — one rename cleared both. The probe it
+    # drives (invoking-shell-bash4-probe.sh) stays shell, untouched: DR-079/
+    # 2026-07-22 claude-klabauter memo, genuine keep, no Python substitute.
     # coordinator/tests/cs-session-shape.bats — EXCLUDED, see module docstring.
     # test-snippet-registry.bats — SUPERSEDED, see module docstring.
     # verify-no-console-flash-file-allow.bats — SUPERSEDED, see module docstring.

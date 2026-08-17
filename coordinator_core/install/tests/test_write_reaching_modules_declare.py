@@ -498,6 +498,28 @@ _ALLOWLIST: dict[str, str] = {
         "(`wont_do`, pm_approved) putting remediation out of scope for "
         "this module."
     ),
+    "coordinator_install_entry.py": (
+        "EXEMPT: pure delegation. Its one flagged call spawns the installer "
+        "declared in `docs/install/agent-install-manifest.json` "
+        "(`standalone_setup_script`) and does nothing else — it resolves the "
+        "script, appends the contract's own flags plus operator passthrough, "
+        "and returns the child's exit code. Every write belongs to the "
+        "declared installer, which is where the WRITE_SURFACE clause belongs; "
+        "declaring the spawner's writes here would duplicate the child's "
+        "surface at a site that cannot know what the child writes, and would "
+        "go stale the moment the manifest repoints at a different installer."
+    ),
+    "path_resolution_report.py": (
+        "EXEMPT: read-only probes. Both flagged spawns are PATH-resolution "
+        "and exec-proof checks — `command -v <name>` under a login shell, "
+        "then the entrypoint's own `_EXEC_PROOF_ARGS`, which are "
+        "`--dump-op-timeouts` and `--help`: argument-parsing/report paths, "
+        "chosen because they prove the entrypoint executes without mutating "
+        "anything. Both capture their output and discard the child's stdout "
+        "(`>/dev/null` in the POSIX payload, `capture_output=True` on the "
+        "Windows arm). A report module that mutated the machine it is "
+        "diagnosing would be the defect, not the declaration gap."
+    ),
     # --- Known gaps: genuinely write-reaching, genuinely undeclared today.
     # Out of this dispatch's scope to fix (writer WRITE_SURFACE authorship
     # is explicitly out-of-scope) — reported to the dispatching EM instead.

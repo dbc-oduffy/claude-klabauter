@@ -97,10 +97,19 @@ class TestDenyAndAllow:
         result = guard.check(_payload(target))
         assert result is None
 
-    def test_override_env_advertised_in_deny_text(self, _mock_mirrors):
+    def test_override_env_never_advertised_in_deny_text(self, _mock_mirrors):
+        """B6 (docs/wiki/guard-messaging.md § Register) bans naming any
+        override artifact -- env-var key, assignment form, sentinel, doc
+        pointer -- in a denial to an audience that isn't a positively
+        resolved EM; this guard's `_payload()` builds no `session_id`/
+        `agent_id`, so the audience is unresolved and must degrade to
+        silence (`operator_override_note`'s 2026-08-13 audience-gated
+        reshape, NEGATIVE SPEC 6). This test previously asserted the
+        opposite (that the bare env-var name WAS present) -- that predates
+        the reshape and pinned a doctrine violation as a spec."""
         target = str(_mock_mirrors / "cross-repo" / "inbox" / "x.md")
         result = guard.check(_payload(target))
-        assert guard.OVERRIDE_ENV in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert guard.OVERRIDE_ENV not in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_non_guarded_tool_allowed(self, _mock_mirrors):
         target = str(_mock_mirrors / "cross-repo" / "inbox" / "x.md")

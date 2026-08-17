@@ -146,6 +146,13 @@ _TELL_ASKS_PERMISSION = re.compile(
 # whole-message co-occurrence check: "your standing instruction to keep PRs
 # under 300 lines" (a real, unrelated PM instruction) must not trip merely
 # because some other sentence in the same turn happens to mention dispatch.
+#: Quantity nouns that make a nearby rule-noun a MEASUREMENT rather than an
+#: authored rule. Native vocabulary here — CLAUDE.md itself says "invocation
+#: budget" and "spawn-count budget" — so both word orders have to be excluded:
+#: "instruction budget" (quantity follows) and "spawn-count budget policy"
+#: (quantity precedes). Both were live false positives found in review.
+_QUANTITY_WORDS = r"budget|count|limit|cap|quota|allowance|spend|overhead"
+
 _POSSESSIVE_PM_ATTRIBUTION = re.compile(
     r"\byour\s+(?:standing\s+)?[^.?!\n]{0,60}?\b(?:instruction|rule|directive|order|policy)\b"
     r"|\bas you(?:'ve| have)?\s+instructed\b"
@@ -156,7 +163,32 @@ _POSSESSIVE_PM_ATTRIBUTION = re.compile(
     # Agentless-passive framing: "this session was started with a standing
     # instruction..." names no author at all, punting the authorship
     # question up rather than inventing a PM — recurrence 5's exact shape.
-    r"|\b(?:this\s+)?(?:session|conversation)\s+was\s+started\s+with\s+a\s+standing\s+\w+",
+    r"|\b(?:this\s+)?(?:session|conversation)\s+was\s+started\s+with\s+a\s+standing\s+\w+"
+    # Scope-possessive framing: "this session's standing instruction",
+    # "the session's instruction", "this turn's directive". Recurrence 6's
+    # exact shape (2026-08-17): the EM attributed the harness line to the
+    # SESSION rather than to "you", which is the same misattribution — an
+    # unattributed line given an authority it does not have — while evading a
+    # pattern anchored on `your`. Naming the session as author is not more
+    # accurate than naming the PM; the line's author is the harness, and the
+    # tell is treating it as a local standing rule at all.
+    # The rule-noun must be the HEAD of its noun phrase, not a modifier on a
+    # quantity: "this session's instruction BUDGET is limited, so I didn't
+    # dispatch" is about token spend, not authorship, and tripped the first
+    # version of this alternative — caught in review, and the vocabulary is
+    # native here (CLAUDE.md itself says "invocation budget", "spawn-count
+    # budget"). The lookahead is what keeps the widening from importing a
+    # false-positive class the `your ...` alternative never had.
+    r"|\b(?:this|the)\s+(?:session|conversation|turn)'s\s+(?:standing\s+)?"
+    # Tempered span: a quantity word anywhere between the possessive and the
+    # rule-noun disqualifies the match, which is what catches the MODIFIER word
+    # order ("spawn-count budget policy") that a trailing lookahead alone
+    # cannot. Both orders are native vocabulary here.
+    r"(?:(?!" + _QUANTITY_WORDS + r")[^.?!\n]){0,40}?"
+    r"\b(?:instruction|rule|directive|order|policy)\b"
+    # ...and the HEAD case ("instruction budget"), where the quantity word
+    # follows instead.
+    r"(?!\s+(?:" + _QUANTITY_WORDS + r"))",
     re.IGNORECASE,
 )
 
@@ -505,13 +537,101 @@ def _final_message_text(payload: dict) -> str:
     fallback, never the primary path.
     """
     supplied = payload.get("last_assistant_message")
-    if isinstance(supplied, str) and supplied.strip():
-        return supplied
+    spoken = supplied if isinstance(supplied, str) and supplied.strip() else ""
 
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
+        return spoken
+    if not spoken:
+        spoken = last_assistant_text(transcript_path)
+
+    # A permission ask made through the AskUserQuestion TOOL never reaches the
+    # spoken text at all, so every prose-scanning tell was blind to the single
+    # highest-signal form of the mistake: a formal permission prompt with the
+    # harness line quoted in an option body. Observed 2026-08-17 (recurrence 6) —
+    # the EM put "dispatch or not?" to the PM as a structured question, and
+    # `last_assistant_text` walks PAST tool_use-only entries by design ("not the
+    # final spoken turn"), so Tell B could not fire. Append the question text to
+    # the scanned corpus rather than changing what "spoken" means: the two are
+    # different channels and only the tells need to see both.
+    asked = ask_user_question_text(transcript_path)
+    if not asked:
+        return spoken
+    return f"{spoken}\n{asked}" if spoken else asked
+
+
+def ask_user_question_text(transcript_path: str) -> str:
+    """Return the question + option text of the final turn's AskUserQuestion
+    calls, or "".
+
+    WHY THIS EXISTS: the tells scan prose, and a permission ask routed through
+    the AskUserQuestion tool is not prose — it is a `tool_use` block, which
+    `last_assistant_text` deliberately walks past. That made the most explicit
+    possible form of the failure (a formal "may I dispatch?" prompt) the one form
+    nothing could see. Recurrence 6, 2026-08-17.
+
+    Harvests `question`, `header`, and each option's `label`/`description` — the
+    misattribution lands in the option bodies as often as in the question itself,
+    since that is where the reasoning for each branch is written.
+
+    Same tail-read and fail-silent posture as `last_assistant_text`: advisory ops
+    never raise. Scans back only to the previous user turn, so a question from an
+    earlier exchange cannot re-trip a later one.
+    """
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as fh:
+            if size > 512_000:
+                fh.seek(size - 512_000)
+                fh.readline()
+            raw = fh.read()
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+    except OSError:
         return ""
-    return last_assistant_text(transcript_path)
+
+    collected: list[str] = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        # Stop at the turn boundary: only this turn's questions are in scope.
+        if entry.get("type") == "user":
+            break
+        if entry.get("type") != "assistant":
+            continue
+        msg = entry.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") != "AskUserQuestion":
+                continue
+            payload = block.get("input")
+            if not isinstance(payload, dict):
+                continue
+            for question in payload.get("questions") or []:
+                if not isinstance(question, dict):
+                    continue
+                for key in ("question", "header"):
+                    val = question.get(key)
+                    if isinstance(val, str) and val.strip():
+                        collected.append(val)
+                for option in question.get("options") or []:
+                    if not isinstance(option, dict):
+                        continue
+                    for key in ("label", "description"):
+                        val = option.get(key)
+                        if isinstance(val, str) and val.strip():
+                            collected.append(val)
+    return "\n".join(collected)
 
 
 def message_trips_tell(text: str) -> bool:

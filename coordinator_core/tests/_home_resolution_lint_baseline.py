@@ -123,13 +123,12 @@ from __future__ import annotations
 # anywhere nearby, unconditional on every platform. `coordinator/bin/**` is
 # outside this chunk's write scope; deferred to a named successor rather
 # than baselined (see this chunk's own run-report for the full reasoning).
-X_OK_BASELINE: list[tuple[str, int, str]] = [
-    (
-        "coordinator/bin/machine-local",
-        96,
-        "if os.path.isfile(base) and os.access(base, os.X_OK):",
-    ),
-]
+#
+# 2026-08-17: `coordinator/bin/machine-local:96` -- the site the note above
+# names as the sole remaining false positive -- no longer matches a live
+# finding (fixed or moved upstream). Row removed per
+# `test_x_ok_baseline_has_no_stale_entries`. X_OK_BASELINE is empty again.
+X_OK_BASELINE: list[tuple[str, int, str]] = []
 
 COLON_JOIN_BASELINE: list[tuple[str, int, str]] = []
 
@@ -340,6 +339,23 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         "coordinator/bin/check-machine-path-leak.py",
         327,
         'current_home = os.environ.get("HOME") or os.path.expanduser("~")',
+    ),
+    # 2026-08-17: `check_posix_exec_assumptions.py::_current_machine_home`
+    # deliberately MIRRORS the check-machine-path-leak.py entry directly
+    # above -- its own docstring says so explicitly ("Deliberately mirrors
+    # -- does not reinvent -- the discrimination
+    # coordinator/bin/check-machine-path-leak.py's main() already draws").
+    # Same construct, same reasoning, same verified-correct outcome: HOME
+    # wins at rung 1 under git-bash, and `expanduser` already honours
+    # USERPROFILE under stock Windows, so both realistic environments
+    # resolve correctly and the chain is not the F10/F15 defect shape this
+    # rule exists to catch. Not deferred debt -- a documented instance of
+    # the same already-accepted correct construct, not a new site created
+    # to dodge the gate.
+    (
+        "coordinator_core/ops/check_posix_exec_assumptions.py",
+        1667,
+        'return os.environ.get("HOME") or os.path.expanduser("~")',
     ),
 ]
 

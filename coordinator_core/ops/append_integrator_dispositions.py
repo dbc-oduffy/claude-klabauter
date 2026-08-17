@@ -287,10 +287,23 @@ def _resolve_git_root(cwd: Optional[str] = None) -> str:
     return root
 
 
-def _build_block(buckets: Dict[str, List[str]], rationale: Optional[str]) -> str:
+def _build_block(
+    buckets: Dict[str, List[str]],
+    rationale: Optional[str],
+    *,
+    no_findings: bool = False,
+) -> str:
     """Render the canonical `## Integrator Dispositions` block, matching
     `agents/review-integrator.md`'s own example byte-for-byte in structure
-    (schema_version, the five buckets in fixed order, optional Rationale)."""
+    (schema_version, the five buckets in fixed order, optional Rationale).
+
+    `no_findings` renders a `no_findings: true` marker. An all-empty block is
+    otherwise indistinguishable from one a lazy caller produced, and the flag
+    cannot be verified against reviewer prose at write time — so the block
+    records that the claim was made, making a zero-finding close greppable
+    after the fact rather than silent. Renders only when set, so an ordinary
+    call keeps byte-parity with a pre-flag block.
+    """
     lines: List[str] = []
     lines.append("")
     lines.append("---")
@@ -311,6 +324,8 @@ def _build_block(buckets: Dict[str, List[str]], rationale: Optional[str]) -> str
             continue
         rendered = "[" + ", ".join(ids) + "]"
         lines.append(f"{_BUCKET_YAML_KEY[bucket]}: {rendered}")
+    if no_findings:
+        lines.append("no_findings: true")
     lines.append("```")
     if rationale and rationale.strip():
         lines.append("")
@@ -327,6 +342,7 @@ def append_dispositions(
     *,
     rationale: Optional[str] = None,
     git_root: Optional[Path] = None,
+    no_findings: bool = False,
 ) -> Dict[str, object]:
     """Validate `sidecar_path` and append the disposition block to it.
 
@@ -334,6 +350,14 @@ def append_dispositions(
     `DispositionsError` on any validation failure — see module docstring for
     the full fail-loud checklist. Never partially writes: the block is only
     ever appended after every check above passes.
+
+    `no_findings` records an all-buckets-empty block for a reviewer that filled
+    its findings section and declared no findings in it. NEGATIVE SPEC: this is
+    not a bypass for an integrator that simply supplied no ids — that stays a
+    hard error, because the two are indistinguishable from the id set alone and
+    only one of them is honest. It is also not a substitute for the unfilled-
+    scaffold check above, which still fires first: a reviewer that never wrote
+    its findings body has not declared anything.
     """
     if not sidecar_path.is_file():
         raise DispositionsError(f"sidecar not found: {sidecar_path}")
@@ -394,15 +418,21 @@ def append_dispositions(
         )
 
     total_ids = sum(len(buckets.get(bucket) or []) for bucket in BUCKET_ORDER)
-    if total_ids == 0:
+    if no_findings and total_ids:
+        raise DispositionsError(
+            "--no-findings records an empty disposition set, but finding ids "
+            f"were supplied ({total_ids}). Drop the flag and bucket them."
+        )
+    if total_ids == 0 and not no_findings:
         raise DispositionsError(
             "no finding ids supplied across any disposition bucket — nothing "
             "to record. Every finding in the sidecar must appear in exactly "
             "one bucket (applied / escalated-disagree / escalated-ask / "
-            "escalated-p0 / deferred / verified-no-action)."
+            "escalated-p0 / deferred / verified-no-action). If the reviewer "
+            "declared no findings at all, pass --no-findings."
         )
 
-    block = _build_block(buckets, rationale)
+    block = _build_block(buckets, rationale, no_findings=no_findings)
     with sidecar_path.open("a", encoding="utf-8") as handle:
         handle.write(block)
 
@@ -451,6 +481,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated finding ids: verified-no-action.",
     )
     parser.add_argument(
+        "--no-findings",
+        action="store_true",
+        help=(
+            "Record an empty disposition set for a reviewer that declared no findings. "
+            "Mutually exclusive with any bucket flag."
+        ),
+    )
+    parser.add_argument(
         "--rationale-file",
         default=None,
         help="Optional path to a file whose content becomes the block's prose ### Rationale section.",
@@ -495,7 +533,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         sidecar_path = git_root / sidecar_path
 
     try:
-        result = append_dispositions(sidecar_path, buckets, rationale=rationale, git_root=git_root)
+        result = append_dispositions(
+            sidecar_path,
+            buckets,
+            rationale=rationale,
+            git_root=git_root,
+            no_findings=args.no_findings,
+        )
     except DispositionsError as exc:
         print(f"append-integrator-dispositions: {exc}", file=sys.stderr)
         return 1

@@ -1305,6 +1305,7 @@ class TestTypeToGlobDerivedGate:
         # --- (A) not a record collection ---
         "capability-manifest":     "single JSON file (state/capabilities/manifest.json), no wildcard, not frontmatter-shaped",
         "fleet-capability-index":  "single JSON file (state/capabilities/fleet-index.json), no wildcard, not frontmatter-shaped",
+        "coordinator-local-md":    "single fixed file (coordinator.local.md), no wildcard — not a record set",
         "docs-roadmap":            "single fixed file (docs/ROADMAP.md), no wildcard — not a record set",
         "health-ledger":           "single fixed file (state/health-ledger.md), no wildcard — not a record set",
         "orientation-cache":       "single fixed file (state/orientation_cache.md), no wildcard — not a record set",
@@ -1319,6 +1320,7 @@ class TestTypeToGlobDerivedGate:
         "atlas-doc":               "record-shaped (docs/architecture/*.md) — not yet wired, out of scope for this fix",
         "atlas-system-doc":        "record-shaped (docs/architecture/systems/*.md) — not yet wired, out of scope for this fix",
         "audit-record":            "record-shaped (docs/architecture/audit-records/*.md) — not yet wired, out of scope for this fix",
+        "census-document":         "record-shaped (state/plan-sidecars/*.census-steps.md) — 0 on-disk instances in this repo (state/plan-sidecars/ exists but carries no *.census-steps.md files yet; the row shape it vendors is still DRAFT per its own schema provenance note) and no reader queries this glob today — not yet wired, out of scope for this fix",
         "cross-repo-commitment":   "record-shaped (state/cross-repo-commitments/*.yaml) — not yet wired, out of scope for this fix",
         "docs-check-sidecar":      "record-shaped (docs/plans/*.docs-check.md) — not yet wired, out of scope for this fix",
         "initiative":              "record-shaped (state/initiatives/*.yaml) — not yet wired, out of scope for this fix",

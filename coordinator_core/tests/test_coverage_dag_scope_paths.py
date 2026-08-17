@@ -16,6 +16,12 @@ under test runs against git's real pathspec engine without needing to build
 the full handoff-DAG / archival.reverse_membership machinery that
 `_derive_dag_chain_set` itself depends on -- that machinery is exercised by
 test_coverage_dag_chain_set_cross_branch.py and is not the subject here.
+
+K-001 note (state/kill-ledger.md): `run_coverage_gate` and its verdict were
+removed under kill-ledger entry K-001. The four DAG-scope-filter tests that
+drove `run_coverage_gate` end-to-end were deleted as dead code; the real
+subject under test — `cov._filter_shas_by_scope_paths`'s git-pathspec
+matching — is still exercised directly by the two tests remaining below.
 """
 
 from __future__ import annotations
@@ -92,81 +98,6 @@ def _patch_dag_chain_set(monkeypatch, shas: List[str]) -> None:
         return cov._DagChainResult(shas=list(shas), indeterminate=False, notes=[])
 
     monkeypatch.setattr(cov, "_derive_dag_chain_set", _fake)
-
-
-def test_dag_scope_paths_excludes_out_of_scope_commits(scoped_repo, monkeypatch) -> None:
-    """(1) A commit touching only an out-of-scope path is excluded from
-    chain_set when scope_paths narrows to a different subtree."""
-    repo, fake_handoff, shas = scoped_repo
-    _patch_dag_chain_set(monkeypatch, [shas["out"], shas["in"]])
-
-    result = cov.run_coverage_gate(
-        from_handoff=fake_handoff,
-        scope_paths=["src/"],
-        repo_root=str(repo),
-    )
-
-    # No review-trail records exist in this repo, so every in-chain commit
-    # that survives scoping shows up as uncovered -- that's how we observe
-    # which SHAs made it through the filter.
-    assert set(result.uncovered_shas) == {shas["in"]}, result.notes
-
-
-def test_dag_scope_paths_empty_is_a_no_op(scoped_repo, monkeypatch) -> None:
-    """(2) scope_paths empty/None must be byte-identical to no filtering --
-    every DAG-derived SHA stays in chain_set."""
-    repo, fake_handoff, shas = scoped_repo
-    all_shas = [shas["out"], shas["dir"], shas["in"], shas["mixed"]]
-
-    _patch_dag_chain_set(monkeypatch, all_shas)
-    result_none = cov.run_coverage_gate(
-        from_handoff=fake_handoff, scope_paths=None, repo_root=str(repo)
-    )
-
-    _patch_dag_chain_set(monkeypatch, all_shas)
-    result_empty = cov.run_coverage_gate(
-        from_handoff=fake_handoff, scope_paths=[], repo_root=str(repo)
-    )
-
-    assert set(result_none.uncovered_shas) == set(all_shas)
-    assert set(result_empty.uncovered_shas) == set(all_shas)
-    assert result_none.verdict_line == result_empty.verdict_line
-
-
-def test_dag_scope_paths_directory_prefix_matches_nested_file(
-    scoped_repo, monkeypatch
-) -> None:
-    """(3) A directory-prefix pathspec ("tests/") must match a commit that
-    touches a file nested beneath it (tests/unit/test_a.py) -- the case a
-    naive Python startswith() would get right but a naive glob would not,
-    and proof this uses git's real pathspec matcher rather than a hand-rolled
-    prefix check."""
-    repo, fake_handoff, shas = scoped_repo
-    _patch_dag_chain_set(monkeypatch, [shas["out"], shas["dir"]])
-
-    result = cov.run_coverage_gate(
-        from_handoff=fake_handoff,
-        scope_paths=["tests/"],
-        repo_root=str(repo),
-    )
-
-    assert set(result.uncovered_shas) == {shas["dir"]}, result.notes
-
-
-def test_dag_scope_paths_mixed_commit_is_retained(scoped_repo, monkeypatch) -> None:
-    """(4) A commit touching BOTH an in-scope and an out-of-scope path is
-    retained -- touching any scoped path is sufficient, matching flat mode's
-    `git rev-list -- scope_paths` semantics."""
-    repo, fake_handoff, shas = scoped_repo
-    _patch_dag_chain_set(monkeypatch, [shas["out"], shas["mixed"]])
-
-    result = cov.run_coverage_gate(
-        from_handoff=fake_handoff,
-        scope_paths=["src/"],
-        repo_root=str(repo),
-    )
-
-    assert set(result.uncovered_shas) == {shas["mixed"]}, result.notes
 
 
 def test_filter_shas_by_scope_paths_normalizes_abbreviated_shas(tmp_path: Path) -> None:

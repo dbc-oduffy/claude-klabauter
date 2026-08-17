@@ -432,7 +432,7 @@ def _validate_json_schema_node(
     Port of validateJsonSchemaNode from DoE-claude coordinator/bin/lib/schema.js.
 
     Supported keywords: $ref, anyOf, allOf, oneOf, type, enum, format
-    (date/date-time), pattern, minLength, minItems, minimum, maximum,
+    (date/date-time), pattern, minLength, maxLength, minItems, minimum, maximum,
     propertyNames, required (array form), properties, additionalProperties (both boolean
     false and schema-valued — a schema-valued additionalProperties recurses
     into every key not declared in this node's `properties`, same as
@@ -467,7 +467,8 @@ def _validate_json_schema_node(
     established fail-loud idiom for unsupported schema shapes, rather than
     silently passing a schema this validator cannot actually check).
 
-    minLength (string values only), minItems (array values only), and
+    minLength (string values only), maxLength (string values only),
+    minItems (array values only), and
     minimum / maximum (numeric values only, `bool` excluded — JSON Schema's
     `number` type does not include booleans even though Python's `bool`
     subclasses `int`) are size/magnitude bound checks, each ignored for a value of
@@ -705,6 +706,17 @@ def _validate_json_schema_node(
                 'field': field,
                 'error': f'value length {len(value)} is less than minLength {min_length}',
                 'hint': f'Value must be at least {min_length} character(s) long',
+            })
+
+    # maxLength — applied to string values only (see docstring); a non-string
+    # value is not a violation, matching pattern/format/minLength above.
+    if 'maxLength' in schema and isinstance(value, str):
+        max_length = schema['maxLength']
+        if len(value) > max_length:
+            errors.append({
+                'field': field,
+                'error': f'value length {len(value)} is greater than maxLength {max_length}',
+                'hint': f'Value must be at most {max_length} character(s) long',
             })
 
     # minimum — applied to numeric values only; bool is deliberately excluded

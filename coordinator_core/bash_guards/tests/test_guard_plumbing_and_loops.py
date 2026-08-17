@@ -73,6 +73,7 @@ import sys
 import pytest
 
 from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
 
 
 def _payload(command):
@@ -192,9 +193,18 @@ class TestHeadTailPlumbing:
         # under `host_is_windows=True`. This guard never denies any more --
         # read the advisory context instead, still under a forced Windows
         # host to confirm the escape hatch survives that leg too.
+        #
+        # RETARGETED AGAIN (2026-08-17, PM ruling on the override-key
+        # message-register doctrine): a guard message names the guard that
+        # fired and nothing else about its override -- no key, no assignment
+        # form (docs/reference/guard-override-keys.md, opening sentence).
+        # `operator_override_note` no longer interpolates `_OVERRIDE_ENV`
+        # into the rendered text at all; the escape hatch is "named" via a
+        # doc pointer, not the literal `COORDINATOR_*` key. Asserting the
+        # bare key string was stale against that doctrine.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
-        assert "COORDINATOR_" in ctx
+        assert OVERRIDE_KEYS_DOC in ctx
 
 
 class TestSeamConfirmedOutletMessageShape:
@@ -229,14 +239,21 @@ class TestSeamConfirmedOutletMessageShape:
         # longer renders (this guard never denies). Same regression check,
         # against the advisory template's "consider ... here too" sentence
         # instead.
+        #
+        # RETARGETED AGAIN (2026-08-17, override-key message-register
+        # ruling): `operator_override_note` no longer interpolates the bare
+        # `COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS` key -- it renders a doc
+        # pointer only. The regression this test guards against (the note
+        # drifting back into the "consider" sentence instead of trailing the
+        # Example) still applies to the doc pointer.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         consider_line = next(
             line for line in ctx.splitlines() if "consider" in line
         )
-        assert "COORDINATOR_" not in consider_line
+        assert OVERRIDE_KEYS_DOC not in consider_line
         example_idx = ctx.index("Example:")
-        override_idx = ctx.index("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS")
+        override_idx = ctx.index(OVERRIDE_KEYS_DOC)
         assert override_idx > example_idx
 
     def test_advisory_summary_reads_sensibly_on_macos_too(self):
@@ -338,9 +355,13 @@ class TestWhileReadLoop:
         assert "while-read-loop" in ctx
 
     def test_advisory_names_its_escape_hatch(self):
+        # RETARGETED (2026-08-17, override-key message-register ruling):
+        # see `TestHeadTailPlumbing.test_advisory_message_names_its_escape_
+        # hatch` above for the same fix on this guard's other shape -- the
+        # escape hatch is named via a doc pointer, never the bare key.
         out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
-        assert "COORDINATOR_" in ctx
+        assert OVERRIDE_KEYS_DOC in ctx
 
 
 class TestBareSeamAdvisoryNeverDenies:

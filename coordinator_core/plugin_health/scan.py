@@ -92,7 +92,6 @@ from typing import Iterator, List, Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
-from coordinator_core.plugin_health.sentinel import _resolve_claude_home
 
 _PROG = "scan-addon-health.sh"
 
@@ -140,6 +139,17 @@ def _resolve_roots() -> "tuple[Path, Path, Optional[Path], Optional[Path]]":
     """
     plugins_override = os.environ.get("COORDINATOR_PLUGINS_ROOT")
     consumer_override = os.environ.get("COORDINATOR_CONSUMER_HEALTH_ROOT")
+
+    # Imported HERE, not at module scope. `sentinel` and this module form an
+    # import cycle, and at module scope the loser depends on which side is
+    # imported first: a process that loads `plugin_health.sentinel` before
+    # `coordinator_core.ops` — which is exactly what the sentinel CLI
+    # trampoline does — left this module half-initialised, so `register_op`
+    # never ran and the `plugin_health.scan` op silently did not exist. A
+    # function-scope import keeps `_resolve_claude_home` the single
+    # implementation (the whole reason this module borrows it) while removing
+    # the cycle from import time.
+    from coordinator_core.plugin_health.sentinel import _resolve_claude_home
 
     claude_home = _resolve_claude_home(os.environ.get("CLAUDE_HOME"))
     plugins_root = Path(plugins_override) if plugins_override else claude_home / "plugins"

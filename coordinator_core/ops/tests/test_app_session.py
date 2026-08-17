@@ -599,7 +599,15 @@ def test_handle_dir_resolution_spawns_no_subprocess(tmp_path, monkeypatch):
         spawns.append(args[0] if args else kwargs.get("args"))
         raise AssertionError(f"unexpected subprocess spawn: {spawns[-1]}")
 
-    monkeypatch.setattr(repo_root_seam.subprocess, "run", _forbidden)
+    # Patched on the stdlib module itself, not `repo_root_seam.subprocess`: that
+    # attribute no longer exists, because `repo_root._spawn_rev_parse` imports
+    # `subprocess` function-locally so the ordinary walk path never loads it (see
+    # the import-budget note there). The function-local import resolves the same
+    # module object at call time, so this still intercepts the spawn — and it now
+    # also catches one reached through any other module.
+    import subprocess as _subprocess
+
+    monkeypatch.setattr(_subprocess, "run", _forbidden)
 
     resolved = app_session._handle_dir(str(consuming_repo))
 

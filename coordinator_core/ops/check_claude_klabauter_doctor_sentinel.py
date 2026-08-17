@@ -11,7 +11,8 @@ never writes it.
 Sentinel location: <CLAUDE_KLABAUTER_ROOT>/state/doctor-last-run.json
 Sentinel schema (claude-klabauter-owned):
   { "verdict": "GREEN|AMBER|RED", "red_probes": ["<probe id>", ...],
-    "hint": "<one-line remediation>", "ts": <epoch seconds> }
+    "hint": "<one-line remediation>", "ts": <epoch seconds>,
+    "advisory_only": <bool, optional> }
 
 Nudge-worthy states (mirrors the memo's ask):
   - absent  — doctor never run on this machine (fresh install / bootstrap gap)
@@ -32,15 +33,20 @@ Negative-spec:
     (invoked as `python bin/claude-klabauter-doctor-probe.py --triage`); this module
     only reads what it wrote.
   - Does NOT require, validate, or enumerate the sentinel's full key set. This
-    module reads exactly four fields (`verdict`, `hint`, `red_probes`, `ts`) via
-    `.get()` with defaults, so it is unaffected by additive keys the writer gains
-    over time — e.g. the `vendor_drift` public key added 2026-07-26 (see
-    `bin/claude-klabauter-doctor-probe.py::_write_doctor_sentinel`). A sentinel from before
-    that key existed, and one from after, both parse identically here. If this
-    module ever needs to read `vendor_drift` (a future DoE-side ask), do so via
-    `.get("vendor_drift")` with the same absent-key tolerance, never a strict
-    key-membership assertion — a sentinel this module fails to parse degrades to
-    the "sentinel unreadable" line, never a crash.
+    module reads exactly five fields (`verdict`, `hint`, `red_probes`, `ts`,
+    `advisory_only`) via `.get()` with defaults, so it is unaffected by additive
+    keys the writer gains over time — e.g. the `vendor_drift` public key added
+    2026-07-26 (see `bin/claude-klabauter-doctor-probe.py::_write_doctor_sentinel`). A
+    sentinel from before a given key existed, and one from after, both parse
+    identically here. `advisory_only` (added 2026-08-17) is read via
+    `.get("advisory_only")` with the same absent-key tolerance: an older
+    sentinel lacking it renders exactly as before this key existed (plain
+    AMBER/RED, no ADVISORY branch) — see `_format_verdict`'s `advisory_only`
+    parameter, default `False`. If this module ever needs to read
+    `vendor_drift` (a future DoE-side ask), do so via `.get("vendor_drift")`
+    with the same absent-key tolerance, never a strict key-membership
+    assertion — a sentinel this module fails to parse degrades to the
+    "sentinel unreadable" line, never a crash.
   - Does NOT re-derive CLAUDE_KLABAUTER_ROOT via the shell resolution ladder — this
     module IS running from inside the resolved claude-klabauter root (the DoE-side
     trampoline already resolved it to reach this import), so CLAUDE_KLABAUTER_ROOT is
@@ -88,16 +94,36 @@ def _format_verdict(
     red_probes: List[str],
     stale: bool,
     age_days: Optional[int],
+    advisory_only: bool = False,
 ) -> str:
     """Render the single advisory line for a parsed, well-formed sentinel.
 
     Mirrors the bash `case "$verdict" in ...` block line-for-line, including
-    the RED/AMBER/GREEN|""/unknown-verdict branch shapes.
+    the RED/AMBER/GREEN|""/unknown-verdict branch shapes, with one addition:
+    when `advisory_only` is True (the sentinel's DEGRADED/BROKEN overall was
+    driven entirely by non-required probes — see
+    `bin/claude-klabauter-doctor-probe.py::_sentinel_advisory_only`), the RED/AMBER band
+    is replaced with an ADVISORY line that says the install is not broken. The
+    degradation itself is still surfaced — it must never vanish, only stop
+    reading as a required-prerequisite failure. `advisory_only` defaults to
+    False so a sentinel written before this key existed (or any sentinel
+    lacking it) renders through the original RED/AMBER branches unchanged.
     """
+    if verdict == "RED" and advisory_only:
+        probe_clause = f" ({','.join(red_probes)})" if red_probes else ""
+        hint_clause = f" — {hint}." if hint else ""
+        return f"[health] claude-klabauter-doctor: ADVISORY (non-gating){probe_clause}{hint_clause} Run python bin/claude-klabauter-doctor-probe.py --triage for details."
+
     if verdict == "RED":
         probe_clause = f" ({','.join(red_probes)})" if red_probes else ""
         hint_clause = f" — {hint}." if hint else ""
         return f"[health] claude-klabauter-doctor: RED{probe_clause}{hint_clause} Run python bin/claude-klabauter-doctor-probe.py --triage for details."
+
+    if verdict == "AMBER" and advisory_only:
+        hint_clause = f" — {hint}." if hint else ""
+        if stale and age_days is not None:
+            return f"[health] claude-klabauter-doctor: ADVISORY (non-gating, {age_days}d old){hint_clause} Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
+        return f"[health] claude-klabauter-doctor: ADVISORY (non-gating){hint_clause} Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
 
     if verdict == "AMBER":
         hint_clause = f" — {hint}." if hint else ""
@@ -152,6 +178,7 @@ def main(argv: List[str]) -> int:  # noqa: ARG001 — argv unused (no flags), ke
     hint = str(data.get("hint") or "")
     red_probes_raw = data.get("red_probes") or []
     red_probes = [str(p) for p in red_probes_raw] if isinstance(red_probes_raw, list) else []
+    advisory_only = data.get("advisory_only") is True
     ts = data.get("ts", "")
 
     stale = True
@@ -162,7 +189,7 @@ def main(argv: List[str]) -> int:  # noqa: ARG001 — argv unused (no flags), ke
         age_days = age_sec // 86400
         stale = age_sec > _stale_sec()
 
-    line = _format_verdict(verdict, hint, red_probes, stale, age_days)
+    line = _format_verdict(verdict, hint, red_probes, stale, age_days, advisory_only)
     if line:
         print(line)
     return 0

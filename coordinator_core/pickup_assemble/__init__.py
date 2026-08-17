@@ -7271,8 +7271,21 @@ def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict
     """Function 6 — parses `completeness_checklist:` items (in-process, via
     `coordinator_core.ops.parse_completeness_item`, AC16 — never re-derives
     the grammar here), hoists `restart-gated` items ahead of `live` items
-    (Step 5.5b fixed ordering rule), and returns `TaskCreate` +
-    `coordinator-tasks-mirror init` as EM-run `directives[]`.
+    (Step 5.5b fixed ordering rule), and returns one `coordinator-tasks-mirror
+    init` EM-run directive per item.
+
+    MIRROR IS PRIMARY, HARNESS TASK IS BEST-EFFORT. Each directive carries an
+    additive `harness_task_create` payload for a consumer that mirrors the item
+    into the agent harness's own task surface. That payload is advisory: this
+    repo has no consumer for it, it commands no directive of its own, and an EM
+    whose harness lacks `TaskCreate` simply does not act on it. The disk-backed
+    `coordinator-tasks-mirror` CLI is the durable half and the only half that
+    executes — confirmed inert-but-harmless in a live session on 2026-08-17,
+    when `TaskCreate` was absent from an EM tool surface entirely
+    (`cross-repo/inbox/2026-08-17-example-cockpit-repo-em-harness-task-create-payload-inert.md`).
+    NEGATIVE SPEC: do not invert these. Promoting the harness task to primary
+    and demoting the mirror to fallback trades a durable on-disk record for a
+    harness capability that has already vanished once.
 
     SECURITY-LOAD-BEARING (contract § "Probe-confirmation is JUDGMENT, not a
     gates boolean"): a `[probe: ...]` command is UNTRUSTED input with full
@@ -8038,12 +8051,16 @@ def brief(
             )
             decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
             # `gates.claim_reclaim`, NOT a key inside `gates.claim_grant`:
-            # the memo branch emits no `claim_grant` at all (only the handoff
-            # branch computes one), and the memo path is precisely where the
-            # 2026-08-10 incident happened — so hanging this off `claim_grant`
-            # would drop the machine-readable record on the one class that
-            # most needs it, leaving only prose. One field path, present for
-            # both classes, and no fabricated half-populated `claim_grant`.
+            # `claim_grant` reports the CURRENT verdict against the state this
+            # brief itself just read (post-reclaim), never the fact that a
+            # takeover happened — folding the reclaim record into it would
+            # either overwrite that current verdict or fabricate a second,
+            # conflicting one. One field path, present for both the handoff
+            # and memo branches (parity fix,
+            # cross-repo/inbox/2026-08-17-doe-claude-em-memo-claim-fires-
+            # after-the-em-can-already-act.md — the memo path is precisely
+            # where the 2026-08-10 duplicate-memo incident happened), and no
+            # fabricated half-populated `claim_grant`.
             gates = decision_object.get("gates")
             if isinstance(gates, dict):
                 decision_object = {
@@ -8624,6 +8641,64 @@ def brief(
         if took_from:
             reclaimed.append(took_from)
 
+    # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-memo-
+    # claim-fires-after-the-em-can-already-act.md) — the handoff branch above
+    # computes `claim`/`claim_grant` and emits both under `gates` right after
+    # its own `acquire_brief_claim` call (~L8167-8168); this memo branch used
+    # to compute neither, so a memo brief carried no `gates.claim_grant` key
+    # at all and `acquire_brief_claim`'s docstring promise — that a FAILED
+    # brief-stage acquisition is narrated by "the `compute_claim_grant` call
+    # that follows" — was never kept for memos. A live peer holding only the
+    # brief-stage lock (no durable frontmatter stamp yet, so
+    # `gates.liveness_signal` never catches it) meant the second session's
+    # brief emitted a fully actionable object with no denial anywhere.
+    claim = compute_claim_gate(root, "memo", basename)
+    claim_grant = compute_claim_grant(root, "memo", basename, artifact["path"], cwd=str(root), fm=fm)
+
+    if claim["holder"] is not None and claim_grant.get("verdict") != "granted":
+        # Mirrors the handoff branch's live-claim-holder stand-down
+        # (~L8256-8331) exactly: a DENIED grant against a live foreign
+        # holder halts before the memo body is worth reading — no
+        # directives, a liveness judgment point as the only offer. Row 2 of
+        # `compute_claim_grant` (`held_by_self`) resolves `granted` for a
+        # same-session re-brief, so this branch is never reached for that
+        # case — see `_claim_already_self_held` below for the idempotence
+        # check on top of that.
+        live_claim_jp = build_liveness_judgment_point(liveness_fired, "gates.liveness_signal", [])
+        live_claim_judgment_points = [jp for jp in (live_claim_jp,) if jp]
+        if live_claim_judgment_points:
+            claim_next_move = "Resolve the open judgment point(s) below before proceeding."
+        else:
+            claim_next_move = (
+                f"{claim['holder']} holds the claim but no live signal fired for it — "
+                "confirm by hand whether that session is still active before proceeding."
+            )
+        return _emit_elision_aware(
+            {
+                "artifact": artifact,
+                "preflight": {"tree_quiescence": tree_quiescence, "staleness": staleness, "closure_signals": []},
+                "gates": {
+                    "claim": claim,
+                    "claim_grant": claim_grant,
+                    "addressee": addressee,
+                    "branch": branch_gate,
+                    "aging_verdict": "not_applicable",
+                    "liveness_signal": liveness_fired,
+                    "competing_claim": competing_claim,
+                    "sender_reachability": compute_sender_reachability(fm.get("sent_by")),
+                    "coast": compute_coast(
+                        live_claim_judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence
+                    ),
+                },
+                "directives": [],
+                "judgment_points": live_claim_judgment_points,
+                "decisions": decisions,
+                "narration": f"{artifact['path']} is already claimed by {claim['holder']}.",
+                "next_move": claim_next_move,
+            },
+            EXIT_BUSINESS_FAIL,
+        )
+
     directives = build_memo_directives(artifact["path"], kind_resolved, decisions)
     if _claim_already_self_held(root, "memo", basename):
         # Idempotent same-session re-entry (see _claim_already_self_held's
@@ -8684,13 +8759,15 @@ def brief(
             "artifact": {**artifact, "kind_resolved": kind_resolved},
             "preflight": {"tree_quiescence": tree_quiescence, "staleness": staleness, "closure_signals": []},
             "gates": {
+                "claim": claim,
+                "claim_grant": claim_grant,
                 "addressee": addressee,
                 "branch": branch_gate,
                 "aging_verdict": "not_applicable",
                 "liveness_signal": liveness_fired,
                 "competing_claim": competing_claim,
                 "sender_reachability": compute_sender_reachability(fm.get("sent_by")),
-                "coast": compute_coast(judgment_points, tree_quiescence=tree_quiescence),
+                "coast": compute_coast(judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence),
             },
             "directives": directives,
             "judgment_points": judgment_points,

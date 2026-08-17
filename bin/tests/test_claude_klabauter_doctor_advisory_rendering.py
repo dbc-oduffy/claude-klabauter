@@ -273,17 +273,46 @@ class TestVendorDriftRemediationDischarge:
 class TestSentinelShapeUnaffected:
     def test_seven_original_keys_plus_vendor_drift(self, tmp_path: Path) -> None:
         """Rendering changes must not reach the sentinel — it has external consumers
-        in DoE (see _write_doctor_sentinel's ADDITIVE-KEY POLICY)."""
+        in DoE (see _write_doctor_sentinel's ADDITIVE-KEY POLICY).
+
+        NEGATIVE SPEC — do NOT restore `set(written) == {...}` here. Exact set
+        equality contradicts the very policy this test cites, which states that
+        new top-level keys MAY be added beside the original seven without a
+        version bump provided they are additive-only and every consumer
+        tolerates their absence. An equality assertion fails on each such
+        permitted key (it fired on `advisory_only`, 2026-08-17) and would fire
+        on the next one too — a test forbidding what the contract allows.
+
+        What DoE actually depends on is that the documented keys keep their
+        MEANING, not that the key set never grows, so that is what is pinned:
+        presence of every required key, plus their values. A key going missing
+        or changing shape still fails.
+        """
         results = [_result("claude-klabauter.schema.vendor_drift", "DEGRADED", required=False)]
         envelope = _mod._build_enriched_envelope(results, None, {})
         _mod._write_doctor_sentinel(envelope, tmp_path)
         written = json.loads((tmp_path / "state" / "doctor-last-run.json").read_text())
-        assert set(written) == {
+
+        required_keys = {
             "ran_at", "ts", "verdict", "red_probes", "hint",
             "schema_version", "plugin", "vendor_drift",
         }
+        assert required_keys <= set(written), (
+            f"documented sentinel key(s) missing: {sorted(required_keys - set(written))}"
+        )
+
         assert written["schema_version"] == 1
         assert written["plugin"] == "claude-klabauter"
+        # `ran_at` is the ISO string, `ts` the int epoch — checked against the
+        # writer, not assumed: both are consumed by DoE, so a type flip is the
+        # breaking change this pins.
+        assert isinstance(written["ran_at"], str) and written["ran_at"]
+        assert isinstance(written["ts"], int)
+        # A non-required DEGRADED probe: AMBER verdict, and `red_probes` stays
+        # empty because it is filtered strictly by row status, never by overall.
+        assert written["verdict"] == "AMBER"
+        assert written["red_probes"] == []
+        assert isinstance(written["hint"], str)
         assert set(written["vendor_drift"]) == {
             "status", "checked", "drifted", "indeterminate"
         }

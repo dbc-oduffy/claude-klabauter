@@ -54,6 +54,12 @@ python3 scripts/setup.py --check           # deterministic check-only, no side e
 
 Windows: `python scripts\setup.py` with the same flags.
 
+The machine-readable declaration backing these commands — dependencies, the entry-point
+contract, and the override flags — lives at
+[`docs/install/agent-install-manifest.json`](docs/install/agent-install-manifest.json). A
+chain-walker reads it, not this file; see
+[`docs/reference/install-chain-walk.md`](docs/reference/install-chain-walk.md) for how.
+
 **On Windows, before anything else:** disable the App Execution Alias stubs — Settings › Apps ›
 App execution aliases › turn off `python` / `python3`. Left on, `python3` resolves to a
 Microsoft Store shim and every diagnostic afterwards will mislead you.

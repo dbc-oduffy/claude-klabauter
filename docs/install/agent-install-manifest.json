@@ -1,0 +1,31 @@
+{
+  "agent_install_contract_version": 3,
+  "repo_id": "claude-klabauter",
+  "standalone_setup_script": {
+    "posix": "scripts/setup.py",
+    "windows": "scripts/setup.py",
+    "entry_point_contract": {
+      "non_interactive_flag": "--i-am-agent",
+      "check_only_flag": "--check",
+      "deterministic_exit": true
+    }
+  },
+  "direct_deps": [
+    {
+      "id": "coordinator-claude",
+      "severity": "hard",
+      "sibling_dir_name": "coordinator-claude",
+      "upstream_url": "https://github.com/dbc-oduffy/coordinator-claude",
+      "functional_probe_kind": "file_exists",
+      "functional_probe_args": {
+        "path": ".claude-plugin/plugin.json"
+      },
+      "consumer_install_args": []
+    }
+  ],
+  "required_env_vars": [],
+  "override_flags": {
+    "skip_dep_check": "--skip-dep-check",
+    "accept_hallucination_risk": "--accept-missing-deps-risk"
+  }
+}

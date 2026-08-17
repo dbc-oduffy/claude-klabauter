@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
+from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.fleet import capability_index as cap_index
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError
 
@@ -416,23 +418,25 @@ class TestOpHandlerParamValidation:
 # present at a hardcoded absolute path in CI").
 # ---------------------------------------------------------------------------
 
-def _candidate_repo_root(env_var: str, *guesses: Path) -> Path | None:
+def _candidate_repo_root(env_var: str, registry_resolver) -> Path | None:
+    """Resolve a sibling repo root for a skip-when-absent fixture test.
+
+    Env override first (pins the checkout for a specific run), then the
+    sanctioned registry resolver (`doe_root_pointer.read_doe_root_pointer()`
+    for `doe_claude`, `machine_resolver.registry_get("repos.<id>")` for
+    everything else — see `sibling_fact.py`'s § REPO ROOT RESOLUTION) —
+    never a `__file__`-anchored guess at a flat-sibling checkout layout."""
     override = os.environ.get(env_var)
     if override and Path(override).is_dir():
         return Path(override)
-    for guess in guesses:
-        if guess.is_dir():
-            return guess
+    resolved = registry_resolver()
+    if resolved and Path(resolved).is_dir():
+        return Path(resolved)
     return None
 
 
-_THIS_REPO_ROOT = Path(__file__).resolve().parents[4]  # coordinator_core/ops/fleet/tests/ -> repo root
-_DOE_ROOT = _candidate_repo_root(
-    "DOE_CLAUDE_ROOT", _THIS_REPO_ROOT.parent / "DoE-claude",
-)
-_EXAMPLE_RETRIEVAL_REPO_ROOT = _candidate_repo_root(
-    "EXAMPLE_RETRIEVAL_REPO_ROOT", _THIS_REPO_ROOT.parent / "example-retrieval-repo",
-)
+_DOE_ROOT = _candidate_repo_root("DOE_CLAUDE_ROOT", read_doe_root_pointer)
+_EXAMPLE_RETRIEVAL_REPO_ROOT = _candidate_repo_root("EXAMPLE_RETRIEVAL_REPO_ROOT", lambda: registry_get("repos.example_retrieval_repo"))
 
 
 @pytest.mark.skipif(_DOE_ROOT is None, reason="DoE-claude checkout not found — set DOE_CLAUDE_ROOT to pin it")

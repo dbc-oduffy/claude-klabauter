@@ -537,6 +537,35 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
         # already made an explicit text/encoding choice of its own.
         run_kwargs["text"] = True
 
+    # Console suppression, chosen from what the stdio wiring above actually
+    # settled on, and never overriding a caller who asked for creationflags of
+    # its own. The two helpers are not interchangeable here: with at least one
+    # of stdin/stdout/stderr set, CPython sets STARTF_USESTDHANDLES and the
+    # flag alone is safe; with NONE set, the child would bind its handles to
+    # the window-less console CREATE_NO_WINDOW allocates and its output would
+    # be lost — which is the exact defect this function exists to prevent, so
+    # that branch takes the passthrough helper instead. Gates:
+    # `coordinator_core/tests/test_no_bare_hot_path_spawn.py` and
+    # `test_no_output_swallowing_no_console_spawn.py`.
+    if "creationflags" not in run_kwargs:
+        wires_stdio = any(
+            key in run_kwargs for key in ("stdin", "stdout", "stderr", "capture_output")
+        )
+        console_kwargs = (
+            no_console_creationflags() if wires_stdio else no_console_passthrough_kwargs()
+        )
+        # Assigned key-by-key rather than via `.update()`: the `NAME["creationflags"] = ...`
+        # subscript shape is one `test_no_bare_hot_path_spawn.py` resolves through to the
+        # `**run_kwargs` splat below, and an `.update()` call reads to that AST-only gate
+        # as an unresolvable splat, i.e. bare. Absent on POSIX (both helpers contribute no
+        # `creationflags` there), so nothing hands `subprocess.run` a Windows-only kwarg
+        # off Windows.
+        if "creationflags" in console_kwargs:
+            run_kwargs["creationflags"] = console_kwargs["creationflags"]
+        for key, value in console_kwargs.items():
+            if key != "creationflags":
+                run_kwargs.setdefault(key, value)
+
     proc = subprocess.run(argv, **run_kwargs)
 
     if forward_stdout is not None and proc.stdout:

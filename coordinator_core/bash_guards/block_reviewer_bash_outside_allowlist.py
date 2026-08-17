@@ -2193,18 +2193,36 @@ _RAW_HEAD_TOKEN_RE = re.compile(r"(" + _ARGV0_HEAD_BOUNDARY_PRE + r")([^\s;&|]+)
 def _windows_argv0_identity_names(ruleset: Dict[str, Any]) -> frozenset:
     """The executable basenames the Windows argv0-head normalization passes
     below treat as ARGV0-position identities worth un-mangling: ``git``
-    plus this call's resolved Tier B scaffolder binary, Tier A read-only
-    fs binaries, and the Tier A ``machine-local`` binary (see the
-    module-level comment above these functions for why this is resolved
-    per-``ruleset`` rather than a hardcoded pair like the sibling guards
-    use).
+    plus this call's resolved Tier B scaffolder binary (bare and
+    ``.py``-suffixed), Tier A read-only fs binaries, and the Tier A
+    ``machine-local`` binary (see the module-level comment above these
+    functions for why this is resolved per-``ruleset`` rather than a
+    hardcoded pair like the sibling guards use).
 
     # Review: coordinator:code-reviewer, Finding 2 -- ``machine_local_binary``
     # was omitted here, so a Windows absolute-path invocation of
     # machine-local with an embedded-space username fell through the P0
     # normalization pass and denied where it should allow.
+
+    # Review: coordinator:code-reviewer, Finding 2 follow-up (2026-08-17,
+    # false-deny) -- ``scaffolder_binary``'s real on-disk name carries a
+    # ``.py`` suffix (see ``_matches_scaffolder_dispatch``'s own Divergence
+    # 19 docstring above for why: ``coordinator-doc-new`` is a naked Python
+    # script, while its Windows-launcher twin keeps the bare
+    # ``coordinator-doc-new.cmd`` name, no ``.py`` in it). The
+    # embedded-space Windows-path rewrite passes below only recognized the
+    # bare name plus ``.exe``/``.cmd``, so a ``Program Files``-style
+    # absolute path ending in ``coordinator-doc-new.py`` still shlex-split
+    # on its embedded space and false-denied. Adding the ``.py``-suffixed
+    # literal HERE, not to ``normalize_executable_basename`` -- same
+    # reasoning as Divergence 19: stripping ``.py`` in the shared basename
+    # normalizer would let a confined-agent-authored ``git.py`` resolve to
+    # real ``git`` for every other caller (Tier A's git-subcommand walk
+    # trusts the matched identity, not the file's contents). This is an
+    # additive literal scoped to the scaffolder name only.
     """
     names = {"git", ruleset["scaffolder_binary"], ruleset["machine_local_binary"]}
+    names.add(ruleset["scaffolder_binary"] + ".py")
     names.update(ruleset["readonly_fs_binaries"])
     return frozenset(names)
 
@@ -2292,8 +2310,9 @@ def _normalize_windows_git_argv0(cmd: str, ruleset: Dict[str, Any]) -> str:
 # bare ``git``, ``/usr/bin/git``, and ``bin/git``. The ``.cmd`` half is a
 # DIFFERENT-direction fix for THIS module specifically: ``coordinator-doc-
 # new.cmd`` is this project's own generated Windows launcher twin
-# (confirmed on disk, ``coordinator/bin/coordinator-doc-new.py.cmd``) for the
-# Tier B scaffolder, and before this fix it was wrongly DENIED by
+# (confirmed on disk, ``coordinator/bin/coordinator-doc-new.cmd`` -- no
+# ``.py`` in the launcher's own name, unlike the scaffolder script itself)
+# for the Tier B scaffolder, and before this fix it was wrongly DENIED by
 # ``_first_token_is_allowlisted_binary`` -- a Windows-usability defect
 # (blocking a legitimately-allowed tool's ordinary invocation), not a
 # security bypass, since this gate's default is deny. See
@@ -2606,9 +2625,40 @@ def _first_token_is_allowlisted_binary(cmd: str, ruleset: Dict[str, Any]) -> boo
     mechanically matched a bare ``endswith()`` check while preserving
     bareword, ``bin/``-prefixed, and absolute-path (POSIX or Windows)
     acceptance.
+
+    Divergence 19 (2026-08-17, false-deny fix): also accepts the SAME token
+    with a literal ``.py`` suffix appended to ``ruleset["scaffolder_binary"]``
+    (e.g. ``coordinator-doc-new.py``), tried as a second, independent
+    ``_token_matches_binary`` call -- not a change to ``normalize_executable_
+    basename`` itself, which stays scoped to the ``.exe``/``.cmd`` Windows-
+    launcher axis it was built for and is shared by the git/readonly-fs/
+    machine-local matchers too (stripping ``.py`` THERE would let a
+    confined-agent-authored script literally named e.g. ``git.py`` pass as
+    real ``git`` for Tier A's git-subcommand walk, since that walk trusts the
+    matched identity rather than the file's actual contents -- a genuine
+    widening this fix must not cause). ``coordinator-doc-new`` is the ONE
+    binary this guard's own module docstring already documents as a naked
+    Python script (Divergence 1: ``#!/usr/bin/env python3``), and its real
+    on-disk name IS ``coordinator-doc-new.py`` (confirmed on disk; the
+    ``.cmd`` Windows-launcher twin is a SEPARATE generated file that keeps
+    the bare ``coordinator-doc-new.cmd`` name, no ``.py`` in it -- see this
+    file's own ``token_matches_binary`` migration comment above) -- so
+    every absolute-path or ``python3``-prefixed dispatch of the REAL script
+    carries that suffix and previously matched neither ``_ALLOWED_BINARY_
+    SUFFIX`` nor its normalized basename. The legacy bareword/``bin/``-
+    relative forms (no ``.py``) are UNCHANGED and still match via the first,
+    unmodified ``_token_matches_binary`` call -- this is additive, not a
+    replacement of the existing match. Root cause confirmed live: six
+    ``test_confined_*_allows`` cases all used the same ``.py``-suffixed
+    absolute path and all failed for this one reason, not six unrelated
+    bugs -- see ``test_block_reviewer_bash_outside_allowlist.py``'s own
+    ``_CLAUDE_KLABAUTER_ABS_PATH`` constant.
     """
     first_token = _extract_first_token(cmd)
-    return _token_matches_binary(first_token, ruleset["scaffolder_binary"])
+    binary = ruleset["scaffolder_binary"]
+    return _token_matches_binary(first_token, binary) or _token_matches_binary(
+        first_token, binary + ".py"
+    )
 
 
 def _has_required_type_arg(cmd: str, ruleset: Dict[str, Any]) -> bool:

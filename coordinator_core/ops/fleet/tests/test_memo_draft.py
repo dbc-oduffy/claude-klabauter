@@ -1181,9 +1181,15 @@ class TestNoMemoIndex:
             name: val for name, val in vars(memo_draft_mod).items()
             if not name.startswith("__")
         }
+        # `MUTATES` is the module's write-surface DECLARATION (c240385d0) — a
+        # constant manifest of glob patterns, not a store. See the same carve-out
+        # in test_memo_compose.py::TestNoMemoIndex.
+        declarative_manifests = {"MUTATES"}
         mutable_collections = {
             name: val for name, val in module_globals.items()
-            if isinstance(val, (dict, list, set)) and not isinstance(val, types.ModuleType)
+            if isinstance(val, (dict, list, set))
+            and not isinstance(val, types.ModuleType)
+            and name not in declarative_manifests
         }
         assert mutable_collections == {}, (
             f"memo_draft module MUST NOT contain module-level mutable collections "

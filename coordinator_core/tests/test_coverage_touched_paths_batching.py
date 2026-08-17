@@ -19,6 +19,14 @@ Fix: `_commit_touched_paths` chunks its `git log` calls at
 COVERED verdict to WARN — never silently COVERED — whenever classification
 was skipped for any commit (AC6), so a ratio computed over an incomplete
 partition cannot read as a clean finding.
+
+K-001 note (state/kill-ledger.md): `run_coverage_gate` and its verdict were
+removed under kill-ledger entry K-001. The two `run_coverage_gate`
+end-to-end tests below (the argv-limit-survival case and the AC6
+COVERED->WARN downgrade case) were deleted as dead code — the downgrade
+behaviour itself lived inside `run_coverage_gate` and no longer exists.
+`_commit_touched_paths`'s own chunking is still pinned directly by the
+remaining test.
 """
 
 from __future__ import annotations
@@ -102,78 +110,3 @@ def test_commit_touched_paths_batches_under_small_chunk_size(
         )
 
 
-def test_unscoped_large_chain_no_longer_dies_on_argv_limit(tmp_path: Path) -> None:
-    """End-to-end: `run_coverage_gate` over a chain wide enough to have
-    previously risked the unchunked-argv failure must still classify cleanly
-    (small N here stands in for the 1924-commit real-world case — the
-    property under test is "chunking runs correctly", not the exact commit
-    count that trips a 32K ceiling, which is impractical to reproduce in a
-    fast unit test).
-    """
-    repo = tmp_path / "repo"
-    base_sha, shas = _build_code_commit_chain(repo, 10)
-
-    result = cov.run_coverage_gate(range_arg=f"{base_sha}..HEAD", repo_root=str(repo))
-
-    assert not any(
-        "git log failed" in n for n in result.notes
-    ), f"classification must not report a git-log failure; notes={result.notes!r}"
-    assert result.chain_commits == 10
-    assert result.exit_code == 0
-
-
-def test_classification_skipped_downgrades_covered_to_warn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC6: when `_commit_touched_paths` reports a diagnostic note (git log
-    genuinely failed for >=1 chunk, even after batching), a run that would
-    otherwise resolve COVERED must be downgraded to WARN — a ratio computed
-    over a corpus that failed to classify must never read as a clean
-    finding. Forced here by monkeypatching `_run` to fail unconditionally
-    for the touched-paths call so the note fires deterministically.
-    """
-    repo = tmp_path / "repo"
-    base_sha, shas = _build_code_commit_chain(repo, 3)
-
-    # 2/3 covered (~0.667, at/above DEFAULT_COVERAGE_RATIO_THRESHOLD) so
-    # absent the injected failure this run resolves cleanly COVERED — the
-    # control this test needs to prove the downgrade is live, not a
-    # constant. The remaining uncovered commit is what drives
-    # `_classify_bookkeeping_shas` -> `_commit_touched_paths` to actually
-    # run (an empty uncovered set never reaches it at all).
-    import json
-
-    for sha in shas[:2]:
-        record_path = repo / "state" / "review-trail" / f"record_{sha[:8]}.json"
-        record_path.parent.mkdir(parents=True, exist_ok=True)
-        record_path.write_text(
-            json.dumps(
-                {
-                    "sha_range": f"{sha}^..{sha}",
-                    "reviewer": "code-reviewer",
-                    "scope": "session",
-                    "scope_kind": "diff",
-                    "verdict": "ok",
-                    "diff_loc": 1,
-                    "session_id": "00000000-0000-0000-0000-000000000001",
-                }
-            ),
-            encoding="utf-8",
-        )
-
-    real_run = cov._run
-
-    def _failing_run(cmd, cwd=None, **kwargs):
-        if isinstance(cmd, list) and "--name-only" in cmd:
-            return 1, "", "simulated git failure"
-        return real_run(cmd, cwd=cwd, **kwargs)
-
-    monkeypatch.setattr(cov, "_run", _failing_run)
-
-    result = cov.run_coverage_gate(range_arg=f"{base_sha}..HEAD", repo_root=str(repo))
-
-    assert result.verdict != "COVERED", (
-        "a run whose classification was skipped must never resolve "
-        f"silently COVERED; verdict={result.verdict!r} notes={result.notes!r}"
-    )
-    assert any("skipped" in n.lower() for n in result.notes)

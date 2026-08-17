@@ -91,7 +91,23 @@ from coordinator_core.ops.platform_outcome_records import (
     records_root,
 )
 
-_DEFAULT_MANIFEST_RELPATH = "coordinator/docs/install/agent-install-manifest.json"
+#: Candidate repo-root-relative manifest paths, probed in order, when no
+#: --manifest-path is given. Two layouts coexist by design across the fleet:
+#: `coordinator/docs/install/...` (the DoE-claude layout) and
+#: `docs/install/...` (claude-klabauter's own layout — see the DoE-claude repo's
+#: `coordinator/docs/install/AGENT.md`, the only repo where that file exists).
+#: Before this list existed, only the DoE relpath was probed, so `main()`
+#: with no args in THIS repo (claude-klabauter) always landed on "no manifest
+#: declared" and exited 0 — a green-by-skip on the guard for claude-klabauter's own
+#: manifest, in a repo with no CI lane to expose it. Probing both, in this
+#: order (DoE-shaped first, matching the oracle's one and only prior
+#: default), keeps every existing DoE-shaped caller's default behavior byte-
+#: identical while making the op actually run against claude-klabauter's manifest by
+#: default too, rather than merely naming the miss in the SKIP text.
+_DEFAULT_MANIFEST_RELPATHS = (
+    "coordinator/docs/install/agent-install-manifest.json",
+    "docs/install/agent-install-manifest.json",
+)
 
 _USAGE = """Usage: validate-install-contract.sh [--manifest-path <path>] [--repo-root <path>]
 
@@ -214,7 +230,100 @@ def _check_point1(manifest: dict, failures: _Failures) -> None:
                 )
 
 
-def _check_point2(manifest: dict, failures: _Failures) -> None:
+#: Keys on `standalone_setup_script` whose values are repo-root-relative paths
+#: to a real file. Both legs are checked: a repoint that resolves only `posix`
+#: leaves Windows installing from a path that does not exist, and this repo
+#: treats macOS and Windows as equally first-class.
+_SETUP_SCRIPT_PATH_KEYS = ("posix", "windows")
+
+
+def _check_point2_declared_paths(
+    manifest: dict, failures: _Failures, repo_root: str
+) -> None:
+    """Assert every declared setup-script path actually resolves on disk.
+
+    WHY: Point 2 verified that the field and its flags were DECLARED, never that
+    the path resolved. DoE-claude's manifest consequently reported
+    `packageability-compliant` while its declared entry point had left the repo
+    entirely — a migration of 1135 files moved it and nothing noticed, because
+    the only thing under test was the presence of a string. A check that
+    confirms a declaration rather than the thing declared is the same vacuous
+    pass as a green layer that never ran.
+
+    NEGATIVE SPEC: a declared path that does not resolve is a FAILURE, not a
+    warning. Downgrading it would reproduce the exact silence this closes.
+
+    Values are treated as repo-root-relative per `agent-install-contract.md`.
+    A manifest that needs to name a path in a SIBLING repo has no expressible
+    form here yet — that is an open contract question, and this check failing
+    loudly on such a value is the correct behaviour until the contract gains
+    one, not a reason to skip the stat.
+
+    NEGATIVE SPEC, second half: an UNSUPPORTED VALUE SHAPE is a failure too,
+    never a skip. The `str` check below guards the `Path` join, and reading it
+    as "not a path, nothing to verify" is what made the whole check bypassable:
+    an object-valued `posix`/`windows` — the cross-repo form DoE-claude proposed
+    on 2026-08-17 — took the `continue` and the stat never ran, so the manifest
+    passed Point 2 while declaring an entry point nothing had confirmed. Silent
+    green, from the guard written to close silent green. The absent key stays a
+    legitimate skip (a platform served another way, per the remediation text
+    below); a key that is PRESENT but not a usable path does not.
+    """
+    for field in _PATH_DECLARING_FIELDS:
+        _stat_declared_paths(manifest, field, failures, repo_root)
+
+
+#: Manifest fields whose `posix`/`windows` values are repo-root-relative paths.
+#: BOTH are checked, and the second one is the one that bit: Point 2 treats
+#: `programmatic_entry_point` as the AUTHORITATIVE witness — when present it
+#: wins outright and `standalone_setup_script` is not even consulted — yet the
+#: declared-path stat originally covered only `standalone_setup_script`. So the
+#: field the contract trusts most was the one field nothing verified. Found
+#: 2026-08-17 by building the `coordinator-install` entry against DoE-claude's
+#: manifest: its `programmatic_entry_point.posix` declares
+#: `coordinator/scripts/install-maximalist.py`, which exists in neither their
+#: working tree nor the published mirror, and Point 2 passed it — the same
+#: 1135-file-migration staleness this check was written for, hiding one field
+#: over from where the check was looking.
+_PATH_DECLARING_FIELDS = ("standalone_setup_script", "programmatic_entry_point")
+
+
+def _stat_declared_paths(
+    manifest: dict, field: str, failures: _Failures, repo_root: str
+) -> None:
+    """Stat one path-declaring field's platform legs. See
+    `_check_point2_declared_paths` for the contract and both negative specs."""
+    block = manifest.get(field)
+    if not isinstance(block, dict):
+        return
+    for key in _SETUP_SCRIPT_PATH_KEYS:
+        if key not in block:
+            continue
+        declared = block[key]
+        if not isinstance(declared, str) or not declared:
+            failures.add(
+                "point-2",
+                f"{field}.{key} is declared as "
+                f"{type(declared).__name__} {declared!r}, which is not a "
+                f"repo-root-relative path string this check can resolve",
+                f"declare {field}.{key} as a non-empty path string "
+                f"relative to the repo root, or remove the key if that platform is "
+                f"served another way. A value shape this check cannot stat is not a "
+                f"reason to skip the stat — it is an entry point nothing has verified.",
+            )
+            continue
+        if not (Path(repo_root) / declared).is_file():
+            failures.add(
+                "point-2",
+                f"{field}.{key} declares '{declared}', which does not "
+                f"exist under {repo_root}",
+                f"point {field}.{key} at a file that exists, or remove "
+                f"the key if that platform is served another way. A declared entry "
+                f"point that does not resolve fails the install it claims to describe.",
+            )
+
+
+def _check_point2(manifest: dict, failures: _Failures, repo_root: str) -> None:
     """Point 2: entry-point contract properties.
 
     Witness precedence: when both programmatic_entry_point.entry_point_contract
@@ -222,7 +331,12 @@ def _check_point2(manifest: dict, failures: _Failures) -> None:
     programmatic_entry_point is the authoritative Point-2 witness;
     standalone_setup_script.entry_point_contract is the Point-2 fallback only
     when programmatic_entry_point is absent.
+
+    The declared-path stat runs regardless of which witness wins: a
+    non-resolving setup script is a defect whether or not a programmatic entry
+    point also exists.
     """
+    _check_point2_declared_paths(manifest, failures, repo_root)
     if _has_key(manifest, "programmatic_entry_point"):
         if not _truthy(manifest, "programmatic_entry_point", "entry_point_contract"):
             failures.add(
@@ -483,19 +597,39 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: unrecognized argument: {arg}", file=sys.stderr)
             return 1
 
-    if not manifest_path:
-        manifest_path = str(Path(repo_root) / _DEFAULT_MANIFEST_RELPATH)
+    probed_paths: List[str]
+    if manifest_path:
+        probed_paths = [manifest_path]
+    else:
+        probed_paths = [
+            str(Path(repo_root) / relpath) for relpath in _DEFAULT_MANIFEST_RELPATHS
+        ]
 
-    manifest_file = Path(manifest_path)
-    if not manifest_file.is_file():
-        print("SKIP: no agent-install-manifest.json declared at:", file=sys.stderr)
-        print(f"      {manifest_path}", file=sys.stderr)
+    manifest_file: Optional[Path] = None
+    for candidate in probed_paths:
+        candidate_file = Path(candidate)
+        if candidate_file.is_file():
+            manifest_file = candidate_file
+            manifest_path = candidate
+            break
+
+    if manifest_file is None:
+        if len(probed_paths) > 1:
+            print("SKIP: no agent-install-manifest.json declared at any of:", file=sys.stderr)
+        else:
+            print("SKIP: no agent-install-manifest.json declared at:", file=sys.stderr)
+        for candidate in probed_paths:
+            print(f"      {candidate}", file=sys.stderr)
         print(
             "  This repo has not opted into the install manifest contract — nothing to validate.",
             file=sys.stderr,
         )
         print(
-            "  Fix: if this repo SHOULD declare a manifest, see docs/install/AGENT.md and seed one",
+            "  Fix: if this repo SHOULD declare a manifest, see the DoE-claude repo's",
+            file=sys.stderr,
+        )
+        print(
+            "  coordinator/docs/install/AGENT.md and seed one",
             file=sys.stderr,
         )
         print(
@@ -529,7 +663,7 @@ def main(argv: List[str]) -> int:
 
     failures = _Failures()
     _check_point1(manifest, failures)
-    _check_point2(manifest, failures)
+    _check_point2(manifest, failures, repo_root)
     _check_point3(manifest, failures)
     _check_point4(manifest, failures, repo_root)
     _check_point6(manifest, failures)

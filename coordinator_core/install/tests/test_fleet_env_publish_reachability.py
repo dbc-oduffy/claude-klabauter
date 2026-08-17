@@ -147,7 +147,7 @@ def _row_publishes_path(row: dict[str, str], repo_relative_path: str) -> bool:
         return True
 
     entries, exclusions = split_inclusion_exclusion(parse_allowlist_csv(allowlist_csv))
-    top_segment = sub_path.split("/", 1)[0]
+    top_segment = sub_path.replace("\\", "/").split("/", 1)[0]
     if top_segment not in entries:
         return False
     for exclusion in exclusions:

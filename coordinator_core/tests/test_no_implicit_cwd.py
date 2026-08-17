@@ -23,7 +23,11 @@ import pytest
 # Files explicitly audited by C4 for BOTH os.getcwd()/Path.cwd() AND subprocess cwd=
 # ---------------------------------------------------------------------------
 _C4_FULL_SCOPE: list[pathlib.Path] = [
-    pathlib.Path("coordinator_core/ops/coverage_gate.py"),
+    # `coordinator_core/ops/coverage_gate.py` removed from this list 2026-08-17: the
+    # file was deleted by 55e64be13 ("K-001: the review-coverage verdict and every
+    # consumer of it are removed"), which left this entry pointing at nothing and the
+    # whole module erroring at collection. Removed explicitly, as the
+    # shrank-silently guard below demands, rather than filtered out at read time.
     pathlib.Path("coordinator_core/coverage.py"),
     pathlib.Path("coordinator_core/dag.py"),
     pathlib.Path("coordinator_core/ops/emit/sections/health.py"),

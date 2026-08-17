@@ -149,6 +149,86 @@ required = true
 severity_if_fail = "error"
 remediation = "Verify coordinator_core/ directory exists in CLAUDE_KLABAUTER_ROOT (run: python3 -c 'import coordinator_core' from CLAUDE_KLABAUTER_ROOT); re-clone if missing"
 
+# claude-klabauter.dialect_guard.armed -- "is the PowerShell dialect guard
+# (coordinator_core/bash_guards/_dialect.py) actually able to parse
+# PowerShell, under the interpreter(s) that run bash guard hooks?" That
+# module's ImportError -> SILENT routing is legal at runtime by design (a
+# guard declining to rule, not crashing) -- but a DISARMED state going
+# undetected forever is the defect this probe exists to end. Verified
+# 2026-08-17: ARMED under the settings-home .coordinator-venv, SILENT under
+# both Homebrew and python.org machine python3 -- hooks.json runs guard
+# hooks under bare `python3`, so checking only the probe's own interpreter
+# would miss the disarmed case entirely. Does NOT arm the guard (a later
+# chunk's job); reports state only. required=false: disarmed is the
+# CURRENT, still-legal runtime state, so this must never punish an
+# otherwise-healthy install to a required DEGRADED. weight = "standard":
+# each checked interpreter is a bounded (10s) subprocess spawn.
+[[probe]]
+id = "claude-klabauter.dialect_guard.armed"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (install tree_sitter and tree_sitter_pwsh under the named interpreter(s); an install-chain chunk to provision them by default is tracked separately)"
+symptom_keywords = ["powershell guard disarmed", "dialect guard silent", "tree_sitter not importable", "tree-sitter-pwsh missing", "PowerShell classification disabled", "PARSER-UNAVAILABLE"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_dialect_guard_armed"
+required = false
+severity_if_fail = "degraded"
+remediation = "Install tree_sitter and tree_sitter_pwsh under the named interpreter(s): <interpreter> -m pip install tree_sitter tree_sitter_pwsh. See the durable record path in this probe's data.durable_record for prior occurrences."
+
+# claude-klabauter.settings_home.complete -- "is <settings-home>
+# (~/.coordinator-claude-settings) actually populated?" Population was
+# emergent before C5 (docs/plans/2026-08-17-machine-first-install-surface.md):
+# bin/ forwarders, .percolate-identity, the machine-local registry, and the
+# .claude-klabauter-root pointer each landed via their own step with no single
+# verified statement of completeness. Shares its check
+# (coordinator_core.install.settings_home_report) with scripts/setup.py's
+# own "Install: settings-home completeness" report line -- one oracle, not
+# two that can drift. required=false: an incomplete settings home is a
+# real, currently-reachable partial-install state, not a broken engine --
+# this must never punish an otherwise-healthy install to a required
+# DEGRADED. weight = "cheap": pure Path.exists()/dir-listing reads, no
+# subprocess spawn.
+[[probe]]
+id = "claude-klabauter.settings_home.complete"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (re-run scripts/setup.py from claude-klabauter -- its settings-home completeness step re-lands missing members)"
+symptom_keywords = ["settings-home incomplete", "coordinator-claude-settings missing", "bin forwarder missing", "percolate-identity missing", "claude-klabauter-root pointer missing", "settings home not populated"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_settings_home_complete"
+required = false
+severity_if_fail = "degraded"
+remediation = "Re-run scripts/setup.py from claude-klabauter -- its 'Install: settings-home completeness' step re-lands the missing members. See this probe's data.fixed_missing / data.forwarder_missing_count for what is absent."
+
+# claude-klabauter.entrypoints.path_resolved -- do `coordinator-invoke` and
+# `coordinator-cockpit-emit-schema` actually RESOLVE and EXECUTE on PATH?
+# (docs/plans/2026-08-17-machine-first-install-surface.md § C3). The pip
+# console scripts from C2 land in a Scripts/bin dir that is deliberately
+# NOT added to PATH (it also carries bare python3/pip3); C3 instead emits
+# coordinator/bin/*.py trampolines, forwarded by substrate's existing
+# agent-helper mechanism into the already-PATH'd settings-home bin/. This
+# probe is the "chain-walk" consumer of the shared oracle
+# (coordinator_core.install.path_resolution_report) -- the "standalone
+# script" consumer is that module's own CLI. required=false: a resolution
+# failure just means the forwarder step hasn't landed yet, or PATH hasn't
+# been refreshed in this shell (a PATH write only takes effect in a NEW
+# shell) -- not a broken engine. weight = "standard": spawns a fresh login
+# shell (POSIX) / a direct child process (Windows) per entrypoint.
+[[probe]]
+id = "claude-klabauter.entrypoints.path_resolved"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (re-run scripts/setup.py from claude-klabauter, then open a NEW shell before re-checking)"
+symptom_keywords = ["coordinator-invoke not found", "coordinator-cockpit-emit-schema not found", "command not found", "entrypoint not on PATH", "forwarder missing", "PATH not refreshed"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_entrypoints_path_resolved"
+required = false
+severity_if_fail = "degraded"
+remediation = "Re-run scripts/setup.py from claude-klabauter -- its bin-forwarder step re-lands the entrypoints. Then open a NEW shell/session before re-checking: a PATH write only takes effect in a shell started after it."
+
 [[probe]]
 id = "claude-klabauter.coverage.seam"
 cluster = "install"

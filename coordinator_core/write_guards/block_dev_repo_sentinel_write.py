@@ -48,24 +48,24 @@ printed in this guard's own reason text (a separate concern from the
 bypass question below: naming `.coordinator-dev-repo` here would tell an
 agent exactly what this guard protects, for no reader benefit). The
 channel-withholding half of that discipline -- never naming the override at
-all -- is now the OUTLIER, not the rule: the reason text below names the
-pre-launch env var via `operator_override_note`, same as every other
-sentinel-write guard in this package that has one. (The in-session-unlock
-auto-append at the `write_guards.engine` seam,
+all -- IS the rule, per `operator_override_note`'s 2026-08-13 audience-gated
+reshape (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
+B6, docs/wiki/guard-messaging.md § Register): the reason text below never
+names the env var, the assignment form, or any other override artifact --
+`operator_override_note` returns a doc-pointer-only string for a positively
+resolved EM audience, and the empty string for every other audience
+(dispatched subagent, or unresolved), and this guard splices whichever
+comes back with no special-casing. (The in-session-unlock auto-append at the
+`write_guards.engine` seam,
 docs/plans/2026-08-03-in-session-operator-unlock-for-the-hard-.md § C4,
 applies only to the hard-deny phase -- this guard's advisory no longer
-reaches it, and its reason text does not depend on that append.) The
-pre-launch env-var line names a key settable only in the environment before
-session launch, not an assignment an agent could paste and run (see
-`operator_override_note`'s own 2026-08-11 NEGATIVE SPEC 4) -- so naming it
-is not the sanctioned-bypass signal the basename-withholding note above
-still guards against; that framing applied to the target path, never to
-the operator's own remediation channel.
+reaches it, and its reason text does not depend on that append.)
 
-Override: `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1` (pre-launch) -- same
-env var as the Bash-leg sibling, so a single override covers both legs of
-one operator intent rather than requiring two different variables for one
-decision. The in-session unlock (per-`(session_id, guard_name)`, one-shot,
+Override: `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL` (pre-launch, same env var
+as the Bash-leg sibling, so a single override covers both legs of one
+operator intent) -- named here in this docstring for the reader of the code,
+never in the rendered guard message itself (see discipline note above). The
+in-session unlock (per-`(session_id, guard_name)`, one-shot,
 `coordinator_core.session.guard_unlock_sentinel`) is additive, reachable
 from inside the very session that hit this deny, and is never the sole
 channel named here -- the pre-launch key stays supported unchanged.

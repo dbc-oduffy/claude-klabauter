@@ -134,6 +134,16 @@ def _subagent_stash_identity_setup(
     return {"agent_id": "a1", "agent_type": "coordinator:executor"}
 
 
+def _subagent_grant_acquisition_identity_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """`block-subagent-grant-acquisition` is identity-gated on the raw
+    presence of `agent_id`, same posture as `_subagent_stash_identity_
+    setup` above and as its own module docstring's "IDENTITY-GATE POSTURE"
+    section states."""
+    return {"agent_id": "a1", "agent_type": "coordinator:executor"}
+
+
 #: Five firing rows (module docstring point 2) topping up the five
 #: CONFINEMENT_DENY guards `guard_message_corpus.CONFINEMENT_ROWS` leaves
 #: control-only, per that module's own "C3c" drift-fix comment. Verified
@@ -212,6 +222,25 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         GuardBand.CONFINEMENT_DENY,
         False,
         setup=_subagent_stash_identity_setup,
+    ),
+    # `block-subagent-grant-acquisition` has no firing row anywhere else in
+    # this corpus -- `guard_message_corpus.REGISTER_COVERAGE_EXEMPTIONS`
+    # (test_guard_message_register_lint.py) exempts it from the AC10
+    # message-register gate on "no corpus row yet", but that exemption
+    # covers only the message-register/coverage concern, not THIS file's
+    # own invariant that every live CONFINEMENT_DENY guard's non-None
+    # branch is actually exercised (module docstring point 2/3). It is
+    # genuinely fireable -- same shape as its near-exact sibling
+    # `block-subagent-guard-grant`, which already fires above via
+    # `CONFINEMENT_ROWS` -- so it gets a real row here, not an exemption.
+    CorpusRow(
+        "block-subagent-grant-acquisition",
+        "block-subagent-grant-acquisition-fire",
+        'python3 -m coordinator_core.session.claude_md_grant grant pm "test reason"',
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=_subagent_grant_acquisition_identity_setup,
     ),
 ]
 

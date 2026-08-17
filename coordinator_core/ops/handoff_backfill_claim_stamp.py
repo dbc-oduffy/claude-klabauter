@@ -213,10 +213,16 @@ def _verify_commit(sha: str, worktree: Path) -> bool:
 
 
 @register_op("handoff.backfill_claim_stamp")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.backfill_claim_stamp" — reconstruct a missing claim
     stamp (`claimed_at`/`claimed_by`) on a handoff that was worked but never
     formally claimed, from caller-supplied, git-verified evidence.
+
+    Deliberately a plain `def`, not `async def`: it does no awaiting (its
+    blocking work is `locked_rmw`'s filesystem lock and a `git cat-file
+    --batch-check` subprocess), so it routes through `ipc.dispatch_message`'s
+    SYNC branch where its dispatch timeout is actually enforceable
+    (`test_async_handler_discipline.py`'s zero-await rule).
 
     Params:
         handoff_path (str, required)      — absolute or repo-relative path;

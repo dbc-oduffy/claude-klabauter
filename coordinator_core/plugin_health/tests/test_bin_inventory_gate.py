@@ -353,3 +353,74 @@ def test_real_tracked_inventory_passes_gate() -> None:
     docstring)."""
     result = big.check_bin_inventory_gate()
     assert result.ok, result.lines + result.disappeared
+
+
+def test_gate_matches_a_ledger_entry_for_an_inventory_name_that_kept_its_extension(
+    tmp_path: Path,
+) -> None:
+    """The stem comparison must normalise BOTH sides.
+
+    Extensions were stripped from the ledger `old_path` only, on the belief that
+    inventory names always arrive `.py`-stripped. Two real entries
+    (`detect-hardware.py`, `spawn-hidden.sh`) carry theirs verbatim, so no ledger
+    entry could ever dispose of them: the gate demanded a record it would then
+    refuse to see, and the only way to pass was to write an `old_path` that
+    misnamed the file. Every other test here uses an extension-less inventory
+    name, which is why the asymmetry survived.
+    """
+    agent_bin = _make_agent_bin(tmp_path, ["still-here"])
+    inventory_path = tmp_path / "inventory.json"
+    _write_inventory(inventory_path, ["still-here", "gone-tool.py"])
+    ledger_path = tmp_path / "ledger.json"
+    _write_ledger(ledger_path, [_retired_entry(old_path="coordinator/bin/gone-tool.py")])
+
+    result = big.check_bin_inventory_gate(
+        agent_bin=agent_bin, inventory_path=inventory_path, ledger_path=ledger_path
+    )
+
+    assert result.ok is True, result.lines
+    assert result.disappeared == []
+
+
+def test_gate_does_not_report_disappeared_for_a_live_file_whose_inventory_name_kept_its_extension(
+    tmp_path: Path,
+) -> None:
+    """Root-cause regression for the `detect-hardware.py`/`spawn-hidden.sh`
+    fabricated-ledger-entry incident: `live_oracle_names()` returns `.py`-
+    stripped stems, but an inventory entry may carry its extension verbatim
+    (a legacy artifact of a `.sh`-era name). The exact-string `name in
+    live_names` membership check in the `disappeared` loop must not be the
+    ONLY thing standing between a genuinely-live file and a false
+    "disappeared" report -- normalizing only the disposed-stems comparison
+    (as the ledger-side fix did) still misses this case with NO ledger
+    entry at all, which is exactly what motivated fabricating one. This
+    test carries no ledger entries: the gate must report the file live via
+    the membership check itself, not via a disposal record."""
+    agent_bin = _make_agent_bin(tmp_path, ["still-here"])
+    inventory_path = tmp_path / "inventory.json"
+    _write_inventory(inventory_path, ["still-here.py"])
+    ledger_path = tmp_path / "ledger.json"
+    _write_ledger(ledger_path, [])
+
+    result = big.check_bin_inventory_gate(
+        agent_bin=agent_bin, inventory_path=inventory_path, ledger_path=ledger_path
+    )
+
+    assert result.ok is True, result.lines
+    assert result.disappeared == []
+
+
+def test_gate_matches_a_non_py_extension_on_the_inventory_side(tmp_path: Path) -> None:
+    """`.sh` is in the known-extension set for the same reason `.py` is --
+    `spawn-hidden.sh` is a real inventory entry carrying one."""
+    agent_bin = _make_agent_bin(tmp_path, ["still-here"])
+    inventory_path = tmp_path / "inventory.json"
+    _write_inventory(inventory_path, ["still-here", "gone-tool.sh"])
+    ledger_path = tmp_path / "ledger.json"
+    _write_ledger(ledger_path, [_retired_entry(old_path="coordinator/bin/gone-tool.sh")])
+
+    result = big.check_bin_inventory_gate(
+        agent_bin=agent_bin, inventory_path=inventory_path, ledger_path=ledger_path
+    )
+
+    assert result.ok is True, result.lines

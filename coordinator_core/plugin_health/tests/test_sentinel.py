@@ -953,3 +953,176 @@ def test_run_triage_end_to_end_resolves_manifest_without_doe_root(monkeypatch, t
         f"got exit_code={exit_code} stderr={stderr_lines}"
     )
     assert not any("manifest not found" in line for line in stderr_lines)
+
+
+# --- P-20 / bash-version-on-PATH gate ---
+
+
+class _FakeCompleted:
+    def __init__(self, returncode, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def test_p20_passes_when_first_bash_on_path_is_modern(monkeypatch):
+    monkeypatch.setattr(S.shutil, "which", lambda name: "/opt/homebrew/bin/bash")
+    monkeypatch.setattr(S.subprocess, "run", lambda *a, **k: _FakeCompleted(0, "5"))
+    assert S.probe_p20() == []
+
+
+def test_p20_reports_red_when_first_bash_on_path_is_old(monkeypatch):
+    monkeypatch.setattr(S.shutil, "which", lambda name: "/bin/bash")
+    monkeypatch.setattr(S.subprocess, "run", lambda *a, **k: _FakeCompleted(0, "3"))
+    (note,) = S.probe_p20()
+    assert note.id == "P-20"
+    assert note.severity == "red"
+    assert "/bin/bash" in note.message
+    assert "version 3" in note.message
+
+
+def test_p20_no_bash_on_path_is_a_clean_pass_on_windows(monkeypatch):
+    _as_nt(monkeypatch)
+    monkeypatch.setattr(S.shutil, "which", lambda name: None)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("probe must not spawn when no bash resolved on PATH")
+
+    monkeypatch.setattr(S.subprocess, "run", _boom)
+    assert S.probe_p20() == []
+
+
+def test_p20_no_bash_on_path_is_inconclusive_on_posix(monkeypatch):
+    _as_posix(monkeypatch)
+    monkeypatch.setattr(S.shutil, "which", lambda name: None)
+    (note,) = S.probe_p20()
+    assert note.severity == "amber"
+    assert note.message.startswith("inconclusive(")
+
+
+def test_p20_exec_failure_routes_to_inconclusive_never_a_fabricated_verdict(monkeypatch):
+    monkeypatch.setattr(S.shutil, "which", lambda name: "/bin/bash")
+
+    def _boom(*_a, **_k):
+        raise OSError("boom")
+
+    monkeypatch.setattr(S.subprocess, "run", _boom)
+    (note,) = S.probe_p20()
+    assert note.severity == "amber"
+    assert note.message.startswith("inconclusive(")
+
+
+def test_p20_unparsable_version_output_is_inconclusive(monkeypatch):
+    monkeypatch.setattr(S.shutil, "which", lambda name: "/bin/bash")
+    monkeypatch.setattr(S.subprocess, "run", lambda *a, **k: _FakeCompleted(0, "not-a-version"))
+    (note,) = S.probe_p20()
+    assert note.severity == "amber"
+    assert note.message.startswith("inconclusive(")
+
+
+# --- P-21 / durable coordinator-root pointer (DR-072) ---
+
+
+def test_p21_passes_on_durable_pointer(monkeypatch, tmp_path):
+    ml_dir = tmp_path / "settings-home" / "machine-local"
+    ml_dir.mkdir(parents=True)
+    (ml_dir / ".doe-root").write_text("/some/doe-claude\n", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home-unused"))
+    assert S.probe_p21() == []
+
+
+def test_p21_pass_on_durable_pointer_never_touches_legacy_fallback(monkeypatch, tmp_path):
+    """Passing on the durable location must not require reaching the legacy
+    fallback — the legacy candidate dir here is deliberately absent."""
+    ml_dir = tmp_path / "settings-home" / "machine-local"
+    ml_dir.mkdir(parents=True)
+    (ml_dir / ".doe-root").write_text("/some/doe-claude\n", encoding="utf-8")
+    claude_home = tmp_path / "claude-home-absent"  # deliberately does NOT exist
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    assert S.probe_p21() == []
+    assert not claude_home.exists()
+
+
+def test_p21_falls_back_to_legacy_pointer(monkeypatch, tmp_path):
+    claude_home = tmp_path / "claude-home"
+    (claude_home / ".claude").mkdir(parents=True)
+    (claude_home / ".claude" / ".doe-root").write_text("/some/doe-claude\n", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    assert S.probe_p21() == []
+
+
+def test_p21_fails_when_neither_pointer_present(monkeypatch, tmp_path):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home-empty"))
+    (note,) = S.probe_p21()
+    assert note.id == "P-21"
+    assert note.severity == "red"
+    assert "DR-072" in note.message
+
+
+# --- Subset-mode rendering: an inconclusive-only run must not say "Failing" ---
+
+
+def test_subset_mode_labels_inconclusive_probe_separately_from_failing(monkeypatch, tmp_path):
+    """Regression for the defect this whole memo reports: the pre-fix render
+    unconditionally joined red_probes + amber_probes under the label
+    'Failing:', so a probe that never ran (inconclusive) was reported as if
+    it had failed. Stubs probe_p20/probe_p21 (already-wired, already-active)
+    to return inconclusive(...) directly, so this exercises `_run`'s
+    rendering logic against exactly that note shape."""
+    monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
+    monkeypatch.setenv("DOCTOR_PROBES_MANIFEST", str(
+        Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"
+    ))
+    monkeypatch.setattr(S, "resolve_active_probes", lambda mode, arg, manifest_path: ["P-20", "P-21"])
+    monkeypatch.setattr(
+        S, "probe_p20", lambda: S._inconclusive("P-20", "no bash found on PATH — cannot judge its version")
+    )
+    monkeypatch.setattr(S, "probe_p21", lambda: S._inconclusive("P-21", "pointer files absent"))
+
+    stdout_lines, stderr_lines, exit_code = S._run("triage", "")
+    assert exit_code == 0
+    joined = "\n".join(stdout_lines)
+    assert "Failing:" not in joined
+    assert "Inconclusive (did not run): P-20 P-21" in joined
+    assert "verdict=AMBER" in joined
+
+
+def test_subset_mode_separates_a_genuine_failure_from_a_concurrent_inconclusive(
+    monkeypatch, tmp_path
+):
+    """Mixed run: P-1 genuinely fails, P-20 is stubbed inconclusive. The
+    pre-fix render joined both under one 'Failing: P-1 P-20' line — this
+    pins that a genuine failure keeps its own label and does not absorb an
+    unrelated inconclusive id, in either direction."""
+    monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
+    monkeypatch.setenv("DOCTOR_PROBES_MANIFEST", str(
+        Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"
+    ))
+    monkeypatch.setattr(S, "resolve_active_probes", lambda mode, arg, manifest_path: ["P-1", "P-20"])
+    monkeypatch.setattr(
+        S, "probe_p20", lambda: S._inconclusive("P-20", "no bash found on PATH — cannot judge its version")
+    )
+
+    # probe_p1 fires red when <settings-home>/machine-local/ is absent — point
+    # settings-home at an empty tmp dir so that's exactly what it sees.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+
+    stdout_lines, stderr_lines, exit_code = S._run("triage", "")
+    assert exit_code == 0
+    joined = "\n".join(stdout_lines)
+    assert "Failing: P-1" in joined
+    assert "Inconclusive (did not run): P-20" in joined
+    assert "Failing: P-1 P-20" not in joined
+    assert "P-20" not in joined.split("Failing:", 1)[1].split("\n", 1)[0]

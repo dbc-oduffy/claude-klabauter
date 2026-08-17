@@ -233,6 +233,16 @@ def _display_completion(link_path: str, fm: dict) -> str:
     return f"- **{title}** [{nature}] (chain: {chain}) — {commits_str}"
 
 
+def _display_sizing(link_path: str, fm: dict) -> str:
+    """Not in the oracle's TYPE_DISPLAY table (sizing-object postdates the JS
+    port). Falls back to `link_path`, NOT `intent` — intent is multi-sentence
+    prose that would blow out a markdown list, the same failure `name` was
+    added to fix. A sizing has no `title` either, which is why it previously
+    fell through to `_default_display` as a bare path."""
+    label = fm.get("name") or link_path
+    return f"- [{label}]({link_path})"
+
+
 def _default_display(link_path: str, fm: dict) -> str:
     """bin/query-records.js:1616 — the fallback used for any type absent from
     TYPE_DISPLAY (e.g. tracker/roadmap/health-status) or, in the multi-type
@@ -259,6 +269,7 @@ TYPE_DISPLAY: dict[str, _DisplayFn] = {
     "research-synthesis": _display_research_synthesis,
     "gap-report": _display_gap_report,
     "coverage-audit": _display_coverage_audit,
+    "sizing-object": _display_sizing,
 }
 
 

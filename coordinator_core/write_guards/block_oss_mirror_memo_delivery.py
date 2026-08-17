@@ -40,13 +40,17 @@ percolation is the mirror's LEGITIMATE purpose; breaking that would be the
 primary regression this guard could cause.
 
 Maintainer override: ``COORDINATOR_OVERRIDE_OSS_MIRROR_MEMO_GUARD=1``
-disables this guard entirely. Advertised in the deny text via the shared
-``operator_override_note`` helper, per this package's general convention
-(unlike ``block_home_dir_memo_delivery``'s deliberately-unadvertised
-override — that guard's scope has no legitimate use at all, whereas an OSS
-mirror clone IS a legitimate write target for everything except its
-``cross-repo/`` subtree, so advertising the escape hatch here matches every
-other guard in this tree rather than that one exception).
+disables this guard entirely. NOT advertised in the deny text: the shared
+``operator_override_note`` helper's 2026-08-13 audience-gated reshape
+(docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md; B6,
+docs/wiki/guard-messaging.md § Register) returns a doc-pointer-only string
+for a positively resolved EM audience and the empty string for every other
+audience (dispatched subagent, or unresolved) — this guard calls the same
+helper every other guard in this package calls and gets whatever that
+audience-resolution returns, same as they do. This supersedes the
+per-guard "advertise vs. don't" distinction this docstring used to draw
+against ``block_home_dir_memo_delivery``: the distinction now lives inside
+``operator_override_note`` (audience), not in which guards opt in.
 
 Registry resolution failure (no ``registry.toml``/``registry.local.toml``,
 unparseable file, no mirror declares a ``.path``) is FAIL-OPEN (allow) —

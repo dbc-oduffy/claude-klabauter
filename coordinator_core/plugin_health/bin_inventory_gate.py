@@ -145,6 +145,21 @@ def _stem_of_old_path(old_path: str) -> str:
     return name.lower()
 
 
+def _stem_of_inventory_name(name: str) -> str:
+    """Reduce an inventory name to the same stem `_stem_of_old_path` produces.
+
+    NEGATIVE SPEC: the comparison must be symmetric. This used to strip
+    extensions from the LEDGER side only, against the belief -- stated in
+    `_KNOWN_OLD_PATH_EXTENSIONS`' own comment -- that inventory names arrive
+    already `.py`-stripped by `_derive_agent_helper_target_map`. Two entries
+    (`detect-hardware.py`, `spawn-hidden.sh`) carry their extension verbatim,
+    so no ledger entry could ever match them: the gate demanded a record it
+    would then refuse to see, and the only way to satisfy it was to write an
+    `old_path` that misnamed the file. Normalising both sides is what makes an
+    honest ledger entry sufficient."""
+    return _stem_of_old_path(name)
+
+
 def default_inventory_path() -> Path:
     """Resolve the tracked inventory file's on-disk path via claude-klabauter's own
     root -- self-resolution, matching `relocation_ledger.default_ledger_path`'s
@@ -297,11 +312,15 @@ def check_bin_inventory_gate(
         if entry.old_repo == _SELF_OLD_REPO_ID
     }
 
+    live_stems: Set[str] = {_stem_of_inventory_name(live_name) for live_name in live_names}
+
     disappeared: List[str] = []
     for name in inventory.names:
         if name in live_names:
             continue
-        if name.lower() in disposed_stems:
+        if _stem_of_inventory_name(name) in live_stems:
+            continue
+        if _stem_of_inventory_name(name) in disposed_stems:
             continue
         disappeared.append(name)
 

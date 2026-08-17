@@ -30,10 +30,15 @@ def test_no_op_without_a_sink_installed():
     None — this is the hot-path no-measurement-work guarantee)."""
     import coordinator_core._hook_envelope as hook_envelope
 
-    assert hook_envelope._capture_sink is None
+    # Read through `.get()`: `_capture_sink` became a `contextvars.ContextVar`
+    # (C8, warm-engine plan) so two concurrent `capture_session()` blocks cannot
+    # cross-contaminate. `hook_envelope._capture_sink` is now the ContextVar
+    # object itself, which is never None, so the bare identity check silently
+    # stopped testing the no-sink guarantee it was written for.
+    assert hook_envelope._capture_sink.get() is None
     envelope = context_only("PreToolUse", "hello")
     assert envelope["hookSpecificOutput"]["additionalContext"].endswith("hello")
-    assert hook_envelope._capture_sink is None
+    assert hook_envelope._capture_sink.get() is None
 
 
 def test_capture_session_accumulates_across_all_five_builders():
@@ -85,7 +90,7 @@ def test_nested_capture_session_restores_prior_sink():
         # block exits, and must not have received the inner call.
         import coordinator_core._hook_envelope as hook_envelope
 
-        assert hook_envelope._capture_sink is outer_sink
+        assert hook_envelope._capture_sink.get() is outer_sink
         context_only("PreToolUse", "outer-after")
 
     assert len(outer_sink) == 2
@@ -99,4 +104,4 @@ def test_nested_capture_session_restores_prior_sink():
 
     import coordinator_core._hook_envelope as hook_envelope
 
-    assert hook_envelope._capture_sink is None
+    assert hook_envelope._capture_sink.get() is None

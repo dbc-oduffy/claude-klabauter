@@ -533,10 +533,10 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.15.0"
+    pinned = "1.17.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
-        f"{pinned!r} — check DoE-claude@eecbe28ec "
+        f"{pinned!r} — check DoE-claude@397d0dd32 "
         "(coordinator/schemas/sizing-object.schema.json) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
@@ -548,11 +548,11 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
 # hazard C0 exists to close, the moment DoE bumps any of the other three.
 # Table-driven so a future vendored schema is one row, not a new function.
 _VENDORED_SCHEMA_VERSION_PINS = (
-    # Re-pinned 1.14.0 -> 1.15.0 on DoE's `detent_discharges` add (eecbe28ec).
-    # The recorded answer AC1 demands is memo
-    # 2026-08-13-doe-claude-em-sizing-object-1-15-0-detent-discharges.md
-    # (actioned, now under cross-repo/archive/).
-    ("sizing-object.schema.json", "1.15.0", "DoE-claude@eecbe28ec (coordinator/schemas/sizing-object.schema.json)"),
+    # Re-pinned 1.15.0 -> 1.17.0 on DoE adopting our `peer_notes` (1.16.0) and
+    # adding optional top-level `name` (1.17.0), both at 397d0dd32. The recorded
+    # answer AC1 demands is memo
+    # 2026-08-17-doe-claude-em-sizing-object-1-17-0-name-field-revendor.md.
+    ("sizing-object.schema.json", "1.17.0", "DoE-claude@397d0dd32 (coordinator/schemas/sizing-object.schema.json)"),
     ("roadmap.schema.json", "1.3.0", "DoE-claude coordinator/schemas/roadmap.schema.json"),
     ("goal.schema.json", "1.2.0", "DoE-claude coordinator/schemas/goal.schema.json"),
     ("initiative.schema.json", "1.1.0", "DoE-claude coordinator/schemas/initiative.schema.json"),

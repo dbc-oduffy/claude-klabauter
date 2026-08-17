@@ -1006,6 +1006,54 @@ def _memo_filename(today: str, sender: str, topic: str) -> str:
     return f"{today}-{sanitized}-{stripped_topic}.md"
 
 
+def _supersedes_ref_basename(supersedes_ref: str) -> str:
+    """Reduce a `supersedes:` reference to its filename-safe identifying stem.
+
+    `supersedes:` accepts either a bare topic slug or a path to the predecessor
+    memo (absolute paths are the common shape — that is what the delivered file
+    is addressed by). Only the predecessor's basename identifies it; the
+    directory prefix is sender-machine layout, and both POSIX `/` and Windows
+    `\\` separators reach here (a Windows sender's reference is not a POSIX path,
+    so `PurePosixPath` alone would keep the whole drive-qualified string).
+
+    Also strips the `.md` suffix and the leading `YYYY-MM-DD-` run: the
+    predecessor of a same-date re-delivery carries today's date already, and
+    repeating it in the disambiguator adds length without adding identity.
+
+    Spec backlink: `_redelivery_filename` negative-spec (2026-08-17
+    example-cockpit-repo-em report — absolute-path leak into the receiver's tree).
+    """
+    if not supersedes_ref:
+        return ""
+    tail = re.split(r"[\\/]", supersedes_ref.strip())[-1]
+    if tail.lower().endswith(".md"):
+        tail = tail[: -len(".md")]
+    return _TOPIC_DOUBLED_DATE_PREFIX_RE.sub("", tail)
+
+
+# Disambiguator budget: the base DR-026 name is already <date>-<sender>-<topic>,
+# and a predecessor basename repeats that shape almost verbatim, so an uncapped
+# disambiguator roughly doubles the basename — 161 chars for a real send, against
+# a 260-char Windows path ceiling that the receiver's inbox prefix eats into.
+# Truncation stays deterministic (same reference -> same name) and can only ever
+# make two distinct predecessors converge, which the residual-collision check
+# refuses fail-loud — the safe direction, never a silent clobber.
+_SUPERSEDES_SLUG_MAX_CHARS = 48
+
+
+def _truncate_supersedes_slug(slug: str) -> str:
+    """Cap a supersedes disambiguator at `_SUPERSEDES_SLUG_MAX_CHARS`, on a dash
+    boundary where one is available so the tail stays a readable word run.
+    """
+    if len(slug) <= _SUPERSEDES_SLUG_MAX_CHARS:
+        return slug
+    clipped = slug[:_SUPERSEDES_SLUG_MAX_CHARS]
+    boundary = clipped.rfind("-")
+    if boundary > _SUPERSEDES_SLUG_MAX_CHARS // 2:
+        clipped = clipped[:boundary]
+    return clipped.rstrip("-")
+
+
 def _redelivery_filename(
     today: str, sender: str, topic: str, supersedes: str | list[str]
 ) -> str:
@@ -1032,6 +1080,15 @@ def _redelivery_filename(
     otherwise collide here too, and per the module negative-spec that residual
     collision still refuses fail-loud rather than layering on a second
     disambiguator.
+
+    Negative-spec (2026-08-17, example-cockpit-repo-em cross-repo report): the
+    disambiguator is derived from the predecessor's BASENAME, never the raw
+    reference. `supersedes:` legitimately accepts an absolute path, and slugging
+    that verbatim wrote the sender's own `/Users/<name>/...` layout into a peer
+    repo's committed tree and produced a 190-char basename hostile to Windows'
+    260-char path ceiling. Basename-derivation keeps the pointer traceable
+    without exporting sender-machine layout; do NOT reintroduce whole-reference
+    slugging.
     """
     base = _memo_filename(today, sender, topic)
     # List form (2026-07-28): disambiguate on the FIRST reference only. Slugging
@@ -1039,7 +1096,9 @@ def _redelivery_filename(
     # thread; the first reference stays a meaningful, traceable pointer, and the
     # residual-collision refusal below is unchanged either way.
     supersedes_ref = supersedes[0] if isinstance(supersedes, list) else supersedes
-    supersedes_slug = _sender_slug(supersedes_ref)
+    supersedes_slug = _truncate_supersedes_slug(
+        _sender_slug(_supersedes_ref_basename(supersedes_ref))
+    )
     if not supersedes_slug:
         return base
     stem = base[: -len(".md")]

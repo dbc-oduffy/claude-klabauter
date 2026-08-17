@@ -154,9 +154,14 @@ def _compose_message(session_id: str, flagged: List[str]) -> str:
 
 
 @register_op("hooks.subagent_sidecar_fill_check")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse-Agent advisory op: re-scan this session's own sidecar
     directory and surface an unfilled sidecar the EM has not yet noticed.
+
+    Deliberately a plain `def`, not `async def`: it does no awaiting, so it
+    routes through `ipc.dispatch_message`'s SYNC branch where its dispatch
+    timeout is actually enforceable (`test_async_handler_discipline.py`'s
+    zero-await rule).
 
     Inputs (flat scalar, extracted via _payload.field(); "" treated as
     absent): session_id, hook_event_name.

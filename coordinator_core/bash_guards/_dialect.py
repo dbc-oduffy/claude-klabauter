@@ -172,10 +172,11 @@ Spec backlink: pln-guards-reach-a-verdict-on-powe-0e4bc3 § C2
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 
 from . import _command_tokenizer
 from ._verdict import record_silent
@@ -332,6 +333,87 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
         _LOGGED_PARSER_UNAVAILABLE = True
     except Exception:  # noqa: BLE001 -- observability must never raise into a guard
         pass
+
+
+def dialect_parser_unavailable_log_path() -> Path:
+    """Public accessor for the durable ImportError record's path -- for
+    consumers OUTSIDE this module (install-time ARMED check, doctor probe)
+    that need to point an operator at the existing record rather than
+    reaching for the private `_dialect_parser_unavailable_log_path`."""
+    return _dialect_parser_unavailable_log_path()
+
+
+#: Windows-only: suppress the console-window flash a subprocess spawn would
+#: otherwise cause when this module is invoked from a non-interactive
+#: install/doctor path. `getattr(..., 0)` makes this a no-op on POSIX,
+#: matching `scripts/setup.py`'s own `_NO_CONSOLE` precedent (not imported
+#: from there -- that module is the installer's own entry point, not a
+#: dependency this package should carry).
+_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+def probe_armed(
+    interpreter: str, claude_klabauter_root: Union[str, Path], *, timeout: float = 10.0
+) -> Tuple[bool, str]:
+    """Verify the PowerShell dialect guard is ARMED under `interpreter` --
+    i.e. that `tree_sitter`/`tree_sitter_pwsh` actually import AND parse
+    THERE, not merely under whichever interpreter is running the caller.
+    That gap -- a package importable in one interpreter and absent from the
+    one that actually runs the guard -- is the exact defect this function
+    exists to catch (plan Anti-scope: "never verify a dependency by
+    importing it" under the wrong interpreter).
+
+    Runs `_powershell_tokens` -- the SAME code path a real PowerShell Bash
+    call takes -- in a CHILD PROCESS under `interpreter`, so a disarmed
+    result durably logs through `_log_dialect_parser_unavailable` exactly as
+    it would in production. This function opens no second, parallel signal
+    path for the same fact -- it exercises the existing one, under the
+    interpreter that matters, and reports what happened.
+
+    Returns `(armed, detail)`. Never raises: an install-time/doctor check
+    must degrade to a reported `(False, ...)`, never crash the install.
+
+    `detail`, when disarmed, names WHICH of `_powershell_tokens`'s three
+    SILENT-routing cases fired -- missing package (ImportError), a parser
+    error (`has_error=True`), or an unexpected exception -- via a leading
+    `cause: missing-package` / `cause: not-a-missing-package` tag, rather
+    than leaving a caller to assume the cause (reviewer finding: a caller
+    that always names the missing-grammar-package remediation regardless of
+    which case fired sends an operator to fix the wrong thing once a real
+    parser regression is what's live). The child probe reaches into
+    `_powershell_tokens`'s own `record_silent` declaration -- via
+    `_verdict.collecting()` -- for the exact reason string, rather than this
+    function guessing one from the return code alone.
+    """
+    probe_src = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(claude_klabauter_root)!r})\n"
+        "from coordinator_core.bash_guards._dialect import _powershell_tokens\n"
+        "from coordinator_core.bash_guards._verdict import collecting\n"
+        "with collecting() as declarations:\n"
+        "    r = _powershell_tokens('Get-Item .', guard_name='install-time-armed-check')\n"
+        "if r is not None:\n"
+        "    sys.exit(0)\n"
+        "reason = declarations[-1].reason if declarations else 'unknown (no SILENT declaration recorded)'\n"
+        "print(reason)\n"
+        "sys.exit(1)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [interpreter, "-c", probe_src],
+            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"could not run {interpreter!r}: {exc!r}"
+    if proc.returncode == 0:
+        return True, f"ARMED under {interpreter}"
+    reason = proc.stdout.strip() or "unknown (probe produced no output)"
+    cause = "missing-package" if reason.startswith("tree-sitter-pwsh not importable") else "not-a-missing-package"
+    return False, f"SILENT under {interpreter} -- cause: {cause} -- {reason}"
 
 
 def _parser():

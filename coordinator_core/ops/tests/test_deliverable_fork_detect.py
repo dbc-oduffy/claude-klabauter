@@ -20,7 +20,6 @@ Spec backlink: docs/plans/2026-08-14-baton-closes-when-its-plan-ships.md § C7 (
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -142,7 +141,7 @@ def test_equivalence_artifact_byte_unchanged(tmp_path):
 def test_handler_repo_root_required():
     """The registered op refuses with no founding root, matching
     cascade_backstop_sweep's own contract."""
-    result = asyncio.run(_handler({}, repo_root=None))
+    result = _handler({}, repo_root=None)
     assert result["exit_code"] == 1
     assert "repo_root is required" in result["error"]
 
@@ -156,7 +155,7 @@ def test_handler_reports_family(tmp_path, monkeypatch):
     _write_handoff(handoffs_dir / "b.md", "dlv-coordinator-ops-buildout-from-fence-invent-903224")
     (tmp_path / ".git").mkdir()
 
-    result = asyncio.run(_handler({}, repo_root=tmp_path))
+    result = _handler({}, repo_root=tmp_path)
 
     assert result["exit_code"] == 0
     assert result["schema_version"] == 1

@@ -148,6 +148,7 @@ from coordinator_core.write_guards import engine
 # review cannot hold down, or a disk-truth wire whose corruption an
 # automated downstream consumer trusts before any human reviews it.
 HARD_DENY_NAMES = [
+    "block_confined_agent_write",
     "block_consumed_handoff_edit",
     "block_derived_global_doctrine_write",
     "block_disarm_marker_sentinel_write",
@@ -158,6 +159,7 @@ HARD_DENY_NAMES = [
     "block_oss_mirror_memo_delivery",
     "block_subagent_archive_write",
     "block_subagent_grant_record_write",
+    "block_subagent_guard_grant_write",
     "block_subagent_plan_body_write",
     "block_unauthorized_claude_md_write",
     "block_worktree_sentinel_write",
@@ -184,8 +186,10 @@ ADVISORY_NAMES = [
     "guard_memory_store_cap",
     "nudge_baton_body_bar",
     "nudge_em_code_dispatch",
+    "nudge_handoff_ac_shape",
     "nudge_improvement_queue_write",
     "nudge_new_sh_file_naked_python",
+    "nudge_peer_notice_unread",
     "nudge_outbox_draft_frontmatter_shape",
     "nudge_plan_sidecar_family_split",
     "nudge_private_git_fact_resolver",

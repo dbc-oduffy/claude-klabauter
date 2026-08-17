@@ -980,14 +980,34 @@ def apply(
         # offer, which returns EXIT_BUSINESS_FAIL with directives=[]) still
         # halts-at-judgment (AC5c), never transport-fails.
         if not judgment_points and brief_result.exit_code != _BRIEF_EXIT_OK and not directives:
-            # brief() could not produce an actionable plan at all (ambiguous
-            # artifact, multi-hit archive fallback, memo addressee block) —
-            # nothing was ever computed to mutate; not a crash, but nothing
-            # apply can proceed on either. Resolved as transport-failure
-            # (the Staff Engineer/EM decision — see chunk report): the honest bucket for
-            # "brief itself did not resolve to a plan", distinct from a
-            # denied claim or an unresolved judgment point, neither of which
-            # applies here.
+            # brief()'s live-claim-holder stand-down (both branches — see
+            # `pickup_assemble.__init__.py`'s memo and handoff stand-down
+            # blocks, cross-repo/inbox/2026-08-17-doe-claude-em-memo-claim-
+            # fires-after-the-em-can-already-act.md, commit `3c779cde2`)
+            # lands exactly HERE whenever no durable frontmatter claim
+            # stamp exists yet — the normal case for a peer holding only
+            # the brief-stage side-file lock, where `gates.liveness_signal`
+            # never fires and `judgment_points` comes back empty alongside
+            # `directives: []`. That is a genuine, correctly-detected claim
+            # contention, not "brief did not resolve a plan" — classify off
+            # `gates.claim_grant` (the SAME field `apply()`'s own pre-loop
+            # blanket gate below reads) before falling back to the honest
+            # transport-failure bucket, so a real contention reports
+            # `APPLY_EXIT_CLAIM_DENIED`, never an infrastructure fault a
+            # wrapper/hook would branch on wrong.
+            claim_grant = (decision.get("gates") or {}).get("claim_grant")
+            if isinstance(claim_grant, dict) and claim_grant.get("verdict") not in apply_base.GRANTED_VERDICTS:
+                return APPLY_EXIT_CLAIM_DENIED, {
+                    "claim_grant": claim_grant,
+                    "landed": [],
+                }
+            # Every other early bail is a genuine "brief itself did not
+            # resolve to a plan" (ambiguous artifact, multi-hit archive
+            # fallback, memo addressee block) — nothing was ever computed
+            # to mutate; not a crash, but nothing apply can proceed on
+            # either. The honest bucket for that case, distinct from the
+            # denied-claim arm just above and from an unresolved judgment
+            # point (handled by the priority check this comment sits under).
             return APPLY_EXIT_TRANSPORT_FAIL, {
                 "error": decision.get("error", "brief did not resolve an actionable plan"),
                 "landed": [],

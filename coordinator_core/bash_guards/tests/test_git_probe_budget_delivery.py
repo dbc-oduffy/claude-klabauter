@@ -173,7 +173,12 @@ def test_unarmed_budget_never_declines_a_probe(monkeypatch) -> None:
     other test in this package, `_alternative_liveness`'s harness) keeps
     today's behaviour byte-for-byte."""
     spawned = _install_slow_git(monkeypatch, per_spawn_seconds=0.05)
-    assert dispatch_checks._git_probe_deadline is None
+    # `.get()`, not the bare attribute: the deadline became a ContextVar (so a
+    # second dispatch cannot resurrect a sibling's budget — see
+    # `_disarm_git_probe_deadline`'s hazard note). A bare `is None` compares the
+    # ContextVar OBJECT, which is never None, so the assertion could neither
+    # pass nor ever catch a budget left armed.
+    assert dispatch_checks._git_probe_deadline.get() is None
 
     for _ in range(6):
         assert dispatch_checks._run_git(["rev-parse", "--git-dir"])[0] == 0
@@ -206,5 +211,5 @@ def test_dispatch_finishes_and_delivers_when_git_is_slow(monkeypatch, capsys) ->
     )
     assert isinstance(out, dict), "the chain produced no envelope for the sweep shape"
     assert out["hookSpecificOutput"]["permissionDecision"] in ("allow", "deny")
-    assert dispatch_checks._git_probe_deadline is None, "budget left armed"
+    assert dispatch_checks._git_probe_deadline.get() is None, "budget left armed"
     assert spawned, "the fake git was never reached; the shape stopped matching"

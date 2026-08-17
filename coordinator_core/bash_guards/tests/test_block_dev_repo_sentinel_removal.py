@@ -23,6 +23,7 @@ import pytest
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal as guard
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
 
 
 SENTINEL = ".coordinator-dev-repo"
@@ -224,8 +225,17 @@ class TestDenyMessageDiscipline:
         assert reason.split(":", 1)[1].strip().lower().startswith("instead")
 
     def test_deny_reason_advertises_override(self):
+        # RETARGETED (2026-08-17, override-key message-register ruling): a
+        # guard message names the guard that fired and nothing else about
+        # its override -- no key, no assignment form
+        # (docs/reference/guard-override-keys.md, opening sentence). This
+        # deny message renders via the shared `operator_override_note`
+        # helper, which no longer interpolates the bare key or any
+        # assignment form -- it points to the reference doc instead.
+        # Asserting a pasteable `KEY=1` literal was stale against that
+        # doctrine.
         reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
-        assert "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1" in reason
+        assert OVERRIDE_KEYS_DOC in reason
 
 
 class TestNotIdentityGated:

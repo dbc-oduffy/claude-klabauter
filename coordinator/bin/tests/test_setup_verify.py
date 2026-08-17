@@ -186,6 +186,108 @@ def test_check_hooks_all_present_passes(tmp_path: Path, capsys) -> None:
     assert "PASS" in out
 
 
+def _make_plugin_root_with_bootstrap_exec_hooks(
+    tmp_path: Path, hook_rel_paths: list[str], write_files: list[str]
+) -> Path:
+    """hooks.json in the BOOTSTRAP-EXEC shape: `command` is the bare interpreter
+    and the real script path rides in `args[]`.
+
+    This is the shape DoE-claude's hooks.json actually carries. Scanning
+    `command` alone matched zero of its 27 entries on machine-b 2026-08-17 and
+    the probe reported "verified nothing" — a second forever-blind pass, arriving
+    through a different door than the extension-alternation one the module's
+    negative-spec already guards.
+    """
+    hooks_dir = tmp_path / "hooks"
+    hooks_dir.mkdir(parents=True)
+    hooks_json = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "Bash", "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python3",
+                        "args": [
+                            "-c",
+                            "import os,sys;b=sys.argv.pop();exec(open(b).read())",
+                            f"${{CLAUDE_PLUGIN_ROOT}}/hooks/{p}",
+                        ],
+                    }
+                    for p in hook_rel_paths
+                ]}
+            ]
+        }
+    }
+    (hooks_dir / "hooks.json").write_text(json.dumps(hooks_json))
+    for f in write_files:
+        (hooks_dir / f).write_text("# hook\n")
+    return tmp_path
+
+
+def test_check_hooks_sees_paths_carried_in_args_not_command(tmp_path: Path, capsys) -> None:
+    """Regression: the probe must not go blind when the script path lives in
+    `args[]` and `command` is the bare interpreter."""
+    _make_plugin_root_with_bootstrap_exec_hooks(
+        tmp_path, ["scripts/a.py", "scripts/b.py"], []
+    )
+    (tmp_path / "hooks" / "scripts").mkdir(parents=True)
+    (tmp_path / "hooks" / "scripts" / "a.py").write_text("# hook\n")
+    (tmp_path / "hooks" / "scripts" / "b.py").write_text("# hook\n")
+    ns = _mod.build_parser().parse_args(["check-hooks", "--plugin-root", str(tmp_path)])
+    rc = ns.func(ns)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "2 coordinator-owned hook file(s)" in out
+
+
+def test_check_hooks_args_shape_still_detects_missing_file(tmp_path: Path, capsys) -> None:
+    """The args[]-scanning path must still FAIL on a registered-but-absent hook —
+    seeing the paths is only useful if the existence check still bites."""
+    _make_plugin_root_with_bootstrap_exec_hooks(tmp_path, ["scripts/gone.py"], [])
+    (tmp_path / "hooks" / "scripts").mkdir(parents=True)
+    ns = _mod.build_parser().parse_args(["check-hooks", "--plugin-root", str(tmp_path)])
+    rc = ns.func(ns)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "gone.py" in err
+
+
+def test_settings_membership_degrades_to_warn_when_live_resolved(tmp_path: Path, capsys) -> None:
+    """Probe 1 must not fail an install Probe 0 passes as live-resolved."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"enabledPlugins": {"other@thing": True}}))
+    source = _make_live_resolved_source(
+        tmp_path / "src", with_manifest=True, with_commands=True, with_hooks=False
+    )
+    ns = _mod.build_parser().parse_args(
+        ["check-settings-membership", "--settings", str(settings),
+         "--plugin-dir", str(source)]
+    )
+    rc = ns.func(ns)
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "[WARN]" in err
+    assert "live-resolved" in err
+
+
+def test_settings_membership_still_fails_without_live_resolved_evidence(
+    tmp_path: Path, capsys
+) -> None:
+    """The degrade is evidence-gated, not a blanket softening: a --plugin-dir
+    with no manifest must still FAIL."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"enabledPlugins": {"other@thing": True}}))
+    source = _make_live_resolved_source(
+        tmp_path / "src", with_manifest=False, with_commands=True, with_hooks=False
+    )
+    ns = _mod.build_parser().parse_args(
+        ["check-settings-membership", "--settings", str(settings),
+         "--plugin-dir", str(source)]
+    )
+    rc = ns.func(ns)
+    assert rc == 1
+
+
 def test_check_hooks_missing_fails(tmp_path: Path, capsys) -> None:
     _make_plugin_root_with_hooks(tmp_path, ["a.sh", "missing.sh"], ["a.sh"])
     ns = _mod.build_parser().parse_args(["check-hooks", "--plugin-root", str(tmp_path)])

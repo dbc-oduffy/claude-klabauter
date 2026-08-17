@@ -583,10 +583,25 @@ def _provision_bin_dst(home: Path) -> Path:
 
 def _pin_home(monkeypatch, home: Path) -> None:
     """Pin HOME to an isolated dir and clear the two settings-home overrides
-    so `settings_home()` resolves under it deterministically."""
+    so `settings_home()` resolves under it deterministically.
+
+    Also opts back IN to real filesystem mutation for this test: the
+    suite-wide `COORDINATOR_DISABLE_MACHINE_MUTATION=1` belt-and-braces
+    fixture (`conftest.py::_quarantine_real_home`) refuses EVERY write
+    through `write_path_entry_guard_blocks` unconditionally — including one
+    correctly redirected into this `tmp_path`-rooted `home` — per
+    `install/substrate.py::_refuse_machine_mutation`'s trigger 1, which
+    applies "regardless of `check_temp_path`". Without this delenv, the
+    real-writer helpers below (`_provision_bin_dst`, `_write_rc_block`)
+    silently no-op and the C3 cases below see truthfully-reported-missing
+    rc blocks that were never written, not a checker defect.
+    `install/test_shell_rc_guard.py` (line 85) already establishes this
+    delenv as the fix for the identical situation on the writer's own
+    direct-coverage tests."""
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
 
 def _write_rc_block(home: Path, bin_dst: Path) -> None:

@@ -259,6 +259,8 @@ def build_children_index(
         for p, fm in fms.items() if _field(fm, "handoff_id")
     }
 
+    corpus_basenames = {os.path.basename(p) for p in paths}
+
     children: Dict[str, Set[str]] = defaultdict(set)
     for p, fm in fms.items():
         for key in fields:
@@ -268,6 +270,26 @@ def build_children_index(
             b = os.path.basename(v)
             if not b.endswith(".md"):
                 b = by_id.get(b, b)
+            # A pointer that explicitly names a NON-baton family resolves to that
+            # file, not to a same-basename baton. Collapsing straight to the
+            # basename made `predecessor: docs/problems/<name>.md` on a handoff
+            # of the same `<name>.md` record the handoff as its own child — a
+            # spurious self-edge, and the disagreement that surfaced this. The
+            # module's existing negative-spec anticipated only the
+            # nonexistent-target case, not same-basename-different-family.
+            # Deliberately still basename-keyed for a pointer that names no
+            # directory at all, or names a baton family: that bare-ref
+            # resolution is what this oracle exists to check independently, and
+            # `dag.resolve_target` reaches the same answer by a different route
+            # (explicit path first, basename probing only as stale-path
+            # recovery) rather than by sharing this code.
+            pointer_dir = os.path.dirname(str(v).replace("\\", "/")).strip("/")
+            if pointer_dir and b in corpus_basenames:
+                names_baton_family = pointer_dir.startswith(
+                    ("state/handoffs", "archive/handoffs")
+                )
+                if not names_baton_family:
+                    continue
             children[b].add(os.path.basename(p))
 
     live_paths = sorted(glob.glob(os.path.join(root, "state/handoffs/*.md")))

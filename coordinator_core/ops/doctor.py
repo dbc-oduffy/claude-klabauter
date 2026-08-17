@@ -134,26 +134,77 @@ def _config_dir() -> Path:
     return home_dir() / ".claude"
 
 
-def _extract_script_path(command: str) -> Optional[str]:
-    """Return the underlying script path a hooks.json `command` string
-    invokes, whether it is fail-open-wrapped (`python3 -c '<bootstrap>'
-    <script> [args...]`) or bare (`python3 <script> [args...]`).
+def _hook_argv(hook: dict) -> Optional[List[str]]:
+    """Return a hook registration's full argv, across both encodings the fleet
+    ships.
 
-    Uses `shlex.split` rather than a regex: the wrapped bootstrap payload is
-    guaranteed single-quoted with no embedded single quote (fail_open_launcher
-    enforces this at wrap time), so shlex correctly treats it as one token
-    regardless of the double quotes it contains, and correctly isolates the
-    script-path token that follows it either way.
+    Legacy string form puts the whole invocation in `command`
+    (`python3 -c '<bootstrap>' <script> [args...]`, or bare
+    `python3 <script> [args...]`). Exec form — what `fail_open_launcher
+    .wrap_command_exec` emits and what every registration in DoE-claude's
+    hooks.json now uses — puts the bare interpreter in `command` and the real
+    argv in `args`, so no shell is ever in the path.
+
+    NEGATIVE SPEC: never `shlex.split` an exec-form `args` entry. Its elements
+    are passed to the child verbatim; splitting the `-c` payload on whitespace
+    would fabricate tokens that no process ever sees.
+
+    NEGATIVE SPEC: never POSIX-split the legacy form on Windows. POSIX mode
+    treats a backslash as an escape, so a native path of the form
+    `<drive>:\\hooks\\scripts\\dispatch.py` splits to `<drive>:hooksscripts
+    dispatch.py` — a path that stats absent, making the layer report a false
+    "registered script missing on disk" for a registration that is in fact
+    fine. `posix=False` keeps the separators and, because it also keeps
+    surrounding quotes on quoted tokens, those are stripped back off here.
     """
+    command = hook.get("command")
+    if not isinstance(command, str) or not command:
+        return None
+    args = hook.get("args")
+    if isinstance(args, list) and args:
+        return [command] + [a for a in args if isinstance(a, str)]
+    posix = os.name != "nt"
     try:
-        tokens = shlex.split(command)
+        tokens = shlex.split(command, posix=posix)
     except ValueError:
         return None
-    if not tokens or tokens[0] not in ("python3", "python"):
+    if posix:
+        return tokens
+    return [_strip_enclosing_quotes(t) for t in tokens]
+
+
+def _strip_enclosing_quotes(token: str) -> str:
+    """Drop one matched pair of surrounding quotes from a non-POSIX shlex token.
+
+    `shlex.split(posix=False)` is the only split that survives Windows path
+    separators, but it hands back quoted tokens with their quotes still
+    attached — so a quoted path containing a space would otherwise stat as a
+    path whose first character is a quote."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        return token[1:-1]
+    return token
+
+
+def _extract_script_path(argv: List[str]) -> Optional[str]:
+    """Return the underlying script path a hook's argv invokes — the target
+    script, not the bootstrap trampoline or the injector appended after it.
+
+    Both encodings reduce to the same argv shape once `_hook_argv` has
+    normalised them, so one rule covers both: skip the interpreter and any
+    `-c` payload, then take the first `.py`-suffixed entry. In exec form that
+    is `args[2]`, ahead of the injector and bootstrap paths the loader pops off
+    the tail; in the legacy wrapped form it is the token after the quoted
+    bootstrap; bare, it is the token right after the interpreter.
+    """
+    if not argv or argv[0] not in ("python3", "python"):
         return None
-    if len(tokens) >= 2 and tokens[1] == "-c":
-        return tokens[3] if len(tokens) > 3 else None
-    return tokens[1] if len(tokens) > 1 else None
+    rest = argv[1:]
+    if rest and rest[0] == "-c":
+        rest = rest[2:]
+    for token in rest:
+        if token.endswith(".py"):
+            return token
+    return None
 
 
 def _resolve_plugin_root_token(path: str, doe_root: Optional[str]) -> str:
@@ -163,8 +214,22 @@ def _resolve_plugin_root_token(path: str, doe_root: Optional[str]) -> str:
 
 
 def _iter_hook_commands(hooks_doc: Any):
-    """Yield every (event, matcher_index, hook_index, command) tuple in a
-    hooks.json-shaped or settings.json `hooks`-block-shaped document."""
+    """Yield every (event, matcher_index, hook_index, argv) tuple in a
+    hooks.json-shaped or settings.json `hooks`-block-shaped document.
+
+    `argv` is the normalised full invocation from `_hook_argv`, so callers see
+    one shape whether the registration is legacy-string or exec-form. Yielding
+    the raw `command` string instead is what made this layer vacuous against
+    exec form: `command` is then just `python3`.
+
+    NEGATIVE SPEC: a dict-shaped hook entry is always yielded, even when
+    `_hook_argv` cannot parse it (`argv is None`). Skipping unparseable
+    entries here — rather than handing the caller a `None` argv to turn into
+    a Finding — is exactly the "OK on zero parsed registrations" pathology
+    this module's status derivation exists to close, moved one call frame
+    earlier: a doc where every hook's `command` is missing/non-string/empty
+    would parse zero entries and report `ok` on a check it never performed.
+    """
     hooks_block = hooks_doc.get("hooks") if isinstance(hooks_doc, dict) else None
     if not isinstance(hooks_block, dict):
         return
@@ -177,9 +242,7 @@ def _iter_hook_commands(hooks_doc: Any):
             for h_idx, hook in enumerate(block.get("hooks", []) or []):
                 if not isinstance(hook, dict):
                     continue
-                command = hook.get("command")
-                if isinstance(command, str) and command:
-                    yield event, m_idx, h_idx, command
+                yield event, m_idx, h_idx, _hook_argv(hook)
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +326,15 @@ def _check_one_hooks_doc(
     bare = 0
     total = 0
 
-    for event, m_idx, h_idx, command in _iter_hook_commands(doc):
+    for event, m_idx, h_idx, argv in _iter_hook_commands(doc):
         total += 1
-        wrapped = _HOOK_SEAM_MARKER in command
-        script = _extract_script_path(command)
+        if argv is None:
+            findings.append(
+                Finding("broken", f"{label} [{event}/{m_idx}/{h_idx}]: command shape not understood.")
+            )
+            continue
+        wrapped = any(_HOOK_SEAM_MARKER in token for token in argv)
+        script = _extract_script_path(argv)
         if script is None:
             findings.append(
                 Finding("broken", f"{label} [{event}/{m_idx}/{h_idx}]: command shape not understood.")
@@ -298,7 +366,13 @@ def _check_one_hooks_doc(
             )
         )
 
-    status = "broken" if missing else "ok"
+    # NEGATIVE SPEC: never derive this from the `missing` counter. `missing`
+    # only counts registrations that parsed and then failed the stat, so a doc
+    # where nothing parses at all — every entry a `broken` finding — reported
+    # `ok`, and the layer went green on a check it had not performed. Status
+    # follows the findings the layer itself emitted, so any future encoding
+    # change fails loud instead of vacuously passing.
+    status = "broken" if any(f.severity == "broken" for f in findings) else "ok"
     return status, findings, True
 
 
@@ -451,13 +525,20 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
                     command = hook.get("command")
                     if not isinstance(command, str) or not command:
                         continue
-                    if fail_open_launcher.is_wrapped(command):
+                    # `is_wrapped` is dict-aware: hand it the whole hook when
+                    # the registration is exec-form (marker lives in args[1]),
+                    # the command string when it is the legacy single-string
+                    # form (marker is a substring of the command).
+                    probe = hook if isinstance(hook.get("args"), list) else command
+                    if fail_open_launcher.is_wrapped(probe):
                         continue
                     try:
-                        hook["command"] = fail_open_launcher.wrap_command(command)
-                        wrapped_count += 1
-                    except ValueError:
+                        wrapped = fail_open_launcher.wrap_command_exec(command)
+                    except (ValueError, AttributeError):
                         continue
+                    hook["command"] = wrapped["command"]
+                    hook["args"] = wrapped["args"]
+                    wrapped_count += 1
 
     if wrapped_count == 0:
         fix_report.append("--fix: hooks.json — nothing to wrap (all entries already fail-open).")

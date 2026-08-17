@@ -4,7 +4,7 @@
   "x-schema-name": "decision",
   "x-schema-version": "1.0.0",
   "applies_to": "docs/decisions/*.md",
-  "description": "Decision record (DR) — records an architectural or process decision. Spec backlink: docs/plans/2026-06-25-example-initiative-tc-1-records-consolidation.md § D3, § D4",
+  "description": "Decision record (DR) — records an architectural or process decision. Spec backlink: pln-example-initiative-tc-1-records-consolidation-9668e7 § D3, § D4",
   "type": "object",
   "required": ["title", "created", "status", "deciders"],
   "properties": {

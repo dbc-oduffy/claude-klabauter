@@ -344,6 +344,11 @@ def test_same_path_case_insensitive_on_windows(tmp_path, monkeypatch):
 # spawned, which is exactly what made branch consolidation (`workday-
 # complete-step3-consolidate.py`'s sync-main step) unrunnable through the
 # assembler path.
+#
+# NOTE: the one test in this section that spawns a REAL process --
+# test_bare_subprocess_run_reproduces_the_original_break -- lives in
+# test_win_portability_real_spawn.py (SPAWN-RATCHET Rule 4: cadence-tiered on
+# its own, so the ~100 faked/monkeypatched tests in this file stay fast-tier).
 # ---------------------------------------------------------------------------
 
 
@@ -356,20 +361,6 @@ def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-lin
         f"sys.exit({returncode})\n"
     )
     return str(script)
-
-
-def test_bare_subprocess_run_reproduces_the_original_break(tmp_path):
-    """Proves the defect exists before asserting the fix: a bare
-    subprocess.run call against a fileno-less StringIO target raises
-    io.UnsupportedOperation -- the exact exception whose bare str() collapses
-    to the single word "fileno" in workday_complete.apply's failed[] entries."""
-    import io
-    import subprocess
-
-    child = _write_child_script(tmp_path)
-    buf = io.StringIO()
-    with pytest.raises(io.UnsupportedOperation):
-        subprocess.run([sys.executable, child], stdout=buf, stderr=buf)
 
 
 def test_run_forwarding_reaches_a_plain_capture_buffer(tmp_path):

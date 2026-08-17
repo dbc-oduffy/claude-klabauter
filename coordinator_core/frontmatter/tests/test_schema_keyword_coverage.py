@@ -55,6 +55,7 @@ _SUPPORTED_KEYWORDS = frozenset({
     "format",
     "pattern",
     "minLength",
+    "maxLength",
     "minimum",
     "maximum",
     "required",

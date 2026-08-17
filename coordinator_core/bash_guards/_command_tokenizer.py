@@ -580,8 +580,8 @@ def _mask_unquoted_backslashes(cmd_text: str) -> str:
     quote OR a `;`/`&`/`|` punctuation character is an atomic escaped-pair
     in real bash -- left raw here (same reasoning as the `\'`/`\"` case
     below) so shlex's own default `escape` handling consumes it, instead of
-    the prior narrower fix that only special-cased a quote and let `\;`/
-    `\&`/`\|` fall through to plain sentinel-masking (fabricating a real
+    the prior narrower fix that only special-cased a quote and let `\\;`/
+    `\\&`/`\\|` fall through to plain sentinel-masking (fabricating a real
     separator token bash never produces). The pairing decision is made on
     the RUN of consecutive unquoted backslashes, not on each backslash in
     isolation: bash consumes a backslash run two-at-a-time, left to right
@@ -589,7 +589,7 @@ def _mask_unquoted_backslashes(cmd_text: str) -> str:
     before it, producing one literal backslash per pair), so only an ODD
     total run length leaves one backslash unpaired at the end to escape
     whatever real character follows the run. Deciding pairing per-character
-    instead of per-run (the prior shape) mis-paired `\\'` as `(\)(\\')`
+    instead of per-run (the prior shape) mis-paired `\\'` as `(\\)(\\')`
     instead of bash's own `(\\)('...)` -- i.e. it let the SECOND backslash
     of an already-self-escaping pair reach for the quote that bash's first
     backslash had already claimed. All backslashes within complete pairs
@@ -1284,16 +1284,43 @@ def _extract_command_substitutions(text: str) -> Tuple[str, List[str]]:
             i += 1
             continue
         if text.startswith("$(", i):
+            # Quote-aware paren balance: a `$(...)` substitution opens a
+            # FRESH quoting context (real shell re-tokenizes its contents
+            # independently of whatever quote the substitution itself sits
+            # inside), so a `)` inside a quoted string here must not close
+            # the substitution early. Before this fix the walk tracked only
+            # `\\`/`(`/`)` and a quoted `)` (e.g. `$(echo ')' ; sh -c
+            # '<payload>')`) desynced the counter, truncating the extracted
+            # span before the true closing paren and silently dropping
+            # everything after it from `subs` -- a live guard bypass when
+            # the substitution's outer context also prevented the segment
+            # loop from splitting on the exposed `;` (e.g. double-quoted
+            # outer text keeps the whole thing one token). Mirrors the
+            # quote-tracking already used by the outer walk in this
+            # function and by `tokenize_full_command`/
+            # `_mask_adjacent_ampersand_redirects`.
             depth = 1
             j = i + 2
+            inner_sq = False
+            inner_dq = False
             while j < n and depth:
-                if text[j] == "\\" and j + 1 < n:
+                cj = text[j]
+                if cj == "\\" and not inner_sq and j + 1 < n:
                     j += 2
                     continue
-                if text[j] == "(":
-                    depth += 1
-                elif text[j] == ")":
-                    depth -= 1
+                if cj == "'" and not inner_dq:
+                    inner_sq = not inner_sq
+                    j += 1
+                    continue
+                if cj == '"' and not inner_sq:
+                    inner_dq = not inner_dq
+                    j += 1
+                    continue
+                if not inner_sq and not inner_dq:
+                    if cj == "(":
+                        depth += 1
+                    elif cj == ")":
+                        depth -= 1
                 j += 1
             subs.append(text[i + 2:j - 1] if depth == 0 else text[i + 2:j])
             out.append(" ")

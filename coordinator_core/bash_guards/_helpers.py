@@ -466,13 +466,10 @@ def operator_override_note(
     read once at hook-process spawn, so it is STRUCTURALLY unusable from
     inside a running session, independent of who is asking. Stating that
     plainly is what stops an agent burning a turn on it -- no disclaimer
-    needed to carry that weight. Rendered shape, e.g.: ``"Override key
-    (flag), unsettable from inside this session -- read only at
-    hook-process spawn: COORDINATOR_ALLOW_X -- key list: claude-klabauter
-    docs/reference/guard-override-keys.md"`` -- kept terse (this reshape
-    stayed inside the pre-existing byte/word budgets in
-    ``test_operator_override_note_retains_affordances.py``, not a new,
-    looser one).
+    needed to carry that weight. That render is itself superseded by the
+    second 2026-08-11 reshape below (a doc-pointer-only string, with no key
+    named at all) -- kept here only as the intermediate step in this
+    function's history, not as this function's current output.
 
     NEGATIVE SPEC -- do not re-add an ``export ... =1`` instruction (the
     exact hand-written shape ``test_no_handwritten_override_clauses.py``

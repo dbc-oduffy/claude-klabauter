@@ -69,6 +69,18 @@ class TestAdvisoryMessageDiscipline:
         reason = _advisory_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
         assert SENTINEL not in reason
 
-    def test_advisory_reason_advertises_override(self):
+    def test_advisory_reason_never_names_override_assignment_form(self):
+        """`operator_override_note`'s 2026-08-11 NEGATIVE SPEC 4 (and the
+        same-day second reshape, docs/plans/2026-08-11-guard-messages-point-
+        to-docs-never-name.md) forbid a pasteable `KEY=1`/`KEY="..."` literal
+        in ANY guard message, any audience -- B6 (docs/wiki/guard-messaging.md
+        § Register) bans naming the override artifact at all in a denial.
+        This test previously asserted the opposite (that the raw assignment
+        WAS present) -- that assertion predates the reshape and pinned a
+        doctrine violation as a spec. An unresolved-audience payload (no
+        `session_id`/`agent_id`, as `_payload()` builds here) degrades to no
+        note at all, so this assertion holds vacuously for the resolvable
+        case and by construction for the unresolved one."""
         reason = _advisory_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
-        assert "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1" in reason
+        assert "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1" not in reason
+        assert 'COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL="' not in reason

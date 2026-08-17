@@ -138,7 +138,6 @@ Negative-spec:
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -215,6 +214,14 @@ def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
     cache a legitimate empty-string result -- see module docstring's
     "Negative caching" section.
     """
+    # Function-local: this is the spawn FALLBACK — the walk answers the ordinary
+    # case without it, so on the common path `subprocess` and its ~10 transitive
+    # modules (select/selectors/signal/threading/locale/math) never load. This
+    # module sits on `coordinator_core.ipc`'s cold-start path, measured against a
+    # module-count ceiling in
+    # `coordinator_core/benchmarks/import-budget-manifest.json`. Do not hoist.
+    import subprocess
+
     try:
         result = subprocess.run(
             ["git", "rev-parse"] + args,

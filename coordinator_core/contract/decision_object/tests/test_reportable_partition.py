@@ -232,6 +232,10 @@ def _sweep_review_assemble(acc: dict[str, set[str]], tmp_path: Path) -> None:
 
 def _sweep_workstream_complete(acc: dict[str, set[str]], tmp_path: Path) -> None:
     from coordinator_core import workstream_complete as wsc
+    from coordinator_core.ops.ceremony.wsc_disposition import (
+        LEGACY_PREDECESSOR_CONSUMED,
+        SINGLE_SESSION,
+    )
     from coordinator_core.workstream_complete.test_workstream_complete import (
         _gate,
         _patch_gate,
@@ -277,8 +281,12 @@ def _sweep_workstream_complete(acc: dict[str, set[str]], tmp_path: Path) -> None
         "flags": ["contract-test flagged item"],
     }
     gate_variants = (
-        _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
-        _gate("single-session", consumed_handoff_paths=()),
+        _gate(
+            LEGACY_PREDECESSOR_CONSUMED,
+            consumed_handoff="state/handoffs/x.md",
+            consumed_handoff_paths=(),
+        ),
+        _gate(SINGLE_SESSION, consumed_handoff_paths=()),
     )
 
     # (C2 redo, docs/plans/2026-08-15-judgment-points-that-gate-nothing-

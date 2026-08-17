@@ -31,6 +31,7 @@ from coordinator_core.write_guards.engine import discover_guard_names
 _EXPECTED_GUARD_NAMES = frozenset(
     {
         "block_completion_monolith_write",
+        "block_confined_agent_write",
         "block_consumed_handoff_edit",
         "bump_out_of_repo_tool_write",
         "guard_memory_store_cap",
@@ -48,6 +49,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "block_priority_ledger_edit",
         "block_subagent_archive_write",
         "block_subagent_grant_record_write",
+        "block_subagent_guard_grant_write",
         "block_subagent_plan_body_write",
         "block_unauthorized_claude_md_write",
         "block_worktree_sentinel_write",
@@ -57,9 +59,11 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "guard_settings_json_write",
         "nudge_baton_body_bar",
         "nudge_em_code_dispatch",
+        "nudge_handoff_ac_shape",
         "nudge_improvement_queue_write",
         "nudge_new_sh_file_naked_python",
         "nudge_outbox_draft_frontmatter_shape",
+        "nudge_peer_notice_unread",
         "nudge_plan_sidecar_family_split",
         "nudge_private_git_fact_resolver",
         "nudge_prose_queue_append",

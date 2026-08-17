@@ -13,6 +13,7 @@ CLASS/PRIORITY flip: docs/plans/2026-08-06-apply-guard-class-census.md (C3)
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -187,6 +188,22 @@ class TestDriveRootContainmentGate:
     fail against the pre-fix `rstrip("/")` spelling before this fix landed.
     """
 
+    @pytest.mark.skipif(
+        not sys.platform.startswith("win"),
+        reason=(
+            "hardware-gated: `_normalize_and_gate`'s containment leg calls "
+            "`pathlib.Path(...).resolve()` on the candidate, not `os.path.*` -- "
+            "on a POSIX interpreter this treats a Windows drive-root string "
+            "('X:/...') as a relative path segment and resolves it against cwd "
+            "instead of as an absolute drive path, so the assertion cannot hold "
+            "regardless of the guard's correctness. Named as hardware-gated "
+            "(not simulable via the ntpath swap used elsewhere in this suite) "
+            "in test_windows_platform_simulation.py::"
+            "test_windows_path_resolve_is_hardware_gated. Runs for real on a "
+            "Windows host, where Path.resolve() natively treats 'X:/...' as "
+            "drive-rooted."
+        ),
+    )
     def test_drive_root_git_root_still_matches(self):
         drive_root = "X:" + "\\"  # abs-path-ok: synthetic drive-root literal, not a repo path citation
         result = guard._normalize_and_gate(

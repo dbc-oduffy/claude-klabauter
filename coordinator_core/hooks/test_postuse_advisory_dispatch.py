@@ -1,12 +1,15 @@
 """
-coordinator_core.hooks.test_postuse_advisory_dispatch -- tests for the token-accurate
-context-pressure estimation path in postuse_advisory_dispatch.py.
+coordinator_core.hooks.test_postuse_advisory_dispatch -- tests for the non-context-
+pressure advisory paths in postuse_advisory_dispatch.py: the post-compaction sentinel
+bridge, the durable throttle state (round-tripped across separate process
+invocations), first-agent-dispatch, unauthorized-handoff, and the runtime tripwire.
 
-Covers `_extract_last_usage_tokens` (pure helper reading real Anthropic API usage
-blocks from a transcript tail), `_resolve_context_window` (three-tier context-window
-resolution: env-var override table, built-in ordered table, safe default), and
-`_check_context_pressure_sync`'s two parallel paths: the token-accurate path (usage
-blocks present) and the legacy byte-proxy fallback path (no usage blocks found).
+The sidecar-sourced context-pressure measurement path (`_check_context_pressure_sync`'s
+Phase 2) is covered by its own test file, not here:
+coordinator_core/hooks/tests/test_postuse_context_pressure.py. The transcript-scan
+measurement machinery this file used to cover -- `_extract_last_usage_tokens`,
+`_resolve_context_window`, `_check_unrecognised_sonnet_generation`, and the byte-based
+proxy fallback -- is deleted; see docs/plans/2026-08-17-the-advisory-reads-the-harness.md.
 
 Spec backlink: coordinator_core/hooks/postuse_advisory_dispatch.py (module under test).
 """
@@ -48,19 +51,10 @@ _TEST_SESSION_STATE_GLOBS = (
     "first-agent-dispatch-advisory-test-session-*",
 )
 
-# Not session-scoped -- deliberately durable across sessions (see the comment
-# above _check_unrecognised_sonnet_generation). Swept unconditionally between
-# tests anyway so one test's "first sighting" of a fake model_id can't leak
-# into another's expectations.
-_SONNET_MONITOR_STATE_GLOBS = (
-    "sonnet-generation-monitor-seen.json",
-    ".sonnet-generation-monitor-*.tmp",
-)
-
 
 def _sweep_test_session_state_files() -> None:
     tmpdir = tempfile.gettempdir()
-    for pattern in _TEST_SESSION_STATE_GLOBS + _SONNET_MONITOR_STATE_GLOBS:
+    for pattern in _TEST_SESSION_STATE_GLOBS:
         for path in glob.glob(os.path.join(tmpdir, pattern)):
             try:
                 os.unlink(path)
@@ -75,224 +69,14 @@ def _reset_advisory_state_files():
     _sweep_test_session_state_files()
 
 
-def _assistant_line(input_tokens, cache_creation, cache_read, output_tokens=336):
-    return json.dumps(
-        {
-            "type": "assistant",
-            "message": {
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "cache_creation_input_tokens": cache_creation,
-                    "cache_read_input_tokens": cache_read,
-                    "output_tokens": output_tokens,
-                }
-            },
-        }
-    )
-
-
-# ---------------------------------------------------------------------------
-# _extract_last_usage_tokens unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_extract_last_usage_tokens_returns_sum_from_last_assistant_record(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    lines = [
-        json.dumps({"type": "user", "message": {"content": "hi"}}),
-        _assistant_line(2, 1103, 209944),
-    ]
-    transcript.write_text("\n".join(lines) + "\n")
-
-    result = pad._extract_last_usage_tokens(str(transcript))
-
-    assert result == 211049
-
-
-def test_extract_last_usage_tokens_picks_last_not_first_or_sum(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    lines = [
-        _assistant_line(1, 100, 100),  # total 201 -- must NOT be picked
-        json.dumps({"type": "user", "message": {"content": "hi"}}),
-        _assistant_line(2, 1103, 209944),  # total 211049 -- LAST, must be picked
-    ]
-    transcript.write_text("\n".join(lines) + "\n")
-
-    result = pad._extract_last_usage_tokens(str(transcript))
-
-    assert result == 211049
-
-
-def test_extract_last_usage_tokens_returns_none_when_no_usage_key(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    lines = [
-        json.dumps({"type": "user", "message": {"content": "hi"}}),
-        json.dumps({"type": "assistant", "message": {"content": [{"text": "hello"}]}}),
-    ]
-    transcript.write_text("\n".join(lines) + "\n")
-
-    assert pad._extract_last_usage_tokens(str(transcript)) is None
-
-
-def test_extract_last_usage_tokens_returns_none_for_missing_file(tmp_path):
-    missing = tmp_path / "does-not-exist.jsonl"
-
-    assert pad._extract_last_usage_tokens(str(missing)) is None
-
-
-def test_extract_last_usage_tokens_tail_read_finds_last_line_past_300kb(tmp_path):
-    transcript = tmp_path / "big-transcript.jsonl"
-    filler_line = json.dumps({"type": "user", "message": {"content": "x" * 500}})
-    # Pad well past the default 300_000-byte tail window.
-    filler_block = "\n".join([filler_line] * 1000)
-    final_line = _assistant_line(2, 1103, 209944)
-    transcript.write_text(filler_block + "\n" + final_line + "\n")
-
-    assert transcript.stat().st_size > 300_000
-
-    result = pad._extract_last_usage_tokens(str(transcript))
-
-    assert result == 211049
-
-
-# ---------------------------------------------------------------------------
-# _resolve_context_window unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_context_window_sonnet_5_is_1m():
-    # In Claude Code on a paid plan, Sonnet 5 gets a 1M window -- diverges from
-    # the Sonnet family's 200k default. Source: support.claude.com 8606394
-    # ("How large is the context window on paid Claude plans"), confirmed
-    # against this PM's own Max-plan account, 2026-07-24.
-    assert pad._resolve_context_window("claude-sonnet-5") == 1_000_000
-
-
-def test_resolve_context_window_sonnet_4_6_is_200k_no_credits_assumed():
-    # Same source names Sonnet 4.6 as ALSO getting 1M in Claude Code -- but
-    # only with usage credits enabled, which this hook can't verify and
-    # doesn't assume (this PM doesn't use credits). Deliberately NOT a
-    # _GENERATION_EXCEPTIONS row -- resolves via the 200k Sonnet family
-    # default instead.
-    assert pad._resolve_context_window("claude-sonnet-4-6") == 200_000
-
-
-def test_resolve_context_window_older_sonnet_generation_is_200k():
-    # A Sonnet generation NOT named in the support article -- stays at the
-    # Sonnet family's base 200k. Guards the exception-matching itself: this
-    # model_id must not accidentally substring-match "sonnet-5".
-    model_id = "claude-sonnet-4-5-20250929"
-    assert "sonnet-5" not in model_id
-    assert pad._resolve_context_window(model_id) == 200_000
-
-
-def test_resolve_context_window_opus_is_1m():
-    assert pad._resolve_context_window("claude-opus-4-8") == 1_000_000
-
-
-def test_resolve_context_window_haiku_is_200k():
-    assert pad._resolve_context_window("claude-haiku-4-5-20251001") == 200_000
-
-
-def test_resolve_context_window_mythos_not_assumed_falls_through_to_safe_default(
-    monkeypatch,
-):
-    # Mythos is NOT on the PM's confirmed 1M-in-Claude-Code list -- unlike Opus,
-    # Sonnet, and Fable, it has no _FAMILY_DEFAULTS row and must not silently
-    # resolve to a guessed figure. It still lands on 1M today, but via the
-    # generous safe default (tier 4), not a confirmed family convention.
-    monkeypatch.delenv("COORDINATOR_DEFAULT_CONTEXT_WINDOW", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    assert pad._resolve_context_window("claude-mythos-5") == 1_000_000
-    assert not any(
-        "mythos" in substr for substr, _ in pad._FAMILY_DEFAULTS
-    )
-
-
-def test_resolve_context_window_unrecognized_model_falls_through_to_default(monkeypatch):
-    monkeypatch.delenv("COORDINATOR_DEFAULT_CONTEXT_WINDOW", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    assert pad._resolve_context_window("claude-nova-1") == 1_000_000
-
-
-def test_resolve_context_window_env_override_wins_over_default(monkeypatch):
-    monkeypatch.setenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", '{"nova-1": 500000}')
-
-    assert pad._resolve_context_window("claude-nova-1") == 500_000
-
-
-def test_resolve_context_window_malformed_env_override_does_not_raise(monkeypatch):
-    monkeypatch.setenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", "not json")
-    monkeypatch.delenv("COORDINATOR_DEFAULT_CONTEXT_WINDOW", raising=False)
-
-    # Falls through cleanly to tier 2 (generation exceptions) -- no raise.
-    assert pad._resolve_context_window("claude-sonnet-5") == 1_000_000
-    # And falls through to tier 4 (safe default) when nothing else matches.
-    assert pad._resolve_context_window("claude-nova-1") == 1_000_000
-
-
-def test_resolve_context_window_haiku_still_correct_after_c1_changes():
-    # AC1/C1 named this the one live small-window model to re-verify unaffected
-    # by the fallback/monitoring changes -- _resolve_context_window itself is
-    # untouched, so this is a direct re-assertion, not a new code path.
-    assert pad._resolve_context_window("claude-haiku-4-5-20251001") == 200_000
-
-
-# ---------------------------------------------------------------------------
-# _check_unrecognised_sonnet_generation unit tests (C1b -- observability only,
-# does NOT change _resolve_context_window's resolution or the invariant tests
-# above it).
-# ---------------------------------------------------------------------------
-
-
-def test_unrecognised_sonnet_generation_fires_once_for_new_model_id(tmp_path):
-    tmpdir = str(tmp_path)
-
-    first = pad._check_unrecognised_sonnet_generation(tmpdir, "claude-sonnet-7-20270101")
-    assert first is not None
-    assert "SONNET GENERATION MONITOR" in first
-    assert "claude-sonnet-7-20270101" in first
-
-    # Same model_id, same (durable) tmpdir -- must not re-fire.
-    second = pad._check_unrecognised_sonnet_generation(tmpdir, "claude-sonnet-7-20270101")
-    assert second is None
-
-
-def test_unrecognised_sonnet_generation_silent_for_known_generations(tmp_path):
-    tmpdir = str(tmp_path)
-
-    for model_id in (
-        "claude-sonnet-4-5-20250929",
-        "claude-sonnet-4-6",
-        "claude-sonnet-5",
-    ):
-        assert pad._check_unrecognised_sonnet_generation(tmpdir, model_id) is None
-
-
-def test_unrecognised_sonnet_generation_silent_for_non_sonnet_models(tmp_path):
-    tmpdir = str(tmp_path)
-
-    assert pad._check_unrecognised_sonnet_generation(tmpdir, "claude-opus-4-8") is None
-    assert pad._check_unrecognised_sonnet_generation(tmpdir, "claude-haiku-4-5") is None
-    assert pad._check_unrecognised_sonnet_generation(tmpdir, "claude-mythos-5") is None
-
-
-def test_unrecognised_sonnet_generation_does_not_invert_resolution(tmp_path):
-    """Firing the monitor must not change what _resolve_context_window returns
-    for the same, still-unconfirmed model_id -- it stays at the 200k family
-    default (the correct, conservative behaviour) even after being flagged."""
-    tmpdir = str(tmp_path)
-    model_id = "claude-sonnet-7-20270101"
-
-    fired = pad._check_unrecognised_sonnet_generation(tmpdir, model_id)
-    assert fired is not None
-    assert pad._resolve_context_window(model_id) == 200_000
-
-
 # ---------------------------------------------------------------------------
 # _check_context_pressure_sync integration-style tests
+#
+# The transcript-scan measurement path (_extract_last_usage_tokens,
+# _resolve_context_window, _check_unrecognised_sonnet_generation, and the
+# byte-based proxy fallback) is deleted; its coverage is superseded by the
+# sidecar-sourced measurement path's own test file, not duplicated here:
+# coordinator_core/hooks/tests/test_postuse_context_pressure.py.
 # ---------------------------------------------------------------------------
 
 
@@ -301,236 +85,6 @@ def _bypass_throttle(session_id):
     # writes the durable state file directly, since that (not process memory)
     # is now the source of truth.
     pad._save_advisory_state(tempfile.gettempdir(), session_id, {"throttle_last_check": 0.0})
-
-
-def test_check_context_pressure_sonnet_5_uses_correct_1m_window_not_false_panic(
-    tmp_path, monkeypatch
-):
-    """A claude-sonnet-5 session with ~185k usage tokens must resolve against the
-    1M Claude Code window (~18%), not the base Sonnet-family 200k window (~92%) --
-    see support.claude.com 8606394 and the _GENERATION_EXCEPTIONS comment."""
-    monkeypatch.delenv("CONTEXT_ADVISORY_THRESHOLD", raising=False)
-    monkeypatch.delenv("CONTEXT_CRITICAL_THRESHOLD", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-5"})
-    usage_tokens_total = 185_000
-    usage_line = _assistant_line(2, 1103, usage_tokens_total - 2 - 1103)
-    transcript.write_text("\n".join([model_line, usage_line]) + "\n")
-
-    session_id = "test-session-sonnet-5-correct-window"
-    _bypass_throttle(session_id)
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    context_window = 1_000_000
-    expected_pct = usage_tokens_total * 100 // context_window
-    assert expected_pct < 20  # correct reading is ~18%, well under both thresholds
-
-    # Below both the 40% advisory and 50% critical thresholds against the correct
-    # 1M window -- no advisory should fire at all.
-    assert result == ""
-
-
-def test_check_context_pressure_1m_tier_critical_fires_below_auto_compact_ceiling(
-    tmp_path, monkeypatch
-):
-    """PM ruling 2026-07-27: on the 1M tier, CRITICAL must fire strictly BELOW
-    Anthropic's fixed ~500K auto-compact ceiling, with real headroom -- not
-    coincident with it. A flat 50%-of-window threshold on a 1M window lands
-    exactly ON the 500K ceiling (500_000 == 500_000), which fires the warning
-    level with the cut instead of ahead of it and defeats the whole point of a
-    pre-emptive advisory. This test fails under that old flat-percentage
-    behaviour and passes under the absolute-anchored (400K/450K) tier."""
-    monkeypatch.delenv("CONTEXT_ADVISORY_THRESHOLD", raising=False)
-    monkeypatch.delenv("CONTEXT_CRITICAL_THRESHOLD", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-5"})  # 1M tier exception
-    # 460K usage tokens: above the anchored 450K critical threshold, but well
-    # below the 500K auto-compact ceiling -- the case the old 50%-of-window
-    # threshold (500K) would have missed by firing coincident with the cut
-    # instead of ahead of it.
-    usage_tokens_total = 460_000
-    usage_line = _assistant_line(2, 1103, usage_tokens_total - 2 - 1103)
-    transcript.write_text("\n".join([model_line, usage_line]) + "\n")
-
-    session_id = "test-session-1m-critical-headroom"
-    _bypass_throttle(session_id)
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result != ""
-    assert "CONTEXT PRESSURE — HIGH" in result
-
-    # The threshold itself must sit strictly below the fixed ceiling, with
-    # explicit, non-trivial headroom -- not just "less than", but a real gap.
-    critical_tokens = 450_000
-    ceiling = pad._AUTO_COMPACT_CEILING_TOKENS_1M
-    assert ceiling == 500_000
-    headroom = ceiling - critical_tokens
-    assert critical_tokens < ceiling
-    assert headroom >= 50_000, (
-        f"critical threshold ({critical_tokens}) must sit at least 50K tokens "
-        f"below the fixed auto-compact ceiling ({ceiling}); headroom was only "
-        f"{headroom}"
-    )
-    # And the fired usage level (460K) is itself still below the ceiling.
-    assert usage_tokens_total < ceiling
-
-
-def test_check_context_pressure_1m_tier_advisory_fires_before_critical(
-    tmp_path, monkeypatch
-):
-    """Advisory (400K) must fire meaningfully before critical (450K) on the
-    1M tier -- both anchored absolute tokens, not the old flat percentages."""
-    monkeypatch.delenv("CONTEXT_ADVISORY_THRESHOLD", raising=False)
-    monkeypatch.delenv("CONTEXT_CRITICAL_THRESHOLD", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-5"})
-    usage_tokens_total = 410_000  # above 400K advisory, below 450K critical
-    usage_line = _assistant_line(2, 1103, usage_tokens_total - 2 - 1103)
-    transcript.write_text("\n".join([model_line, usage_line]) + "\n")
-
-    session_id = "test-session-1m-advisory-before-critical"
-    _bypass_throttle(session_id)
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result != ""
-    assert "CONTEXT PRESSURE — ADVISORY" in result
-    assert "CONTEXT PRESSURE — HIGH" not in result
-
-
-def test_check_context_pressure_200k_tier_unchanged_percentage_model(
-    tmp_path, monkeypatch
-):
-    """Sub-1M tiers (Sonnet/Haiku 200K default) must keep the 40%/50%-of-window
-    behaviour unchanged -- there is no fixed-ceiling collision to guard against
-    at this window size, and this test would fail if the 1M-tier absolute
-    anchoring were accidentally applied here too."""
-    monkeypatch.delenv("CONTEXT_ADVISORY_THRESHOLD", raising=False)
-    monkeypatch.delenv("CONTEXT_CRITICAL_THRESHOLD", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-haiku-4-5-20251001"})  # 200K default
-    context_window = 200_000
-    assert pad._resolve_context_window("claude-haiku-4-5-20251001") == context_window
-
-    # 95_000 tokens is below the 40%-of-200K (80_000) advisory threshold that
-    # would apply here if the 1M absolute anchoring (400K) were wrongly
-    # reused -- but well above 40% of the correct 200K window, so it SHOULD
-    # fire advisory under the correct (unchanged) percentage model.
-    usage_tokens_total = 95_000  # 47.5% of 200K -- above 40% advisory, below 50% critical
-    usage_line = _assistant_line(2, 1103, usage_tokens_total - 2 - 1103)
-    transcript.write_text("\n".join([model_line, usage_line]) + "\n")
-
-    session_id = "test-session-200k-haiku-unchanged"
-    _bypass_throttle(session_id)
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result != ""
-    assert "CONTEXT PRESSURE — ADVISORY" in result
-    assert "CONTEXT PRESSURE — HIGH" not in result
-
-    expected_pct = usage_tokens_total * 100 // context_window
-    assert f"~{expected_pct}%" in result
-
-
-def test_check_context_pressure_uses_usage_tokens_when_available(tmp_path, monkeypatch):
-    monkeypatch.delenv("CONTEXT_ADVISORY_THRESHOLD", raising=False)
-    monkeypatch.delenv("CONTEXT_CRITICAL_THRESHOLD", raising=False)
-    monkeypatch.delenv("COORDINATOR_MODEL_CONTEXT_WINDOWS", raising=False)
-
-    transcript = tmp_path / "transcript.jsonl"
-    # Any Sonnet-family model id resolves to the 200k window used by this scenario.
-    model_line = json.dumps({"model": "claude-sonnet-4-5-20250929"})
-    # Real usage totalling ~95% of a 200k window -- the reported bug scenario.
-    usage_line = _assistant_line(2, 1103, 189997)  # total 191102 -> ~95%
-    # Keep the file's raw byte size small so the OLD byte-proxy formula would
-    # have estimated well under the critical threshold for this same content.
-    lines = [model_line, usage_line]
-    transcript.write_text("\n".join(lines) + "\n")
-
-    session_id = "test-session-usage-critical"
-    _bypass_throttle(session_id)
-
-    # Sanity-check the scenario: byte-proxy-derived pct must be well below 95%,
-    # while the usage-derived pct correctly reports >= the 50% critical threshold.
-    file_size = transcript.stat().st_size
-    context_window = 200_000
-    byte_proxy_pct = file_size * 100 // (context_window * 7)
-    assert byte_proxy_pct < 50
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result != ""
-    assert "measured from the transcript's own Anthropic API usage blocks" in result
-    assert "byte-based proxy" not in result
-    usage_tokens = 191102
-    expected_pct = usage_tokens * 100 // context_window
-    assert expected_pct >= 50
-    assert f"~{expected_pct}%" in result
-    assert "CONTEXT PRESSURE — HIGH" in result
-
-
-def test_check_context_pressure_no_usage_no_advisory_under_threshold(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-4-5-20250929"})
-    # Light, prose-heavy content -- no usage block, small file size.
-    user_line = json.dumps({"type": "user", "message": {"content": "just chatting"}})
-    transcript.write_text("\n".join([model_line, user_line]) + "\n")
-
-    session_id = "test-session-light-no-advisory"
-    _bypass_throttle(session_id)
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result == ""
-
-
-def test_check_context_pressure_fallback_fails_loud_not_a_percentage(tmp_path):
-    """C1(a): the old 7-bytes/token proxy is gone. When no usage block is found,
-    a large-enough transcript gets an explicit "can't measure this" disclosure --
-    never a confident (and historically ~2x wrong) percentage."""
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-4-5-20250929"})
-    # No usage block anywhere. Build a file large enough to cross the old
-    # byte-proxy critical threshold: context_window(200_000) * 50% * 7 bytes/token
-    # = 7_000_000 bytes -- that threshold is now used only as a "worth
-    # mentioning at all" size gate, never to compute a displayed percentage.
-    context_window = 200_000
-    bytes_per_token = 7
-    critical_pct = 50
-    critical_bytes = context_window * critical_pct * bytes_per_token // 100
-    filler_line = json.dumps({"type": "user", "message": {"content": "x" * 500}})
-    lines = [model_line]
-    # Each filler line is > 500 bytes; pad comfortably past critical_bytes.
-    needed_lines = (critical_bytes // len(filler_line)) + 10
-    lines.extend([filler_line] * needed_lines)
-    transcript.write_text("\n".join(lines) + "\n")
-
-    assert transcript.stat().st_size >= critical_bytes
-
-    session_id = "test-session-fallback-fails-loud"
-    _bypass_throttle(session_id)
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result != ""
-    assert "CONTEXT PRESSURE — UNKNOWN" in result
-    assert "cannot be measured" in result
-    assert "no Anthropic API usage block was found" in result
-    # No percentage of any kind is fabricated for this path.
-    assert "%" not in result
-    assert "byte-based proxy" not in result
-    assert "measured from the transcript's own Anthropic API usage blocks" not in result
 
 
 def test_check_context_pressure_fallback_bark_once_per_transcript(tmp_path):
@@ -592,9 +146,12 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
 
     # "Invocation" 1: no prior state on disk anywhere for this session, so the
     # throttle does NOT suppress -- the real check runs and persists
-    # throttle_last_check as a side effect.
+    # throttle_last_check as a side effect. No sidecar is present in tmp_path,
+    # so the sidecar-sourced path reports UNKNOWN rather than "" -- that is
+    # the measurement outcome, not a throttle outcome; what this test isolates
+    # is that the check ran at all (as opposed to being throttled away).
     first = pad._check_context_pressure_sync(session_id, str(transcript))
-    assert first == ""  # light content -- nothing crosses a threshold
+    assert "CONTEXT PRESSURE — UNKNOWN" in first
 
     state_path = pad._advisory_state_path(tempfile.gettempdir(), session_id)
     assert os.path.isfile(state_path)

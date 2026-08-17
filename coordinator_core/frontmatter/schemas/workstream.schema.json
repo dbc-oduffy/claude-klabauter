@@ -4,7 +4,7 @@
   "x-schema-name": "workstream",
   "x-schema-version": "1.0.0",
   "applies_to": "state/workstreams/*.yaml",
-  "description": "Workstream definition — one per-entry file per strategic workstream in the render-from-queue project-tracker store. Rewritten atomically (write-temp + rename, single writer, low-contention assumption); status/deliverable-completion mutations are field-scoped events (see workstream-event.schema.json), never in-place definition edits. Spec backlink: DoE-claude:pln-project-tracker-render-from-qu-41e413 § Approach / § Substrate (definitions) / § Chunks C2.",
+  "description": "Workstream definition — one per-entry file per strategic workstream in the workstream store, which is queried directly; the markdown render it once fed is retired. Rewritten atomically (write-temp + rename, single writer, low-contention assumption); status/deliverable-completion mutations are field-scoped events (see workstream-event.schema.json), never in-place definition edits. Spec backlink: pln-project-tracker-render-from-qu-41e413 § Approach / § Substrate (definitions) / § Chunks C2.",
   "type": "object",
   "required": ["workstream_id", "title", "created", "coordinator_root_path"],
   "properties": {
@@ -14,7 +14,7 @@
     },
     "title": {
       "type": "string",
-      "description": "Human-readable workstream name, as rendered in docs/project-tracker.md's numbered-list heading."
+      "description": "Human-readable workstream name for this workstream entry."
     },
     "created": {
       "type": "string",
@@ -23,7 +23,7 @@
     },
     "coordinator_root_path": {
       "type": "string",
-      "description": "Dual-tenant discriminator — the git root path of the repo this workstream belongs to. Folded from claude-klabauter-em constraints memo (2026-07-08): the physical directory <claude-klabauter>/state/workstreams/ is dual-tenant when the git root is the meta-repo (co-mingles the meta-repo's routed workstreams with claude-klabauter's own). The generator (C3) filters by this field so each repo's render includes ONLY its own entries — never the co-tenant's. Same discriminator vocabulary claude-klabauter's trackers.py already uses (composite-natural-key component)."
+      "description": "Dual-tenant discriminator — the git root path of the repo this workstream belongs to. Folded from claude-klabauter-em constraints memo: the physical directory <claude-klabauter>/state/workstreams/ is dual-tenant when the git root is the meta-repo (co-mingles the meta-repo's routed workstreams with claude-klabauter's own). The generator (C3) filters by this field so each repo's render includes ONLY its own entries — never the co-tenant's. Same discriminator vocabulary claude-klabauter's trackers.py already uses (composite-natural-key component)."
     },
     "deliverables": {
       "type": "array",
