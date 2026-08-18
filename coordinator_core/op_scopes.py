@@ -738,6 +738,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # to resolve cross-repo/archive/<filename> for each of the 34 backfill-table
     # entries. Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C5
     "fleet.backfill_dispositionless_memos":  "common_dir",
+    # fleet.backfill_reference_edges — same "common_dir" keying: the handler
+    # derives the worktree via main_worktree_root(common_dir) to walk
+    # docs/plans/ and state/handoffs/ and stamp `references:` edges.
+    # Spec: docs/plans/2026-08-18-a-session-always-has-a-baton.md § D-D, chunk C7
+    "fleet.backfill_reference_edges":        "common_dir",
     # session.commits — keyed on git_common_dir (worktree derived via
     # main_worktree_root(common_dir), same convention as ceremony.wsc_tail /
     # resolve_session_branches): resolves a session_id's attributed commits

@@ -47,6 +47,23 @@ the chunk, not a detail):
     Backstop 2: the cold path is a SUCCESS path -- nothing in this
         preamble may fail in a way that fails the op.
 
+Caller-identity seam: `_caller_session_id()` resolves THIS client process's
+own session id (`coordinator_core.session.core.resolve_session_id()`) --
+cold, in the true caller's own environment, before the request ever
+crosses the pipe -- and the request carries it beside `_engine_token` under
+`_session_id`, mirroring that field's own naming and "absent means
+degrade, never fabricate" handling. Exists to close the warm-engine
+identity-attribution defect (state/bug-backlog/2026-08-18-a-warm-server-
+stamps-every-op-it-serves-eeb801fc6bee.yaml): a long-lived warm server's
+own `os.environ` reflects whoever SPAWNED it, not the caller of any given
+request, so identity must cross the wire explicitly rather than being
+re-resolved server-side. Unresolvable (empty string) is omitted from the
+request entirely, never sent as `""` or fabricated -- the server-side
+`session.core.session_identity_override` no-ops on absence exactly like
+`resolve_session_id()`'s own env chain does today, so an older client (or
+a caller this process cannot identify) degrades to the server's
+pre-existing behaviour, not a broken one.
+
 Engine-token seam: `engine_token()` is a placeholder. C16 ("Version tokens
 and skew eviction", dispatched after this chunk) owns computing the real
 skew-signal value and is free to replace this function's body outright.
@@ -157,6 +174,21 @@ def engine_token() -> str:
         return "unversioned"
 
 
+def _caller_session_id() -> str:
+    """This client process's own resolved session id, cold, in its own
+    (true-caller) environment -- see module docstring's "Caller-identity
+    seam". Never raises: `resolve_session_id()` itself never raises (its
+    own docstring), and an import failure here is treated identically to
+    "unresolvable" so this preamble never fails the op over an identity
+    lookup (Backstop 2)."""
+    try:
+        from coordinator_core.session.core import resolve_session_id
+
+        return resolve_session_id()
+    except Exception:
+        return ""
+
+
 def _spawn_once() -> None:
     """Best-effort spawn on the FileNotFoundError trigger, gated to at most
     one attempt per client process (Backstop 1). See module docstring's
@@ -239,6 +271,9 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
 
     pipe = election.pipe_name(engine_token())
     request = {**msg, "_engine_token": engine_token()}
+    caller_sid = _caller_session_id()
+    if caller_sid:
+        request["_session_id"] = caller_sid
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
 
     # At most 2 attempts: the original open, plus the table's single

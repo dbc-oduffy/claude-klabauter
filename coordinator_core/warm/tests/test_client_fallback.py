@@ -249,3 +249,34 @@ def test_pipe_handle_always_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
     client.try_warm_dispatch(_MSG)
     assert fake.closed is True
+
+
+def test_request_payload_carries_the_callers_resolved_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """C-warm-identity: the client resolves ITS OWN (true-caller)
+    environment, cold, and attaches it beside `_engine_token` -- this is
+    the sole place identity crosses the wire; the server never re-resolves
+    it from its own environment (state/bug-backlog/2026-08-18-a-warm-
+    server-stamps-every-op-it-serves-eeb801fc6bee.yaml)."""
+    monkeypatch.setattr(client, "_caller_session_id", lambda: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    fake = _FakePipe()
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
+    client.try_warm_dispatch(_MSG)
+    sent = json.loads(fake.written[0].decode("utf-8"))
+    assert sent["_session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def test_request_payload_omits_session_id_when_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unresolvable identity (`_caller_session_id()` returns "") must be
+    OMITTED from the request, never sent as an empty string or fabricated
+    -- the server-side no-op fallback keys on the field's absence."""
+    monkeypatch.setattr(client, "_caller_session_id", lambda: "")
+    fake = _FakePipe()
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
+    client.try_warm_dispatch(_MSG)
+    sent = json.loads(fake.written[0].decode("utf-8"))
+    assert "_session_id" not in sent
+
+
+def test_caller_session_id_resolves_via_session_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    assert client._caller_session_id() == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"

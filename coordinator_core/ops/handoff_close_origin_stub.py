@@ -170,19 +170,23 @@ Negative-spec (hard-won):
     ``coordinator-handoff-archive.sh --stamp-only`` exactly. Archival is a
     separate, later concern (fleet.archive_shipped_handoffs / boot_sweep).
   - Does NOT fall back to a branch-tip SHA when no ``sha`` param is supplied
-    — mirrors ``handoff_ship_archive.py``'s explicit choice (its
-    negative-spec: "Does NOT fall back to a branch-tip SHA"). The bash's
-    ``stamp_shipped_in --allow-branch-tip-fallback`` + Session-Id-trailer
-    sibling-session-correction walk has NO Python primitive on disk to
-    compose (no existing op accepts a session_id and performs a
-    ``git show --format=%(trailers:key=Session-Id)`` walk) — reimplementing
-    that walk here would violate "compose, don't reimplement." ``session_id``
-    is therefore accepted (per the port proposal's param contract) but
-    currently UNUSED; a caller wanting ``shipped_in`` stamped must supply the
-    optional ``sha`` param directly (mirrors ``handoff.ship_and_archive``'s
-    caller contract, not ``handoff.stamp``'s — the proposal's claim that
-    session_id "mirrors handoff.stamp's caller contract" does not hold
-    against disk: ``handoff.stamp`` has no ``session_id`` param at all).
+    and no session-derived sha resolves — mirrors ``handoff_ship_archive.py``'s
+    explicit choice (its negative-spec: "Does NOT fall back to a branch-tip
+    SHA"). Absence of evidence is not a fallback: a session-derived sha is
+    used ONLY when the session's own commit set (via
+    ``ops.session_commits :: resolve_session_commits``, C4/C5,
+    docs/plans/2026-08-18-a-session-always-has-a-baton.md) contains a commit
+    that touched the stub's own path — never a branch-tip guess, and never a
+    commit that merely postdates the session. When ``session_id`` is
+    supplied but resolves no such commit for a given stub, ``shipped_in`` is
+    left unstamped for that stub exactly as it was before this leg existed
+    (graceful partial, same choice ``handoff_ship_archive.py`` makes). An
+    explicit ``sha`` param, when supplied, always wins over the
+    session-derived resolution — it is a stronger, caller-asserted claim.
+    ``session_id`` therefore is USED now (see ``_session_derived_sha``),
+    closing the gap the port proposal's param contract left open (mirrors
+    ``handoff.ship_and_archive``'s caller contract, not ``handoff.stamp``'s —
+    ``handoff.stamp`` has no ``session_id`` param at all).
   - Does NOT walk the baton-walk leg off ``plan_path`` — plans
     (``docs/plans/*.md``) are not part of the handoff DAG (``walk_forward``
     only knows ``state/handoffs/`` + ``archive/handoffs/`` nodes). A
@@ -248,6 +252,9 @@ from coordinator_core.ops.handoff_children import (
 )
 from coordinator_core.ops.handoff_stamp import _handler as _stamp_handler
 from coordinator_core.ops.handoff_transition import _ship
+from coordinator_core.ops.session_commits import (
+    resolve_session_commits as _resolve_session_commits_primitive,
+)
 from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
@@ -811,6 +818,38 @@ async def _scan_matches(
 
 
 # ---------------------------------------------------------------------------
+# session_id-derived sha resolution (C5 continuation; see module docstring)
+# ---------------------------------------------------------------------------
+
+
+def _session_derived_sha(
+    session_commits: Optional[List[dict]], stub_rel_path: str
+) -> str:
+    """Resolve the shipping-commit sha for ``stub_rel_path`` from the
+    session's own commit set, or ``""`` when none touched it.
+
+    Preserves this op's negative-spec verbatim: absence of evidence is not a
+    fallback. Never a branch-tip guess — only a real commit, in
+    ``session_commits``, whose own ``touched_paths`` names this exact stub
+    path. When more than one session commit touched the stub, the MOST
+    RECENT one wins (``session_commits`` is oldest-first per
+    ``resolve_session_commits``'s own contract, so this scans in reverse) —
+    the last commit to touch the stub's path is the one that shipped it.
+
+    ``session_commits`` is ``None`` when no ``session_id`` was supplied, or
+    the primitive could not resolve one (either reads as "nothing to derive
+    from" here, never an error — the caller falls back to today's exact
+    unstamped behaviour).
+    """
+    if not session_commits:
+        return ""
+    for commit in reversed(session_commits):
+        if stub_rel_path in commit.get("touched_paths", ()):
+            return commit["sha"]
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Stamp-only close (guard + optional shipped_in stamp + ship verb)
 # ---------------------------------------------------------------------------
 
@@ -1035,13 +1074,21 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      the consumed/execution handoff (must resolve under
                      state/handoffs/ or archive/handoffs/). Required for the
                      baton-walk join leg (§2) — plans are not DAG nodes.
-        session_id   (str, optional) — accepted per the port proposal's param
-                     contract; currently UNUSED (see module negative-spec).
+        session_id   (str, optional) — when `sha` is absent, used to resolve
+                     the session's own commit set (`ops.session_commits`)
+                     and derive a per-stub shipping sha from the most recent
+                     session commit that touched that stub's own path (see
+                     `_session_derived_sha`). No such commit -> that stub's
+                     shipped_in stamp is skipped exactly as it was before
+                     this leg existed — never a branch-tip fallback (module
+                     negative-spec).
         sha          (str, optional) — shipping-commit SHA to stamp as
                      shipped_in on each closed stub, when the field is
-                     absent (idempotent). Absent -> shipped_in stamp is
-                     skipped (graceful partial, mirrors
-                     handoff.ship_and_archive's negative-spec).
+                     absent (idempotent). Takes precedence over any
+                     session_id-derived sha. Absent (and no session-derived
+                     sha resolves) -> shipped_in stamp is skipped (graceful
+                     partial, mirrors handoff.ship_and_archive's
+                     negative-spec).
         delivery_proof (dict, optional) — a completed delivery proof for the
                      CLOSING plan, letting a positive, complete delivery
                      proof close the origin stub directly instead of relying
@@ -1182,10 +1229,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     plan_path = (params.get("plan_path") or "").strip()
     handoff_path = (params.get("handoff_path") or "").strip()
-    # session_id accepted per the port proposal's param contract; currently
-    # unused — see module negative-spec for why (no Python primitive on disk
-    # to compose the bash's Session-Id-trailer sibling-session-correction walk).
-    _session_id_unused = (params.get("session_id") or "").strip()  # noqa: F841
+    session_id = (params.get("session_id") or "").strip()
     sha = (params.get("sha") or "").strip()
     delivery_proof = params.get("delivery_proof")
     if not isinstance(delivery_proof, dict):
@@ -1206,6 +1250,28 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     handoffs_dir = worktree / "state" / "handoffs"
     archive_dir = worktree / "archive" / "handoffs"
     plans_dir = worktree / "docs" / "plans"
+
+    # session_id-derived sha resolution (C5 continuation; see module
+    # docstring and `_session_derived_sha`). Only consulted per-stub when no
+    # explicit `sha` param was supplied — an explicit sha always wins.
+    # Resolved once, lazily, at most one `session.commits` call for this
+    # whole request regardless of how many stubs end up closed.
+    session_commits: Optional[List[dict]] = None
+    if not sha and session_id:
+        try:
+            session_commits = _resolve_session_commits_primitive(worktree, session_id)
+        except (ValueError, RuntimeError) as exc:
+            _LOG.warning(
+                "handoff.close_origin_stub: session.commits primitive failed "
+                "for session_id=%r — no session-derived sha available: %s",
+                session_id, exc,
+            )
+            session_commits = None
+
+    def _sha_for(stub_path: Path) -> str:
+        if sha:
+            return sha
+        return _session_derived_sha(session_commits, rel_id(stub_path, worktree))
 
     pairs: List[Tuple[str, str, str]] = []  # (roadmap_id, stub_id, join_source)
     seen: Set[Tuple[str, str]] = set()
@@ -1453,7 +1519,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             roadmap_id,
             stub_id,
             join_source,
-            sha,
+            _sha_for(matches[0]),
             guard_exclude,
             delivery_proof,
         )
@@ -1503,7 +1569,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             stub_rid_s or None,
             stub_sid_s or None,
             join_source,
-            sha,
+            _sha_for(stub_path),
             guard_exclude,
             delivery_proof,
         )

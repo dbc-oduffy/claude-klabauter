@@ -792,6 +792,60 @@ def test_ac13_post_commit_auto_push_not_replayed_on_failure(tmp_path, monkeypatc
     assert calls == []
 
 
+# ---------------------------------------------------------------------------
+# `commit_authored_content`'s own `attributed_session_id` -- the fourth
+# blind-`_resolve_session_id` site closed by this chunk (the same defect
+# `commit_scoped`/`_commit_scoped_private_index` already closed above,
+# state/bug-backlog/2026-08-18-scoped-git-commit-stamps-a-foreign-session-id-
+# 8d21f0c4e7b9.yaml -- carried over to this sibling entrypoint's own
+# `compute_missing_trailer_args` call, which had none of `commit_scoped`'s
+# `session_id_override` threading until now).
+# ---------------------------------------------------------------------------
+
+
+def test_commit_authored_content_attributed_session_id_wins_over_ambient_env(tmp_path, monkeypatch):
+    """`commit_authored_content()`'s trailer-replay call must stamp the
+    CALLER's own resolved identity, not whatever this process's ambient env
+    happens to hold -- the same split `commit_scoped`'s own AGREE/diverged
+    branches already close, mirrored here for this sibling entrypoint."""
+    repo = real_git_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "baseline"], repo)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SESSION_B)
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_authored_content(
+        "file.txt", "NEW CONTENT\n", msg_file, repo, attributed_session_id=_SESSION_A
+    )
+
+    assert result.ok, result.stderr
+    sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert _trailer_lines(repo, sha, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]
+
+
+def test_commit_authored_content_attributed_session_id_none_is_byte_identical_to_default(
+    tmp_path, monkeypatch
+):
+    """`attributed_session_id=None` (the default) must reproduce the prior
+    blind env-var resolution exactly -- every pre-existing call in this file
+    omits the kwarg and is left unmodified by this change."""
+    repo = real_git_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "baseline"], repo)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SESSION_A)
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_authored_content(
+        "file.txt", "NEW CONTENT\n", msg_file, repo
+    )
+
+    assert result.ok, result.stderr
+    sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert _trailer_lines(repo, sha, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]
+
+
 def test_wrong_known_diverged_trusts_caller_and_commits_worktree_content(tmp_path):
     """Documents the trust boundary explicitly (code review: "ideally a
     case where a caller passes a WRONG known_diverged"). `file.txt` is

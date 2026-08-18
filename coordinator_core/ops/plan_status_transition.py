@@ -673,6 +673,19 @@ def _commit_plan_flip(
 
     Returns the raw ``GitResult`` -- the caller decides how a failure maps
     to this CLI's own exit code (see _stamp_implemented).
+
+    Attribution (state/bug-backlog/2026-08-18-scoped-git-commit-stamps-a-
+    foreign-session-id-8d21f0c4e7b9.yaml): no caller of this function has a
+    trusted, caller-resolved session identity to hand it -- ``_stamp_
+    implemented``'s own ``--by`` flag is rejected outright by ``main()``
+    before ``_stamp_implemented`` ever runs (an unauthenticated session-id
+    override would let a caller disarm ``_refuse_if_live_foreign_holder``'s
+    own-session check), and the other verbs' ``--by`` flags mean something
+    else entirely (``_stamp_superseded``'s is a PLAN PATH, not a session
+    id) or have no override at all (``_stamp_reopened``). This function
+    therefore never passes ``attributed_session_id`` to
+    ``commit_authored_content`` and falls through to that function's own
+    blind env-var read, same as every other caller of it.
     """
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -681,7 +694,7 @@ def _commit_plan_flip(
         msg_path = fh.name
     try:
         return git_native.commit_authored_content(
-            relpath, content, msg_path, worktree_root, deliverable_id=deliverable_id
+            relpath, content, msg_path, worktree_root, deliverable_id=deliverable_id,
         )
     finally:
         try:
@@ -1279,7 +1292,7 @@ def _stamp_implemented(opts: _Opts) -> int:
                 f"{_PROG}: stamp status (resumed) {_state['prior_status']} on {relpath}\n"
             )
             commit_result = _commit_plan_flip(
-                worktree_root, relpath, message, resume_content, _state["deliverable_id"]
+                worktree_root, relpath, message, resume_content, _state["deliverable_id"],
             )
             if not commit_result.ok:
                 print(
@@ -1322,7 +1335,7 @@ def _stamp_implemented(opts: _Opts) -> int:
             # interpreter. Same event, two different portability requirements.
             message = f"{_PROG}: stamp status \"{_state['prior_status']}\" -> implemented on {relpath}\n"
             commit_result = _commit_plan_flip(
-                worktree_root, relpath, message, written_text, _state["deliverable_id"]
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
             )
             if not commit_result.ok:
                 print(

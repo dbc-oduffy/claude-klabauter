@@ -652,6 +652,79 @@ def test_agree_branch_session_id_trailer_not_duplicated_when_hook_also_stamps(tm
     assert message.count("Session-Id:") == 1
 
 
+def test_handler_attributes_each_commit_to_its_own_invoker_session_id(tmp_path, monkeypatch):
+    """End-to-end pin for the full `_handler -> run_commit_pipeline ->
+    commit() -> commit_scoped()` chain (c425e181fa1a, `attributed_session_id`
+    threading; code-reviewer warn on that landed diff -- the prior tests in
+    this file and in `test_commit_scoped.py` pin `session_id_override` at the
+    `commit_trailers` layer and `attributed_session_id` at the `git_native.
+    commit_scoped()` layer directly, but nothing before this test drove the
+    op HANDLER itself, which is exactly where the original defect
+    manifested: `owner_session_id` was resolved correctly in `_handler` and
+    then simply never threaded down. `attributed_session_id=owner_session_id`
+    is currently a single keyword pass-through at `_handler`'s own
+    `run_commit_pipeline(...)` call site (see that call, and `commit()`'s own
+    forwarding into `commit_scoped()`) -- pinned by nothing until this test,
+    so a rename or a dropped kwarg anywhere in that chain would regress
+    silently.
+
+    Two sessions, overlapping dirty paths (both `a.txt` and `b.txt` are
+    dirty on disk for BOTH calls below -- the shape the incident needs: an
+    ambient env fallback that leaked in for either call would pick up the
+    SAME wrong identity for both, not two correctly-differing ones). The
+    ambient env is deliberately set to a THIRD, wrong identity that must
+    never appear in either trailer. Each call commits only its own explicit
+    pathspec via `params["session_id"]` (never the ambient env), and each
+    landed commit's `Session-Id:` trailer names its own invoker only.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "00000000-0000-0000-0000-000000000000")
+
+    session_a = "903044ef-72b9-4549-a3df-6300e10b6b84"
+    session_b = "e77424be-b452-43bd-a995-e12d60168cb6"
+
+    _seed_file(repo, "a.txt", "from A\n")
+    _seed_file(repo, "b.txt", "from B\n")
+
+    result_a = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.txt"],
+            "message": "commit from session A",
+            "session_id": session_a,
+        }
+    )
+    assert result_a["committed"] is True
+    message_a = subprocess.run(
+        ["git", "log", "-1", "--format=%B", result_a["sha"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert f"Session-Id: {session_a}" in message_a
+    assert session_b not in message_a
+    assert "00000000-0000-0000-0000-000000000000" not in message_a
+
+    result_b = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["b.txt"],
+            "message": "commit from session B",
+            "session_id": session_b,
+        }
+    )
+    assert result_b["committed"] is True
+    message_b = subprocess.run(
+        ["git", "log", "-1", "--format=%B", result_b["sha"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert f"Session-Id: {session_b}" in message_b
+    assert session_a not in message_b
+    assert "00000000-0000-0000-0000-000000000000" not in message_b
+
+
 def test_agree_branch_explicit_deliverable_id_wins_and_appears_once(tmp_path, monkeypatch):
     """C7a precedence, now sharing this fix's `trailer_args` list with the
     Session-Id computation (`_drop_trailer_arg`-then-append shape, mirroring

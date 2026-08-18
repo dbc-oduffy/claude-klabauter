@@ -799,6 +799,46 @@ class TestScopedToShaResolvabilityGate:
         written = [f for f in inbox.iterdir() if f.name != ".gitkeep"]
         assert written == [], "a blob sha must write NOTHING into the receiver's tree"
 
+    def test_unresolvable_sha_refusal_names_the_frame_of_reference(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The refusal names WHOSE history the pin resolves against, not just
+        that it failed to resolve.
+
+        Negative spec: a sender who pinned their own commit reads a
+        frame-less "does not resolve" as "scoped_to.sha is unusable outbound"
+        and drops the field, when the correct repair is re-pinning at a commit
+        the receiver's clone contains. Routed via
+        cross-repo/inbox/2026-08-18-example-retrieval-repo-em-scoped-to-sha-refusal-
+        message-frame.md.
+        """
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        scoped_to = {
+            "artifact": "coordinator_core",
+            "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "seam": "memo_send",
+        }
+        params = {
+            **_base_params(dry_run=False, topic="sha-refusal-frame-test"),
+            "scoped_to": scoped_to,
+        }
+        with caplog.at_level("ERROR"):
+            result = _run(_memo_send(params))
+
+        assert result["exit_code"] != 0, f"an unresolvable sha must refuse: {result}"
+        text = caplog.text.lower()
+        assert "receiver's history" in text, (
+            f"the refusal must name the frame of reference, not only the "
+            f"failure: {caplog.text}"
+        )
+        assert "their clone contains" in text, (
+            f"the refusal must point at the real exit (re-pin at a commit the "
+            f"receiver has), not merely 'fix the sha': {caplog.text}"
+        )
+
     def test_unreachable_receiver_clone_degrades_to_advisory(self, tmp_path, monkeypatch):
         """A receiver clone this process cannot even query (no git repo at the
         registered path) is an ENVIRONMENT problem, not evidence the pin is

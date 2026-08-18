@@ -567,40 +567,50 @@ def _session_added_plans(
 
     git pathspec note: ``docs/plans/*.md`` — git * crosses /; harmless (flat dir).
 
-    C5 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5) deliberately
-    does NOT migrate this site onto C4's ``session.commits`` primitive: C4's
-    shape is a per-commit numstat/subject walk with no ``--diff-filter=A``
-    equivalent, so it cannot answer "which plan docs were ADDED (not merely
-    touched) since started_at" — the question this function asks. Its
-    ``--grep=Session-Id: {sid}`` anchoring already matches C4's chosen
-    unanchored form, so the two sites are anchor-consistent even though they
-    remain two separate git invocations.
+    C5 continuation (docs/plans/2026-08-18-a-session-always-has-a-baton.md
+    § C5): migrated onto C4's ``session.commits`` primitive now that it
+    exposes a per-file ``status`` alongside its numstat counts (``--raw``
+    composed alongside ``--numstat`` in the SAME invocation — see that
+    primitive's module docstring) — the added-status equivalent of
+    ``--diff-filter=A`` this site previously needed a second git call for —
+    plus a per-commit ``committer_epoch`` (``%ct``, same header line as
+    ``sha``/``subject``), the ``--since``-equivalent this function needs for
+    its temporal floor. Both are read off ONE ``_cached_session_commits``
+    call — no second git invocation. Filters in Python: ``status == "A"``
+    plus a ``docs/plans/`` prefix + ``.md`` suffix match (mirrors the
+    ``docs/plans/*.md`` pathspec — a flat dir, so no ``/`` crossing to guard
+    against) plus ``committer_epoch >= started_epoch`` (mirrors ``--since``,
+    which git evaluates as an inclusive floor on commit date).
 
     Spec backlink:
       docs/plans/2026-07-06-wsc-resolve-consume-doe-signals-x-to-d.md § C1
+      docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5
     """
-    result = _git_run(
-        [
-            "log",
-            "--diff-filter=A",
-            f"--since={started_at}",
-            f"--grep=Session-Id: {sid}",
-            "--name-only",
-            "--format=",
-            "--",
-            "docs/plans/*.md",
-        ],
-        cwd=worktree_root,
-    )
-    if result.returncode != 0:
+    try:
+        started_epoch = datetime.fromisoformat(
+            (started_at or "").replace("Z", "+00:00")
+        ).timestamp()
+    except (ValueError, AttributeError):
         return []
+
+    commits = _cached_session_commits(str(worktree_root), sid)
+    if commits is None:
+        return []
+
     seen: set[str] = set()
     paths: list[str] = []
-    for line in result.stdout.splitlines():
-        p = line.strip()
-        if p and p not in seen:
-            seen.add(p)
-            paths.append(p)
+    for commit in commits:
+        if commit.get("committer_epoch", 0) < started_epoch:
+            continue
+        for f in commit["files"]:
+            if f.get("status") != "A":
+                continue
+            path = f["path"]
+            if not (path.startswith("docs/plans/") and path.endswith(".md")):
+                continue
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
     return paths
 
 

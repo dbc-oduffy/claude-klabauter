@@ -82,7 +82,13 @@ nesting is safe by `session.declared_writes.collecting()`'s own contract.
 Binding explicitly here, rather than relying solely on path 1's internal
 convergence, is deliberate: it is what makes this module's own per-request
 scoping visible and testable at the boundary this row owns, independent of
-`ipc.py`'s internals ever changing.
+`ipc.py`'s internals ever changing. As of C-warm-identity, `per_request_
+state` ALSO binds the calling session's identity for the same scope (`_serve_
+line` pops `_session_id` off the request and threads it through) -- this
+server process's OWN environment (whoever spawned it) must never leak into
+`session.core.resolve_session_id()` for a request some OTHER session sent;
+see `session.core.session_identity_override`'s docstring for the full
+defect this closes.
 
 NEVER FAIL A CALLER. Every fault below the frame-parse boundary --
 malformed JSON, a non-object frame, a raised handler exception -- returns a
@@ -222,7 +228,7 @@ def _parse_frame(raw_line: bytes) -> dict:
     return msg
 
 
-def _run_dispatch(msg: dict) -> dict:
+def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     """Invoke the existing engine core for one already-parsed JSON-RPC
     request -- the SOLE process-level dispatch chokepoint
     (`coordinator_core.ipc.dispatch_message`'s own docstring), never a
@@ -235,12 +241,20 @@ def _run_dispatch(msg: dict) -> dict:
     "TRANSPORT MODEL"), so a per-call event loop needs no cross-thread
     scheduling and leaves no shared loop state for the next request on this
     thread, or any other connection's thread, to inherit.
+
+    `session_id`, when given (the caller's own resolved identity, carried
+    over the wire as the request's `_session_id` field and popped by
+    `_serve_line` before this call), is bound for the duration of the
+    dispatch via `per_request_state`'s own `session_id` parameter -- see
+    that seam's docstring for the full identity-attribution defect this
+    closes. `None` (no identity carried) is a no-op bind, reproducing
+    today's server-resolves-its-own-env behaviour exactly.
     """
     import asyncio
 
     from coordinator_core.ipc import dispatch_message
 
-    with per_request_state():
+    with per_request_state(session_id=session_id):
         return asyncio.run(dispatch_message(msg))
 
 
@@ -253,7 +267,7 @@ def _serve_line(
     close_listener: Callable[[], None],
     drain: Callable[[], None],
     release_in_flight: Callable[[], None],
-    dispatch: Callable[[dict], dict] = _run_dispatch,
+    dispatch: Callable[..., dict] = _run_dispatch,
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[[str], None] = lambda reason: None,
@@ -269,6 +283,14 @@ def _serve_line(
     which is what lets a skew-triggered `drain()` observe this request as
     already-released rather than deadlocking on its own count) and have the
     connection thread's own cleanup call it again as a no-op safety net.
+
+    Pops `_session_id` (the caller's own resolved identity, set by
+    `warm.client._try_warm_dispatch_inner`) off `msg` the same way
+    `_engine_token` is already popped, and passes it through to `dispatch`
+    as a `session_id=` kwarg -- `_run_dispatch`'s own docstring covers the
+    bind/no-op contract from there. Absent (older client, or a caller
+    `resolve_session_id()` could not identify) is `None`, which is a no-op
+    bind, not a fabricated identity.
 
     `mark_invocation` runs for EVERY frame this function is handed,
     including a skew-evicting one -- `warm.idle`'s own module docstring
@@ -299,6 +321,7 @@ def _serve_line(
 
     request_id = msg.get("id")
     client_token = msg.pop("_engine_token", None)
+    caller_session_id = msg.pop("_session_id", None)
 
     if client_token is not None and version_state.is_skewed(client_token):
         record_exit(telemetry.EXIT_REASON_SKEW)
@@ -313,7 +336,7 @@ def _serve_line(
         return
 
     try:
-        response = dispatch(msg)
+        response = dispatch(msg, session_id=caller_session_id)
     except Exception as exc:  # noqa: BLE001 -- never fail the caller, see module docstring
         response = {
             "jsonrpc": "2.0",
@@ -332,7 +355,7 @@ def _handle_connection(
     close_listener: Callable[[], None],
     drain: Callable[[], None],
     in_flight: InFlightCounter,
-    dispatch: Callable[[dict], dict] = _run_dispatch,
+    dispatch: Callable[..., dict] = _run_dispatch,
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[[str], None] = lambda reason: None,

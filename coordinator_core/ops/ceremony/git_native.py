@@ -2838,6 +2838,7 @@ def commit_authored_content(
     cwd: Union[str, Path],
     *,
     deliverable_id: Optional[str] = None,
+    attributed_session_id: Optional[str] = None,
 ) -> GitResult:
     """Commit EXACTLY `content` at `path`, reading no worktree state on
     `path` at any point (DR-272 § 3.3 bound 2) -- the sibling entrypoint to
@@ -2898,6 +2899,20 @@ def commit_authored_content(
 
     File mode is preserved from `HEAD`'s existing tree entry for `path` --
     this entrypoint never changes a file's executable bit; only its content.
+
+    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, passed
+    straight through to `compute_missing_trailer_args`'s own
+    `session_id_override`, same contract `commit_scoped`/
+    `_commit_scoped_private_index` already carry (see their own docstrings).
+    `None` (the default) reproduces the prior blind
+    `session_core.resolve_session_id()` env-var resolution byte-for-byte --
+    every caller not yet updated to pass its own already-resolved identity
+    sees no behaviour change. A caller that has one (e.g. an explicit
+    `session_id`/`closed_by` request param) should pass it here rather than
+    let this function's own `compute_missing_trailer_args` call re-derive
+    the committer's identity a second, independent way -- the same
+    disagreeing-copies hazard `commit_scoped`'s own docstring names.
 
     Returns a `GitResult`; on success `stdout` carries the new commit SHA
     (matching `_commit_scoped_private_index`'s own contract). Failure
@@ -3003,7 +3018,10 @@ def commit_authored_content(
         # the session/claimed-plan tiers, never the artifact-first tier that
         # reads a committed path) -- passing `paths=[normalized]` here would
         # reintroduce exactly the worktree read this bound forbids.
-        trailer_args = compute_missing_trailer_args(msg_file, root, paths=None)
+        trailer_args = compute_missing_trailer_args(
+            msg_file, root, paths=None,
+            session_id_override=attributed_session_id,
+        )
         msg_text_before = Path(msg_file).read_text(encoding="utf-8")
         message_already_has_deliverable_trailer = "Deliverable-Id:" in msg_text_before
         if deliverable_id:

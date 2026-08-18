@@ -55,13 +55,22 @@ meant to replace (`branch_resolution.py`'s `_session_commit_log` /
 `git log -1` loop). That is C5 — deliberately a separate chunk so a
 regression is bisectable to the migration rather than to this primitive.
 
+Per-file add-status (follow-up to C5, same plan): `files[i].status` composes
+`--raw` alongside `--numstat` in the SAME invocation — git emits both diff
+formats, in the same per-file order, for one walk, so this is a second
+FORMAT of the one walk, not a second git call. This is what lets
+`_session_added_plans` (`branch_resolution.py`) migrate onto this primitive
+too: it needs to tell a file ADDED by a commit apart from one merely
+touched, which the numstat-only shape could not answer.
+
 Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C4
 
 Negative-spec (hard-won):
   - Does NOT spawn one `git` invocation per commit — the whole point of the
     primitive (see `handoff_close_origin_stub.py`'s and `coverage.py`'s
-    un-batched loops this replaces) is ONE `git log --numstat` call whose
-    output already interleaves subject + numstat per commit.
+    un-batched loops this replaces) is ONE `git log` call, composing
+    `--raw` and `--numstat` as two output formats of that same walk, whose
+    output already interleaves subject + raw status + numstat per commit.
   - Does NOT use `--grep=...$` (the anchored-both-ends form) — see the
     anchoring resolution above; that form is a documented under-count.
   - Does NOT accept a session_id that resolves to `--all`/no scoping — an
@@ -120,15 +129,31 @@ def resolve_session_commits(
             {
               "sha": str,
               "subject": str,
+              "committer_epoch": int,       # %ct, from the same header line
               "touched_paths": List[str],   # deduped, insertion order
               "added": int,                 # total insertions, this commit
               "deleted": int,                # total deletions, this commit
               "files": [{"path": str, "added": Optional[int],
-                         "deleted": Optional[int]}, ...],
+                         "deleted": Optional[int], "status": Optional[str]},
+                        ...],
             }
+        `committer_epoch` is read off the same per-commit header line as
+        `sha`/`subject` (`%ct` in the `--format=` string) — no per-commit
+        date lookup, and what lets a caller like `_session_added_plans`
+        (`branch_resolution.py`) apply its own `--since`-equivalent floor
+        without a second git call.
         `files[i].added`/`deleted` is `None` for a binary row (git numstat
         emits `-` for both columns on a binary diff); that commit's
         `added`/`deleted` totals only sum resolvable (non-binary) rows.
+        `files[i].status` is the single-letter `git log --raw` change-type
+        code for that row (`"A"` added, `"M"` modified, `"D"` deleted, `"R"`
+        renamed, `"C"` copied, ...; a rename/copy score suffix like `R100` is
+        truncated to its leading letter) from the SAME invocation as the
+        numstat counts (`--raw` composed alongside `--numstat` — git emits
+        both diff formats, in the same per-file order, for one walk; no
+        second git call). `None` when the raw/numstat row counts for a
+        commit diverge (defensive — should not happen for a non-merge
+        commit) and no status could be paired with that file row.
         `[]` when `session_id` is attributable but matched zero commits —
         a real, representable answer, never conflated with a git failure.
 
@@ -149,8 +174,9 @@ def resolve_session_commits(
         "log",
         "--reverse",
         f"--grep=^Session-Id: {sid}",
+        "--raw",
         "--numstat",
-        f"--format={_HEADER_SENTINEL}%H{_FIELD_SEP}%s",
+        f"--format={_HEADER_SENTINEL}%H{_FIELD_SEP}%ct{_FIELD_SEP}%s",
     ]
     if commit_range:
         args.append(commit_range)
@@ -165,29 +191,57 @@ def resolve_session_commits(
     commits: List[Dict[str, Any]] = []
     current: Optional[Dict[str, Any]] = None
     seen_paths: Optional[set] = None
+    pending_statuses: List[str] = []
 
     for line in result.stdout.splitlines():
         if line.startswith(_HEADER_SENTINEL):
-            sha, sep, subject = line[len(_HEADER_SENTINEL):].partition(_FIELD_SEP)
-            if not sep:
+            sha, sep, rest = line[len(_HEADER_SENTINEL):].partition(_FIELD_SEP)
+            ct_raw, sep2, subject = rest.partition(_FIELD_SEP)
+            if not sep or not sep2:
                 # Malformed/unsplit header (should not happen with a
                 # well-formed --format) — skip rather than guess.
                 current = None
                 seen_paths = None
                 continue
+            try:
+                committer_epoch = int(ct_raw)
+            except ValueError:
+                committer_epoch = 0
             current = {
                 "sha": sha,
                 "subject": subject,
+                "committer_epoch": committer_epoch,
                 "touched_paths": [],
                 "added": 0,
                 "deleted": 0,
                 "files": [],
             }
             seen_paths = set()
+            pending_statuses = []
             commits.append(current)
             continue
 
-        if current is None or seen_paths is None or not line.strip():
+        if current is None or seen_paths is None:
+            continue
+
+        if line.startswith(":"):
+            # --raw row: ":<old-mode> <new-mode> <old-sha> <new-sha> "
+            # "<status>[<score>]\t<path>[\t<path2>]" — <status> is the
+            # single-letter change-type code this function surfaces as
+            # files[i].status. Collected here, oldest-first per commit,
+            # then paired positionally with the --numstat rows below (git
+            # emits both diff formats in the same per-file order for one
+            # walk, so positional pairing needs no path-matching — load-
+            # bearing for a rename, whose --raw path and --numstat "old =>
+            # new" path text do not match verbatim).
+            meta = line[1:].split(None, 4)
+            if len(meta) == 5:
+                status_field = meta[4].split("\t", 1)[0]
+                if status_field:
+                    pending_statuses.append(status_field[0])
+            continue
+
+        if not line.strip():
             continue
 
         # --numstat row: "<added>\t<deleted>\t<path>" (binary: "-\t-\t<path>")
@@ -197,7 +251,10 @@ def resolve_session_commits(
         added_raw, deleted_raw, path = parts
         added = int(added_raw) if added_raw.isdigit() else None
         deleted = int(deleted_raw) if deleted_raw.isdigit() else None
-        current["files"].append({"path": path, "added": added, "deleted": deleted})
+        status = pending_statuses.pop(0) if pending_statuses else None
+        current["files"].append(
+            {"path": path, "added": added, "deleted": deleted, "status": status}
+        )
         if added is not None:
             current["added"] += added
         if deleted is not None:

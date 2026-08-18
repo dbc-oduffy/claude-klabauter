@@ -567,6 +567,50 @@ def _legacy_absent() -> None:
     )
 
 
+#: UUID-shape gate mirroring `coordinator_core.session.core._UUID_RE` /
+#: `coordinator_core.git.commit_trailers._UUID_RE` (each module keeps its own
+#: copy by established convention — see the former's docstring). Client-side
+#: validation here means this CLI never hands the op a malformed override and
+#: leans on `compute_missing_trailer_args`'s downstream "not UUID-shaped ->
+#: no override" leniency as its error handling.
+_SESSION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _resolve_own_session_id() -> str:
+    """Resolve THIS process's own session identity client-side, for passing
+    as an explicit `params["session_id"]` override on the op request (see
+    `_resolve_committing_session_id` in `ops/ceremony/scoped_git_commit.py`,
+    which already prefers a caller-supplied override to a downstream
+    `session_core.resolve_session_id(worktree_root)` re-resolution).
+
+    Cold-path re-resolution at the op's execution site is correct today, but
+    stops being sufficient once an op can execute inside a warm server
+    process serving a DIFFERENT session's request — the CLI stating its own
+    identity here, rather than leaving it to be inferred wherever the op
+    happens to run, survives that regardless of where execution lands.
+
+    Convention: mirrors `coordinator-queue-append.py::_resolve_session_id`
+    — fail-soft to "" on any resolution or import failure (no CLAUDE_KLABAUTER_ROOT,
+    no engine on path, no ambient session), which the caller treats as
+    "omit the param, let the op resolve it itself" — never a fabricated or
+    empty-string override. A resolved value that is not UUID-shaped is
+    likewise treated as unresolved, rather than forwarded for the op's own
+    leniency to silently discard.
+    """
+    try:
+        ensure_engine_on_path(os.path.abspath(__file__))
+        from coordinator_core.session.core import resolve_session_id
+
+        sid = resolve_session_id()
+    except Exception:  # noqa: BLE001 — fail-soft: omit the param, never fabricate one
+        return ""
+    if sid and _SESSION_ID_RE.fullmatch(sid):
+        return sid
+    return ""
+
+
 # Human renderings of the op's `push_state` tri-state. `unconfirmed` deliberately
 # does NOT read as a failure and names no corrective action: the commit is local,
 # the remote could not be read, and the reader's cheapest correct next move is to
@@ -884,6 +928,9 @@ def main(argv: list[str]) -> int:
         params["deliverable_id"] = deliverable_id
     if stage_patch is not None:
         params["stage_patch"] = stage_patch
+    session_id = _resolve_own_session_id()
+    if session_id:
+        params["session_id"] = session_id
     try:
         result = route_mutation(_OP, params, worktree_root, _legacy_absent)
     except RuntimeError as exc:

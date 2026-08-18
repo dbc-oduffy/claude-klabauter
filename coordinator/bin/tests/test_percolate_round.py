@@ -2320,24 +2320,32 @@ def _non_publish_call_kwargs(spy):
     ]
 
 
-def test_delta_is_passed_to_publish_by_default(tmp_path, monkeypatch):
+def test_delta_default_is_the_engine_s_not_forwarded_per_call(tmp_path, monkeypatch):
+    """PM ruling 2026-08-19: delta is `publish.py`'s own default, so no caller
+    has to remember to ask for it. The round therefore forwards NEITHER flag on
+    a default run — passing `--delta` here would just re-state the engine's
+    default, and every new caller would have to know to do the same."""
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
     publish_calls = _publish_calls(spy)
     assert publish_calls, "expected at least one publish.py invocation"
     for call in publish_calls:
-        assert "--delta" in call, call
+        assert "--delta" not in call, call
+        assert "--no-delta" not in call, call
 
 
-def test_no_delta_flag_suppresses_delta_on_every_publish_call(tmp_path, monkeypatch):
+def test_no_delta_flag_forwards_the_opt_out_to_every_publish_call(tmp_path, monkeypatch):
+    """The opt-out MUST be forwarded explicitly. Once the engine defaults delta
+    on, a round that merely withheld `--delta` would silently fail to opt out —
+    `--no-delta` would become a no-op flag that reads as if it worked."""
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, no_delta=True)
 
     assert rc == _mod._EXIT_OK
     publish_calls = _publish_calls(spy)
     assert publish_calls, "expected at least one publish.py invocation"
     for call in publish_calls:
-        assert "--delta" not in call, call
+        assert "--no-delta" in call, call
 
 
 def test_publish_legs_use_heavier_timeout_other_legs_keep_default(tmp_path, monkeypatch):

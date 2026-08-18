@@ -299,6 +299,83 @@ def render():
     return _load_cli_module()._render
 
 
+class TestOwnSessionIdResolution:
+    """`_resolve_own_session_id` (added alongside `c425e181fa1a`, which made
+    the invoking session's identity authoritative for the `Session-Id:`
+    trailer once threaded down to `commit_trailers.py`): the CLI's half of
+    that fix is stating its own identity client-side rather than leaving it
+    to be re-resolved wherever the op executes — see the function's own
+    docstring for why that stops being equivalent once an op can run inside
+    a warm server serving a different session's request.
+
+    Convention: mirrors `coordinator-queue-append.py::_resolve_session_id`
+    — fail-soft to "", never a fabricated or malformed value.
+    """
+
+    @pytest.fixture(scope="class")
+    def resolve_own_session_id(self):
+        return _load_cli_module()._resolve_own_session_id
+
+    def test_resolves_a_uuid_shaped_ambient_session_id(
+        self, resolve_own_session_id, monkeypatch
+    ):
+        uuid_sid = "8f14e45f-ceea-467e-9c2e-1a1b1a1b1a1b"
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", uuid_sid)
+        assert resolve_own_session_id() == uuid_sid
+
+    def test_omits_cleanly_when_unresolvable(self, resolve_own_session_id, monkeypatch):
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        assert resolve_own_session_id() == ""
+
+    def test_omits_a_resolved_value_that_is_not_uuid_shaped(
+        self, resolve_own_session_id, monkeypatch
+    ):
+        # A non-UUID ambient value (e.g. this file's own _TEST_SESSION_ID
+        # convention) must not be forwarded for the op's downstream
+        # leniency (`compute_missing_trailer_args`) to silently discard --
+        # this CLI treats it as unresolved itself, never relying on that.
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "not-a-uuid-at-all")
+        assert resolve_own_session_id() == ""
+
+    def test_main_includes_session_id_in_op_params_when_resolvable(self, tmp_path, monkeypatch):
+        """End-to-end: `main()` builds `params["session_id"]` from a
+        resolvable ambient identity, exercising the override in production
+        rather than leaving it tested only at the op layer."""
+        module = _load_cli_module()
+        uuid_sid = "1a2b3c4d-5e6f-4789-a0b1-c2d3e4f5a6b7"
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", uuid_sid)
+
+        captured = {}
+
+        def _fake_route_mutation(op, params, worktree_root, legacy_fn):
+            captured["params"] = params
+            return {"committed": False, "reason": "empty-commit-set"}
+
+        monkeypatch.setattr(module, "route_mutation", _fake_route_mutation)
+        (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+        module.main(["-m", "subject", "--repo", str(tmp_path), "--", "f.txt"])
+
+        assert captured["params"]["session_id"] == uuid_sid
+
+    def test_main_omits_session_id_when_unresolvable(self, tmp_path, monkeypatch):
+        module = _load_cli_module()
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+
+        captured = {}
+
+        def _fake_route_mutation(op, params, worktree_root, legacy_fn):
+            captured["params"] = params
+            return {"committed": False, "reason": "empty-commit-set"}
+
+        monkeypatch.setattr(module, "route_mutation", _fake_route_mutation)
+        (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+        module.main(["-m", "subject", "--repo", str(tmp_path), "--", "f.txt"])
+
+        assert "session_id" not in captured["params"]
+
+
 class TestPushReporting:
     """The line a human reads must never render an UNCONFIRMED push as a FAILED
     one (doe-claude-em, 2026-07-30). The old two-valued map printed

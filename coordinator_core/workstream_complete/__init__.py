@@ -208,6 +208,9 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     resolve_json_payload_flag,
 )
 from coordinator_core.ops import list_review_trail_records
+from coordinator_core.ops.session_commits import (
+    resolve_session_commits as _resolve_session_commits_primitive,
+)
 from coordinator_core.ops.review_brightline_gate import classify_surface
 from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
 from coordinator_core.coverage import _is_planning_artifact_path  # review finding P2: planning-artifact LOC de-weight
@@ -2880,15 +2883,24 @@ def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
     KNOWN over-match, accepted: `git log --grep` matches per line of the FULL
     commit message, not the trailer block, so a body line quoting another
     session's trailer verbatim also matches. Over-inclusion is the safe
-    direction for this function's callers."""
+    direction for this function's callers.
+
+    C5 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5): derived
+    from `ops.session_commits :: resolve_session_commits` — the same ONE
+    `git log --numstat` primitive `branch_resolution.py`'s sibling walks
+    were migrated onto, using its unanchored `^Session-Id: <sid>` form
+    (this function's own pre-existing anchoring, unchanged — see the
+    primitive's module docstring for why unanchored was chosen for every
+    caller). This also closes the anchored/unanchored split against
+    `review_brightline_gate._compute_session_oracle_single`, which reads
+    this same primitive."""
     if not session_id:
         return None
-    out = _run_git_read_only(
-        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}", "--reverse"], root
-    )
-    if out is None:
+    try:
+        commits = _resolve_session_commits_primitive(root, session_id)
+    except (ValueError, RuntimeError):
         return None
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    return [c["sha"] for c in commits]
 
 
 # `_resolve_numstat_row_path` (and its two rename regexes) now live in

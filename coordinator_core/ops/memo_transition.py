@@ -146,6 +146,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.wire_paths import rel_id
 
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -267,7 +268,8 @@ def _err(message: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _commit_terminal_write(
-    memo_path: Path, git_root: Path, verb: str, content: str
+    memo_path: Path, git_root: Path, verb: str, content: str,
+    *, attributed_session_id: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Commit ``content`` (the exact bytes this call authored/validated) as the
     memo's on-disk mutation, in one single-path follow-up commit.
@@ -280,6 +282,17 @@ def _commit_terminal_write(
     ``content`` is passed straight through to ``git_native.commit_authored_content`` —
     no worktree read on ``memo_path`` happens anywhere in this call (DR-272 § 3.3 bound 2).
 
+    ``attributed_session_id`` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) — OPTIONAL, passed straight
+    through to ``commit_authored_content``'s own ``attributed_session_id``.
+    Only ``claim``/``resolve`` — the two verbs whose params carry a caller-
+    supplied ``session_id`` at all (see ``_handler``'s own params table) —
+    have anything better to offer than the blind env-var read
+    ``commit_authored_content`` falls back to; every other verb (``action``,
+    ``release``, ``close``, and the stranded-write resume path shared by all
+    of them) leaves this ``None``, reproducing the prior resolution
+    byte-for-byte.
+
     Returns a ``(commit_sha, error)`` pair — exactly one of the two is
     non-``None``. On success, ``commit_sha`` comes directly from
     ``commit_authored_content``'s own ``stdout`` (no separate SHA read-back
@@ -291,7 +304,10 @@ def _commit_terminal_write(
     silently reported as a clean success.
     """
     try:
-        pathspec = str(memo_path.resolve().relative_to(git_root))
+        # rel_id (not str(...relative_to(...))) — forward-slash always, so this
+        # matches `git status --porcelain`'s own separator on Windows (Path.relative_to
+        # stringifies with os.sep there, which is backslash).
+        pathspec = rel_id(memo_path.resolve(), git_root)
     except ValueError:
         # Unreachable in practice — _containment_check already proved memo_path
         # resolves under git_root/cross-repo or git_root/state before any write
@@ -306,7 +322,10 @@ def _commit_terminal_write(
         msg_path = fh.name
 
     try:
-        commit_result = git_native.commit_authored_content(pathspec, content, msg_path, git_root)
+        commit_result = git_native.commit_authored_content(
+            pathspec, content, msg_path, git_root,
+            attributed_session_id=attributed_session_id,
+        )
     finally:
         try:
             Path(msg_path).unlink()
@@ -359,7 +378,8 @@ def _memo_path_dirty(git_root: Path, relpath: str) -> bool:
 
 
 def _resume_probe_and_commit(
-    memo_path: Path, git_root: Path, verb: str, content: str, resumed_message: str
+    memo_path: Path, git_root: Path, verb: str, content: str, resumed_message: str,
+    *, attributed_session_id: str | None = None,
 ) -> dict | None:
     """After a verb's own idempotency comparison finds the on-disk frontmatter
     already at the verb's expected terminal state, detect and recover a
@@ -385,16 +405,26 @@ def _resume_probe_and_commit(
     Fail-loud on commit failure: returns ``_err()`` (AC10) — the write really
     is stranded uncommitted on disk in that case, and the caller must not
     report success.
+
+    ``attributed_session_id`` — OPTIONAL, passed straight through to
+    ``_commit_terminal_write``'s own parameter of the same name. See that
+    function's docstring for which verbs' callers have anything to pass.
     """
     try:
-        relpath = str(memo_path.resolve().relative_to(git_root))
+        # rel_id, matching _commit_terminal_write's own pathspec derivation —
+        # `_memo_path_dirty` compares this against `git status --porcelain` entries,
+        # which are always forward-slash regardless of host OS.
+        relpath = rel_id(memo_path.resolve(), git_root)
     except ValueError:
         relpath = str(memo_path.resolve())
 
     if not _memo_path_dirty(git_root, relpath):
         return None
 
-    commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, verb, content)
+    commit_sha, commit_error = _commit_terminal_write(
+        memo_path, git_root, verb, content,
+        attributed_session_id=attributed_session_id,
+    )
     if commit_error is not None:
         return _err(commit_error)
 
@@ -852,6 +882,7 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
             memo_path, git_root, "claim", new_text,
             f"{memo} already in_progress (picked_up_by {_sid}) — resumed a stranded "
             "uncommitted write and committed it",
+            attributed_session_id=_sid,
         )
         if resumed_reply is not None:
             return resumed_reply
@@ -865,7 +896,9 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
             f"INTERNAL ERROR — post-write status key count ≠ 1. Inspect {memo} immediately."
         )
 
-    commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, "claim", new_text)
+    commit_sha, commit_error = _commit_terminal_write(
+        memo_path, git_root, "claim", new_text, attributed_session_id=_sid,
+    )
     if commit_error is not None:
         return _err(commit_error)
 
@@ -1995,6 +2028,7 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
             # resume in logs/commit messages.
             f"{memo} already resolved at target disposition — resumed a stranded "
             "uncommitted resolve write and committed it",
+            attributed_session_id=_sid,
         )
         if resumed_reply is not None:
             return resumed_reply
@@ -2008,7 +2042,9 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
             f"INTERNAL ERROR — post-write status key count ≠ 1. Inspect {memo} immediately."
         )
 
-    commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, "resolve", new_text)
+    commit_sha, commit_error = _commit_terminal_write(
+        memo_path, git_root, "resolve", new_text, attributed_session_id=_sid,
+    )
     if commit_error is not None:
         return _err(commit_error)
 

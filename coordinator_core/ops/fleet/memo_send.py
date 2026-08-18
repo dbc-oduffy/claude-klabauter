@@ -1632,9 +1632,10 @@ async def _verify_scoped_to_sha_resolvable(
     return build_setup_error_result(
         _MODE, dry_run,
         f"memo.send: scoped_to.sha {sha!r} does not resolve as a commit in "
-        f"the receiver's clone ({receiver_repo_path}) — they cannot resolve "
-        f"this pin, so nothing was written to their tree.{blob_hint} Fix the "
-        f"sha (or use scoped_to.version instead) and re-send.",
+        f"the receiver's clone ({receiver_repo_path}) — the pin resolves "
+        f"against the RECEIVER's history, not yours. Nothing was written to "
+        f"their tree.{blob_hint} Re-pin with a commit their clone contains, "
+        f"or use scoped_to.version, and re-send.",
     )
 
 

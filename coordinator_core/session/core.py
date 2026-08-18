@@ -28,15 +28,17 @@ Negative-spec:
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
 import re
 import subprocess
 import tempfile
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Iterator, Mapping, Optional
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.git.repo_root import git_common_dir, show_toplevel
@@ -794,10 +796,77 @@ SESSION_ENV_PRECEDENCE = (
 )
 
 
+#: UUID-shape gate for `session_identity_override` — mirrors
+#: `coordinator_core.git.commit_trailers._UUID_RE` exactly (same
+#: fail-safe direction: a caller-supplied override that is not UUID-shaped
+#: is treated as "no override", never trusted verbatim). A value crossing
+#: a process boundary (the warm server's request wire) must be validated,
+#: not trusted, before it can substitute for the server's own env-derived
+#: identity — see `coordinator_core.warm.entry_seam.per_request_state`'s
+#: `session_id` parameter, the sole production setter of this ContextVar.
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+#: Per-request override for `resolve_session_id`, bound via
+#: `session_identity_override` for the life of one warm-server dispatch.
+#: `default=None` reproduces today's env-only resolution for every caller
+#: that never opens the override (every cold invocation, and any warm
+#: request that arrived with no identity to carry) — see that context
+#: manager's own docstring for the full contract this exists to serve.
+_SESSION_ID_OVERRIDE: "ContextVar[Optional[str]]" = ContextVar(
+    "coordinator_core_session_id_override", default=None
+)
+
+
+@contextlib.contextmanager
+def session_identity_override(sid: Optional[str]) -> Iterator[None]:
+    """Bind the CALLER's session id for the duration of one in-process
+    dispatch, so `resolve_session_id()` returns it instead of reading this
+    process's OWN environment.
+
+    Exists to close the warm-engine identity-attribution defect (state/
+    bug-backlog/2026-08-18-a-warm-server-stamps-every-op-it-serves-
+    eeb801fc6bee.yaml): a long-lived warm server's `os.environ` reflects
+    WHOEVER SPAWNED IT, not the many distinct sessions it goes on to serve
+    requests for. `warm.entry_seam.per_request_state` binds this
+    Token/reset-scoped around each dispatch — the same explicit-scope shape
+    that module's own docstring already uses for `session.declared_writes`
+    — using the identity `warm.client.py` resolved COLD, in the true
+    caller's own environment, before the request ever crossed the pipe.
+
+    `sid` is validated here, not trusted from the caller: anything that is
+    not UUID-shaped (`_UUID_RE`) is silently treated as "no override" — the
+    bind is a no-op and `resolve_session_id()` falls through to its
+    ordinary env-var chain unchanged. This is the fail-safe direction
+    (never fabricate or misattribute an identity; at worst, degrade to
+    today's behaviour) — mirrors `commit_trailers.compute_missing_trailer_
+    args`'s own `session_id_override` gate (`c425e181f`), which validates a
+    caller-supplied override the identical way for the identical reason.
+
+    `sid=None` (or empty) is always a no-op bind — the explicit "no
+    identity to carry" case (module docstring's "no-identity fallback"),
+    never silently substituting anything.
+    """
+    if not sid or not _UUID_RE.fullmatch(sid):
+        yield
+        return
+    token = _SESSION_ID_OVERRIDE.set(sid)
+    try:
+        yield
+    finally:
+        _SESSION_ID_OVERRIDE.reset(token)
+
+
 def resolve_session_id(cwd: Optional[str] = None) -> str:
     """Port of ``_cs_resolve_session_id`` / public alias ``cs_resolve_session_id``.
 
-    Resolve THIS session's id via the canonical 3-tier chain:
+    Resolution order, current (2026-08-19):
+      0. `session_identity_override`'s bound ContextVar, when a request has
+         one bound (warm-server per-request identity carried from the
+         caller — see that context manager's docstring). Never set outside
+         an explicitly opened scope, so this is a no-op for every
+         cold-path/unbound caller.
       1. ``COORDINATOR_SESSION_ID``  (explicit test override)
       2. ``CLAUDE_SESSION_ID``       (explicit override slot)
       3. ``CLAUDE_CODE_SESSION_ID``  (platform-injected, Claude Code >= ~2.1.150)
@@ -811,12 +880,15 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     sole writer (session-init.py, the DoE-claude SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives, so
     it could never be refreshed. ``cwd`` is retained for API compatibility
-    with existing callers even though tiers 1-3 do not use it.
+    with existing callers even though tiers 0-3 do not use it.
 
     Tiers 1-3 (env vars) are byte-for-byte unchanged. Always returns
     successfully (empty string signals "unresolvable", never an
     exception) — callers gate on empty.
     """
+    override = _SESSION_ID_OVERRIDE.get()
+    if override:
+        return override
     for var in SESSION_ENV_PRECEDENCE:
         sid = os.environ.get(var, "")
         if sid:

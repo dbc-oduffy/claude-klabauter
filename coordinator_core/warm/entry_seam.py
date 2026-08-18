@@ -39,13 +39,18 @@ Four engine entry paths, verified at HEAD (2026-08-15/16):
 
 Negative-spec (RAG-bait):
     This module does not decide WHICH declared-write list an op sees, does
-    not resolve session identity, and does not record anything to disk. It
+    not resolve session identity from an env/environment-derived source (it
+    only BINDS an identity a caller already resolved and handed in — see
+    `per_request_state`'s `session_id` parameter and `session.core.
+    session_identity_override`), and does not record anything to disk. It
     delegates collection to `session.declared_writes.collecting()` (already
     `ContextVar` Token/reset-scoped, so nesting is safe) and recording
     remains each caller's own job via `ipc._record_self_reported_touches` —
     exactly the split `cli_entry.recording_declared_writes` already had.
     This module introduces no second declare/record dialect; it is a
-    convergence point for the SCOPING half only.
+    convergence point for the SCOPING half, plus (as of C-warm-identity)
+    the per-request IDENTITY-BINDING half — never identity RESOLUTION,
+    which stays `session.core`'s job alone.
 
     `reentrant_dispatch` deliberately does not add `asyncio.wait_for` timeout
     wrapping or a JSON-RPC envelope. Every audited path-3 call site invokes
@@ -69,30 +74,44 @@ import asyncio
 import contextlib
 from typing import Any, Iterator, List, Optional
 
+from coordinator_core.session.core import session_identity_override
 from coordinator_core.session.declared_writes import collecting
 
 __all__ = ["per_request_state", "reentrant_dispatch"]
 
 
 @contextlib.contextmanager
-def per_request_state(into: Optional[List[str]] = None) -> Iterator[List[str]]:
+def per_request_state(
+    into: Optional[List[str]] = None, *, session_id: Optional[str] = None
+) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
 
-    Currently a thin pass-through to `session.declared_writes.collecting()`
-    — the one per-request mechanism every entry path needs to bind
-    explicitly under warmth rather than inherit ambiently. Named and kept
-    as its own seam (rather than callers importing `collecting` directly)
-    so a future per-request concern is a seam to grow HERE, once, instead
-    of a parallel context manager invented at each entry path.
+    Two independent axes, both Token/reset-scoped and both unwound in a
+    `finally` regardless of nesting order: `session.declared_writes.
+    collecting()` (the pre-existing per-request declared-writes list) and,
+    now, `session.core.session_identity_override()` (C-warm-identity: the
+    CALLER's resolved session id, when the request carried one — see that
+    context manager's own docstring for the full defect this closes).
+    Named and kept as its own seam (rather than callers importing either
+    primitive directly) so a future per-request concern is a seam to grow
+    HERE, once, instead of a parallel context manager invented at each
+    entry path.
 
     `into`, when given, is the list `declare_write()` calls append to
     (matching `collecting()`'s own signature) — callers that already hold a
     list object to hand to a recorder (e.g. `cli_entry.recording_declared_
     writes`) pass it through unchanged rather than this seam allocating a
     second one.
+
+    `session_id`, when given, is the caller's session id to bind for the
+    duration of the block — absent/`None`/non-UUID-shaped is a no-op
+    (`session_identity_override`'s own fail-safe gate), so every existing
+    caller of this function (none of which pass `session_id` today) is
+    byte-for-byte unaffected.
     """
-    with collecting(into) as declared:
-        yield declared
+    with session_identity_override(session_id):
+        with collecting(into) as declared:
+            yield declared
 
 
 def reentrant_dispatch(

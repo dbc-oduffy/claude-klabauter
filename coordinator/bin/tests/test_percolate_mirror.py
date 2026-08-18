@@ -8,6 +8,7 @@ lock, with the lock taken before anything mutates the dest.
 Spec backlink: state/sizings/2026-08-18-one-entry-point-owns-the-mirror-publish.yaml
 """
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -96,7 +97,7 @@ class _RecordingLockCtx:
         return False
 
 
-def _wire(monkeypatch, order, *, dirty=False, scan_rc=0):
+def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", drift_real=False):
     targets = [
         "claude-klabauter-publish-repo-toplevel",
         "claude-klabauter-bin",
@@ -112,7 +113,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0):
         "_round_held_lock",
         lambda target, **kw: _RecordingLockCtx(order, target, **kw),
     )
-    monkeypatch.setattr(_mod._round, "_split_stdout_by_row_dest", lambda s, d: [(d, s)])
+    monkeypatch.setattr(_mod._round, "_split_stdout_by_row_dest", lambda s, d: [("X:/claude-klabauter", s)])
     monkeypatch.setattr(_mod._round, "_extract_change_lines", lambda s: ([("NEW", "a.py")], []))
     monkeypatch.setattr(
         _mod._round, "_build_commit_pathspec", lambda *a, **kw: ["a.py"]
@@ -121,7 +122,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0):
         _mod._round, "_push_dest", lambda d: subprocess.CompletedProcess([], 0, "", "")
     )
 
-    monkeypatch.setattr(_mod._round, "_branch0_gate", lambda t, r: "X:/src")
+    monkeypatch.setattr(_mod, "_row_paths", lambda r: {n: ("X:/src", "X:/claude-klabauter") for n in targets})
     monkeypatch.setattr(_mod._round, "_resolve_central_state", lambda: None)
 
     publish_calls = []
@@ -141,7 +142,23 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0):
             return subprocess.CompletedProcess(cmd, scan_rc, "", "")
         if "inverse-drift" in joined:
             order.append("drift")
-            return subprocess.CompletedProcess(cmd, 0, "anchor_mode: marker", "")
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                json.dumps(
+                    {
+                        "anchor_mode": drift_anchor,
+                        "anchor_reliable": drift_anchor == "marker",
+                        "anchor_ref": "deadbeef",
+                        "commits": 1 if drift_real else 0,
+                        "commit_lines": ["abc123 2026-08-18 hand edit"] if drift_real else [],
+                        "dismissed_crlf_only": [],
+                        "content_differs": ["a.py"] if drift_real else [],
+                        "real_drift": drift_real,
+                    }
+                ),
+                "",
+            )
         if "scoped-git-commit" in joined:
             order.append("commit")
             return subprocess.CompletedProcess(cmd, 0, '{"committed": true}', "")
@@ -171,7 +188,7 @@ def test_all_rows_go_through_a_single_publish_invocation(tmp_path, monkeypatch):
 
     assert rc == _mod._round._EXIT_OK
     assert order.count("publish") == 1, order
-    assert publish_calls[0][-1] == ",".join(targets)
+    assert ",".join(targets) in publish_calls[0], publish_calls[0]
 
 
 def test_lock_spans_publish_and_commit(tmp_path, monkeypatch):

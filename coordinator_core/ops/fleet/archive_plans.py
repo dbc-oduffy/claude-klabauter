@@ -19,6 +19,16 @@ Applied at BOTH T1 (preview) and T3 (act).  T1-filtering removes live-referenced
 plans from the human preview entirely (safe-default behavioral divergence from the
 contract's "human is the guard" reading — documented in plan Key Decision 4).
 
+ID-resolved sibling (C7, D-D — docs/plans/2026-08-18-a-session-always-has-a-
+baton.md): `_collect_live_reference_ids` / `_plan_is_id_referenced` resolve
+the same guard by a stamped `references: [<plan_id>|<handoff_id>, ...]`
+frontmatter list instead of body-text substring matching. It is consulted
+ALONGSIDE `_collect_live_reference_text`, never instead of it — either match
+retains the plan. `_collect_live_reference_text`, `scan_incomplete` and its
+fail-closed branches stay authoritative and are NOT narrowed by this addition;
+deleting them is chunk C12, gated on a corpus backfill having run AND an
+emission path existing so new referrers stamp the edge at authoring time.
+
 cannot-derive-date skip guard:
 A terminal plan whose filename carries no YYYY-MM-DD prefix has no archive
 destination (YYYY-MM is derived from the filename prefix). Such a plan is
@@ -267,6 +277,112 @@ def _collect_live_reference_text(worktree_root: Path) -> Tuple[str, bool]:
                 _LOG.debug("archive_plans: could not read plan %s: %s", lpath, exc)
 
     return "\n".join(parts), scan_incomplete
+
+
+def _collect_live_reference_ids(worktree_root: Path) -> Tuple[Set[str], bool]:
+    """Return (set of every ``references:`` value stamped on a live handoff or
+    live plan, scan_incomplete) — the ID-resolved sibling of
+    ``_collect_live_reference_text``.
+
+    A terminal plan whose ``plan_id`` (or, symmetrically, a value matching its
+    filename-derived id if ever minted that way) appears in this set is
+    live-referenced by a stamped inbound edge (D-D,
+    docs/plans/2026-08-18-a-session-always-has-a-baton.md § D-D). This
+    resolves by frontmatter ONLY — no body-text scanning — because a stamped
+    FK cannot be partially scanned the way free prose can.
+
+    ADDITIVE, NOT A REPLACEMENT: this function is consulted ALONGSIDE
+    ``_collect_live_reference_text`` and never instead of it. Chunk C7 ships
+    the ID-resolved half of the mechanism; the substring scan stays
+    authoritative until chunk C12 deletes it (gated on the one-shot backfill
+    having run over the corpus AND an emission path existing so newly-authored
+    referrers stamp `references:` at authoring time). Most records carry no
+    `references:` field yet — an empty return here is the expected, common
+    case today, not a bug.
+
+    scan_incomplete mirrors the text-scan sibling's fail-closed semantics:
+    True when either state/handoffs/ or docs/plans/ could not be fully
+    enumerated. Uses iterdir(), never glob("*.md"), for the same
+    PermissionError-swallowing reason documented on
+    ``_collect_live_reference_text``.
+    """
+    ids: Set[str] = set()
+    scan_incomplete = False
+
+    def _collect_ids_from(meta: dict) -> None:
+        raw = meta.get("references")
+        if raw is None:
+            return
+        if isinstance(raw, str):
+            candidates = [raw]
+        elif isinstance(raw, (list, tuple)):
+            candidates = list(raw)
+        else:
+            return
+        for value in candidates:
+            if isinstance(value, str) and value:
+                ids.add(value)
+
+    # Live handoffs (state/handoffs/*.md).
+    handoffs_dir = worktree_root / "state" / "handoffs"
+    if handoffs_dir.is_dir():
+        try:
+            handoff_entries = sorted(handoffs_dir.iterdir())
+        except OSError as exc:
+            _LOG.warning(
+                "archive_plans: cannot scan %s for live-reference ids — %s; "
+                "marking scan incomplete (fail-closed)", handoffs_dir, exc,
+            )
+            scan_incomplete = True
+            handoff_entries = []
+        for hpath in handoff_entries:
+            if hpath.suffix != ".md" or not hpath.is_file():
+                continue
+            status = parse_frontmatter_status(hpath)
+            if status in _RETIRED_HANDOFF_STATUSES:
+                continue  # handoff is claimed/retired — not live
+            _collect_ids_from(_read_meta(str(hpath)))
+
+    # Live plans (docs/plans/*.md, excluding sidecars and terminal plans).
+    plans_dir = worktree_root / "docs" / "plans"
+    if plans_dir.is_dir():
+        try:
+            plan_entries = sorted(plans_dir.iterdir())
+        except OSError as exc:
+            _LOG.warning(
+                "archive_plans: cannot scan %s for live-reference ids — %s; "
+                "marking scan incomplete (fail-closed)", plans_dir, exc,
+            )
+            scan_incomplete = True
+            plan_entries = []
+        for lpath in plan_entries:
+            if lpath.suffix != ".md" or not lpath.is_file():
+                continue
+            if _is_sidecar(lpath):
+                continue  # sidecar — NOT a live plan
+            status = parse_frontmatter_status(lpath)
+            if status in _TERMINAL_STATUSES:
+                continue  # terminal — not live
+            _collect_ids_from(_read_meta(str(lpath)))
+
+    return ids, scan_incomplete
+
+
+def _plan_is_id_referenced(plan_path: Path, live_ref_ids: Set[str]) -> bool:
+    """Return True iff plan_path's own stamped id (``plan_id``) is named in
+    ``live_ref_ids`` — the ID-resolved sibling check to the filename-substring
+    ``path.name in live_ref_text`` test.
+
+    A plan minted without a `plan_id` (pre-C2 records) can never match here —
+    that is expected, not a gap: such a plan is covered by the substring scan,
+    which stays authoritative regardless (see `_collect_live_reference_ids`
+    docstring).
+    """
+    if not live_ref_ids:
+        return False
+    meta = _read_meta(str(plan_path))
+    plan_id = meta.get("plan_id")
+    return isinstance(plan_id, str) and plan_id in live_ref_ids
 
 
 def _build_moves_for_plan(
@@ -579,6 +695,10 @@ async def _handle_preview(
     both need to run per-candidate.
     """
     live_ref_text, live_ref_incomplete = _collect_live_reference_text(worktree_root)
+    # ID-resolved sibling (C7, D-D): consulted ALONGSIDE the substring scan
+    # above, never instead of it — see _collect_live_reference_ids docstring.
+    live_ref_ids, live_ref_ids_incomplete = _collect_live_reference_ids(worktree_root)
+    live_ref_incomplete = live_ref_incomplete or live_ref_ids_incomplete
     candidates: List[dict] = []
 
     for path in sorted(plans_dir.glob("*.md")):
@@ -590,7 +710,9 @@ async def _handle_preview(
             continue  # not terminal
 
         # Live-reference guard (Key Decision 4, T1 filter): exclude from preview entirely.
-        if path.name in live_ref_text:
+        # ID-resolved edge (C7, D-D) is checked alongside the substring scan —
+        # either match is sufficient to retain.
+        if path.name in live_ref_text or _plan_is_id_referenced(path, live_ref_ids):
             _LOG.debug(
                 "archive_plans: T1 skip live-referenced plan %s", path.name
             )
@@ -693,6 +815,10 @@ async def _handle_act(
     """
     # Collect live-reference text once (shared across all candidates in this act call).
     live_ref_text, live_ref_incomplete = _collect_live_reference_text(worktree_root)
+    # ID-resolved sibling (C7, D-D): consulted ALONGSIDE the substring scan
+    # above, never instead of it — see _collect_live_reference_ids docstring.
+    live_ref_ids, live_ref_ids_incomplete = _collect_live_reference_ids(worktree_root)
+    live_ref_incomplete = live_ref_incomplete or live_ref_ids_incomplete
 
     acted: List[dict] = []
     skipped: List[dict] = []
@@ -734,8 +860,10 @@ async def _handle_act(
             })
             continue
 
-        # Live-reference guard at T3 (Key Decision 4 — applied at both T1 and T3).
-        if plan_path.name in live_ref_text:
+        # Live-reference guard at T3 (Key Decision 4 — applied at both T1 and
+        # T3). ID-resolved edge (C7, D-D) checked alongside the substring
+        # scan — either match is sufficient to retain.
+        if plan_path.name in live_ref_text or _plan_is_id_referenced(plan_path, live_ref_ids):
             skipped.append({"id": cid, "reason": "live-reference"})
             continue
 

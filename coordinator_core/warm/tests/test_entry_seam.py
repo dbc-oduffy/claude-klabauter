@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import active_declarations, declare_write
 from coordinator_core.warm.entry_seam import per_request_state, reentrant_dispatch
 
@@ -95,6 +96,30 @@ def test_reentrant_dispatch_scopes_declared_writes_per_call():
         reentrant_dispatch("ping", {})
         # ping declares nothing; the outer scope is unaffected either way.
         assert outer == ["caller.txt"]
+
+
+def test_per_request_state_binds_the_given_session_id():
+    with per_request_state(session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+        assert resolve_session_id() == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    # Unwound outside the block -- reproducing today's env-only behaviour.
+
+
+def test_per_request_state_with_no_session_id_is_a_no_op(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    with per_request_state():
+        assert resolve_session_id() == ""
+
+
+def test_per_request_state_rejects_a_non_uuid_shaped_session_id(monkeypatch):
+    """A malformed value crossing the wire must never be trusted -- it is
+    treated as "no override" and resolution falls through to the ordinary
+    env chain, same fail-safe direction as `commit_trailers.compute_
+    missing_trailer_args`'s own `session_id_override` gate."""
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "env-value")
+    with per_request_state(session_id="not-a-uuid"):
+        assert resolve_session_id() == "env-value"
 
 
 def test_run_op_main_collection_opens_through_the_seam(tmp_path, monkeypatch):

@@ -258,6 +258,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',
     ),
+    ("coordinator_core.ops.backfill_reference_edges", 'registers "fleet.backfill_reference_edges"'),
     ("coordinator_core.ops.fleet.reap_unintegrated_findings", 'registers "fleet.reap_unintegrated_findings"'),
     ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
     ("coordinator_core.ops.session.reap", 'registers "session.reap", "session.reap_claims_for_repos"'),

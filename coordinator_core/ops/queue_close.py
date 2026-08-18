@@ -217,6 +217,18 @@ def _commit_close(
     resumed commit reads distinctly from a same-call flip) — it carries no
     other behavioural difference.
 
+    ``closed_by`` is also passed to ``commit_authored_content`` as
+    ``attributed_session_id`` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) — it is this op's own
+    required, params-validated identity for "who is closing this entry",
+    the same authority a caller-resolved session id holds over
+    ``commit_authored_content``'s blind env-var read (see that function's
+    own docstring). A ``closed_by`` that is not UUID-shaped (a human/EM
+    name rather than a session id) is a no-op here — the `Session-Id:`
+    trailer resolution falls through to the blind read unchanged, exactly
+    as `compute_missing_trailer_args`'s own UUID fail-safe already
+    guarantees.
+
     Returns the raw ``GitResult`` — the caller decides how a failure maps to
     the op's own response envelope.
     """
@@ -230,7 +242,10 @@ def _commit_close(
         fh.write(message)
         msg_path = fh.name
     try:
-        return git_native.commit_authored_content(relpath, content, msg_path, worktree_root)
+        return git_native.commit_authored_content(
+            relpath, content, msg_path, worktree_root,
+            attributed_session_id=closed_by,
+        )
     finally:
         try:
             Path(msg_path).unlink()

@@ -94,7 +94,9 @@ def test_attributed_commit_returns_sha_subject_touched_paths_numstat(tmp_path):
     assert row["touched_paths"] == ["b.txt"]
     assert row["added"] == 2
     assert row["deleted"] == 0
-    assert row["files"] == [{"path": "b.txt", "added": 2, "deleted": 0}]
+    assert row["files"] == [
+        {"path": "b.txt", "added": 2, "deleted": 0, "status": "A"}
+    ]
 
 
 def test_oldest_first_ordering(tmp_path):
