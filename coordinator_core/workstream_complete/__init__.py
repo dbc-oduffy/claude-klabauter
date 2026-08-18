@@ -244,6 +244,7 @@ from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-
 from coordinator_core.resolution.facade import resolve_operator_config
 
 from coordinator_core.workstream_complete import chain_partition_verdict_store
+from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_completion
 from coordinator_core.workstream_complete import directives_lessons_plan
@@ -2614,8 +2615,11 @@ def _read_consumed_handoff_text(repo_root: Path, gate: SessionShapeGate) -> Opti
     compute_completeness_checklist_gate`) and for Step 2's governing-plan
     resolution (`_governing_plan_field_from_consumed_handoff` below) —
     read-only, never raises; an unreadable/missing/archived-away handoff
-    degrades to `None` (each caller's own not-applicable branch), matching
-    every other absent-input case in this module's convention."""
+    degrades to `None`, matching every other absent-input case in this
+    module's convention. Each caller reads that `None` its own way: the
+    completeness-checklist gate's `verdict` is `indeterminate` when the
+    close is chain-terminal (it should have had input and did not), the
+    governing-plan resolution keeps its own not-applicable branch."""
     candidate = _resolve_consumed_handoff_path(repo_root, gate)
     if candidate is None:
         return None
@@ -4055,6 +4059,27 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     if review_scale_chain_slices is not None:
         review_scale_payload["chain_slices"] = review_scale_chain_slices
 
+    # C2, pln-one-completion-verdict-for-wor-ea96e2: `gates.completion_
+    # verdict` — one rollup over the five gate payloads just built above,
+    # via `completion_verdict.py`'s per-gate readers (AC2) and its
+    # `compose_completion_verdict` (AC1). Every reader is handed that
+    # gate's own SHALLOW `._asdict()` — the same dict already passed into
+    # `gates={...}` below, never the raw NamedTuple — for consistency with
+    # what the envelope itself emits; `_row_reference`/
+    # `_completeness_item_field` in that module tolerate nested NamedTuples
+    # either way. AC7: reads already-computed payloads only, calls no
+    # gate-computation function.
+    _completion_verdict_readings = {
+        "completeness_checklist": _completion_verdict.completeness_checklist(completeness_gate._asdict()),
+        "open_spine_row_worklist": _completion_verdict.open_spine_row_worklist(open_spine_row_gate._asdict()),
+        "consumed_handoff_completeness": _completion_verdict.consumed_handoff_completeness(
+            consumed_handoff_completeness_gate._asdict()
+        ),
+        "landed_reconciliation": _completion_verdict.landed_reconciliation(landed_reconciliation_gate._asdict()),
+        "review_scale": _completion_verdict.review_scale(review_scale_payload),
+    }
+    completion_verdict_payload = _completion_verdict.compose_completion_verdict(_completion_verdict_readings)
+
     envelope = build_envelope(
         artifact={"path": str(root), "classification": "workstream", "frontmatter": {}},
         preflight={
@@ -4076,6 +4101,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "review_scale": review_scale_payload,
             "stage_paths_candidates": stage_paths_candidates,
             "repo_identity": repo_identity_gate,
+            "completion_verdict": completion_verdict_payload,
         },
         directives=directives,
         judgment_points=judgment_points,

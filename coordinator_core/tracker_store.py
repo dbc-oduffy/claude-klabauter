@@ -1079,3 +1079,396 @@ def resolve_observed_set_for_event(
         return OBSERVED_SET_UNKNOWN
 
     return resolve_observed_set(latest_marker, repo_root=repo_root)
+
+
+# ---------------------------------------------------------------------------
+# Causal comparator (tmrg-03 C3) — a linear extension of the causal partial
+# order over observed-set vectors, kept a wholly separate entrypoint from
+# ``read_events`` per DEC-4 (AC8: ``read_events``' signature and default
+# ordering behaviour do not change).
+#
+# Normative spec: example-cockpit-repo
+# ``docs/wiki/tracker-observed-set-and-concurrency.md`` § MIXED-TYPE
+# DOMINATION COMPARE (A14) and § CONSUMPTION CONSTRAINT — that wiki wins on
+# any conflict with prose elsewhere, including
+# docs/plans/2026-08-18-tmrg-03-ordering-contract-in-tracker-store.md's own
+# C3 task text. Cockpit owns the comparator as a SPECIFICATION end to end
+# (their § OWNERSHIP); this is a conformant second implementation of their
+# one spec, not a second contract.
+# ---------------------------------------------------------------------------
+
+CAUSAL_ORDER_EQUAL = "equal"
+"""Every component of both vectors compares equal — same causal position."""
+
+CAUSAL_ORDER_A_DOMINATES = "a_dominates"
+"""Vector A dominates vector B (A14): every component of B is ``<=`` its A
+counterpart, with at least one strictly ``<``. A is causally LATER than B —
+A has observed everything B has, plus more."""
+
+CAUSAL_ORDER_B_DOMINATES = "b_dominates"
+"""The mirror of ``CAUSAL_ORDER_A_DOMINATES`` — B dominates A, B is causally
+later."""
+
+CAUSAL_ORDER_CONCURRENT = "concurrent"
+"""A genuine antichain: some component names A as later, another names B as
+later, and no component is ``unknown``. Neither vector dominates — this is a
+real, decided concurrent-modification finding, not a missing-information
+one, and must never be reported the same way as
+``CAUSAL_ORDER_INDETERMINATE``."""
+
+CAUSAL_ORDER_INDETERMINATE = "indeterminate"
+"""At least one component's comparison could not be decided (A13): a
+resolved-to-``OBSERVED_SET_UNKNOWN`` component, an equal-``sequence``
+digest-divergence, or a whole vector that is the bare ``OBSERVED_SET_UNKNOWN``
+sentinel (no assertion was ever made about that side at all). Per A13, an
+``unknown`` component always propagates to the whole-axis answer — it must
+never be silently outvoted by a decided component elsewhere, and it must
+never collapse into ``CAUSAL_ORDER_CONCURRENT`` (a decided finding) or into
+either dominates value (a trusted maximum)."""
+
+_ABSENT = object()
+"""Internal sentinel distinguishing "this vector has no entry for this peer"
+(A14's ``absent`` row) from a real component value — never returned or
+compared with ``==`` outside ``_compare_observed_set_component``."""
+
+
+def _compare_observed_set_component(component_a: object, component_b: object) -> str:
+    """One key's A14 compare. Returns ``"lt"``, ``"gt"``, ``"eq"``, or
+    ``"unknown"`` — never a five-valued axis result; that aggregation is
+    ``compare_observed_set_vectors``'s job, over every key in the union.
+
+    Implements the table verbatim:
+
+    | Case | Result |
+    |---|---|
+    | Key absent on one side | ``absent == {sequence: 0}``, compares below any present component; no digest test |
+    | Either side ``unknown`` | ``"unknown"``; never compared |
+    | Both present, ``sequence`` differs | order on ``sequence`` alone — digests carry NO signal here |
+    | Both present, ``sequence`` equal, digest equal | ``"eq"`` |
+    | Both present, ``sequence`` equal, digest differs | ``"unknown"`` — histories diverged |
+
+    *component_a* / *component_b* are each one of: ``_ABSENT`` (key missing
+    from that side's vector), ``OBSERVED_SET_UNKNOWN`` (that component
+    itself resolved unknown), or a concrete ``{"sequence": int,
+    "prefix_digest": str}`` mapping.
+
+    ``prefix_digest`` is NOT an ordering key — a digest is not orderable.
+    Its entire participation is the equal-``sequence`` divergence test in
+    the last two table rows; a differing ``sequence`` decides the order on
+    its own, digests unconsulted (a longer prefix is EXPECTED to hash
+    differently, so comparing digests there would be a false unknown).
+
+    Degenerate case not named by the table: both sides absent (never
+    reached — this is only called for keys in the union of both vectors'
+    key sets, so at least one side is always present) and a present
+    component naming ``sequence: 0`` compared against an absent side (both
+    normalise to ``0`` with no digest to test either way) — treated as
+    ``"eq"``. Not exercised in practice: ``fold_observed_set`` never emits a
+    peer component for a peer shard with zero events.
+    """
+    if component_a is OBSERVED_SET_UNKNOWN or component_b is OBSERVED_SET_UNKNOWN:
+        return "unknown"
+
+    if component_a is _ABSENT:
+        seq_a: int = 0
+    else:
+        seq_a = component_a["sequence"]  # type: ignore[index]
+
+    if component_b is _ABSENT:
+        seq_b: int = 0
+    else:
+        seq_b = component_b["sequence"]  # type: ignore[index]
+
+    if seq_a != seq_b:
+        return "lt" if seq_a < seq_b else "gt"
+
+    if component_a is _ABSENT or component_b is _ABSENT:
+        return "eq"
+
+    digest_a = component_a["prefix_digest"]  # type: ignore[index]
+    digest_b = component_b["prefix_digest"]  # type: ignore[index]
+    return "eq" if digest_a == digest_b else "unknown"
+
+
+def _resolve_self_component(
+    machine: str, sequence: int, *, repo_root: Path
+) -> dict | _UnknownObservedSet:
+    """cockpit's A14 self-normalisation: recompute *machine*'s own
+    ``{sequence, prefix_digest}`` component fresh from its OWN shard, at
+    RESOLVE time — never from a value stamped at append time (§
+    MIXED-TYPE DOMINATION COMPARE (A14), "Resolve time, never append
+    time"). Stamping this at append would give ``append_event`` a reason
+    to derive a digest at write time, breaking AC1c/AC7's append-path
+    no-peer-shard-read guarantee; independently, a digest frozen at
+    append hashes bytes a later git merge rewrites, so it could never
+    detect the rewrite it exists to detect.
+
+    Reads *machine*'s own shard exactly once — the same shard already
+    read (by the caller, ``resolve_observed_set_union_for_event``) to
+    recover the event's own record — so this adds NO peer-shard access,
+    preserving ``resolve_observed_set_for_event``'s byte-derivability
+    property.
+
+    Applies cockpit's DEC-5 / § SELF-SHARD APPLICABILITY: the
+    well-formedness precondition covers the reader's OWN shard too, not
+    peers only. An event at or after its own shard's first defect
+    (``_well_formedness``) reports ``OBSERVED_SET_UNKNOWN`` for its
+    self-component, exactly as a peer's defect would for that peer's
+    component — reusing ``_well_formedness`` rather than a second
+    predicate.
+
+    Spec backlink: docs/plans/2026-08-18-tmrg-03-ordering-contract-in-tracker-store.md
+    § C4; example-cockpit-repo docs/wiki/tracker-observed-set-and-concurrency.md
+    § MIXED-TYPE DOMINATION COMPARE (A14), § SELF-SHARD APPLICABILITY (DEC-5).
+    """
+    path = shard_path(repo_root, machine=machine)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+
+    event_ids: list[str] = []
+    shard_sequences: list[int] = []
+    for line in _split_lines(text):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise TrackerStoreError(f"malformed line in shard {path}: {exc}") from exc
+        if not isinstance(record, dict):
+            raise TrackerStoreError(f"malformed line in shard {path}: not a JSON object")
+        record_sequence = record.get("sequence")
+        if not isinstance(record_sequence, int):
+            continue
+        shard_sequences.append(record_sequence)
+        if record_sequence <= sequence:
+            record_id = record.get("id")
+            if not record_id:
+                raise TrackerStoreError(
+                    f"malformed record in shard {path}: missing or empty 'id'"
+                )
+            event_ids.append(record_id)
+
+    _first_defect, resolves_unknown_from = _well_formedness(shard_sequences)
+    if resolves_unknown_from is not None and sequence >= resolves_unknown_from:
+        return OBSERVED_SET_UNKNOWN
+
+    return {"sequence": sequence, "prefix_digest": _prefix_digest(event_ids)}
+
+
+def resolve_observed_set_union_for_event(
+    event: dict, *, repo_root: Path
+) -> dict | _UnknownObservedSet:
+    """``W(E)`` — cockpit's § SELF-COMPONENT RECONCILIATION (A10): the union
+    of *event*'s peer-only vector with its OWN self-component.
+
+    ```
+    W(E) = resolve_observed_set_for_event(E)      # peers, from the marker in effect
+         ∪ { machine(E): (sequence(E), id(E)) }    # self, from E's OWN record
+    ```
+
+    normalised to ``{sequence, prefix_digest}`` per § MIXED-TYPE DOMINATION
+    COMPARE (A14) — the digest computed HERE, at resolve time, over
+    *machine*'s own shard prefix ``1..sequence(E)`` via
+    ``_resolve_self_component`` — so ``compare_observed_set_vectors`` sees
+    exactly one homogeneous component type across the whole union.
+
+    The self-component comes from *event*'s OWN ``machine``/``sequence``
+    fields — NEVER from the marker's placement that
+    ``resolve_observed_set_for_event`` walks to find peers. That is the
+    whole point of this function:
+    ``resolve_observed_set_for_event`` maps every event between two fold
+    markers to the SAME marker (§ SELF-COMPONENT RECONCILIATION, "the
+    failure mode of getting this wrong"), so two same-machine applied
+    events sharing one fold window get an identical peer payload — correct
+    and expected. If the self-component were ALSO taken from the marker's
+    own placement, both events' FULL vectors would be identical: neither
+    dominates, and the axis would be falsely reported
+    ``CAUSAL_ORDER_CONCURRENT``. Reading the self-component from each
+    event's own record instead gives the later event a strictly greater
+    own-``sequence`` than the earlier one, so it correctly dominates —
+    no conflict.
+
+    If no marker was ever in effect for *event* (the bare
+    ``OBSERVED_SET_UNKNOWN`` sentinel from ``resolve_observed_set_for_event``
+    — no assertion was ever made about peers), the whole union is
+    ``OBSERVED_SET_UNKNOWN`` too: there is no peer payload to union a
+    self-component onto.
+
+    No peer-shard access is added by this function over
+    ``resolve_observed_set_for_event`` alone — see
+    ``_resolve_self_component``'s own docstring.
+
+    ``compare_observed_set_vectors`` (C3) is UNCHANGED by this function —
+    it only changes what gets fed into that compare, per that function's
+    own "Self-component note".
+
+    Spec backlink: docs/plans/2026-08-18-tmrg-03-ordering-contract-in-tracker-store.md
+    § C4; example-cockpit-repo docs/wiki/tracker-observed-set-and-concurrency.md
+    § SELF-COMPONENT RECONCILIATION (A10), § MIXED-TYPE DOMINATION COMPARE
+    (A14).
+    """
+    machine = event.get("machine")
+    sequence = event.get("sequence")
+    if not isinstance(machine, str) or not machine:
+        raise TrackerStoreError(f"event is missing required field: machine ({event!r})")
+    if not isinstance(sequence, int):
+        raise TrackerStoreError(f"event is missing required field: sequence ({event!r})")
+
+    peer_vector = resolve_observed_set_for_event(event, repo_root=repo_root)
+    if peer_vector is OBSERVED_SET_UNKNOWN:
+        return OBSERVED_SET_UNKNOWN
+
+    union = dict(peer_vector)
+    union[machine] = _resolve_self_component(machine, sequence, repo_root=repo_root)
+    return union
+
+
+def compare_observed_set_vectors(vector_a, vector_b) -> str:
+    """The causal comparator (cockpit's § MIXED-TYPE DOMINATION COMPARE,
+    A14) over two observed-set vectors. Pure and read-free — takes whatever
+    ``resolve_observed_set_for_event`` (or a future self-augmented union of
+    it — see the module note below) already resolved; does no shard I/O of
+    its own.
+
+    *vector_a* / *vector_b* are each either the bare ``OBSERVED_SET_UNKNOWN``
+    sentinel (no marker was ever in effect for that side — no assertion was
+    ever made) or a ``dict`` mapping peer slug to either
+    ``OBSERVED_SET_UNKNOWN`` (that one component resolved unknown) or a
+    concrete ``{"sequence": int, "prefix_digest": str}`` mapping — exactly
+    ``resolve_observed_set_for_event``'s return shape.
+
+    Domination (A14, quoted): ``W(A)`` dominates ``W(B)`` iff every
+    component of ``B`` is ``<=`` its counterpart in ``A``, with at least one
+    strictly ``<``. Any ``unknown`` component leaves the pair undecided and
+    the axis ``indeterminate`` (A13) — checked FIRST, before any directional
+    tally, so an unknown component can never be silently outvoted by a
+    decided component elsewhere in the same vector.
+
+    Returns one of ``CAUSAL_ORDER_EQUAL``, ``CAUSAL_ORDER_A_DOMINATES``,
+    ``CAUSAL_ORDER_B_DOMINATES``, ``CAUSAL_ORDER_CONCURRENT`` (a genuine,
+    decided antichain — no unknowns, but neither side dominates), or
+    ``CAUSAL_ORDER_INDETERMINATE`` (an unknown component, or an entire side
+    that is the bare sentinel, decided nothing).
+
+    Comparison is over the UNION of both vectors' peer key sets — a peer
+    named by only one side compares via the ``absent`` row, never raises,
+    never silently drops that peer from the compare.
+
+    Negative-spec: ``CAUSAL_ORDER_INDETERMINATE`` must never collapse into
+    ``CAUSAL_ORDER_EQUAL`` (a false "nothing changed"), into
+    ``CAUSAL_ORDER_CONCURRENT`` (a false positive — that value is reserved
+    for a DECIDED antichain), or into either dominates value (the exact
+    trusted-maximum over-claim cockpit's contract exists to prevent).
+
+    Self-component note (tmrg-03 scope split): this function is intentionally
+    agnostic to what a vector's keys and components MEAN — it compares
+    whatever mapping it is given. C4 adds the writing machine's own
+    self-component to ``W(E)`` at the point the vector is CONSTRUCTED
+    (``resolve_observed_set_union_for_event``, unioning
+    ``resolve_observed_set_for_event``'s peer-only result with a self entry
+    normalised to this same ``{sequence, prefix_digest}`` shape, digest
+    recomputed at resolve time over the event's own shard prefix per A14's
+    "normalise, then compare" rule) — never here. This function did not
+    change to accommodate that; it was, and remains, the seam C4 builds on
+    top of, not one it rewrites.
+
+    Spec backlink: docs/plans/2026-08-18-tmrg-03-ordering-contract-in-tracker-store.md
+    § C3; example-cockpit-repo docs/wiki/tracker-observed-set-and-concurrency.md
+    § MIXED-TYPE DOMINATION COMPARE (A14).
+    """
+    if vector_a is OBSERVED_SET_UNKNOWN or vector_b is OBSERVED_SET_UNKNOWN:
+        return CAUSAL_ORDER_INDETERMINATE
+
+    keys = set(vector_a) | set(vector_b)
+
+    saw_unknown = False
+    saw_lt = False
+    saw_gt = False
+    for key in keys:
+        component_a = vector_a.get(key, _ABSENT)
+        component_b = vector_b.get(key, _ABSENT)
+        result = _compare_observed_set_component(component_a, component_b)
+        if result == "unknown":
+            saw_unknown = True
+        elif result == "lt":
+            saw_lt = True
+        elif result == "gt":
+            saw_gt = True
+
+    if saw_unknown:
+        return CAUSAL_ORDER_INDETERMINATE
+    if saw_lt and saw_gt:
+        return CAUSAL_ORDER_CONCURRENT
+    if saw_lt:
+        # Every component of A is <= its B counterpart, at least one <.
+        return CAUSAL_ORDER_B_DOMINATES
+    if saw_gt:
+        return CAUSAL_ORDER_A_DOMINATES
+    return CAUSAL_ORDER_EQUAL
+
+
+def compare_events_causal_order(event_a: dict, event_b: dict, *, repo_root: Path) -> int:
+    """The linear-extension entrypoint: a total order over applied events,
+    causal-vector-first, ``(machine, id)``-tiebreak second — kept
+    deliberately separate from ``read_events`` (DEC-4, AC8:
+    ``read_events``' signature and default ordering behaviour do not
+    change).
+
+    Resolves each event's UNION observed-set vector ``W(E)`` via
+    ``resolve_observed_set_union_for_event`` (C4 — peers from the marker in
+    effect, plus the writing machine's own self-component from *event*'s
+    own record) and compares them with ``compare_observed_set_vectors``.
+    When that compare decides a direction (one side dominates), the
+    dominating event is causally LATER and sorts after the other. For
+    every pair the vector compare proves incomparable —
+    ``CAUSAL_ORDER_EQUAL``, ``CAUSAL_ORDER_CONCURRENT``, or
+    ``CAUSAL_ORDER_INDETERMINATE`` alike — order falls through to the
+    stable ``(machine, id)`` key (``machine`` names the shard, ``id`` is
+    cockpit's globally-unique primary key), never to ``applied_at``:
+    ``applied_at`` is wall-clock-stamped per machine and is not trusted to
+    order two applied events across machines once causal information has
+    already spoken for a pair — and it does not participate here even when
+    the vector compare has nothing to say, because it never speaks FOR a
+    pair to begin with, only alongside one.
+
+    Returns ``-1`` if *event_a* sorts before *event_b*, ``1`` if after, and
+    ``0`` only when both events carry the same ``(machine, id)`` — i.e. the
+    same event compared against itself. Suitable as a
+    ``functools.cmp_to_key`` comparator.
+
+    C3's known incompleteness is now closed: two applied events from the
+    SAME machine sharing one fold marker (cockpit's § SELF-COMPONENT
+    RECONCILIATION worked example) got identical PEER vectors under C3 and
+    fell straight through to the ``(machine, id)`` tiebreak — stable but
+    not causally informed for that pair. Under
+    ``resolve_observed_set_union_for_event`` the two events' self-components
+    differ (the later event has the strictly greater own-``sequence``), so
+    ``compare_observed_set_vectors`` now decides that pair causally instead
+    of falling through.
+
+    CONSUMPTION CONSTRAINT (cockpit's wiki, same section name — a hard
+    constraint on every value this comparator touches, not a footnote): a
+    vector ``sequence`` component indexes SHARD position, including marker
+    slots that ``read_events`` filters out (``applied_at is None``). This
+    function never compares a vector ``sequence`` component against a
+    projection-derived count (a ``read_events``-output index, a ``len()``,
+    an enumerate position) — the fallback key deliberately uses ``machine``
+    and ``id`` only, never ``sequence``, so this function cannot even be
+    tempted into that mistake. A future editor extending the fallback key
+    must not add ``sequence`` to it for exactly this reason.
+
+    Spec backlink: docs/plans/2026-08-18-tmrg-03-ordering-contract-in-tracker-store.md
+    § C3; example-cockpit-repo docs/wiki/tracker-observed-set-and-concurrency.md
+    § 4.3's linear extension, § CONSUMPTION CONSTRAINT.
+    """
+    vector_a = resolve_observed_set_union_for_event(event_a, repo_root=repo_root)
+    vector_b = resolve_observed_set_union_for_event(event_b, repo_root=repo_root)
+    outcome = compare_observed_set_vectors(vector_a, vector_b)
+
+    if outcome == CAUSAL_ORDER_A_DOMINATES:
+        return 1
+    if outcome == CAUSAL_ORDER_B_DOMINATES:
+        return -1
+
+    key_a = (event_a.get("machine"), event_a.get("id"))
+    key_b = (event_b.get("machine"), event_b.get("id"))
+    if key_a == key_b:
+        return 0
+    return -1 if key_a < key_b else 1

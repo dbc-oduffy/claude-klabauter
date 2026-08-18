@@ -189,9 +189,35 @@ def list_worktrees(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
     return worktrees
 
 
-def worktree_is_dirty(run_git: RunGit, worktree_path: str) -> bool:
+def worktree_is_dirty(run_git: RunGit, worktree_path: str) -> dict[str, Any]:
+    """Probes whether `worktree_path` has uncommitted changes via `git
+    status --porcelain`. Returns DR-319's degraded-with-evidence posture —
+    never fail-open (`docs/decisions/DR-319-session-fact-facade-shape-and-
+    failure-posture.md`; reference shape, read-only:
+    `coordinator_core/baton_assemble/__init__.py ::
+    _compute_dirty_tree_attribution`). A bare `bool(proc.stdout.strip())`
+    reads a failed call's empty stdout as "clean" (`returncode != 0` never
+    inspected), which then authorizes worktree removal — the single most
+    dangerous direction for this probe, since the caller uses "clean" to
+    unlock a destructive op. A degraded read must be structurally
+    distinguishable from a genuinely-clean one at the call site, never
+    collapsed back to a bool before the caller decides.
+
+    Returns:
+      - computed: {"degraded": False, "value": <bool>}
+      - degraded: {"degraded": True, "evidence": "<why the probe could not run>"}
+    """
     proc = run_git(["--no-optional-locks", "status", "--porcelain"], Path(worktree_path))
-    return bool(proc.stdout.strip())
+    if proc.returncode != 0:
+        return {
+            "degraded": True,
+            "evidence": (
+                f"worktree dirty-tree probe: git status --porcelain exited "
+                f"{proc.returncode} for {worktree_path!r} "
+                f"(stderr: {proc.stderr.strip()!r}) — cannot tell dirty from clean."
+            ),
+        }
+    return {"degraded": False, "value": bool(proc.stdout.strip())}
 
 
 def branch_reachable(run_git: RunGit, repo_root: Path, ref: str, target: str) -> bool:
@@ -361,10 +387,23 @@ def brief(
             continue
 
         reachable = branch_reachable(run_git, repo_root, branch_name, main_branch or current)
-        dirty = worktree_is_dirty(run_git, wt_path)
+        dirty_probe = worktree_is_dirty(run_git, wt_path)
+        # DR-319 posture, applied at the call site: a degraded probe is
+        # never read as clean. This guard authorizes destructive worktree
+        # removal, so "cannot tell" is treated as "do not proceed"
+        # (fail-closed) — a degraded probe routes through the same
+        # judgment-point-gated path as a genuinely dirty tree, never the
+        # unconditional-removal path a false "clean" would unlock.
+        dirty = dirty_probe["degraded"] or dirty_probe["value"]
         category = "stale-absorbed" if reachable else "stale-unique-work"
         worktrees_report.append(
-            {**wt, "tip_author": author, "category": category, "dirty": dirty}
+            {
+                **wt,
+                "tip_author": author,
+                "category": category,
+                "dirty": dirty,
+                "dirty_probe_degraded": dirty_probe["degraded"],
+            }
         )
 
         if not reachable:
@@ -378,16 +417,27 @@ def brief(
         remove_directive_id = f"d-worktree-remove-{wt_path}"
         if dirty:
             jp_id = f"j-worktree-dirty-{wt_path}"
+            if dirty_probe["degraded"]:
+                question = (
+                    f"Worktree {wt_path!r}'s dirty-tree probe failed "
+                    f"({dirty_probe['evidence']}) — cannot confirm clean, remove anyway?"
+                )
+            else:
+                question = f"Worktree {wt_path!r} has uncommitted changes — remove anyway?"
             judgment_points.append(
                 build_judgment_point(
                     None,
                     id=jp_id,
-                    question=f"Worktree {wt_path!r} has uncommitted changes — remove anyway?",
+                    question=question,
                     dispositions=[
                         build_disposition("proceed", resolves=[remove_directive_id]),
                         build_disposition("preserve"),
                     ],
-                    evidence={"path": wt_path, "branch": branch_name},
+                    evidence={
+                        "path": wt_path,
+                        "branch": branch_name,
+                        "probe_degraded": dirty_probe["degraded"],
+                    },
                     reason="insufficient-evidence",
                     revalidate_at_dispatch=False,
                 )

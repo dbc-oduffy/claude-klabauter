@@ -37,6 +37,7 @@ from coordinator_core.testing.doe_root import resolve_doe_root
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.workstream_complete import apply as wsc_apply
 from coordinator_core.workstream_complete import chain_partition_verdict_store
+from coordinator_core.workstream_complete import completion_verdict as _cv
 from coordinator_core.workstream_complete import judgments
 
 
@@ -4776,6 +4777,106 @@ def test_acceptance_criteria_batch_spelling_matches():
 
 
 # ---------------------------------------------------------------------------
+# gates.completeness_checklist verdict — C0,
+# docs/plans/2026-08-18-one-completion-verdict-for-workstream-complete.md.
+# `compute_completeness_checklist_gate` had no test coverage anywhere in
+# this repo before this chunk; this is its first. Table-driven over the
+# gate's four verdict arms (not-applicable x2 / indeterminate / clean /
+# open), each pinning `applies`/`unverified_count` to their pre-C0 values —
+# `verdict` is additive, not a behavior change.
+# ---------------------------------------------------------------------------
+
+_TWO_ITEM_CHECKLIST_TEXT = (
+    "---\n"
+    'title: "a handoff"\n'
+    "completeness_checklist:\n"
+    '  - "live: the server responds"\n'
+    '  - "restart-gated: config reload takes effect"\n'
+    "---\n"
+)
+
+_NO_CHECKLIST_TEXT = '---\ntitle: "a handoff"\nstatus: dispatched\n---\n'
+
+
+@pytest.mark.parametrize(
+    "case_name, disposition, consumed_handoff_text, decisions, "
+    "expected_applies, expected_unverified, expected_verdict",
+    [
+        (
+            "not-chain-terminal",
+            "single-session",
+            None,
+            {},
+            False,
+            0,
+            "not-applicable",
+        ),
+        (
+            "chain-terminal-no-checklist-field",
+            "predecessor-consumed",
+            _NO_CHECKLIST_TEXT,
+            {},
+            False,
+            0,
+            "not-applicable",
+        ),
+        (
+            "chain-terminal-no-consumed-text",
+            "predecessor-consumed",
+            None,
+            {},
+            False,
+            0,
+            "indeterminate",
+        ),
+        (
+            "all-items-waived",
+            "predecessor-consumed",
+            _TWO_ITEM_CHECKLIST_TEXT,
+            {"waived_items": ["the server responds", "config reload takes effect"]},
+            True,
+            0,
+            "clean",
+        ),
+        (
+            "items-unverified",
+            "predecessor-consumed",
+            _TWO_ITEM_CHECKLIST_TEXT,
+            {},
+            True,
+            2,
+            "open",
+        ),
+    ],
+)
+def test_completeness_checklist_gate_four_way_verdict(
+    case_name, disposition, consumed_handoff_text, decisions,
+    expected_applies, expected_unverified, expected_verdict,
+):
+    gate = _dc_hygiene.compute_completeness_checklist_gate(
+        disposition, consumed_handoff_text, decisions=decisions,
+    )
+    assert gate.applies is expected_applies, case_name
+    assert gate.unverified_count == expected_unverified, case_name
+    assert gate.verdict == expected_verdict, case_name
+
+
+def test_completeness_checklist_gate_archived_away_handoff_is_indeterminate_not_clean():
+    """The case C0 exists for: a chain-terminal close whose consumed
+    handoff was archived away by the cadence sweeps degrades
+    `consumed_handoff_text` to `None` (`__init__._read_consumed_handoff_
+    text`'s documented contract) -- the gate had input to look for and
+    didn't find it, which is NOT the same as looking and finding
+    everything verified."""
+    gate = _dc_hygiene.compute_completeness_checklist_gate(
+        "predecessor-consumed", None, decisions={},
+    )
+    assert gate.verdict == "indeterminate"
+    assert gate.applies is False
+    assert gate.unverified_count == 0
+
+
+# ---------------------------------------------------------------------------
 # gates.open_spine_row_worklist — docs/plans/2026-08-05-wsc-open-spine-row-
 # worklist.md, chunks C1-C3. Mirrors the completeness-checklist gate's own
 # test shape above; covers every "## Test surface" row: fires, silent
@@ -4950,6 +5051,11 @@ def test_open_spine_row_gate_never_blocks_directives_other_than_the_stamp(monkey
     def _strip(decision_object):
         gates = dict(decision_object["gates"])
         gates.pop("open_spine_row_worklist")
+        # `gates.completion_verdict` (C2) is a downstream aggregate that
+        # reads `open_spine_row_worklist`'s own reading -- it legitimately
+        # differs between firing/silent for the same reason that gate's
+        # own key is popped above, not a byte-identity break.
+        gates.pop("completion_verdict")
         judgment_points = [
             jp for jp in decision_object["judgment_points"] if jp["id"] != "jp-open-spine-rows-block-stamp"
         ]
@@ -6379,3 +6485,195 @@ def test_commit_count_scope_caps_length(monkeypatch, tmp_path):
     review_scale = decision_object["gates"]["review_scale"]
     scope_clause = review_scale["reason"].split("commit_count_scope=", 1)[1].rstrip(")")
     assert len(scope_clause) == wsc._COMMIT_COUNT_SCOPE_MAX_LEN
+
+
+# ---------------------------------------------------------------------------
+# gates.completion_verdict — C2,
+# docs/plans/2026-08-18-one-completion-verdict-for-workstream-complete.md.
+# `compose_completion_verdict` itself is tested directly (table-driven, over
+# synthetic `GateReading`s) for exact control of the composition-rule
+# arms; the `brief()`-level tests confirm the key's real presence/shape on
+# the envelope and that this chunk changes no judgment-point behavior
+# (AC6).
+# ---------------------------------------------------------------------------
+
+_CV_CLEAN = _cv.GateReading(status="clean", residue_items=(), reason=None)
+_CV_OPEN = _cv.GateReading(status="open", residue_items=(), reason=None)
+_CV_NA = _cv.GateReading(status="not-applicable", residue_items=(), reason=None)
+_CV_INDET = _cv.GateReading(status="indeterminate", residue_items=(), reason=None)
+
+
+def _cv_readings(
+    completeness_checklist=_CV_NA,
+    open_spine_row_worklist=_CV_NA,
+    consumed_handoff_completeness=_CV_NA,
+    landed_reconciliation=_CV_NA,
+    review_scale=_CV_NA,
+):
+    return {
+        "completeness_checklist": completeness_checklist,
+        "open_spine_row_worklist": open_spine_row_worklist,
+        "consumed_handoff_completeness": consumed_handoff_completeness,
+        "landed_reconciliation": landed_reconciliation,
+        "review_scale": review_scale,
+    }
+
+
+def test_completion_verdict_ac8_all_four_not_applicable_is_indeterminate_never_complete():
+    """AC8: nothing was measured (all four census gates `not-applicable`),
+    so `verdict` must be `indeterminate`, never `complete` -- `complete`
+    requires positive evidence (>=1 `clean`)."""
+    payload = _cv.compose_completion_verdict(_cv_readings())
+    assert payload["verdict"] == "indeterminate"
+    assert payload["clean_count"] == 0
+    assert payload["not_applicable_count"] == 4
+    assert payload["indeterminate_gates"] == []
+
+
+@pytest.mark.parametrize(
+    "readings_kwargs, expected_verdict",
+    [
+        ({"completeness_checklist": _CV_CLEAN}, "complete"),
+        ({"completeness_checklist": _CV_CLEAN, "landed_reconciliation": _CV_NA}, "complete"),
+        ({"completeness_checklist": _CV_OPEN}, "incomplete"),
+        ({"completeness_checklist": _CV_CLEAN, "open_spine_row_worklist": _CV_OPEN}, "incomplete"),
+        ({"completeness_checklist": _CV_INDET}, "indeterminate"),
+        (
+            {"completeness_checklist": _CV_CLEAN, "landed_reconciliation": _CV_INDET},
+            "indeterminate",
+        ),
+        (
+            {"completeness_checklist": _CV_OPEN, "landed_reconciliation": _CV_INDET},
+            "incomplete",
+        ),
+    ],
+)
+def test_completion_verdict_composition_rule_table(readings_kwargs, expected_verdict):
+    """The composition rule, over the four census gates only: any `open`
+    wins outright (`incomplete`), else `complete` requires >=1 `clean` and
+    zero `indeterminate`, else `indeterminate`."""
+    payload = _cv.compose_completion_verdict(_cv_readings(**readings_kwargs))
+    assert payload["verdict"] == expected_verdict
+
+
+def test_completion_verdict_review_scale_excluded_from_verdict_and_census():
+    """`review_scale` is narration-only (F5): an `open`- or `indeterminate`-
+    shaped review_scale reading must never flip `verdict`, appear in
+    `indeterminate_gates[]`, or count toward `clean_count`/
+    `not_applicable_count` -- only the four census gates do."""
+    all_clean_except_review_scale = _cv_readings(
+        completeness_checklist=_CV_CLEAN, review_scale=_CV_INDET,
+    )
+    payload = _cv.compose_completion_verdict(all_clean_except_review_scale)
+    assert payload["verdict"] == "complete"
+    assert "review_scale" not in payload["indeterminate_gates"]
+    assert payload["clean_count"] == 1
+    assert payload["not_applicable_count"] == 3
+
+    review_scale_open_never_forces_incomplete = _cv_readings(
+        completeness_checklist=_CV_CLEAN, review_scale=_CV_OPEN,
+    )
+    payload = _cv.compose_completion_verdict(review_scale_open_never_forces_incomplete)
+    assert payload["verdict"] == "complete"
+
+    # `review_scale` still appears in `readings[]` for narration.
+    reading_gates = {r["gate"] for r in payload["readings"]}
+    assert "review_scale" in reading_gates
+
+
+def test_completion_verdict_indeterminate_gates_populated_even_when_verdict_is_incomplete():
+    """`indeterminate_gates[]` is ALWAYS populated with every indeterminate
+    census gate, independent of the top-level verdict -- including when
+    `verdict` is `incomplete` (a concrete `open` reading elsewhere must not
+    make other unreadable gates disappear from the envelope)."""
+    payload = _cv.compose_completion_verdict(
+        _cv_readings(
+            completeness_checklist=_CV_OPEN,
+            open_spine_row_worklist=_CV_INDET,
+            landed_reconciliation=_CV_INDET,
+        )
+    )
+    assert payload["verdict"] == "incomplete"
+    assert set(payload["indeterminate_gates"]) == {"open_spine_row_worklist", "landed_reconciliation"}
+
+
+def test_completion_verdict_residue_concatenates_every_readings_residue_items():
+    open_reading = _cv.GateReading(
+        status="open",
+        residue_items=({"gate": "completeness_checklist", "reference": "x", "summary": "s"},),
+        reason=None,
+    )
+    payload = _cv.compose_completion_verdict(_cv_readings(completeness_checklist=open_reading))
+    assert payload["residue"] == [{"gate": "completeness_checklist", "reference": "x", "summary": "s"}]
+
+
+def test_completion_verdict_present_on_brief_envelope_with_verdict_enum_and_indeterminate_gates(
+    monkeypatch, tmp_path
+):
+    """AC1: `gates.completion_verdict` is present on every `brief()`
+    envelope, carrying a `verdict` in the declared enum and an ALWAYS-
+    populated `indeterminate_gates[]` -- verified over a fixture session
+    with no governing plan resolved (open_spine_row_worklist and
+    landed_reconciliation both read `indeterminate` in that shape, per
+    their own gates' "no governing plan resolved" arm), doubling as this
+    chunk's AC8 end-to-end case: no reading is `clean`, so `verdict` is
+    `indeterminate`, never `complete`."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    completion_verdict = decision_object["gates"]["completion_verdict"]
+    assert completion_verdict["verdict"] in {"complete", "incomplete", "indeterminate"}
+    assert completion_verdict["verdict"] == "indeterminate"
+    assert completion_verdict["clean_count"] == 0
+    assert isinstance(completion_verdict["indeterminate_gates"], list)
+    assert set(completion_verdict["indeterminate_gates"]) == {
+        "open_spine_row_worklist",
+        "landed_reconciliation",
+    }
+    reading_gates = {r["gate"] for r in completion_verdict["readings"]}
+    assert reading_gates == {
+        "completeness_checklist",
+        "open_spine_row_worklist",
+        "consumed_handoff_completeness",
+        "landed_reconciliation",
+        "review_scale",
+    }
+
+
+def test_completion_verdict_ac6_no_new_judgment_point_and_ids_unchanged(monkeypatch, tmp_path):
+    """AC6: this plan gates nothing -- no `depends_on` edge, no judgment
+    point, no halt/block. Regression guard: the judgment-point id set on a
+    fixture brief (the same fixture `test_ac8_regression_five_protected_
+    judgment_points_still_emit` above uses) is exactly what it was before
+    this chunk, with no `completion-verdict`-shaped id added."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decisions = {
+        "review": {
+            "sha_range": "a..b",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        },
+        "scratch_candidates": ["state/scratch/some-file.md"],
+    }
+    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert jp_ids == {
+        "commit-message-authoring",
+        "commit-significance-filter",
+        "finding-tradeoff-escalation-check",
+        "governing-spec-identification",
+        "jp-commit-subject-missing",
+        "jp-review-scale",
+        "jp-stage-paths-missing",
+        "lesson-worth-capturing",
+        "quota-retry-vs-escalate",
+        "review-dispatch-vehicle-choice",
+        "review-partition-strategy",
+        "reviewer-count-on-oracle-disagreement",
+        "scratch-disposition-per-file",
+        "session-work-summary",
+        "shallow-row3-waive-check",
+        "shared-schema-touch-check",
+    }
+    assert not any("completion-verdict" in jp_id or "completion_verdict" in jp_id for jp_id in jp_ids)

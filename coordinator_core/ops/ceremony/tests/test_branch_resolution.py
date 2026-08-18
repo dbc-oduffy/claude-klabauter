@@ -3802,7 +3802,7 @@ def test_c3_trailerless_large_range_scores_partition_mandatory(git_repo):
     Regression for the trailer-grep-vs-range-recompute bug: SCOPING_METHOD_
     STARTED_AT_RANGE is reached exactly when the Session-Id trailer is
     unreliable, so diff_loc/commit_count computed via the trailer-grep
-    helpers (_session_diff_loc/_session_commit_count) return 0 BY
+    helpers (_session_diff_loc/session_commit_count_attributed) return 0 BY
     CONSTRUCTION on this branch — silently under-scoring a large trailerless
     session as single-reviewer-ok regardless of true size.  This test's
     single trailerless commit alone exceeds _BRIGHTLINE_LOC (500), so the

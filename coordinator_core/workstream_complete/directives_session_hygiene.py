@@ -409,6 +409,32 @@ class CompletenessChecklistGate(NamedTuple):
     unverified_count: int
     warn_text: Optional[str]
     summary_line: str
+    #: Four-way split over what `applies=False` was standing in for,
+    #: matching `directives_spine_worklist.OpenSpineRowGate.verdict` /
+    #: `__init__.LandedReconciliationGate.verdict`. `applies` alone
+    #: collapses three distinct cases into one payload shape: the close
+    #: is not chain-terminal (nothing to check), the chain-terminal
+    #: handoff carries no `completeness_checklist:` field (nothing to
+    #: check), and the close IS chain-terminal but the consumed handoff
+    #: text never arrived (should have checked, could not). The last of
+    #: those is not theoretical: `__init__._read_consumed_handoff_text`
+    #: degrades an unreadable/missing/archived-away handoff to `None`,
+    #: and the cadence sweeps archive handoffs routinely — a
+    #: chain-terminal close over an archived-away handoff would
+    #: otherwise read as "all verified / not applicable" with no trace
+    #: that the gate never looked.
+    #:
+    #:   "indeterminate"  — chain-terminal disposition, but no consumed
+    #:                      handoff text to check (unreadable, missing,
+    #:                      or archived away)
+    #:   "not-applicable" — not chain-terminal, or the consumed handoff
+    #:                      carries no `completeness_checklist:` field
+    #:   "clean"          — items parsed, all verified
+    #:   "open"           — items parsed, at least one unverified
+    #:
+    #: Advisory only, exactly like `applies`: `verdict` adds no judgment
+    #: point, no dependency edge, and no exit code.
+    verdict: str = "not-applicable"
 
 
 _WARN_TEMPLATE = """WARN [completeness-checklist]: {count} completeness item(s) unverified on consumed baton {handoff_basename}.
@@ -473,16 +499,30 @@ def compute_completeness_checklist_gate(
     Returns `CompletenessChecklistGate(applies=False, ...)` with an empty
     item tuple and `warn_text=None` when the opt-in gate does not fire —
     `summary_line` is still populated with the "not applicable" Step 4
-    one-liner in that case.
+    one-liner in that case. `verdict` splits that `applies=False` shape
+    four ways (see `CompletenessChecklistGate.verdict`): `not-applicable`
+    when the close is not chain-terminal or the consumed handoff carries
+    no `completeness_checklist:` field; `indeterminate` when the close IS
+    chain-terminal but no consumed handoff text arrived to check (an
+    unreadable, missing, or archived-away handoff); `clean` when every
+    parsed item verified; `open` when at least one did not.
     """
     decisions = decisions or {}
     waived_items = frozenset(str(x) for x in decisions.get(_WAIVED_ITEM_KEY, ()))
     done_task_ids = frozenset(str(x) for x in decisions.get(_DONE_TASK_KEY, ()))
 
-    if canonicalize(disposition) != PREDECESSOR_CONSUMED or not consumed_handoff_text:
+    if canonicalize(disposition) != PREDECESSOR_CONSUMED:
         return CompletenessChecklistGate(
             applies=False, items=(), unverified_count=0, warn_text=None,
             summary_line="Completeness checklist: all verified / not applicable",
+            verdict="not-applicable",
+        )
+
+    if not consumed_handoff_text:
+        return CompletenessChecklistGate(
+            applies=False, items=(), unverified_count=0, warn_text=None,
+            summary_line="Completeness checklist: all verified / not applicable",
+            verdict="indeterminate",
         )
 
     parsed = parse_frontmatter(consumed_handoff_text)
@@ -492,6 +532,7 @@ def compute_completeness_checklist_gate(
         return CompletenessChecklistGate(
             applies=False, items=(), unverified_count=0, warn_text=None,
             summary_line="Completeness checklist: all verified / not applicable",
+            verdict="not-applicable",
         )
 
     checklist_items: list[CompletenessItem] = []
@@ -504,6 +545,7 @@ def compute_completeness_checklist_gate(
         return CompletenessChecklistGate(
             applies=True, items=tuple(checklist_items), unverified_count=0, warn_text=None,
             summary_line="Completeness checklist: all verified / not applicable",
+            verdict="clean",
         )
 
     item_lines = "\n".join(f"  - {it.item_class}: {it.assertion}" for it in unverified)
@@ -516,6 +558,7 @@ def compute_completeness_checklist_gate(
     return CompletenessChecklistGate(
         applies=True, items=tuple(checklist_items), unverified_count=len(unverified),
         warn_text=warn_text, summary_line=summary_line,
+        verdict="open",
     )
 
 

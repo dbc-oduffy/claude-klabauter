@@ -598,6 +598,49 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
       Count DISTINCT lines in ``<sdir>/touched.txt`` (the bash
       ``sort -u | wc -l`` dedup). Guard: absent ``touched.txt`` -> 0.
 
+      COVERAGE LIMIT ON THIS COUNT — DECLARED, NOT SILENTLY INHERITED
+      (docs/decisions/DR-258-bash-mediated-writes-are-a-named-permanent-limit.md,
+      ratified permanent, not a gap awaiting a fix): ``touched.txt``'s
+      producer, ``hooks.track_touched_files`` (``coordinator_core/hooks/
+      track_touched_files.py``), is registered only on the
+      ``Write|Edit|MultiEdit|NotebookEdit`` path. A path written through
+      Bash or PowerShell records no claim there, so this count is a FLOOR on
+      the session's true touched-path set, never a clean total — a session
+      that wrote real files entirely via Bash/PowerShell reads the same
+      ``files_touched: 0`` (or an equally undercounted N) as a session that
+      genuinely touched fewer paths. This function's wire contract (two bare
+      ints, byte-parity with the bash ``cs_session_shape_magnitude`` oracle
+      and locked by this module's own tests) has no room for a structural
+      degraded/collision discriminator the way the DR-319 fact facade does
+      (``docs/decisions/DR-319-session-fact-facade-shape-and-failure-posture.md``,
+      ``coordinator_core/session/session_facts.py``) — so, per the same
+      "absent coverage is not the same claim as a clean fact" requirement
+      (R-11, ``state/roadmap/fact-layer-core/COORDINATOR-RESOLUTIONS.md``),
+      the limit is declared here in prose, at this fact's own seam, the same
+      way ``session_facts.py`` declares its own known attribution limit in
+      prose rather than as a silent extra key.
+
+      DIRECTION OF ERROR MATTERS, AND IT IS THE UNSAFE ONE HERE:
+      ``baton_assemble._compute_dirty_tree_attribution`` (read-only
+      reference, ``coordinator_core/baton_assemble/__init__.py``) depends on
+      this same ``touched.txt`` and degrades (``degraded: True``) only when
+      the file is missing/unreadable or no session id resolves; when the
+      file is present but DR-258-incomplete, it returns ``degraded: False``
+      with an under-populated ``mine`` -- an UNDER-claim, which is the safe
+      direction for a probe whose only job is to stop OVER-claiming a peer's
+      work. This function's ``files_touched`` has no such safety valve: it
+      is a bare magnitude with no degrade signal, so the SAME DR-258
+      incompleteness inherits here in the direction that matters -- a caller
+      reading ``files_touched`` as a clean count is silently misled, not
+      merely conservative. That asymmetry is why this limit is called out
+      explicitly rather than assumed self-evident from DR-258 alone.
+
+      A future lift of ``files_touched`` onto the DR-319 fact facade
+      (``fl-core-02``) MUST carry this declaration forward at that facade's
+      own seam (its structural ``degraded``/``evidence`` shape can state it
+      properly) -- inheriting a bare int here without restating the limit
+      would regress an undercount into a claimed-clean fact.
+
     Spec backlink: pln-ceremony-as-pipeline-v1-session-state-co-596280 § C5
     """
     if not sid:
@@ -627,6 +670,10 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
                         commits = int(n)
 
     # ---- files_touched ----
+    # DR-258 coverage limit (see docstring's "COVERAGE LIMIT ON THIS COUNT"):
+    # touched.txt only records Write|Edit|MultiEdit|NotebookEdit-mediated
+    # paths, never Bash/PowerShell ones -- this count is a floor, not a
+    # clean total. Ratified permanent; do not "fix" by widening producers.
     touched = 0
     touched_file = Path(sdir) / "touched.txt"
     if touched_file.is_file():

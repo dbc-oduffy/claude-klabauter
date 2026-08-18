@@ -94,17 +94,25 @@ pytestmark = [
 
 from coordinator_core import tracker_store as ts  # noqa: E402
 from coordinator_core.tracker_store import (  # noqa: E402
+    CAUSAL_ORDER_A_DOMINATES,
+    CAUSAL_ORDER_B_DOMINATES,
+    CAUSAL_ORDER_CONCURRENT,
+    CAUSAL_ORDER_EQUAL,
+    CAUSAL_ORDER_INDETERMINATE,
     EVENTS_DIR_RELPATH,
     OBSERVED_SET_UNKNOWN,
     TrackerStoreDuplicateIdError,
     TrackerStoreError,
     append_event,
     append_events,
+    compare_events_causal_order,
+    compare_observed_set_vectors,
     fold_observed_set,
     max_sequence,
     read_events,
     resolve_observed_set,
     resolve_observed_set_for_event,
+    resolve_observed_set_union_for_event,
     shard_path,
 )
 from coordinator_core.locked_write import LockTimeout, MutateAbort  # noqa: E402,F401
@@ -3161,3 +3169,415 @@ class TestAppendEventsAC2AtomicityNegativeControl:
             "a second fd's read() into the locked byte range was not blocked — "
             "msvcrt.locking should be a mandatory lock, not merely advisory"
         )
+
+
+# ---------------------------------------------------------------------------
+# tmrg-03 C3 — compare_observed_set_vectors / compare_events_causal_order
+# ---------------------------------------------------------------------------
+
+
+def _concrete(sequence: int, event_ids: list[str]) -> dict:
+    """Build a concrete ``{sequence, prefix_digest}`` component the same way
+    ``fold_observed_set``/``resolve_observed_set`` do — via the pinned
+    ``_prefix_digest`` over *event_ids*."""
+    return {"sequence": sequence, "prefix_digest": ts._prefix_digest(event_ids)}
+
+
+class TestCompareObservedSetVectorsA14Table:
+    """One test per row of cockpit's § MIXED-TYPE DOMINATION COMPARE (A14)
+    table, plus the whole-vector-unknown case (a bare ``OBSERVED_SET_UNKNOWN``
+    side — no marker was ever in effect)."""
+
+    def test_key_absent_on_one_side_compares_below_present_no_digest_test(self):
+        vector_a = {"peer-a": _concrete(3, ["e1", "e2", "e3"])}
+        vector_b: dict = {}
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_A_DOMINATES
+        assert compare_observed_set_vectors(vector_b, vector_a) == CAUSAL_ORDER_B_DOMINATES
+
+    def test_either_side_unknown_component_propagates_to_indeterminate(self):
+        vector_a = {"peer-a": OBSERVED_SET_UNKNOWN, "peer-b": _concrete(1, ["e1"])}
+        vector_b = {"peer-a": _concrete(1, ["e1"]), "peer-b": _concrete(1, ["e1"])}
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_INDETERMINATE
+        assert compare_observed_set_vectors(vector_b, vector_a) == CAUSAL_ORDER_INDETERMINATE
+
+    def test_unknown_component_is_never_outvoted_by_a_decided_component(self):
+        # peer-a: A's component is unknown against B's concrete claim (undecided).
+        # peer-b: A strictly dominates B (a decided "gt"). The unknown must win
+        # the whole-axis answer regardless of the decided component elsewhere.
+        vector_a = {
+            "peer-a": OBSERVED_SET_UNKNOWN,
+            "peer-b": _concrete(5, ["e1", "e2", "e3", "e4", "e5"]),
+        }
+        vector_b = {
+            "peer-a": _concrete(2, ["p1", "p2"]),
+            "peer-b": _concrete(1, ["e1"]),
+        }
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_INDETERMINATE
+
+    def test_both_present_sequence_differs_orders_on_sequence_digests_ignored(self):
+        # Same sequence-order outcome under two UNRELATED digests — proves
+        # digests carry no signal when sequence alone already decides.
+        vector_a = {"peer-a": _concrete(5, ["a", "b", "c", "d", "e"])}
+        vector_b = {"peer-a": _concrete(3, ["x", "y", "z"])}
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_A_DOMINATES
+
+    def test_both_present_sequence_equal_digest_equal_is_equal(self):
+        vector_a = {"peer-a": _concrete(4, ["e1", "e2", "e3", "e4"])}
+        vector_b = {"peer-a": _concrete(4, ["e1", "e2", "e3", "e4"])}
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_EQUAL
+
+    def test_both_present_sequence_equal_digest_differs_resolves_unknown(self):
+        # The row that earns the digest's participation: same claimed
+        # sequence, divergent bytes (a rebase-and-re-append shape) — must
+        # resolve unknown/indeterminate, never equal and never a trusted
+        # dominates.
+        vector_a = {"peer-a": _concrete(3, ["e1", "e2", "e3"])}
+        vector_b = {"peer-a": _concrete(3, ["r1", "r2", "r3"])}
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_INDETERMINATE
+
+    def test_whole_vector_bare_unknown_sentinel_is_indeterminate(self):
+        vector_b = {"peer-a": _concrete(1, ["e1"])}
+        assert compare_observed_set_vectors(OBSERVED_SET_UNKNOWN, vector_b) == CAUSAL_ORDER_INDETERMINATE
+        assert compare_observed_set_vectors(vector_b, OBSERVED_SET_UNKNOWN) == CAUSAL_ORDER_INDETERMINATE
+        assert (
+            compare_observed_set_vectors(OBSERVED_SET_UNKNOWN, OBSERVED_SET_UNKNOWN)
+            == CAUSAL_ORDER_INDETERMINATE
+        )
+
+    def test_both_empty_vectors_are_equal(self):
+        assert compare_observed_set_vectors({}, {}) == CAUSAL_ORDER_EQUAL
+
+    def test_genuine_antichain_is_concurrent_not_indeterminate(self):
+        # peer-a: A ahead of B. peer-b: B ahead of A. Neither dominates, and
+        # nothing is unknown — a DECIDED concurrent finding, distinct from
+        # the missing-information indeterminate case.
+        vector_a = {
+            "peer-a": _concrete(3, ["a1", "a2", "a3"]),
+            "peer-b": _concrete(1, ["b1"]),
+        }
+        vector_b = {
+            "peer-a": _concrete(1, ["a1"]),
+            "peer-b": _concrete(2, ["b1", "b2"]),
+        }
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_CONCURRENT
+        assert compare_observed_set_vectors(vector_b, vector_a) == CAUSAL_ORDER_CONCURRENT
+
+
+class TestCompareEventsCausalOrderFallback:
+    """The event-level entrypoint: causal vector decides when it can, the
+    stable ``(machine, id)`` key decides everything the vector compare
+    proves incomparable — asserted stable and deterministic, and never
+    touching ``applied_at`` or a vector's ``sequence`` component."""
+
+    def test_dominating_vector_decides_direction_over_key_order(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+
+        _write_shard(
+            repo,
+            "peer-a",
+            [{**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"}],
+        )
+
+        early_marker = {
+            "id": "machine-a-fold-1111111111111111",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:01Z",
+            "applied_at": None,
+            "observed_set": {
+                "peer-a": {"sequence": 1, "prefix_digest": ts._prefix_digest(["peer-evt-1"])}
+            },
+        }
+        # event_z's own key ("machine-a", "z-evt") sorts AFTER event_a's own
+        # key ("machine-a", "a-evt") lexicographically, but event_z carries
+        # NO marker at all (predates any fold) while event_a's marker
+        # observed peer-a — so the vector compare must decide via
+        # indeterminate-vs-decided, not the reverse of what the key alone
+        # would say. Use two events that both DO have a marker in effect,
+        # with peer-a growing between them, to prove domination overrides
+        # any key-order intuition.
+        applied = {
+            **_event("z-evt", "2026-01-01T00:00:03Z", applied_at="2026-01-01T00:00:03Z"),
+            "machine": "machine-a",
+            "sequence": 2,
+        }
+        _write_shard(repo, "machine-a", [early_marker, applied])
+
+        _write_shard(
+            repo,
+            "peer-a",
+            [
+                {**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"},
+                {**_event("peer-evt-2", "2026-01-01T00:00:01Z"), "sequence": 2, "machine": "peer-a"},
+            ],
+        )
+        later_marker = {
+            "id": "machine-b-fold-2222222222222222",
+            "kind": "observed_set_fold",
+            "machine": "machine-b",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:04Z",
+            "applied_at": None,
+            "observed_set": {
+                "peer-a": {
+                    "sequence": 2,
+                    "prefix_digest": ts._prefix_digest(["peer-evt-1", "peer-evt-2"]),
+                }
+            },
+        }
+        b_applied = {
+            **_event("a-evt", "2026-01-01T00:00:05Z", applied_at="2026-01-01T00:00:05Z"),
+            "machine": "machine-b",
+            "sequence": 2,
+        }
+        _write_shard(repo, "machine-b", [later_marker, b_applied])
+
+        # b_applied's marker observed peer-a at sequence 2, strictly beyond
+        # applied's marker (peer-a at sequence 1) — b_applied dominates.
+        # b_applied's OWN key ("machine-b", "a-evt") sorts BEFORE applied's
+        # key ("machine-a", "z-evt") lexicographically on machine alone —
+        # proving domination, not key order, decided this pair.
+        assert compare_events_causal_order(applied, b_applied, repo_root=repo) == -1
+        assert compare_events_causal_order(b_applied, applied, repo_root=repo) == 1
+
+    def test_incomparable_pair_falls_through_to_stable_machine_id_key(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        # Neither event has a marker in effect (no fold has happened) — both
+        # vectors are the bare OBSERVED_SET_UNKNOWN sentinel, indeterminate,
+        # so order must come from the (machine, id) fallback only.
+        _write_shard(
+            repo,
+            "machine-a",
+            [{**_event("evt-a", "2026-01-01T00:00:00Z", applied_at="2026-01-01T00:00:00Z"), "sequence": 1, "machine": "machine-a"}],
+        )
+        _write_shard(
+            repo,
+            "machine-b",
+            [{**_event("evt-b", "2026-01-01T00:00:01Z", applied_at="2026-01-01T00:00:01Z"), "sequence": 1, "machine": "machine-b"}],
+        )
+        event_a = {"machine": "machine-a", "sequence": 1, "id": "evt-a"}
+        event_b = {"machine": "machine-b", "sequence": 1, "id": "evt-b"}
+
+        result_ab = compare_events_causal_order(event_a, event_b, repo_root=repo)
+        result_ba = compare_events_causal_order(event_b, event_a, repo_root=repo)
+        assert result_ab == -1, "machine-a sorts before machine-b lexicographically"
+        assert result_ba == 1
+        # Deterministic across repeated calls.
+        assert compare_events_causal_order(event_a, event_b, repo_root=repo) == result_ab
+
+    def test_same_event_compared_with_itself_is_zero(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        event = {"machine": "machine-a", "sequence": 1, "id": "evt-a"}
+        assert compare_events_causal_order(event, event, repo_root=repo) == 0
+
+    def test_equal_vectors_fall_through_to_key_not_reported_as_decided(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "peer-a",
+            [{**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"}],
+        )
+        marker_a = {
+            "id": "machine-a-fold-3333333333333333",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:01Z",
+            "applied_at": None,
+            "observed_set": {
+                "peer-a": {"sequence": 1, "prefix_digest": ts._prefix_digest(["peer-evt-1"])}
+            },
+        }
+        event_a = {
+            **_event("a-evt", "2026-01-01T00:00:02Z", applied_at="2026-01-01T00:00:02Z"),
+            "machine": "machine-a",
+            "sequence": 2,
+        }
+        _write_shard(repo, "machine-a", [marker_a, event_a])
+
+        marker_b = {
+            "id": "machine-b-fold-4444444444444444",
+            "kind": "observed_set_fold",
+            "machine": "machine-b",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:01Z",
+            "applied_at": None,
+            "observed_set": {
+                "peer-a": {"sequence": 1, "prefix_digest": ts._prefix_digest(["peer-evt-1"])}
+            },
+        }
+        event_b = {
+            **_event("b-evt", "2026-01-01T00:00:02Z", applied_at="2026-01-01T00:00:02Z"),
+            "machine": "machine-b",
+            "sequence": 2,
+        }
+        _write_shard(repo, "machine-b", [marker_b, event_b])
+
+        # Both events' peer-only vectors are identical ({peer-a: seq 1,
+        # same digest}) — the vector compare proves EQUAL, which must still
+        # fall through to the stable key rather than being treated as a
+        # decided direction.
+        assert (
+            compare_observed_set_vectors(
+                resolve_observed_set_for_event(event_a, repo_root=repo),
+                resolve_observed_set_for_event(event_b, repo_root=repo),
+            )
+            == CAUSAL_ORDER_EQUAL
+        )
+        assert compare_events_causal_order(event_a, event_b, repo_root=repo) == -1
+        assert compare_events_causal_order(event_b, event_a, repo_root=repo) == 1
+
+
+class TestSelfComponentUnionC4:
+    """tmrg-03 C4 — ``resolve_observed_set_union_for_event``: cockpit's
+    worked example (§ SELF-COMPONENT RECONCILIATION (A10)) for two
+    same-machine applied events sharing one fold marker, own shard made
+    contiguous, plus the sibling case where the discriminating slot is
+    genuinely absent (§ SELF-SHARD APPLICABILITY, DEC-5)."""
+
+    @staticmethod
+    def _build_own_shard(repo, *, materialize_14: bool):
+        """Machine ``machine-m`` folds once (marker ``F`` at own-shard
+        sequence 12, observing no peers), then two applied transitions on
+        the same ``(item_id, axis)`` share that one fold window: ``E1`` at
+        own-shard sequence 13, ``E2`` at own-shard sequence 15. Sequence 14
+        is either a genuinely materialized unrelated/different-axis event
+        (own shard contiguous 1..15 — the case that discriminates the
+        marker-placement bug) or genuinely absent (own shard defective from
+        position 14 — the sibling case that must resolve indeterminate, not
+        antichain 1)."""
+        records = [
+            {
+                **_event(
+                    f"m-evt-{i}",
+                    f"2026-01-01T00:{i:02d}:00Z",
+                    applied_at=f"2026-01-01T00:{i:02d}:00Z",
+                ),
+                "sequence": i,
+                "machine": "machine-m",
+            }
+            for i in range(1, 12)
+        ]
+        records.append(
+            {
+                "id": "machine-m-fold-aaaaaaaaaaaaaaaa",
+                "kind": "observed_set_fold",
+                "machine": "machine-m",
+                "sequence": 12,
+                "observed_at": "2026-01-01T00:12:00Z",
+                "applied_at": None,
+                "observed_set": {},
+            }
+        )
+        e1 = {
+            **_event("evt-a1", "2026-01-01T00:13:00Z", applied_at="2026-01-01T00:13:00Z"),
+            "machine": "machine-m",
+            "sequence": 13,
+            "item_id": "item-x",
+            "axis": "qa",
+        }
+        records.append(e1)
+        if materialize_14:
+            records.append(
+                {
+                    **_event(
+                        "evt-other", "2026-01-01T00:14:00Z", applied_at="2026-01-01T00:14:00Z"
+                    ),
+                    "machine": "machine-m",
+                    "sequence": 14,
+                    "item_id": "item-y",
+                    "axis": "docs",
+                }
+            )
+        e2 = {
+            **_event("evt-a2", "2026-01-01T00:15:00Z", applied_at="2026-01-01T00:15:00Z"),
+            "machine": "machine-m",
+            "sequence": 15,
+            "item_id": "item-x",
+            "axis": "qa",
+        }
+        records.append(e2)
+        _write_shard(repo, "machine-m", records)
+        return e1, e2
+
+    def test_slot_materialized_e2_dominates_e1_no_false_conflict(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        e1, e2 = self._build_own_shard(repo, materialize_14=True)
+
+        union_e1 = resolve_observed_set_union_for_event(e1, repo_root=repo)
+        union_e2 = resolve_observed_set_union_for_event(e2, repo_root=repo)
+
+        # The bug this chunk exists to prevent: if the self-component were
+        # taken from the marker's own placement rather than each event's
+        # own record, both e1 and e2 would carry the SAME self-component
+        # (F's own placement) and the axis would be falsely reported
+        # CAUSAL_ORDER_CONCURRENT. Under the per-event rule the later event
+        # strictly dominates — a decided antichain of cardinality 1, E2
+        # alone.
+        assert compare_observed_set_vectors(union_e1, union_e2) == CAUSAL_ORDER_B_DOMINATES
+        assert compare_observed_set_vectors(union_e2, union_e1) == CAUSAL_ORDER_A_DOMINATES
+        assert compare_events_causal_order(e1, e2, repo_root=repo) == -1
+        assert compare_events_causal_order(e2, e1, repo_root=repo) == 1
+
+    def test_slot_absent_resolves_indeterminate_not_dominates_or_conflicted(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        e1, e2 = self._build_own_shard(repo, materialize_14=False)
+
+        union_e1 = resolve_observed_set_union_for_event(e1, repo_root=repo)
+        union_e2 = resolve_observed_set_union_for_event(e2, repo_root=repo)
+
+        # e2's OWN sequence (15) is at/after its own shard's first defect
+        # (the genuine hole at 14) — its self-component must resolve
+        # OBSERVED_SET_UNKNOWN, never a trusted antichain-1 (that would be
+        # trusting a defective own shard) and never CAUSAL_ORDER_CONCURRENT
+        # (that would collapse unknown into a false positive).
+        assert union_e2["machine-m"] is OBSERVED_SET_UNKNOWN
+        assert union_e1["machine-m"] is not OBSERVED_SET_UNKNOWN
+        assert compare_observed_set_vectors(union_e1, union_e2) == CAUSAL_ORDER_INDETERMINATE
+        assert compare_observed_set_vectors(union_e2, union_e1) == CAUSAL_ORDER_INDETERMINATE
+
+    def test_union_is_indeterminate_when_no_marker_ever_existed(self, tmp_path):
+        # resolve_observed_set_for_event's own no-marker case (bare
+        # OBSERVED_SET_UNKNOWN sentinel) must propagate through the union
+        # unchanged — there is no peer payload to union a self-component
+        # onto.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "machine-solo",
+            [
+                {
+                    **_event(
+                        "solo-evt", "2026-01-01T00:00:00Z", applied_at="2026-01-01T00:00:00Z"
+                    ),
+                    "machine": "machine-solo",
+                    "sequence": 1,
+                }
+            ],
+        )
+        event = {"machine": "machine-solo", "sequence": 1, "id": "solo-evt"}
+        assert resolve_observed_set_union_for_event(event, repo_root=repo) is OBSERVED_SET_UNKNOWN
+
+
+class TestCompareEventsCausalOrderAC8ReadEventsUnaffected:
+    """AC8: this comparator must not perturb ``read_events``' own contract —
+    a negative check that it takes no *sort*, *filter*, or *repo_root
+    default* parameter overlapping ``read_events``'s signature."""
+
+    def test_read_events_signature_and_sort_key_unchanged(self, tmp_path):
+        import inspect
+
+        repo = _make_git_repo(tmp_path / "repo")
+        applied = append_event(
+            _event("evt-1", "2026-01-01T00:00:00Z", applied_at="2026-01-01T00:00:00Z"),
+            repo_root=repo,
+        )
+        marker = fold_observed_set(repo_root=repo)
+        assert marker is None or marker is not None  # fold is a no-op with no peers; either is fine
+
+        events = read_events(repo_root=repo)
+        assert events == [applied], "read_events output unaffected by the comparator's existence"
+
+        sig = inspect.signature(read_events)
+        assert list(sig.parameters) == ["repo_root"], "read_events must not gain a new parameter"

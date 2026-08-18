@@ -544,16 +544,53 @@ def _session_added_plans(
     return paths
 
 
-def _session_commit_count(worktree_root: Path, sid: str) -> int:
-    """Return the number of commits tagged with Session-Id: sid."""
+def session_commit_count_attributed(worktree_root: Path, sid: str) -> dict:
+    """Attributed session commit count: `git log --grep=Session-Id: <sid>`.
+
+    Returns C1(c)'s degraded-with-evidence shape (docs/decisions/DR-319 —
+    `_compute_dirty_tree_attribution`'s reference shape), not a bare int. A failed git
+    call and a genuinely-zero-commit session are NOT the same value, and this producer
+    is the seam where that distinction must first exist — collapsing a git failure into
+    `0` here is what left AC3 unsatisfiable at the facade one layer up
+    (`coordinator_core/session/session_facts.py`), which cannot recover a distinction
+    its producer already destroyed.
+
+    Promoted from the former private `_session_commit_count` (plan
+    docs/plans/2026-08-18-session-fact-facade-and-failure-posture.md, C2 sub-task,
+    the Staff Engineer F4): the underscore name was being reached across packages by
+    `quick_wrap_assemble`, the exact accretion `assemblers.md` § 7 warns against for
+    `pickup_assemble`. This is now the one importable producer both packages call.
+
+    Shapes:
+      - `{"degraded": False, "value": <int commit count>}`
+      - `{"degraded": True, "evidence": "<why the probe could not run>"}`
+
+    KNOWN UNDERCOUNT (the Staff Engineer F5, R-11/DR-319): `--grep=Session-Id:` only sees commits
+    carrying the trailer. A commit made via plumbing (`git commit-tree`, bypassing the
+    porcelain `commit` path) loses the trailer, so `value: 0` is ALSO reachable for a
+    session that committed real work. This producer has no signal to distinguish "no
+    commits" from "commits, untagged" — a caller serving this fact declares that limit
+    as part of the served fact rather than silently inheriting it.
+
+    `_session_diff_loc` (below) has the identical fail-open shape and is deliberately
+    NOT converted by this change — named-and-deferred, not lifted onto any fact this
+    plan serves.
+    """
     result = _git_run(
         ["log", "--oneline", f"--grep=Session-Id: {sid}"],
         cwd=worktree_root,
     )
     if result.returncode != 0:
-        return 0
+        return {
+            "degraded": True,
+            "evidence": (
+                f"git log --grep=Session-Id: {sid} failed: returncode="
+                f"{result.returncode!r} stderr={result.stderr.strip()!r}"
+            ),
+        }
     # Review: code-reviewer F12 — renamed l → line (PEP 8 E741: l is visually ambiguous)
-    return len([line for line in result.stdout.splitlines() if line.strip()])
+    count = len([line for line in result.stdout.splitlines() if line.strip()])
+    return {"degraded": False, "value": count}
 
 
 def _session_diff_loc(worktree_root: Path, sid: str) -> int:
@@ -596,7 +633,7 @@ def _session_surface_count(paths: list[str]) -> int:
 def _range_commit_count(worktree_root: Path, candidate_range: str) -> int:
     """Return the number of commits within candidate_range.
 
-    Range-scoped counterpart to ``_session_commit_count`` for the
+    Range-scoped counterpart to ``session_commit_count_attributed`` for the
     SCOPING_METHOD_STARTED_AT_RANGE branch, where the Session-Id trailer grep
     is a proven-unreliable signal (that unreliability is exactly why this
     branch is reached).  Uses ``git rev-list --count`` over candidate_range
@@ -714,7 +751,7 @@ def _trailer_reliable(
     """Return whether the Session-Id trailer is a trustworthy scoping signal for sid.
 
     UNRELIABLE (returns False) when the trailer grep finds zero matches
-    (``_session_commit_count`` == 0) BUT HEAD has moved since the session's
+    (``session_commit_count_attributed`` reports ``value: 0``, computed) BUT HEAD has moved since the session's
     own ``started_at`` — i.e. the session did real work but none of its
     commits carry the trailer (plain ``git add -- … && git commit``,
     SC-DR-008 baseline, carries no ``Session-Id:`` trailer).
@@ -726,7 +763,14 @@ def _trailer_reliable(
 
     Pure read — no receipt mutation, no X-node emission.
     """
-    if _session_commit_count(worktree_root, sid) > 0:
+    # Preexisting fail-open behaviour at this in-module call site is left unchanged by
+    # the C2 sub-task (docs/plans/2026-08-18-session-fact-facade-and-failure-posture.md):
+    # a degraded read is treated the same as a computed `value: 0` here, same as the
+    # old bare-int `_session_commit_count` did. The new degraded-with-evidence
+    # distinction is surfaced by the facade (coordinator_core/session/session_facts.py),
+    # not retrofitted onto this pre-existing ceremony branch.
+    commit_count_record = session_commit_count_attributed(worktree_root, sid)
+    if not commit_count_record["degraded"] and commit_count_record["value"] > 0:
         return True
 
     if started_at is None:
@@ -851,7 +895,7 @@ def analyze_session_scoping(
     method selection:
       - Trailer reliable (at least one Session-Id-tagged commit, or no work
         happened since started_at) ⇒ SCOPING_METHOD_TRAILER — the existing
-        grep-based scoping (_session_commit_count / _session_diff_loc) stays
+        grep-based scoping (session_commit_count_attributed / _session_diff_loc) stays
         authoritative; C3 wires this branch to a no-op (keep current path).
       - Trailer unreliable AND the started_at range is foreign-free and
         contiguous ⇒ SCOPING_METHOD_STARTED_AT_RANGE — the range itself is
@@ -2278,7 +2322,15 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
         # trusting a (possibly foreign-contaminated) grep/range result.
         sha_range = ""
         diff_loc = _session_diff_loc(worktree_root, sid)
-        commit_count = _session_commit_count(worktree_root, sid)
+        # Preexisting fail-open behaviour at this call site is left unchanged by the C2
+        # sub-task: a degraded read is folded into commit_count=0 here, matching the old
+        # bare-int `_session_commit_count`. The degraded-with-evidence distinction is
+        # surfaced by the facade (coordinator_core/session/session_facts.py), not
+        # retrofitted onto this pre-existing brightline branch.
+        commit_count_record = session_commit_count_attributed(worktree_root, sid)
+        commit_count = (
+            commit_count_record["value"] if not commit_count_record["degraded"] else 0
+        )
         surface_count = _session_surface_count(touched_paths)
 
     partition_mandatory = (
