@@ -146,6 +146,31 @@ def _fm_field(path: Path, key: str) -> Optional[str]:
     return read_fm_field(split.fm_text, key)
 
 
+def _seed_forked_from_child(repo: Path, name: str, forked_from: str) -> Path:
+    """Live, non-terminal handoff naming `forked_from` (bare filename) — used
+    to retain a predecessor across the supersede archival guard (C3
+    edge_kinds={"forked_from"} exemption: a succession child no longer
+    retains, but a spinoff still does) so a test can exercise TWO supersede
+    calls against the SAME still-resident path. Mirrors
+    coordinator_core/ops/tests/test_supersede_archives_atomically.py's own
+    `_seed_handoff_with_forked_from` helper."""
+    path = repo / "state" / "handoffs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        f'title: "Test Handoff {name}"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        f'forked_from: "{forked_from}"\n'
+        "deployment_state: active\n"
+    )
+    path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add {name}")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # AC12 — ship (`_ship`, via handoff_transition's own "ship" verb)
 # ---------------------------------------------------------------------------
@@ -410,6 +435,15 @@ def test_supersede_conflicting_successor_still_refuses(tmp_path):
 
 
 def test_transition_supersede_clears_pickup_ready(tmp_path):
+    """C3 follow-up (docs/plans/2026-08-18-supersede-stamps-and-archives-
+    atomically.md): writer 2 (`handoff_transition._supersede`) now
+    discharges its own archival in the same call, same as writer 1. With no
+    real successor file on disk (nothing else in state/handoffs/ names this
+    candidate), the live-children guard reports safe and the record
+    archives — so the pair this test pins (deployment_state/pickup_ready/
+    status) is asserted at its POST-ARCHIVE location, the same file-moved
+    shape AC2 mandates everywhere else in this plan, not at the original
+    (now-vacated) path."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     handoff = _seed_handoff(
@@ -419,6 +453,7 @@ def test_transition_supersede_clears_pickup_ready(tmp_path):
         deployment_state="in_flight",
         status="claimed",
         pickup_ready=True,
+        commit=True,
     )
 
     result = _run(
@@ -431,12 +466,24 @@ def test_transition_supersede_clears_pickup_ready(tmp_path):
     )
 
     assert result["exit_code"] == 0, result
-    assert _fm_field(handoff, "deployment_state") == "continued"
-    assert _fm_field(handoff, "pickup_ready") == "false"
-    assert _fm_field(handoff, "status") == "claimed"
+    assert result.get("moved") is True, result
+    assert not handoff.exists(), "predecessor must be gone from state/handoffs/"
+
+    archived = list((repo / "archive" / "handoffs").rglob("20260101-ht-supersede.md"))
+    assert len(archived) == 1, archived
+    assert _fm_field(archived[0], "deployment_state") == "continued"
+    assert _fm_field(archived[0], "pickup_ready") == "false"
+    assert _fm_field(archived[0], "status") == "claimed"
 
 
 def test_transition_supersede_idempotent_no_op_only_at_full_target_state(tmp_path):
+    """C3 follow-up: writer 2 now discharges archival in the same call, so a
+    record with NO live children would archive on the first call, leaving
+    nothing at the original path for a second call to replay against. A
+    live `forked_from` child (a spinoff — deliberately NOT the succession
+    edge C3's edge_kinds={"forked_from"} exemption drops) keeps this record
+    RETAINED across both calls, so the pickup_ready idempotency this test
+    actually pins is still exercised at the same resident path."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     successor = "state/handoffs/20260101-successor.md"
@@ -447,7 +494,9 @@ def test_transition_supersede_idempotent_no_op_only_at_full_target_state(tmp_pat
         deployment_state="continued",
         status="claimed",
         pickup_ready=True,
+        commit=True,
     )
+    _seed_forked_from_child(repo, "20260101-spinoff.md", "20260101-ht-supersede-stale.md")
     text = handoff.read_text(encoding="utf-8")
     handoff.write_text(
         text.replace(

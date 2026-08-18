@@ -957,7 +957,7 @@ def test_rung2_absent_key_remediation_text_byte_identical(_rung2_fixture, monkey
         "  Remediate (choose one):\n"
         "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
         "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-        "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
+        "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
     )
 
     def _fake_run(*args, **kwargs):

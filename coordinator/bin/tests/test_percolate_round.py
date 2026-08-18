@@ -1623,6 +1623,87 @@ def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
     assert order == ["lock-acquired", "real-run", "commit", "lock-released"], order
 
 
+# ---------------------------------------------------------------------------
+# `--reconcile-dest=discard` is a `git reset --hard` + `git clean -fd` over
+# dest. Run OUTSIDE the round lock it resets the working tree of a round
+# concurrently syncing into that same dest, destroying in-flight bytes the
+# holder is about to commit — observed live on 2026-08-18 against
+# claude-klabauter, where a round whose foreground shell had been killed was
+# still running, still holding the lock, and a retry's discard reset its tree
+# before failing to acquire. The lock is what makes "dirty" mean "crashed
+# predecessor" instead of "live peer".
+# ---------------------------------------------------------------------------
+
+
+def _discard_ordering_round(tmp_path, monkeypatch, order, extra_argv):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _recording_run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            order.append("real-run")
+        elif str(_mod._SCOPED_GIT_COMMIT) in joined:
+            order.append("commit")
+        return spy(cmd, **kwargs)
+
+    def _recording_discard(dest_arg, dirty_status):
+        order.append("discard")
+        return True, "discarded 1 path(s), reset to HEAD deadbeef"
+
+    monkeypatch.setattr(_mod.subprocess, "run", _recording_run)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+    monkeypatch.setattr(_mod, "_dest_dirty_status", lambda d: " M stranded.py\n")
+    monkeypatch.setattr(_mod, "_reconcile_dest_discard", _recording_discard)
+    monkeypatch.setattr(
+        _mod, "_round_held_lock", lambda target, **kw: _RecordingLockCtx(order, target, **kw)
+    )
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(
+        ["alpha", "--percolate-root", str(percolate_root), "--yes",
+         "--reconcile-dest", "discard"] + extra_argv
+    )
+    return _mod._cmd_round(args)
+
+
+def test_discard_runs_inside_held_lock_default_path(tmp_path, monkeypatch):
+    """The dest-residue discard must not touch the tree before the round owns
+    the dest lock — otherwise it resets a live peer's in-flight sync."""
+    order: List[str] = []
+    rc = _discard_ordering_round(tmp_path, monkeypatch, order, [])
+
+    assert rc == _mod._EXIT_OK
+    assert "discard" in order, order
+    assert order.index("lock-acquired") < order.index("discard"), order
+    assert order.index("discard") < order.index("real-run"), order
+
+
+def test_discard_runs_inside_held_lock_dry_run_first_path(tmp_path, monkeypatch):
+    """Same invariant on the `--dry-run-first` path, which has its own
+    pre-flight call site."""
+    order: List[str] = []
+    rc = _discard_ordering_round(tmp_path, monkeypatch, order, ["--dry-run-first"])
+
+    assert rc == _mod._EXIT_OK
+    assert "discard" in order, order
+    assert order.index("lock-acquired") < order.index("discard"), order
+    assert order.index("discard") < order.index("real-run"), order
+
+
 def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
     """A contended dest fails FAST via `_print_step_failure`'s `_EXIT_FAIL`
     path, naming that another round is running against the dest, and never

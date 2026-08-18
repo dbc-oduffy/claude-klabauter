@@ -936,3 +936,90 @@ class TestComputeOnly:
             "'commit.anchors' not found in op-registry — check register_op() call "
             "and ops/__init__.py import"
         )
+
+
+# ---------------------------------------------------------------------------
+# (e) Shared-index scoping — the `paths` param narrows the staged set
+# ---------------------------------------------------------------------------
+
+class TestSharedIndexScoping:
+    """`paths` scopes the staged-diff read to THIS commit's own pathspec.
+
+    Regression pin for the 2026-08-18 misattribution: on a shared worktree the
+    index carries every concurrent session's staged work, so an unscoped
+    `git diff --cached --name-only` answers "what is staged in the repo", not
+    "what is in this commit". Ship commit 582c7b510 was stamped
+    `Deliverable-Id: dlv-fl-core-03` off a PEER's staged plan while committing
+    a different deliverable's artifacts. The single-plan ambiguity guard cannot
+    catch this — a set of exactly one foreign plan looks unambiguous.
+    """
+
+    def _setup(self, tmp_path: Path):
+        _reset_equivalence_map_cache()
+        _init_repo(tmp_path)
+        (tmp_path / "docs" / "plans").mkdir(parents=True)
+        (tmp_path / "docs" / "plans" / "peer-plan.md").write_text(
+            textwrap.dedent(
+                """\
+                ---
+                plan_id: "pln-peer-plan-aaaaaa"
+                deliverable_id: "dlv-peer-deliverable"
+                ---
+                peer body
+                """
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "mine.md").write_text("my own artifact\n", encoding="utf-8")
+        # BOTH staged, as on a shared tree: the peer's plan and my file.
+        _git(["add", "docs/plans/peer-plan.md", "mine.md"], tmp_path)
+
+    def _call(self, tmp_path: Path, paths):
+        from coordinator_core.ops.commit_anchors import _handler
+
+        params = {"session_id": "", "nature": None}
+        if paths is not None:
+            params["paths"] = paths
+        result = _run(_handler(params, _common_dir(tmp_path)))
+        return _parse_trailers(result["trailers"])
+
+    def test_unscoped_read_picks_up_the_peers_staged_plan(self, tmp_path):
+        """Pre-fix behaviour, pinned deliberately: with no `paths` scope the op
+        still reads the whole index. That is correct for a sole-occupant tree
+        and is what every not-yet-updated caller relies on — it must not change
+        silently underneath them."""
+        self._setup(tmp_path)
+        trailers = self._call(tmp_path, paths=None)
+        assert trailers.get("Deliverable-Id") == "dlv-peer-deliverable"
+
+    def test_scoping_to_own_paths_omits_the_foreign_plan(self, tmp_path):
+        """THE assertion: scoped to a pathspec that excludes the peer's plan,
+        no Plan/Plan-Id/Deliverable-Id is emitted at all — omit rather than
+        stamp a foreign identity."""
+        self._setup(tmp_path)
+        trailers = self._call(tmp_path, paths=["mine.md"])
+        assert "Plan" not in trailers
+        assert "Plan-Id" not in trailers
+        assert "Deliverable-Id" not in trailers
+
+    def test_scope_including_own_plan_still_resolves_it(self, tmp_path):
+        """The narrowing must not break the case it exists to preserve: a plan
+        genuinely inside this commit's pathspec still stamps."""
+        self._setup(tmp_path)
+        trailers = self._call(tmp_path, paths=["docs/plans/peer-plan.md", "mine.md"])
+        assert trailers.get("Plan") == "docs/plans/peer-plan.md"
+        assert trailers.get("Deliverable-Id") == "dlv-peer-deliverable"
+
+    def test_backslash_pathspec_still_matches(self, tmp_path):
+        """Windows is first-class: a caller handing over OS-native separators
+        scopes identically to one handing over forward slashes."""
+        self._setup(tmp_path)
+        trailers = self._call(tmp_path, paths=[r"docs\plans\peer-plan.md"])
+        assert trailers.get("Deliverable-Id") == "dlv-peer-deliverable"
+
+    def test_empty_scope_is_treated_as_no_scope(self, tmp_path):
+        """An empty list tells us nothing about scope, so it must NOT be read
+        as "this commit touches nothing" and suppress every anchor."""
+        self._setup(tmp_path)
+        trailers = self._call(tmp_path, paths=[])
+        assert trailers.get("Deliverable-Id") == "dlv-peer-deliverable"

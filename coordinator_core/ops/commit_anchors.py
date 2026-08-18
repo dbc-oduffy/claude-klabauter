@@ -86,7 +86,7 @@ import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _parse_frontmatter, _read_meta
@@ -223,20 +223,50 @@ def _read_meta_from_staged(worktree_root: Path, plan_rel_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_plan_from_diff(worktree_root: Path) -> Optional[Dict[str, Optional[str]]]:
-    """Find a plan file in the staged diff and extract its frontmatter identity.
+def _normalize_scope_paths(scope_paths: Optional[Sequence[str]]) -> Optional[frozenset]:
+    """Canonicalize a caller-supplied commit pathspec to the forward-slash,
+    repo-relative shape `git diff --cached --name-only` emits, or ``None``
+    when the caller supplied no scope at all.
 
-    Purpose: runs `git diff --cached --name-only` from worktree_root (READ-ONLY) and
-    looks for a single docs/plans/*.md file in the staged set. Reads that file's
-    frontmatter for plan_id (pln-...) and deliverable_id (dlv-...).
+    ``None`` (no scope) and an EMPTY scope are deliberately distinct: no
+    scope means "read the whole index" (the pre-scoping behaviour every
+    other caller still relies on), while an empty scope would mean "this
+    commit touches nothing" and is normalized to ``None`` rather than
+    silently suppressing every anchor — a caller that passes `[]` has not
+    told us anything about scope.
+    """
+    if not scope_paths:
+        return None
+    normalized = {
+        str(p).replace("\\", "/").strip().lstrip("./")
+        for p in scope_paths
+        if str(p).strip()
+    }
+    return frozenset(normalized) or None
 
-    Returns a dict {path, plan_id, deliverable_id} on success, or None when:
-    - No docs/plans/*.md file is in the staged set.
-    - Multiple plan files are staged (ambiguous — precision over recall → omit).
-    - The git command fails (offline, not a repo).
 
-    Staged-diff branch is self-verifying (the plan file is in the commit) — exempt
-    from the DD#1 freshness gate (claude-klabauter-commit-anchor-stamper.md § D2).
+def _staged_files(
+    worktree_root: Path, scope_paths: Optional[Sequence[str]] = None
+) -> Optional[list]:
+    """The staged path set, narrowed to this commit's own pathspec.
+
+    Shared by the `Plan:` resolver and the `Resolves:` completion-entry
+    gate so the two cannot drift on what "the staged set" means.
+
+    Why the narrowing is load-bearing, not a refinement: on a SHARED
+    worktree (this box's norm — see CLAUDE.md § Load norm) the index holds
+    every concurrent session's staged work, so a bare `git diff --cached
+    --name-only` answers "what is staged in the repo", never "what is in
+    THIS commit". A ship commit scoped to four of its own files was stamped
+    `Plan:`/`Plan-Id:`/`Deliverable-Id:` off a PEER's staged plan because
+    that peer's plan happened to be the only `docs/plans/*.md` in the
+    shared index — the ambiguity guard below cannot fire on a set of one,
+    however foreign that one is. Measured 2026-08-18 on ship commit
+    582c7b510, which carried `dlv-fl-core-03` while committing
+    `dlv-chain-terminal-review-trail-discharge-d7b568`'s own artifacts.
+
+    Returns ``None`` (never `[]`) on any git failure, matching the
+    omit-rather-than-guess posture both callers already apply.
     """
     try:
         result = subprocess.run(
@@ -248,13 +278,44 @@ def _resolve_plan_from_diff(worktree_root: Path) -> Optional[Dict[str, Optional[
             **no_console_creationflags(),
         )
     except (OSError, ValueError):
-        print(f"skip: _resolve_plan_from_diff: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(
+            f"skip: _staged_files: subprocess.run failed: {sys.exc_info()[1]}",
+            file=sys.stderr,
+        )
         return None
 
     if result.returncode != 0:
         return None
 
-    staged_files = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+    staged = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+    scope = _normalize_scope_paths(scope_paths)
+    if scope is None:
+        return staged
+    return [f for f in staged if f.replace("\\", "/") in scope]
+
+
+def _resolve_plan_from_diff(
+    worktree_root: Path, scope_paths: Optional[Sequence[str]] = None
+) -> Optional[Dict[str, Optional[str]]]:
+    """Find a plan file in the staged diff and extract its frontmatter identity.
+
+    Purpose: reads the staged set via `_staged_files` (READ-ONLY), narrowed to
+    `scope_paths` when the caller supplied this commit's own pathspec, and
+    looks for a single docs/plans/*.md file in it. Reads that file's
+    frontmatter for plan_id (pln-...) and deliverable_id (dlv-...).
+
+    Returns a dict {path, plan_id, deliverable_id} on success, or None when:
+    - No docs/plans/*.md file is in the staged set.
+    - Multiple plan files are staged (ambiguous — precision over recall → omit).
+    - The git command fails (offline, not a repo).
+
+    Staged-diff branch is self-verifying (the plan file is in the commit) — exempt
+    from the DD#1 freshness gate (claude-klabauter-commit-anchor-stamper.md § D2).
+    """
+    staged_files = _staged_files(worktree_root, scope_paths)
+    if staged_files is None:
+        return None
+
     # Match docs/plans/<filename>.md — single path component only (no nested subdirs).
     plan_files = [f for f in staged_files if re.match(r"^docs/plans/[^/]+\.md$", f)]
 
@@ -333,7 +394,11 @@ def _completion_entry_deliverable_id(worktree_root: Path, entry_rel_path: str) -
     return None
 
 
-def _has_staged_completion_entry(worktree_root: Path, deliverable_id: Optional[str]) -> bool:
+def _has_staged_completion_entry(
+    worktree_root: Path,
+    deliverable_id: Optional[str],
+    scope_paths: Optional[Sequence[str]] = None,
+) -> bool:
     """True iff the staged diff includes an `archive/completed/*.md` entry that
     itself resolves to `deliverable_id` — the completion-event signal `Resolves:`
     is gated on.
@@ -362,23 +427,10 @@ def _has_staged_completion_entry(worktree_root: Path, deliverable_id: Optional[s
         return False
     equivalence_map = load_equivalence_map(worktree_root)
     deliverable_id = canonicalize(deliverable_id, equivalence_map)
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=str(worktree_root),
-            **no_console_creationflags(),
-        )
-    except (OSError, ValueError):
-        print(f"skip: _has_staged_completion_entry: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+    staged = _staged_files(worktree_root, scope_paths)
+    if staged is None:
         return False
-    if result.returncode != 0:
-        print(f"skip: _has_staged_completion_entry: git diff --cached --name-only exited {result.returncode}", file=sys.stderr)
-        return False
-    for line in result.stdout.splitlines():
-        path = line.strip()
+    for path in staged:
         if path and _COMPLETION_ENTRY_RE.match(path):
             entry_dlv_id = canonicalize(
                 _completion_entry_deliverable_id(worktree_root, path), equivalence_map
@@ -514,6 +566,14 @@ def _handler(
     Keying scope: common_dir — repo_root is the .git directory (git_common_dir result).
     """
     session_id: str = params.get("session_id") or ""
+    # This commit's own pathspec, when the caller knows it. Absent, the
+    # staged-diff readers below fall back to the whole index — correct for a
+    # sole-occupant tree, WRONG on a shared one, where the index carries
+    # every concurrent session's staged work. See `_staged_files`.
+    raw_paths = params.get("paths")
+    scope_paths: Optional[Sequence[str]] = (
+        [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else None
+    )
     nature_override: Optional[str] = params.get("nature")
 
     trailers: List[str] = []
@@ -557,7 +617,7 @@ def _handler(
     if repo_root is not None:
         worktree_root = main_worktree_root(repo_root)
 
-        plan_info = _resolve_plan_from_diff(worktree_root)
+        plan_info = _resolve_plan_from_diff(worktree_root, scope_paths)
         if plan_info is not None:
             trailers.append(f"Plan: {plan_info['path']}")
             if plan_info["plan_id"]:
@@ -574,7 +634,9 @@ def _handler(
                 # additional completion-event signal so an ordinary mid-flight
                 # commit (Deliverable-Id: only) never emits Resolves:.
                 # --------------------------------------------------------
-                if _has_staged_completion_entry(worktree_root, plan_info["deliverable_id"]):
+                if _has_staged_completion_entry(
+                    worktree_root, plan_info["deliverable_id"], scope_paths
+                ):
                     trailers.append(f"Resolves: {plan_info['deliverable_id']}")
 
         # ------------------------------------------------------------------

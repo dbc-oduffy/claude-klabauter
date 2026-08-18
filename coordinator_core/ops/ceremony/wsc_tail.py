@@ -620,6 +620,13 @@ def _derive_trailers(
     diff, so the SAFE subset of `stage_paths` is pre-staged here (see
     `diverging_paths()` split below).
 
+    `stage_paths` is ALSO passed to `commit.anchors` as its `paths` scope, and
+    that is load-bearing on a shared worktree: without it the op reads the
+    whole index and answers "what is staged in the repo", not "what is in
+    THIS commit", so a peer's staged plan becomes this commit's `Plan:`/
+    `Deliverable-Id:`. See `commit_anchors._staged_files` for the measured
+    incident (ship commit 582c7b510).
+
     C10 fix (docs/plans/2026-07-27-computed-commit-mechanism-selection.md
     § C10) -- the pre-stage used to be an unconditional `git add -- stage_
     paths` against the SHARED index, justified as idempotent ("git add on an
@@ -669,7 +676,10 @@ def _derive_trailers(
     if handler is None:
         return ""
     try:
-        result = handler({"session_id": sid, "nature": nature}, common_dir)
+        result = handler(
+            {"session_id": sid, "nature": nature, "paths": list(stage_paths or [])},
+            common_dir,
+        )
         return str(result.get("trailers", ""))
     except Exception as exc:  # noqa: BLE001 -- best-effort trailer derivation, never raises
         _LOG.warning("wsc_tail: commit.anchors raised %s: %s", type(exc).__name__, exc)

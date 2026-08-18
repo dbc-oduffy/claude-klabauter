@@ -828,8 +828,49 @@ def directory_pathspec_diagnostic(path: str) -> str:
     )
 
 
+#: Env var `coordinator_core.hooks.auto_push` reads to stand down for one
+#: commit. Imported by name rather than restated as a literal so the two
+#: modules cannot drift apart silently.
+_AUTO_PUSH_SUPPRESS_ENV = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
+
+
+def _sole_publisher_env(suppress_post_commit_auto_push: bool) -> Optional[Dict[str, str]]:
+    """Env for a `git commit` whose caller will publish the commit itself.
+
+    opro-01 C-01 (state/audits/2026-08-18-opro-01-where-the-push-outcome-is-
+    known.md). `git commit` fires the installed `post-commit` hook, which
+    detaches and pushes; a caller that then runs its own synchronous `git
+    push` has TWO publishers racing for one branch tip. When the detached
+    child wins, the caller's own push fails on a commit that is already on
+    the remote -- the 2026-07-30 false negative, and the reason
+    `scoped_git_commit` grew a remote-confirmation probe to walk its own
+    verdict back.
+
+    Standing the hook's push down for this one commit makes the caller's own
+    push outcome authoritative BY CONSTRUCTION rather than by corroborating
+    it against the remote. The commit is still published -- synchronously, by
+    the caller, in the same invocation.
+
+    Returns None when suppression is off, so the caller passes `env=None` and
+    `_git` inherits the parent environment unchanged (never a rebuilt copy of
+    `os.environ`, which would be a behaviour change wearing a no-op's
+    clothes). `os.environ` itself is never mutated: this repo's engine is a
+    cold spawn per invocation today, but the warm engine would make a
+    process-global toggle here a cross-request leak.
+    """
+    if not suppress_post_commit_auto_push:
+        return None
+    env = dict(os.environ)
+    env[_AUTO_PUSH_SUPPRESS_ENV] = "1"
+    return env
+
+
 def commit_with_message_file(
-    cwd: Union[str, Path], msg_file: Union[str, Path], paths: Sequence[str]
+    cwd: Union[str, Path],
+    msg_file: Union[str, Path],
+    paths: Sequence[str],
+    *,
+    suppress_post_commit_auto_push: bool = False,
 ) -> GitResult:
     """`git commit -F <msg_file> -- <paths>` — explicit-pathspec commit (AC5).
 
@@ -842,8 +883,16 @@ def commit_with_message_file(
     uses `commit_with_message_file_pathspec_scoped()` (below) instead, never
     this wrapper, for exactly that reason. Kept here unchanged for every
     other, smaller-batch caller.
+
+    `suppress_post_commit_auto_push` -- see `_sole_publisher_env`. Default
+    False: a caller that does NOT push synchronously afterwards must leave the
+    hook's own push in place, or the commit never reaches the remote at all.
     """
-    return _git(["commit", "-F", str(msg_file), "--", *paths], cwd=cwd)
+    return _git(
+        ["commit", "-F", str(msg_file), "--", *paths],
+        cwd=cwd,
+        env=_sole_publisher_env(suppress_post_commit_auto_push),
+    )
 
 
 def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
@@ -894,7 +943,11 @@ def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitR
 
 
 def commit_with_message_file_pathspec_scoped(
-    cwd: Union[str, Path], msg_file: Union[str, Path], paths: Sequence[str]
+    cwd: Union[str, Path],
+    msg_file: Union[str, Path],
+    paths: Sequence[str],
+    *,
+    suppress_post_commit_auto_push: bool = False,
 ) -> GitResult:
     """`git commit -F <msg_file> --pathspec-from-file=<f>` — the
     percolate-publish-scale-safe sibling of `commit_with_message_file()`
@@ -921,6 +974,7 @@ def commit_with_message_file_pathspec_scoped(
         return _git(
             ["commit", "-F", str(msg_file), f"--pathspec-from-file={pathspec_file}"],
             cwd=root,
+            env=_sole_publisher_env(suppress_post_commit_auto_push),
         )
     finally:
         pathspec_file.unlink(missing_ok=True)
@@ -2196,6 +2250,7 @@ def commit_scoped(
     known_diverged: Optional[Set[str]] = None,
     deliverable_id: Optional[str] = None,
     supplied_blobs: Optional[Dict[str, str]] = None,
+    suppress_post_commit_auto_push: bool = False,
 ) -> GitResult:
     """Commit exactly `paths`, choosing the safe mechanism from OBSERVED
     index/worktree state -- the computed replacement for hand-picking
@@ -2573,7 +2628,15 @@ def commit_scoped(
             add_result = add_paths_pathspec_file(root, existing)
             if not add_result.ok:
                 return add_result
-        return commit_with_message_file_pathspec_scoped(root, msg_file, path_list)
+        # Only this branch needs the flag: the private-index branch below
+        # lands via `commit-tree`/`update-ref`, which fire NO hooks at all,
+        # so it has never had a second publisher to stand down.
+        return commit_with_message_file_pathspec_scoped(
+            root,
+            msg_file,
+            path_list,
+            suppress_post_commit_auto_push=suppress_post_commit_auto_push,
+        )
 
     diverged_set = set(diverged)
     non_diverged = [p for p in path_list if p not in diverged_set]

@@ -63,51 +63,30 @@ archive/handoffs/ proceeds this same call.
 
 **Scoping (2026-08-02, roadmap-baton-supersession-hazard plan, chunk C2;
 re-keyed 2026-08-05, DR-126 § Clarifications C-1, plan
-c2-supersede-gate-chaseable-terminus chunk C1):** the ruling above — the
-flip is UNCONDITIONAL — is scoped to SESSION-HANDOFF succession, the
-artifact class the 2026-07-27 incident concerned. It is NOT universal: for a
-predecessor whose frontmatter `kind` canonicalizes to `roadmap-baton`, the
-flip is refused outright — no automated supersede for a roadmap baton in
-any state, whether or not it currently has a live `blocked_by` dependent
-(DR-126 § Clarifications C-1; see § roadmap-baton blocked_by gate below).
-Ordinary session-handoff succession is unaffected — the flip stays
-unconditional for every predecessor whose `kind` is not `roadmap-baton`.
+c2-supersede-gate-chaseable-terminus chunk C1) — RETIRED (2026-08-18,
+DR-172, plan a-session-always-has-a-baton chunk C10):** the ruling above —
+the flip is UNCONDITIONAL — used to be scoped to SESSION-HANDOFF succession
+only, with an outright refusal for any predecessor whose frontmatter `kind`
+canonicalized to `roadmap-baton`. DR-172 found the refusal's own rationale
+does not hold: `reconcile/gate_eval.py` resolves `blocked_by` by `stub_id`,
+never by file path, so an archival move cannot sever the dependency edge the
+refusal existed to protect. The kind-first refusal is REMOVED — the flip is
+now unconditional for every predecessor regardless of `kind`, matching
+ordinary session-handoff succession. `d6`'s (`handoff.supersede_predecessor`,
+`baton_assemble/__init__.py`) mirror-image decline and its paired
+force-supersede decision key are removed with it. DR-242's claimed-or-shipped
+gate (above) and DR-126 § Decision 2's `handoff_phase` kind-gate
+(`frontmatter/schema_validate.py`) are untouched — neither is this gate.
 
 **roadmap-baton blocked_by gate (C2, PIN-2; re-keyed on `kind` alone by
-DR-126 § Clarifications C-1, C1 2026-08-05):** placed in the same
-`if mode == "supersede":` block as the DR-242 gate above, before `do_stamp`
-is computed and before the status flip — gating the git-mv alone would do
-nothing, since `gate_eval` reads `deployment_state`, never file location.
-The refusal decision is `canonical_kind(_current_kind(contained)) ==
-"roadmap-baton"` ALONE — DR-126's own reasoning (the dependent set is
-authored incrementally; a `stub_id` outlives the baton file; `d6`
-(`handoff.supersede_predecessor`) already enforces this rule kind-first,
-with no dependents condition, on the other path). `blocked_by_dependents`
-(PIN-1) is still composed at the same call site, but it now feeds the
-refusal MESSAGE, not the decision: `"dependents"` (a live handoff lists the
-predecessor's stub id in its own `blocked_by`) names the live dependent(s);
-`"none"` (no live dependents today) states the refusal is on kind alone;
-`"indeterminate"` (an unresolvable candidate identifier, or a non-empty
-`scan_errors`) states the live-dependent list is unavailable because the
-scan could not complete — a distinct, still-true FACT, but not a distinct
-DECISION, since every arm refuses. None of the three arms is a retention
-(`retained: True`) — see § Layering and the SEMANTICS note in the plan: a
-retain here would reach `apply.py`'s
-`_dispatch_handoff_supersede_predecessor`, which keys on
-`result["superseded"]` and raises on `False` — by which point
-`_cleanup_successor()` has already unlinked the freshly-minted successor and
-d5's claim has already released, making a "graceful retain" a harder,
-dirtier block than a refusal. A REPLAY of an already-successful
-supersession (on-disk `deployment_state:continued` with `continued_into`
-already equal to the requested successor) short-circuits past this gate
-entirely, before it is evaluated, into the existing byte-identical no-op
-path — the gate guards the TRANSITION into `continued`, not the steady
-state. `exclude` threads through to `blocked_by_dependents` exactly as it
-threads to `_handoff_has_live_children`, so a scaffolded successor
-inheriting its predecessor's `blocked_by` list does not read itself as a
-blocking dependent in the MESSAGE — `exclude` no longer affects the
-decision at all, since a dependent-free roadmap baton is refused exactly
-the same as one with dependents.
+DR-126 § Clarifications C-1, C1 2026-08-05) — RETIRED, see above.** This
+section is kept as a historical pointer only; the gate itself, and the
+replay-convergence short-circuit that existed solely to route around it, are
+gone from this module. A predecessor's succession identity — `stub_id`,
+`roadmap_id`, `blocks`, `blocked_by`, `sprint`, `wave` — is instead carried
+forward through the mint on the `baton_assemble` side (DR-172 ask 2), so the
+dependency edge that used to be protected by refusal is now protected by the
+successor actually inheriting it.
 
 **closed-baton-is-terminal gate (2026-08-13, plan
 closed-baton-is-terminal-d6-declines-per-predecessor, chunk C2):** a third
@@ -316,7 +295,6 @@ from typing import List, Optional
 
 import yaml
 
-from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -340,10 +318,7 @@ from coordinator_core.ops.fleet._common import (
     handoff_archive_dest,
     main_worktree_root,
 )
-from coordinator_core.ops.handoff_children import (
-    _handoff_has_live_children,
-    blocked_by_dependents,
-)
+from coordinator_core.ops.handoff_children import _handoff_has_live_children
 from coordinator_core.ops.handoff_transition import _ship
 # Aliased: `rel_id` is also a local variable name in _handler below, and an
 # unaliased import would be shadowed by that binding (UnboundLocalError).
@@ -497,10 +472,11 @@ def _current_deployment_state(handoff_abs: Path) -> Optional[str]:
 def _current_kind(handoff_abs: Path) -> Optional[str]:
     """Read the current kind: value from a handoff's frontmatter, or None.
 
-    Used by the C2 roadmap-baton blocked_by gate (module docstring §
-    roadmap-baton blocked_by gate) to scope the new pre-flip gate to
-    `kind: roadmap-baton` only — ordinary session-handoff succession stays
-    on the 2026-07-27 unconditional-flip path (AC2).
+    Retained as a general-purpose reader in the `_current_fm_field` family
+    (see that docstring). The C2 roadmap-baton blocked_by gate that
+    motivated this helper is retired — DR-172 (2026-08-18) removed the
+    kind-first supersede refusal entirely; see module docstring § roadmap-
+    baton blocked_by gate (retired).
     """
     return _current_fm_field(handoff_abs, "kind")
 
@@ -1227,101 +1203,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
             out["mode"] = mode
             return out
-
-        # ------------------------------------------------------------------
-        # C2 — roadmap-baton blocked_by gate (docs/plans/2026-08-02-roadmap-
-        # baton-supersession-hazard.md, PIN-2; re-keyed 2026-08-05, DR-126 §
-        # Clarifications C-1, plan c2-supersede-gate-chaseable-terminus
-        # chunk C1). See module docstring § roadmap-baton blocked_by gate
-        # for the full design rationale. Scoped to kind: roadmap-baton only
-        # — the 2026-07-27 unconditional-flip ruling stays in force for
-        # ordinary session-handoff succession (AC3c). Runs BEFORE
-        # `do_stamp`/`do_supersede` are computed and BEFORE the status flip
-        # below — gating the git-mv alone would do nothing (gate_eval reads
-        # deployment_state, not file location).
-        #
-        # DR-126 § Clarifications C-1: the refusal DECISION is
-        # `canonical_kind(...) == "roadmap-baton"` ALONE — no automated
-        # supersede for a roadmap baton in any state, whether or not it
-        # currently has a live blocked_by dependent (the dependent set is
-        # authored incrementally, and `d6` already enforces this rule
-        # kind-first with no dependents condition). `blocked_by_dependents`
-        # (PIN-1) stays composed at this same call site — its call site does
-        # not move — but it now feeds the refusal MESSAGE, not the decision.
-        # ------------------------------------------------------------------
-        # Review: code-reviewer (P1, Finding 1) — canonicalize before comparing:
-        # a raw string compare bypassed both case/whitespace variants and the
-        # pre-rename alias (kind: spinoff-roadmap -> roadmap-baton), matching
-        # canonical_kind()'s two normalization steps every sibling gate
-        # (gate_eval.py, archive_handoffs.py) already relies on. C2 is the
-        # backstop behind C3's _resolved_predecessor_canonical_kind (which
-        # already canonicalizes); a raw compare here made the backstop
-        # strictly weaker than the primary it backs up.
-        if canonical_kind(_current_kind(contained)) == "roadmap-baton":
-            # REPLAY CONVERGENCE (AC7): the gate condition can still be true
-            # on a replay of an already-successful supersession — short-
-            # circuit to the existing byte-identical no-op path
-            # (_supersede_continued's own idempotency check, below) whenever
-            # the on-disk record already carries deployment_state:continued
-            # AND continued_into already equal to the requested successor,
-            # BEFORE evaluating the gate at all. This is a reading of the
-            # idempotency contract, not a demonstrated red test — see C6a's
-            # own replay-convergence regression test. NOT touched by C1
-            # (2026-08-05) — stays upstream of every arm below, same
-            # ordering.
-            already_converged = (
-                _current_deployment_state(contained) == "continued"
-                and _current_continued_into(contained) == continued_into
-            )
-            if not already_converged:
-                # DR-126 § Clarifications C-1 (2026-08-05): every arm below
-                # refuses — `dep_state` selects only which MESSAGE is
-                # returned, never whether the call is refused.
-                dep_result = blocked_by_dependents(contained, worktree, exclude=exclude)
-                dep_state = dep_result.get("state")
-                if dep_state == "dependents":
-                    # Review: code-reviewer (P2, Finding 4) — surface dependents
-                    # via this module's own rel-id convention, not raw absolute
-                    # filesystem paths (which are machine-local and inconsistent
-                    # with every other operator-facing message here).
-                    dep_rel_ids = [
-                        _wire_rel_id(Path(p), worktree)
-                        for p in dep_result.get("dependents", [])
-                    ]
-                    out = _err(
-                        f"refusing supersede: {rel_id} is kind: roadmap-baton "
-                        "— DR-126 § Clarifications C-1: no automated "
-                        "supersede for a roadmap baton in any state; it has "
-                        "a live blocked_by dependent "
-                        f"({', '.join(dep_rel_ids)})"
-                    )
-                    out["mode"] = mode
-                    return out
-                if dep_state == "none":
-                    out = _err(
-                        f"refusing supersede: {rel_id} is kind: roadmap-baton "
-                        "— DR-126 § Clarifications C-1: no automated "
-                        "supersede for a roadmap baton in any state; no "
-                        "blocked_by dependent is currently live, refused "
-                        "on kind alone"
-                    )
-                    out["mode"] = mode
-                    return out
-                # Review: code-reviewer (nit, Finding 1) — bare `else` rather
-                # than `if dep_state == "indeterminate":` so this arm keeps
-                # firing fail-closed for "indeterminate" AND any unrecognized
-                # future `dep_state` value; narrowing to an explicit equality
-                # check would drop that fail-closed-on-unknown property.
-                out = _err(
-                    f"refusing supersede: {rel_id} is kind: roadmap-baton "
-                    "— DR-126 § Clarifications C-1: no automated supersede "
-                    "for a roadmap baton in any state; refused on kind, "
-                    "not on the dependent count — the live-dependent list "
-                    "is unavailable because the blocked_by scan could not "
-                    f"complete ({dep_result.get('error') or 'unknown resolver error'})"
-                )
-                out["mode"] = mode
-                return out
 
         # ------------------------------------------------------------------
         # Closed-baton-is-terminal gate (docs/plans/2026-08-13-closed-

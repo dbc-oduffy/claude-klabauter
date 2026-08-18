@@ -2914,3 +2914,152 @@ def test_foreign_stripped_scopes_unchanged_by_c4() -> None:
     from coordinator_core.coverage import _FOREIGN_STRIPPED_SCOPES
 
     assert _FOREIGN_STRIPPED_SCOPES == frozenset({"session", "chain", "workstream-close-auto"})
+
+
+def test_single_commit_range_outside_chain_set_resolves_without_a_spawn():
+    """A `<sha>^..<sha>` record outside the chain DAG set must be declined
+    WITHOUT calling the range resolver.
+
+    This pins a spawn-amplification fix, not a micro-optimization. The live
+    `resolve_range_shas` is a `git rev-list` subprocess and the caller loop runs
+    once per trail record; measured 2026-08-18 on a chain-terminal close, the
+    unfiltered loop issued 5392 spawns over 224s against a chain DAG set holding
+    9 commits. The per-range memo inside the resolver cannot help, because every
+    single-commit range is a distinct cache key.
+
+    The skip is sound rather than heuristic: `git rev-list <sha>^..<sha>` can
+    only ever yield `{<sha>}`, and `_record_membership_shas` discards any record
+    whose resolved set misses `chain_dag_sha_set` on the very next line. The
+    records this declines to resolve are exactly the ones it would have thrown
+    away after paying for them.
+
+    Abbreviated endpoints are the live corpus's dominant spelling, so they are
+    pinned here too -- an earlier full-hex-only form of this guard matched
+    nothing real and left the amplification in place.
+    """
+    from coordinator_core.workstream_complete.directives_review import (
+        _record_membership_shas,
+    )
+
+    in_chain = "a" * 40
+    off_chain = "b" * 40
+    calls: list[str] = []
+
+    def _resolver(rng: str):
+        calls.append(rng)
+        return {off_chain}
+
+    for spelling in (f"{off_chain}^..{off_chain}", f"{off_chain}~1..{off_chain}",
+                     f"{off_chain[:9]}^..{off_chain[:9]}"):
+        membership = _record_membership_shas(
+            {
+                "sha_range": spelling,
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "scope_kind": "diff",
+                "verdict": "ok",
+            },
+            resolve_range_shas=_resolver,
+            chain_dag_sha_set={in_chain},
+            chain_code_sha_set={in_chain},
+        )
+        assert membership is None, (
+            f"{spelling!r} names a commit outside the chain DAG set and must "
+            f"contribute nothing -- got {membership!r}"
+        )
+
+    assert calls == [], (
+        "the resolver must never be called for a single-commit range whose own "
+        "sha is outside the chain DAG set -- each such call is a git subprocess "
+        f"whose result is already determined; got {calls!r}"
+    )
+
+
+def test_single_commit_range_inside_chain_set_still_resolves_normally():
+    """The short-circuit must not swallow a record that genuinely contributes.
+
+    Guards the fix's own failure direction: skipping too much would silently
+    under-credit review coverage, which reads as an unreviewed chain rather
+    than as an error.
+    """
+    from coordinator_core.workstream_complete.directives_review import (
+        _record_membership_shas,
+    )
+
+    in_chain = "c" * 40
+    calls: list[str] = []
+
+    def _resolver(rng: str):
+        calls.append(rng)
+        return {in_chain}
+
+    membership = _record_membership_shas(
+        {
+            "sha_range": f"{in_chain}^..{in_chain}",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "scope_kind": "diff",
+            "verdict": "ok",
+        },
+        resolve_range_shas=_resolver,
+        chain_dag_sha_set={in_chain},
+        chain_code_sha_set={in_chain},
+    )
+
+    assert calls, "an in-chain record must still be resolved for real"
+    assert membership == {in_chain}, membership
+
+
+def test_resolve_plan_scope_mode_reads_working_tree_not_committed_revision(
+    tmp_path: Path,
+) -> None:
+    """AC10 (ii) pin: `_resolve_plan_scope_mode` reads a plan's `scope_mode:`
+    off the WORKING TREE, deliberately, never `git show <sha>:<path>` — see
+    the function's own docstring for why (the plan artifact's route is a
+    property of the plan as it stands right now, not as some historical
+    commit recorded it; this pulls in the opposite direction from the
+    substrate `branch_resolution` resolves against, on purpose).
+
+    Discriminating fixture: commit a plan with `scope_mode: plan`, then
+    overwrite the same file on disk (uncommitted) with `scope_mode:
+    spec-dispatch`. A committed-revision reader (`git show HEAD:<path>`)
+    would still see `plan`; the working-tree reader sees `spec-dispatch`. A
+    fixture that leaves the tree clean cannot tell the two implementations
+    apart and does not pin this property — do not simplify this test into
+    one that only commits.
+
+    If this test starts failing because someone "cleaned up" the working-tree
+    read into a committed-revision read, that is the regression this test
+    exists to catch — fix the code back, not the test.
+    """
+    from coordinator_core.coverage import _resolve_plan_scope_mode
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+
+    rel_path = "docs/plans/2026-08-18-working-tree-pin.md"
+    _make_plan_commit_with_scope_mode(repo, rel_path, "author plan", "plan")
+
+    # Committed revision says "plan". Now diverge the working tree only —
+    # no add, no commit — so HEAD:<path> and disk disagree.
+    (repo / rel_path).write_text(
+        "---\nscope_mode: spec-dispatch\n---\n\n# author plan (uncommitted edit)\n",
+        encoding="utf-8",
+    )
+
+    committed_content = subprocess.run(
+        ["git", "show", f"HEAD:{rel_path}"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout
+    assert "scope_mode: plan" in committed_content, (
+        "harness sanity check: HEAD must still record the pre-edit value"
+    )
+
+    scope_mode = _resolve_plan_scope_mode(rel_path, str(repo))
+
+    assert scope_mode == "spec-dispatch", (
+        "_resolve_plan_scope_mode must read the WORKING TREE, not the "
+        f"committed revision (which still says 'plan'); got {scope_mode!r}"
+    )

@@ -28,15 +28,29 @@ this module ... routes through `git_native._git`") is covered by wrapping
 this one function. It does not itself spawn per-path -- it counts real
 calls the pipeline already makes, it never issues extra ones.
 
-MEASURED SHAPES (2026-08-11, this repo, matching `budget-manifest.json`'s
-`overrides["ceremony.scoped_git_commit"].spawn_count_budget`):
-  - green path (clean commit, no claim conflict): 12 spawns.
+MEASURED SHAPES (re-baselined 2026-08-18, this repo, matching
+`budget-manifest.json`'s `overrides["ceremony.scoped_git_commit"].
+spawn_count_budget`):
+  - green path (clean commit, no claim conflict): 17 spawns.
   - refusal path (an UNANSWERABLE path -- unverified caller identity
     conflicting with a live claimant): 0 spawns -- `_handler` returns the
     rejection before any staging call is ever issued.
-  - a directory-pathspec-expansion invocation: 13 spawns -- the green
-    path's 12 plus the one extra pathspec-scoped `git status --porcelain
+  - a directory-pathspec-expansion invocation: 18 spawns -- the green
+    path's 17 plus the one extra pathspec-scoped `git status --porcelain
     -- <dir>` `_expand_directory_pathspecs` issues up front.
+  - the push-raced path: 20 spawns and ZERO hot-path `time.sleep`. Was 24
+    and 1.0s while `_remote_sha_state` lived on it (opro-01 C-09 made it
+    countable, C-01/C-02 removed it).
+
+The first three were 12/0/13 when measured 2026-08-11. The +5 on the two
+non-zero shapes is the agree-branch CAS's doubled index/HEAD blob read
+(`_index_blobs`/`_head_blobs` at capture, re-read in
+`_agree_branch_cas_refusal` before the agree branch's `git add`) plus
+`interpret-trailers --no-divider --in-place` -- all of it landed between
+that date and 2026-08-18 without moving the budget. This module carries
+`pytest.mark.cadence`, so the fast tier never ran the assertion that
+would have caught it the day it drifted; that, not the count, is the
+part worth remembering.
 
 These are exact-equality assertions, deliberately: the whole point of a
 spawn-COUNT budget is that it does not drift quietly. A future op change
@@ -48,6 +62,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -236,31 +251,35 @@ def _init_repo_with_upstream(tmp_path: Path) -> Path:
     return repo
 
 
-def test_probe_bearing_path_spawn_count_and_sleep_match_budget(tmp_path_factory):
-    """C-09/C-05 baseline: the push-raced path costs the manifest's
-    `spawn_count_budget.probe_bearing_path` git subprocesses AND 1.0s of
-    hot-path `time.sleep`.
+def test_push_raced_path_spawn_count_and_sleep_match_budget(tmp_path_factory):
+    """C-05 after-figure: the push-raced path costs the manifest's
+    `spawn_count_budget.push_raced_path` git subprocesses and sleeps ZERO.
 
-    This is the path `_remote_sha_state` is reachable on -- the green path's
-    fixture has no remote and no upstream, so the probe is unreachable there
-    and `green_path` stays at 12. Four of the spawns asserted here are the
-    probe's own (`rev-parse --abbrev-ref @{u}` once, `merge-base
-    --is-ancestor` three times across the retry loop); before C-09 routed
-    them through `git_native._git` they were bare `subprocess.run` calls and
-    this counter could not see them at all.
+    This is the path `_remote_sha_state` used to be reachable on -- the green
+    path's fixture has no remote and no upstream, so the probe was never
+    reachable there and `green_path` is unaffected by its removal. C-09 first
+    routed the probe's four spawns through `git_native._git` so this counter
+    could see them at all (they were bare `subprocess.run`); C-01/C-02 then
+    removed the probe, taking those four spawns and the retry loop's 1.0s with
+    them.
 
-    The sleep assertion is not decoration: a spawn count cannot express a
-    `time.sleep`, and the second half of what opro-01 sheds from this path is
-    the 1.0s wall-clock, under a 50-70-concurrent-session load norm where it
-    is held while nothing else proceeds.
+    The zero-sleep assertion is the load-bearing half. A spawn count cannot
+    express a `time.sleep`, and a reintroduced retry loop would cost 1.0s per
+    raced commit under a 50-70-concurrent-session load norm while showing up
+    as only a small count change -- or, if it slept without spawning, as none
+    at all.
     """
     tmp_path = tmp_path_factory.mktemp("e2e-spawn-probe")
     repo = _init_repo_with_upstream(tmp_path)
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
     _write_meta_live(repo, "sess-caller", live=True)
 
+    # Patched on the `time` module itself, not on any one module's imported
+    # reference: C-02 removed `scoped_git_commit`'s `import time` entirely, and
+    # a per-module patch would only ever catch a sleep reintroduced in the one
+    # module it was aimed at. This catches one anywhere on the path.
     slept: list[float] = []
-    orig_sleep = scoped_git_commit.time.sleep
+    orig_sleep = time.sleep
 
     def _record_sleep(secs):
         slept.append(secs)
@@ -275,11 +294,11 @@ def test_probe_bearing_path_spawn_count_and_sleep_match_budget(tmp_path_factory)
             }
         )
 
-    scoped_git_commit.time.sleep = _record_sleep
+    time.sleep = _record_sleep
     try:
         n, result = _count_op_git_calls(_run)
     finally:
-        scoped_git_commit.time.sleep = orig_sleep
+        time.sleep = orig_sleep
 
     assert result["committed"] is True, "fixture did not land a commit: %r" % (result,)
     assert result["push_state"] == "push-failed", (
@@ -288,14 +307,15 @@ def test_probe_bearing_path_spawn_count_and_sleep_match_budget(tmp_path_factory)
         "this test is measuring the wrong path" % (result.get("push_state"),)
     )
 
-    budgeted = _manifest_spawn_budget()["probe_bearing_path"]
+    budgeted = _manifest_spawn_budget()["push_raced_path"]
     assert n == budgeted, (
-        "probe-bearing-path e2e spawn count is %d, manifest budgets %d -- "
+        "push-raced-path e2e spawn count is %d, manifest budgets %d -- "
         "update budget-manifest.json's ceremony.scoped_git_commit.spawn_"
-        "count_budget.probe_bearing_path (and its _rationale) together with "
+        "count_budget.push_raced_path (and its _rationale) together with "
         "this test if the change is intentional" % (n, budgeted)
     )
-    assert sum(slept) == pytest.approx(1.0), (
-        "probe-bearing path slept %.2fs on the hot path, expected 1.0s "
-        "(_remote_sha_state's 2 x retry_delay_s=0.5) -- %r" % (sum(slept), slept)
+    assert slept == [], (
+        "the push-raced path slept %.2fs on the hot path, expected none -- "
+        "opro-01 C-02 removed the only sleep this path had "
+        "(`_remote_sha_state`'s retry loop). %r" % (sum(slept), slept)
     )

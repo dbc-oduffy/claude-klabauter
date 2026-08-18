@@ -122,7 +122,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,6 +134,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_DECLINED,
+    PUSH_STATUS_FAILED,
     PUSH_STATUS_NO_REMOTE,
     PUSH_STATUS_NOT_ATTEMPTED,
     PUSH_STATUS_PUSHED,
@@ -822,10 +822,6 @@ PUSH_STATE_NO_REMOTE = "no-remote"
 #: routed through the remote probe (see `_resolve_push_report`, C5).
 PUSH_STATE_DECLINED = "declined"
 
-#: `_remote_sha_state()` verdicts.
-_REMOTE_PRESENT = "present"
-_REMOTE_ABSENT = "absent"
-_REMOTE_UNKNOWN = "unknown"
 
 
 @register_op("ceremony.scoped_git_commit")
@@ -966,7 +962,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                         # no-op ("reason": "empty-commit-set")
 
         Conditionally present (only when a genuine push-invariant violation
-        is confirmed — see `_sha_missing_from_remote`):
+        is confirmed — this op's own push reported failure, which since
+        opro-01 C-01 is authoritative rather than racy: see
+        `_resolve_push_report`):
           "integrity_breach": bool  # always True when present
 
         Conditionally present (2026-08-04 fix, never a silent drop —
@@ -1300,9 +1298,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # which-branch.md). Test doubles in this package's own test file
         # carry `push_status` explicitly now.
         push_status = result.push_status
-        pushed, push_state = _resolve_push_report(
-            worktree_root, result.committed_sha, push_status
-        )
+        pushed, push_state = _resolve_push_report(push_status)
         response["pushed"] = pushed
         response["push_state"] = push_state
 
@@ -1394,15 +1390,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # reason once `_classify_uncommitted` has already reclassified
             # it as benign.
             response["reason"] = result.reason
-    # `result.integrity_breach` is derived by the pipeline as "committed locally
-    # AND pushed is False", which over-fires wherever something other than this
-    # op's own push step does the pushing -- a post-commit auto-push hook wins
-    # the race, the op's own push then collides with it and reports failure, and
-    # the commit is on the remote despite the predicate. `_resolve_push_report`
-    # has already confirmed the sha against the remote, so the breach reduces to
-    # its verdict: only a CONFIRMED-absent sha is a breach. An unconfirmable or
-    # absent remote is not -- there is no remote invariant to violate -- so this
-    # fails closed to "no breach".
+    # C-01/C-03: the pipeline derives `integrity_breach` from `push_status ==
+    # PUSH_STATUS_FAILED`, and with one publisher per commit that predicate is
+    # no longer racy -- so this is a straight carry-through, not a correction.
+    # The `push_state` conjunct is retained rather than dropped as redundant:
+    # the pipeline has a second `integrity_breach` construction site (the
+    # `sha_unverified` path, where the commit landed but its sha could not be
+    # read back), and this re-derivation is what keeps THIS response's
+    # `integrity_breach` and `push_state` answering the same question. It fails
+    # closed to "no breach" on every non-FAILED state, unchanged.
     if result.integrity_breach and response.get("push_state") == PUSH_STATE_FAILED:
         response["integrity_breach"] = True
 
@@ -1745,33 +1741,38 @@ def _commit_paths_are_clean(worktree_root: str, paths: List[str]) -> bool:
 
 
 def _resolve_push_report(
-    worktree_root: str,
-    sha: Optional[str],
     push_status: str,
 ) -> tuple[Optional[bool], str]:
     """Map the pipeline's canonical `push_status` onto this module's tri-state
-    report.
+    report. A pure mapping: no git, no remote, no sleep.
 
-    A policy decline (`push_status == PUSH_STATUS_DECLINED`) short-circuits
-    HERE, before any remote probe: it is known and deliberate, not unknown --
-    `commit_pipeline` already decided the branch policy, and re-deriving it
-    from remote state would be exactly the second copy this plan exists to
-    eliminate. `PUSH_STATUS_NO_REMOTE` maps directly to `PUSH_STATE_NO_REMOTE`
-    for the same reason -- nothing to probe.
+    C-02/C-03 (opro-01) collapsed this. It used to short-circuit on
+    DECLINED/PUSHED/NO_REMOTE and route everything else through
+    `_remote_sha_state`, a remote-confirmation probe costing 4 git spawns and
+    1.0s of `time.sleep` on the push-raced path. The probe existed because
+    `push_status` answered "did THIS op's push step sync", which was the wrong
+    question while a SECOND publisher existed: `coordinator-auto-push`'s
+    post-commit hook detached rather than blocking `git commit`, raced this
+    op's own push, and on winning made a landed commit render as a failed one
+    (the 2026-07-30 false negative).
 
-    Everything else (`PUSH_STATUS_PUSHED` aside) falls through to the remote
-    probe below, unchanged from before this signature took `push_status`:
-    `push_status` answers "did THIS op's push step sync", which is the wrong
-    question whenever another publisher exists -- `coordinator-auto-push`'s
-    post-commit hook detaches (os.fork()/detached Popen) rather than blocking
-    `git commit` to completion, so it races this op's own push. When it wins,
-    this op's `git push` collides with it, fails for a reason that is not a
-    fast-forward reject, and the pipeline reports a status other than
-    `PUSH_STATUS_PUSHED` on a commit that is on the remote.
+    C-01 removed the second publisher instead of correcting for it -- the hook
+    stands down for exactly the commits this op publishes itself (see
+    `git_native._sole_publisher_env`). With one publisher, `push_status` IS the
+    answer rather than a guess about it, and there is nothing left for a remote
+    read to overturn:
 
-    So anything other than a confirmed decline/no-remote/pushed status is
-    treated as UNKNOWN, not as failure, and the remote itself decides. Only
-    `_REMOTE_ABSENT` renders as a failed push.
+      - a peer's push cannot carry OUR commit, which is local-only until this
+        op pushes it, so a collision with a peer never means "already landed";
+      - a non-fast-forward reject is handled upstream by `push_with_retry`'s
+        own fetch+rebase+retry, and reaches here only once genuinely exhausted;
+      - network/auth failures were never ambiguous.
+
+    `PUSH_STATE_UNCONFIRMED` is retained, NOT collapsed into failure: a push
+    that was never attempted (deferred/none mode, or a commit that did not
+    land) is genuinely unknown, and rendering unknown as failure is how a
+    report starts lying. That rung is the one thing the probe got right and it
+    outlives it.
     """
     if push_status == PUSH_STATUS_DECLINED:
         return None, PUSH_STATE_DECLINED
@@ -1779,99 +1780,6 @@ def _resolve_push_report(
         return True, PUSH_STATE_PUSHED
     if push_status == PUSH_STATUS_NO_REMOTE:
         return None, PUSH_STATE_NO_REMOTE
-
-    state = _remote_sha_state(worktree_root, sha)
-    if state == _REMOTE_PRESENT:
-        return True, PUSH_STATE_PUSHED
-    if state == _REMOTE_ABSENT:
+    if push_status == PUSH_STATUS_FAILED:
         return False, PUSH_STATE_FAILED
     return None, PUSH_STATE_UNCONFIRMED
-
-
-def _remote_sha_state(
-    worktree_root: str,
-    sha: Optional[str],
-    *,
-    attempts: int = 3,
-    retry_delay_s: float = 0.5,
-) -> str:
-    """Tri-state: is *sha* on the tracked remote branch, absent from it, or
-    unknowable?
-
-    Retries the merge-base check a few times (bounded, ~1-2s total) before
-    concluding absence -- the detached auto-push described in
-    `_resolve_push_report` may still be landing, so a single point-in-time
-    check can race it. The retry absorbs that completion window without
-    turning this into an unbounded wait; both subprocess calls are local ref
-    lookups with no network I/O. It narrows the race, it does not eliminate it
-    -- which is exactly why the residual is `_REMOTE_UNKNOWN` and never a
-    manufactured failure.
-
-    Routed through `git_native._git` (C-09,
-    `state/handoffs/2026-08-18_190000_roadmap-opro-01.md`) rather than bare
-    `subprocess.run`, for the same reason `_commit_paths_are_clean` is: it is
-    this op's sole native-git choke point, so a spawn issued outside it is a
-    spawn no budget can see. The push-raced path these calls live on is the
-    one that actually pays the probe's cost, and it was uncountable while
-    they bypassed the seam. `_git` converts a timeout to
-    `returncode=-1` instead of raising, which lands on the same
-    `_REMOTE_UNKNOWN` rung the `except` below gave it before.
-    """
-    if not sha:
-        return _REMOTE_UNKNOWN
-    try:
-        upstream = git_native._git(
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd=worktree_root,
-            timeout=2,
-        )
-        if upstream.returncode != 0:
-            return _REMOTE_UNKNOWN  # no upstream configured — nothing to violate
-        upstream_ref = upstream.stdout.strip()
-
-        for attempt in range(attempts):
-            contains = git_native._git(
-                ["merge-base", "--is-ancestor", sha, upstream_ref],
-                cwd=worktree_root,
-                timeout=2,
-            )
-            if contains.returncode == 0:
-                return _REMOTE_PRESENT
-            if contains.returncode == 1 and attempt < attempts - 1:
-                time.sleep(retry_delay_s)
-                continue
-            # 1 = definitively not an ancestor; anything else is git failing to
-            # answer, which is unknown rather than absent.
-            return _REMOTE_ABSENT if contains.returncode == 1 else _REMOTE_UNKNOWN
-        return _REMOTE_UNKNOWN  # unreachable in practice; keeps the contract explicit
-    except Exception:
-        # A bug in the probe itself (not just an unreachable remote) would
-        # otherwise silently and permanently suppress breach reporting with
-        # no diagnostic trace -- log it, but never manufacture a failure out
-        # of a failed probe.
-        _LOG.debug("_remote_sha_state probe failed", exc_info=True)
-        return _REMOTE_UNKNOWN
-
-
-def _sha_missing_from_remote(
-    worktree_root: str,
-    sha: Optional[str],
-    *,
-    attempts: int = 3,
-    retry_delay_s: float = 0.5,
-) -> bool:
-    """True only when *sha* is CONFIRMED absent from the tracked remote branch.
-
-    The boolean collapse of `_remote_sha_state`, kept because "is this a
-    breach" is genuinely two-valued at the call site: an unknowable remote
-    fails closed to "no breach" exactly like a present sha does. Callers that
-    must distinguish the two — anything that RENDERS a push outcome to a human
-    — want `_remote_sha_state` instead, because collapsing unknown into the
-    same bucket as one of the certainties is how a report starts lying.
-    """
-    return (
-        _remote_sha_state(
-            worktree_root, sha, attempts=attempts, retry_delay_s=retry_delay_s
-        )
-        == _REMOTE_ABSENT
-    )

@@ -21,12 +21,14 @@ Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C30
 from __future__ import annotations
 
 import json
+import sys
 import threading
+import time
 
 import pytest
 
 from coordinator_core.session import declared_writes
-from coordinator_core.warm import lifecycle, server, skew
+from coordinator_core.warm import breadcrumb, idle, lifecycle, server, skew, telemetry
 
 
 @pytest.fixture(autouse=True)
@@ -36,8 +38,10 @@ def _reset_shutdown_guard():
     Reset around every test so one test's `drain_and_exit` call does not
     silently no-op the next test's."""
     lifecycle.reset_shutdown_guard_for_test()
+    idle.reset_idle_clock_for_test()
     yield
     lifecycle.reset_shutdown_guard_for_test()
+    idle.reset_idle_clock_for_test()
 
 
 class _FakeIO:
@@ -219,6 +223,84 @@ def test_shutdown_trigger_mid_request_completes_in_flight_before_exit():
     assert response["error"]["data"]["server_sha"] == "abc123"
 
 
+def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
+    """The drain wait must genuinely block on an OTHER request that is
+    still in flight on a different connection when a shutdown trigger
+    fires -- not merely observe its own (already-released) slot and
+    declare the sequence's return value proof enough. This is the real
+    counter `InFlightCounter` owns (there is no live in-flight counter
+    anywhere else in `warm/` -- `coordinator_core.lifecycle`'s
+    `get_in_flight_count`/`in_flight_increment`/`in_flight_decrement` are
+    C3-retired no-ops; `warm.lifecycle.drain_and_exit`'s `in_flight_count`
+    is a caller-injected callable for exactly this reason)."""
+    in_flight = server.InFlightCounter()
+    hold = threading.Event()
+    other_done = threading.Event()
+    exit_calls: list[int] = []
+
+    def dispatch_a(msg: dict) -> dict:
+        hold.wait(timeout=5)
+        other_done.set()
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
+
+    io_a = _FakeIO([_frame(id_="a")])
+    t_a = threading.Thread(
+        target=server._handle_connection,
+        args=(io_a,),
+        kwargs=dict(
+            version_state=_FakeVersionState(),
+            server_sha="x",
+            close_listener=lambda: None,
+            drain=lambda: None,
+            in_flight=in_flight,
+            dispatch=dispatch_a,
+        ),
+    )
+    t_a.start()
+
+    deadline = time.monotonic() + 5
+    while in_flight() < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert in_flight() == 1  # A is genuinely counted in-flight before B triggers shutdown
+
+    def drain() -> None:
+        lifecycle.drain_and_exit(
+            in_flight_count=in_flight,
+            ctx_shutdown=lambda: None,
+            exit_fn=exit_calls.append,
+        )
+
+    io_b = _FakeIO([_frame(id_="b", extra={"_engine_token": "tok"})])
+    t_b = threading.Thread(
+        target=server._handle_connection,
+        args=(io_b,),
+        kwargs=dict(
+            version_state=_FakeVersionState(skewed=True, server_sha="abc"),
+            server_sha="abc",
+            close_listener=lambda: None,
+            drain=drain,
+            in_flight=in_flight,
+            dispatch=lambda msg: pytest.fail("dispatch must not run on a skewed request"),
+        ),
+    )
+    t_b.start()
+
+    # The drain loop has had time to start polling; it must NOT have
+    # reached exit yet, because A is still genuinely in flight.
+    time.sleep(0.2)
+    assert exit_calls == []
+    assert not other_done.is_set()
+
+    hold.set()
+    t_a.join(timeout=5)
+    t_b.join(timeout=5)
+
+    assert other_done.is_set()
+    assert exit_calls == [0]
+    assert in_flight() == 0
+    assert json.loads(io_a.written[0])["result"] == "ok"
+
+
 def test_malformed_frame_does_not_kill_the_loop():
     """A frame that is not valid UTF-8/JSON/an-object must produce a
     well-formed error response on its own connection, never an unhandled
@@ -262,3 +344,168 @@ def test_run_dispatch_opens_per_request_state(monkeypatch):
     assert result["result"] == "ok"
     assert captured["active_during"] == []
     assert declared_writes.active_declarations() is None
+
+
+# ---------------------------------------------------------------------------
+# Idle-demotion / breadcrumb wiring (C30 gap: idle.py and breadcrumb.py had
+# no production call site -- see the module docstring's "idle demotion" /
+# "breadcrumb" ownership notes).
+# ---------------------------------------------------------------------------
+
+
+def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch):
+    """The idle watchdog thread must fire `idle.demote_if_idle` -- with a
+    served-count of zero -- on its own, with NO connection ever having
+    arrived on the accept loop. This is the leak the EM measured live: a
+    stranded generation that never gets a request must still self-demote,
+    which only an independent timer (not a request-path check) can do.
+
+    `idle.demote_if_idle` itself is monkeypatched here (not exercised for
+    real) purely to avoid this test process calling `os._exit` -- the
+    thing under test is that `_ServerContext`'s watchdog reaches it at
+    all, with the right `served_count`/`close_listener`/`ctx_shutdown`
+    wiring, not `idle.py`'s own predicate (already covered by
+    test_idle_demotion.py).
+    """
+    calls: list[int] = []
+
+    def _fake_demote_if_idle(*, served_count, close_listener, in_flight_count, ctx_shutdown, **_kw):
+        calls.append(served_count())
+        close_listener()
+        return True
+
+    monkeypatch.setattr(server.idle, "demote_if_idle", _fake_demote_if_idle)
+    monkeypatch.setattr(server, "_IDLE_WATCHDOG_POLL_SECS", 0.02)
+
+    ctx = server._ServerContext(name="pipe-x", sid="sid-x", version_state=_FakeVersionState())
+    t = threading.Thread(target=ctx._idle_watchdog_loop, daemon=True)
+    t.start()
+
+    deadline = time.monotonic() + 3
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    ctx._idle_watchdog_stop.set()
+    t.join(timeout=3)
+
+    assert calls == [0]  # zero-invocation server: served_count() reads 0
+    assert ctx._is_listening() is False
+
+
+def test_breadcrumb_exists_while_serving_and_gone_after_shutdown(tmp_path):
+    """`_ctx_shutdown` must unlink the breadcrumb for THIS server's own
+    `engine_root` -- the operator stop hatch (`warm-engine-stop.py`)
+    otherwise reports "nothing to stop" for a server that is, in fact,
+    still running (or, symmetrically, never learns a server has already
+    exited)."""
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-x",
+        pid=12345,
+        stable_pid_start_epoch=1,
+        engine_sha="deadbeef",
+        engine_root=tmp_path,
+    )
+    assert breadcrumb.read_breadcrumb(tmp_path) is not None
+
+    ctx = server._ServerContext(
+        name="pipe-x", sid="sid-x", version_state=_FakeVersionState(), engine_root=tmp_path
+    )
+    ctx._ctx_shutdown()
+
+    assert breadcrumb.read_breadcrumb(tmp_path) is None
+
+
+def _write_git_fixture(git_dir) -> None:
+    git_dir.mkdir(parents=True, exist_ok=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git_dir / "refs" / "heads").mkdir(parents=True, exist_ok=True)
+    (git_dir / "refs" / "heads" / "main").write_text("a" * 40, encoding="utf-8")
+
+
+def _rotate_git_fixture(git_dir) -> None:
+    # A real commit rewrites the ref file's content (new sha, same or
+    # different length) -- rewriting it here with different content changes
+    # both its mtime and (usually) its size, either of which is enough to
+    # change `skew.compute_client_token`'s `_stat_pair` fingerprint.
+    (git_dir / "refs" / "heads" / "main").write_text("b" * 40, encoding="utf-8")
+    # Guard against a filesystem whose mtime resolution is too coarse to
+    # register two writes within one test as distinct -- force it forward.
+    import os as _os
+    import time as _time
+
+    st = (git_dir / "refs" / "heads" / "main").stat()
+    _os.utime(git_dir / "refs" / "heads" / "main", ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+
+
+def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
+    """Composed regression for the leak's actual field shape (EM's
+    addendum, example-retrieval-repo-f7's finding): rotation MINTS an orphan (a new
+    `.git/HEAD`/ref fingerprint -> a new `compute_client_token` -> a new
+    pipe name, binding a successor without contesting the predecessor's
+    still-listening pipe -- `election.py`'s own docstring), and dead
+    demotion is what makes that orphan immortal. A predecessor that DID
+    serve a request before being stranded (so its idle clock was marked,
+    unlike a never-served process) must still self-terminate on
+    time-since-last-invocation -- not on the "never served anything"
+    zero-served short-circuit, which a demotion fix could satisfy while
+    leaving this exact real-world orphan alive.
+
+    Runs the predecessor in a REAL subprocess (idle.py's clock is
+    process-global -- module docstring -- so two servers' idle state
+    cannot be faithfully modelled in one process) with a short
+    `engine.warm.idle_minutes` via the `MACHINE_LOCAL_*` registry env
+    override, marks one invocation, then asserts the process exits on its
+    own within the deadline with NO further activity.
+    """
+    git_dir = tmp_path / ".git"
+    _write_git_fixture(git_dir)
+
+    token_before = skew.compute_client_token(tmp_path)
+    _rotate_git_fixture(git_dir)
+    token_after = skew.compute_client_token(tmp_path)
+    assert token_before != token_after  # rotation mints a new generation token
+
+    worker = tmp_path / "_predecessor_worker.py"
+    worker.write_text(
+        "import os, sys, time\n"
+        "sys.path.insert(0, %r)\n"
+        "from coordinator_core.warm import idle, lifecycle\n"
+        "idle.mark_invocation()  # served one request before being stranded\n"
+        "deadline = time.monotonic() + 30\n"
+        "while time.monotonic() < deadline:\n"
+        "    if idle.demote_if_idle(\n"
+        "        served_count=lambda: 1,\n"
+        "        close_listener=lambda: None,\n"
+        "        in_flight_count=lambda: 0,\n"
+        "        ctx_shutdown=lambda: None,\n"
+        "    ):\n"
+        "        break\n"
+        "    time.sleep(0.05)\n"
+        "else:\n"
+        "    sys.exit(1)  # never demoted within the deadline\n"
+        % str(_engine_clone_root_for_test()),
+        encoding="utf-8",
+    )
+
+    import os as _os
+    import subprocess
+
+    env = dict(_os.environ)
+    env["MACHINE_LOCAL_ENGINE_WARM_IDLE_MINUTES"] = "0.02"  # 1.2s
+
+    started = time.monotonic()
+    proc = subprocess.run(
+        [sys.executable, str(worker)],
+        env=env,
+        timeout=20,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    elapsed = time.monotonic() - started
+
+    assert proc.returncode == 0  # demoted on its own, not the sys.exit(1) escape hatch
+    assert elapsed >= 1.0  # did not fire instantly -- genuinely waited out the idle deadline
+
+
+def _engine_clone_root_for_test():
+    from pathlib import Path
+
+    return Path(server.__file__).resolve().parents[2]

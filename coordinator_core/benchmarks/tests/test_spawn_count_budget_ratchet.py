@@ -40,12 +40,23 @@ from coordinator_core.benchmarks.budget import load_manifest
 # both `budget-manifest.json` and their own dedicated test files at the time
 # this module was written) -- both rows are correspondingly absent here, not
 # left dangling with no manifest entry to ratchet against.
+# `ceremony.scoped_git_commit`'s green_path/directory_pathspec_expansion marks
+# were raised 12->17 and 13->18 on 2026-08-18 (opro-01). The argument this
+# table exists to force: the +5 is the agree-branch CAS reading its
+# index/HEAD blob pair twice by construction (a compare-and-swap needs both
+# the capture and the re-read immediately before `git add`) plus one
+# `interpret-trailers --in-place`. Five real spawns doing named,
+# correctness-bearing work, landed after the 2026-08-11 figure without
+# moving the budget, and unnoticed because the enforcing module carries
+# `pytest.mark.cadence`. A raise here is still a raise: it is defensible
+# only because nothing among the five is reducible, not because the count
+# moved.
 _SPAWN_COUNT_HIGH_WATER = {
     "ceremony.scoped_git_commit": {
-        "green_path": 12,
+        "green_path": 17,
         "refusal_path_unanswerable": 0,
-        "directory_pathspec_expansion": 13,
-        "probe_bearing_path": 24,
+        "directory_pathspec_expansion": 18,
+        "push_raced_path": 20,
     },
     "changelog.cited_in_range_count": {
         "n_tokens": 1,

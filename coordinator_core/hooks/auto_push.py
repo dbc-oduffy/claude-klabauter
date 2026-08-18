@@ -167,6 +167,25 @@ _ENV_SYNC = "COORDINATOR_AUTO_PUSH_SYNC"
 # wrapper's interpreter rather than the real host interpreter that launched it.
 _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
 
+# Stand-down seam (opro-01 C-01, state/audits/2026-08-18-opro-01-where-the-
+# push-outcome-is-known.md): set by a caller that will publish this commit
+# ITSELF, synchronously, and therefore needs to be the only publisher.
+#
+# Not a disable switch and not a test seam. `git commit` fires this hook and
+# the hook detaches; a caller that then runs its own `git push` has two
+# publishers racing for one branch tip, and when the detached child wins, the
+# caller's push fails on a commit that IS on the remote. That is the
+# 2026-07-30 false negative, and it is why `scoped_git_commit` grew a
+# remote-confirmation probe to walk its own verdict back.
+#
+# One publisher, chosen deliberately, makes the caller's own push outcome
+# authoritative by construction. The commit is still published -- by the
+# caller, in the same invocation, synchronously -- so nothing is deferred and
+# no pending record is written. A caller that sets this and does NOT push is
+# the one misuse this seam has, which is why the name says SUPPRESS_FOR_
+# SYNC_PUSH rather than DISABLE.
+_ENV_SUPPRESS_FOR_SYNC_PUSH = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
+
 #: Generator-provenance declaration: every write in this module (push-
 #: failures.log, push-stderr-*.log, coordinator-auto-push-pending.json)
 #: lands under resolve_git_common_dir() — inside .git/ — never a tracked
@@ -1797,6 +1816,14 @@ def main(argv: list[str] | None = None) -> int:
 
     branch = "<unknown>"
     try:
+        if os.environ.get(_ENV_SUPPRESS_FOR_SYNC_PUSH):
+            # The committing caller publishes this commit itself, in this same
+            # invocation -- see `_ENV_SUPPRESS_FOR_SYNC_PUSH`. Stand down before
+            # resolving anything: no detach, no pending record, no drain. Silent
+            # by design, since this fires on every commit through the sanctioned
+            # path and a per-commit line on the hot path is noise, not signal.
+            return 0
+
         repo_root = args.repo_root or _run_git(None, ["rev-parse", "--show-toplevel"])
         if not repo_root:
             return 0

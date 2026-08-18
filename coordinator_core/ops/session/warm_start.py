@@ -83,7 +83,6 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.warm.breadcrumb import should_spawn
-from coordinator_core.warm.client import SERVER_ENTRY_SCRIPT
 from coordinator_core.warm.settings import is_warm_enabled
 
 __all__ = ["ASYNC", "SESSIONSTART_MATCHERS", "warm_start"]
@@ -133,6 +132,16 @@ def warm_start(engine_root: Optional[Path] = None) -> bool:
         root = engine_root if engine_root is not None else _engine_clone_root()
         if not should_spawn(root):
             return False
+        # Imported HERE, not at module scope, to break an import cycle that
+        # otherwise silently unregisters this op. `warm.client` imports
+        # `ops.ceremony.detached_spawn`, which triggers the `coordinator_core.
+        # ops` package's eager import-all, which reaches this module -- so any
+        # process that imports `warm.client` FIRST (the client preamble: the
+        # actual hot path) hit a partially-initialized `warm.client` and lost
+        # `session.warm_start` registration entirely. Module-scope import here
+        # is load-bearing in the negative: it must stay deferred.
+        from coordinator_core.warm.client import SERVER_ENTRY_SCRIPT
+
         spawn_detached(str(root), SERVER_ENTRY_SCRIPT)
         return True
     except Exception:

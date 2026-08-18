@@ -396,7 +396,7 @@ def test_gitignored_path_dropped_from_pathspec(tmp_path, monkeypatch):
     def _fake_run(cmd, **kwargs):
         if "check-ignore" in cmd:
             return _mod.subprocess.CompletedProcess(
-                cmd, 0, "__pycache__/foo.pyc\n", ""
+                cmd, 0, "__pycache__/foo.pyc\0", ""
             )
         raise AssertionError(f"unhandled: {cmd!r}")
 
@@ -465,7 +465,7 @@ def test_filter_summary_printed_to_stderr(tmp_path, monkeypatch, capsys):
     def _fake_run(cmd, **kwargs):
         if "check-ignore" in cmd:
             return _mod.subprocess.CompletedProcess(
-                cmd, 0, "__pycache__/foo.pyc\n", ""
+                cmd, 0, "__pycache__/foo.pyc\0", ""
             )
         if "ls-files" in cmd:
             return _mod.subprocess.CompletedProcess(cmd, 1, "", "")
@@ -537,7 +537,7 @@ def test_check_ignore_result_subset_of_rel_paths_does_not_raise(tmp_path, monkey
 
     def _fake_run(cmd, **kwargs):
         if "check-ignore" in cmd:
-            return _mod.subprocess.CompletedProcess(cmd, 0, "ignored.pyc\n", "")
+            return _mod.subprocess.CompletedProcess(cmd, 0, "ignored.pyc\0", "")
         raise AssertionError(f"unhandled: {cmd!r}")
 
     monkeypatch.setattr(_mod, "_run", _fake_run)

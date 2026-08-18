@@ -1607,7 +1607,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'commit_own_artifact',
             '_run_git',
         ),
-        ('coordinator_core/ops/ceremony/scoped_git_commit.py', '_remote_sha_state', 'run'),
         (
             'coordinator_core/ops/ceremony/tail_ops.py',
             'fire_archive_sweeps_detached',

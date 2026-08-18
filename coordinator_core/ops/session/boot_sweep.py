@@ -251,6 +251,7 @@ from coordinator_core.ops.fleet.archive_handoffs import (
     _handle_act_handoffs,
     _handle_preview_handoffs,
     _HEIR_NOTE_PREFIX,
+    _is_terminal,
     _shipped_in_resolvable,
 )
 from coordinator_core.ops.fleet._common import (
@@ -1803,10 +1804,16 @@ async def _sweep_consumed_handoffs(
     # diagnostic" only covers the H3 promoter-owned shape, not H4). The
     # sweep-consumed-handoffs.py CLI's own contract promises every skip is
     # "always surfaced — never silently swallowed"; this re-derives the
-    # H4-retained set (read-only, never re-verified via _is_terminal itself,
-    # which exposes no "retained but why" hook) so it reaches consumed_skipped
-    # like every other retain reason below, instead of vanishing between the
-    # candidates[] and skipped[] buckets.
+    # H4-retained set (read-only) so it reaches consumed_skipped like every
+    # other retain reason below, instead of vanishing between the
+    # candidates[] and skipped[] buckets. The H4/heir-branch arm below stays a
+    # local re-derivation (no "retained but why" hook on _is_terminal for that
+    # branch); the Branch-B terminal-deployment_state arm (C4,
+    # docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md) DOES
+    # call _is_terminal directly to get its real verdict/reason, since C4's
+    # narrowed Check 3 means a local re-derivation can no longer tell whether
+    # a live succession child still retains the record without re-running
+    # Check 4 itself.
     #
     # Reuses the SAME read-only classification the (f) heir pre-stamp pass
     # above already ran (_classify_heir_children + _is_promoter_owned_spinoff_
@@ -1845,27 +1852,32 @@ async def _sweep_consumed_handoffs(
             ):
                 # Branch-B-first (archive_handoffs._is_terminal): a candidate whose
                 # deployment_state is already terminal qualifies via Branch B and
-                # NEVER reaches the heir branch, so H4 is not what retained it —
-                # Check 3 (live successor) is. Reporting it under the H4 note
-                # misattributes the gate AND, via "retained for reaper", promises an
-                # actor that will never take it: reap-orphaned-in-flight-handoffs.py
-                # stamps shipped_in only for a dead-holder orphan that provably
-                # shipped and skips every other disposition by design (2026-07-20
-                # ruling against automated `abandoned`). The clearing actor is the
-                # CASCADE (module docstring "CASCADE archival"): once the successor
-                # leaves in_flight for any terminal deployment_state it stops
-                # counting as a live child (archival.reverse_membership), and the
-                # next boot sweep archives this record through Branch B with no
-                # shipped_in required. Cross-repo memo 2026-08-18 example-retrieval-repo-em
-                # "consumed handoff archive retained for absent reaper".
+                # NEVER reaches the heir branch, so H4 is not what retained it.
+                # C4 (docs/plans/2026-08-18-supersede-stamps-and-archives-
+                # atomically.md) narrowed Check 3 for a Branch-B-qualified record to
+                # edge_kinds={"forked_from"} — a live SUCCESSION child (this
+                # candidate's heir) no longer retains there. Whatever retention
+                # remains, if any, is now decided solely by Check 4 (live claim-dir
+                # holder / live consumed_by session), so re-derive the real verdict
+                # via _is_terminal itself instead of re-asserting the pre-C4 "the
+                # live-successor check retains it" narration, which is no longer
+                # true and would otherwise double-count this candidate into both
+                # candidates[] (it now archives) and this skip list.
+                is_terminal, reason, _status_label = await _is_terminal(
+                    handoff_path, dag_index, state_worktree, common_dir,
+                    allow_in_flight=True,
+                )
+                if is_terminal:
+                    # Check 3's succession exemption clears it and Check 4 finds no
+                    # live claim either — this candidate already reached
+                    # candidates[] above via the ordinary preview call and archives
+                    # this sweep. Nothing to surface as retained.
+                    continue
                 heir_retained_skipped.append({
                     "id": cid,
                     "reason": (
                         f"deployment_state={deployment_state}; succeeded by "
-                        f"{heir_detail} — retained by the live-successor check, "
-                        "not by ship evidence; archives by cascade on the first "
-                        "boot sweep after the successor reaches a terminal "
-                        "deployment_state"
+                        f"{heir_detail} — {reason}"
                     ),
                 })
                 continue

@@ -10,6 +10,22 @@
       "deterministic_exit": true
     }
   },
+  "configurable_locations": [
+    {
+      "name": "engine_warm_enabled",
+      "discovery": {
+        "candidates": [
+          "$COORDINATOR_WARM (rung-1 env override — coordinator_core.warm.settings.is_warm_enabled; a falsy token, e.g. '0', ALWAYS wins over the registry key below)",
+          "engine.warm.enabled in the machine-local TOML registry (rung-2 — same DR-132 registry engine.working_repos.* and repos.* live in; written at install time by scripts/setup.py::offer_warm_opt_in)",
+          "off (rung-3 default — no signal set on either rung)"
+        ]
+      },
+      "default": "true — install-time prompt defaults ON (PM ruling 2026-08-15); --i-am-agent and every other non-interactive install path take ON without prompting",
+      "override": {
+        "env": "COORDINATOR_WARM"
+      }
+    }
+  ],
   "direct_deps": [
     {
       "id": "coordinator-claude",

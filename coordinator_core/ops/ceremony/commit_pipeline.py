@@ -105,6 +105,7 @@ import sys
 # sweep can see.
 GENERATES = []
 
+import logging
 import os
 import re
 import tempfile
@@ -1432,6 +1433,7 @@ def commit(
     common_dir: Optional[Path] = None,
     deliverable_id: Optional[str] = None,
     stage_patch: Optional[Union[str, Path]] = None,
+    suppress_post_commit_auto_push: bool = False,
 ) -> CommitOutcome:
     """Commit exactly `commit_paths`, via `git_native.commit_scoped()` (C3/C4).
 
@@ -1649,6 +1651,7 @@ def commit(
             root,
             deliverable_id=deliverable_id,
             supplied_blobs=supplied_blobs,
+            suppress_post_commit_auto_push=suppress_post_commit_auto_push,
         )
         if not result.ok:
             # Deliberately NOT `_reason_from_git_result()` here (2026-08-03
@@ -2412,17 +2415,31 @@ def derive_pushed_tristate(push_outcome: Optional[PushOutcome]) -> Optional[bool
               touched the contract, and (b) is the meaning this plan adds
               on top of both.
     """
+    # C-03 (opro-01): expressed over `derive_push_status` rather than reading
+    # `PushOutcome`'s fields a second time. Both functions used to walk
+    # `skipped`/`failed`/`exit_code`/`acted` independently to answer the same
+    # question in two vocabularies, and they DISAGREED: on a `push-failed`
+    # outcome this one keyed off `exit_code` while `derive_push_status` keyed
+    # off `failed`, so an outcome carrying one without the other resolved
+    # differently depending on which caller asked. One reading now, rendered
+    # two ways.
+    #
+    # `push_outcome is None` keeps its own answer, deliberately: `False` here
+    # is a pinned contract (test_derive_pushed_tristate_false_when_push_never_
+    # attempted), and it is NOT what `derive_push_status(None)` says
+    # (`not-attempted`, which renders as the unknown rung). The divergence is
+    # real and is left standing rather than quietly harmonised -- this function
+    # is documented as the lossy legacy shape for existing readers, and moving
+    # a caller from "not pushed" to "unknown" is a semantic change no part of
+    # opro-01 asked for. New code reads `push_status`.
     if push_outcome is None:
         return False
-    if push_outcome.exit_code != 0:
+    status = derive_push_status(push_outcome)
+    if status == PUSH_STATUS_PUSHED:
+        return True
+    if status == PUSH_STATUS_FAILED:
         return False
-    if "push:no-remote" in push_outcome.skipped:
-        return None
-    if "push:branch-policy" in push_outcome.skipped or (
-        "push:branch-unresolvable" in push_outcome.skipped
-    ):
-        return None
-    return True
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2681,6 +2698,39 @@ def _preflight_reap_stale_lock(worktree_root: str) -> None:
     from coordinator_core.lock_preflight import preflight_reap_stale_lock
 
     preflight_reap_stale_lock(worktree_root)
+
+
+_LOG = logging.getLogger(__name__)
+
+
+def _drain_pending_push_after_sync(worktree_root: Union[str, Path]) -> None:
+    """Re-host `auto_push.drain_pending_push`'s per-commit call site.
+
+    opro-01 C-01. That drain used to ride at the head of every commit's own
+    detached `run_push_with_retry` -- "the NEXT commit fires this for free"
+    (see its own docstring, call site 1 of 3). Standing the post-commit hook
+    down so this op is the sole publisher would have taken that call site
+    with it, silently narrowing a durability mechanism to its two remaining
+    hosts (session boot, workday-start) as a side effect of a spawn-count
+    fix. Re-hosted here instead of accepted as collateral.
+
+    Called only AFTER a confirmed successful synchronous push, for two
+    reasons: the branch tip is already published at that point, so a record
+    covering this branch is moot rather than raced; and the network cost is
+    already paid, so this is not a new blocking call on the commit hot path.
+    Costs zero subprocesses when no record exists (`_read_pending_record`
+    returns None and it returns immediately), which is the ordinary case.
+
+    Best-effort by the same contract as everything else in that module: a
+    drain failure must never turn a landed, pushed commit into a reported
+    failure.
+    """
+    try:
+        from coordinator_core.hooks import auto_push
+
+        auto_push.drain_pending_push(str(worktree_root))
+    except Exception:
+        _LOG.debug("post-sync-push pending-push drain failed", exc_info=True)
 
 
 def run_commit_pipeline(
@@ -3158,6 +3208,12 @@ def run_commit_pipeline(
                 diagnostics=diagnostics,
             )
 
+        # opro-01 C-01: stand the post-commit hook's own detached push down
+        # for this commit IFF this call will publish it synchronously below.
+        # Two publishers for one branch tip is what makes `integrity_breach`
+        # racy -- see `git_native._sole_publisher_env`. Strictly `sync`: in
+        # `deferred`/`none` this call does NOT push, so the hook's push is the
+        # only one there is and suppressing it would strand the commit.
         commit_outcome = commit(
             root,
             message=message,
@@ -3165,6 +3221,7 @@ def run_commit_pipeline(
             common_dir=common_dir,
             deliverable_id=deliverable_id,
             stage_patch=stage_patch,
+            suppress_post_commit_auto_push=(push_mode == PUSH_MODE_SYNC),
         )
         if commit_outcome.exit_code != 0:
             if not commit_outcome.landed:
@@ -3282,6 +3339,7 @@ def run_commit_pipeline(
             push_status = derive_push_status(push_outcome)
             if push_status == PUSH_STATUS_PUSHED:
                 diagnostics.append(_pushed_range_diagnostic(push_outcome))
+                _drain_pending_push_after_sync(root)
             return PipelineResult(
                 stage=stage,
                 deletion_gate=deletion_gate,
@@ -3374,6 +3432,7 @@ def run_commit_pipeline(
         final_committed_sha = commit_outcome.committed_sha
         if push_status == PUSH_STATUS_PUSHED:
             diagnostics.append(_pushed_range_diagnostic(push_outcome))
+            _drain_pending_push_after_sync(root)
             # `push_with_retry()` can fetch + `git rebase --onto` THIS
             # commit on a rejected push before re-pushing, which rewrites
             # its sha (same hazard as `consumed_handoff_stamp.

@@ -17,6 +17,15 @@ Covers:
     did not disable the guard outright.
   - Writer 3 (`archive_stamp.cs_supersede_archive_handoff`) — a thin wrapper
     over writer 1 — inherits the fix with no code change of its own.
+  - Writer 2 (`handoff_transition._supersede`) — CLOSED in a follow-up wave
+    (writes: widened to include handoff_transition.py + test_lifecycle_
+    pair_consistency.py once wave 1 landed): it now delegates its write to
+    writer 1's own `_supersede_continued` and runs the same guard-then-
+    archive-or-retain discharge, rather than a second field-write closure.
+    `test_lifecycle_pair_consistency.py`'s two `test_transition_supersede_*`
+    tests were updated in the same change to follow the file to its
+    post-archive location (or retain via a live `forked_from` child, for
+    the idempotency test's two-call shape) — not weakened, not deleted.
   - AC11: a MECHANICALLY DISCOVERED (AST-walked, not hand-listed) inventory
     of every source site that writes the literal "continued" into a
     `deployment_state` field, asserted as a closed (frozen) set — a NEW,
@@ -24,18 +33,9 @@ Covers:
     `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`'s own
     frozen-inventory-subset shape (see that module's G2 note).
 
-Known, reported divergence (not fixed by this chunk — see the dispatch
-report, not silently swallowed here): writer 2
-(`handoff_transition._supersede`) still writes `continued` with NO archival
-and NO refusal. Fixing it (either shape the plan allows: delegate, or
-refuse) changes its return contract on a live handoff, which breaks
-`coordinator_core/ops/tests/test_lifecycle_pair_consistency.py`'s
-`test_transition_supersede_clears_pickup_ready` /
-`test_transition_supersede_idempotent_no_op_only_at_full_target_state` — a
-file outside this chunk's `writes:`. `test_open_gap_writer_two_still_does_
-not_discharge` below pins TODAY's behavior as an `xfail(strict=True)` so a
-future fix is caught (test starts unexpectedly passing) rather than silently
-re-opening.
+A fifth writer this chunk does not fix (out of scope, human-run migration
+tool, reported not silently swallowed — see the AC11 inventory below):
+`coordinator_core/ops/fleet/migrate_handoff_vocabulary.py::_plan_one`.
 """
 
 from __future__ import annotations
@@ -279,17 +279,19 @@ def test_handoff_stamp_registered_op_is_not_deployment_state_shaped():
 
 
 # ---------------------------------------------------------------------------
-# Known, reported open gap — writer 2 (see module docstring)
+# Writer 2 (`handoff_transition._supersede`) — CLOSED this follow-up (EM
+# widened C3's writes: to include handoff_transition.py + test_lifecycle_
+# pair_consistency.py once wave 1 landed; see that plan/dispatch thread).
+# It now delegates its write to writer 1's own `_supersede_continued` and
+# runs the SAME guard-then-archive-or-retain discharge, rather than writing
+# continued with no archival/refusal.
 # ---------------------------------------------------------------------------
 
 
-def test_open_gap_writer_two_still_does_not_discharge(tmp_path):
-    """Plain pinning test (NOT an xfail — the current behavior below is what
-    actually happens today and passes cleanly; the gap is that it happens at
-    all, not that this test fails). When writer 2 is fixed (delegate or
-    refuse, per the plan's own two sanctioned shapes), THIS TEST must be
-    updated in the same change — it is deliberately not an xfail because
-    xfail requires the body to raise, and today's actual behavior does not."""
+def test_writer_two_now_discharges_via_delegation(tmp_path):
+    """Writer 2 archives when the guard is safe — the SAME outcome writer 1
+    produces, via the SAME shared `_supersede_continued` body (no more
+    parallel field-write closure to keep in sync)."""
     import coordinator_core.ops.handoff_transition as ht
 
     repo = tmp_path / "repo"
@@ -303,15 +305,34 @@ def test_open_gap_writer_two_still_does_not_discharge(tmp_path):
     )
 
     assert result.get("exit_code") == 0, result
-    # THE GAP: continued was written (superseded), but the file was neither
-    # moved nor was the write refused.
-    assert hp.exists(), "today: writer 2 never archives (this is the open gap)"
-    text = hp.read_text(encoding="utf-8")
-    split = split_frontmatter(text)
+    assert result.get("moved") is True, result
+    assert not hp.exists(), "writer 2 must discharge archival, not leave the file resident"
+    archived = list((repo / "archive" / "handoffs").rglob("gap-predecessor.md"))
+    assert len(archived) == 1, archived
+    split = split_frontmatter(archived[0].read_text(encoding="utf-8"))
     assert split is not None
-    assert read_fm_field(split.fm_text, "deployment_state") == "continued", (
-        "today: writer 2 writes continued with no discharge and no refusal"
+    assert read_fm_field(split.fm_text, "deployment_state") == "continued"
+
+
+def test_writer_two_still_retains_for_live_forked_from_child(tmp_path):
+    """Same narrow-exemption control as AC4 above, exercised through
+    writer 2's own delegated path."""
+    import coordinator_core.ops.handoff_transition as ht
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    hp = _seed_handoff(repo, "gap2-predecessor.md", "claimed", "in_flight")
+    _seed_handoff_with_forked_from(repo, "gap2-spinoff.md", "gap2-predecessor.md")
+    common_dir = _common_dir(repo)
+    worktree = repo
+
+    result = ht._supersede(
+        "state/handoffs/gap2-predecessor.md", "gap2-successor.md", worktree, common_dir
     )
+
+    assert result.get("exit_code") == 0, result
+    assert result.get("moved") is not True, result
+    assert hp.exists(), "a live forked_from child must retain writer 2's target too"
 
 
 # ---------------------------------------------------------------------------
@@ -334,21 +355,24 @@ def test_open_gap_writer_two_still_does_not_discharge(tmp_path):
 # and its C3 verdict:
 _KNOWN_CONTINUED_WRITER_SITES: Set[Tuple[str, str]] = {
     # writer 1 (THE PRIMARY DEFECT) — `_supersede_continued`'s own `mutate`
-    # closure. FIXED this chunk: `_handler`'s live-children guard call now
-    # passes edge_kinds={"forked_from"} for mode="supersede" (see
-    # handoff_archive_transition.py's guard-call comment), so the successor
-    # itself no longer retains the predecessor. Covered by
-    # test_supersede_archives_despite_live_successor_predecessor_edge above.
+    # closure (handoff_archive_transition.py). FIXED this chunk: `_handler`'s
+    # live-children guard call now passes edge_kinds={"forked_from"} for
+    # mode="supersede" (see handoff_archive_transition.py's guard-call
+    # comment), so the successor itself no longer retains the predecessor.
+    # Covered by test_supersede_archives_despite_live_successor_predecessor_
+    # edge above.
+    #
+    # writer 2 (`handoff_transition._supersede`) is now a THIN DELEGATOR to
+    # this SAME `_supersede_continued` body — it no longer has a field-write
+    # closure of its own (mechanically confirmed: this scan no longer finds
+    # a separate site under handoff_transition.py), which is the actual fix
+    # for the "patched field-by-field twice already" divergence AC1 named.
+    # It runs the identical guard-then-archive-or-retain discharge as writer
+    # 1 (own closure, at the `_supersede` call site itself — see that
+    # function's docstring). Covered by
+    # test_writer_two_now_discharges_via_delegation and
+    # test_writer_two_still_retains_for_live_forked_from_child above.
     ("coordinator_core/ops/handoff_archive_transition.py", "mutate"),
-    # writer 2 — `_supersede`'s own `mutate` closure (handoff_transition.py).
-    # OPEN GAP, reported not fixed this chunk — see module docstring and
-    # test_open_gap_writer_two_still_does_not_discharge above: writes
-    # continued with no archival and no refusal. Fixing it (delegate or
-    # refuse, either of the plan's two sanctioned shapes) changes its return
-    # contract on a live handoff and breaks
-    # test_lifecycle_pair_consistency.py's test_transition_supersede_*
-    # tests, a file outside C3's writes:.
-    ("coordinator_core/ops/handoff_transition.py", "mutate"),
     # writer 4 (as literally named by the plan's AC1 enumeration) —
     # `_repair_archived_deployment_state_handler`'s own `_mutate` closure
     # (handoff_stamp.py). VERIFIED SAFE BY CONSTRUCTION, not merely trusted:

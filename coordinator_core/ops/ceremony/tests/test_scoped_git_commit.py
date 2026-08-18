@@ -960,58 +960,40 @@ def test_successful_commit_response_stays_thin(tmp_path):
     assert set(result) == {"committed", "sha", "pushed", "push_state"}
 
 
-def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypatch):
-    """`integrity_breach` is derived as "committed AND not pushed", which
-    over-fires wherever a post-commit auto-push hook wins the race: the hook
-    pushes, this op's own push step then finds nothing to push and reports
-    False, and the commit IS on the remote. Reporting a breach there trains
-    the reader to ignore the field. Confirmed-absent-from-remote is the bar.
+def test_commit_spawn_stands_the_other_publisher_down(tmp_path, monkeypatch):
+    """opro-01 C-01: the 2026-07-30 false negative cannot return, because the
+    thing that caused it no longer runs.
 
-    Forces the targeted scenario directly rather than relying on the op's
-    own push step to race a real auto-push hook (which it never actually
-    exercised -- see finding 1): monkeypatch `run_commit_pipeline` to report
-    exactly `pushed=False`/`integrity_breach=True` for a sha that IS already
-    genuinely on a real bare-repo remote (pushed via a side channel,
-    independent of the mocked-out pipeline call), so the confirmation logic
-    in `_handler` -- `_remote_sha_state` -- is the only thing that can make
-    this assertion pass.
+    This test replaces `test_no_false_integrity_breach_when_something_else_
+    pushed`, which pinned the SUPPRESSION of the symptom: it forced
+    `pushed=False`/`integrity_breach=True` for a sha genuinely on the remote
+    and asserted `_remote_sha_state` corrected the verdict. That probe is gone
+    (C-02), and a test asserting a removed correction would just be deleted
+    coverage. The invariant that replaces it is upstream of the symptom:
+    `git commit` must carry the marker that stands the post-commit hook's own
+    detached push down, so no second publisher exists to lose a race to.
 
-    Second assertion set (2026-07-30, doe-claude-em memo): suppressing the
-    breach was only half the fix. The op still REPORTED `pushed=False` for a
-    sha it had just confirmed on the remote, and `scoped-git-commit` rendered
-    that as `(not pushed)` -- three times in one DoE session on commits that
-    had all pushed. `pushed` answers "is this commit published", so a
-    confirmed-present sha is `True`, whoever's push put it there.
+    Asserted against the real `git commit` spawn's env rather than the flag on
+    the way in -- the flag being threaded is not the same fact as it reaching
+    git, and only the latter prevents the incident.
     """
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    from coordinator_core.ops.ceremony import git_native
 
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
-    _git(["remote", "add", "origin", str(origin)], repo)
-    _git(["push", "-q", "-u", "origin", "HEAD"], repo)
-
     _seed_file(repo, "notes/alpha.md", "content")
-    _git(["add", "--", "notes/alpha.md"], repo)
-    _git(["commit", "-q", "-m", "add notes"], repo)
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-    # Side channel: push it for real, independent of anything the (mocked)
-    # op call does.
-    _git(["push", "-q", "origin", "HEAD"], repo)
 
-    fake_result = SimpleNamespace(
-        committed_sha=sha,
-        pushed=False,
-        push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
-        commit_failed=False,
-        integrity_breach=True,
-        diagnostics=[],
-    )
-    monkeypatch.setattr(scoped_git_commit, "run_commit_pipeline", lambda *a, **k: fake_result)
+    commit_envs = []
+    orig = git_native._git
+
+    def _spy(args, **kw):
+        if args and args[0] == "commit":
+            commit_envs.append(kw.get("env"))
+        return orig(args, **kw)
+
+    monkeypatch.setattr(git_native, "_git", _spy)
 
     result = _call(
         {
@@ -1022,10 +1004,13 @@ def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypa
     )
 
     assert result["committed"] is True
-    assert result["sha"] == sha
-    assert result["pushed"] is True
-    assert result["push_state"] == scoped_git_commit.PUSH_STATE_PUSHED
-    assert "integrity_breach" not in result
+    assert commit_envs, "no `git commit` spawn observed -- fixture did not commit"
+    for env in commit_envs:
+        assert env is not None and env.get(git_native._AUTO_PUSH_SUPPRESS_ENV) == "1", (
+            "the commit spawn did not carry the stand-down marker: the "
+            "post-commit hook will detach and push, racing this op's own "
+            "push, and a landed commit can again render as PUSH FAILED"
+        )
 
 
 def test_landed_but_sha_unverified_reports_committed_true_not_false(tmp_path, monkeypatch):
@@ -1082,10 +1067,16 @@ def test_landed_but_sha_unverified_reports_committed_true_not_false(tmp_path, mo
     assert result.get("reason") != "empty-commit-set"
 
 
-def _commit_and_fake_pipeline(tmp_path, monkeypatch, *, with_remote: bool):
+def _commit_and_fake_pipeline(
+    tmp_path, monkeypatch, *, with_remote: bool, push_status=None
+):
     """Land a real local commit, then make the pipeline claim `pushed=False`
-    for it — the shape `derive_pushed_tristate` produces when this op's own
-    push loses a race to the detached auto-push, or genuinely fails.
+    for it.
+
+    `push_status` defaults to `NOT_ATTEMPTED` (the unknown rung). Pass
+    `PUSH_STATUS_FAILED` for the genuinely-failed-publish shape: since C-02
+    removed the remote probe, that status is what distinguishes a real failure
+    from an unknown one, where the probe's verdict used to.
     """
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
@@ -1110,7 +1101,7 @@ def _commit_and_fake_pipeline(tmp_path, monkeypatch, *, with_remote: bool):
         lambda *a, **k: SimpleNamespace(
             committed_sha=sha,
             pushed=False,
-            push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
+            push_status=push_status or scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
             commit_failed=False,
             integrity_breach=True,
             diagnostics=[],
@@ -1124,12 +1115,9 @@ def test_genuinely_unpushed_commit_still_reports_failure_and_breach(tmp_path, mo
     — that would trade the memo's false negative for a false positive and
     destroy the only signal that says a push actually failed.
     """
-    repo, sha = _commit_and_fake_pipeline(tmp_path, monkeypatch, with_remote=True)
-    # Deliberately never pushed: genuinely absent from origin.
-    monkeypatch.setattr(
-        scoped_git_commit,
-        "_remote_sha_state",
-        lambda *a, **k: scoped_git_commit._REMOTE_ABSENT,
+    repo, sha = _commit_and_fake_pipeline(
+        tmp_path, monkeypatch, with_remote=True,
+        push_status=scoped_git_commit.PUSH_STATUS_FAILED,
     )
 
     result = _call(
@@ -1158,96 +1146,6 @@ def test_unreadable_remote_reports_unconfirmed_never_failure(tmp_path, monkeypat
     assert result["pushed"] is None
     assert result["push_state"] == scoped_git_commit.PUSH_STATE_UNCONFIRMED
     assert "integrity_breach" not in result
-
-
-def test_remote_sha_state_distinguishes_absent_from_unknown(tmp_path):
-    """`_sha_missing_from_remote` collapses absent and unknown into one bool;
-    the tri-state probe underneath it must keep them apart, since that
-    collapse is precisely what a human-facing render must not inherit.
-    """
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    # No upstream configured: unknowable, NOT absent.
-    assert scoped_git_commit._remote_sha_state(str(repo), sha) == scoped_git_commit._REMOTE_UNKNOWN
-    assert scoped_git_commit._sha_missing_from_remote(str(repo), sha) is False
-
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
-    _git(["remote", "add", "origin", str(origin)], repo)
-    _git(["push", "-q", "-u", "origin", "HEAD"], repo)
-    assert scoped_git_commit._remote_sha_state(str(repo), sha) == scoped_git_commit._REMOTE_PRESENT
-
-    _seed_file(repo, "notes/alpha.md", "content")
-    _git(["add", "--", "notes/alpha.md"], repo)
-    _git(["commit", "-q", "-m", "add notes"], repo)
-    unpushed = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-    assert (
-        scoped_git_commit._remote_sha_state(str(repo), unpushed, attempts=1)
-        == scoped_git_commit._REMOTE_ABSENT
-    )
-
-
-def test_sha_missing_from_remote_false_when_sha_is_on_remote(tmp_path):
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
-
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _git(["remote", "add", "origin", str(origin)], repo)
-    _git(["push", "-q", "-u", "origin", "HEAD"], repo)
-
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    assert scoped_git_commit._sha_missing_from_remote(str(repo), sha) is False
-
-
-def test_sha_missing_from_remote_true_when_sha_genuinely_absent(tmp_path):
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
-
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _git(["remote", "add", "origin", str(origin)], repo)
-    _git(["push", "-q", "-u", "origin", "HEAD"], repo)
-
-    _seed_file(repo, "notes/alpha.md", "content")
-    _git(["add", "--", "notes/alpha.md"], repo)
-    _git(["commit", "-q", "-m", "add notes"], repo)
-    # Deliberately never pushed -- genuinely absent from origin.
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    # attempts=1: this is a stable-absent case, not a race; skip the
-    # production retry/backoff so the test stays fast.
-    assert scoped_git_commit._sha_missing_from_remote(str(repo), sha, attempts=1) is True
-
-
-def test_sha_missing_from_remote_false_when_no_upstream_configured(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    assert scoped_git_commit._sha_missing_from_remote(str(repo), sha) is False
 
 
 def test_unstaged_deletion_named_in_pathspec_is_committed(tmp_path):
@@ -1579,80 +1477,71 @@ def test_post_commit_release_phantom_claims_never_drops_a_pending_tracked_deleti
     assert tracked_path in offer["safe_paths"]
 
 
-def test_declined_push_status_short_circuits_before_remote_probe(tmp_path, monkeypatch):
-    """AC5 (docs/plans/2026-08-08-the-push-leg-that-never-asked-which-branch.md,
-    C5): a policy decline is known and deliberate, not the genuinely-unknown
-    case `_resolve_push_report`'s remote probe exists for -- it must render
-    `PUSH_STATE_DECLINED` WITHOUT ever calling `_remote_sha_state`. Asserting
-    only the returned string would pass even if the probe still ran (its
-    result is simply discarded by the branch order); the probe-not-called
-    assertion is the actual AC.
+def test_resolve_push_report_issues_no_git_at_all(monkeypatch):
+    """C-02: `_resolve_push_report` is a pure mapping now.
+
+    The strongest available statement of "the probe is gone": explode on any
+    git spawn, then exercise every status. A reintroduced remote read -- under
+    any name, from any layer -- fails here rather than quietly costing 4 spawns
+    and 1.0s of sleep on the push-raced path again.
+    """
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony import scoped_git_commit as sgc
+
+    def _explode(*a, **k):
+        raise AssertionError("_resolve_push_report spawned git: %r" % (a,))
+
+    monkeypatch.setattr(git_native, "_git", _explode)
+
+    for status in (
+        sgc.PUSH_STATUS_DECLINED,
+        sgc.PUSH_STATUS_PUSHED,
+        sgc.PUSH_STATUS_NO_REMOTE,
+        sgc.PUSH_STATUS_FAILED,
+        sgc.PUSH_STATUS_NOT_ATTEMPTED,
+    ):
+        sgc._resolve_push_report(status)
+
+
+def test_resolve_push_report_maps_every_status():
+    """Each canonical status maps to exactly one report, including the two
+    rungs the acceptance criteria name explicitly.
+
+    `PUSH_STATUS_FAILED -> (False, PUSH_STATE_FAILED)` is the rung C-01 made
+    trustworthy: with one publisher per commit, this op's own push status IS
+    whether the commit is published, so a failure is a failure.
+
+    `PUSH_STATUS_NOT_ATTEMPTED -> (None, PUSH_STATE_UNCONFIRMED)` is the rung
+    that must NOT collapse into failure. A push that never ran is genuinely
+    unknown, and rendering unknown as failure invites the dangerous correction
+    (re-push, amend, force-push) on an auto-push-armed shared branch.
     """
     from coordinator_core.ops.ceremony import scoped_git_commit as sgc
 
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    probe_calls = []
-    monkeypatch.setattr(
-        sgc,
-        "_remote_sha_state",
-        lambda *a, **k: probe_calls.append((a, k)) or sgc._REMOTE_UNKNOWN,
-    )
-
-    pushed, push_state = sgc._resolve_push_report(str(repo), sha, sgc.PUSH_STATUS_DECLINED)
-
-    assert push_state == sgc.PUSH_STATE_DECLINED
-    assert pushed is None
-    assert probe_calls == []
+    assert sgc._resolve_push_report(sgc.PUSH_STATUS_DECLINED) == (
+        None, sgc.PUSH_STATE_DECLINED)
+    assert sgc._resolve_push_report(sgc.PUSH_STATUS_PUSHED) == (
+        True, sgc.PUSH_STATE_PUSHED)
+    assert sgc._resolve_push_report(sgc.PUSH_STATUS_NO_REMOTE) == (
+        None, sgc.PUSH_STATE_NO_REMOTE)
+    assert sgc._resolve_push_report(sgc.PUSH_STATUS_FAILED) == (
+        False, sgc.PUSH_STATE_FAILED)
+    assert sgc._resolve_push_report(sgc.PUSH_STATUS_NOT_ATTEMPTED) == (
+        None, sgc.PUSH_STATE_UNCONFIRMED)
 
 
-def test_unknown_push_status_still_probes_remote(tmp_path, monkeypatch):
-    """The regression that matters most: the short-circuit added for
-    `PUSH_STATUS_DECLINED` must not swallow the genuinely-unknown case --
-    anything other than pushed/declined/no-remote still reaches the remote
-    probe exactly as before this change.
+def test_unrecognized_push_status_is_unconfirmed_never_failure():
+    """A status this mapping does not know must fail toward "unknown".
+
+    The old code reached the probe on anything unrecognized and let the remote
+    decide; the mapping has no such backstop, so the default rung is the whole
+    safety argument. Failing toward FAILED would manufacture a breach out of a
+    vocabulary drift between this module and `commit_pipeline`.
     """
     from coordinator_core.ops.ceremony import scoped_git_commit as sgc
 
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "seed")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-    probe_calls = []
-
-    def _fake_probe(*a, **k):
-        probe_calls.append((a, k))
-        return sgc._REMOTE_PRESENT
-
-    monkeypatch.setattr(sgc, "_remote_sha_state", _fake_probe)
-
-    pushed, push_state = sgc._resolve_push_report(str(repo), sha, sgc.PUSH_STATUS_NOT_ATTEMPTED)
-
-    assert push_state == sgc.PUSH_STATE_PUSHED
-    assert pushed is True
-    assert len(probe_calls) == 1
-
-
-def test_no_remote_push_status_maps_to_push_state_no_remote(tmp_path):
-    """`PUSH_STATUS_NO_REMOTE` maps onto the existing `PUSH_STATE_NO_REMOTE`
-    rather than falling through to the unknown/probe path.
-    """
-    from coordinator_core.ops.ceremony import scoped_git_commit as sgc
-
-    pushed, push_state = sgc._resolve_push_report(str(tmp_path), None, sgc.PUSH_STATUS_NO_REMOTE)
-
-    assert push_state == sgc.PUSH_STATE_NO_REMOTE
-    assert pushed is None
+    assert sgc._resolve_push_report("some-future-status") == (
+        None, sgc.PUSH_STATE_UNCONFIRMED)
 
 
 # ---------------------------------------------------------------------------

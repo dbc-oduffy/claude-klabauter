@@ -151,6 +151,21 @@ def should_demote(
     `served_count()` is still zero (staff-eng finding 5). Pure predicate --
     no side effects, no shutdown call; `demote_if_idle` is the one that
     acts on this.
+
+    THE FULL-DEADLINE ARM MUST STAY KEYED ON `seconds_idle()` (time since
+    the LAST `mark_invocation`), never narrowed to "never served anything
+    (`served_count() == 0`)" -- that narrower predicate looks like the
+    obvious simplification and is wrong: the field orphan a stranded
+    generation actually produces (`warm.skew`'s per-commit token rotation
+    minting a new pipe name out from under a still-listening predecessor)
+    typically SERVED requests before rotation stranded it, so its
+    `served_count()` is nonzero and only `seconds_idle()` ever crosses the
+    deadline for it. A refactor that drops the OR and demotes solely on
+    `served_count() == 0` leaves that real orphan running forever while
+    still passing a synthetic zero-invocation test
+    (test_idle_demotion_survives_token_rotation_after_serving in
+    `warm/tests/test_server_loop.py` is the regression pinned against
+    exactly this).
     """
     idle = seconds_idle(clock=clock)
     deadline = (

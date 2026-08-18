@@ -6276,30 +6276,26 @@ class TestDirtyTreeCaseCEndToEndViaBrief:
 # ---------------------------------------------------------------------------
 
 
-class TestC3RoadmapBatonPredecessorDeclinesD6:
-    """C3: `_build_directives` currently gates d6 on the MECHANICAL
-    predicate `lineage.get("predecessor") is not None` alone -- it never
-    reads the predecessor's own `kind` frontmatter. When the resolved
-    predecessor's `kind` canonicalizes to `roadmap-baton` (via the shared
-    `coordinator_core.frontmatter.baton_class.canonical_kind` helper), d6
-    must NOT arm as an unconditional directive -- it must instead surface a
-    judgment point (PIN-3 id `d6-roadmap-baton-decline`) naming the baton,
-    with two legal decision values: `leave-baton` (default -- d6 stays
-    unarmed, the mint proceeds) and `force-supersede` (operator override --
-    d6 arms exactly as it does today). This is the PRIMARY closure for the
-    ordinary `/handoff` path (§ Layering) -- C2 is only the backstop for
-    direct-invoke callers that bypass `brief()`/`_build_directives` entirely.
-
-    Every assertion below FAILS against current HEAD: HEAD has no
-    `d6-roadmap-baton-decline` judgment point at all, and d6 arms
-    unconditionally for ANY named predecessor regardless of its `kind`."""
+class TestC10RoadmapBatonPredecessorArmsD6Unconditionally:
+    """RE-POINTED (DR-172, 2026-08-18, plan a-session-always-has-a-baton
+    chunk C10) from the retired `TestC3RoadmapBatonPredecessorDeclinesD6`.
+    C3's `d6-roadmap-baton-decline` judgment point -- the kind-first refusal
+    that used to gate d6 for a `kind: roadmap-baton` predecessor -- is gone:
+    DR-172 found `reconcile/gate_eval.py` resolves `blocked_by` by
+    `stub_id`, never file path, so the refusal's own rationale (an archival
+    move could sever a dependency edge) did not hold. d6 now arms
+    unconditionally for a roadmap-baton predecessor exactly like any other,
+    AND the successor mints AS a roadmap-baton, inheriting the
+    predecessor's `roadmap_id`/`stub_id` (see
+    `_resolved_predecessor_roadmap_identity`'s own docstring for what is,
+    and is not, carried)."""
 
     @staticmethod
     def _roadmap_baton_predecessor(tmp_path: Path) -> Path:
         """The artifact IS its own predecessor (own_handoff_id branch --
         mirrors `TestHandoffInputBecomesItsOwnPredecessor`), carrying
         `kind: roadmap-baton` on the SAME frontmatter `_build_directives`
-        must read to discriminate -- the shortest fixture that puts a
+        reads to discriminate -- the shortest fixture that puts a
         roadmap-baton `kind` on the resolved predecessor's own frontmatter."""
         return _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-02-roadmap-baton-predecessor.md",
@@ -6307,78 +6303,48 @@ class TestC3RoadmapBatonPredecessorDeclinesD6:
                 "deliverable_id: DEL-C3-BATON",
                 "handoff_id: hnd-baton-1a2b44",
                 "kind: roadmap-baton",
+                "roadmap_id: rm-c10-test",
+                "stub_id: stub-c10-test",
                 'predecessor: "none"',
             ],
         )
 
-    def test_no_decision_supplied_does_not_arm_d6(self, tmp_path):
+    def test_no_decision_needed_d6_arms_unconditionally(self, tmp_path):
         artifact = self._roadmap_baton_predecessor(tmp_path)
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         clis = {d["cli"] for d in decision["directives"]}
-        assert "handoff.supersede_predecessor" not in clis, (
-            "C3: d6 must not arm unconditionally for a roadmap-baton "
-            "predecessor -- it must surface a judgment point instead"
+        assert "handoff.supersede_predecessor" in clis, (
+            "C10: d6 must arm unconditionally for a roadmap-baton "
+            "predecessor now the kind-first decline is retired"
         )
 
-    def test_judgment_point_emitted_naming_the_baton(self, tmp_path):
+    def test_no_roadmap_baton_decline_judgment_point_is_emitted(self, tmp_path):
         artifact = self._roadmap_baton_predecessor(tmp_path)
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
-        jp = next(
-            (jp for jp in decision["judgment_points"] if jp["id"] == "d6-roadmap-baton-decline"),
-            None,
-        )
-        assert jp is not None, (
-            "C3/PIN-3: expected a judgment point with id "
-            "'d6-roadmap-baton-decline' when the resolved predecessor's "
-            "kind canonicalizes to roadmap-baton"
-        )
-        jp_text = " ".join(str(jp.get(field, "")) for field in ("question", "reason", "evidence"))
-        assert "roadmap-baton" in jp_text.lower() or "baton" in jp_text.lower(), (
-            "C3: the judgment point must name the baton, not decline bare -- "
-            f"got jp text {jp_text!r}"
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-roadmap-baton-decline" not in jp_ids, (
+            "C10: the retired kind-first decline must never be surfaced again"
         )
 
-    def test_both_legal_decision_values_are_present(self, tmp_path):
+    def test_successor_mints_as_roadmap_baton_carrying_identity(self, tmp_path):
         artifact = self._roadmap_baton_predecessor(tmp_path)
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
-        jp = next(
-            (jp for jp in decision["judgment_points"] if jp["id"] == "d6-roadmap-baton-decline"),
-            None,
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert "--type=roadmap-baton" in d1["args"], (
+            "C10 Part 2: a roadmap-baton predecessor's successor must mint "
+            f"as a roadmap-baton -- got args {d1['args']!r}"
         )
-        assert jp is not None
-        values = {d["value"] for d in jp["dispositions"]}
-        assert values == {"leave-baton", "force-supersede"}, (
-            "C3/PIN-3: legal decision values must be exactly "
-            f"{{'leave-baton', 'force-supersede'}} -- got {values!r}"
-        )
+        assert "--roadmap-id=rm-c10-test" in d1["args"]
+        assert "--stub-id=stub-c10-test" in d1["args"]
 
-    def test_resolving_leave_baton_yields_no_d6_directive(self, tmp_path):
+    def test_d6_supersedes_the_named_predecessor(self, tmp_path):
         artifact = self._roadmap_baton_predecessor(tmp_path)
-        decision = ba.brief(
-            "handoff",
-            str(artifact),
-            decisions={"d6-roadmap-baton-decline": {"disposition": "leave-baton"}},
-            repo_root=tmp_path,
-        ).decision_object
-        clis = {d["cli"] for d in decision["directives"]}
-        assert "handoff.supersede_predecessor" not in clis
-
-    def test_resolving_force_supersede_yields_the_d6_directive_as_today(self, tmp_path):
-        artifact = self._roadmap_baton_predecessor(tmp_path)
-        decision = ba.brief(
-            "handoff",
-            str(artifact),
-            decisions={"d6-roadmap-baton-decline": {"disposition": "force-supersede"}},
-            repo_root=tmp_path,
-        ).decision_object
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         d6 = next(
             (d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"),
             None,
         )
-        assert d6 is not None, (
-            "C3: an explicit 'force-supersede' override must arm d6 exactly "
-            "as an ungated predecessor does today"
-        )
+        assert d6 is not None
         assert d6["args"][0] == str(artifact)
 
 
@@ -6561,10 +6527,19 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         read the ledger-resolved predecessor via a hand-rolled
         `_read_frontmatter` that silently returns `""` for a missing path,
         so `predecessor_id` came back `None` and
-        `_resolved_predecessor_canonical_kind` (C3's own gate, fed the same
-        un-resolved value) reported "not roadmap-baton" for a predecessor
-        that genuinely is one -- arming d6 unconditionally for exactly the
-        archived-baton shape this whole plan exists to close."""
+        `_resolved_predecessor_canonical_kind` reported "not roadmap-baton"
+        for a predecessor that genuinely is one.
+
+        RE-POINTED (DR-172, 2026-08-18, C10): what Finding 1 fixed --
+        `predecessor_id` resolving correctly through the archived-path
+        shape -- is still asserted below unchanged. What it USED to also
+        assert -- that this discrepancy defeated the kind-first d6 decline
+        -- no longer applies, because that decline is retired. The mint-kind
+        carry (C10 Part 2) IS still gated on the same
+        `_resolved_predecessor_canonical_kind` resolution Finding 1 fixed,
+        so this fixture still exercises real load-bearing behaviour: the
+        successor mints as a roadmap-baton even though the predecessor has
+        already moved to archive/."""
         _init_repo(tmp_path)
         archived_predecessor = _write_artifact(
             tmp_path / "archive" / "handoffs" / "2026-08-01-archived-baton.md",
@@ -6594,19 +6569,16 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         )
 
         clis = {d["cli"] for d in decision["directives"]}
-        assert "handoff.supersede_predecessor" not in clis, (
-            "Finding 1: an archived roadmap-baton predecessor resolved via "
-            "the ledger must still decline to arm d6 unconditionally -- C3's "
-            "gate must not be defeated by the archived-path shape"
+        assert "handoff.supersede_predecessor" in clis, (
+            "C10: d6 arms unconditionally now the kind-first decline is "
+            "retired -- an archived roadmap-baton predecessor supersedes "
+            "exactly like any other"
         )
-        jp = next(
-            (jp for jp in decision["judgment_points"] if jp["id"] == "d6-roadmap-baton-decline"),
-            None,
-        )
-        assert jp is not None, (
-            "Finding 1: the archived predecessor must still be recognized as "
-            "a roadmap-baton and surface 'd6-roadmap-baton-decline', not "
-            "silently arm d6"
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert "--type=roadmap-baton" in d1["args"], (
+            "C10 Part 2: the archived-path resolution Finding 1 fixed must "
+            "still feed the mint-kind carry -- the successor mints as a "
+            f"roadmap-baton -- got args {d1['args']!r}"
         )
 
 
@@ -7639,21 +7611,17 @@ class TestClosedPredecessorDeclinesD6PerPredecessor:
             f"be surfaced (undecided) -- got jp ids {jp_ids!r}"
         )
 
-    def test_roadmap_baton_primary_with_closed_additional_surfaces_both_declines(
+    def test_roadmap_baton_primary_with_closed_additional_surfaces_only_the_closed_decline(
         self, tmp_path, monkeypatch
     ):
-        """2026-08-13 re-scope (the roadmap-baton-supersede-gate-reads-only-
-        the-primary-predecessor bug fix): `_build_directives`'s per-
-        predecessor loop is now UNCONDITIONAL -- it is no longer hoisted
-        behind the primary's own roadmap-baton kind, so a closed ADDITIONAL
-        predecessor's own decline is evaluated independently of what the
-        primary is. `brief()` now surfaces BOTH declines here: the primary's
-        own 'd6-roadmap-baton-decline' (unrelated reason -- it is a
-        roadmap-baton) and the additional predecessor's own
-        'd6-2-closed-predecessor-decline' (unrelated reason -- it is
-        closed). Neither predecessor's own d6/d6-N arms, but for two
-        independent reasons, not because one gate blanket-declined the
-        whole fan-in (that blanket behaviour was Leak 2, now fixed)."""
+        """RE-POINTED (DR-172, 2026-08-18, C10) from
+        `test_roadmap_baton_primary_with_closed_additional_surfaces_both_
+        declines`: the roadmap-baton primary's own `d6-roadmap-baton-
+        decline` is retired -- it no longer fires regardless of the
+        additional predecessor's state. Only the closed additional
+        predecessor's own `d6-2-closed-predecessor-decline` remains, and d6
+        (the now-unconditional roadmap-baton edge) arms while d6-2 (the
+        closed edge) stays declined."""
         _init_repo(tmp_path)
         predecessor_1 = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-10-roadmap-baton-primary.md",
@@ -7695,21 +7663,19 @@ class TestClosedPredecessorDeclinesD6PerPredecessor:
 
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
         assert "d6-2-closed-predecessor-decline" in jp_ids, (
-            "the per-predecessor loop is now unconditional -- the closed "
-            "additional predecessor's own decline must surface regardless "
-            f"of the primary's kind; got jp ids {jp_ids!r}"
+            "the closed additional predecessor's own decline must still "
+            f"surface -- got jp ids {jp_ids!r}"
         )
-        assert "d6-roadmap-baton-decline" in jp_ids, (
-            "the primary's own roadmap-baton decline point is unrelated "
-            "and must still fire"
+        assert "d6-roadmap-baton-decline" not in jp_ids, (
+            "C10: the retired kind-first decline must never be surfaced"
         )
 
         d6_ids = {
             d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
         }
-        assert d6_ids == set(), (
-            "no d6 directive arms while the primary roadmap-baton is "
-            f"undecided -- got {d6_ids!r}"
+        assert d6_ids == {"d6"}, (
+            "the roadmap-baton primary arms unconditionally; only the "
+            f"closed additional (d6-2) stays declined -- got {d6_ids!r}"
         )
 
     def test_all_open_fan_in_brief_is_unchanged(self, tmp_path, monkeypatch):
@@ -7741,19 +7707,19 @@ class TestClosedPredecessorDeclinesD6PerPredecessor:
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
         assert not any(jp_id.endswith("-closed-predecessor-decline") for jp_id in jp_ids)
 
-    def test_predecessor_both_roadmap_baton_and_closed_surfaces_only_roadmap_baton_decline(
+    def test_predecessor_both_roadmap_baton_and_closed_surfaces_only_the_closed_decline(
         self, tmp_path, monkeypatch
     ):
-        """Review coordinatorcode-reviewer-e58adcaa Finding P2: a SINGLE
-        predecessor that is simultaneously `kind: roadmap-baton` AND
-        `deployment_state: closed` must NOT surface both decline points
-        unconditionally -- `_build_directives`'s per-predecessor loop checks
-        roadmap-baton first and `continue`s past the closed check while that
-        decline is undecided, so a closed-decline point offered before the
-        roadmap-baton decline is resolved is inert (no directive-consulting
-        code path can reach it yet). Only the roadmap-baton decline point
-        may surface up front; force-superseding it is what makes the closed
-        check -- and its own decline point -- reachable."""
+        """RE-POINTED (DR-172, 2026-08-18, C10) from
+        `test_predecessor_both_roadmap_baton_and_closed_surfaces_only_
+        roadmap_baton_decline`: the roadmap-baton-first precedence this test
+        used to pin (Review coordinatorcode-reviewer-e58adcaa Finding P2) no
+        longer applies -- the roadmap-baton decline it was ordered ahead of
+        is retired entirely, so for a predecessor that is simultaneously
+        `kind: roadmap-baton` AND `deployment_state: closed`, the
+        closed-baton gate is now the ONLY decline reachable, and it
+        surfaces immediately -- no longer gated behind resolving a
+        roadmap-baton decision first."""
         _init_repo(tmp_path)
         predecessor = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-10-baton-and-closed.md",
@@ -7773,64 +7739,56 @@ class TestClosedPredecessorDeclinesD6PerPredecessor:
 
         decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
-        assert "d6-roadmap-baton-decline" in jp_ids, (
-            f"the roadmap-baton decline must surface up front -- got {jp_ids!r}"
+        assert "d6-roadmap-baton-decline" not in jp_ids, (
+            "C10: the retired kind-first decline must never be surfaced"
         )
-        assert "d6-closed-predecessor-decline" not in jp_ids, (
-            "the closed-decline point is inert while the roadmap-baton "
-            f"decline is undecided -- must not be offered yet, got {jp_ids!r}"
+        assert "d6-closed-predecessor-decline" in jp_ids, (
+            f"the closed-baton gate must surface immediately -- got {jp_ids!r}"
         )
         d6_ids = {
             d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
         }
-        assert d6_ids == set(), f"undecided roadmap-baton predecessor must not arm d6 -- got {d6_ids!r}"
+        assert d6_ids == set(), f"the closed predecessor must not arm d6 -- got {d6_ids!r}"
 
-        # Force-superseding the roadmap-baton decline re-arms the edge only
-        # far enough to make the closed check reachable -- the closed check
-        # then declines it on its own terms (no closed-decline force-
-        # supersede has been given), so d6 still does not arm, but NOW the
-        # closed-decline point becomes reachable and is surfaced.
+        # Force-superseding the closed decline arms d6 directly now -- no
+        # roadmap-baton decision is in the way any more.
         rearmed = ba.brief(
             "handoff",
             "",
-            decisions={"d6-roadmap-baton-decline": {"disposition": "force-supersede"}},
+            decisions={"d6-closed-predecessor-decline": {"disposition": "force-supersede"}},
             repo_root=tmp_path,
         ).decision_object
-        rearmed_jp_ids = {jp["id"] for jp in rearmed["judgment_points"]}
-        assert "d6-closed-predecessor-decline" in rearmed_jp_ids, (
-            "once the roadmap-baton decline is force-superseded, the closed "
-            f"check -- and its own decline point -- becomes reachable, got {rearmed_jp_ids!r}"
-        )
         rearmed_d6_ids = {
             d["id"] for d in rearmed["directives"] if d["cli"] == "handoff.supersede_predecessor"
         }
-        assert rearmed_d6_ids == set(), (
-            "the closed check still declines to arm d6 absent its own "
-            f"force-supersede -- got {rearmed_d6_ids!r}"
+        assert rearmed_d6_ids == {"d6"}, (
+            "force-superseding the closed decline arms d6 -- got "
+            f"{rearmed_d6_ids!r}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Bug fix: "the roadmap-baton supersede gate reads only the primary
-# predecessor, so a fan-in leaks both ways"
+# Bug fix (2026-08-13): "the roadmap-baton supersede gate reads only the
+# primary predecessor, so a fan-in leaks both ways"
 # (state/bug-backlog/2026-08-13-the-roadmap-baton-supersede-gate-reads-o-
-# 8a52f62d5380.yaml). `_build_directives`'s roadmap-baton d6 gate was
-# computed ONCE off `lineage["predecessor"]` (the primary alone) and applied
-# to the WHOLE `all_predecessors` loop -- Leak 1: an ordinary primary +
-# roadmap-baton additional armed d6-N against the baton (DR-126 C-1 routed
-# around, op refuses, mint aborts). Leak 2: a roadmap-baton primary declined
-# d6 for EVERY predecessor, silently stranding open siblings. The fix moves
-# the kind check INSIDE the loop, per-predecessor, mirroring
-# `TestClosedPredecessorDeclinesD6PerPredecessor`'s fixture shape exactly.
+# 8a52f62d5380.yaml) -- HISTORICAL. The per-predecessor roadmap-baton gate
+# this bug fix scoped is RETIRED (DR-172, 2026-08-18, plan
+# a-session-always-has-a-baton chunk C10): a roadmap-baton predecessor now
+# supersedes exactly like any other, so there is no fan-in leak class left
+# for this gate to have (neither leak's failure mode -- a stray refusal, or
+# a stray blanket decline -- is reachable when nothing declines on `kind`
+# any more). `TestRoadmapBatonDeclinesD6PerPredecessor`'s four tests below
+# are RE-POINTED to assert the new unconditional-arming behaviour across
+# the same fan-in shapes, rather than deleted -- per this chunk's own
+# re-point-don't-delete instruction.
 # ---------------------------------------------------------------------------
 
 
 class TestRoadmapBatonDeclinesD6PerPredecessor:
-    """Per-predecessor roadmap-baton decline -- the re-scope that closes
-    both fan-in leaks described above. A roadmap-baton predecessor's own
-    d6/d6-N is skipped; every sibling edge in the same fan-in still arms
-    normally, regardless of whether the roadmap-baton is the primary or an
-    additional predecessor."""
+    """RE-POINTED (DR-172, C10): a roadmap-baton predecessor's own d6/d6-N
+    now arms exactly like any other predecessor's, regardless of whether it
+    is the primary or an additional predecessor in a fan-in -- there is no
+    more decline to skip."""
 
     def _seed_handoff_claim(
         self,
@@ -7845,17 +7803,13 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         if claimed_at is not None:
             (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
 
-    def test_leak_1_ordinary_primary_roadmap_baton_additional_only_declines_the_baton_edge(
+    def test_ordinary_primary_and_roadmap_baton_additional_both_arm(
         self, tmp_path, monkeypatch
     ):
-        """Leak 1 regression: primary is an ordinary session-handoff,
-        additional predecessor is a roadmap-baton. Pre-fix, the primary-only
-        kind check passed (primary is not a baton) and armed d6-2 against
-        the roadmap baton, routing around DR-126 C-1 on the brief side --
-        the op's own choke point then refused and the mint aborted. Post-fix:
-        d6 arms for the ordinary primary, d6-2 does NOT arm for the roadmap
-        baton, and a 'd6-2-roadmap-baton-decline' judgment point is
-        surfaced instead -- the mint completes."""
+        """RE-POINTED from `test_leak_1_...`: an ordinary primary + a
+        roadmap-baton additional predecessor both arm their own d6/d6-N now
+        -- the kind-first decline that used to skip the baton edge is
+        retired."""
         _init_repo(tmp_path)
         predecessor_1 = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-13-ordinary-primary.md",
@@ -7888,30 +7842,20 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         d6_ids = {
             d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
         }
-        assert d6_ids == {"d6"}, (
-            "Leak 1: d6 must arm for the ordinary primary and d6-2 must NOT "
-            f"arm for the roadmap-baton additional -- got {d6_ids!r}"
+        assert d6_ids == {"d6", "d6-2"}, (
+            f"C10: both edges must arm unconditionally -- got {d6_ids!r}"
         )
 
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
-        assert "d6-2-roadmap-baton-decline" in jp_ids, (
-            "Leak 1: the roadmap-baton additional predecessor's own decline "
-            f"point must be surfaced -- got jp ids {jp_ids!r}"
-        )
-        assert "d6-roadmap-baton-decline" not in jp_ids, (
-            "the ordinary primary is not a roadmap-baton -- no decline "
-            f"point should be surfaced for it -- got jp ids {jp_ids!r}"
+        assert not any(jp_id.endswith("-roadmap-baton-decline") for jp_id in jp_ids), (
+            f"C10: no roadmap-baton decline may be surfaced -- got jp ids {jp_ids!r}"
         )
 
-    def test_leak_2_roadmap_baton_primary_still_arms_the_ordinary_additional(
+    def test_roadmap_baton_primary_and_ordinary_additional_both_arm(
         self, tmp_path, monkeypatch
     ):
-        """Leak 2 regression: primary IS a roadmap-baton, additional
-        predecessor is an ordinary open session-handoff. Pre-fix, the
-        `pass` branch declined to arm d6 for EVERY predecessor, silently
-        stranding the ordinary sibling non-terminal forever. Post-fix: d6
-        is skipped for the baton primary (with its own decline point
-        surfaced), but d6-2 STILL ARMS for the ordinary sibling."""
+        """RE-POINTED from `test_leak_2_...`: a roadmap-baton primary and an
+        ordinary additional predecessor both arm their own d6/d6-N now."""
         _init_repo(tmp_path)
         predecessor_1 = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-13-roadmap-baton-primary.md",
@@ -7944,32 +7888,27 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         d6_ids = {
             d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
         }
-        assert d6_ids == {"d6-2"}, (
-            "Leak 2: d6 must NOT arm for the roadmap-baton primary but d6-2 "
-            f"must still arm for the ordinary sibling -- got {d6_ids!r}"
+        assert d6_ids == {"d6", "d6-2"}, (
+            f"C10: both edges must arm unconditionally -- got {d6_ids!r}"
         )
 
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
-        assert "d6-roadmap-baton-decline" in jp_ids, (
-            "the roadmap-baton primary's own decline point must be "
-            f"surfaced -- got jp ids {jp_ids!r}"
-        )
-        assert "d6-2-roadmap-baton-decline" not in jp_ids, (
-            "the ordinary additional predecessor is not a roadmap-baton -- "
-            f"no decline point should be surfaced for it -- got jp ids {jp_ids!r}"
+        assert not any(jp_id.endswith("-roadmap-baton-decline") for jp_id in jp_ids), (
+            f"C10: no roadmap-baton decline may be surfaced -- got jp ids {jp_ids!r}"
         )
 
-    def test_force_supersede_rearms_only_the_named_roadmap_baton_edge(self, tmp_path, monkeypatch):
-        """Per-predecessor `force-supersede` must resolve ONLY the edge
-        whose id it names, never every d6 in the fan-in.
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert "--type=roadmap-baton" in d1["args"], (
+            "C10 Part 2: the primary is kind: roadmap-baton -- the "
+            f"successor must mint as one -- got args {d1['args']!r}"
+        )
 
-        Review coverage gap (2026-08-13): a single-roadmap-baton fixture
-        cannot observe isolation -- the ordinary primary's d6 arms
-        regardless because it was never gated at all, so a defect that
-        resolved `force-supersede` globally across every
-        `*-roadmap-baton-decline` id would pass identically. Use TWO
-        roadmap-baton predecessors, name only one, and assert the other's
-        own edge stays declined and its own decline point still surfaces."""
+    def test_two_roadmap_baton_predecessors_both_arm(self, tmp_path, monkeypatch):
+        """RE-POINTED from
+        `test_force_supersede_rearms_only_the_named_roadmap_baton_edge`
+        (which pinned per-edge isolation of a now-retired decision key):
+        with no decline left to resolve, every predecessor's own d6/d6-N
+        arms regardless of how many of them are roadmap-batons."""
         _init_repo(tmp_path)
         predecessor_1 = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-13-ordinary-primary-fs.md",
@@ -8004,33 +7943,28 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         )
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fs")
 
-        decision = ba.brief(
-            "handoff",
-            "",
-            decisions={"d6-2-roadmap-baton-decline": {"disposition": "force-supersede"}},
-            repo_root=tmp_path,
-        ).decision_object
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
 
         d6_ids = {
             d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
         }
-        assert d6_ids == {"d6", "d6-2"}, (
-            "force-supersede named only 'd6-2-roadmap-baton-decline' -- it "
-            f"must arm that edge and the already-ordinary primary, but NOT "
-            f"'d6-3' (the other, un-named roadmap-baton edge) -- got {d6_ids!r}"
+        assert d6_ids == {"d6", "d6-2", "d6-3"}, (
+            f"C10: every edge arms unconditionally -- got {d6_ids!r}"
         )
 
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
-        assert "d6-3-roadmap-baton-decline" in jp_ids, (
-            "the other roadmap-baton predecessor's own decline point must "
-            f"still be surfaced (undecided) -- got jp ids {jp_ids!r}"
+        assert not any(jp_id.endswith("-roadmap-baton-decline") for jp_id in jp_ids), (
+            f"C10: no roadmap-baton decline may be surfaced -- got jp ids {jp_ids!r}"
         )
 
-    def test_single_predecessor_roadmap_baton_brief_is_byte_identical(self, tmp_path):
-        """Bare-id preservation: a single-predecessor roadmap-baton brief
-        (no fan-in at all) must still surface the bare
-        'd6-roadmap-baton-decline' id, unchanged from before this fix --
-        mirrors `TestC3RoadmapBatonPredecessorDeclinesD6`'s own fixture."""
+    def test_single_predecessor_roadmap_baton_brief_arms_and_mints_as_roadmap_baton(
+        self, tmp_path
+    ):
+        """RE-POINTED from
+        `test_single_predecessor_roadmap_baton_brief_is_byte_identical`
+        (which pinned the retired bare `d6-roadmap-baton-decline` id): a
+        single-predecessor roadmap-baton brief now arms d6 and mints its
+        successor as a roadmap-baton, with no decline point at all."""
         artifact = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-13-solo-roadmap-baton-predecessor.md",
             [
@@ -8042,14 +7976,9 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         )
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         clis = {d["cli"] for d in decision["directives"]}
-        assert "handoff.supersede_predecessor" not in clis
+        assert "handoff.supersede_predecessor" in clis
 
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
-        assert "d6-roadmap-baton-decline" in jp_ids, (
-            "the bare 'd6-roadmap-baton-decline' id must be preserved for a "
-            f"single-predecessor (primary-only) brief -- got jp ids {jp_ids!r}"
+        assert not any(jp_id.endswith("-roadmap-baton-decline") for jp_id in jp_ids), (
+            f"C10: no roadmap-baton decline may be surfaced -- got jp ids {jp_ids!r}"
         )
-        assert not any(
-            jp_id.endswith("-roadmap-baton-decline") and jp_id != "d6-roadmap-baton-decline"
-            for jp_id in jp_ids
-        ), f"a single-predecessor brief must not surface any numbered variant -- got {jp_ids!r}"

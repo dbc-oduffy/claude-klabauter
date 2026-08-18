@@ -169,7 +169,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
                 file=sys.stderr,
             )
             print(
-                "  Remediation: ~/.claude/plugins/coordinator/docs/wiki/"
+                "  Remediation: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/"
                 "machine-local-registry.md § Verifying registry health",
                 file=sys.stderr,
             )

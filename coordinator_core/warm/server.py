@@ -40,10 +40,18 @@ and a second copy is the failure mode this row is most likely to produce:
     the close-listener/wait-drain/ctx-shutdown/exit sequence by hand.
   - warm on/off -> `warm.settings` (consulted by the CLIENT before it ever
     spawns this process; this module does not re-check it at boot).
-  - breadcrumb -> C18, not yet landed. Step 3 of the lifecycle sequence
-    ("flush the log, unlink the breadcrumb, close pipe handles") therefore
-    has no breadcrumb to unlink yet; `_ctx_shutdown` below is a documented
-    no-op pending that chunk, not a silent gap.
+  - breadcrumb -> `warm.breadcrumb`. `main()` writes it once election has
+    been WON (never before -- a process that loses the election returns 0
+    without touching the winner's breadcrumb), and `_ctx_shutdown` unlinks
+    it as step 3 of the lifecycle sequence.
+  - idle demotion -> `warm.idle`. This module's own watchdog thread
+    (`_ServerContext._idle_watchdog_loop`) is the trigger this row wires
+    in: it must fire even when the accept loop never receives a single
+    connection, so it cannot be reached only from the request path.
+  - lifecycle telemetry -> `warm.telemetry`. `_ServerContext.telemetry` is
+    constructed once at boot, `record_invocation`/`record_exit` are called
+    from the request and shutdown-trigger paths below, and `flush()` runs
+    from `_ctx_shutdown`.
 
 TRANSPORT MODEL -- synchronous, one OS thread per connection, not asyncio
 end to end. `warm.lifecycle`'s shutdown sequence is itself synchronous
@@ -99,10 +107,17 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
-from coordinator_core.warm import election, lifecycle, skew
+from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
 from coordinator_core.warm.entry_seam import per_request_state
 
 __all__ = ["InFlightCounter", "main"]
+
+# How often the idle watchdog re-checks `idle.should_demote` -- independent
+# of request arrival (module docstring's "idle demotion" ownership note).
+# Small relative to both `idle.ZERO_SERVED_DEADLINE_SECS` (90s) and
+# `idle.DEFAULT_IDLE_MINUTES` (15min) so a stranded, zero-invocation server
+# demotes close to its deadline rather than one extra poll interval late.
+_IDLE_WATCHDOG_POLL_SECS = 5.0
 
 # Mirrors `_winapi.ERROR_PIPE_CONNECTED` (535) -- a client already connected
 # before this instance's own `ConnectNamedPipe` call was posted, which is a
@@ -239,6 +254,9 @@ def _serve_line(
     drain: Callable[[], None],
     release_in_flight: Callable[[], None],
     dispatch: Callable[[dict], dict] = _run_dispatch,
+    mark_invocation: Callable[[], None] = idle.mark_invocation,
+    record_invocation: Callable[[bool], None] = lambda warm: None,
+    record_exit: Callable[[str], None] = lambda reason: None,
 ) -> None:
     """Process one request frame for one connection: write exactly one
     response frame (or delegate that write to `warm.skew.evict_on_skew`'s
@@ -251,7 +269,16 @@ def _serve_line(
     which is what lets a skew-triggered `drain()` observe this request as
     already-released rather than deadlocking on its own count) and have the
     connection thread's own cleanup call it again as a no-op safety net.
+
+    `mark_invocation` runs for EVERY frame this function is handed,
+    including a skew-evicting one -- `warm.idle`'s own module docstring
+    ("IDLE CLOCK OWNERSHIP") calls this out as deliberate, not a bug to
+    suppress. `record_invocation` records a served (warm) request for
+    `warm.telemetry`; `record_exit` records why this server is about to
+    exit, called before `drain` on the skew path so `_ctx_shutdown`'s later
+    `telemetry.flush()` observes the reason.
     """
+    mark_invocation()
     released = False
 
     def _release() -> None:
@@ -274,6 +301,7 @@ def _serve_line(
     client_token = msg.pop("_engine_token", None)
 
     if client_token is not None and version_state.is_skewed(client_token):
+        record_exit(telemetry.EXIT_REASON_SKEW)
         skew.evict_on_skew(
             respond=_write_and_release,
             close_listener=close_listener,
@@ -292,6 +320,7 @@ def _serve_line(
             "id": request_id,
             "error": {"code": INTERNAL_ERROR, "message": f"internal error: {exc!r}"},
         }
+    record_invocation(True)
     _write_and_release(response)
 
 
@@ -304,6 +333,9 @@ def _handle_connection(
     drain: Callable[[], None],
     in_flight: InFlightCounter,
     dispatch: Callable[[dict], dict] = _run_dispatch,
+    mark_invocation: Callable[[], None] = idle.mark_invocation,
+    record_invocation: Callable[[bool], None] = lambda warm: None,
+    record_exit: Callable[[str], None] = lambda reason: None,
 ) -> None:
     """One connection's request/response lifecycle, run on its own thread.
 
@@ -347,6 +379,9 @@ def _handle_connection(
             drain=drain,
             release_in_flight=_exit_once,
             dispatch=dispatch,
+            mark_invocation=mark_invocation,
+            record_invocation=record_invocation,
+            record_exit=record_exit,
         )
     finally:
         _exit_once()
@@ -417,25 +452,40 @@ def _wrap_handle(handle: int) -> Any:
 
 class _ServerContext:
     """Boot-scoped server state: the pipe name, the ACL identity, the
-    version state constructed once, and the in-flight counter every
-    connection thread shares.
+    version state constructed once, the in-flight counter every connection
+    thread shares, this server life's `warm.telemetry.ServerTelemetry`, and
+    the idle-demotion watchdog.
 
     `close_listener` / `_drain` are the two callables `_serve_line` binds
-    into `warm.skew.evict_on_skew` for the skew-eviction path; both are
-    also the natural hooks a FUTURE trigger (idle demotion C24, operator
-    request) would bind to `warm.lifecycle.begin_shutdown` with, but this
-    row does not wire any trigger beyond skew -- out of scope, see module
-    docstring's ownership list.
+    into `warm.skew.evict_on_skew` for the skew-eviction path; the SAME
+    `close_listener` and a `begin_shutdown`-bound `_idle_tick` are what the
+    idle-demotion watchdog below uses -- both triggers share the single
+    `warm.lifecycle` shutdown guard, so whichever fires first is the only
+    one that ever reaches `_ctx_shutdown`/`os._exit`.
+
+    `engine_root` is threaded through only so `_ctx_shutdown` can unlink
+    THIS clone's breadcrumb (`warm.breadcrumb.svc_dir`'s own per-clone
+    resolution) rather than assuming the caller's cwd.
     """
 
-    def __init__(self, *, name: str, sid: str, version_state: "skew.ServerVersionState"):
+    def __init__(
+        self,
+        *,
+        name: str,
+        sid: str,
+        version_state: "skew.ServerVersionState",
+        engine_root: Optional[Path] = None,
+    ):
         self.name = name
         self.sid = sid
         self.version_state = version_state
+        self.engine_root = engine_root
         self.in_flight = InFlightCounter()
+        self.telemetry = telemetry.ServerTelemetry()
         self._listening_lock = threading.Lock()
         self._listening = True
         self._stopped = threading.Event()
+        self._idle_watchdog_stop = threading.Event()
 
     def close_listener(self) -> None:
         with self._listening_lock:
@@ -445,29 +495,74 @@ class _ServerContext:
         with self._listening_lock:
             return self._listening
 
+    def record_invocation(self, warm: bool) -> None:
+        self.telemetry.record_invocation(warm=warm)
+
+    def record_exit(self, reason: str) -> None:
+        self.telemetry.record_exit(reason)
+
     def _ctx_shutdown(self) -> None:
         """Step 3 of `warm.lifecycle`'s sequence: flush the log, unlink the
-        breadcrumb, close pipe handles. No breadcrumb exists yet (C18 not
-        landed -- module docstring), and `os._exit(0)` (step 4, run
+        breadcrumb, close pipe handles. `os._exit(0)` (step 4, run
         immediately after this by `lifecycle._run_tail`) reclaims every
-        open handle at the OS level regardless, so there is nothing this
-        step needs to do today. Documented no-op, not a silent gap.
+        open pipe handle at the OS level regardless, so this step's own
+        work is exactly the two on-disk artifacts this server life owns --
+        never raises, per both `telemetry.flush()`'s and
+        `breadcrumb.unlink_breadcrumb()`'s own "never raises" contracts.
         """
+        self._idle_watchdog_stop.set()
+        self.telemetry.flush(engine_root=self.engine_root)
+        breadcrumb.unlink_breadcrumb(self.engine_root)
         return None
 
     def _drain(self) -> None:
         lifecycle.drain_and_exit(in_flight_count=self.in_flight, ctx_shutdown=self._ctx_shutdown)
 
-    def serve_forever(self, first_handle: int) -> None:
-        """Kick off the self-replenishing accept chain on its own thread
-        and block for the life of the process.
+    def _idle_tick(self) -> None:
+        """One watchdog poll: record why (if this poll is the one that
+        demotes) before handing off to `idle.demote_if_idle`, which owns
+        the actual predicate and the `begin_shutdown` call. Re-evaluating
+        `should_demote` here is a second, side-effect-free read of the same
+        pure predicate `demote_if_idle` itself checks -- cheap at a 5s poll
+        interval and the only way to know, ahead of the call, whether THIS
+        poll is the one that will actually demote.
+        """
+        if idle.should_demote(served_count=self.telemetry.served_count):
+            self.record_exit(telemetry.EXIT_REASON_IDLE_DEMOTION)
+        idle.demote_if_idle(
+            served_count=self.telemetry.served_count,
+            close_listener=self.close_listener,
+            in_flight_count=self.in_flight,
+            ctx_shutdown=self._ctx_shutdown,
+        )
 
-        A drain triggered from any connection thread ends the whole
-        process via `os._exit(0)` (`warm.lifecycle`), which is the only
-        thing that ever wakes this wait -- no separate interrupt mechanism
-        is needed (module docstring's "TRANSPORT MODEL").
+    def _idle_watchdog_loop(self) -> None:
+        """Runs on its OWN thread, independent of the accept loop -- the
+        whole point (module docstring: idle demotion "must fire even when
+        the accept loop never receives a single connection"). `Event.wait`
+        both sleeps and gives `_ctx_shutdown` a way to end this thread
+        promptly once some OTHER trigger has already won the shutdown
+        guard, rather than polling `idle.should_demote` needlessly past
+        that point (harmless either way -- `demote_if_idle` no-ops once
+        `lifecycle`'s single-shot guard is spent -- but there is no reason
+        to keep ticking).
+        """
+        while not self._idle_watchdog_stop.wait(_IDLE_WATCHDOG_POLL_SECS):
+            self._idle_tick()
+
+    def serve_forever(self, first_handle: int) -> None:
+        """Kick off the self-replenishing accept chain and the idle
+        watchdog, each on its own thread, and block for the life of the
+        process.
+
+        A drain triggered from any connection thread OR the idle watchdog
+        ends the whole process via `os._exit(0)` (`warm.lifecycle`), which
+        is the only thing that ever wakes this wait -- no separate
+        interrupt mechanism is needed (module docstring's "TRANSPORT
+        MODEL").
         """
         threading.Thread(target=self._accept_and_replenish, args=(first_handle,), daemon=True).start()
+        threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
         self._stopped.wait()
 
     def _accept_and_replenish(self, handle: int) -> None:
@@ -519,7 +614,30 @@ class _ServerContext:
             close_listener=self.close_listener,
             drain=self._drain,
             in_flight=self.in_flight,
+            record_invocation=self.record_invocation,
+            record_exit=self.record_exit,
         )
+
+
+def _self_stable_pid_start_epoch() -> Optional[int]:
+    """This process's own birth instant, in the SAME derivation
+    `coordinator_core.session.core.stable_pid_alive` compares a stored
+    breadcrumb value against (`_win_create_time_epoch`'s own docstring:
+    "the SAME comparison now used on both platforms"). Reached into
+    directly, mirroring `_create_pipe_instance`'s reach into
+    `election._build_security_attributes` (module docstring's negative
+    -spec) -- a second, independently-derived epoch here risks disagreeing
+    with the read side by exactly the tolerance window `stable_pid_alive`
+    exists to police. Returns `None` if this process's own pid cannot be
+    read (should not happen for a live self-lookup, but the breadcrumb
+    writer treats it the same as any other unavailable field).
+    """
+    from coordinator_core.session.core import _win_create_time_epoch
+
+    try:
+        return _win_create_time_epoch(os.getpid())
+    except Exception:
+        return None
 
 
 def main() -> int:
@@ -535,7 +653,10 @@ def main() -> int:
        process already won this exact generation's pipe -- not an error,
        just nothing for this process to do; exits 0.
     3. Construct `skew.ServerVersionState` ONCE (boot identity).
-    4. Run the accept loop until a drain-triggered `os._exit(0)` ends the
+    4. Write the breadcrumb (`warm.breadcrumb.write_breadcrumb`) -- only
+       reachable past step 2, so a process that lost the election never
+       clobbers the winner's breadcrumb.
+    5. Run the accept loop until a drain-triggered `os._exit(0)` ends the
        process.
     """
     if sys.platform != "win32":
@@ -558,7 +679,19 @@ def main() -> int:
         return 0
 
     version_state = skew.ServerVersionState(repo_root)
-    ctx = _ServerContext(name=name, sid=sid, version_state=version_state)
+
+    try:
+        breadcrumb.write_breadcrumb(
+            pipe=name,
+            pid=os.getpid(),
+            stable_pid_start_epoch=_self_stable_pid_start_epoch() or 0,
+            engine_sha=version_state.server_sha,
+            engine_root=repo_root,
+        )
+    except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
+        print(f"[warm-server] failed to write breadcrumb: {exc!r}", file=sys.stderr)
+
+    ctx = _ServerContext(name=name, sid=sid, version_state=version_state, engine_root=repo_root)
     ctx.serve_forever(first_handle)
     return 0
 

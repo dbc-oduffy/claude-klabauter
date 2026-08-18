@@ -21,12 +21,13 @@ producers only (`branch_resolution.session_commit_count_attributed`,
 `branch_resolution._read_session_shape`) and nothing from `coordinator_core.ipc` or
 the op registry.
 
-SERVES THREE FACTS SO FAR (`fl-core-02` C2, C3): the attributed session commit
+SERVES ALL FIVE `fl-core-02` FACTS (C2, C3, C4, C5, C7b): the attributed session commit
 magnitude (`session_magnitude_attributed`), the session pickup kind
-(`session_pickup_kind`), and the session diff brightline
-(`session_diff_brightline`). C4–C5 and C7b (`fl-core-02`'s remaining rows) lift the
-other two close-gate facts onto this same module — anti-scope for THIS chunk only, not
-a standing limit on the module.
+(`session_pickup_kind`), the governing plan (`session_governing_plan`) — the ONLY fact
+whose value carries a free pass-through string (`scope_mode`), verbatim, per DR-323's
+C7b body — the session diff brightline (`session_diff_brightline`), the terminal sizing
+scan (`session_terminal_sizings`) — the collision reference implementation, DR-323
+§ (b) — and the fold-execution-record sidecar scan (`session_fold_sidecars`).
 
 RETURN-SHAPE CONTRACT (DR-319, binding — verbatim, not summarized):
     Discriminator key `"degraded"` (bool), present on every returned record.
@@ -69,12 +70,13 @@ this fact's `value: 0` does not do so on its own.
 
 ANTI-SCOPE (this chunk only, not a standing rule): does not build a second session
 store (`coordinator_core/session/shape.py` already is one; this module reads through
-existing producers, never a store of its own — AC10). Does not lift Facts 2, 4, 5
-(`fl-core-02`'s remaining rows). Does not converge the 21 hand-rolled dirty-probe
-implementations (a sibling roadmap-seed's scope, not this one's). Does not edit
-`quick_wrap_assemble/__init__.py` — DR-323 § (a)'s coexistence-then-cut discipline
-makes C7 the only chunk that cuts the interim readers over; this module's facts are
-served ALONGSIDE them until then.
+existing producers, never a store of its own — AC10). Does not converge the 21
+hand-rolled dirty-probe implementations (a sibling roadmap-seed's scope, not this
+one's). Does not edit `quick_wrap_assemble/__init__.py` — DR-323 § (a)'s
+coexistence-then-cut discipline makes C7 the only chunk that cuts the interim readers
+over; this module's facts are served ALONGSIDE them until then (C7b's `session_
+governing_plan` included — its sibling reader `_read_governing_plan` stays live in
+`quick_wrap_assemble` until C7's wave).
 
 Spec backlink: docs/plans/2026-08-18-session-fact-facade-and-failure-posture.md § C2
 Contract:      docs/decisions/DR-319-session-fact-facade-shape-and-failure-posture.md
@@ -87,6 +89,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.ops.ceremony.branch_resolution import (
     _BRIGHTLINE_COMMITS,
     _BRIGHTLINE_LOC,
@@ -109,6 +112,13 @@ _SOURCE_SESSION_MAGNITUDE_ATTRIBUTED = (
 #: Same convention, for Fact 1's producer (DR-319 § (b), DR-323 body).
 _SOURCE_SESSION_PICKUP_KIND = (
     "coordinator_core/ops/ceremony/branch_resolution.py::_read_session_shape"
+)
+
+#: Same convention, for Fact 4's producer. Points at THIS module's own served function
+#: (not `quick_wrap_assemble._read_terminal_sizings`, which C7 deletes) — the scan logic
+#: is moved wholesale below, so the grep-able producer is this facade itself.
+_SOURCE_SESSION_TERMINAL_SIZINGS = (
+    "coordinator_core/session/session_facts.py::session_terminal_sizings"
 )
 
 #: Same convention, for Fact 3's producer. Points at `session_commit_count_attributed`
@@ -142,6 +152,11 @@ _DOC_ONLY_PREFIXES: tuple[str, ...] = (
     "tasks/",
 )
 
+#: Local re-declarations of `quick_wrap_assemble`'s Fact-4 constants, for the same
+#: dependency-direction reason as `_KIND_RE` above.
+_TERMINAL_SIZING_STATUSES: frozenset[str] = frozenset({"shipped", "declined", "superseded"})
+_STATUS_RE = re.compile(r"^status:\s*['\"]?([A-Za-z_-]+)['\"]?\s*$", re.MULTILINE)
+
 
 def _read_frontmatter_kind(path: Path) -> str | None:
     """Read the `kind:` frontmatter scalar off `path`, tolerant of a malformed body.
@@ -156,6 +171,22 @@ def _read_frontmatter_kind(path: Path) -> str | None:
         return None
     head = text.split("\n---", 2)[0] if text.startswith("---") else text[:4096]
     match = _KIND_RE.search(head)
+    return match.group(1).strip() if match else None
+
+
+def _read_frontmatter_status(path: Path) -> str | None:
+    """Read the `status:` frontmatter scalar off `path`, tolerant of a malformed body.
+
+    Same rationale as `_read_frontmatter_kind` above — a sibling regex read, not a
+    second general-purpose parser, and re-declared here for the same dependency-
+    direction reason as `_STATUS_RE`.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    head = text.split("\n---", 2)[0] if text.startswith("---") else text[:4096]
+    match = _STATUS_RE.search(head)
     return match.group(1).strip() if match else None
 
 
@@ -303,6 +334,214 @@ def session_pickup_kind(worktree_root: Path, common_dir: Path, sid: str) -> dict
         "value": value,
         "source": _SOURCE_SESSION_PICKUP_KIND,
         "collision": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# session_governing_plan (fl-core-02 C7b) — lift of
+# quick_wrap_assemble._read_governing_plan. The lift only — no vocabulary
+# question in it (DR-323 body, C7b): the served `scope_mode` is a verbatim
+# pass-through of the plan frontmatter's own free string, per § Problem's
+# Fact 2 reader table (one producer, five pass-through readers, none of
+# which translate/normalize/coerce the value) — this facade is a sixth
+# pass-through reader, not the point where normalization is invented.
+# ---------------------------------------------------------------------------
+
+#: Same convention, for Fact 2's producer (DR-319 § (b), DR-323 § (b) table).
+_SOURCE_SESSION_GOVERNING_PLAN = (
+    "coordinator_core/session/claimed_plan.py::list_held_plan_claims"
+)
+
+def _read_frontmatter_scope_mode(path: Path) -> str | None:
+    """Read the `scope_mode:` frontmatter scalar off `path` VERBATIM — no enum,
+    no canonical spelling, no default substitution (AC11).
+
+    Delegates to `frontmatter.primitives.read_fm_field_unquoted`, the canonical
+    reader `coverage.py :: _resolve_plan_scope_mode` and the plan emitter both
+    already use. C7b originally re-declared `quick_wrap_assemble`'s
+    `_SCOPE_MODE_RE` here on the reasoning that an identical character class
+    could not introduce normalization. That held for values the regex parses,
+    but not for its failure mode: `scope_mode: spec-dispatch  # routed` is
+    anchored out by the trailing ``\\s*$`` and returns None, so a declared value
+    silently reads as absent — the fail-open posture this plan exists to
+    retire, and an AC11 verbatim regression the moment any consumer converges
+    onto this facade rather than onto the canonical reader.
+
+    Negative-spec: do NOT re-introduce a local regex to avoid the import. The
+    dependency runs to `frontmatter.primitives`, a leaf with no subprocess and
+    no engine dispatch, so DR-319 § (a)'s dependency-free-leaf constraint is
+    unaffected — that constraint forbids an op registration or a spawn per
+    fact read, not importing the producer a facade fronts.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    head = text.split("\n---", 2)[0] if text.startswith("---") else text[:4096]
+    return read_fm_field_unquoted(head, "scope_mode")
+
+
+def session_governing_plan(worktree_root: Path, common_dir: Path, sid: str) -> dict[str, Any]:
+    """Serve the plan THIS session holds a claim on (`fl-core-02` Fact 2; DR-323's
+    lift of `quick_wrap_assemble._read_governing_plan`) — the lift only, no
+    vocabulary question in it (DR-323 body, C7b).
+
+    `common_dir` and `sid` are accepted for call-shape parity with the lifted
+    reader and the facade's other three-argument facts, but unused in the
+    body below — `list_held_plan_claims` re-resolves the session id and the
+    git-common-dir from `worktree_root` itself (its own contract, module
+    docstring), the same as the interim reader it replaces.
+
+    DELEGATES THE CLAIM READ TO THE SHIPPED RESOLVER
+    (`coordinator_core.session.claimed_plan.list_held_plan_claims`), exactly as
+    `_read_governing_plan` already does — never hand-rolled. That function's own
+    docstring records why: the first version of this read looked for a
+    `holder-session-id` file while the writer emits `session_id`, so it matched
+    nothing and reported `present: false` for EVERY session, silently passing
+    entry-test condition 1 for a plan-driven close that owes
+    `/workstream-complete` (`state/lessons/2026-08-18-a-static-reviewer-shares-
+    your-premise-ab-292f0a09875e.yaml`). Session-scoping is the resolver's own
+    contract: it resolves this session's id and returns only claims THIS
+    session holds, so a dozen concurrent peers' claims on the same shared
+    worktree are excluded without this facade re-deriving the rule.
+
+    Returns DR-319's return-shape contract (module docstring, "RETURN-SHAPE
+    CONTRACT"):
+      - computed:  {"degraded": False, "value": <dict, below>, "source": <str>,
+                    "collision": <bool>}
+      - degraded:  {"degraded": True, "evidence": <str>, "source": <str>}
+
+    `value`'s keys, on a computed record: `present` (bool), `path`
+    (repo-relative str | None), `status`, `scope_mode`, `slug`, `claims_held`
+    (int, present only when `present` is True) — the same fields
+    `_read_governing_plan` already computed; only the posture and the
+    enclosing shape changed here, not the payload. `present` stays true when
+    the claim exists but the plan file itself is gone — a missing file is not
+    an absent plan, and treating it as one would flip entry-test condition 1
+    the wrong way (same rule the lifted reader already carried).
+
+    VERBATIM PASS-THROUGH (AC11, a property of THIS chunk too, not only C8's):
+    `scope_mode` is whatever string the plan frontmatter's `scope_mode:` scalar
+    carries, read by `_read_frontmatter_scope_mode` above — no normalization,
+    no enum, no canonical spelling, no default substitution. § Problem's Fact 2
+    reader table names five other pass-through readers of this same frontmatter
+    field (`coverage.py`, `pipeline_context.py`, `ops/emit/sections/plans.py`,
+    the frozen `PlanSummary.scope_mode` cross-repo contract, and
+    `plan_assemble/predicates/substrate_seven_dim.py`) — none of them translate
+    the value either. Introducing normalization HERE would break every one of
+    them by changing an emitted VALUE, not a field name, which is the cross-
+    plane hazard this chunk owns alone (no answer from DoE-claude bears on it,
+    per § Problem's F1 correction).
+
+    POSTURE CONVERSION (AC3, the whole point of this chunk): the OLD bare
+    `except Exception` around the resolver import/call returned the `absent`
+    literal (`present: False`), conflating "this session holds no plan" with
+    "the resolver blew up" — in the dangerous direction, silently passing
+    entry-test condition 1 for a plan-driven close that owes
+    `/workstream-complete`. `list_held_plan_claims`'s OWN contract is
+    never-raises (its module docstring's negative-spec: "Do NOT raise when no
+    plan is claimed... Every failure edge... falls through to returning...
+    `[]`... never an exception"), so a caught exception here can only be an
+    import/environment failure (e.g. the module itself fails to import in a
+    degraded install) — not an ordinary "no plan claimed" result, which
+    `list_held_plan_claims` already reports as `[]`, not as a raise. This
+    function therefore degrades on that caught exception rather than folding
+    it into the ordinary empty-claims branch, with evidence naming the
+    producer, the call, and what it raised.
+
+    COLLISION SHAPE (DR-323 § (b) table): `collision` is a real `bool` for this
+    fact (never `None`) — the claim store (`plan-claims/`) and the plan's own
+    frontmatter are both surfaces a peer session can concurrently mutate
+    (hold/release a claim; edit the plan file), unlike Facts 1/3's
+    single-writer/sid-scoped surfaces. This function reuses the SAME mechanism
+    Facts 4 and 5 already established for detecting a live peer edit —
+    `_dirty_paths`'s `git status --porcelain` read — and asks whether the
+    RESOLVED plan path itself is currently uncommitted: `collision: True` means
+    the plan file this session holds is mid-edit by a peer session right now;
+    `False` means it is clean. No plan held, or a claim with no resolvable file
+    on disk, short-circuits straight to `collision: False` without calling
+    `_dirty_paths` at all — same "nothing found, nothing to fold over"
+    shortcut `session_terminal_sizings`/`session_fold_sidecars` take for an
+    empty scan. This is a fresh `_dirty_paths` read, not shared with the other
+    facts' own calls — module precedent (`session_fold_sidecars`'s docstring):
+    each served fact owns its own sub-reads.
+
+    `_dirty_paths`'s own `git status` failure propagates as a degraded FACT
+    (same "propagate the sub-read's degraded state" discipline
+    `session_diff_brightline`/`session_terminal_sizings`/`session_fold_sidecars`
+    already carry) — a scan that cannot tell dirty from clean has no basis to
+    report a collision state on the plan it did find.
+    """
+    try:
+        from coordinator_core.session.claimed_plan import list_held_plan_claims
+
+        held = list_held_plan_claims(str(worktree_root))
+    except Exception as exc:
+        return {
+            "degraded": True,
+            "evidence": (
+                "coordinator_core/session/claimed_plan.py::list_held_plan_claims"
+                f"({str(worktree_root)!r}) raised {exc!r} — that resolver's own "
+                "contract is never-raises (module docstring negative-spec), so "
+                "this is an import/environment failure, not an ordinary "
+                "'no plan claimed' result."
+            ),
+            "source": _SOURCE_SESSION_GOVERNING_PLAN,
+        }
+
+    if not held:
+        return {
+            "degraded": False,
+            "value": {
+                "present": False,
+                "path": None,
+                "status": None,
+                "scope_mode": None,
+                "slug": None,
+            },
+            "source": _SOURCE_SESSION_GOVERNING_PLAN,
+            "collision": False,
+        }
+
+    claim_path = held[0][0]
+    slug = Path(claim_path.replace("\\", "/")).stem
+
+    plan_path = None
+    status = None
+    scope_mode = None
+    candidates = [worktree_root / claim_path]
+    candidates += [worktree_root / d / f"{slug}.md" for d in ("docs/plans", "archive/specs")]
+    for candidate in candidates:
+        if candidate.exists():
+            plan_path = candidate.relative_to(worktree_root).as_posix()
+            status = _read_frontmatter_status(candidate)
+            scope_mode = _read_frontmatter_scope_mode(candidate)
+            break
+
+    if plan_path is None:
+        collision = False
+    else:
+        dirty_result = _dirty_paths(worktree_root)
+        if dirty_result["degraded"]:
+            return {
+                "degraded": True,
+                "evidence": dirty_result["evidence"],
+                "source": _SOURCE_SESSION_GOVERNING_PLAN,
+            }
+        collision = plan_path in dirty_result["paths"]
+
+    return {
+        "degraded": False,
+        "value": {
+            "present": True,
+            "path": plan_path,
+            "status": status,
+            "scope_mode": scope_mode,
+            "slug": slug,
+            "claims_held": len(held),
+        },
+        "source": _SOURCE_SESSION_GOVERNING_PLAN,
+        "collision": collision,
     }
 
 
@@ -562,4 +801,331 @@ def session_diff_brightline(worktree_root: Path, common_dir: Path, sid: str) -> 
         "value": value,
         "source": _SOURCE_SESSION_DIFF_BRIGHTLINE,
         "collision": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# session_terminal_sizings (fl-core-02 C4) — lift of
+# quick_wrap_assemble._read_terminal_sizings / _dirty_paths. THE COLLISION
+# REFERENCE IMPLEMENTATION (DR-323 § (b)): the only fact of the five carrying real
+# collision state today, so how per-record `dirty` maps onto DR-319's record-level
+# `collision: bool` is the pattern C5/C7b are read against.
+# ---------------------------------------------------------------------------
+
+
+def _dirty_paths(worktree_root: Path) -> dict[str, Any]:
+    """Repo-relative forward-slash paths with uncommitted changes, from one
+    `git status --porcelain` read.
+
+    Moved from `quick_wrap_assemble/__init__.py :: _dirty_paths` (fl-core-02 C4) —
+    the parsing logic (porcelain's 3-char status prefix, the `old -> new` rename
+    arrow, forward-slashing a Windows path) is unchanged. The POSTURE changed: the
+    old helper called `_git_out`, which swallows any git failure (nonzero exit,
+    `OSError`, timeout) into `""` — indistinguishable from a genuinely clean
+    worktree. This uses `branch_resolution._git_run` instead (the same seam C3's
+    `_novel_loc_split` uses), returncode-checked, so a `git status` failure reports
+    as degraded rather than as zero dirty paths.
+
+    Returns `{"degraded": False, "paths": set[str]}` on success,
+    `{"degraded": True, "evidence": <str>}` when the underlying `git status` call
+    fails.
+    """
+    result = _git_run(["status", "--porcelain", "--untracked-files=all"], worktree_root)
+    if result.returncode != 0:
+        return {
+            "degraded": True,
+            "evidence": (
+                "git status --porcelain --untracked-files=all failed: returncode="
+                f"{result.returncode!r} stderr={result.stderr.strip()!r}"
+            ),
+        }
+    dirty: set[str] = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        entry = line[3:].strip()
+        if " -> " in entry:
+            entry = entry.split(" -> ", 1)[1]
+        dirty.add(entry.strip('"').replace("\\", "/"))
+    return {"degraded": False, "paths": dirty}
+
+
+def session_terminal_sizings(worktree_root: Path) -> dict[str, Any]:
+    """Serve the terminal sizing-object scan (`fl-core-02` Fact 4; DR-323's lift of
+    `quick_wrap_assemble._read_terminal_sizings` / `_dirty_paths`) —
+    **the collision reference implementation** (DR-323 § (b) table): the only fact of
+    the five carrying real collision state today.
+
+    Returns DR-319's return-shape contract (module docstring, "RETURN-SHAPE CONTRACT"):
+      - computed:  {"degraded": False, "value": <dict, below>, "source": <str>,
+                    "collision": <bool>}
+      - degraded:  {"degraded": True, "evidence": <str>, "source": <str>}
+
+    `value`'s keys, on a computed record: `scanned` (int, every `*.yaml` under
+    `state/sizings/`, terminal or not), `non_terminal_count` (int), `terminal`
+    (list of dicts, one per record at `shipped`/`declined`/`superseded`) — the same
+    fields `_read_terminal_sizings` already computed, MINUS `movable`. Each `terminal`
+    entry carries `path`, `status`, `dirty` (bool), `reason` (str | None) — `movable`
+    is DROPPED per DR-323 § (b): `movable: not is_dirty` is a pure restatement of
+    `dirty` carrying zero additional information, and it encodes the EM's
+    skip-vs-sweep call, squarely DR-319's Negative-spec on disposition/action keys
+    (AC12). This function implements that decision; it is not re-scrutinized here.
+
+    COLLISION SHAPE — THE DECISION THIS CHUNK MAKES, STATED HERE FOR THE FACTS THAT
+    READ AGAINST IT: `collision` (record-level, DR-319's single required key) is the
+    OR across every `terminal` entry's own `dirty` flag — `True` the moment ANY
+    terminal-status sizing carries live uncommitted edits, `False` when none do.
+    Chosen over folding `collision` away entirely and letting `value["terminal"][i]
+    ["dirty"]` carry the whole signal, because DR-319's contract test asserts
+    `"collision" in record` unconditionally on every COMPUTED record regardless of
+    fact shape (C6, AC9) — a record-level bool that answers "is this fact's overall
+    read live-contended right now" is the aggregate signal that assertion is written
+    against, and it costs nothing: it is a fold over data this function already
+    computes, not a second read. PER-RECORD GRANULARITY SURVIVES INTACT: the OR
+    summarizes, it does not replace — every `terminal` entry keeps its own `dirty`
+    bool in `value`, because the EM's skip-vs-sweep call is per record (C1's
+    depends_on note), and an aggregate `collision: True` alone cannot tell the EM
+    WHICH of N terminal sizings to leave alone. A caller doing the skip-vs-sweep
+    judgment reads `value["terminal"][i]["dirty"]`, never the top-level `collision`,
+    for that decision — `collision` is the fact-level signal DR-319's contract wants,
+    `dirty` is the record-level signal the EM's judgment needs, and this shape keeps
+    both live rather than collapsing one into the other.
+
+    POSTURE — THREE DISTINCT READS, SPLIT (AC3): today `_read_terminal_sizings`
+    returns the identical empty `{"scanned": 0, "terminal": [], "non_terminal_count":
+    0}` for THREE different situations, only one of which is genuinely "nothing
+    terminal": (1) `state/sizings/` does not exist — a COMPUTED empty scan, no
+    sizings have ever been written, `collision: False` (there is nothing to collide
+    over); (2) `sizings_dir.glob("*.yaml")` raises `OSError` mid-glob — DEGRADED, the
+    scan could not run, evidence names the glob call and what raised; (3)
+    `_dirty_paths`'s own `git status` call fails — DEGRADED, propagated verbatim
+    (same "propagate the sub-read's degraded state as a degraded FACT" discipline
+    `session_diff_brightline` already carries for `session_commit_count_attributed`),
+    because a scan that cannot tell dirty from clean has no basis to report
+    terminal-sizing records as movable-or-not at all. Case (1) and case (2)/(3) no
+    longer share a return value — a scan that ran clean and found nothing is no
+    longer indistinguishable from a scan that could not run.
+
+    `collision` is a real `bool` for this fact (never `None`) — DR-323 § (b) table:
+    `state/sizings/` is a shared surface with live peer edits, so a collision mode
+    genuinely exists, unlike Facts 1/3 above.
+    """
+    sizings_dir = worktree_root / "state" / "sizings"
+    if not sizings_dir.is_dir():
+        return {
+            "degraded": False,
+            "value": {"scanned": 0, "terminal": [], "non_terminal_count": 0},
+            "source": _SOURCE_SESSION_TERMINAL_SIZINGS,
+            "collision": False,
+        }
+
+    try:
+        candidates = sorted(sizings_dir.glob("*.yaml"))
+    except OSError as exc:
+        return {
+            "degraded": True,
+            "evidence": (
+                f"state/sizings/*.yaml glob under {sizings_dir} raised {exc!r}"
+            ),
+            "source": _SOURCE_SESSION_TERMINAL_SIZINGS,
+        }
+
+    dirty_result = _dirty_paths(worktree_root)
+    if dirty_result["degraded"]:
+        return {
+            "degraded": True,
+            "evidence": dirty_result["evidence"],
+            "source": _SOURCE_SESSION_TERMINAL_SIZINGS,
+        }
+    dirty = dirty_result["paths"]
+
+    scanned = 0
+    non_terminal_count = 0
+    terminal: list[dict[str, Any]] = []
+    for path in candidates:
+        scanned += 1
+        status = _read_frontmatter_status(path)
+        if not status or status.lower() not in _TERMINAL_SIZING_STATUSES:
+            non_terminal_count += 1
+            continue
+        rel = path.relative_to(worktree_root).as_posix()
+        is_dirty = rel in dirty
+        terminal.append(
+            {
+                "path": rel,
+                "status": status.lower(),
+                "dirty": is_dirty,
+                "reason": (
+                    "uncommitted edits present — a git mv would sweep in-flight "
+                    "work into archive/"
+                    if is_dirty
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "degraded": False,
+        "value": {
+            "scanned": scanned,
+            "terminal": terminal,
+            "non_terminal_count": non_terminal_count,
+        },
+        "source": _SOURCE_SESSION_TERMINAL_SIZINGS,
+        "collision": any(entry["dirty"] for entry in terminal),
+    }
+
+
+# ---------------------------------------------------------------------------
+# session_fold_sidecars (fl-core-02 C5) — lift of
+# quick_wrap_assemble._read_fold_sidecars. A directory listing over
+# state/execution-records/ and state/fold-execution-records/.
+# ---------------------------------------------------------------------------
+
+#: Same convention, for Fact 5's producer. Points at THIS module's own served
+#: function (not `quick_wrap_assemble._read_fold_sidecars`, which C7 deletes) —
+#: same reason as Fact 4's source string above: the listing logic is moved
+#: wholesale below, so the grep-able producer is this facade itself.
+_SOURCE_SESSION_FOLD_SIDECARS = (
+    "coordinator_core/session/session_facts.py::session_fold_sidecars"
+)
+
+
+def _scan_fold_sidecar_roots(worktree_root: Path) -> dict[str, Any]:
+    """List every `coordinator-fold-execution-record` sidecar under
+    `state/execution-records/` and `state/fold-execution-records/`.
+
+    Moved from `quick_wrap_assemble/__init__.py :: _read_fold_sidecars`
+    (fl-core-02 C5) — the listing logic (two fixed roots, `rglob("*.json")`,
+    repo-relative forward-slash paths) is unchanged. The POSTURE changed: the
+    old helper caught `OSError` PER-ROOT and `continue`d, so a partially-
+    failed scan reported the same empty-looking result as a clean scan that
+    found nothing — a failure indistinguishable from success (AC3). This
+    scans every root before returning rather than short-circuiting on the
+    first failure, so a root that raises is named alongside whichever root(s)
+    succeeded — "one of two roots was unreadable" is a different fact from
+    "neither was," and this is where that distinction survives.
+
+    Returns `{"degraded": False, "paths": list[str]}` when every EXISTING
+    root was listable (a root that does not exist at all is not a failure —
+    same "nothing to scan" posture `session_terminal_sizings` already carries
+    for an absent `state/sizings/`), or `{"degraded": True, "evidence": <str>}`
+    naming every root that raised and what it raised, when at least one
+    existing root could not be listed.
+    """
+    roots = [
+        worktree_root / "state" / "execution-records",
+        worktree_root / "state" / "fold-execution-records",
+    ]
+    found: list[str] = []
+    failures: list[str] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            for path in sorted(root.rglob("*.json")):
+                found.append(path.relative_to(worktree_root).as_posix())
+        except OSError as exc:
+            failures.append(f"{root.relative_to(worktree_root).as_posix()} raised {exc!r}")
+    if failures:
+        return {
+            "degraded": True,
+            "evidence": "fold-sidecar root(s) could not be listed: " + "; ".join(failures),
+        }
+    return {"degraded": False, "paths": found}
+
+
+def session_fold_sidecars(worktree_root: Path) -> dict[str, Any]:
+    """Serve fold-execution-record sidecar presence (`fl-core-02` Fact 5;
+    DR-323's lift of `quick_wrap_assemble._read_fold_sidecars`) — a directory
+    listing over `state/execution-records/` and `state/fold-execution-records/`.
+
+    Returns DR-319's return-shape contract (module docstring, "RETURN-SHAPE
+    CONTRACT"):
+      - computed:  {"degraded": False, "value": <dict, below>, "source": <str>,
+                    "collision": <bool>}
+      - degraded:  {"degraded": True, "evidence": <str>, "source": <str>}
+
+    `value`'s keys, on a computed record: `present` (bool), `paths` (list of
+    repo-relative forward-slash strings), `count` (int) — the same fields
+    `_read_fold_sidecars` already computed; only the posture and the enclosing
+    shape changed here, not the payload.
+
+    POSTURE CONVERSION (AC3, the whole point of this chunk): the OLD
+    `_read_fold_sidecars` caught `OSError` PER-ROOT and `continue`d, so a root
+    that could not be listed (permission denied, a symlink cycle, ...)
+    reported the same `present: False` as a scan that genuinely found
+    nothing — a partially-failed scan with full confidence. Unlike Fact 1's
+    `_read_session_shape` seam (which never raises and must have its
+    degradation RECOVERED via a file-existence check), this producer's
+    failure is a real exception this facade can catch directly — no
+    recovery-by-proxy needed. `_scan_fold_sidecar_roots` above catches it: a
+    root that raises degrades the fact, with evidence naming WHICH root and
+    WHAT it raised, and every root is attempted before the fact returns so
+    "one of two roots was unreadable" is not collapsed into "neither was."
+
+    COLLISION — DIFFERS FROM C4'S REFERENCE SHAPE, STATED HERE PER THE BRIEF:
+    C4's `collision` folds an OR across a per-record `dirty` bool it already
+    computes as part of its own scan (a git-status cross-reference against
+    `state/sizings/*.yaml`, one entry per sizing record). This fact's own
+    scan carries no analogous per-entry signal — a directory listing has
+    nothing to fold over. DR-323 § (b) still requires `collision: bool` here
+    (a peer session can write a sidecar into either root concurrently with
+    this scan), so this function reuses the SAME underlying mechanism C4
+    already established for detecting a live peer write — `_dirty_paths`'s
+    `git status --porcelain` read — and asks whether any of the sidecar paths
+    THIS scan found are themselves uncommitted right now. `collision: True`
+    means at least one fold-execution-record sidecar this scan found is
+    mid-write by a peer session (present on disk, not yet committed);
+    `False` means every sidecar found is clean. An empty scan short-circuits
+    straight to `collision: False` without calling `_dirty_paths` at all —
+    same "nothing found, nothing to fold over" shortcut
+    `session_terminal_sizings` takes for an absent `state/sizings/`. This is
+    a fresh `_dirty_paths` read when it does run, not shared with
+    `session_terminal_sizings`'s own call — each served fact owns its own
+    sub-reads (module precedent:
+    `session_diff_brightline` calls `session_commit_count_attributed`
+    independently of `session_magnitude_attributed` rather than sharing a
+    cached result across facts).
+
+    `_dirty_paths`'s own `git status` failure propagates as a degraded FACT
+    (same "propagate the sub-read's degraded state" discipline
+    `session_diff_brightline` and `session_terminal_sizings` already carry) —
+    a scan that cannot tell dirty from clean has no basis to report a
+    collision state on the sidecars it did find.
+    """
+    scan = _scan_fold_sidecar_roots(worktree_root)
+    if scan["degraded"]:
+        return {
+            "degraded": True,
+            "evidence": scan["evidence"],
+            "source": _SOURCE_SESSION_FOLD_SIDECARS,
+        }
+    found = scan["paths"]
+
+    # No sidecar found means there is nothing a peer could be mid-write on — same
+    # short-circuit `session_terminal_sizings` takes for an absent `state/sizings/`
+    # (collision: False without a sub-read), and it avoids paying `_dirty_paths`'s
+    # git-status cost on the empty-scan hot path.
+    if not found:
+        collision = False
+    else:
+        dirty_result = _dirty_paths(worktree_root)
+        if dirty_result["degraded"]:
+            return {
+                "degraded": True,
+                "evidence": dirty_result["evidence"],
+                "source": _SOURCE_SESSION_FOLD_SIDECARS,
+            }
+        collision = any(path in dirty_result["paths"] for path in found)
+
+    return {
+        "degraded": False,
+        "value": {
+            "present": bool(found),
+            "paths": found,
+            "count": len(found),
+        },
+        "source": _SOURCE_SESSION_FOLD_SIDECARS,
+        "collision": collision,
     }

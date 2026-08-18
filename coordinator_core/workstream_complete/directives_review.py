@@ -1452,6 +1452,56 @@ class ChainAttributionWindow(NamedTuple):
     grep_attributed_for_session: Callable[[Optional[str]], Any]
 
 
+
+#: A trail record's `sha_range` spelled as the single commit `<sha>`: either
+#: `<sha>^..<sha>` or `<sha>~1..<sha>` (the `~1` spelling exists because
+#: cmd.exe eats a literal `^` in argv on Windows). Hex on BOTH sides and
+#: identical, abbreviated (>=7) or full -- the live corpus writes both. A
+#: symbolic or mismatched endpoint falls through to the resolver rather than
+#: being reasoned about here.
+_SINGLE_COMMIT_RANGE_RE = re.compile(
+    r"^(?P<base>[0-9a-fA-F]{7,40})(?:\^|~1)\.\.(?P=base)$"
+)
+
+
+def _single_commit_range_base(sha_range: str) -> Optional[str]:
+    """Return the lowercased sha a single-commit `sha_range` denotes, or `None`
+    when the range is any other shape.
+
+    Used only to decide whether a range's resolved sha set is knowable without
+    calling the resolver (see `_record_membership_shas`). Deliberately narrow:
+    it recognises exactly the two spellings the write path emits, both sides
+    full-hex and identical. Anything else -- an abbreviated endpoint, a
+    multi-commit range, a symbolic ref -- returns `None` and is resolved the
+    ordinary way.
+
+    Negative-spec:
+      - Does NOT decide membership. It answers "what would `git rev-list` return
+        for this range", nothing more; the caller still applies every membership
+        and narrowing rule to the result.
+      - Does NOT widen what counts as a single-commit range to make more records
+        skippable. The skip is only sound because the answer is forced.
+    """
+    match = _SINGLE_COMMIT_RANGE_RE.match(sha_range)
+    if match is None:
+        return None
+    return match.group("base").lower()
+
+
+def _prefix_hits_chain_set(base: str, chain_dag_sha_set: set[str]) -> bool:
+    """Whether any chain-DAG sha could be what `base` resolves to.
+
+    `base` may be abbreviated, so this is a prefix test, not equality --
+    `git rev-list <base>^..<base>` can only ever yield a sha carrying `base`
+    as a prefix, which makes "no chain sha starts with `base`" equivalent to
+    "the intersection this record needs is empty". Full-length `base` degrades
+    to plain equality, since a 40-hex prefix match IS equality.
+    """
+    if len(base) == 40:
+        return base in chain_dag_sha_set
+    return any(sha.startswith(base) for sha in chain_dag_sha_set)
+
+
 def _record_membership_shas(
     record: Mapping[str, Any],
     resolve_range_shas: Callable[[str], Any],
@@ -1603,6 +1653,24 @@ def _record_membership_shas(
         return None
     if _record_range_has_stored_head(sha_range):
         return None
+    if _single_commit_range_base(sha_range) is not None:
+        # A `<sha>^..<sha>` / `<sha>~1..<sha>` record can only ever resolve to
+        # {<sha>}, so the `raw & chain_dag_sha_set` test three lines below is
+        # already decided before the resolver runs: outside the chain DAG set,
+        # this record contributes nothing no matter what git would say. Skipping
+        # the call is therefore behavior-preserving, not a heuristic -- the only
+        # records it declines to resolve are ones whose membership would have
+        # been discarded on the next line.
+        #
+        # This is a spawn-amplification fix, not a micro-optimization. The live
+        # resolver is a `git rev-list` subprocess and this loop runs once per
+        # trail record: measured 2026-08-18 on a chain-terminal close, 5392
+        # spawns and 224s wall against a chain DAG set holding 9 commits. The
+        # per-range memo above the resolver never helps here because every
+        # single-commit range is a distinct cache key.
+        _base = _single_commit_range_base(sha_range)
+        if _base is not None and not _prefix_hits_chain_set(_base, chain_dag_sha_set):
+            return None
     try:
         raw = {str(s).lower() for s in resolve_range_shas(sha_range)}
     except Exception:  # noqa: BLE001 - a broken resolver must reject, never crash

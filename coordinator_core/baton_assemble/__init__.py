@@ -1707,9 +1707,7 @@ def _scan_deliverable_collision(
     pointer, not a `predecessor:` edge -- the ancestor walk has no edge to
     follow to it at all, so without this separate kind-based skip a
     roadmap-baton root would still warn even though it is exactly the chain
-    tip's own root. `_build_roadmap_baton_decline_judgment_point`'s own d6
-    gate deliberately declines to supersede a roadmap-baton predecessor for
-    the identical reason. DoE-claude `coordinator/docs/wiki/coordinator-
+    tip's own root. DoE-claude `coordinator/docs/wiki/coordinator-
     tripwires.md:1454` mandates this exclusion directly: "Any backfill,
     reconciler, or convergence pass over `deliverable_id` MUST exclude
     `kind: roadmap-baton` records."
@@ -2673,51 +2671,54 @@ def _resolved_predecessor_closed_reason(predecessor_path: Optional[str], root: O
     return _fm_field(fm, "closed_reason") or ""
 
 
-def _closed_decline_reachable(
-    pred_kind: Optional[str], d6_id: str, decisions: Optional[dict[str, Any]]
-) -> bool:
-    """Single source of truth for whether a given predecessor's per-
-    predecessor closed-baton check in `_build_directives` is actually
-    REACHABLE -- i.e. whether resolving that predecessor's own
-    `{d6_id}-closed-predecessor-decline` judgment point can have any effect
-    on the emitted directives. `_build_directives`'s per-predecessor loop
-    checks roadmap-baton FIRST and `continue`s past the closed check
-    entirely for an undecided (non-force-superseded) roadmap-baton
-    predecessor -- so a predecessor that is BOTH `kind: roadmap-baton` AND
-    `deployment_state: closed` only reaches the closed check once its own
-    roadmap-baton decline has been force-superseded. `brief()`'s judgment-
-    point loop consults this SAME predicate before surfacing the closed-
-    decline point, so a predecessor is never offered an inert closed-
-    decline point alongside an unresolved roadmap-baton decline (2026-08-13
-    review coordinatorcode-reviewer-e58adcaa Finding P2 -- the mixed-kind
-    case no fixture had previously constructed). Both `_build_directives`
-    and `brief()` call this ONE function rather than each re-deriving the
-    precedence, so they cannot independently drift out of agreement again."""
-    if pred_kind != "roadmap-baton":
-        return True
-    _decline_decision = (decisions or {}).get(f"{d6_id}-roadmap-baton-decline")
-    return (
-        isinstance(_decline_decision, dict)
-        and _decline_decision.get("disposition") == "force-supersede"
-    )
+def _resolved_predecessor_roadmap_identity(
+    predecessor_path: Optional[str], root: Optional[Path]
+) -> tuple[str, str]:
+    """The resolved predecessor's own `roadmap_id`/`stub_id` frontmatter
+    fields, same fail-open-to-`""` resolution shape as the sibling
+    `_resolved_predecessor_*` readers above -- feeds DR-172's mint-time
+    identity carry (C10 Part 2): when the predecessor is `kind:
+    roadmap-baton`, these two values are forwarded to `coordinator-doc-new`'s
+    existing `--roadmap-id`/`--stub-id` flags so the successor mints as a
+    roadmap-baton inheriting the same roadmap identity rather than a bare
+    `handoff`.
+
+    NOT carried here (named, not silently dropped): `blocks`, `blocked_by`,
+    `sprint`, `wave`. `coordinator-doc-new`'s roadmap-baton scaffold has no
+    passthrough flag for any of the four today -- adding one is a
+    `coordinator/bin/coordinator-doc-new.py` change, outside this chunk's
+    declared write scope. A freshly-minted roadmap-baton successor therefore
+    gets that scaffold's own PLACEHOLDER graph-field stubs for those four
+    fields, not the predecessor's values, until that follow-on lands."""
+    if not predecessor_path or root is None:
+        return "", ""
+    candidate = Path(predecessor_path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    if not candidate.is_file():
+        return "", ""
+
+    fm = _read_frontmatter(candidate)
+    return (_fm_field(fm, "roadmap_id") or "", _fm_field(fm, "stub_id") or "")
 
 
 def _build_closed_predecessor_decline_judgment_point(
     predecessor_path: str, closed_reason: str, d6_id: str, root: Path
 ) -> dict[str, Any]:
-    """`d6-closed-predecessor-decline` (re-keyed twin of
-    `_build_roadmap_baton_decline_judgment_point`, on `deployment_state`
-    instead of `kind`) -- surfaced by `brief()` in place of a `d6`/`d6-N`
-    directive when the resolved predecessor at `predecessor_path` carries
-    `deployment_state: closed`. A closed baton is terminal
-    (docs/plans/2026-08-13-closed-baton-is-terminal-d6-declines-per-
+    """`d6-closed-predecessor-decline` -- surfaced by `brief()` in place of
+    a `d6`/`d6-N` directive when the resolved predecessor at
+    `predecessor_path` carries `deployment_state: closed`. A closed baton is
+    terminal (docs/plans/2026-08-13-closed-baton-is-terminal-d6-declines-per-
     predecessor.md § Problem) -- superseding it would flip
     `deployment_state` to `continued` and strand its own `closed_reason`
     against the bidirectional schema rule
     (`frontmatter/schema_validate.py::_cf_closed_reason_required`), so d6
-    declines to arm for this predecessor unless explicitly overridden.
+    declines to arm for this predecessor unless explicitly overridden. The
+    kind-first roadmap-baton decline this point used to sit alongside is
+    retired (DR-172, 2026-08-18, C10) -- this is now the only per-
+    predecessor d6 decline in the module.
 
-    Two legal decision values, mirroring the roadmap-baton precedent:
+    Two legal decision values:
     `leave-closed` (default -- this predecessor's d6/d6-N stays unarmed,
     the mint proceeds -- resolves d1) and `force-supersede` (operator
     override -- resolves ONLY the `d6_id` this predecessor's own directive
@@ -2750,81 +2751,6 @@ def _build_closed_predecessor_decline_judgment_point(
     )
 
 
-def _build_roadmap_baton_decline_judgment_point(
-    predecessor_path: str, root: Path, d6_id: str = "d6"
-) -> dict[str, Any]:
-    """PIN-3 `{d6_id}-roadmap-baton-decline` -- surfaced by `brief()` in
-    place of an unconditionally-armed d6/d6-N directive when
-    `_resolved_predecessor_canonical_kind` reports `"roadmap-baton"` for the
-    resolved predecessor at `predecessor_path`. Re-keyed twin of
-    `_build_closed_predecessor_decline_judgment_point`'s per-predecessor id
-    convention (2026-08-13 re-scope, see the linked bug row): `d6_id`
-    defaults to `"d6"` so the PRIMARY predecessor's id stays the bare
-    `d6-roadmap-baton-decline`, byte-identical to before this fix; every
-    other predecessor in the fan-in gets its own `{d6_id}-roadmap-baton-
-    decline` (`d6-2-roadmap-baton-decline`, ...), never colliding with a
-    sibling edge's id. Names the baton path AND its LIVE `blocked_by`
-    dependents (C1's `blocked_by_dependents`, `ops/handoff_children.py`) so
-    the ask is decidable -- "a bare 'declined' teaches nothing" -- and
-    degrades the EVIDENCE text (never the whole brief) on that resolver's
-    `indeterminate` outcome, per its own fail-closed contract.
-
-    Two legal decision values (PIN-3): `leave-baton` (default -- this
-    predecessor's d6/d6-N stays unarmed, the mint proceeds -- resolves d1)
-    and `force-supersede` (operator override -- resolves ONLY the `d6_id`
-    this predecessor's own directive would have used, never every d6 in the
-    fan-in).
-
-    Precedence with `_build_closed_predecessor_decline_judgment_point`: for
-    a predecessor that is BOTH roadmap-baton AND `deployment_state: closed`,
-    this point takes precedence -- `brief()` gates the closed-decline point
-    on `_closed_decline_reachable` (shared with `_build_directives`'s own
-    per-predecessor gate) and does NOT surface it until THIS point's own
-    decline has been resolved `force-supersede`. Surfacing both
-    unconditionally would offer an inert closed-decline control the
-    directive loop never reaches (2026-08-13 review
-    coordinatorcode-reviewer-e58adcaa Finding P2)."""
-    from coordinator_core.ops.handoff_children import blocked_by_dependents
-
-    result = blocked_by_dependents(predecessor_path, root)
-    if result["state"] == "dependents":
-        dependents_text = (
-            f"{len(result['dependents'])} live handoff(s) list this baton in "
-            f"their blocked_by: {', '.join(result['dependents'])}."
-        )
-    elif result["state"] == "indeterminate":
-        dependents_text = (
-            "blocked_by dependents could not be determined "
-            f"({result['error']}) -- treat as unknown, not zero."
-        )
-    else:
-        dependents_text = "no live handoff currently lists this baton in its blocked_by."
-
-    return build_untrusted_gate_judgment_point(
-        id=f"{d6_id}-roadmap-baton-decline",
-        question=(
-            f"The resolved predecessor {predecessor_path!r} is a roadmap-baton -- "
-            "supersede it (archive + stamp continued) as part of this mint, or "
-            "leave it in place?"
-        ),
-        dispositions=[
-            {"value": "leave-baton", "resolves": ["d1"]},
-            {"value": "force-supersede", "resolves": [d6_id]},
-        ],
-        evidence=(
-            "kind: roadmap-baton, canonicalized via "
-            f"coordinator_core.frontmatter.baton_class.canonical_kind. {dependents_text}"
-        ),
-        reason=(
-            "Supersession is a PM-or-roadmap event, not an EM unilateral call on "
-            "adjacent handoffs (handoff/SKILL.md doctrine) -- d6 declines to arm "
-            "unconditionally for a roadmap-baton predecessor; this judgment point "
-            "is the primary closure for the ordinary /handoff path (plan "
-            "claude-klabauter docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § Layering)."
-        ),
-    )
-
-
 def _build_fan_in_cardinality_judgment_point(
     lineage: dict[str, Any], root: Path
 ) -> dict[str, Any]:
@@ -2841,8 +2767,8 @@ def _build_fan_in_cardinality_judgment_point(
     dropped-deliverable survival.
 
     NARRATION-ONLY (non-negotiable, per the sedge-04 stub and the 2026-07-29
-    hazard `_build_roadmap_baton_decline_judgment_point`'s own docstring
-    describes): this id is never wired into any directive's `depends_on`
+    Constraint #6 hazard `brief()`'s own docstring describes): this id is
+    never wired into any directive's `depends_on`
     -- `_build_directives`'s d6/d6-N loop already arms unconditionally off
     `lineage["additional_predecessors"]` regardless of whether this point is
     resolved, so there is nothing here for a halt to gate. A future editor
@@ -3087,6 +3013,29 @@ def _build_directives(
     # constructs a `lineage` dict by hand with no `brief()` above it) falls
     # back to computing it locally, unchanged from before this fix.
     d1_args = [f"--type={kind}", f"--deliverable-id={lineage.get('deliverable_id') or ''}"]
+    # DR-172 (2026-08-18, plan a-session-always-has-a-baton, chunk C10, Part
+    # 2) -- succession identity carry: a `kind: roadmap-baton` predecessor's
+    # successor is minted AS a roadmap-baton, not the bare `handoff` doc
+    # type, so its `roadmap_id`/`stub_id` survive the succession
+    # (`--type` overridden below, then `--roadmap-id`/`--stub-id` forwarded
+    # via coordinator-doc-new's existing flags -- see
+    # `_resolved_predecessor_roadmap_identity`'s own docstring for the
+    # `blocks`/`blocked_by`/`sprint`/`wave` gap this does NOT close).
+    if kind == "handoff":
+        _mint_pred_kind = (
+            predecessor_canonical_kind
+            if predecessor_canonical_kind is not None
+            else _resolved_predecessor_canonical_kind(lineage.get("predecessor"), root)
+        )
+        if _mint_pred_kind == "roadmap-baton":
+            _pred_roadmap_id, _pred_stub_id = _resolved_predecessor_roadmap_identity(
+                lineage.get("predecessor"), root
+            )
+            d1_args[0] = "--type=roadmap-baton"
+            if _pred_roadmap_id:
+                d1_args.append(f"--roadmap-id={_pred_roadmap_id}")
+            if _pred_stub_id:
+                d1_args.append(f"--stub-id={_pred_stub_id}")
     # `--out` is `lineage["output_path"]` -- a FRESH path COMPUTED via
     # `_compute_fresh_output_path`, never `artifact_path` echoed verbatim.
     # `artifact_path` is the caller-supplied INPUT lineage source in both
@@ -3483,57 +3432,25 @@ def _build_directives(
             )
             for _i, _pred_path in enumerate(all_predecessors):
                 _d6_id = "d6" if _i == 0 else f"d6-{_i + 1}"
-                # C3 (2026-08-02, roadmap-baton-supersession-hazard plan,
-                # PIN-3; re-scoped 2026-08-13, see the linked bug row that
-                # closed the primary-only leak): d6 declines to arm
-                # unconditionally when THIS predecessor's own `kind`
-                # frontmatter canonicalizes to `roadmap-baton` (F2/F4's
-                # finding -- nothing in this emission path read that field at
-                # all before C3). DR-126 § Clarifications C-1's rule --
-                # NEVER automatically supersede a roadmap-baton predecessor,
-                # in any state -- is preserved unchanged; what moved is the
-                # SCOPE, from "the whole fan-in, decided by the primary
-                # alone" to "this one edge", checked PER-PREDECESSOR INSIDE
-                # this loop, same shape as the closed-baton decline
-                # immediately below. `brief()` surfaces one
-                # `{d6_id}-roadmap-baton-decline` judgment point per
-                # roadmap-baton predecessor found (see
-                # `_build_roadmap_baton_decline_judgment_point`), naming the
-                # baton and its live `blocked_by` dependents. For the
-                # PRIMARY predecessor (`_i == 0`) this id is the bare
-                # `d6-roadmap-baton-decline` -- UNCHANGED from before this
-                # fix, so a single-predecessor brief stays byte-identical.
-                # The ONLY way a given predecessor still arms its own d6/d6-N
-                # is an explicit `{"<that id>": {"disposition":
-                # "force-supersede"}}` resolution threaded back through
-                # `decisions`, resolving ONLY that predecessor's own edge --
-                # absent any decision, or an explicit "leave-baton", that
-                # predecessor's d6/d6-N stays unarmed while every sibling
-                # edge in the same fan-in still arms normally. A mixed-kind
-                # `additional_predecessors` fan-in is now fully in scope for
-                # this gate.
-                _d6_predecessor_kind = (
-                    predecessor_canonical_kind
-                    if _i == 0 and predecessor_canonical_kind is not None
-                    else _resolved_predecessor_canonical_kind(_pred_path, root)
-                )
-                # Precedence expressed ONCE in `_closed_decline_reachable`
-                # (see its own docstring) -- `not reachable` here means
-                # exactly "roadmap-baton, and not force-superseded", the
-                # same condition that gates `brief()`'s closed-decline
-                # judgment point below.
-                if not _closed_decline_reachable(_d6_predecessor_kind, _d6_id, decisions):
-                    continue  # decline to arm -- brief() emits the judgment point instead
+                # DR-172 (2026-08-18, plan a-session-always-has-a-baton,
+                # chunk C10) RETIRES the roadmap-baton kind-first decline
+                # that used to sit here (C3, 2026-08-02, PIN-3): DR-172
+                # found the refusal's own rationale does not hold --
+                # `reconcile/gate_eval.py` resolves `blocked_by` by
+                # `stub_id`, never by file path, so an archival move cannot
+                # sever the edge the decline existed to protect. A
+                # roadmap-baton predecessor now supersedes exactly like any
+                # other -- see `ops/handoff_archive_transition.py`'s module
+                # docstring for the mirror-image removal at that seam.
                 # 2026-08-13 (closed-baton-is-terminal plan, C1): a
                 # closed predecessor is terminal and is EXEMPT from
                 # supersede -- superseding it would flip its
                 # deployment_state to continued and strand its own
                 # closed_reason against the bidirectional schema rule
                 # (_cf_closed_reason_required). Checked PER-PREDECESSOR,
-                # INSIDE this loop -- same shape as the roadmap-baton
-                # gate immediately above. `continue` skips THIS
-                # predecessor's directive only -- every other iteration
-                # still appends, so the mint completes.
+                # INSIDE this loop. `continue` skips THIS predecessor's
+                # directive only -- every other iteration still appends, so
+                # the mint completes.
                 _pred_deployment_state = _resolved_predecessor_deployment_state(_pred_path, root)
                 if _pred_deployment_state == "closed":
                     _decline_decision = (decisions or {}).get(f"{_d6_id}-closed-predecessor-decline")
@@ -4274,15 +4191,13 @@ def brief(
     for a `kind` in {handoff, spinoff}. Read-only throughout; mutates
     nothing. `decisions` is currently accepted for signature parity with the
     Tier-B contract's two-phase-stateless protocol. Every judgment point
-    built here is still untrusted-gate in the sense that resolving it never
-    mutates state directly -- but C3's per-predecessor `{d6-id}-roadmap-
-    baton-decline` points are a landed exception to "no directive fires
-    purely off a disposition": `_build_directives` reads
-    `decisions.get(f"{d6_id}-roadmap-baton-decline")` directly per
-    predecessor and gates whether that predecessor's own d6/d6-N is emitted
-    at all on its value (Review:
-    coordinatorcode-reviewer-c2d43fc7 Finding 4). C4/C5 wire further
-    directive-gating dependencies as the SKILL callers land. `title`, when
+    built here is untrusted-gate in the sense that resolving it never
+    mutates state directly -- `_build_directives`'s per-predecessor
+    `{d6_id}-closed-predecessor-decline` point is the landed exception to
+    "no directive fires purely off a disposition" (its sibling, the
+    roadmap-baton kind-first decline, is RETIRED -- DR-172, 2026-08-18,
+    C10). C4/C5 wire further directive-gating dependencies as the SKILL
+    callers land. `title`, when
     supplied, is passed through to d1's `coordinator-doc-new` scaffold as
     `--title=<title>`; when omitted, d1 omits the flag entirely and
     `coordinator-doc-new`'s own default (placeholder) title applies
@@ -4620,46 +4535,29 @@ def brief(
     _assert_no_directive_writes_over_input(directives, normalized_artifact_path, root)
     dirty_tree_attribution = _compute_dirty_tree_attribution(root)
     judgment_points = _build_judgment_points(kind, dirty_tree_attribution)
-    # C3 (PIN-3; re-scoped 2026-08-13, see the linked bug row that closed
-    # the primary-only leak): surface one `{d6_id}-roadmap-baton-decline`
-    # judgment point PER PREDECESSOR in the fan-in whose own resolved
-    # `kind` canonicalizes to `roadmap-baton` -- the SAME per-predecessor
-    # discriminator `_build_directives`'s d6 gate now applies, same shape as
-    # the closed-predecessor decline immediately below (never re-derived
-    # independently -- both loops walk the identical `all_predecessors`
-    # list and use the identical `d6`/`d6-N` id scheme). For the PRIMARY
-    # predecessor (index 0) this id is the bare `d6-roadmap-baton-decline`,
-    # UNCHANGED from before this fix, so a single-predecessor brief stays
-    # byte-identical. DR-126 § Clarifications C-1's rule -- never
-    # automatically supersede a roadmap-baton predecessor, in any state --
-    # is unchanged; only the SCOPE of the decline moved, from the whole
-    # fan-in to the one predecessor edge.
-    # Constraint #6 (2026-07-29 incident: a judgment-point halt must not fire
-    # d1's compensator and destroy the scaffolded successor) is satisfied by
-    # CONSTRUCTION, not by an explicit gating design: neither
-    # `d6-roadmap-baton-decline` nor `d6-plan-no-ledger-claim` is named in any
-    # directive's `depends_on`, so `apply_base.execute_directives` runs
-    # through to `APPLY_EXIT_OK` regardless of whether either is resolved --
-    # there is nothing here for either judgment point to halt. Deliberately
-    # non-gating; a future editor wiring one into a `depends_on` re-opens the
-    # 2026-07-29 hazard and must re-solve it, not assume this comment still
-    # covers it.
+    # DR-172 (2026-08-18, plan a-session-always-has-a-baton, chunk C10)
+    # RETIRES the roadmap-baton kind-first decline judgment point that used
+    # to be surfaced here (C3, PIN-3): DR-126 § Clarifications C-1's rule --
+    # never automatically supersede a roadmap-baton predecessor, in any
+    # state -- is gone; a roadmap-baton predecessor now supersedes exactly
+    # like any other, and its successor is minted AS a roadmap-baton
+    # inheriting its identity (`_build_directives`'s d1_args mint-kind
+    # flip). See `ops/handoff_archive_transition.py`'s module docstring for
+    # the mirror-image removal at that seam.
     #
     # C4 (PIN-3): a plan input whose plan-ness discriminator routed it to the
     # durable claim ledger, but found zero held claims -- NEVER a silent
     # non-arm. See `_build_plan_no_ledger_claim_judgment_point`'s own
     # docstring for the replay-vs-stranding distinction this surfaces.
     # C1 (2026-08-13, closed-baton-is-terminal plan): surface
-    # `d6-closed-predecessor-decline` (per-predecessor, same shape as the
-    # roadmap-baton gate above since the 2026-08-13 re-scope) whenever a
-    # resolved predecessor in the fan-in carries `deployment_state: closed`
-    # -- the SAME discriminator `_build_directives`'s per-predecessor
-    # closed-baton gate applies. One point per skipped predecessor, ids
-    # unique per predecessor (`{d6_id}-closed-predecessor-decline`) so
-    # `jp_by_id` stays keyed correctly -- mirrors the d6/d6-N id uniqueness
-    # constraint.
+    # `d6-closed-predecessor-decline` (per-predecessor) whenever a resolved
+    # predecessor in the fan-in carries `deployment_state: closed` -- the
+    # SAME discriminator `_build_directives`'s per-predecessor closed-baton
+    # gate applies. One point per skipped predecessor, ids unique per
+    # predecessor (`{d6_id}-closed-predecessor-decline`) so `jp_by_id` stays
+    # keyed correctly -- mirrors the d6/d6-N id uniqueness constraint.
     #
-    # Both loops below are reachable for every predecessor now that
+    # This loop is reachable for every predecessor now that
     # `_build_directives`'s per-predecessor loop is unconditional (no more
     # all-or-nothing gate hoisted on the primary predecessor's kind) --
     # every judgment point surfaced here has a corresponding directive-
@@ -4670,29 +4568,7 @@ def brief(
         )
         for _decline_i, _decline_pred_path in enumerate(_all_predecessors_for_decline):
             _decline_d6_id = "d6" if _decline_i == 0 else f"d6-{_decline_i + 1}"
-            _decline_pred_kind = (
-                _predecessor_canonical_kind
-                if _decline_i == 0
-                else _resolved_predecessor_canonical_kind(_decline_pred_path, root)
-            )
-            if _decline_pred_kind == "roadmap-baton":
-                judgment_points.append(
-                    _build_roadmap_baton_decline_judgment_point(
-                        _decline_pred_path, root, d6_id=_decline_d6_id
-                    )
-                )
-            # Gated on `_closed_decline_reachable` (shared with
-            # `_build_directives`'s per-predecessor closed-baton check, see
-            # its own docstring) -- a predecessor that is BOTH roadmap-baton
-            # AND closed only gets a closed-decline point once its own
-            # roadmap-baton decline is force-superseded; offering it
-            # earlier would be an inert control (2026-08-13 review
-            # coordinatorcode-reviewer-e58adcaa Finding P2).
-            if _resolved_predecessor_deployment_state(
-                _decline_pred_path, root
-            ) == "closed" and _closed_decline_reachable(
-                _decline_pred_kind, _decline_d6_id, decisions
-            ):
+            if _resolved_predecessor_deployment_state(_decline_pred_path, root) == "closed":
                 judgment_points.append(
                     _build_closed_predecessor_decline_judgment_point(
                         _decline_pred_path,

@@ -676,7 +676,18 @@ _SUPERSEDE_CONFLICTING_TERMINALS = frozenset({"closed"})
 
 
 def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root: Path) -> dict:
-    """Apply supersede transition (status→claimed, deployment_state→continued+continued_into).
+    """Apply supersede transition (status→claimed, deployment_state→continued+continued_into)
+    AND discharge its own archival in the same call — C3 follow-up
+    (docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md, AC1
+    "writer 2"): a writer of a terminal deployment_state must never leave
+    the record resident in state/handoffs/ without either archiving it or
+    refusing to write. This verb now DELEGATES the write itself to
+    `handoff_archive_transition._supersede_continued` — the SAME
+    implementation writer 1 (`handoff.archive_transition` mode="supersede")
+    uses — rather than re-deriving the field set a second time; that
+    divergence was patched field-by-field twice before this fix (`e24a971fd`,
+    `9d442f9b0`) and is now a single shared body. `locked_rmw` is no longer
+    called directly here — `_supersede_continued` already routes through it.
 
     DR-084: deployment_state:abandoned has RETIRED — the old consumed+abandoned
     expression this verb used to write is gone. continued is the only
@@ -689,8 +700,9 @@ def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root
     automated writer, may NEVER stamp deployment_state:closed.
 
     No claimed_at/claimed_by are written — supersession does not create a
-    pickup claim.  Idempotency: no-op when status==claimed AND
-    deployment_state==continued AND continued_into already equals the supplied value.
+    pickup claim.  Idempotency: no-op (delegated to `_supersede_continued`)
+    when status==claimed AND deployment_state==continued AND continued_into
+    already equals the supplied value AND pickup_ready is already false.
 
     Refuses (exit_code=1, no write) when deployment_state is already closed
     (see _SUPERSEDE_CONFLICTING_TERMINALS) — the symmetric counterpart of
@@ -700,11 +712,21 @@ def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root
     deliberate adjudication (and the closed_reason recording it), which is
     the same violation from the other direction as supersede's own
     documented "may NEVER stamp deployment_state:closed" restriction above.
-    Checked AFTER the idempotency no-op, so a genuinely already-superseded
-    record still no-ops rather than erroring.
+    Checked via a quick unlocked read BEFORE the delegated write (mirrors
+    `handoff_archive_transition._handler`'s own closed-baton-is-terminal
+    gate, which runs the same way, ahead of its own lock acquisition) — a
+    genuinely already-superseded record still reaches the idempotent no-op
+    inside `_supersede_continued` rather than erroring here.
 
-    Routes the read-modify-write through locked_rmw for cross-process serialisation.
-    Domain-abort paths raise MutateAbort from inside the mutate closure so no write occurs.
+    Archival discharge (THE FIX): once the write lands, the live-children
+    guard runs with edge_kinds={"forked_from"} — the narrow succession-child
+    exemption (same shape as writer 1's own guard call and C4's Check-3
+    exemption; the successor this call just named is a succession child and
+    its existence is the reason to archive, not a reason to retain — a live
+    `forked_from` spinoff still retains). Guard-safe → git-mv + commit to
+    archive/handoffs/YYYY-MM/. Guard-retain → the flip is committed in place
+    (never left loose in a shared tree — AC5) and the file stays resident,
+    exactly as writer 1 already does on its own retain path.
     """
     if not continued_into or not continued_into.strip():
         return _err(
@@ -719,108 +741,92 @@ def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root
     except _PathNotContained as exc:
         return _err(f"supersede: {exc}")
 
-    _state: dict = {"applied": False, "message": ""}
-
-    def mutate(old_text: str) -> str:
-        split = split_frontmatter(old_text)
-        if split is None:
-            raise MutateAbort(f"supersede: no parseable YAML frontmatter in {handoff_path}")
-
-        status = read_fm_field(split.fm_text, "status")
-        deployment = read_fm_field(split.fm_text, "deployment_state")
-        existing_continued_into = read_fm_field(split.fm_text, "continued_into")
-        # pickup_ready is read unquoted for the idempotency compare below —
-        # same reason _ship reads it that way (§ pickup_ready cleared on ship).
-        existing_pickup_ready = read_fm_field_unquoted(split.fm_text, "pickup_ready")
-
-        # Idempotency: no-op at full target state (continued_into already
-        # matching the supplied successor AND pickup_ready already false).
-        # Without that last condition a pre-fix record already carrying the
-        # succession edge would short-circuit on the edge alone and never pick
-        # up the pickup_ready clear below.
-        if (
-            _status_is(status, "claimed")
-            and deployment == "continued"
-            and existing_continued_into == continued_into
-            and existing_pickup_ready == "false"
-        ):
-            _state["applied"] = False
-            _state["message"] = (
-                f"{handoff_path} already claimed+continued (continued_into: "
-                f"{continued_into}) — no-op"
-            )
-            return old_text  # byte-identical → locked_rmw skips the write
-
-        # Refuse to overwrite a deliberate human close — see
-        # _SUPERSEDE_CONFLICTING_TERMINALS docstring above.
-        if deployment in _SUPERSEDE_CONFLICTING_TERMINALS:
-            existing_closed_reason = read_fm_field(split.fm_text, "closed_reason")
-            raise MutateAbort(
-                f'supersede refuses to overwrite deployment_state:"{deployment}" '
-                f"(closed_reason: {existing_closed_reason!r}) — reversing a "
-                "deliberate human close is a human decision, not an automated "
-                f"one — {handoff_path}"
-            )
-
-        fm = split.fm_text
-
-        # status → claimed (replace existing; insert after 'title' if missing).
-        if not _status_is(status, "claimed"):
-            if status is None:
-                fm = insert_fm_field(fm, "status", "claimed", "title")
-            else:
-                fm = replace_fm_field(fm, "status", "claimed")
-
-        # deployment_state → continued (replace existing; insert after 'status' if missing).
-        if deployment != "continued":
-            if deployment is None:
-                fm = insert_fm_field(fm, "deployment_state", "continued", "status")
-            else:
-                fm = replace_fm_field(fm, "deployment_state", "continued")
-
-        # continued_into — always stamped to the supplied successor (replace if
-        # present, insert after deployment_state if absent).
-        if read_fm_field(fm, "continued_into") is not None:
-            fm = replace_fm_field(fm, "continued_into", continued_into)
-        else:
-            fm = insert_fm_field(fm, "continued_into", continued_into, "deployment_state")
-
-        # pickup_ready → false. `continued` is terminal, so the same reasoning
-        # that clears it on ship (§ pickup_ready cleared on ship) and on close
-        # (2026-08-10) applies — a superseded baton left advertising
-        # pickup_ready:true is re-advertised to /pickup by claims.py's
-        # SUCCEEDED-BATON CARVE-OUT. This is the sibling write site of
-        # handoff_archive_transition._supersede_continued, which carries the
-        # identical clear; the two supersede implementations must not diverge
-        # on the pair they both write.
-        if read_fm_field(fm, "pickup_ready") is not None:
-            fm = replace_fm_field(fm, "pickup_ready", "false")
-        else:
-            fm = insert_fm_field(fm, "pickup_ready", "false", "deployment_state")
-
-        # Post-mutation schema validation gate — raise MutateAbort to skip the write.
-        errors = _validate_fm(fm)
-        if errors:
-            details = format_validation_errors(errors)
-            raise MutateAbort(f"handoff frontmatter validation failed: {details}")
-
-        _state["applied"] = True
-        _state["message"] = (
-            f"superseded {handoff_path} (status: claimed, deployment_state: continued, "
-            f"continued_into: {continued_into})"
-        )
-        return rebuild(split, fm)
-
+    # Closed-baton refusal — a quick unlocked read, mirroring
+    # handoff_archive_transition._handler's own closed-baton-is-terminal
+    # gate (also unlocked, also ahead of the write). See docstring above.
     try:
-        locked_rmw(path, mutate, repo_root=repo_root)
-    except FileNotFoundError:
-        return _err(f"supersede: handoff not found: {handoff_path}")
-    except LockTimeout as exc:
-        return _err(f"supersede: timed out waiting for file lock on {handoff_path}: {exc}")
-    except MutateAbort as exc:
-        return _err(exc.args[0] if exc.args else "supersede: mutation aborted")
+        current_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _err(f"supersede: cannot read {handoff_path}: {exc}")
+    current_split = split_frontmatter(current_text)
+    if current_split is None:
+        return _err(f"supersede: no parseable YAML frontmatter in {handoff_path}")
+    current_deployment = read_fm_field(current_split.fm_text, "deployment_state")
+    if current_deployment in _SUPERSEDE_CONFLICTING_TERMINALS:
+        existing_closed_reason = read_fm_field(current_split.fm_text, "closed_reason")
+        return _err(
+            f'supersede refuses to overwrite deployment_state:"{current_deployment}" '
+            f"(closed_reason: {existing_closed_reason!r}) — reversing a "
+            "deliberate human close is a human decision, not an automated "
+            f"one — {handoff_path}"
+        )
 
-    return _ok(_state["applied"], _state["message"])
+    # Function-local: importing handoff_archive_transition fires its
+    # @register_op("handoff.archive_transition") side-effect, and this module
+    # is itself imported top-level BY handoff_archive_transition (for _ship)
+    # — a top-level back-edge here would deadlock the cycle on that module's
+    # own partially-initialized state (mirrors this file's existing
+    # _normalize_claim_summary / handoff_normalize function-local-import
+    # precedent, and archive_stamp's own function-local imports in
+    # handoff_archive_transition.py for the identical reason).
+    from coordinator_core.ops.handoff_archive_transition import (
+        _commit_retained_supersede_flip,
+        _supersede_continued,
+    )
+    from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
+    from coordinator_core.ops.handoff_children import _handoff_has_live_children
+    from coordinator_core.wire_paths import rel_id as _wire_rel_id
+
+    write_res = _supersede_continued(path, continued_into, repo_root)
+    if write_res.get("exit_code") != 0:
+        return _err(write_res.get("error") or "supersede: mutation aborted")
+
+    warnings = list(write_res.get("warnings") or [])
+    applied = bool(write_res.get("applied"))
+    written_text = write_res.get("written_text")
+    rel = _wire_rel_id(path, worktree)
+
+    # Live-children guard — edge_kinds={"forked_from"} narrows out succession
+    # children (the successor this call just named), never an arbitrary one.
+    # See docstring above.
+    guard_result = asyncio.run(_handoff_has_live_children(
+        {"candidate": str(path), "edge_kinds": {"forked_from"}}, repo_root
+    ))
+
+    if guard_result.get("exit_code") != 1:
+        # Retained — commit the flip so it is never left loose on disk in a
+        # shared tree (AC5), same discipline as writer 1's own retain paths.
+        flip_status = _commit_retained_supersede_flip(worktree, rel, written_text, warnings)
+        message = write_res.get("message") or f"superseded {handoff_path}"
+        return {
+            "exit_code": 0,
+            "applied": applied,
+            "message": f"{message}; retained — not archived this call ({flip_status})",
+            "warnings": warnings,
+        }
+
+    dest = handoff_archive_dest(worktree, path)
+    move = Move(src=path, dst=dest, candidate_id=rel, restage_src=True)
+    subject = f"archive handoff: {rel}\n\nVia handoff.transition supersede."
+    acted, failed = asyncio.run(archive_and_commit(worktree, [move], subject))
+    moved = bool(acted) and not failed
+
+    if failed:
+        reason = failed[0].get("reason") or "git mv failed, no reason reported"
+        warnings.append(f"not archived: {reason}")
+        message = f"superseded {handoff_path}; not archived: {reason}"
+    elif moved:
+        message = f"archived {rel} to {_wire_rel_id(dest, worktree)}"
+    else:
+        message = f"superseded {handoff_path}; archival did not complete this call"
+
+    return {
+        "exit_code": 0,
+        "applied": applied,
+        "message": message,
+        "warnings": warnings,
+        "moved": moved,
+    }
 
 
 # ---------------------------------------------------------------------------

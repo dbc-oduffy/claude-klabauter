@@ -57,16 +57,28 @@ uniformly to both branches:
         is bypassing the normal in_flight/claim exclusions (see the
         "BYPASSES BOTH" paragraph below).
       * CASCADE archival (Branch B, via deployment_state == "continued")
-        — needs NO shipped_in at all. A predecessor whose successor has
-        left in_flight (into any terminal state, "continued" included)
-        simply stops appearing in the live-children set on the NEXT boot
-        sweep (archival.py's live-children computation, ~:157-160) and
-        becomes archivable through ordinary Branch B + Check 3. This is
-        not a rail relaxation — it is B1's "continued" membership (see
-        above) doing exactly what it already does for "abandoned" and
-        "closed": archiving on terminal deployment_state with no ship
-        evidence required. A chain drains tail-first, automatically, one
-        boot sweep at a time, with no H4 change.
+        — needs NO shipped_in at all. Once a predecessor itself qualifies
+        via Branch B, Check 3 is called with edge_kinds={"forked_from"}
+        (DR-324; see the Check-3 docstring in _is_terminal below), so a
+        live SUCCESSION child (predecessor / additional_predecessors) no
+        longer counts as retaining it — the successor's own liveness or
+        deployment_state is irrelevant to this exemption. A DIFFERENT
+        live child that is a forked_from spinoff still retains (DR-224 —
+        a spinoff founds its own line and does not retire its origin).
+        This is not a rail relaxation — it is B1's "continued" membership
+        (see above) doing exactly what it already does for "abandoned"
+        and "closed": archiving on terminal deployment_state with no
+        ship evidence required, no longer gated on waiting for the
+        successor to leave in_flight.
+        <!-- DR-324 corrects this paragraph: before the narrow Check-3
+        exemption landed (2026-08-18,
+        docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md
+        C4), Check 3 counted a live succession child regardless of ITS
+        OWN deployment_state, so a "continued" predecessor stayed
+        retained for as long as its successor session stayed alive — the
+        opposite of "stops appearing in the live-children set on the
+        next boot sweep" / "drains tail-first, automatically" this
+        paragraph used to claim. -->
 
     The heir branch (PROMPT archival) exists purely as a latency
     optimisation for the case CASCADE archival would otherwise leave
@@ -726,7 +738,13 @@ async def _is_terminal(
           (git cat-file -e, fail-closed).  The other three need no shipped_in check.
 
     Checks applied once branch-qualification fires (either branch):
-      3. reverse_membership() == ∅ (no live children)
+      3. reverse_membership() == ∅ (no live children). For a Branch-B-qualified
+         record only, a live SUCCESSION child (predecessor / additional_predecessors)
+         does NOT retain — reverse_membership is called with
+         edge_kinds={"forked_from"} so only a live forked_from child still counts
+         (DR-224, C4 of docs/plans/2026-08-18-supersede-stamps-and-archives-
+         atomically.md). Branch A keeps the default edge_kinds (all three kinds)
+         unchanged — H1-H4 and DR-224's reserved "relax H4" question are untouched.
       4. No live claim-dir holder (primary key) OR no live consumed_by session
          (fallback when the claim dir is not locatable)
 
@@ -780,6 +798,13 @@ async def _is_terminal(
     deployment_state = (meta.get("deployment_state") or "").strip().lower()
 
     status_label = ""
+    # C4 (docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md):
+    # set True only when Branch B (terminal deployment_state) is the qualifying
+    # branch below — gates the Check-3 succession exemption further down. NOT
+    # set on the Branch A / heir path; Branch A retains the pre-existing
+    # default-edge-kind Check 3 unchanged (H1-H4 / DR-224's reserved "relax H4"
+    # question stays untouched — see _classify_heir_children).
+    branch_b_qualified = False
 
     # Branch B: terminal deployment_state, regardless of status (2026-07-13 widening —
     # see module docstring "Branch B").  Checked first so a handoff that satisfies
@@ -804,6 +829,7 @@ async def _is_terminal(
                     "",
                 )
         status_label = deployment_state
+        branch_b_qualified = True
     elif normalized_status not in ("consumed", "claimed"):
         # Neither branch qualifies: not claimed (old vocab: consumed), and not a
         # terminal deployment_state. Dual-tolerant per DR-084: "claimed" is the
@@ -932,9 +958,24 @@ async def _is_terminal(
     # dag_index must be non-empty; if somehow empty, fail-closed (not terminal).
     if not dag_index:
         return False, "dag_index empty — cannot determine children (fail-closed)", ""
+    # C4 succession exemption (docs/plans/2026-08-18-supersede-stamps-and-archives-
+    # atomically.md, DR-224): a record that qualifies as terminal via Branch B is
+    # NOT retained by a live SUCCESSION child (predecessor / additional_predecessors)
+    # — the successor's existence already resolves the succession, so counting it
+    # as a retaining reference here was the bug. A live forked_from child still
+    # retains (a spinoff founds its own line and does not retire its origin — AC4).
+    # Expressed via reverse_membership's own edge_kinds parameter, NOT by consulting
+    # _classify_heir_children (its "heir" short-circuit would misclassify a record
+    # with BOTH a live succession child and a live forked_from child — see Finding
+    # 1/2 in the plan). Branch A is unaffected: it keeps the default edge_kinds
+    # (all three kinds), leaving H1-H4 and DR-224's reserved "relax H4" question
+    # untouched. Do not modify reverse_membership's default or
+    # handoff_children._DEFAULT_EDGE_KINDS — other callers must not inherit this
+    # exemption.
+    check3_edge_kinds = {"forked_from"} if branch_b_qualified else None
     try:
         children = await asyncio.to_thread(
-            reverse_membership, str(handoff_path), dag_index
+            reverse_membership, str(handoff_path), dag_index, edge_kinds=check3_edge_kinds
         )
     except ValueError as exc:
         print(f"skip: _is_terminal: children = await asyncio.to_thread( failed: {exc}", file=sys.stderr)

@@ -48,6 +48,13 @@ Coverage:
       pre-existing DR-084 awaiting-adjudication disposition, unaffected by
       the new heir-retain pass — proves the pass is heir-scoped, not a
       blanket behavior change.
+  (d) Branch-B / C4 (docs/plans/2026-08-18-supersede-stamps-and-archives-
+      atomically.md) — a `continued` predecessor with a live succession
+      child never reaches H4 (Branch B qualifies first) and, post-C4, is no
+      longer retained by Check 3 either (the succession exemption), so with
+      no live claim on it (Check 4) it archives on this boot sweep with the
+      FILE MOVED, and must not also appear in skipped[] — the heir-retain
+      reporting pass must not narrate a retention that no longer occurs.
 
 AC5 (both-directions confirmation — this file's tests fail against the
 pre-fix boot_sweep.py and pass after) is confirmed by the dispatching agent
@@ -310,19 +317,27 @@ def test_non_heir_candidate_unaffected(heir_repo):
 
 
 # ---------------------------------------------------------------------------
-# Branch-B attribution — a terminal deployment_state never reached H4
+# Branch-B attribution — a terminal deployment_state never reached H4, and
+# (post-C4) a live succession child no longer retains it either
 # ---------------------------------------------------------------------------
 
 
 def test_continued_predecessor_reports_cascade_not_h4(heir_repo):
-    """A `continued` predecessor with a live successor qualifies via
+    """A `continued` predecessor with a live succession child qualifies via
     archive_handoffs._is_terminal's Branch B (checked FIRST, before the
-    Branch-A heir path), so H4 never ran and is not what retained it — the
-    live-successor check is. Reporting it under the H4 note misattributes
-    the gate and, via "retained for reaper", names an actor that will never
-    take it: reap-orphaned-in-flight-handoffs.py stamps shipped_in only for
-    a dead-holder orphan that provably shipped. The clearing actor is the
-    cascade (archive_handoffs module docstring "CASCADE archival").
+    Branch-A heir path), so H4 never ran and was never what retained it.
+
+    C4 (docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md,
+    DR-224) narrowed Branch B's Check 3 to edge_kinds={"forked_from"}, so a
+    live SUCCESSION child (this fixture's successor) no longer retains a
+    Branch-B-qualified record there either. With no live claim on the
+    predecessor (Check 4), nothing retains it: it archives on this boot
+    sweep, through the ordinary preview/act path — this is the CASCADE
+    (archive_handoffs module docstring "CASCADE archival") actually firing
+    immediately rather than waiting on a later sweep. The FILE MOVES: gone
+    from state/handoffs/, present under archive/handoffs/YYYY-MM/ — a
+    flipped-verdict-only assertion would pass whether or not the move
+    happened, so this test checks the move directly (AC2).
 
     Spec backlink: cross-repo/archive/2026-08-18-example-retrieval-repo-em-consumed-
     handoff-archive-retained-for-absent-reaper.md.
@@ -332,6 +347,7 @@ def test_continued_predecessor_reports_cascade_not_h4(heir_repo):
         extra_frontmatter="deployment_state: continued",
     )
     parent_rel = "state/handoffs/2026-08-14-continued-predecessor.md"
+    dest_rel = "archive/handoffs/2026-08/2026-08-14-continued-predecessor.md"
     heir_repo.seed_successor("2026-08-14-continued-child.md", parent_path)
 
     result = _run(_handler({"dry_run": False}, repo_root=heir_repo.common_dir))
@@ -339,29 +355,25 @@ def test_continued_predecessor_reports_cascade_not_h4(heir_repo):
     assert result["exit_code"] == 0, f"expected exit_code:0; got {result!r}"
 
     archived_ids = [a["id"] for a in result["consumed_handoffs"]["archived"]]
-    assert parent_rel not in archived_ids, (
-        f"a Branch-B candidate with a LIVE successor is retained by Check 3, "
-        f"not archived; got archived_ids={archived_ids!r}"
+    assert parent_rel in archived_ids, (
+        f"a Branch-B candidate whose only live child is a SUCCESSION child no "
+        f"longer retains at Check 3 post-C4, and this fixture has no live claim "
+        f"holder, so it must archive; got archived_ids={archived_ids!r}"
+    )
+    assert not parent_path.exists(), (
+        f"the archival candidate's source file must be gone from "
+        f"state/handoffs/ — a flipped verdict alone is not archival (AC2); "
+        f"still present at {parent_path}"
+    )
+    assert (heir_repo.root / dest_rel).exists(), (
+        f"the archival candidate's file must have MOVED to "
+        f"archive/handoffs/YYYY-MM/ (AC2); not found at {dest_rel}"
     )
 
     skip_map = {s["id"]: s["reason"] for s in result["consumed_handoffs"]["skipped"]}
-    assert parent_rel in skip_map, (
-        f"the retention must still be surfaced (sweep-consumed-handoffs' "
-        f"never-silently-swallowed contract); got "
+    assert parent_rel not in skip_map, (
+        f"a candidate that archived this sweep must not ALSO appear in "
+        f"skipped[] — the heir-retain reporting pass must not narrate a "
+        f"retention that no longer occurs; got "
         f"skipped={result['consumed_handoffs']['skipped']!r}"
-    )
-    reason = skip_map[parent_rel]
-    assert "reaper" not in reason, (
-        f"a `continued` record is never collected by the reaper — the note must "
-        f"not promise that actor; got {reason!r}"
-    )
-    assert "shipped_in" not in reason, (
-        f"H4's ship-evidence rationale did not run for this candidate and must "
-        f"not be cited as the retain reason; got {reason!r}"
-    )
-    assert "cascade" in reason and "deployment_state=continued" in reason, (
-        f"the note must name the actual gate and the clearing actor; got {reason!r}"
-    )
-    assert "2026-08-14-continued-child.md" in reason, (
-        f"the note must name the live successor it is waiting on; got {reason!r}"
     )

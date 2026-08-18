@@ -296,6 +296,25 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # The pathspec-file sibling of the entry above -- same commit, same
+    # release eligibility, differing only in how the pathspec reaches git
+    # (argv vs `--pathspec-from-file`, for the Windows 32767-char cap). Both
+    # have existed since the pathspec-file split; only the argv one was ever
+    # listed, so this tripwire has been red on the pair for as long as the
+    # split has existed. Listed with the sibling's disposition, not a new one.
+    "ops/ceremony/git_native.py::commit_with_message_file_pathspec_scoped": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # Found red alongside the entry above: a real coordinator op route (the
+    # deliverable cascade's own scoped follow-up commit, routed through
+    # `commit_scoped` exactly as `post_commit_tail`/`consumed_handoff_stamp`
+    # are), so "release" pending the same classification those carry -- not
+    # an auto-ineligible.
+    "ops/deliverable_cascade.py::_commit_mutated_paths": {
+        "reason": "release",
+        "confirmed": False,
+    },
     "ops/ceremony/commit_pipeline.py::commit": {
         "reason": "release",
         "confirmed": False,

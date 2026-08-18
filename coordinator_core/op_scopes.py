@@ -738,6 +738,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # to resolve cross-repo/archive/<filename> for each of the 34 backfill-table
     # entries. Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C5
     "fleet.backfill_dispositionless_memos":  "common_dir",
+    # session.commits — keyed on git_common_dir (worktree derived via
+    # main_worktree_root(common_dir), same convention as ceremony.wsc_tail /
+    # resolve_session_branches): resolves a session_id's attributed commits
+    # via one `git log --numstat` over the caller's own repo. Unlisted
+    # default is "none", which would be wrong here — this op reads the
+    # caller's own git history, not an explicit caller-supplied repo path.
+    # Spec: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C4
+    "session.commits":                       "common_dir",
     "session.reap":                          "common_dir",
     "session.boot_sweep":                    "common_dir",
     # session.sweep_consumed_handoffs — same scope as session.boot_sweep, and for the same
