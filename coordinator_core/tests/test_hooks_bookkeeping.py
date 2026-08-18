@@ -1114,6 +1114,39 @@ class TestTrackDispatchedAgents:
             f"in coordinator-session-loe and drops the opus runtime tripwire; row={cols!r}"
         )
 
+    def test_real_type_at_create_still_upgrades_model_on_dedup_leg(self, tmp_path: Path) -> None:
+        """A row created with a resolved subagent_type must not strand model at 'unknown'.
+
+        SubagentStart appends (id, "unknown", <real type>, ts) for a Workflow agent()
+        spawn (real type, no model yet). PostToolUse(Agent) later arrives with the SAME
+        type plus the real model — that hits the existing_type == subagent_type dedup
+        arm, not the enrich-in-place arm, so the dedup leg itself must upgrade cols[1]
+        instead of returning None and leaving model stranded at the placeholder.
+        """
+        from coordinator_core.hooks.track_dispatched_agents import _handler
+        ctx = self._ctx(tmp_path)
+        sid = "ses00000000000v1"
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "subagent_type": "coordinator:executor"},
+            repo_root=ctx.repo_root,
+        ))
+        created = self._row(tmp_path, sid)
+        assert created[2] == "coordinator:executor", f"create should carry the real type; row={created!r}"
+        assert created[1] == "unknown", f"model should still be the placeholder at create; row={created!r}"
+        _run(_handler(
+            {"session_id": sid, "dispatched_agent_id": self._HEX_AID,
+             "dispatched_model": "claude-opus-4-5", "subagent_type": "coordinator:executor"},
+            repo_root=ctx.repo_root,
+        ))
+        cols = self._row(tmp_path, sid)
+        assert cols[2] == "coordinator:executor", f"type must not change on the dedup leg; row={cols!r}"
+        assert cols[1] == "claude-opus-4-5", (
+            f"model stranded at 'unknown' on the dedup leg; a permanently-'unknown' col-2 "
+            f"silently undercounts opus in coordinator-session-loe and drops the opus "
+            f"runtime tripwire; row={cols!r}"
+        )
+
     def test_two_phase_enrich_preserves_dispatched_at(self, tmp_path: Path) -> None:
         """Enrichment keeps column 4 from the create call, which is closer to the true
         dispatch moment than the enriching call — the runtime tripwire measures against it."""

@@ -96,6 +96,12 @@ def _resolve_default_paths() -> tuple[str, str]:
     to SCRIPT_DIR/.wsc-inline-budget-baseline (this repo's own state, unaffected
     by the skills cross-plane resolution).
 
+    An explicitly-set-but-empty/whitespace WSC_SKILL_PATH is treated as unset
+    (`.strip() or _default_skill_path()`) and falls through to the default
+    resolver rather than being passed through as an empty path — a
+    behavior improvement over passing an empty string straight through, not
+    a regression (no caller sets WSC_SKILL_PATH="" deliberately).
+
     Raises RuntimeError, naming which rungs were tried, if WSC_SKILL_PATH is
     unset and `data_root("skills")` cannot resolve a skills/ directory on this
     box (e.g. a consumer repo whose coordinator-claude mirror lacks it).

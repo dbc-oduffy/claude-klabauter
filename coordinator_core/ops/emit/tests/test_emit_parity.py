@@ -869,9 +869,13 @@ def test_commit_closures_malformed_sha_routes_to_malformed_bucket(tmp_path: Path
     # ("%x00%H%x00%(trailers:key=Closes,valueonly)"): one malformed (non-40-hex) SHA record
     # and one well-formed record, so the quarantine branch and the happy path both fire in
     # the same subprocess result.
+    # Three fields per record, body last, matching _LOG_FORMAT's
+    # (sha, trailer_block, body) layout — the quarantine path's stride moves in
+    # lockstep with the walk's, so a malformed record must not desynchronize the
+    # records that follow it.
     fake_stdout = (
-        "\x00" + "not-a-valid-sha" + "\x00" + "RECS-99\n"
-        + "\x00" + ("b" * 40) + "\x00" + "RECS-1\n"
+        "\x00" + "not-a-valid-sha" + "\x00" + "RECS-99\n" + "\x00" + "a subject\n"
+        + "\x00" + ("b" * 40) + "\x00" + "RECS-1\n" + "\x00" + "another subject\n"
     )
     fake_result = subprocess.CompletedProcess(
         args=["git", "log"], returncode=0, stdout=fake_stdout, stderr=""

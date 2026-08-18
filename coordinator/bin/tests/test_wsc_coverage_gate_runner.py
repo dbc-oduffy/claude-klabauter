@@ -27,8 +27,11 @@ Coverage:
 """
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import json
+import os
+import shlex
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -440,6 +443,49 @@ def test_write_trail_omits_reviewer_evidence_when_not_given(monkeypatch):
         "--diff-loc", "42",
     ])
     assert "--reviewer-evidence" not in captured_argv["argv"]
+
+
+def test_write_trail_forwards_attestation_dispatch_id_when_given(monkeypatch):
+    """`--attestation-dispatch-id` is forwarded verbatim when supplied."""
+    captured_argv = {}
+
+    def _fake(argv):
+        captured_argv["argv"] = argv
+        return 0, "", ""
+
+    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
+    _mod.main([
+        "write-trail",
+        "--sha-range", "abc..def",
+        "--reviewer", "code-reviewer",
+        "--scope", "chain",
+        "--verdict", "ok",
+        "--diff-loc", "42",
+        "--attestation-dispatch-id", "dispatch-xyz",
+    ])
+    assert "--attestation-dispatch-id" in captured_argv["argv"]
+    assert "dispatch-xyz" in captured_argv["argv"]
+
+
+def test_write_trail_omits_attestation_dispatch_id_when_not_given(monkeypatch):
+    """`--attestation-dispatch-id` is omitted entirely from the forwarded
+    argv when not supplied — never forwarded as an empty string."""
+    captured_argv = {}
+
+    def _fake(argv):
+        captured_argv["argv"] = argv
+        return 0, "", ""
+
+    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
+    _mod.main([
+        "write-trail",
+        "--sha-range", "abc..def",
+        "--reviewer", "code-reviewer",
+        "--scope", "chain",
+        "--verdict", "ok",
+        "--diff-loc", "42",
+    ])
+    assert "--attestation-dispatch-id" not in captured_argv["argv"]
 
 
 def test_write_trail_propagates_failure(monkeypatch, capsys):
@@ -991,8 +1037,9 @@ def test_brightline_gate_uncovered_message_names_all_foreign_set_recordable(
     assert rc == 0
     err = capsys.readouterr().err
     assert "UNCOVERED: 2 of 2 chain code commit(s)" in err
-    assert "2 of these 2 commit(s) were authored by a predecessor session" in err
+    assert "2 of these 2 commit(s) are not attributable to the closing session" in err
     assert "coordinator-write-review-trail --sha-range" in err
+    assert "--reviewer-evidence" in err
     assert "unrecordable" not in err
     assert "waiver" not in err
     assert "Sanctioned exits: a PM vouch waiver, or /handoff." not in err
@@ -1277,7 +1324,7 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
     assert "UNCOVERED: 3 of 3 chain code commit(s)" in err
     assert "2 code commit(s):" in err
     assert "1 planning-artifact commit(s) (owe a plan review, not a code review):" in err
-    assert "1 of these 3 commit(s) were authored by a predecessor session" in err
+    assert "1 of these 3 commit(s) are not attributable to the closing session" in err
     assert "REMEDY: record a per-commit review-trail verdict for each of the remaining 2" in err
 
 
@@ -1290,13 +1337,16 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
 # 2026-08-17 (cross-repo/inbox/2026-08-17-doe-claude-em-chain-ancestry-review-
 # ran-clean.md): the waiver-conditioned half of that fix is gone. K-005 removed
 # `_guard_foreign_session_range`'s Case 1 refusal, so EVERY foreign-attributed
-# commit is recordable by an ordinary write over its own concrete range and
-# `_resolve_vouched_shas` returns empty forever. The old partition therefore
-# rendered the unrecordable wording unconditionally, and a chain terminal that
-# HAD reviewed its ancestry was told to narrate the gap in prose instead of
-# recording it — leaving the gate unable to distinguish a reviewed chain from
-# an unreviewed one. The pins below are the negative-spec against that wording
-# returning.
+# commit is recordable by an ordinary write over its own concrete range.
+# 2026-08-18 (docs/plans/2026-08-18-chain-review-records-and-credits-
+# predecessors.md § C3) replaces the dead waiver seam with `_resolve_
+# attested_shas`, the RECORD-keyed DR-156 attestation read — this helper's
+# `vouched` set is never actually consulted by these narration tests (`_load_
+# trail_records` returns `[]` below, so `_record_membership_shas` never runs
+# against a real record), but the monkeypatch target is kept accurate so a
+# future change that starts calling it here fails loudly on a real signature
+# rather than silently patching a name that no longer exists. The pins below
+# are the negative-spec against the unrecordable wording returning.
 # ---------------------------------------------------------------------------
 
 
@@ -1315,7 +1365,7 @@ def _patch_foreign_narration_case(monkeypatch, tmp_path, chain_code_shas, foreig
             [s for s in shas if s not in foreign],
         ),
     )
-    monkeypatch.setattr(_mod, "_resolve_vouched_shas", lambda session_id: frozenset(vouched))
+    monkeypatch.setattr(_mod, "_resolve_attested_shas", lambda record: frozenset(vouched))
     monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
 
 
@@ -1333,8 +1383,10 @@ def test_brightline_gate_all_foreign_narrates_the_write_that_discharges_them(
     rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "2 of these 2 commit(s) were authored by a predecessor session" in err
-    assert 'coordinator-write-review-trail --sha-range "<sha>^..<sha>" --scope chain' in err
+    assert "2 of these 2 commit(s) are not attributable to the closing session" in err
+    assert 'coordinator-write-review-trail --sha-range "<sha>^..<sha>" --reviewer <reviewer> --scope chain' in err
+    assert "--verdict <verdict> --diff-loc <diff-loc>" in err
+    assert "--reviewer-evidence" in err
     assert "unrecordable" not in err
 
 
@@ -1778,14 +1830,17 @@ def test_record_membership_foreign_narrowing_failure_rejects_record():
     ) is None
 
 
-def test_record_membership_vouched_foreign_sha_is_not_narrowed():
-    """2026-08-06 read-side vouch-honouring fix: a foreign-attributed commit
-    that carries a PM vouch (or a matching gate-minted chain-ancestry
-    waiver) must NOT be narrowed out of the record's coverage — the write
-    side's `ForeignSessionRangeRefused` guard names the vouch as the
-    sanctioned remedy for exactly this case, and the read side must honour
-    it. `bbbbbbb2` is foreign-attributed (per `narrow_foreign_shas`) but
-    also vouched (per `vouched_shas`) — it is credited."""
+def test_record_membership_attested_foreign_sha_is_not_narrowed():
+    """2026-08-18 (docs/plans/2026-08-18-chain-review-records-and-credits-
+    predecessors.md § C3): a foreign-attributed commit named by THIS
+    record's own persisted DR-156 reviewer attestation must NOT be narrowed
+    out of the record's coverage. `attested_shas` is RECORD-keyed, not
+    session-keyed — it receives the record itself (eng-director F5: a bare
+    session id cannot answer "what did THIS record attest" without
+    globbing every sidecar under that session, the per-session store this
+    plan's Anti-scope forbids). `bbbbbbb2` is foreign-attributed (per
+    `narrow_foreign_shas`) but also named by the record's attestation (per
+    `attested_shas`) — it is credited."""
     chain_dag_sha_set = {"aaaaaaa1", "bbbbbbb2"}
     chain_code_sha_set = {"aaaaaaa1", "bbbbbbb2"}
     record = {"verdict": "ok", "sha_range": "base..tip", "scope": "chain", "session_id": "own-sid"}
@@ -1793,8 +1848,8 @@ def test_record_membership_vouched_foreign_sha_is_not_narrowed():
     def narrow_foreign_shas(sha_range, session_id):
         return {"bbbbbbb2"}
 
-    def vouched_shas(session_id):
-        assert session_id == "own-sid"
+    def attested_shas(record_arg):
+        assert record_arg is record
         return {"bbbbbbb2"}
 
     assert _record_membership_shas(
@@ -1803,14 +1858,14 @@ def test_record_membership_vouched_foreign_sha_is_not_narrowed():
         chain_dag_sha_set,
         chain_code_sha_set,
         narrow_foreign_shas=narrow_foreign_shas,
-        vouched_shas=vouched_shas,
+        attested_shas=attested_shas,
     ) == {"aaaaaaa1", "bbbbbbb2"}
 
 
-def test_record_membership_same_record_without_vouch_still_narrows():
+def test_record_membership_same_record_without_attestation_still_narrows():
     """The pinned regression: the SAME record, SAME foreign narrowing,
-    with no vouch present (`vouched_shas` returns an empty set) — the
-    existing narrowing behaviour stays exactly as before this fix."""
+    with no attestation present (`attested_shas` returns an empty set) —
+    the existing narrowing behaviour stays exactly as before this fix."""
     chain_dag_sha_set = {"aaaaaaa1", "bbbbbbb2"}
     chain_code_sha_set = {"aaaaaaa1", "bbbbbbb2"}
     record = {"verdict": "ok", "sha_range": "base..tip", "scope": "chain", "session_id": "own-sid"}
@@ -1818,7 +1873,7 @@ def test_record_membership_same_record_without_vouch_still_narrows():
     def narrow_foreign_shas(sha_range, session_id):
         return {"bbbbbbb2"}
 
-    def vouched_shas(session_id):
+    def attested_shas(record_arg):
         return set()
 
     assert _record_membership_shas(
@@ -1827,7 +1882,7 @@ def test_record_membership_same_record_without_vouch_still_narrows():
         chain_dag_sha_set,
         chain_code_sha_set,
         narrow_foreign_shas=narrow_foreign_shas,
-        vouched_shas=vouched_shas,
+        attested_shas=attested_shas,
     ) == {"aaaaaaa1"}
 
 
@@ -2393,20 +2448,34 @@ def test_partition_foreign_uncovered_shas_grep_failure_degrades_whole_batch(monk
     _ = base
 
 
-def test_resolve_vouched_shas_always_returns_empty_no_waiver_source_remains(monkeypatch):
-    """`_resolve_vouched_shas` formerly wrapped the gate-minted chain-
-    ancestry-waiver store (`_chain_ancestry_waived_shas` /
-    `_VOUCHED_SHAS_CACHE`); that whole mechanism is removed outright
-    (state/kill-ledger.md K-005, 2026-08-16 — "waiver system dies"). No
-    waiver source remains, so the resolver is unconditional: it must return
-    an empty frozenset regardless of `session_id`, with no caching and no
-    git/repo-root consultation at all."""
+def test_resolve_attested_shas_reads_the_records_own_persisted_attestation(monkeypatch):
+    """2026-08-18 (docs/plans/2026-08-18-chain-review-records-and-credits-
+    predecessors.md § C3): `_resolve_attested_shas` replaces the retired
+    gate-minted chain-ancestry-waiver store (`_chain_ancestry_waived_shas`
+    / the former `_VOUCHED_SHAS_CACHE`, K-005, 2026-08-16 — "waiver system
+    dies") with a RECORD-keyed read of C1/C2's persisted DR-156
+    attestation, never a session-keyed lookup and never a git/repo-root
+    consultation of its own."""
     monkeypatch.setattr(
         _mod, "_resolve_repo_root",
         lambda: (_ for _ in ()).throw(AssertionError("must not resolve repo root")),
     )
-    assert _mod._resolve_vouched_shas("own-sid") == frozenset()
-    assert _mod._resolve_vouched_shas(None) == frozenset()
+    record_without_attestation = {"session_id": "own-sid"}
+    assert _mod._resolve_attested_shas(record_without_attestation) == frozenset()
+
+    from coordinator_core.ops.review_trail_write import _REVIEWER_ATTESTATION_KEY
+
+    record_with_attestation = {
+        "session_id": "own-sid",
+        _REVIEWER_ATTESTATION_KEY: {
+            "reviewer_session_id": "reviewer-sid",
+            "sidecar": "state/subagent-share/own-sid/review-x.md",
+            "shas": ["AAAAAAA1", "bbbbbbb2"],
+        },
+    }
+    assert _mod._resolve_attested_shas(record_with_attestation) == frozenset(
+        {"aaaaaaa1", "bbbbbbb2"}
+    )
 
 
 def test_peer_record_outside_chain_does_not_discharge_despite_being_later_on_shared_branch():
@@ -2706,5 +2775,339 @@ def test_run_review_brightline_gate_telemetry_failure_never_breaks_the_gate(monk
 
     assert rc == 0
     assert stdout == _TIER_B_STDOUT
+
+
+# ---------------------------------------------------------------------------
+# AC6 (docs/plans/2026-08-18-chain-review-records-and-credits-predecessors.md
+# § C6): end-to-end credit, not just admission, and the two readers agree.
+#
+# Takes the exact command line the AC9 narration above prints (fills in its
+# `<sha>`/`<dispatch-id>`/`<sidecar-path>` placeholders with a real fixture's
+# values) and runs it — via `coordinator-write-review-trail.py`'s own `main`,
+# never a hand-rolled call into `write_review_trail_entry` — against a real
+# git repo whose sole uncovered commit is predecessor-authored. Only the
+# transport hop (`cc_invoke.route_mutation`'s daemon/socket round trip) is
+# replaced, with the SAME native op function
+# (`review_trail_write.write_review_trail_entry`) this repo's own CLI
+# ultimately calls — `_guard_foreign_session_range` and every other guard on
+# the write path run for real, unmocked, exactly the "two surfaces
+# disagreeing" defect class this chunk exists to catch (eng-director F7).
+# ---------------------------------------------------------------------------
+
+_AC6_OWN_SESSION = "ac6-own-session-e2e01"
+_AC6_FOREIGN_SESSION = "ac6-foreign-session-e2e02"
+_AC6_DISPATCH_ID = "code-reviewer@session-ac6own"
+
+
+def _load_write_review_trail_cli():
+    loader = importlib.machinery.SourceFileLoader(
+        "wsc_coverage_gate_runner_ac6_write_trail_cli",
+        str(_BIN_DIR / "coordinator-write-review-trail.py"),
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    loader.exec_module(mod)
+    return mod
+
+
+def _make_trailer_commit(repo, filename, message, session_id):
+    """Real, non-empty commit (name-only touched-path detection needs a
+    real file change) carrying a `Session-Id:` trailer — the same
+    attribution signal `_partition_foreign_uncovered_shas` and
+    `_resolve_foreign_session_shas` read for real off this fixture's own
+    git history, never stubbed."""
+    (repo / filename).write_text(message, encoding="utf-8")
+    _git("add", filename, cwd=repo)
+    _commit_clock["epoch"] += 1
+    date_str = f"{_commit_clock['epoch']} +0000"
+    env = dict(os.environ, GIT_AUTHOR_DATE=date_str, GIT_COMMITTER_DATE=date_str)
+    _git(
+        "commit", "-m", f"{message}\n\nSession-Id: {session_id}",
+        cwd=repo, env=env,
+    )
+    return _git("rev-parse", "HEAD", cwd=repo)
+
+
+def _ac6_ledger_row(repo, session_id, dispatch_id):
+    ledger_dir = repo / ".git" / "coordinator-sessions" / session_id
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    (ledger_dir / "dispatched-agents.txt").write_text(
+        f"{dispatch_id}\topus\tcode-reviewer\t1786451686\n", encoding="utf-8",
+    )
+
+
+def _ac6_write_pending_frozen_record(repo, session_id, sha_range):
+    trail_dir = repo / "state" / "review-trail"
+    trail_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "sha_range": sha_range,
+        "reviewer": "code-reviewer",
+        "scope": "session",
+        "scope_kind": "diff",
+        "verdict": "pending",
+        "diff_loc": 1,
+        "session_id": session_id,
+        "workstream": None,
+    }
+    (trail_dir / f"2026-08-18-000000-{session_id[:8]}-pending.json").write_text(
+        json.dumps(record), encoding="utf-8",
+    )
+
+
+def _ac6_write_sidecar(repo, session_id, filename, reviewed_range_sha):
+    rel = f"state/subagent-share/{session_id}/{filename}"
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\nreviewer: code-reviewer\n"
+        f'reviewed_range:\n  - "{reviewed_range_sha}^..{reviewed_range_sha}"\n'
+        "---\n",
+        encoding="utf-8",
+    )
+    return rel
+
+
+def _extract_narrated_write_trail_argv(err: str) -> list[str]:
+    """Parses the literal `coordinator-write-review-trail ...` command line
+    out of the AC9 `foreign_shas` narration in `err` (see
+    `wsc-coverage-gate-runner.py::cmd_brightline_gate`'s printed text),
+    returning its argv (flag tokens plus `<placeholder>` tokens) with the
+    leading program name stripped. The command runs up to the explanatory
+    parenthetical that follows it in the same sentence — that parenthetical
+    is prose, not part of the runnable command."""
+    marker = "coordinator-write-review-trail "
+    start = err.index(marker)
+    end = err.index(" (concrete", start)
+    tokens = shlex.split(err[start:end])
+    assert tokens[0] == "coordinator-write-review-trail", tokens
+    return tokens[1:]
+
+
+def test_ac6_narration_route_admits_and_credits_across_both_readers(
+    monkeypatch, temp_git_repo, capsys,
+):
+    """The narration's own printed remedy, actually run against a real
+    fixture: parses the exact command line the AC9 narration above prints,
+    substitutes its `<placeholder>` tokens with this fixture's own values
+    (never a hand-assembled parallel argv — a test that builds its own argv
+    independently of the narration string cannot catch a narration defect,
+    e.g. a required flag silently missing from the printed text), then runs
+    the resulting argv and checks (1) the record lands, (2)
+    `_record_membership_shas` credits it, and (3)
+    `coverage._narrow_foreign_session_scope` admits the IDENTICAL set over
+    the same fixture."""
+    from coordinator_core import coverage as cov_mod
+
+    repo = temp_git_repo
+    _make_commit(repo, "base.txt", "base")
+    foreign_sha = _make_trailer_commit(
+        repo, "peer.py", "peer work", session_id=_AC6_FOREIGN_SESSION,
+    )
+    chain_code_shas = [foreign_sha]
+
+    monkeypatch.setattr(_mod, "_run_review_brightline_gate", lambda argv: (0, _TIER_B_STDOUT, ""))
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(repo))
+    monkeypatch.setattr(_mod, "_resolve_closing_session_id", lambda repo_root: _AC6_OWN_SESSION)
+    monkeypatch.setattr(_mod, "_resolve_chain_code_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(_mod, "_resolve_chain_dag_shas", lambda from_handoff: list(chain_code_shas))
+    monkeypatch.setattr(
+        _mod, "_classify_bookkeeping_shas",
+        lambda shas, cwd, cache: (frozenset(), frozenset(), None),
+    )
+    monkeypatch.setattr(_mod, "_load_trail_records", lambda: [])
+    # `_partition_foreign_uncovered_shas` is deliberately left UNMOCKED — it
+    # must classify `foreign_sha` off the real trailer this fixture wrote,
+    # not a stubbed answer.
+
+    rc = _mod.main(["brightline-gate", "--from-handoff", "state/handoffs/x.md"])
+    err = capsys.readouterr().err
+    assert rc == 0, err  # own_shas empty: communicate-only, never a halt
+    assert f"1 of these 1 commit(s) are not attributable to the closing session" in err
+    assert "--attestation-dispatch-id" in err
+    assert "--reviewer-evidence" in err
+
+    narrated_argv = _extract_narrated_write_trail_argv(err)
+    # coordinator-write-review-trail.py::main's required-arg presence gate
+    # (the "missing required args" check) — every flag it demands must be
+    # present in the narration's OWN printed tokens, not merely in a test-
+    # constructed argv, or a future regression that drops one from the
+    # narration would pass silently.
+    for required_flag in ("--sha-range", "--reviewer", "--scope", "--verdict", "--diff-loc"):
+        assert required_flag in narrated_argv, (required_flag, narrated_argv)
+
+    # -- Fill in the narration's placeholders with this fixture's real
+    #    values and run the exact command it names. --
+    _ac6_ledger_row(repo, _AC6_OWN_SESSION, _AC6_DISPATCH_ID)
+    _ac6_write_pending_frozen_record(repo, _AC6_OWN_SESSION, f"{foreign_sha}^..{foreign_sha}")
+    sidecar_rel = _ac6_write_sidecar(repo, _AC6_OWN_SESSION, "ac6-review.md", foreign_sha)
+
+    monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(repo / "state"))
+    monkeypatch.setenv("COORDINATOR_ROOT", str(repo / "state"))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _AC6_OWN_SESSION)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+    cli = _load_write_review_trail_cli()
+    monkeypatch.setattr(cli, "_resolve_repo_root", lambda: str(repo))
+
+    def _real_route_mutation(op, params, repo_root, fallback):
+        assert op == "review_trail.write"
+        from coordinator_core.ops.review_trail_write import write_review_trail_entry
+
+        return write_review_trail_entry(
+            sha_range=params.get("sha_range", ""),
+            reviewer=params.get("reviewer", ""),
+            scope=params.get("scope", ""),
+            verdict=params.get("verdict", ""),
+            diff_loc=int(params.get("diff_loc", 0)),
+            scope_kind=params.get("scope_kind", "diff"),
+            session_id=_AC6_OWN_SESSION,
+            workstream=params.get("workstream"),
+            reviewed_paths=params.get("reviewed_paths"),
+            reviewer_evidence=params.get("reviewer_evidence"),
+            execution_basis=params.get("execution_basis"),
+            reviewer_attestation=params.get("reviewer_attestation"),
+            attestation_dispatch_id=params.get("attestation_dispatch_id"),
+            caller_worktree=Path(repo_root) if repo_root else None,
+        )
+
+    monkeypatch.setattr(cli.cc_invoke, "route_mutation", _real_route_mutation)
+
+    placeholder_values = {
+        "<sha>^..<sha>": f"{foreign_sha}^..{foreign_sha}",
+        "<reviewer>": "code-reviewer",
+        "<verdict>": "ok",
+        "<diff-loc>": "5",
+        "<dispatch-id>": _AC6_DISPATCH_ID,
+        "<sidecar-path>": sidecar_rel,
+    }
+    write_argv = [placeholder_values.get(token, token) for token in narrated_argv]
+    write_rc = cli.main(write_argv)
+    assert write_rc == 0
+
+    # (1) the record lands
+    trail_files = sorted((repo / "state" / "review-trail").glob("*.json"))
+    written = [
+        json.loads(p.read_text(encoding="utf-8")) for p in trail_files
+        if json.loads(p.read_text(encoding="utf-8")).get("verdict") == "ok"
+    ]
+    assert len(written) == 1, trail_files
+    record = written[0]
+    assert record["sha_range"] == f"{foreign_sha}^..{foreign_sha}"
+    assert _mod._resolve_attested_shas(record) == frozenset({foreign_sha.lower()})
+
+    # (2) `_record_membership_shas` credits it
+    contribution = _record_membership_shas(
+        record,
+        resolve_range_shas=_mod._resolve_range_shas,
+        chain_dag_sha_set={foreign_sha},
+        chain_code_sha_set={foreign_sha},
+        narrow_foreign_shas=_mod._resolve_foreign_session_shas,
+        attested_shas=_mod._resolve_attested_shas,
+    )
+    assert contribution == {foreign_sha}
+
+    # (3) `coverage._narrow_foreign_session_scope` admits the IDENTICAL set
+    stripped = cov_mod._narrow_foreign_session_scope(
+        f"{foreign_sha}^..{foreign_sha}",
+        _AC6_OWN_SESSION,
+        str(repo),
+        {},
+        attested_shas=_mod._resolve_attested_shas(record),
+    )
+    assert stripped == frozenset()  # nothing left stripped: the same commit both readers credit
+
+
+def test_ac6_two_records_sharing_a_range_and_session_with_different_attestations_still_agree(
+    monkeypatch, temp_git_repo,
+):
+    """The EM-flagged case: C3's `_record_membership_shas` reads
+    `attested_shas` PER RECORD, while C4's `coverage.py` unions attested
+    sets across every record sharing a `(sha_range, session_id)` key
+    (`attested_by_range_session`). Two on-disk records CAN share that key
+    with DIFFERENT attested sets — `_LOAD_BEARING_IDENTITY_FIELDS` treating
+    `reviewer_attestation` as load-bearing makes such a pair a divergent
+    identity at WRITE time (`review_trail_write.py`'s own divergence path),
+    which creates a SECOND file rather than merging or refusing — it does
+    not prevent two such records from coexisting on disk.
+
+    RESULT: they still agree. C3's caller (`_collect_discharging_range_
+    shas`) does not stop at one record — it unions EVERY surviving record's
+    own `_record_membership_shas` contribution
+    (`directives_review.py::_collect_discharging_range_shas`, `covered.
+    update(membership)`). For two records sharing one `(sha_range,
+    session_id)` raw set S and foreign set F, with attested sets A1 and A2
+    respectively, that outer union works out to
+    `S ∩ (¬F ∪ A1) ∪ S ∩ (¬F ∪ A2) == S ∩ (¬F ∪ (A1 ∪ A2))` (union
+    distributes over the shared intersection with S) — the SAME
+    `A1 ∪ A2` C4's own `attested_by_range_session` dict builds for that key
+    at `coverage.py`'s Phase-1 accumulation. This test verifies that
+    equality empirically rather than asserting the algebra alone."""
+    from coordinator_core import coverage as cov_mod
+
+    repo = temp_git_repo
+    _make_commit(repo, "base.txt", "base")
+    foreign_1 = _make_trailer_commit(repo, "peer1.py", "peer work 1", session_id=_AC6_FOREIGN_SESSION)
+    foreign_2 = _make_trailer_commit(repo, "peer2.py", "peer work 2", session_id=_AC6_FOREIGN_SESSION)
+    sha_range = f"{foreign_1}^..{foreign_2}"
+
+    record_a = {
+        "sha_range": sha_range,
+        "reviewer": "code-reviewer",
+        "scope": "chain",
+        "scope_kind": "diff",
+        "verdict": "ok",
+        "diff_loc": 3,
+        "session_id": _AC6_OWN_SESSION,
+        "workstream": None,
+        "reviewer_attestation": {
+            "reviewer_session_id": _AC6_DISPATCH_ID,
+            "sidecar": f"state/subagent-share/{_AC6_OWN_SESSION}/a.md",
+            "shas": [foreign_1],
+        },
+    }
+    record_b = {
+        **record_a,
+        "reviewer_attestation": {
+            "reviewer_session_id": _AC6_DISPATCH_ID,
+            "sidecar": f"state/subagent-share/{_AC6_OWN_SESSION}/b.md",
+            "shas": [foreign_2],
+        },
+    }
+
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda: str(repo))
+
+    chain_dag_sha_set = {foreign_1, foreign_2}
+    chain_code_sha_set = {foreign_1, foreign_2}
+
+    covered: set[str] = set()
+    for record in (record_a, record_b):
+        membership = _record_membership_shas(
+            record,
+            resolve_range_shas=_mod._resolve_range_shas,
+            chain_dag_sha_set=chain_dag_sha_set,
+            chain_code_sha_set=chain_code_sha_set,
+            narrow_foreign_shas=_mod._resolve_foreign_session_shas,
+            attested_shas=_mod._resolve_attested_shas,
+        )
+        assert membership is not None
+        covered.update(membership)
+
+    # C4's union for this (sha_range, session_id) key, built the same way
+    # coverage.py's own Phase-1 accumulation does (`_record_attested_shas`
+    # per record, unioned).
+    attested_union = cov_mod._record_attested_shas(record_a) | cov_mod._record_attested_shas(record_b)
+    assert attested_union == {foreign_1, foreign_2}
+
+    stripped = cov_mod._narrow_foreign_session_scope(
+        sha_range, _AC6_OWN_SESSION, str(repo), {}, attested_shas=attested_union,
+    )
+    raw = _mod._resolve_range_shas(sha_range)
+    c4_covered = raw - stripped
+
+    assert covered == {foreign_1, foreign_2}
+    assert c4_covered == covered, (
+        f"C3's per-record union {covered!r} disagrees with C4's "
+        f"range/session-keyed union {c4_covered!r}"
+    )
 
 

@@ -197,3 +197,105 @@ def test_directory_pathspec_expansion_spawn_count_matches_budget(tmp_path_factor
         "(and its _rationale) together with this test if the change is "
         "intentional" % (n, budgeted)
     )
+
+
+# ---------------------------------------------------------------------------
+# opro-01 C-09: the probe-bearing (push-raced / push-failed) path
+# ---------------------------------------------------------------------------
+
+
+def _init_repo_with_upstream(tmp_path: Path) -> Path:
+    """A repo on a `work/*` branch with a real upstream, whose remote URL is
+    then pointed at nothing.
+
+    Every clause is load-bearing for reaching the probe:
+      - `work/*` — `coordinator-auto-push` doctrine declines to push anything
+        else, and `PUSH_STATUS_DECLINED` short-circuits `_resolve_push_report`
+        before `_remote_sha_state`.
+      - a real first push — leaves `origin/<branch>` as a resolvable local ref,
+        so `merge-base --is-ancestor` can answer 1 (definitively absent) rather
+        than 128 (unknown), which is what drives the full retry loop.
+      - a broken remote URL afterwards — makes this op's own push fail without
+        a fast-forward reject, so `_rebase_onto_fetched_ref` stays out of the
+        count.
+    """
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    _git(["init", "--bare", "-q"], bare)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(["init", "-q", "-b", "work/budget/probe"], repo)
+    _git(["config", "user.email", "t@t.example"], repo)
+    _git(["config", "user.name", "t"], repo)
+    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    _git(["push", "-q", "-u", "origin", "work/budget/probe"], repo)
+    _git(["remote", "set-url", "origin", str(tmp_path / "nonexistent.git")], repo)
+    return repo
+
+
+def test_probe_bearing_path_spawn_count_and_sleep_match_budget(tmp_path_factory):
+    """C-09/C-05 baseline: the push-raced path costs the manifest's
+    `spawn_count_budget.probe_bearing_path` git subprocesses AND 1.0s of
+    hot-path `time.sleep`.
+
+    This is the path `_remote_sha_state` is reachable on -- the green path's
+    fixture has no remote and no upstream, so the probe is unreachable there
+    and `green_path` stays at 12. Four of the spawns asserted here are the
+    probe's own (`rev-parse --abbrev-ref @{u}` once, `merge-base
+    --is-ancestor` three times across the retry loop); before C-09 routed
+    them through `git_native._git` they were bare `subprocess.run` calls and
+    this counter could not see them at all.
+
+    The sleep assertion is not decoration: a spawn count cannot express a
+    `time.sleep`, and the second half of what opro-01 sheds from this path is
+    the 1.0s wall-clock, under a 50-70-concurrent-session load norm where it
+    is held while nothing else proceeds.
+    """
+    tmp_path = tmp_path_factory.mktemp("e2e-spawn-probe")
+    repo = _init_repo_with_upstream(tmp_path)
+    (repo / "a.txt").write_text("v2\n", encoding="utf-8")
+    _write_meta_live(repo, "sess-caller", live=True)
+
+    slept: list[float] = []
+    orig_sleep = scoped_git_commit.time.sleep
+
+    def _record_sleep(secs):
+        slept.append(secs)
+        return orig_sleep(secs)
+
+    def _run():
+        return scoped_git_commit._handler(
+            {
+                "worktree_root": str(repo),
+                "paths": ["a.txt"],
+                "message": "test commit",
+            }
+        )
+
+    scoped_git_commit.time.sleep = _record_sleep
+    try:
+        n, result = _count_op_git_calls(_run)
+    finally:
+        scoped_git_commit.time.sleep = orig_sleep
+
+    assert result["committed"] is True, "fixture did not land a commit: %r" % (result,)
+    assert result["push_state"] == "push-failed", (
+        "fixture did not reach the probe -- push_state is %r, so "
+        "_resolve_push_report short-circuited before _remote_sha_state and "
+        "this test is measuring the wrong path" % (result.get("push_state"),)
+    )
+
+    budgeted = _manifest_spawn_budget()["probe_bearing_path"]
+    assert n == budgeted, (
+        "probe-bearing-path e2e spawn count is %d, manifest budgets %d -- "
+        "update budget-manifest.json's ceremony.scoped_git_commit.spawn_"
+        "count_budget.probe_bearing_path (and its _rationale) together with "
+        "this test if the change is intentional" % (n, budgeted)
+    )
+    assert sum(slept) == pytest.approx(1.0), (
+        "probe-bearing path slept %.2fs on the hot path, expected 1.0s "
+        "(_remote_sha_state's 2 x retry_delay_s=0.5) -- %r" % (sum(slept), slept)
+    )

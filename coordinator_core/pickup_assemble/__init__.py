@@ -104,6 +104,7 @@ from coordinator_core.shipped_in_tokens import (
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
 )
 from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
+from coordinator_core import dag
 from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _shared_build_judgment_point,
     build_untrusted_gate_judgment_point as _shared_build_untrusted_gate_judgment_point,
@@ -2070,6 +2071,16 @@ def _build_archived_resolution(display_path: str, archive_hit: Path, repo_root: 
     terminal_fields = _extract_terminal_fields(
         fm_text, _TERMINAL_MEMO_FIELDS if is_memo else _TERMINAL_HANDOFF_FIELDS
     )
+    # `frontmatter` stays `{}` here (pre-existing shape, unrelated to this
+    # field) — `chain` is computed straight off `archive_hit`'s own parsed
+    # frontmatter (AC8: a month-nested `archive/handoffs/YYYY-MM/` artifact
+    # computes the same chain as its live-path twin), not off the
+    # deliberately-terminal-only `terminal_fields` extraction above.
+    # `is_memo` (not the "archived" classification) is the discriminator here:
+    # an archived MEMO is terminal correspondence with no continuity chain, and
+    # `classification` has already collapsed to "archived" for both shapes by
+    # this point, so keying on it alone would emit a chain block for a memo.
+    chain = None if is_memo else _compute_artifact_chain(archive_hit, repo_root, "archived")
     return {
         "path": display_path,
         "classification": "archived",
@@ -2080,6 +2091,7 @@ def _build_archived_resolution(display_path: str, archive_hit: Path, repo_root: 
             "terminal_fields": terminal_fields,
             "archived_class": "memo" if is_memo else "handoff",
         },
+        "chain": chain,
     }
 
 
@@ -2250,6 +2262,7 @@ def _resolve_found_file(found_path: Path, repo_root: Path) -> dict[str, Any]:
             "classification": "ambiguous",
             "frontmatter": {},
             "resolution": None,
+            "chain": None,
         }
     classification = classify(found_path, split.fm_text, repo_root)
     # Defect 2 — a well-formed handoff/memo passed at its NATIVE archive
@@ -2262,11 +2275,13 @@ def _resolve_found_file(found_path: Path, repo_root: Path) -> dict[str, Any]:
     # PM-facing `ambiguous`.
     if classification == "ambiguous" and _is_under_archive_dir(found_path, repo_root):
         return _build_archived_resolution(display_path, found_path, repo_root)
+    fm = _parse_fm_dict(split.fm_text)
     return {
         "path": display_path,
         "classification": classification,
-        "frontmatter": _parse_fm_dict(split.fm_text),
+        "frontmatter": fm,
         "resolution": None,
+        "chain": _compute_artifact_chain(found_path, repo_root, classification),
     }
 
 
@@ -4183,11 +4198,109 @@ def _predecessor_artifact_paths(fm: dict[str, Any]) -> list[str]:
     return paths
 
 
-def _read_lineage_artifact_fm(repo_root: Path, relative_path: str) -> Optional[dict[str, Any]]:
-    """Best-effort frontmatter read of a lineage-ancestor path (AC3e).
+def _compute_artifact_chain(
+    abs_artifact_path: Path,
+    repo_root: Path,
+    classification: str,
+) -> Optional[dict[str, Any]]:
+    """Computes `artifact.chain` (D1-D3,
+    docs/plans/2026-08-18-the-pickup-brief-computes-its-own-contin.md) — the
+    transitive continuation-edge walk quick-wrap's conclusion gate needs,
+    computed once here instead of re-derived from three raw frontmatter
+    reads (`predecessor`/`additional_predecessors`/`forked_from`) on every
+    pickup.
+
+    Walks `dag.CONTINUATION_EDGE_KINDS` BY REFERENCE (D1) — never
+    `forked_from`: a spinoff is a niece, not a descendant (see that
+    constant's docstring). Do NOT derive this from `_predecessor_artifact_
+    paths` above — that helper unions the ARCHIVAL set (including
+    `forked_from`) for a different question (relatedness/claim-contention)
+    and would invert this gate for a spinoff.
+
+    Returns `None` for a non-handoff-family *classification* (a memo, AC6)
+    — an explicit null, never a fabricated zero-block a reader could
+    mistake for "walked, found nothing".
+
+    Keyed on *classification*, NOT on whether *fm* happens to carry a
+    lineage field. Those two differ for a real and load-bearing case: 3 of
+    585 handoff-family artifacts in this corpus (2 of them live) omit
+    `predecessor`/`additional_predecessors`/`forked_from` entirely. Under a
+    presence-check proxy each would emit `chain: null` — indistinguishable,
+    to the conclusion gate consuming this field, from "not a handoff", when
+    the truthful answer is `ancestor_count: 0`, chain root. The walk
+    handles the no-edge case correctly on its own (`orderedPaths == [self]`
+    -> 0), so there is nothing a presence check buys and one wrong answer
+    it costs.
+
+    Never raises (AC7): `dag.walk_forward` already degrades an
+    unresolvable or cyclic edge to a `terminatedEarly` verdict rather than
+    raising, and this function does not wrap it in anything that could
+    swallow that verdict along with an error.
+
+    `repo_root` is passed explicitly to `walk_forward` (AC8) — never left
+    to its own two-dirs-up inference from `handoff_dir`, which is correct
+    only for `<repo_root>/state|archive/handoffs` and breaks for a
+    month-nested `archive/handoffs/YYYY-MM/` artifact, which pickup
+    resolves routinely via its archive fallback.
+    """
+    if classification not in ("handoff", "spinoff", "archived"):
+        return None
+
+    walk = dag.walk_forward(
+        str(abs_artifact_path),
+        edge_kinds=set(dag.CONTINUATION_EDGE_KINDS),
+        handoff_dir=str(repo_root / "state" / "handoffs"),
+        repo_root=str(repo_root),
+    )
+    ordered = walk["orderedPaths"]
+    ancestor_count = max(len(ordered) - 1, 0)
+    ancestor_paths = ordered[1:]
+    root_abs = ordered[-1] if ancestor_count else None
+    walk_verdict = walk["terminatedEarly"] or "clean"
+
+    def _display(raw: str) -> str:
+        p = Path(raw)
+        return rel_id(p, repo_root) if _is_relative(p, repo_root) else str(p)
+
+    return {
+        "ancestor_count": ancestor_count,
+        "paths": [_display(p) for p in ancestor_paths],
+        "root": _display(root_abs) if root_abs is not None else None,
+        "walk": walk_verdict,
+    }
+
+
+def _resolve_lineage_artifact_path(repo_root: Path, relative_path: str) -> Optional[Path]:
+    """Archive-aware resolution of a lineage-ancestor reference (AC3e),
+    following `_compute_artifact_chain`'s worked example: routed through
+    `dag.resolve_target` (the same path/basename/archive/month-foldered
+    tiers every sibling consumer already uses) rather than a bare
+    `repo_root / relative_path` join, which only ever hits a still-live
+    file — an ancestor archived to `archive/handoffs/YYYY-MM/` resolves to
+    None under the bare join and silently drops out of relatedness.
+
+    Returns `None` when the reference is absent, unresolvable, or resolves
+    only to the `'git-history'` sentinel (present in history, absent on
+    disk — nothing here to read).
+    """
+    from coordinator_core.dag import resolve_target as _dag_resolve_target
+
+    resolved = _dag_resolve_target(
+        relative_path,
+        str(repo_root / "state" / "handoffs"),
+        str(repo_root),
+        include_history_tier=False,
+    )
+    if not resolved or resolved == "git-history":
+        return None
+    return Path(resolved)
+
+
+def _read_lineage_artifact_fm(candidate: Path) -> Optional[dict[str, Any]]:
+    """Best-effort frontmatter read of an already archive-aware-resolved
+    lineage-ancestor path (AC3e) — see `_resolve_lineage_artifact_path`.
     Returns `None` on any read/parse failure — an unreadable ancestor
     contributes no relatedness, never a crash and never a false relation."""
-    candidate = repo_root / relative_path
     try:
         if not candidate.is_file():
             return None
@@ -4281,7 +4394,10 @@ def _lineage_related_sessions(repo_root: Path, fm: dict[str, Any]) -> "frozenset
         related.add(str(authoring_session))
 
     for lineage_path in _predecessor_artifact_paths(fm):
-        lineage_fm = _read_lineage_artifact_fm(repo_root, lineage_path)
+        resolved_path = _resolve_lineage_artifact_path(repo_root, lineage_path)
+        if resolved_path is None:
+            continue
+        lineage_fm = _read_lineage_artifact_fm(resolved_path)
         if lineage_fm is None:
             continue
         authoring_session = lineage_fm.get("authoring_session")
@@ -4292,8 +4408,12 @@ def _lineage_related_sessions(repo_root: Path, fm: dict[str, Any]) -> "frozenset
         # `claim_state`, picked_up_by as the last-resort mirror-only
         # fallback) instead of a raw frontmatter-only scan, so a predecessor
         # whose mirror reverted but whose ledger still holds a live claim
-        # still counts as lineage-related.
-        lineage_holder = _resolve_ledger_first_holder(repo_root, lineage_path, lineage_fm)
+        # still counts as lineage-related. Threaded through the SAME
+        # archive-aware `resolved_path` as the frontmatter read above (not
+        # the raw `lineage_path`) — otherwise an archived predecessor
+        # contributes its `authoring_session` but not its ledger-held
+        # claimant, and AC5 is only half met.
+        lineage_holder = _resolve_ledger_first_holder(repo_root, resolved_path, lineage_fm)
         if lineage_holder:
             related.add(lineage_holder)
 

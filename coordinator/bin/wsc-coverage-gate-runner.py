@@ -183,6 +183,7 @@ from coordinator_core.workstream_complete.chain_partition_verdict_store import (
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel  # noqa: E402
 from coordinator_core import chain_attribution  # noqa: E402
 from coordinator_core import session_attribution  # noqa: E402
+from coordinator_core.ops import review_trail_write  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
@@ -829,24 +830,37 @@ def _resolve_foreign_session_shas(sha_range: str, session_id: str | None) -> fro
     )
 
 
-#: Module-level memo for `_resolve_vouched_shas`, keyed on `session_id`
-#: (session-independent lookups are cheap, but memoized here anyway so a
-#: repeat call for the same key, common across a chain's many trail records,
-#: doesn't re-scan the waiver directory and re-resolve the closing session
-#: id per record).
-_VOUCHED_SHAS_CACHE: dict = {}
+def _resolve_attested_shas(record: dict) -> frozenset[str]:
+    """The `attested_shas` callable `directives_review._record_membership_
+    shas` injects (2026-08-18, docs/plans/2026-08-18-chain-review-records-
+    and-credits-predecessors.md § C3, eng-director F5). RECORD-keyed, not
+    session-keyed: reads THIS record's own persisted DR-156 attestation
+    (`review_trail_write._parse_reviewer_attestation`, C1/C2's write-time
+    resolution) and returns its admitted SHA set, or empty when the record
+    carries no attestation.
 
-
-def _resolve_vouched_shas(session_id: str | None) -> frozenset[str]:
-    """The `vouched_shas` callable `directives_review._record_membership_
-    shas` injects. Formerly the gate-minted chain-ancestry waiver store
+    Formerly the gate-minted chain-ancestry waiver store
     (`coverage._chain_ancestry_waived_shas`, scoped to `session_id`) — that
     mechanism is removed outright (state/kill-ledger.md K-005, 2026-08-16 —
-    "waiver system dies"). No waiver source remains, so this resolver
-    always returns empty; the foreign-session strip in
-    `_record_membership_shas` now proceeds unconditionally. Kept as a named
-    seam (isolated for test monkeypatching) rather than inlined."""
-    return frozenset()
+    "waiver system dies"). This is not a revival of it under a new name:
+    the prior shape was a per-session store consulted by both writer and
+    reader, exactly what this plan's Anti-scope forbids reproducing; this
+    resolver instead reads a value C1/C2 already persisted ONTO the record
+    itself at write time, so there is nothing here to memoize per session —
+    a module-level, session-keyed cache would recreate the same forbidden
+    store one indirection removed. Re-key per-record only if profiling
+    shows the per-call `dict.get` + list-comprehension cost actually
+    matters; it has not been shown to.
+
+    Kept as a named seam (isolated for test monkeypatching) rather than
+    inlined."""
+    attestation = review_trail_write._parse_reviewer_attestation(record)
+    if not attestation:
+        return frozenset()
+    shas = attestation.get("shas")
+    if not shas:
+        return frozenset()
+    return frozenset(str(s).lower() for s in shas)
 
 
 #: Module-level memo for `_resolve_chain_attribution_window`, keyed on
@@ -966,8 +980,13 @@ def _clear_process_caches() -> None:
     """Test-only reset hook for every module-level, never-cleared-in-
     production process cache this file owns (`_RANGE_SHAS_CACHE`,
     `_DAG_SHAS_CACHE`, `_FOREIGN_SHAS_CACHE`, `_GREP_ATTRIBUTED_SHAS_CACHE`,
-    `_VOUCHED_SHAS_CACHE`, `_CHAIN_ATTRIBUTION_WINDOW_CACHE`) —
-    review-integrator finding N2. Each is a correct, intentional design for
+    `_CHAIN_ATTRIBUTION_WINDOW_CACHE`) — review-integrator finding N2.
+    `_resolve_attested_shas` (2026-08-18 § C3) carries no module-level
+    cache of its own — it reads a value already persisted onto the record
+    it is called with, so there is nothing here to clear for it; the
+    retired `_VOUCHED_SHAS_CACHE` this list used to name is gone with the
+    session-keyed lookup it memoized. Each remaining cache is a correct,
+    intentional design for
     production (spawn-per-call, one short-lived process per gate run —
     nothing outlives it to be poisoned), but a cross-test contamination
     hazard for any test suite that calls the real resolvers more than once
@@ -981,7 +1000,6 @@ def _clear_process_caches() -> None:
     _DAG_SHAS_CACHE.clear()
     _FOREIGN_SHAS_CACHE.clear()
     _GREP_ATTRIBUTED_SHAS_CACHE.clear()
-    _VOUCHED_SHAS_CACHE.clear()
     _CHAIN_ATTRIBUTION_WINDOW_CACHE.clear()
 
 
@@ -1160,8 +1178,8 @@ def _resolve_broadly_reviewed_shas(
     review does not reduce what the closing EM owes). Re-runs the same
     verdict-consuming seam `chain_partition_uncovered_shas` uses for the
     displayed (narrow) uncovered set, a second time with
-    `narrow_foreign_shas`/`vouched_shas` omitted — the broad membership
-    test, unrestricted by THIS chain's foreign-session/vouching scope
+    `narrow_foreign_shas`/`attested_shas` omitted — the broad membership
+    test, unrestricted by THIS chain's foreign-session/attestation scope
     (`directives_review._record_membership_shas`). A sha this returns was
     NOT dropped from the narrow uncovered set here: it carries a real,
     non-pending/non-waived review-trail verdict recorded somewhere, just
@@ -1193,7 +1211,7 @@ def _resolve_broadly_reviewed_shas(
         broad_uncovered = chain_partition_uncovered_shas(
             trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
             narrow_foreign_shas=None,
-            vouched_shas=None,
+            attested_shas=None,
             chain_planning_shas=chain_planning_shas,
         )
     except Exception:
@@ -1460,6 +1478,8 @@ def cmd_write_trail(args: argparse.Namespace) -> int:
         argv += ["--workstream", args.workstream]
     if args.reviewer_evidence:
         argv += ["--reviewer-evidence", args.reviewer_evidence]
+    if args.attestation_dispatch_id:
+        argv += ["--attestation-dispatch-id", args.attestation_dispatch_id]
 
     returncode, stdout, stderr = _run_write_review_trail(argv)
     if stdout:
@@ -1863,7 +1883,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 chain_partition_uncovered_shas(
                     trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
                     narrow_foreign_shas=_resolve_foreign_session_shas,
-                    vouched_shas=_resolve_vouched_shas,
+                    attested_shas=_resolve_attested_shas,
                     chain_planning_shas=chain_planning_shas,
                     chain_window=chain_window,
                 )
@@ -1916,7 +1936,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
             basis_report = chain_partition_execution_basis_report(
                 trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
                 narrow_foreign_shas=_resolve_foreign_session_shas,
-                vouched_shas=_resolve_vouched_shas,
+                attested_shas=_resolve_attested_shas,
                 chain_planning_shas=chain_planning_shas,
             )
         except Exception:
@@ -1973,10 +1993,15 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 # refusal a waiver used to exempt — is REMOVED
                 # (state/kill-ledger.md K-005, 2026-08-16), so such a
                 # commit falls through to Case 2 like any other. Partitioning
-                # recordability on `vouched` outlived that refusal: with
-                # `_resolve_vouched_shas` now always empty, it marked every
-                # ancestor commit unrecordable and told the closing EM prose
-                # narration was the only discharge available.
+                # recordability on `vouched` outlived that refusal: while the
+                # chain-ancestry waiver store was live, an unvouched
+                # ancestor commit read unrecordable and told the closing EM
+                # prose narration was the only discharge available. 2026-08-18
+                # (docs/plans/2026-08-18-chain-review-records-and-credits-
+                # predecessors.md § C3) replaces that dead waiver source with
+                # `_resolve_attested_shas`, the per-record DR-156 attestation
+                # read — a foreign-attributed commit an attested sidecar
+                # names is now genuinely recordable via the ordinary route.
                 recordable_shas = frozenset(own_shas) | frozenset(foreign_shas)
                 # AC7 (plan C4) / AC3 (plan C3) — an aiming aid only: which
                 # of the shas about to be listed below already carry a
@@ -2127,16 +2152,44 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     # `_guard_foreign_session_range`'s Case 1 existed; K-005
                     # removed it. Naming the gap in narration is no longer
                     # the discharge available — the record is.
+                    #
+                    # 2026-08-18 (docs/plans/2026-08-18-chain-review-records-
+                    # and-credits-predecessors.md § C6, AC9): this bucket is
+                    # `_partition_foreign_uncovered_shas`'s actual output —
+                    # "not attributable to the closing session" — a WIDER
+                    # set than "authored by a predecessor session in this
+                    # chain" (the prior, narrower wording this line used to
+                    # claim). That distinction is now load-bearing: a member
+                    # of this set is dischargeable only when the write
+                    # cites BOTH a dispatch-ledger-resolvable dispatch id
+                    # (`--attestation-dispatch-id`) AND that dispatch's own
+                    # reviewer sidecar (`--reviewer-evidence`) — C2's
+                    # evidence-source leg engages only when
+                    # `attestation_dispatch_id` is supplied at all (see
+                    # `review_trail_write.py`'s own docstring at that
+                    # parameter). A bare `--sha-range` write naming neither
+                    # is refused for a foreign-attributed commit exactly as
+                    # before. Name the route that actually works, not the
+                    # bare CLI line that only worked pre-C2.
                     print(
                         f"  {len(foreign_shas)} of these {len(uncovered)} "
-                        "commit(s) were authored by a predecessor session in "
-                        "this chain. Reviewing them is still OWED, and a "
-                        "record this session writes discharges them: "
+                        "commit(s) are not attributable to the closing "
+                        "session. Reviewing them is still OWED, and a "
+                        "record this session writes discharges them when it "
+                        "cites the dispatch that reviewed the commit: "
                         "coordinator-write-review-trail --sha-range "
-                        '"<sha>^..<sha>" --scope chain (concrete endpoints '
-                        "only — a `..HEAD` range is dropped before the range "
-                        "is resolved). Record only what this session "
-                        "reviewed.",
+                        '"<sha>^..<sha>" --reviewer <reviewer> --scope chain '
+                        "--verdict <verdict> --diff-loc <diff-loc> "
+                        "--attestation-dispatch-id <dispatch-id> "
+                        "--reviewer-evidence <sidecar-path> (concrete "
+                        "endpoints only — a `..HEAD` range is dropped "
+                        "before the range is resolved; the dispatch id "
+                        "must resolve in this session's own dispatched-"
+                        "agents.txt, and the sidecar's reviewed_range must "
+                        "name the commit and resolve within that dispatch's "
+                        "own frozen range; --reviewer/--verdict/--diff-loc "
+                        "name what that dispatch's own review actually "
+                        "found). Record only what this session reviewed.",
                         file=sys.stderr,
                     )
                     for line in _annotate_already_reviewed(
@@ -2276,6 +2329,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Evidence correlating --reviewer with an artifact showing a review "
         "occurred (optional; forwarded verbatim when supplied). See "
         "coordinator_core/ops/review_trail_write.py's reviewer_evidence design.",
+    )
+    p_trail.add_argument(
+        "--attestation-dispatch-id", default=None, dest="attestation_dispatch_id",
+        help="Dispatch id engaging the reviewer-attestation admission path in "
+        "review_trail_write._guard_foreign_session_range (optional; forwarded "
+        "verbatim when supplied).",
     )
     p_trail.set_defaults(func=cmd_write_trail)
 

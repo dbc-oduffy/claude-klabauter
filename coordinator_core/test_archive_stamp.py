@@ -223,7 +223,9 @@ def _assert_shipped_in(path: Path, expected_sha: str) -> None:
     assert raw == expected_sha[:8]
 
 
-def _seed_handoff_with_predecessor(repo: Path, name: str, predecessor: str) -> Path:
+def _seed_handoff_with_predecessor(
+    repo: Path, name: str, predecessor: str, edge_field: str = "predecessor"
+) -> Path:
     """Seeds a live, non-terminal handoff naming `predecessor` (bare filename,
     mirrors coordinator_core/ops/tests/conftest.py's HandoffRepo.seed_handoff
     predecessor convention) — used to make the reverse-membership guard
@@ -231,7 +233,16 @@ def _seed_handoff_with_predecessor(repo: Path, name: str, predecessor: str) -> P
 
     Writes raw frontmatter directly (rather than composing with _seed_handoff,
     which hardcodes its own `predecessor: "none"` line) to avoid a duplicate-key
-    frontmatter block."""
+    frontmatter block.
+
+    `edge_field` selects WHICH lineage edge the child names its parent by, and
+    the choice is load-bearing for supersede callers: a `predecessor` child is a
+    SUCCESSION child, which supersede's narrow Check-3 exemption
+    (`edge_kinds={"forked_from"}`) deliberately no longer treats as retaining,
+    while a `forked_from` child is a spinoff and still retains (DR-224 -- a
+    spinoff founds its own line, and archiving its origin would strand that
+    spinoff's origin pointer). A retention test must seed `forked_from` to
+    exercise the retain path at all."""
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -239,7 +250,7 @@ def _seed_handoff_with_predecessor(repo: Path, name: str, predecessor: str) -> P
         "created: 2026-01-01\n"
         "branch: work/test/2026-01-01\n"
         "status: open\n"
-        f'predecessor: "{predecessor}"\n'
+        f'{edge_field}: "{predecessor}"\n'
         "deployment_state: active\n"
     )
     path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
@@ -2419,7 +2430,7 @@ class TestSupersedeArchiveHandoff:
             repo, "sup3.md", "claimed", "in_flight",
             extra="scope:\n  - state/handoffs/sup3.md\n",
         )
-        _seed_handoff_with_predecessor(repo, "sup3-child.md", "sup3.md")
+        _seed_handoff_with_predecessor(repo, "sup3-child.md", "sup3.md", edge_field="forked_from")
 
         rc = arstamp.cs_supersede_archive_handoff(str(hp), "sup3-successor.md")
         assert rc == 0
@@ -2445,7 +2456,7 @@ class TestSupersedeArchiveHandoff:
             repo, "sup3b.md", "claimed", "in_flight",
             extra="scope:\n  - state/handoffs/sup3b.md\n",
         )
-        _seed_handoff_with_predecessor(repo, "sup3b-child.md", "sup3b.md")
+        _seed_handoff_with_predecessor(repo, "sup3b-child.md", "sup3b.md", edge_field="forked_from")
 
         import io
         import contextlib

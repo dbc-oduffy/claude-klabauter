@@ -364,6 +364,68 @@ def _git(
     )
 
 
+#: git's canonical empty tree — the sha `git write-tree` emits for an index
+#: holding zero entries. Load-bearing, not trivia: a MISSING `GIT_INDEX_FILE`
+#: produces it with rc=0 and empty stderr. Mirrors
+#: `coordinator_core.ops.fleet._common.EMPTY_TREE_SHA`; the two seams are
+#: independent commit paths and neither imports the other.
+EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _empty_private_index_refusal(
+    tree_sha: str,
+    *,
+    root: Union[str, Path],
+    caller: str,
+) -> Optional[GitResult]:
+    """Refuse a pathspec-less private-index commit that would commit NOTHING.
+
+    Returns None when `tree_sha` is safe to hand to `commit-tree`, or a failed
+    `GitResult` the caller returns verbatim through its existing
+    git-failure path.
+
+    WHY THIS EXISTS — the incident of 2026-08-18 (`fbfbd061d`), which committed
+    a tree of `4b825dc…` and thereby deleted all 26,264 files in the repo on a
+    shared branch that was already pushed. `git write-tree` against a MISSING
+    `GIT_INDEX_FILE` returns `EMPTY_TREE_SHA` with **exit code 0 and empty
+    stderr** (verified on git 2.55.0.windows.4); a zero-byte index fails loud
+    (rc=128) but an *absent* one fails silent, so every `.ok` check upstream is
+    blind to it by construction — the index can go missing AFTER a successful
+    `read-tree` seed.
+
+    The first guard landed on the fleet seams
+    (`fleet/_common.py :: _empty_private_index_breach`). This module's
+    `commit-tree` seams are the CEREMONY path — reached by every
+    `pickup-assemble apply` on the box, which is where claude-klabauter-7a
+    observed the collapse reproduce. Both are pathspec-less by design: the
+    private index IS the commit scope, so a lost index commits the empty tree
+    rather than committing nothing.
+
+    Deliberately trigger-independent — it does not care WHY the index went
+    missing (still open as of 2026-08-18), only that a commit is about to
+    erase the repo.
+
+    Negative spec: this does NOT relax the pathspec-less design. A
+    `-- <paths>` pathspec would make git read the WORKTREE for those paths
+    instead of the index, which is the shared-tree absorption hazard both
+    seams exist to avoid.
+    """
+    if tree_sha != EMPTY_TREE_SHA:
+        return None
+    return GitResult(
+        returncode=1,
+        stdout="",
+        stderr=(
+            "empty-private-index: git write-tree returned git's canonical "
+            "EMPTY TREE (%s), meaning the private index holds zero entries — "
+            "committing it with no pathspec would delete every tracked file "
+            "in %s. Refused by %s; nothing was committed. The index file "
+            "named by GIT_INDEX_FILE is missing or holds zero entries."
+            % (EMPTY_TREE_SHA, root, caller)
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Thin typed wrappers — one per git subcommand the wsc_tail rebuild needs.
 # Each routes through `_git()`; none constructs its own subprocess.run call.
@@ -1994,6 +2056,11 @@ def _commit_scoped_private_index(
         if not write_tree_result.ok:
             return write_tree_result
         tree_sha = write_tree_result.stdout.strip()
+        empty_tree_refusal = _empty_private_index_refusal(
+            tree_sha, root=root, caller="_commit_scoped_private_index"
+        )
+        if empty_tree_refusal is not None:
+            return empty_tree_refusal
 
         # `commit-tree` is plumbing -- it runs NO git hooks, so the
         # `prepare-commit-msg` hook that stamps Session-Id/Deliverable-Id on
@@ -2813,6 +2880,11 @@ def commit_authored_content(
         if not write_tree_result.ok:
             return write_tree_result
         tree_sha = write_tree_result.stdout.strip()
+        empty_tree_refusal = _empty_private_index_refusal(
+            tree_sha, root=root, caller="commit_authored_content"
+        )
+        if empty_tree_refusal is not None:
+            return empty_tree_refusal
 
         # Bound 2 -- trailer tier-0 resolves from the CALLER-SUPPLIED
         # `deliverable_id`, never by opening `path` on disk.

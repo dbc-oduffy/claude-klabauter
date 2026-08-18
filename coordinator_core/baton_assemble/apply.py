@@ -98,6 +98,10 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 
 # Import side-effect only: triggers each op module's register_op(...) so
 # _invoke_op_in_process's get_op_handler() lookups below resolve via a direct
@@ -1328,10 +1332,14 @@ def _execute_directives(
     repo_root: Path,
     *,
     decisions: Optional[dict[str, Any]] = None,
+    composition_budget: "Optional[apply_base.CompositionBudget]" = None,
 ) -> tuple[int, dict[str, Any]]:
     """Thin wrapper binding `apply_base.execute_directives`'s generic
     `dispatch_table` parameter to this module's own closed `_CLI_DISPATCH`,
-    and its optional `compensators` parameter to `_D1_COMPENSATORS`."""
+    and its optional `compensators` parameter to `_D1_COMPENSATORS`.
+    `composition_budget` passes straight through -- threaded in from
+    `apply()`'s own construction so the budget's lifetime is the apply
+    run's, not this wrapper's."""
     return apply_base.execute_directives(
         directives,
         judgment_points,
@@ -1339,6 +1347,7 @@ def _execute_directives(
         _CLI_DISPATCH,
         decisions=decisions,
         compensators=_D1_COMPENSATORS,
+        composition_budget=composition_budget,
     )
 
 
@@ -1604,6 +1613,8 @@ def apply(
     from coordinator_core.baton_assemble import TransportFailure, brief, resolve_repo_root
     from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
 
+    composition_budget = make_fleet_budget("baton_assemble")
+
     repo_root_was_cwd_derived = repo_root is None
     root = repo_root or resolve_repo_root()
     if root is None:
@@ -1718,9 +1729,21 @@ def apply(
         # handles a partial-mutation abort where d1 landed but a LATER
         # directive in this same run failed -- see `_compensate_d1_scaffold`'s
         # own docstring; no separate call site is needed here.
-        exit_code, report = _execute_directives(
-            directives, judgment_points, root, decisions=decisions or {}
-        )
+        outcome = "directive_failed"
+        try:
+            exit_code, report = _execute_directives(
+                directives,
+                judgment_points,
+                root,
+                decisions=decisions or {},
+                composition_budget=composition_budget,
+            )
+            if exit_code == APPLY_EXIT_OK:
+                outcome = "success"
+            elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
+                outcome = "partial_mutation"
+        finally:
+            flush_composition_record(composition_budget, outcome)
 
         # Present unconditionally, including as [] -- same reasoning as
         # `commits` below.

@@ -21,12 +21,19 @@ from __future__ import annotations
 
 import re
 
+from coordinator_core.tracker_id_grammar import ITEM_ID_BODY
+
 # Each pattern must expose exactly one capturing group yielding the item_id.
 # Ordered by specificity; first pattern to match a given value wins.
-# Row 1 (this pass): a bare "<ID>" value, e.g. "RECS-42". Future rows (PR-link
-# forms, "closes #N", multi-ID-per-value) are additive — append, don't reorder.
+# Row 1: a bare "<ID>" value, e.g. "RECS-42" (JIRA-shaped tracker ids).
+# Row 2 (this pass): a bare sovereign-tracker item.id, e.g.
+# "itm-20260818-fix-the-thing-a1b2c3-0123456789ab" (DEC-16 grammar, shared
+# with the mint path via `tracker_id_grammar.ITEM_ID_BODY` so the two cannot
+# diverge). Future rows (PR-link forms, "closes #N", multi-ID-per-value) are
+# additive — append, don't reorder.
 _TRAILER_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*-\d+)\s*$"),
+    re.compile(rf"^\s*({ITEM_ID_BODY})\s*$"),
 ]
 
 

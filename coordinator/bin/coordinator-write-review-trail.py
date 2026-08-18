@@ -23,6 +23,7 @@ Usage (unchanged from the bash facade — zero caller-contract drift):
         --verdict ok|warn|blocked|waived|pending \\
         --diff-loc <integer> \\
         --reviewer-evidence <sidecar-path|dispatch-id|justification-text> \\
+        [--attestation-dispatch-id <dispatch-id>] \\
         [--scope-kind diff|plan|integration] \\
         [--workstream <slug>]
 
@@ -32,6 +33,15 @@ Usage (unchanged from the bash facade — zero caller-contract drift):
     existing sidecar path or resolvable dispatch id for a delegate reviewer, a
     real free-text justification for ``waived``/``em-verified``. This facade
     forwards it verbatim; enforcement is op-side.
+
+    ``--attestation-dispatch-id`` (docs/plans/2026-08-18-chain-review-records-
+    and-credits-predecessors.md, chunk C2/C5) engages the reviewer-attestation
+    admission path in ``_guard_foreign_session_range``
+    (coordinator_core/ops/review_trail_write.py) for a record naming a
+    predecessor commit outside this session's own dispatch range: that
+    dispatch's own id in this session's ``dispatched-agents.txt``, whose cited
+    ``--reviewer-evidence`` sidecar must resolve within its frozen review
+    range. Forwarded verbatim; enforcement is op-side.
 
     ``--workstream`` (2026-07-27, § C4) states the workstream explicitly, taking
     precedence over ``COORDINATOR_REVIEW_WORKSTREAM`` and the op's own
@@ -299,6 +309,18 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--reviewer-evidence", dest="reviewer_evidence", default=None,
     )
+    # Names the dispatch whose own frozen review range the cited reviewer
+    # sidecar must resolve within, engaging the foreign-session admission
+    # path in `_guard_foreign_session_range`
+    # (coordinator_core/ops/review_trail_write.py). That op parameter has
+    # existed since chunk C2 of docs/plans/2026-08-18-chain-review-records-
+    # and-credits-predecessors.md; this facade had no flag for it, leaving
+    # the admission path reachable only by an in-process op call even
+    # though C5's own refusal message directs callers here. Forwarded
+    # verbatim, like --reviewer-evidence; validation stays op-side.
+    parser.add_argument(
+        "--attestation-dispatch-id", dest="attestation_dispatch_id", default=None,
+    )
     # Optional attestation of whether the review actually ran the touched
     # code or only read it — forwarded verbatim to the native op, which
     # validates against its own `_VALID_EXECUTION_BASES`
@@ -375,6 +397,8 @@ def main(argv: list[str]) -> int:
         params["reviewed_paths"] = args.reviewed_paths
     if args.reviewer_evidence is not None:
         params["reviewer_evidence"] = args.reviewer_evidence
+    if args.attestation_dispatch_id is not None:
+        params["attestation_dispatch_id"] = args.attestation_dispatch_id
     if args.execution_basis is not None:
         params["execution_basis"] = args.execution_basis
 

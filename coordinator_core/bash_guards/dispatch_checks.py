@@ -4842,6 +4842,28 @@ def _format_owner_token(fact: Optional["OwnerFact"]) -> str:
     return "orphan"
 
 
+_TESTS_FIXTURE_SEGMENT_RE = re.compile(r"(^|/)tests/fixtures/")
+_SETTINGS_JSON_RE = re.compile(r"(^|/)settings\.json$")
+
+
+def _is_live_settings_json(rel_path: str) -> bool:
+    """Is ``rel_path`` a real settings surface Check 11 (machine-path-leak)
+    should scan, as opposed to test data that merely shares the filename?
+
+    Negative spec: a ``settings.json`` under a ``tests/fixtures/`` tree is a
+    fixture, never a live settings file. ``coordinator/tests/fixtures/
+    stranded-claude/F-truncated-json/settings.json`` is deliberately malformed
+    (``coordinator/bin/tests/test_break_glass.py``), and
+    ``commit_tripwires.check_machine_path_leak``'s JSONDecodeError branch
+    reports unparseable JSON as a hard violation -- so without this exclusion,
+    merely staging that fixture hard-blocks every commit in the repo.
+    """
+    return bool(
+        _SETTINGS_JSON_RE.search(rel_path)
+        and not _TESTS_FIXTURE_SEGMENT_RE.search(rel_path)
+    )
+
+
 def check_validate_commit(
     cmd: str,
     session_id: str = "",
@@ -5470,7 +5492,13 @@ def check_validate_commit(
         warnings.append("BIN-SH-POLYGLOT-TRIPWIRE:\n%s" % bin_sh_polyglot_violation)
 
     # Check 11 (machine-path-leak) -- hard-block sink for settings.json.
-    settings_staged = [f for f in staged if re.search(r"(^|/)settings\.json$", f)]
+    # Negative spec: a settings.json under a tests/fixtures/ tree is test data,
+    # not a live settings surface. F-truncated-json/settings.json is deliberately
+    # malformed (coordinator/bin/tests/test_break_glass.py), and the checker's
+    # JSONDecodeError branch flags unparseable JSON as a hard violation -- so
+    # without this exclusion, staging that fixture hard-blocks every commit in
+    # the repo.
+    settings_staged = [f for f in staged if _is_live_settings_json(f)]
     for sf in settings_staged:
         detail = commit_tripwires.check_machine_path_leak(sf, _cwd)
         if detail:

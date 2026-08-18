@@ -83,11 +83,14 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
     _directive_gate_open,
+    budget_advisory_mid_directive,
+    budget_check_post_mutation,
+    budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
 )
 from coordinator_core.ceremony_common.json_payload_flag import (
@@ -99,7 +102,14 @@ from coordinator_core.ceremony_common.cli_rejection import (
     classify_cli_exit,
     describe_exit_class,
 )
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 from coordinator_core.workday_complete.brief import CONSUMES_MANIFEST, brief
+
+if TYPE_CHECKING:
+    from coordinator_core.composition_budget import CompositionBudget
 
 # ---------------------------------------------------------------------------
 # Exit-code contract (apply-side, 0-4) — SEPARATE from `brief.WorkdayExitCode`
@@ -312,6 +322,7 @@ def _execute_directives(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
     decisions: dict[str, Any],
+    composition_budget: "Optional[CompositionBudget]" = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -373,6 +384,17 @@ def _execute_directives(
     stdout_by_id: dict[str, str] = {}
     already_satisfied_ids: set[str] = set()
 
+    pre_mutation_breach = budget_check_pre_mutation(composition_budget)
+    if pre_mutation_breach is not None:
+        return int(WorkdayApplyExitCode.DIRECTIVE_FAILED), {
+            "landed": [],
+            "blocked": [],
+            "failed": [],
+            "degraded": [],
+            "results": [],
+            "budget_breach": pre_mutation_breach,
+        }
+
     for directive in directives:
         if directive.get("already_satisfied"):
             landed.append(directive["id"])
@@ -424,7 +446,9 @@ def _execute_directives(
                 "id": directive["id"],
                 "error": f"{type(exc).__name__}: {exc}",
             })
+            budget_advisory_mid_directive(composition_budget, directive["id"])
             continue
+        budget_advisory_mid_directive(composition_budget, directive["id"])
         if result.get("exit_code", 0) != 0:
             error = (
                 f"{directive['cli']} exited {result['exit_code']} "
@@ -463,6 +487,9 @@ def _execute_directives(
         return int(WorkdayApplyExitCode.DIRECTIVE_FAILED), report
     if blocked:
         return int(WorkdayApplyExitCode.HALTED_AT_JUDGMENT), report
+    post_mutation_breach = budget_check_post_mutation(composition_budget)
+    if post_mutation_breach is not None:
+        report["budget_breach"] = post_mutation_breach
     return int(WorkdayApplyExitCode.SUCCESS), report
 
 
@@ -492,19 +519,38 @@ def apply(
     module. They date-scope `d_step3_5_backfill_phase_b` ONLY — see
     `brief._build_directives`'s docstring for the exact args shape; every
     other directive in the recomputed envelope is unaffected.
+
+    Constructs a fresh composition budget (never module-level — see
+    `telemetry.composition_record`'s own PER-CALL FACTORY note) and flushes
+    exactly one record for it in a `finally`, regardless of outcome
+    (§ `flush_composition_record`'s own docstring).
     """
-    brief_exit_code, envelope = brief(decisions=decisions, for_date=for_date, only_mode=only_mode)
-    if brief_exit_code != 0:
-        return int(WorkdayApplyExitCode.TRANSPORT_FAIL), {
-            "error": envelope.get("error", "brief() did not resolve an actionable plan"),
-            "landed": [],
-        }
+    composition_budget = make_fleet_budget("workday_complete")
+    outcome = "directive_failed"
+    try:
+        brief_exit_code, envelope = brief(
+            decisions=decisions, for_date=for_date, only_mode=only_mode
+        )
+        if brief_exit_code != 0:
+            return int(WorkdayApplyExitCode.TRANSPORT_FAIL), {
+                "error": envelope.get("error", "brief() did not resolve an actionable plan"),
+                "landed": [],
+            }
 
-    directives = envelope.get("directives", [])
-    judgment_points = envelope.get("judgment_points", [])
-    effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
+        directives = envelope.get("directives", [])
+        judgment_points = envelope.get("judgment_points", [])
+        effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
 
-    return _execute_directives(directives, judgment_points, effective_decisions)
+        exit_code, report = _execute_directives(
+            directives, judgment_points, effective_decisions, composition_budget=composition_budget
+        )
+        if exit_code == int(WorkdayApplyExitCode.SUCCESS):
+            outcome = "success"
+        elif exit_code == int(WorkdayApplyExitCode.PARTIAL_MUTATION):
+            outcome = "partial_mutation"
+        return exit_code, report
+    finally:
+        flush_composition_record(composition_budget, outcome)
 
 
 def main(argv: list[str]) -> int:

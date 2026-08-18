@@ -185,6 +185,97 @@ def test_file_exists_false_when_absent(registered_repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# AC11 (C6) — archive fallback for path-keyed legs. A leg whose target moved
+# to archive/handoffs/ (month-nested, per handoff_archive_dest) still
+# resolves rather than manufacturing a permanent false negative; `source`
+# says which path answered. See docs/plans/2026-08-18-auto-reconcile-must-
+# fire.md § C6.
+# ---------------------------------------------------------------------------
+
+
+def test_file_exists_resolves_via_archive_when_moved(registered_repo: Path) -> None:
+    archived_dir = registered_repo / "archive" / "handoffs" / "2026-08"
+    archived_dir.mkdir(parents=True)
+    archived_file = archived_dir / "shipped.md"
+    archived_file.write_text("stub_id: sat-04\n", encoding="utf-8")
+
+    leg = {
+        "leg_id": "L1",
+        "kind": "file_exists",
+        "repo": "fixture-repo",
+        "path": "state/handoffs/shipped.md",
+    }
+    observation = resolve_leg(leg)
+    assert observation["read_ok"] is True
+    assert observation["observed"] is True
+    assert observation["error"] is None
+    # `source` names the archive path that actually answered, not the
+    # literal (now-nonexistent) path the leg named -- the only way a
+    # reader can see the fallback fired.
+    assert observation["source"] == str(archived_file)
+
+
+def test_file_exists_live_wins_over_archived_namesake(registered_repo: Path) -> None:
+    """A live file at the literal path always wins over an archived
+    same-basename file, mirroring gate_eval's live-then-archive ordering."""
+    live_dir = registered_repo / "state" / "handoffs"
+    live_dir.mkdir(parents=True)
+    (live_dir / "shipped.md").write_text("stub_id: sat-04\n", encoding="utf-8")
+    archived_dir = registered_repo / "archive" / "handoffs" / "2026-08"
+    archived_dir.mkdir(parents=True)
+    (archived_dir / "shipped.md").write_text("stub_id: stale-copy\n", encoding="utf-8")
+
+    leg = {
+        "leg_id": "L1",
+        "kind": "file_exists",
+        "repo": "fixture-repo",
+        "path": "state/handoffs/shipped.md",
+    }
+    observation = resolve_leg(leg)
+    assert observation["observed"] is True
+    assert observation["source"] == str(live_dir / "shipped.md")
+
+
+def test_file_exists_ambiguous_archive_match_is_not_guessed_at(registered_repo: Path) -> None:
+    """Two same-basename files under archive/handoffs/ is an ambiguous
+    fallback -- treated exactly like no match, never a silent pick."""
+    for month in ("2026-07", "2026-08"):
+        month_dir = registered_repo / "archive" / "handoffs" / month
+        month_dir.mkdir(parents=True)
+        (month_dir / "shipped.md").write_text("stub_id: sat-04\n", encoding="utf-8")
+
+    leg = {
+        "leg_id": "L1",
+        "kind": "file_exists",
+        "repo": "fixture-repo",
+        "path": "state/handoffs/shipped.md",
+    }
+    observation = resolve_leg(leg)
+    assert observation["read_ok"] is True
+    assert observation["observed"] is False
+
+
+def test_frontmatter_field_resolves_via_archive_when_moved(registered_repo: Path) -> None:
+    archived_dir = registered_repo / "archive" / "handoffs" / "2026-08"
+    archived_dir.mkdir(parents=True)
+    archived_file = archived_dir / "shipped.md"
+    archived_file.write_text("deployment_state: shipped\n", encoding="utf-8")
+
+    leg = {
+        "leg_id": "L1",
+        "kind": "frontmatter_field",
+        "repo": "fixture-repo",
+        "path": "state/handoffs/shipped.md",
+        "field": "deployment_state",
+    }
+    observation = resolve_leg(leg)
+    assert observation["read_ok"] is True
+    assert observation["observed"] == "shipped"
+    assert observation["error"] is None
+    assert observation["source"] == str(archived_file)
+
+
+# ---------------------------------------------------------------------------
 # (e) frontmatter_field
 # ---------------------------------------------------------------------------
 

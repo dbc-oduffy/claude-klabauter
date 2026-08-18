@@ -490,7 +490,24 @@ def test_no_legacy_fn_defined():
 
 
 def test_no_retired_transport():
-    """AC9: coordinator-lesson-add must not reference retired transport patterns."""
+    """AC9: coordinator-lesson-add must not reference retired transport patterns.
+
+    Narrowed scope, reaffirmed (2026-08-18, plan C19): these four patterns name
+    exactly what DR-315 (§3.1, §3.2, §5) confirms stays DR-215-retired even after
+    the Windows named-pipe transport (C14/C15 of
+    docs/plans/2026-08-16-one-engine-for-the-whole-box.md) lands — the UDS/HTTP
+    coordinator_core.client seam, the AF_UNIX socket primitive, the IPC auth-token
+    matrix, and a three-state router label. A named pipe is none of these: DR-315
+    §3.1 calls it "a different transport shape" than either D1 name (UDS/HTTP),
+    §5 confirms no AF_UNIX socket exists on Windows to leak, and §3.2 keeps the
+    token matrix vacated. lesson-add itself has no independent routing gate (see
+    test_no_independent_routing_gate above) and inherits transport choice
+    transitively through queue-append, so this pin does not need widening for the
+    pipe transport to stay caught if it were ever wrongly wired in here directly —
+    the bare-string check already catches any of the four retired patterns
+    appearing anywhere in this CLI's source, by name, regardless of shape.
+    Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C19.
+    """
     source = _source()
     for pattern in ("coordinator_core.client", "AF_UNIX", "auth_token", "three-state"):
         assert pattern not in source, (

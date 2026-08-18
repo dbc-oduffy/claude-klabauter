@@ -212,7 +212,10 @@ def test_dispatch_emit_propagates_an_unwritable_output_path(tmp_path):
     unwritable_output = tmp_path / "a-directory"
     unwritable_output.mkdir()
 
-    with pytest.raises(IsADirectoryError):
+    # POSIX raises IsADirectoryError for this; Windows raises PermissionError
+    # (WinError 5) for the same condition. Both are OSError subclasses and both
+    # are the "the write itself failed" leg this test exercises.
+    with pytest.raises((IsADirectoryError, PermissionError)):
         _dispatch_emit(
             {
                 "plan_path": str(plan_path),

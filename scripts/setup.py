@@ -2239,6 +2239,85 @@ def register_claude_klabauter_root(
     return claude_klabauter_root_resolved
 
 
+def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
+    """Install-time warm-engine opt-in, written to `engine.warm.enabled` in
+    the machine-local TOML registry — the same registry `register_claude_klabauter_root`
+    writes `engine.working_repos.*`/`repos.*` into, under a namespace
+    `coordinator_core.warm.settings.is_warm_enabled` (this chunk's other
+    file) resolves at read time.
+
+    DEFAULT ON (PM ruling 2026-08-15, overriding this chunk's first draft,
+    which had it off). `--i-am-agent` and every other non-interactive path
+    through this installer take the ON branch WITHOUT prompting — the same
+    `args.agent_mode` signal `run_health_probe`/`install_precommit_hook`
+    already gate their own prompts on — because a non-interactive install
+    must never block on a question. An interactive run prompts, framed in
+    the operator's terms (heavy agentic engineering vs. occasional use),
+    never in milliseconds, and defaults to ON on bare Enter/EOF.
+
+    Do not re-derive an off default from a safety argument: the safety is
+    carried by three things that already exist elsewhere in this plan, not
+    by this prompt's default. Nothing starts on device boot (SessionStart-
+    triggered), an idle server self-terminates after 15 minutes
+    (`coordinator_core.warm.idle`), and `COORDINATOR_WARM=0` always wins
+    over this registry key at read time (`is_warm_enabled`'s own
+    precedence). Those three are the safety argument.
+
+    Registry write is best-effort, mirroring `register_claude_klabauter_root`'s
+    graceful-degrade shape: machine-local absent means coordinator-claude
+    is not installed, which is `check_coordinator_claude_dep`'s failure to
+    surface, not this optional feature's — an advisory is printed and the
+    install proceeds. `is_warm_enabled` already defaults to off with no
+    registry key present, so a skipped write here fails safe."""
+    from coordinator_core.install._shared import resolve_machine_local_cli
+
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    plugin_root_str = str(plugin_root) if plugin_root else None
+
+    if args.agent_mode:
+        want_warm = True
+    else:
+        print()
+        print("--- Warm engine ---")
+        print("A warm engine keeps a resident process ready between agent sessions so tool")
+        print("calls don't each pay a fresh startup. Recommended ON for a machine doing heavy")
+        print("agentic engineering (many concurrent sessions); OFF for occasional use. Nothing")
+        print("starts until a session begins, and an idle server shuts itself down after 15")
+        print("minutes with no invocation.")
+        try:
+            answer = input("  Run a warm engine on this machine? [Y/n]: ")
+        except EOFError:
+            answer = ""
+        want_warm = answer.strip().lower() not in ("n", "no")
+
+    machine_local_argv = resolve_machine_local_cli(plugin_root_str)
+    if machine_local_argv is None:
+        print()
+        print("[ADVISORY] machine-local not found — coordinator-claude absent.")
+        print(f"  engine.warm.enabled registration skipped (recommended: {str(want_warm).lower()}).")
+        print("  When coordinator-claude is installed, register with:")
+        print(f"    machine-local set engine.warm.enabled {str(want_warm).lower()}")
+        return
+
+    value = "true" if want_warm else "false"
+    try:
+        proc = subprocess.run(
+            machine_local_argv + ["set", "engine.warm.enabled", value],
+            timeout=15,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[ADVISORY] 'machine-local set engine.warm.enabled' failed to launch: {exc}", file=sys.stderr)
+        print(f"  Remediation: run manually: machine-local set engine.warm.enabled {value}", file=sys.stderr)
+        return
+    if proc.returncode != 0:
+        print(f"[ADVISORY] 'machine-local set engine.warm.enabled' failed.", file=sys.stderr)
+        print(f"  Remediation: run manually: machine-local set engine.warm.enabled {value}", file=sys.stderr)
+        return
+    print(f"PASS [registration] engine.warm.enabled = {value}")
+
+
 def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, engine_py: str, import_names: list[str]) -> None:
     """Verification — coordinator_core importable from CLAUDE_KLABAUTER_ROOT.
 
@@ -2585,8 +2664,11 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     # downgrades to an ADVISORY like every other failure branch in this
     # function, instead of propagating and aborting the rest of setup.
     try:
+        substrate_argv = [engine_py, "-m", "coordinator_core.install.substrate", "--setup-only"]
+        if args.allow_venv_fallback:
+            substrate_argv.append("--allow-venv-fallback")
         proc = subprocess.run(
-            [engine_py, "-m", "coordinator_core.install.substrate", "--setup-only"],
+            substrate_argv,
             cwd=str(claude_klabauter_root_resolved),
             env=env,
             capture_output=True, text=True,
@@ -2818,6 +2900,53 @@ def provision_whoami_under_general_pin(
         print(
             "[ADVISORY] coordinator_whoami provisioning under the coordinator.python pin "
             f"failed unexpectedly ({type(exc).__name__}: {exc}).",
+            file=sys.stderr,
+        )
+
+
+def migrate_whoami_pin_off_venv(repo_root: Path, args: Args) -> None:
+    """Advisory install-chain step: fires the one-time `coordinator.whoami_python`
+    repoint leg on boxes whose pin still names the retired `.coordinator-venv`.
+
+    NAMED MECHANISM (AC1 of docs/plans/2026-08-18-retire-coordinator-venv.md):
+    `coordinator_core.install.migrations.whoami_pin_migration` is written to be
+    idempotent and refusal-safe, but a migration no call site invokes never runs
+    anywhere — it repoints exactly the box its author happened to run it on, by
+    hand, which is the "no hand-edit instruction to operators" clause AC1 rules
+    out. This is that call site.
+
+    Ordering: invoked AFTER `provision_whoami_under_general_pin`, deliberately.
+    The migration REFUSES to repoint onto an interpreter that cannot import
+    `coordinator_whoami` (never repoint blind), so the provisioning step that
+    makes it importable has to have run first; inverting the two turns a healthy
+    box into a refusal on first install.
+
+    Advisory and never fatal, matching the step it sits beside: a box that cannot
+    be migrated keeps its old pin and says so, rather than failing the install.
+    """
+    if args.register_only:
+        return
+    try:
+        from coordinator_core.install._shared import resolve_machine_local_cli
+        from coordinator_core.install.migrations.whoami_pin_migration import (
+            migrate_whoami_pin,
+        )
+
+        coord_path, coord_source = _resolve_coordinator_claude_root(repo_root, args)
+        if coord_source.is_publish_mirror_rejected:
+            print(
+                "[ADVISORY] coordinator-claude root resolved to a publish mirror — "
+                "skipping the coordinator.whoami_python migration.",
+                file=sys.stderr,
+            )
+            return
+        plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+        ml_cli = resolve_machine_local_cli(str(plugin_root) if plugin_root else None)
+        migrate_whoami_pin(ml_cli)
+    except Exception as exc:  # noqa: BLE001 — advisory surface, never fatal
+        print(
+            "[ADVISORY] the coordinator.whoami_python migration failed unexpectedly "
+            f"({type(exc).__name__}: {exc}); the pin is left as it was.",
             file=sys.stderr,
         )
 
@@ -3408,6 +3537,7 @@ def main(argv: list[str]) -> int:
             check_coordinator_claude_dep(repo_root, args)
 
     claude_klabauter_root_resolved = register_claude_klabauter_root(claude_klabauter_root_resolved, claude_klabauter_root_source, repo_root, args)
+    offer_warm_opt_in(repo_root, args)
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
     check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
@@ -3415,6 +3545,7 @@ def main(argv: list[str]) -> int:
     if not args.register_only:
         install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         provision_whoami_under_general_pin(repo_root, engine_py, claude_klabauter_root_resolved, args)
+        migrate_whoami_pin_off_venv(repo_root, args)
         install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)

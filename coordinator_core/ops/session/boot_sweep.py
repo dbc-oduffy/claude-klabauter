@@ -127,6 +127,23 @@ The sweeps, in order:
      that could over-count a colliding candidate — the collision check
      gating actual archival in `_handle_act` is the only enforcement point
      and it always runs before any candidate is archived.
+  10. Handoff-reconcile cadence backstop (C5, AC10, docs/plans/2026-08-18-
+      auto-reconcile-must-fire.md) — `handoff.reconcile_open`'s only prior
+      invoker was DoE's `coordinator/bin/check-auto-reconcile.py`, a
+      `/workday-start` probe: at most daily, only when a human runs the
+      ceremony, and a NUDGE rather than an actuator. This bullet is the
+      actuator this repo owns: every session boot considers firing
+      `handoff.reconcile_open` in-process, throttled to at-most-once-per-
+      `_RECONCILE_CADENCE_WINDOW_SECONDS` by `_claim_reconcile_cadence_slot`
+      so N concurrent boots across 50-70 sessions do not each fire a
+      corpus-wide gate-cascade sweep. `handoff.reconcile_open` serialises
+      its own writes per-handoff via `locked_rmw`, so this sweep does not
+      need to mutually exclude overlapping runs — see that function's own
+      docstring for why a still-running previous pass is safe to overlap.
+      Degrade-safe like sweeps 6/7/9: any exception folds into `warnings[]`
+      rather than failing the composite boot sweep.
+      `check-auto-reconcile.py` is UNTOUCHED — this adds a trigger, it does
+      not move or replace DoE's probe.
 
 session.reap (Class-B untracked .git/ substrate, 12h cadence) is invoked
 SEPARATELY by session-init.sh — NOT part of this sweep.
@@ -190,6 +207,8 @@ import sys
 
 import asyncio
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -236,6 +255,7 @@ from coordinator_core.ops.fleet.archive_handoffs import (
 )
 from coordinator_core.ops.fleet._common import (
     _REASON_DEST_CONFLICT,
+    _TERMINAL_DEPLOYMENT_STATES,
     _is_identical_duplicate,
 )
 from coordinator_core.ops.fleet.archive_plans import (
@@ -257,6 +277,8 @@ from coordinator_core.ops.fleet.reap_unintegrated_findings import (
 from coordinator_core.ops.handoff_archive_transition import (
     _handler as _archive_transition_handler,
 )
+from coordinator_core.ops.handoff_archive_transition import _handler as _archive_transition_handler
+from coordinator_core.ops.handoff_reconcile import _handler as _reconcile_open_handler
 from coordinator_core.ops.priority_drain import drain as _drain_priority_intents
 from coordinator_core.ops.tracker.fold_observed_set import run_fold_observed_set
 from coordinator_core.session import core as session_core
@@ -280,6 +302,168 @@ _CONSUMED_AT_RECENCY_FLOOR_SECONDS: int = 30 * 60
 # accumulation count machine-visible per sweep (plan C1 AC1). Supersedes the
 # deleted in_flight→abandoned flip; see module docstring bullet (b).
 _AWAITING_ADJUDICATION_REASON: str = "awaiting-adjudication-dr084"
+
+# C5 (docs/plans/2026-08-18-auto-reconcile-must-fire.md AC10): the cadence
+# marker gating handoff.reconcile_open's boot-time invocation, below.
+#
+# handoff.reconcile_open's own writes are already serialised per-handoff via
+# locked_rmw (see that module), so two overlapping passes never corrupt a
+# handoff — this marker exists ONLY to bound how often the corpus-wide sweep
+# fires under 50-70 concurrent session boots, not to mutually exclude runs.
+# A slow/still-running previous pass is therefore safe to still be in flight
+# when the next boot considers firing again; the marker's job is to make that
+# the RARE case rather than the every-boot case.
+#
+# Filename lives inside the git COMMON DIR (never state/ or any tracked
+# path) — mirrors coordinator_core.session.day_branch_cut_lock and
+# coordinator_core.hooks.auto_push's pending-record placement: untracked,
+# per-worktree, no commit/guard surface to reason about.
+_RECONCILE_CADENCE_MARKER_NAME = "coordinator-reconcile-open-cadence.marker"
+
+# At-most-once-per-15-minutes across all concurrent boots on one worktree.
+# Sized against the machine load norm (project CLAUDE.md § Load norm,
+# 50-70 concurrent LLM sessions): frequent enough that a shipped blocker
+# clears within one coffee break of landing, generous enough that a corpus-
+# wide gate-cascade scan is not re-run on every one of dozens of boots in
+# that same window.
+_RECONCILE_CADENCE_WINDOW_SECONDS: float = 15 * 60.0
+
+
+# ----------------------------------------------------------------------
+# C7 — the archival sweep that `stamp_only` always promised and nobody built
+# ----------------------------------------------------------------------
+_SHIPPED_UNARCHIVED_PER_PASS_CAP = 25
+
+
+async def _archive_shipped_unarchived(
+    common_dir: Path, worktree: Path, warnings: List[dict]
+) -> dict:
+    """Archive handoffs left `deployment_state: shipped` in `state/handoffs/`.
+
+    `handoff.archive_transition` mode `stamp_only` stamps a handoff shipped and
+    deliberately does NOT move it, deferring the move to "a later async
+    archival sweep" (see that module's mode table). That sweep was never built,
+    so every `stamp_only` ship — and every ship the live-children guard retained
+    — left a shipped record sitting in the live corpus indefinitely. This is it.
+
+    `stamp_only` is NOT modified to archive inline, and must not be: it is also
+    the mode `coordinator/bin/handoff-archive-transition.py` falls back to when
+    the guard reports has-children or indeterminate, so making it move would
+    archive exactly the batons the guard just refused to archive. The deferral
+    was never the defect — the missing owner was.
+
+    Mode `chain` is reused rather than adding a fifth mode: it already means
+    "this candidate is terminal on disk, move it," stamps nothing, and reaches
+    the same terminal-state precondition and git-mv block. The live-children
+    guard is unconditional across every mode, so a baton whose children are
+    still live is retained here exactly as it was at ship time, and simply
+    reconsidered on the next pass.
+
+    Bounded per pass (`_SHIPPED_UNARCHIVED_PER_PASS_CAP`): this runs on the
+    session-boot path under the machine load norm, and a first pass over a
+    corpus with a long archival backlog would otherwise git-mv the entire
+    backlog in one boot. The remainder is picked up by the next cadence window,
+    and the count left behind is reported rather than silently dropped.
+
+    Spec backlink: docs/plans/2026-08-18-auto-reconcile-must-fire.md § C7
+    """
+    live_root = worktree / "state" / "handoffs"
+    if not live_root.is_dir():
+        return {"archived": [], "retained": [], "failed": [], "remaining": 0}
+
+    candidates: List[Path] = []
+    for entry in sorted(live_root.glob("*.md")):
+        try:
+            state = read_fm_field(entry.read_text(encoding="utf-8", errors="replace"), "deployment_state")
+        except OSError:
+            continue
+        if (state or "").strip().strip("\"'") == "shipped":
+            candidates.append(entry)
+
+    remaining = max(0, len(candidates) - _SHIPPED_UNARCHIVED_PER_PASS_CAP)
+    archived: List[str] = []
+    retained: List[str] = []
+    failed: List[dict] = []
+
+    for entry in candidates[:_SHIPPED_UNARCHIVED_PER_PASS_CAP]:
+        try:
+            res = await _archive_transition_handler(
+                {"handoff_path": str(entry), "mode": "chain"}, common_dir
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention
+            failed.append({"handoff": rel_id(entry, worktree), "reason": str(exc)})
+            continue
+        if res.get("moved"):
+            archived.append(rel_id(entry, worktree))
+        elif res.get("retained"):
+            retained.append(rel_id(entry, worktree))
+        else:
+            failed.append(
+                {"handoff": rel_id(entry, worktree), "reason": res.get("error") or res.get("message")}
+            )
+
+    if failed:
+        warnings.append(
+            {"scope": "shipped_unarchived", "reason": f"{len(failed)} handoff(s) failed to archive"}
+        )
+    return {
+        "archived": archived,
+        "retained": retained,
+        "failed": failed,
+        "remaining": remaining,
+    }
+
+
+def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None) -> bool:
+    """Return True iff THIS boot is the one that fires handoff.reconcile_open.
+
+    Age-based, not identity-based: unlike day_branch_cut_lock's mutex (which
+    must never let two sessions win at once), overlap here is tolerated by
+    design — see the constant block above. `O_CREAT | O_EXCL` still resolves
+    the common "N boots wake up at once" race to exactly one winner on the
+    file's FIRST creation; once the marker exists, eligibility is decided by
+    its age alone (mtime older than the window → due; touch it and fire).
+
+    A benign multi-winner race at the age boundary (two peers both read an
+    expired mtime before either touches it) is accepted, not engineered
+    away — both firing once in the same instant is exactly the "safe to
+    still be running" case the module docstring above names, and closing
+    that race would require the same holder/PID machinery this docstring
+    explicitly says this marker does not need.
+
+    Any I/O failure (unreadable/unwritable common dir) degrades to False —
+    skip this boot's fire rather than risk a thundering-herd re-fire loop
+    or a raised exception on the session-boot path.
+    """
+    now = time.time() if now is None else now
+    marker = common_dir / _RECONCILE_CADENCE_MARKER_NAME
+
+    try:
+        fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        pass
+    except OSError:
+        return False
+    else:
+        try:
+            os.write(fd, str(now).encode("utf-8"))
+        finally:
+            os.close(fd)
+        return True
+
+    try:
+        age = now - marker.stat().st_mtime
+    except OSError:
+        return False
+
+    if age < _RECONCILE_CADENCE_WINDOW_SECONDS:
+        return False
+
+    try:
+        os.utime(str(marker), (now, now))
+    except OSError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1655,6 +1839,36 @@ async def _sweep_consumed_handoffs(
             heir_kind, heir_detail = await _classify_heir_children(handoff_path, dag_index)
             if heir_kind != "heir":
                 continue
+            deployment_state = (meta.get("deployment_state") or "").strip().lower()
+            if deployment_state in _TERMINAL_DEPLOYMENT_STATES and not (
+                deployment_state == "shipped" and not meta.get("shipped_in")
+            ):
+                # Branch-B-first (archive_handoffs._is_terminal): a candidate whose
+                # deployment_state is already terminal qualifies via Branch B and
+                # NEVER reaches the heir branch, so H4 is not what retained it —
+                # Check 3 (live successor) is. Reporting it under the H4 note
+                # misattributes the gate AND, via "retained for reaper", promises an
+                # actor that will never take it: reap-orphaned-in-flight-handoffs.py
+                # stamps shipped_in only for a dead-holder orphan that provably
+                # shipped and skips every other disposition by design (2026-07-20
+                # ruling against automated `abandoned`). The clearing actor is the
+                # CASCADE (module docstring "CASCADE archival"): once the successor
+                # leaves in_flight for any terminal deployment_state it stops
+                # counting as a live child (archival.reverse_membership), and the
+                # next boot sweep archives this record through Branch B with no
+                # shipped_in required. Cross-repo memo 2026-08-18 example-retrieval-repo-em
+                # "consumed handoff archive retained for absent reaper".
+                heir_retained_skipped.append({
+                    "id": cid,
+                    "reason": (
+                        f"deployment_state={deployment_state}; succeeded by "
+                        f"{heir_detail} — retained by the live-successor check, "
+                        "not by ship evidence; archives by cascade on the first "
+                        "boot sweep after the successor reaches a terminal "
+                        "deployment_state"
+                    ),
+                })
+                continue
             shipped_in = meta.get("shipped_in")
             resolvable = bool(shipped_in) and await _shipped_in_resolvable(
                 state_worktree, str(shipped_in)
@@ -2017,6 +2231,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         tracker store (opt-in-by-existence gate — see module docstring
         bullet 7). A fold failure never contributes to exit_code:2 — it
         degrades to a top-level warning instead (see below).
+      reconcile_cadence (C5, AC10) — {"ran": bool, "reason": str,
+        "result": dict | None}. "ran": False + reason "within cadence
+        window" when `_claim_reconcile_cadence_slot` declines (a peer boot
+        already fired handoff.reconcile_open inside the current window).
+        "ran": True carries handoff.reconcile_open's own exit_code and the
+        reconciled/gates_cleared/surfaced/conservation_violations counts
+        under "result" — see module docstring bullet 10. A call failure
+        never contributes to exit_code:2 — it degrades to a top-level
+        warning instead, mirroring observed_set_fold immediately above.
       warnings — top-level list of structured scan-failure notices that degraded
         safe rather than failing the sweep (e.g. an unreadable handoffs subtree
         made the consumed-handoffs dag_index scan incomplete, or an
@@ -2227,6 +2450,69 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # own — see module docstring bullet 8.
     drain_pending_push(str(worktree))
 
+    # --- Sweep 10: handoff-reconcile cadence backstop (C5, AC10,
+    # docs/plans/2026-08-18-auto-reconcile-must-fire.md) ---
+    # This is the trigger the plan's Problem section found missing: before
+    # this sweep, handoff.reconcile_open's only invoker was DoE's
+    # coordinator/bin/check-auto-reconcile.py, a /workday-start probe (at
+    # most daily, human-run). Every session boot now considers firing it
+    # again, throttled to _RECONCILE_CADENCE_WINDOW_SECONDS by
+    # _claim_reconcile_cadence_slot above so N concurrent boots in the same
+    # window fire the corpus-wide sweep once, not N times.
+    #
+    # Own worktree/common_dir ONLY, exactly like sweeps 7/8 above — open
+    # handoffs and their blocked_by graph are GIT_ROOT-scoped, never
+    # state_worktree (mirrors those sweeps' own worktree-only rationale,
+    # not the two-repo handoff-archival families' STATE-repo routing).
+    #
+    # Degrade-safe: any exception is caught and folded into warnings[],
+    # never raised out of this composite boot sweep — mirrors sweeps 6/7's
+    # own try/except convention immediately above. check-auto-reconcile.py
+    # is untouched by this sweep; it keeps its own independent invocation.
+    reconcile_cadence_warnings: List[dict] = []
+    if _claim_reconcile_cadence_slot(common_dir):
+        try:
+            reconcile_open_result = await _reconcile_open_handler({}, common_dir)
+        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
+            _LOG.warning("session.boot_sweep: reconcile-open cadence sweep errored: %s", exc)
+            reconcile_cadence_warnings.append(
+                {"scope": "reconcile_cadence", "reason": f"handoff.reconcile_open call errored: {exc}"}
+            )
+            reconcile_cadence_result = {"ran": True, "reason": "error", "result": None}
+        else:
+            reconcile_cadence_result = {
+                "ran": True,
+                "reason": "cadence window elapsed",
+                "result": {
+                    "exit_code": reconcile_open_result.get("exit_code"),
+                    "reconciled": len(reconcile_open_result.get("reconciled") or []),
+                    "gates_cleared": len(reconcile_open_result.get("gates_cleared") or []),
+                    "surfaced": len(reconcile_open_result.get("surfaced") or []),
+                    "conservation_violations": len(
+                        reconcile_open_result.get("conservation_violations") or []
+                    ),
+                },
+            }
+
+        # C7: same cadence slot archives whatever is sitting shipped-but-live.
+        # Runs whether or not the reconcile call above errored — a shipped
+        # record stranded in state/handoffs/ is independent of that pass.
+        try:
+            reconcile_cadence_result["shipped_unarchived"] = await _archive_shipped_unarchived(
+                common_dir, worktree, reconcile_cadence_warnings
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
+            _LOG.warning("session.boot_sweep: shipped-unarchived sweep errored: %s", exc)
+            reconcile_cadence_warnings.append(
+                {"scope": "shipped_unarchived", "reason": f"archival sweep errored: {exc}"}
+            )
+    else:
+        reconcile_cadence_result = {
+            "ran": False,
+            "reason": "within cadence window",
+            "result": None,
+        }
+
     # index-resync-residue warnings (2026-08-02 fix): fold in ANY family whose
     # archive_and_commit/rm_and_commit call landed the commit but exhausted
     # its main-index resync retry budget — see _index_resync_warnings for the
@@ -2247,7 +2533,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         memos_archived, memos_skipped, memos_failed,
         unintegrated_reaped, unintegrated_skipped, unintegrated_failed,
         consumed_warnings + shipped_warnings + priority_intent_warnings
-        + observed_set_fold_warnings + index_resync_warnings,
+        + observed_set_fold_warnings + index_resync_warnings
+        + reconcile_cadence_warnings,
         priority_drained=priority_drained,
         priority_rejected=priority_rejected,
         priority_failed=priority_failed,
@@ -2256,4 +2543,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         sizings_failed=sizings_failed,
     )
     result["observed_set_fold"] = observed_set_fold_result
+    result["reconcile_cadence"] = reconcile_cadence_result
     return result

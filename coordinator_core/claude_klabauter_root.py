@@ -423,10 +423,13 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
          (published-engine branches) can never fire — skip straight to the
          shim's own live-tree resolution (`_resolve_claude_klabauter_root`, which
          itself reads the `.claude-klabauter-root` pointer as ITS OWN rung 2) rather
-         than paying for the full `_is_engine_working_repo` session-root
-         walk the gate would otherwise do first. THIS branch is where Rung
-         1.5's `.claude-klabauter-root` pointer fast path now lives — checked here,
-         ahead of the full gate walk (`_is_engine_working_repo`), so the
+         than paying for the full `_is_claude_klabauter_source_tree` session-root
+         walk the gate would otherwise do first (2026-08-18, C4: this
+         replaced the retired per-repo `_is_engine_working_repo` gate with
+         a structural session-root-vs-live-root comparison; the short-circuit
+         here is unaffected either way — it still skips the walk entirely).
+         THIS branch is where Rung 1.5's `.claude-klabauter-root` pointer fast path
+         now lives — checked here, ahead of the full gate walk, so the
          single-tree box (no klabauter registered) keeps today's
          byte-identical zero-subprocess fast path (AC4). Note this still
          pays one `_load_shim()`/`exec_module` cost (the unconditional

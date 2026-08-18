@@ -488,7 +488,10 @@ def _make_published_engine_fixture(root: Path) -> None:
     (root / "coordinator_core").mkdir(parents=True)
 
 
-def test_live_tree_wins_when_session_is_working_repo(tmp_path: Path, monkeypatch):
+def test_live_tree_wins_when_session_is_the_source_tree(tmp_path: Path, monkeypatch):
+    """2026-08-18 (C4): the discriminant is now structural — the session's
+    OWN root must equal ``_resolve_claude_klabauter_root``'s resolved value, not
+    membership in a registered ``engine.working_repos.*`` set (retired)."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -498,24 +501,27 @@ def test_live_tree_wins_when_session_is_working_repo(tmp_path: Path, monkeypatch
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
 
-    session_root = tmp_path / "session-repo"
-    session_root.mkdir()
-
     (ml_dir / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = \'{published_root}\'\n'
-        f'"engine.working_repos.claude_klabauter" = \'{session_root}\'\n',
-        encoding="utf-8",
+        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
     )
 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_root))
+    # The session's own root IS the resolved live tree.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(live_root))
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
     assert root == str(live_root)
     assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
 
 
-def test_published_wins_when_gate_returns_false(tmp_path: Path, monkeypatch):
+def test_published_wins_when_session_is_not_the_source_tree(tmp_path: Path, monkeypatch):
+    """2026-08-18 (C4): a session whose OWN root differs from the resolved
+    live tree diverts to the published engine — no ``engine.working_repos.*``
+    entry can rescue it any more (that key is a pure locator elsewhere now,
+    not this gate's input). ``engine.target`` must ALSO be readable (AC20,
+    ruling correction) — written here so this test isolates the structural
+    discriminant specifically; the absent-target case has its own test
+    above (``test_absent_engine_target_does_not_divert_even_when_session_confirmed_different``)."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -525,14 +531,12 @@ def test_published_wins_when_gate_returns_false(tmp_path: Path, monkeypatch):
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
 
-    other_working_repo = tmp_path / "other-working-repo"
-    other_working_repo.mkdir()
     session_root = tmp_path / "session-repo"
     session_root.mkdir()
 
     (ml_dir / "registry.local.toml").write_text(
         f'"repos.claude_klabauter" = \'{published_root}\'\n'
-        f'"engine.working_repos.doe_claude" = \'{other_working_repo}\'\n',
+        '"engine.target" = \'candidate\'\n',
         encoding="utf-8",
     )
 
@@ -547,7 +551,9 @@ def test_published_wins_when_gate_returns_false(tmp_path: Path, monkeypatch):
     assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
-def test_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
+def test_structural_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
+    """`engine.target` IS written here -- isolates the structural gate's
+    OWN undeterminable case from the separate absent-target case below."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -558,16 +564,57 @@ def test_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
     _make_published_engine_fixture(published_root)
 
     (ml_dir / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+        f'"repos.claude_klabauter" = \'{published_root}\'\n'
+        '"engine.target" = \'candidate\'\n',
+        encoding="utf-8",
     )
+
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    # No determinable session root (no CLAUDE_PROJECT_DIR, and cwd has no
+    # `.git` in its ancestry) -> the structural gate is undeterminable
+    # (None), which MUST NOT divert away from an otherwise-resolvable live
+    # tree, regardless of engine.target being readable.
+    no_git_cwd = tmp_path / "no-git-cwd"
+    no_git_cwd.mkdir()
+    monkeypatch.chdir(no_git_cwd)
+
+    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert root == str(live_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+
+
+def test_absent_engine_target_does_not_divert_even_when_session_confirmed_different(
+    tmp_path: Path, monkeypatch
+):
+    """AC20 (ruling correction, 2026-08-18): a box with `repos.claude_klabauter`
+    registered but `engine.target` never written -- every machine installed
+    before C8 -- MUST NOT divert, even when the structural gate is a
+    CONFIRMED `False` (a session that is definitely not the live tree).
+    Absence means "not yet rolled out", never a silent opt-in."""
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    live_root = tmp_path / "live-claude-klabauter"
+    _make_claude_klabauter_fixture(live_root)
+    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+
+    published_root = tmp_path / "published-klabauter"
+    _make_published_engine_fixture(published_root)
+
     session_root = tmp_path / "session-repo"
     session_root.mkdir()
+
+    # No "engine.target" key anywhere -- the pre-C8 / not-yet-rolled-out state.
+    (ml_dir / "registry.local.toml").write_text(
+        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+    )
 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_root))
 
-    # No engine.working_repos.* registered at all -> the gate is
-    # undeterminable (None), which MUST NOT divert away from the live tree.
+    assert resolve_claude_klabauter.resolve_engine_target(ml_dir) is None
+    assert resolve_claude_klabauter._is_claude_klabauter_source_tree(ml_dir) is False
+
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
     assert root == str(live_root)
     assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
@@ -613,31 +660,6 @@ def test_klabauter_only_resolves_published_engine(tmp_path: Path, monkeypatch):
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
     assert root == str(published_root)
     assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
-
-
-def test_working_repo_union_across_both_registry_files(tmp_path: Path, monkeypatch):
-    ml_dir = tmp_path / "machine-local"
-    ml_dir.mkdir()
-
-    repo_in_tracked = tmp_path / "repo-in-tracked"
-    repo_in_tracked.mkdir()
-    repo_in_local = tmp_path / "repo-in-local"
-    repo_in_local.mkdir()
-
-    (ml_dir / "registry.toml").write_text(
-        f'"engine.working_repos.doe_claude" = \'{repo_in_tracked}\'\n', encoding="utf-8"
-    )
-    (ml_dir / "registry.local.toml").write_text(
-        f'"engine.working_repos.claude_klabauter" = \'{repo_in_local}\'\n', encoding="utf-8"
-    )
-
-    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
-
-    # A working repo registered in registry.toml ONLY and one registered in
-    # registry.local.toml ONLY must BOTH be recognised -- union, not
-    # first-hit-wins.
-    roots = resolve_claude_klabauter._engine_working_repo_roots(ml_dir)
-    assert set(roots) == {str(repo_in_tracked), str(repo_in_local)}
 
 
 def test_installed_settings_home_shim_importable_standalone_via_subprocess(tmp_path: Path):

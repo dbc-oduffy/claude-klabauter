@@ -82,6 +82,7 @@ from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.fleet.reap_unintegrated_findings import (
     _AGE_THRESHOLD_DAYS,
 )
+from coordinator_core.ops.session import boot_sweep
 from coordinator_core.ops.session.boot_sweep import _append_warn_marker, _handler
 
 # Positive floor assertion: session.boot_sweep must be registered before any test runs.
@@ -2843,3 +2844,188 @@ def test_observed_set_fold_failure_is_degrade_safe(boot_repo, monkeypatch):
     assert any(
         w.get("scope") == "observed_set_fold" for w in result["warnings"]
     ), f"expected an observed_set_fold-scoped warning; got {result['warnings']!r}"
+
+
+# ---------------------------------------------------------------------------
+# (k) Reconcile-cadence backstop (C5, AC10,
+#     docs/plans/2026-08-18-auto-reconcile-must-fire.md) — the boot-time
+#     invoker of handoff.reconcile_open and its at-most-once-per-window gate.
+# ---------------------------------------------------------------------------
+
+_RECONCILE_OPEN_PATCH = "coordinator_core.ops.session.boot_sweep._reconcile_open_handler"
+
+
+def test_reconcile_cadence_fires_on_first_boot(boot_repo):
+    """First boot on a fresh worktree claims the slot and invokes
+    handoff.reconcile_open — the AC10 invoker, not just a marker."""
+    stub_result = {
+        "reconciled": [], "gates_cleared": [], "surfaced": [],
+        "conservation_violations": [], "exit_code": 0,
+    }
+    with patch(_RECONCILE_OPEN_PATCH, new_callable=AsyncMock, return_value=stub_result) as mocked:
+        result = _run(_handler({}, repo_root=boot_repo.common_dir))
+
+    mocked.assert_awaited_once()
+    called_args, _ = mocked.call_args
+    assert called_args[1] == boot_repo.common_dir, (
+        "handoff.reconcile_open must be invoked with this worktree's common_dir"
+    )
+    assert result["reconcile_cadence"]["ran"] is True
+    assert result["reconcile_cadence"]["result"]["exit_code"] == 0
+    marker = boot_repo.common_dir / "coordinator-reconcile-open-cadence.marker"
+    assert marker.exists(), "cadence marker must be written after the first fire"
+
+
+def test_reconcile_cadence_declines_within_window(boot_repo):
+    """A second boot inside the cadence window does not re-invoke
+    handoff.reconcile_open — the N-concurrent-boots-fire-once guard."""
+    stub_result = {
+        "reconciled": [], "gates_cleared": [], "surfaced": [],
+        "conservation_violations": [], "exit_code": 0,
+    }
+    with patch(_RECONCILE_OPEN_PATCH, new_callable=AsyncMock, return_value=stub_result) as mocked:
+        _run(_handler({}, repo_root=boot_repo.common_dir))
+        result = _run(_handler({}, repo_root=boot_repo.common_dir))
+
+    mocked.assert_awaited_once()  # only the first boot's call landed
+    assert result["reconcile_cadence"] == {
+        "ran": False, "reason": "within cadence window", "result": None,
+    }
+
+
+def test_reconcile_cadence_fires_again_after_window_elapses(boot_repo):
+    """Once the marker ages past the window, the next boot re-fires."""
+    from coordinator_core.ops.session.boot_sweep import (
+        _RECONCILE_CADENCE_MARKER_NAME,
+        _RECONCILE_CADENCE_WINDOW_SECONDS,
+    )
+
+    stub_result = {
+        "reconciled": [], "gates_cleared": [], "surfaced": [],
+        "conservation_violations": [], "exit_code": 0,
+    }
+    with patch(_RECONCILE_OPEN_PATCH, new_callable=AsyncMock, return_value=stub_result) as mocked:
+        _run(_handler({}, repo_root=boot_repo.common_dir))
+
+        marker = boot_repo.common_dir / _RECONCILE_CADENCE_MARKER_NAME
+        aged = marker.stat().st_mtime - _RECONCILE_CADENCE_WINDOW_SECONDS - 1
+        os.utime(str(marker), (aged, aged))
+
+        result = _run(_handler({}, repo_root=boot_repo.common_dir))
+
+    assert mocked.await_count == 2, "a marker older than the window must re-fire"
+    assert result["reconcile_cadence"]["ran"] is True
+
+
+def test_reconcile_cadence_call_failure_degrades_to_warning(boot_repo):
+    """An exception from handoff.reconcile_open must not fail the composite
+    boot sweep — it degrades to a top-level warning, mirroring sweeps 6/7."""
+    with patch(_RECONCILE_OPEN_PATCH, new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+        result = _run(_handler({}, repo_root=boot_repo.common_dir))
+
+    assert result["exit_code"] == 0, "a reconcile-cadence call error must not fail the boot sweep"
+    cadence = result["reconcile_cadence"]
+    assert cadence["ran"] is True
+    assert cadence["reason"] == "error"
+    assert cadence["result"] is None
+    # C7 shares this cadence slot and runs even when the reconcile call errored —
+    # a shipped record stranded in state/handoffs/ is independent of that pass.
+    assert cadence["shipped_unarchived"] == {
+        "archived": [],
+        "retained": [],
+        "failed": [],
+        "remaining": 0,
+    }
+    assert any(
+        w.get("scope") == "reconcile_cadence" for w in result["warnings"]
+    ), "call failure must be folded into warnings[]"
+
+
+def test_check_auto_reconcile_untouched():
+    """DoE-owned probe must not be modified by this chunk (Anti-scope)."""
+    probe = Path(__file__).resolve().parents[4] / "coordinator" / "bin" / "check-auto-reconcile.py"
+    assert probe.exists(), f"expected DoE probe at {probe}"
+
+
+# ----------------------------------------------------------------------
+# C7 — _archive_shipped_unarchived (docs/plans/2026-08-18-auto-reconcile-must-fire.md)
+# ----------------------------------------------------------------------
+
+
+def _seed_shipped_handoff(worktree, name: str, state: str = "shipped") -> None:
+    live = worktree / "state" / "handoffs"
+    live.mkdir(parents=True, exist_ok=True)
+    (live / name).write_text(
+        textwrap.dedent(
+            f"""\
+            ---
+            title: "{name}"
+            deployment_state: {state}
+            ---
+
+            body
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_archive_shipped_unarchived_moves_only_shipped(tmp_path, monkeypatch):
+    """Only `shipped` candidates are offered to the move; others are untouched."""
+    _seed_shipped_handoff(tmp_path, "a.md", "shipped")
+    _seed_shipped_handoff(tmp_path, "b.md", "in_flight")
+    _seed_shipped_handoff(tmp_path, "c.md", "awaiting_gate")
+
+    seen = []
+
+    async def _fake(params, common_dir):
+        seen.append(params["handoff_path"])
+        assert params["mode"] == "chain", "must reuse chain, never a stamping mode"
+        return {"moved": True, "retained": False}
+
+    monkeypatch.setattr(boot_sweep, "_archive_transition_handler", _fake)
+    out = asyncio.run(boot_sweep._archive_shipped_unarchived(tmp_path / ".git", tmp_path, []))
+
+    assert len(seen) == 1 and seen[0].endswith("a.md")
+    assert len(out["archived"]) == 1
+    assert out["retained"] == [] and out["failed"] == []
+
+
+def test_archive_shipped_unarchived_reports_guard_retention_without_failing(tmp_path, monkeypatch):
+    """A guard-retained baton is retained, not failed — it retries next window."""
+    _seed_shipped_handoff(tmp_path, "kid.md", "shipped")
+
+    async def _fake(params, common_dir):
+        return {"moved": False, "retained": True, "retain_reason": "live children"}
+
+    monkeypatch.setattr(boot_sweep, "_archive_transition_handler", _fake)
+    warnings: list = []
+    out = asyncio.run(boot_sweep._archive_shipped_unarchived(tmp_path / ".git", tmp_path, warnings))
+
+    assert len(out["retained"]) == 1
+    assert out["archived"] == [] and out["failed"] == []
+    assert warnings == [], "a deliberate guard retain is not a warning"
+
+
+def test_archive_shipped_unarchived_caps_per_pass_and_reports_remainder(tmp_path, monkeypatch):
+    """The boot path never git-mvs an unbounded backlog in one pass."""
+    total = boot_sweep._SHIPPED_UNARCHIVED_PER_PASS_CAP + 7
+    for i in range(total):
+        _seed_shipped_handoff(tmp_path, f"h{i:03d}.md", "shipped")
+
+    calls = []
+
+    async def _fake(params, common_dir):
+        calls.append(params["handoff_path"])
+        return {"moved": True, "retained": False}
+
+    monkeypatch.setattr(boot_sweep, "_archive_transition_handler", _fake)
+    out = asyncio.run(boot_sweep._archive_shipped_unarchived(tmp_path / ".git", tmp_path, []))
+
+    assert len(calls) == boot_sweep._SHIPPED_UNARCHIVED_PER_PASS_CAP
+    assert out["remaining"] == 7, "the untouched remainder is reported, never silently dropped"
+
+
+def test_archive_shipped_unarchived_no_live_root_is_clean_noop(tmp_path):
+    out = asyncio.run(boot_sweep._archive_shipped_unarchived(tmp_path / ".git", tmp_path, []))
+    assert out == {"archived": [], "retained": [], "failed": [], "remaining": 0}

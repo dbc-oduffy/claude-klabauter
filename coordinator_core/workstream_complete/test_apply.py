@@ -2453,7 +2453,17 @@ def test_coverage_gate_directive_carries_no_depends_on() -> None:
     from coordinator_core.workstream_complete import _build_legacy_coverage_and_trail_directives
 
     gate = type(
-        "FakeGate", (), {"disposition": "predecessor-consumed", "consumed_handoff": "state/handoffs/x.md"}
+        "FakeGate",
+        (),
+        {
+            "disposition": "predecessor-consumed",
+            "consumed_handoff": "state/handoffs/x.md",
+            # f200bfae1 added a `gate.sid` read at the write-trail call site
+            # (`__init__.py::_build_legacy_coverage_and_trail_directives`) without
+            # widening this fixture, so these pins died on AttributeError rather
+            # than on the behaviour they assert.
+            "sid": "00000000-0000-4000-8000-000000000000",
+        },
     )()
     directives = _build_legacy_coverage_and_trail_directives(
         gate, decisions={}, plan_claim_directives=[{"id": "d-claim-plan-execution-lock"}]
@@ -2480,7 +2490,17 @@ def test_coverage_gate_directive_still_dispatches_when_plan_claim_producer_faile
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     gate = type(
-        "FakeGate", (), {"disposition": "predecessor-consumed", "consumed_handoff": "state/handoffs/x.md"}
+        "FakeGate",
+        (),
+        {
+            "disposition": "predecessor-consumed",
+            "consumed_handoff": "state/handoffs/x.md",
+            # f200bfae1 added a `gate.sid` read at the write-trail call site
+            # (`__init__.py::_build_legacy_coverage_and_trail_directives`) without
+            # widening this fixture, so these pins died on AttributeError rather
+            # than on the behaviour they assert.
+            "sid": "00000000-0000-4000-8000-000000000000",
+        },
     )()
     plan_claim_directive = _directive("d-claim-plan-execution-lock", "wsc-coverage-gate-runner-claim")
     pair = _build_legacy_coverage_and_trail_directives(

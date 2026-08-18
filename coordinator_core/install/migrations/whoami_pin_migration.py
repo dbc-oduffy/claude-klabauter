@@ -88,6 +88,12 @@ NOOP_ALREADY_MIGRATED = "noop-already-migrated"
 NOOP_NO_CLI = "noop-no-cli"
 REFUSED_NO_MACHINE_PIN = "refused-no-machine-pin"
 REFUSED_TARGET_UNHEALTHY = "refused-target-unhealthy"
+REFUSED_PIN_UNREADABLE = "refused-pin-unreadable"
+#: The repoint was attempted and the machine-local write did NOT succeed. Distinct
+#: from every REFUSED_* above, which all mean "declined before writing": here the
+#: pin's state on disk is whatever the failed write left, so a caller must not
+#: report the box as migrated.
+REFUSED_WRITE_FAILED = "refused-write-failed"
 
 
 WRITE_SURFACE = WriteSurfaceDeclaration(
@@ -116,11 +122,17 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 )
 
 
-def _ml_get(ml_cli: list, key: str) -> str:
-    """Mirrors `ensure_venv._ml_get` exactly (same quiet-failure contract) —
-    a small, deliberate duplication rather than an import, per this module's
-    own negative-spec (no runtime dependency on the module being migrated
-    away from)."""
+def _ml_get(ml_cli: list, key: str) -> Optional[str]:
+    """Reads one machine-local key, distinguishing "read it, it is empty"
+    (``""``) from "could not read it at all" (``None``).
+
+    Negative-spec: does NOT mirror `ensure_venv._ml_get`'s quiet-failure
+    contract, which collapses both into ``""``. Here the caller's very next
+    move is to treat an absent venv marker as "already migrated", so a
+    swallowed read failure reports a box as migrated that was never even
+    inspected — measured on Windows 2026-08-18, where the extensionless
+    `machine-local` shell script raises WinError 193 and every run returned
+    `noop-already-migrated` while the pin still named the venv."""
     try:
         proc = subprocess.run(
             [*ml_cli, "get", key],
@@ -134,14 +146,47 @@ def _ml_get(ml_cli: list, key: str) -> str:
             f"whoami-pin-migration: {ml_cli[0] if ml_cli else '<empty argv>'} get {key} failed: {exc}",
             file=sys.stderr,
         )
-        return ""
+        return None
     if proc.returncode != 0:
-        return ""
+        return None
     return (proc.stdout or "").strip()
 
 
-def _ml_set(ml_cli: list, key: str, value: str) -> None:
-    subprocess.run([*ml_cli, "set", key, value], **no_console_creationflags())
+def _ml_set(ml_cli: list, key: str, value: str) -> bool:
+    """Writes one machine-local key, reporting whether the write actually
+    landed.
+
+    Negative-spec: does NOT fire-and-forget. An unchecked `subprocess.run`
+    here reintroduces on the WRITE side exactly what `_ml_get`'s docstring
+    documents on the read side — the extensionless `machine-local` shell
+    script raises WinError 193 on Windows, and a swallowed failure would let
+    `migrate_whoami_pin` print "repointed" and return `REPOINTED` while the
+    pin still names the retired venv. Bounded like every other subprocess in
+    this module: a machine-local CLI blocked on lock contention is a slow op
+    to fail loud on, never one to hang the install step behind.
+    """
+    try:
+        proc = subprocess.run(
+            [*ml_cli, "set", key, value],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(
+            f"whoami-pin-migration: {ml_cli[0] if ml_cli else '<empty argv>'} set {key} failed: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    if proc.returncode != 0:
+        print(
+            f"whoami-pin-migration: {ml_cli[0] if ml_cli else '<empty argv>'} set {key} exited "
+            f"{proc.returncode}: {(proc.stderr or '').strip()}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def _target_imports_whoami(target_interpreter: str) -> bool:
@@ -182,6 +227,15 @@ def migrate_whoami_pin(ml_cli: Optional[list]) -> str:
         return NOOP_NO_CLI
 
     current_whoami = _ml_get(ml_cli, WHOAMI_PIN_KEY)
+    if current_whoami is None:
+        print(
+            f"whoami-pin-migration: REFUSED — could not read {WHOAMI_PIN_KEY}; "
+            "a box whose pin cannot be inspected is NOT a migrated box, and "
+            "reporting it as one strands the pin on a venv that later chunks "
+            "delete.",
+            file=sys.stderr,
+        )
+        return REFUSED_PIN_UNREADABLE
     if not current_whoami or _VENV_MARKER not in current_whoami:
         # Either unset, or already repointed at something outside the venv
         # (this leg's own prior run, or an operator's own choice) — a
@@ -210,7 +264,14 @@ def migrate_whoami_pin(ml_cli: Optional[list]) -> str:
         )
         return REFUSED_TARGET_UNHEALTHY
 
-    _ml_set(ml_cli, WHOAMI_PIN_KEY, target)
+    if not _ml_set(ml_cli, WHOAMI_PIN_KEY, target):
+        print(
+            f"whoami-pin-migration: REFUSED — the machine-local write of {WHOAMI_PIN_KEY} "
+            f"did not land; the pin is NOT known to name '{target}'. Reporting this box as "
+            "migrated on an unverified write is what leaves a pin on a deleted venv.",
+            file=sys.stderr,
+        )
+        return REFUSED_WRITE_FAILED
     print(
         f"whoami-pin-migration: repointed {WHOAMI_PIN_KEY}: "
         f"'{current_whoami}' -> '{target}'"

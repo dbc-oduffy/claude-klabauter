@@ -50,6 +50,10 @@ from coordinator_core.ceremony_common.json_payload_flag import (
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.consolidate_assemble import brief
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 
 APPLY_EXIT_OK = apply_base.APPLY_EXIT_OK
 APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
@@ -184,6 +188,7 @@ def apply(
     `apply_base.execute_directives` against this module's closed dispatch
     table. Returns `(exit_code, report)`."""
     root = repo_root or Path.cwd()
+    composition_budget = make_fleet_budget("consolidate_assemble")
 
     resolved_sid = _resolve_explicit_session_id(session_id)
     if resolved_sid is None:
@@ -206,13 +211,22 @@ def apply(
         directives = decision.get("directives", [])
         judgment_points = decision.get("judgment_points", [])
 
-        exit_code, report = apply_base.execute_directives(
-            directives,
-            judgment_points,
-            root,
-            _CLI_DISPATCH,
-            decisions=effective_decisions,
-        )
+        outcome = "directive_failed"
+        try:
+            exit_code, report = apply_base.execute_directives(
+                directives,
+                judgment_points,
+                root,
+                _CLI_DISPATCH,
+                decisions=effective_decisions,
+                composition_budget=composition_budget,
+            )
+            if exit_code == apply_base.APPLY_EXIT_OK:
+                outcome = "success"
+            elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
+                outcome = "partial_mutation"
+        finally:
+            flush_composition_record(composition_budget, outcome)
         return exit_code, report
 
 

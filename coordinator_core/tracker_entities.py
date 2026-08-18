@@ -82,6 +82,7 @@ from pathlib import Path
 from coordinator_core import tracker_store
 from coordinator_core.ops.ceremony.completion_entry import _slug_from_title
 from coordinator_core.ops.emit._slug import machine_slug
+from coordinator_core.tracker_id_grammar import is_item_id
 
 EVENT_KINDS: frozenset[str] = frozenset(
     {
@@ -116,7 +117,6 @@ field for this plan."""
 _ITEM_ID_SLUG_MAX = 32
 _ITEM_ID_NONCE_HEX_LEN = 6  # secrets.token_hex(3) == 6 hex chars
 _ITEM_ID_DIGEST_LEN = 12
-_ITEM_ID_CHARSET_RE = re.compile(r"^[a-z0-9-]+$")
 
 
 class TrackerEntityError(Exception):
@@ -251,9 +251,10 @@ def mint_item_id(
     ]
 
     item_id = f"itm-{date_part}-{slug}-{resolved_nonce}-{digest}"
-    if not _ITEM_ID_CHARSET_RE.match(item_id):
+    if not is_item_id(item_id):
         raise TrackerEntityError(
-            f"minted item id {item_id!r} violates the [a-z0-9-]-only charset"
+            f"minted item id {item_id!r} violates the item.id grammar "
+            "(tracker_id_grammar.ITEM_ID_PATTERN)"
         )
     return item_id
 

@@ -7,10 +7,15 @@ Purpose: lands a freshly git-cloned coordinator-claude checkout on a new
 machine. Detects/installs the toolchain (Homebrew, bash>=4.3, python@3.12,
 node, uv, git-lfs) via `brew`, seeds the machine-local repo registry, then
 runs the post-toolchain orchestration chain: install-substrate (in-process
-import, template-variant #1) -> ensure-coordinator-venv (in-process import,
-native as of the Port B retire-doe-bash-bridges migration) -> platform-
-localize (in-process import, native as of the 2026-07-21 pure-Python-shop
-cutover -- see run_post_toolchain's Step 4c) -> git lfs install.
+import, template-variant #1) -> platform-localize (in-process import,
+native as of the 2026-07-21 pure-Python-shop cutover -- see
+run_post_toolchain's Step 4c) -> git lfs install. Step 4b
+(ensure-coordinator-venv) is RETIRED (docs/plans/2026-08-18-retire-
+coordinator-venv.md chunk C4): `coordinator_core.install.ensure_venv
+.ensure_coordinator_venv` is reachable only via the explicit
+`--allow-venv-fallback` opt-in elsewhere in the install chain
+(`scripts/setup.py`, `coordinator_core.install.substrate`'s Step C10a-3),
+never unconditionally from this module.
 
 Unit decomposition (matches the DOE-PORT brief):
   unit1 -- arg parsing / config-load preamble                     -> parse_args()
@@ -30,10 +35,12 @@ no bash-3.2-parse constraint on the interpreter running this module, so the
 self-re-exec dance has no Python analogue and is dropped entirely. Observable
 behavior is preserved 1:1 -- same probes, same plan text/step ordering, same
 downstream scripts invoked in the same order, same exit-code contract.
-`ensure-coordinator-venv` is a native in-process call (Port B,
-`coordinator_core.install.ensure_venv`); the oracle's Step 4c NEWLY-installed-
-bash requirement for `platform-localize.sh` no longer applies at all -- see
-the retired-bug note below.
+`ensure-coordinator-venv` was a native in-process call (Port B,
+`coordinator_core.install.ensure_venv`) prior to 2026-08-18; that Step 4b
+call site is now retired outright (docs/plans/2026-08-18-retire-
+coordinator-venv.md chunk C4 -- see the purpose paragraph above). The
+oracle's Step 4c NEWLY-installed-bash requirement for `platform-
+localize.sh` no longer applies at all -- see the retired-bug note below.
 
 RETIRED oracle bug (2026-07-21 pure-Python-shop cutover -- this bug is FIXED,
 not faithfully reproduced, unlike the rest of this port's parity contract).
@@ -261,7 +268,7 @@ def build_plan(env: _Env, no_git_lfs: bool) -> List[str]:
     # so that step line is intentionally NOT reproduced -- it would describe
     # a mechanism this port doesn't use. Everything downstream is unchanged.
     steps.append("seed machine-local registry  (post-toolchain, C1b, Step 3)")
-    steps.append("run install-substrate -> ensure-coordinator-venv -> platform-localize  (post-toolchain, C1b, Step 4)")
+    steps.append("run install-substrate -> platform-localize  (post-toolchain, C1b, Step 4)")
     steps.append("tell you to /reload-plugins")
     return steps
 
@@ -535,22 +542,16 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
         return EXIT_FAIL
     print("[post-toolchain] install-substrate: done.")
 
-    # Step 4b: ensure-coordinator-venv (native — coordinator_core.install.ensure_venv).
-    print("[post-toolchain] Step 4b: ensure-coordinator-venv...")
-    from coordinator_core._settings_home import settings_home
-    from coordinator_core.install.ensure_venv import EnsureVenvError, ensure_coordinator_venv
-
-    try:
-        venv_status = ensure_coordinator_venv(
-            plugin_root,
-            settings_home(),
-            claude_home=os.environ.get("CLAUDE_HOME"),
-            check_only=False,
-        )
-    except EnsureVenvError as exc:
-        print(f"[post-toolchain] ERROR: ensure-coordinator-venv failed: {exc}", file=sys.stderr)
-        return EXIT_FAIL
-    print(f"[post-toolchain] ensure-coordinator-venv: done ({venv_status}).")
+    # Step 4b: ensure-coordinator-venv -- RETIRED (docs/plans/2026-08-18-
+    # retire-coordinator-venv.md chunk C4, AC5). `ensure_coordinator_venv`
+    # is now reachable ONLY via the explicit `--allow-venv-fallback` opt-in
+    # (`scripts/setup.py`'s `_fallback_to_venv` / `provision_deps`, and
+    # `coordinator_core.install.substrate`'s flag-gated Step C10a-3); this
+    # unconditional first-run call site is retired outright, not
+    # flag-gated, because first-run.py's own CLI carries no such flag.
+    # Machine-interpreter `coordinator_whoami` provisioning no longer
+    # depends on this call — it is handled independently by
+    # `scripts/setup.py`'s post-registration advisory step (chunk C10).
 
     # Step 4c: platform-localize -- native in-process call (2026-07-21
     # pure-Python-shop cutover). `plugin_root/bin/platform-localize.sh` is
@@ -759,10 +760,12 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
             return rc
         # Review: code-reviewer -- Finding 4 (2026-07-17 BIG_PORT Wave C sidecar):
         # env.bash_ok is intentionally NOT re-derived here. Nothing downstream reads
-        # it again -- Steps 4b/4c are now native in-process calls (ensure-
-        # coordinator-venv, platform-localize) that don't invoke bash at all
-        # (2026-07-21 pure-Python-shop cutover retired the last bash-dependent
-        # Step 4c path); a re-check here would just be dead state.
+        # it again -- Step 4c is a native in-process call (platform-localize) that
+        # doesn't invoke bash at all (2026-07-21 pure-Python-shop cutover retired
+        # the last bash-dependent Step 4c path); Step 4b (ensure-coordinator-venv)
+        # is retired outright (docs/plans/2026-08-18-retire-coordinator-venv.md
+        # chunk C4) and never ran under bash either. A re-check here would just
+        # be dead state.
 
     if not env.python_ok:
         rc = _brew_install("python@3.12", "python@3.12")

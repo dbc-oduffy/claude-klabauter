@@ -222,7 +222,7 @@ def run_one_sample(from_handoff: str, *, profile: bool = False) -> SampleResult:
             uncovered = directives_review.chain_partition_uncovered_shas(
                 trail_records, chain_code_shas, chain_dag_shas, mod._resolve_range_shas,
                 narrow_foreign_shas=mod._resolve_foreign_session_shas,
-                vouched_shas=mod._resolve_vouched_shas,
+                attested_shas=mod._resolve_attested_shas,
                 chain_planning_shas=chain_planning_shas,
             )
             t_uncovered = time.perf_counter() - t0
@@ -235,7 +235,7 @@ def run_one_sample(from_handoff: str, *, profile: bool = False) -> SampleResult:
                 directives_review.chain_partition_execution_basis_report(
                     trail_records, chain_code_shas, chain_dag_shas, mod._resolve_range_shas,
                     narrow_foreign_shas=mod._resolve_foreign_session_shas,
-                    vouched_shas=mod._resolve_vouched_shas,
+                    attested_shas=mod._resolve_attested_shas,
                     chain_planning_shas=chain_planning_shas,
                 )
             except Exception:

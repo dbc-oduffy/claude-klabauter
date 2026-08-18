@@ -9,6 +9,18 @@ lowercased variant — the chunk's self-authored test per the plan body.
 from __future__ import annotations
 
 from coordinator_core.ops.emit.closure_trailer import parse_closure_trailers
+from coordinator_core.tracker_entities import mint_item_id
+
+
+def test_minted_item_id_round_trips_through_trailer_parser() -> None:
+    # C1 AC1 — a real `mint_item_id` output, not a hand-authored string that
+    # merely happens to match the new pattern row. Proves the mint path and
+    # the trailer grammar recognize the same grammar rather than two
+    # independently-hand-copied ones that can drift apart.
+    minted = mint_item_id(
+        "Fix the thing", "some body text", "2026-08-18T12:00:00+00:00"
+    )
+    assert parse_closure_trailers([minted]) == [minted]
 
 
 def test_single_value_present() -> None:

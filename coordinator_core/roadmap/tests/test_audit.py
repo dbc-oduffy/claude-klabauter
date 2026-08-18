@@ -669,3 +669,53 @@ def test_main_hard_error_exits_3(
     assert main([run_id, "--root", str(root)]) == 3
     err = capsys.readouterr().err
     assert "hard error while auditing" in err
+
+
+# ---------------------------------------------------------------------------
+# DR-172 succession — a superseded baton leaves TWO records carrying ONE
+# `stub_id` (archived predecessor + live successor) permanently. Audit 1 counts
+# coverage per STUB, not per record, so the pair must read as one stub. Summing
+# record counts made this audit fail forever after the first succession and
+# blocked Phase 3 dispatch on a roadmap whose graph was sound.
+# Source: cross-repo/inbox/2026-08-18-doe-claude-em-roadmap-baton-succession-refusal-comes-out.md § ask 3
+# ---------------------------------------------------------------------------
+
+
+def test_audit1_succession_pair_counts_as_one_stub(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-succession"
+    handoffs = root / "state" / "handoffs"
+    archived = root / "archive" / "handoffs"
+
+    # Two distinct stubs, one of which has undergone a succession: its
+    # predecessor sits in archive/ and its successor in state/, both carrying
+    # `stub_id: <run_id>-1`. Three records, two stubs, two KEEP verdicts.
+    _write_stub(
+        archived / f"{run_id}-1-predecessor.md",
+        run_id,
+        f"{run_id}-1",
+        1,
+        1,
+        deployment_state="continued",
+        kind="roadmap-baton",
+    )
+    _write_stub(
+        handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1, kind="roadmap-baton"
+    )
+    _write_stub(
+        handoffs / f"{run_id}-2.md",
+        run_id,
+        f"{run_id}-2",
+        1,
+        2,
+        blocked_by=[f"{run_id}-1"],
+        kind="roadmap-baton",
+    )
+    _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 2)
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0, stderr_lines
+    assert any("Stub-coverage: 2 stubs" in line for line in stdout_lines), stdout_lines
+    # The record count is still reported — the succession is visible, not hidden.
+    assert any("3 record(s)" in line for line in stdout_lines), stdout_lines

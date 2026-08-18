@@ -3511,7 +3511,11 @@ _QUEUE_SCHEMA_PINS = {
     #   PM-authorised major re-vendor: sha_range closed to hex-range grammar
     #   (1.3.0 -> 2.0.0), per DoE memo 2026-08-15-doe-claude-em-review-trail-
     #   schema-2-0-0-revendor.md
-    'review-trail': "eebef71dc77e7ea6e4e462892625b276a015639c",
+    # Pin moved 2026-08-18 to 9e9854fc9af259112bdb2da6412b39eeb86b8633 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   DoE ruled reviewer_attestation verbatim at 2.1.0 (56cc5fba2); C0 leg
+    #   of pln-a-chain-review-records-and-cre-0c3d9e
+    'review-trail': "9e9854fc9af259112bdb2da6412b39eeb86b8633",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the

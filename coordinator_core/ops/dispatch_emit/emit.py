@@ -82,6 +82,75 @@ preflight's value is that the overwhelmingly common failure — a pathspec
 that was never claimable by a dispatched committer at all — is caught
 before any wave's work exists, instead of after.
 
+## Top-level body, never a defined-but-uninvoked wrapper (BREAK-CLASS FIX)
+
+``compose_script`` emits every ``phase()``/``agent()``/``parallel()`` call as
+a TOP-LEVEL statement in the ``.mjs`` module body, never inside a
+``function run(ctx) { ... }`` block that nothing calls. Measured, not
+inferred: a minimal probe using exactly that wrapper shape (``wf_abfe2580-
+fb2``) returned the top-level value ``{"wrapperInvoked": false}`` with
+``agent_count: 0`` — the harness Workflow contract executes the script BODY
+directly (``export const meta = {...}`` then top-level statements); it never
+looks for, defines, or calls a ``run`` export. A defined-but-uninvoked
+``run()`` therefore spawns nothing and reports success having done nothing.
+Top-level ``await`` is valid ESM syntax, which this module's ``.mjs`` output
+already is (see ``export const meta`` above it). ``workflow_scaffold.
+_compose_script`` carries the identical defect and is NOT fixed here — out
+of this module's write scope; tracked at
+``state/bug-backlog/2026-08-18-workflow-scaffold-emits-an-inert-script-*.yaml``.
+
+## Review phases (a)
+
+Pre-flight checkers, the integrator, and named reviewers compose onto the
+SAME phase mechanism as an executor wave (``phase()`` + ``agent()``/
+``parallel()``) — proven unnecessary to duplicate by the spike's review-
+phase probe (docs/research/spike-verdicts/2026-08-18-claude-klabauter-fires-an-
+emitted-workflow.md, probe 3: a review-phase ``agentType`` runs through the
+identical mechanism unchanged). No parallel review-runner exists here.
+
+The division of labour is load-bearing. ``coordinator/routing.md``
+(DoE-claude) cannot supply reviewer selection directly here — it keys
+Reviewers on change scope (hotfix / 2-5 files / architectural / test-only /
+doc-only) resolved by domain signal-gating, which this emitter cannot
+evaluate, not on a sizing object's t-shirt. Minting a sizing->reviewer
+mapping in THIS module would author doctrine in a plane CLAUDE.md says
+Claude-klabauter does not own; runtime-parsing ``routing.md`` prose would add a
+cross-plane read dependency against ``docs/reference/boundary-and-data-
+planes.md``. Both excluded.
+
+The concern splits instead: ``derive_review_tier`` reads the plan's own
+frontmatter ``sizing_object:`` citation and that sizing-object's
+``estimate.tshirt`` — data this repo owns, writes, and validates against
+its own schema (``sizing-object.schema.json``) — and maps it through
+``_TSHIRT_TO_REVIEW_TIER`` onto ONE of three tiers, ``lightweight`` /
+``standard`` / ``full``. That three-rung vocabulary is not invented here —
+it is the same vocabulary ``coordinator:staff-session`` already selects a
+tier on, so a fragment author has a live cross-repo precedent rather than a
+fresh one. The tier->reviewer roster stays entirely DoE-owned, supplied as
+a machine-readable fragment (shape documented at ``_reviewers_for_tier``)
+that this module consumes and never authors. Composing a review phase
+therefore needs BOTH a derived tier (this repo's data) AND a supplied
+fragment (DoE's data) — either alone composes nothing.
+
+The DoE-side roster fragment does not exist yet. This module is built and
+tested against a fixture fragment of its own making
+(``tests/test_emit.py``'s review-phase tests) — only LIVE consumption of a
+real DoE fragment waits on the fragment landing; tier derivation and
+fragment-shaped composition are real and tested today.
+
+## Commit-phase placement keyed to wave size (b)
+
+The commit-phase MECHANISM (``_commit_agent_call``) is unchanged — only
+WHERE it fires is new. A wave at or under ``_WAVE_COMMIT_BATCH_THRESHOLD``
+(10) rows keeps firing exactly one commit phase after it, identical to
+every wave before this chunk. A wave OVER that many rows is split into
+consecutive batches of at most 10 rows apiece (``_split_wave_for_commit_
+placement``), each batch getting its own executor phase immediately
+followed by its own commit phase against that batch's own (recomputed,
+narrower) pathspec — so a >10-row wave commits incrementally rather than
+holding every row's work uncommitted until one single trailing commit
+covers all of it.
+
 ## Ordering (AC9)
 
 The terminal ``coordinator:test-runner`` phase is placed AFTER the final
@@ -150,6 +219,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec, terminal_test_scope
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
@@ -162,6 +235,40 @@ _EXECUTOR_AGENT_TYPE = "coordinator:executor"
 _ENRICHER_AGENT_TYPE = "coordinator:enricher"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 _TEST_AGENT_TYPE = "coordinator:test-runner"
+
+# dispatch_emit/emit.py -> dispatch_emit -> ops -> coordinator_core -> repo
+# root. Same 3-parents-up derivation `pathspec.py` uses for its own
+# `_REPO_ROOT` (this file sits at the identical directory depth) -- kept as
+# a separate module-local constant rather than imported, since it is a
+# private name on that module's own surface.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Reuses `loe.tshirt`'s six-notch vocabulary (sizing-object.schema.json
+# `estimate.tshirt`) as the INPUT and the three-rung vocabulary
+# `coordinator:staff-session` already selects on (lightweight/standard/full)
+# as the OUTPUT -- see module docstring § Review phases for why this
+# mapping lives here (claude-klabauter-owned) rather than a sizing->reviewer table
+# (DoE-owned, supplied as a roster fragment, never authored in this repo).
+_TSHIRT_TO_REVIEW_TIER: dict[str, str] = {
+    "XS": "lightweight",
+    "S": "lightweight",
+    "M": "standard",
+    "L": "standard",
+    "XL": "full",
+    "XXL": "full",
+}
+
+_REVIEW_PHASE_TITLE = "Review"
+
+# (b) Commit-phase placement keyed to wave size: the PM's own n>10
+# executors-per-wave marker (see module docstring § Commit-phase placement
+# keyed to wave size). A wave at or under this many rows fires exactly one
+# commit phase after it, unchanged from before this chunk; a wave over it
+# is split into batches of at most this many rows, each with its own
+# executor phase immediately followed by its own commit phase -- the same
+# commit-phase MECHANISM as always (``_commit_agent_call``), a new
+# placement rule only.
+_WAVE_COMMIT_BATCH_THRESHOLD = 10
 
 
 class MixedAgentTypeRowError(ValueError):
@@ -261,6 +368,21 @@ def _wave_phase_title(index: int, wave: list[WaveRow]) -> str:
 
 def _commit_phase_title(index: int) -> str:
     return f"Commit wave {index + 1}"
+
+
+def _split_wave_for_commit_placement(
+    wave: list[WaveRow], *, threshold: int = _WAVE_COMMIT_BATCH_THRESHOLD
+) -> list[list[WaveRow]]:
+    """Split ``wave`` into consecutive commit-sized batches (b).
+
+    Returns ``[wave]`` unchanged (one batch) when ``len(wave) <= threshold``
+    — the common case, and the one every pre-C5 test already exercises.
+    Order-preserving: batch boundaries never reorder rows, only group them.
+    See module docstring § Commit-phase placement keyed to wave size.
+    """
+    if len(wave) <= threshold:
+        return [wave]
+    return [wave[i : i + threshold] for i in range(0, len(wave), threshold)]
 
 
 _TEST_PHASE_TITLE = "Scoped test run"
@@ -375,6 +497,181 @@ def _test_agent_call(scope: list[str], phase_title: str) -> str:
     return f"{phase_call}\n{call}"
 
 
+class ReviewRosterFragmentError(ValueError):
+    """Raised when a supplied review-roster fragment lacks the expected shape.
+
+    See ``_reviewers_for_tier``'s docstring for the fragment shape this
+    error is checked against.
+    """
+
+
+def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Optional[str]:
+    """Derive a review TIER (``lightweight``/``standard``/``full``) from
+    ``plan_path``'s own sizing object (a) — never from ``routing.md`` prose
+    and never a locally-minted sizing->reviewer table. See module docstring
+    § Review phases.
+
+    Reads ONLY ``plan_path``'s frontmatter ``sizing_object:`` citation
+    (``frontmatter.primitives.split_frontmatter`` + ``read_fm_field_
+    unquoted``, matching ``assert_plan_sizing_citation``'s own frontmatter-
+    only read discipline — never the body), then reads that citation's
+    sizing-object YAML file's ``estimate.tshirt`` and maps it through
+    ``_TSHIRT_TO_REVIEW_TIER``.
+
+    Returns ``None`` (never a fabricated tier) whenever the derivation
+    cannot be completed cleanly: the plan file cannot be read, has no
+    frontmatter, declares no ``sizing_object:`` (absent or explicit
+    ``null``), the cited path does not resolve under ``repo_root``, the
+    sizing YAML does not parse to a mapping, or ``estimate``/``estimate.
+    tshirt`` is missing. A caller getting ``None`` composes no review phase
+    at all rather than guessing a tier — the same fail-soft-by-omission
+    posture ``compose_script``'s optional ``review_tier``/``review_roster_
+    fragment`` pair uses (see its docstring).
+
+    Raises ``ValueError`` only if ``estimate.tshirt`` IS present but is not
+    one of ``_TSHIRT_TO_REVIEW_TIER``'s six schema-enumerated values — never
+    expected against a schema-valid sizing object, so this is a fail-loud
+    guard against a corrupt record, not a normal branch.
+    """
+    plan_path = Path(plan_path)
+    root = Path(repo_root) if repo_root is not None else _REPO_ROOT
+
+    try:
+        text = plan_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+
+    cited = read_fm_field_unquoted(split.fm_text, "sizing_object")
+    if not cited or cited == "null":
+        return None
+
+    # (Review: code-reviewer S4-dispatch-emit, P2 finding 1 -- `root / cited`
+    # alone does not contain `cited`: `..`-traversal is not normalized by
+    # `Path.__truediv__`, and an absolute `cited` silently discards `root`
+    # entirely per pathlib semantics. Reuses the shared containment helper
+    # rather than hand-rolling a check, matching the sibling `pathspec.py`
+    # containment shape.)
+    resolved = contained_path(root / cited, [root])
+    if resolved is None or not resolved.is_file():
+        return None
+    sizing_path = resolved
+
+    try:
+        sizing_doc = yaml.safe_load(sizing_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+
+    if not isinstance(sizing_doc, dict):
+        return None
+    estimate = sizing_doc.get("estimate")
+    if not isinstance(estimate, dict):
+        return None
+    tshirt = estimate.get("tshirt")
+    if tshirt is None:
+        return None
+    if tshirt not in _TSHIRT_TO_REVIEW_TIER:
+        raise ValueError(
+            f"sizing object {cited!r} declares estimate.tshirt {tshirt!r}, "
+            f"not one of {sorted(_TSHIRT_TO_REVIEW_TIER)}"
+        )
+    return _TSHIRT_TO_REVIEW_TIER[tshirt]
+
+
+def _reviewers_for_tier(fragment: dict, tier: str) -> list[str]:
+    """Look up ``tier``'s reviewer ``agentType`` list in a DoE-supplied
+    review-roster fragment.
+
+    FRAGMENT SHAPE (DoE-owned; this repo consumes it and never authors the
+    mapping — see module docstring § Review phases)::
+
+        {
+          "schema": "review-roster-fragment",
+          "tiers": {
+            "lightweight": ["coordinator:code-reviewer"],
+            "standard": ["coordinator:code-reviewer", "coordinator:review-integrator"],
+            "full": [
+              "coordinator:code-reviewer",
+              "coordinator:review-integrator",
+              "coordinator:staff-eng"
+            ]
+          }
+        }
+
+    ``tiers`` keys are exactly the three tier names ``_TSHIRT_TO_REVIEW_
+    TIER`` derives (``lightweight``/``standard``/``full``) — the same
+    vocabulary ``coordinator:staff-session`` already selects a tier on.
+    Each value is a non-empty list of ``agentType`` strings, composed onto
+    a review phase the same way a commit phase's ``agentType`` is composed
+    (``_review_phase_calls``) — no new firing mechanism.
+
+    Raises ``ReviewRosterFragmentError`` naming what is missing — a
+    fragment with no ``tiers`` mapping, or a ``tiers`` mapping missing
+    ``tier``'s key, or an empty list at that key — never a silent empty
+    reviewer list, which would compose a review phase dispatching nobody.
+    """
+    tiers = fragment.get("tiers") if isinstance(fragment, dict) else None
+    if not isinstance(tiers, dict):
+        raise ReviewRosterFragmentError(
+            "review roster fragment carries no 'tiers' mapping"
+        )
+    reviewers = tiers.get(tier)
+    if not reviewers:
+        raise ReviewRosterFragmentError(
+            f"review roster fragment declares no reviewers for tier {tier!r}"
+        )
+    return list(reviewers)
+
+
+def _review_phase_calls(reviewers: list[str], phase_title: str) -> str:
+    """Compose the review phase's ``phase()`` + agent-dispatch call(s) (a).
+
+    One ``agent()`` call per reviewer ``agentType`` — a single reviewer
+    emits a plain serial ``await agent(...)``, more than one emits
+    ``await parallel([...])``, the identical single-vs-multi shape
+    ``_wave_agent_calls`` already uses for an executor wave. Composed on
+    the SAME phase mechanism as every other phase in this module (no new
+    firing mechanism) — see module docstring § Review phases.
+    """
+    phase_call = f"  phase({_js_string_literal(phase_title)});"
+    prompt = "Review this plan's completed work."
+
+    if len(reviewers) == 1:
+        reviewer = reviewers[0]
+        call = (
+            "  await agent("
+            f"{_js_string_literal(prompt)}, "
+            "{ "
+            f"label: {_js_string_literal(f'review:{reviewer}')}, "
+            f"phase: {_js_string_literal(phase_title)}, "
+            f"agentType: {_js_string_literal(reviewer)}, "
+            f"{_MODEL_OPT} "
+            "});"
+        )
+        return f"{phase_call}\n{call}"
+
+    item_calls = ",\n".join(
+        "    () => agent("
+        f"{_js_string_literal(prompt)}, "
+        "{ "
+        f"label: {_js_string_literal(f'review:{reviewer}')}, "
+        f"phase: {_js_string_literal(phase_title)}, "
+        f"agentType: {_js_string_literal(reviewer)}, "
+        f"{_MODEL_OPT} "
+        "})"
+        for reviewer in reviewers
+    )
+    call = (
+        "  await parallel([\n"
+        f"{item_calls}\n"
+        "  ]);"
+    )
+    return f"{phase_call}\n{call}"
+
+
 def _meta_block(name: str, description: str, phase_titles: list[str]) -> str:
     phases_literal = ", ".join(_js_string_literal(t) for t in phase_titles)
     return (
@@ -392,6 +689,8 @@ def compose_script(
     name: str,
     description: str,
     repo_root: Optional[Path] = None,
+    review_tier: Optional[str] = None,
+    review_roster_fragment: Optional[dict] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
@@ -400,6 +699,16 @@ def compose_script(
     ``NoTestTargetError``) is raised by ``pathspec.commit_pathspec``/
     ``pathspec.terminal_test_scope`` and propagates unchanged: this function
     adds no derivation of its own.
+
+    A review phase (a) composes ONLY when BOTH ``review_tier`` (this repo's
+    data — see ``derive_review_tier``) AND ``review_roster_fragment`` (DoE's
+    data — see ``_reviewers_for_tier``) are supplied; either alone composes
+    no review phase, never a guessed one. A wave over
+    ``_WAVE_COMMIT_BATCH_THRESHOLD`` rows (b) is split into commit-sized
+    batches — see module docstring § Commit-phase placement keyed to wave
+    size; this changes WHERE ``_commit_agent_call`` fires, never how many
+    times overall a whole wave's work is committed for a wave at or under
+    the threshold.
     """
     if not waves:
         raise NoWavesError(
@@ -424,14 +733,31 @@ def compose_script(
     body_blocks.append(_preflight_agent_call(preflight_pathspec, _PREFLIGHT_PHASE_TITLE))
 
     for index, wave in enumerate(waves):
-        wave_title = _wave_phase_title(index, wave)
-        phase_titles.append(wave_title)
-        body_blocks.append(_wave_agent_calls(wave, wave_title))
+        batches = _split_wave_for_commit_placement(wave)
+        multi_batch = len(batches) > 1
 
-        pathspec = wave_pathspecs[index]
-        commit_title = _commit_phase_title(index)
-        phase_titles.append(commit_title)
-        body_blocks.append(_commit_agent_call(pathspec, commit_title, index))
+        for batch_index, batch in enumerate(batches):
+            if multi_batch:
+                suffix = f" (batch {batch_index + 1}/{len(batches)})"
+            else:
+                suffix = ""
+
+            # (Review: code-reviewer S4-dispatch-emit, P2 finding 2 -- pass
+            # `batch`, not the full `wave`: a batch's title must only list
+            # the rows that batch actually dispatches.)
+            wave_title = f"{_wave_phase_title(index, batch)}{suffix}"
+            phase_titles.append(wave_title)
+            body_blocks.append(_wave_agent_calls(batch, wave_title))
+
+            batch_pathspec = commit_pathspec(batch)
+            commit_title = f"{_commit_phase_title(index)}{suffix}"
+            phase_titles.append(commit_title)
+            body_blocks.append(_commit_agent_call(batch_pathspec, commit_title, index))
+
+    if review_tier is not None and review_roster_fragment is not None:
+        reviewers = _reviewers_for_tier(review_roster_fragment, review_tier)
+        phase_titles.append(_REVIEW_PHASE_TITLE)
+        body_blocks.append(_review_phase_calls(reviewers, _REVIEW_PHASE_TITLE))
 
     scope = terminal_test_scope(waves, repo_root=repo_root)
     phase_titles.append(_TEST_PHASE_TITLE)
@@ -440,12 +766,9 @@ def compose_script(
     meta_block = _meta_block(name, description, phase_titles)
     body = "\n\n".join(body_blocks)
 
-    return (
-        f"{meta_block}\n"
-        "async function run(ctx) {\n"
-        f"{body}\n"
-        "}\n"
-    )
+    # Top-level, never `async function run(ctx) { ... }` -- see module
+    # docstring § Top-level body, never a defined-but-uninvoked wrapper.
+    return f"{meta_block}\n{body}\n"
 
 
 def emit_script(
@@ -454,14 +777,21 @@ def emit_script(
     name: Optional[str] = None,
     description: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    review_roster_fragment: Optional[dict] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
     Composes the full pipeline: ``spine_read.read_spine`` ->
     ``wave_map.build_waves`` -> ``compose_script``. ``name``/``description``
     default to the plan file's stem and a fixed generic description when
-    omitted — this module reads no plan frontmatter (out of scope; see the
-    C4 reads list).
+    omitted.
+
+    Also reads ``plan_path``'s frontmatter ONLY (never the body — see
+    ``derive_review_tier``) to derive a review tier, which composes a review
+    phase (a) if, and only if, a caller also supplies ``review_roster_
+    fragment`` (DoE's data — no live fragment exists yet, see module
+    docstring § Review phases); omitting it composes no review phase, same
+    as before this chunk.
     """
     plan_path = Path(plan_path)
     rows = read_spine(plan_path)
@@ -472,11 +802,15 @@ def emit_script(
         f"Emitted executor/commit/test workflow for {plan_path.stem}"
     )
 
+    review_tier = derive_review_tier(plan_path, repo_root=repo_root)
+
     return compose_script(
         waves,
         name=resolved_name,
         description=resolved_description,
         repo_root=repo_root,
+        review_tier=review_tier,
+        review_roster_fragment=review_roster_fragment,
     )
 
 

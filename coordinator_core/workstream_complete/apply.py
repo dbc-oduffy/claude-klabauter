@@ -242,7 +242,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
@@ -250,6 +250,9 @@ from coordinator_core.ceremony_common.apply_halt import (
     _disposition_resolves_directive,
     _normalize_depends_on,
     assert_disjoint_dependency_namespaces,
+    budget_advisory_mid_directive,
+    budget_check_post_mutation,
+    budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
 )
 from coordinator_core.ceremony_common.json_payload_flag import (
@@ -264,10 +267,17 @@ from coordinator_core.ceremony_common.cli_rejection import (
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete import judgments as _judgments
+
+if TYPE_CHECKING:
+    from coordinator_core.composition_budget import CompositionBudget
 
 # ---------------------------------------------------------------------------
 # Exit-code contract (apply-side) — SEPARATE from `__init__.py`'s own
@@ -776,6 +786,7 @@ def _execute_directives(
     decisions: dict[str, Any],
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
+    composition_budget: "Optional[CompositionBudget]" = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -885,6 +896,19 @@ def _execute_directives(
     # namespaces are disjoint once per envelope so an id collision is a
     # loud producer bug, not a silent precedence accident.
     assert_disjoint_dependency_namespaces(jp_by_id, directive_ids)
+
+    pre_mutation_breach = budget_check_pre_mutation(composition_budget)
+    if pre_mutation_breach is not None:
+        return int(WorkstreamApplyExitCode.DIRECTIVE_FAILED), {
+            "landed": [],
+            "blocked": [],
+            "blocked_remedy": {},
+            "failed": [],
+            "degraded": [],
+            "results": [],
+            "budget_breach": pre_mutation_breach,
+        }
+
     landed: list[str] = []
     blocked: list[str] = []
     blocked_remedy: dict[str, Any] = {}
@@ -950,7 +974,9 @@ def _execute_directives(
                 degraded.append(entry)
             else:
                 failed.append(entry)
+            budget_advisory_mid_directive(composition_budget, directive["id"])
             continue
+        budget_advisory_mid_directive(composition_budget, directive["id"])
         _emit_progress(
             f"{directive['id']} exited {result.get('exit_code', 0)} "
             f"in {time.monotonic() - started:.1f}s"
@@ -1008,6 +1034,9 @@ def _execute_directives(
         return int(WorkstreamApplyExitCode.DIRECTIVE_FAILED), report
     if blocked:
         return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), report
+    post_mutation_breach = budget_check_post_mutation(composition_budget)
+    if post_mutation_breach is not None:
+        report["budget_breach"] = post_mutation_breach
     return int(WorkstreamApplyExitCode.SUCCESS), report
 
 
@@ -1123,55 +1152,78 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
     brief()` returns the envelope `Mapping` directly and raises
     `TransportFailure` on a resolution failure (see module docstring,
     deviation 1) — that exception is the one this function's `try` guards.
+
+    Constructs a fresh composition budget (never module-level — see
+    `telemetry.composition_record`'s own PER-CALL FACTORY note) and flushes
+    exactly one record for it in a `finally`, regardless of outcome
+    (§ `flush_composition_record`'s own docstring) — including the
+    no-commit-row-guard and TRANSPORT_FAIL early returns below, neither of
+    which reaches the directive loop.
     """
+    composition_budget = make_fleet_budget("workstream_complete")
+    outcome = "directive_failed"
     try:
-        envelope = brief(decisions=decisions)
-    except TransportFailure as exc:
-        return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
-            "error": str(exc),
-            "landed": [],
-        }
-
-    directives = envelope.get("directives", [])
-    judgment_points = envelope.get("judgment_points", [])
-    effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
-
-    # No-commit row guard (C13) — checked BEFORE dispatch, not woven into
-    # the ordinary directive halt contract above: this judgment gates the
-    # WHOLE apply (no directive names it in `depends_on`), because a
-    # no-commit row's disposition is a scope question, not a step any
-    # single directive's execution depends on. See `_no_commit_row_
-    # judgment`'s own docstring for why this recomputes governing-plan
-    # resolution here rather than reading it back out of `envelope` (that
-    # value never made it into the envelope's own shape — see module
-    # docstring § No-commit row guard).
-    artifact_path = envelope.get("artifact", {}).get("path")
-    if artifact_path:
-        pending_jp = _no_commit_row_judgment(effective_decisions, Path(artifact_path))
-        if pending_jp is not None:
-            return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), {
-                "error": (
-                    "task-spine row(s) with no covering commit require an explicit "
-                    "disposition (shipped/spun-off/backlogged/wont-do/carried-forward) "
-                    "in decisions['no_commit_row_dispositions'] before this workstream "
-                    "can close — see judgment_points[0]"
-                ),
-                "judgment_points": [pending_jp],
+        try:
+            envelope = brief(decisions=decisions)
+        except TransportFailure as exc:
+            return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
+                "error": str(exc),
                 "landed": [],
-                "blocked": [pending_jp["id"]],
-                "blocked_remedy": {},
-                "failed": [],
-                "results": [],
             }
 
-    sid = envelope.get("preflight", {}).get("session_shape", {}).get("sid")
-    try:
-        return _execute_directives(directives, judgment_points, effective_decisions, sid=sid)
-    except TransportFailure as exc:
-        return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
-            "error": str(exc),
-            "landed": [],
-        }
+        directives = envelope.get("directives", [])
+        judgment_points = envelope.get("judgment_points", [])
+        effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
+
+        # No-commit row guard (C13) — checked BEFORE dispatch, not woven into
+        # the ordinary directive halt contract above: this judgment gates the
+        # WHOLE apply (no directive names it in `depends_on`), because a
+        # no-commit row's disposition is a scope question, not a step any
+        # single directive's execution depends on. See `_no_commit_row_
+        # judgment`'s own docstring for why this recomputes governing-plan
+        # resolution here rather than reading it back out of `envelope` (that
+        # value never made it into the envelope's own shape — see module
+        # docstring § No-commit row guard).
+        artifact_path = envelope.get("artifact", {}).get("path")
+        if artifact_path:
+            pending_jp = _no_commit_row_judgment(effective_decisions, Path(artifact_path))
+            if pending_jp is not None:
+                return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), {
+                    "error": (
+                        "task-spine row(s) with no covering commit require an explicit "
+                        "disposition (shipped/spun-off/backlogged/wont-do/carried-forward) "
+                        "in decisions['no_commit_row_dispositions'] before this workstream "
+                        "can close — see judgment_points[0]"
+                    ),
+                    "judgment_points": [pending_jp],
+                    "landed": [],
+                    "blocked": [pending_jp["id"]],
+                    "blocked_remedy": {},
+                    "failed": [],
+                    "results": [],
+                }
+
+        sid = envelope.get("preflight", {}).get("session_shape", {}).get("sid")
+        try:
+            exit_code, report = _execute_directives(
+                directives,
+                judgment_points,
+                effective_decisions,
+                sid=sid,
+                composition_budget=composition_budget,
+            )
+        except TransportFailure as exc:
+            return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
+                "error": str(exc),
+                "landed": [],
+            }
+        if exit_code == int(WorkstreamApplyExitCode.SUCCESS):
+            outcome = "success"
+        elif exit_code == int(WorkstreamApplyExitCode.PARTIAL_MUTATION):
+            outcome = "partial_mutation"
+        return exit_code, report
+    finally:
+        flush_composition_record(composition_budget, outcome)
 
 
 def main(argv: list[str]) -> int:

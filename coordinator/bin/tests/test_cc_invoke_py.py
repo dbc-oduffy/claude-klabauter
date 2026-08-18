@@ -1047,6 +1047,17 @@ class TestGrepGate(unittest.TestCase):
     The grep-gate checks for CODE-level usage patterns (actual imports, socket opens,
     token reads, daemon-aware state machine), not bare string mentions that may appear
     in documentation/comments. Patterns are chosen to catch actual code misuse.
+
+    Scope, reaffirmed (2026-08-18, plan C19): a Windows named-pipe transport for
+    coordinator_core (C14/C15 of docs/plans/2026-08-16-one-engine-for-the-whole-box.md)
+    is a live addition, not a hypothetical one. DR-315 §3.1/§5 is explicit that this
+    pipe transport is a *different shape* than what DR-215 retired — UDS (socket.AF_UNIX)
+    and HTTP with auth tokens — and does not trip any of the four patterns below. Do NOT
+    widen these checks to forbid a pipe/warm/daemon surface generally: that would pin the
+    absence of C14/C15's authorized addition, not the absence of the DR-215-retired shape
+    this gate exists to keep out. Each pattern below is DR-215/DR-315-scoped by name; if a
+    future change needs a fifth pattern, name the DR clause it enforces, the same way.
+    Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C19.
     """
 
     def _source_text(self) -> str:
@@ -1057,7 +1068,9 @@ class TestGrepGate(unittest.TestCase):
 
         Checks for the actual import forms: 'from coordinator_core.client' and
         'from coordinator_core import client'. Bare string 'coordinator_core.client'
-        may appear in negative-spec comments; the import forms cannot.
+        may appear in negative-spec comments; the import forms cannot. DR-315 §3.1
+        confirms the named-pipe transport does not reinstate this seam — it is a
+        different client shape entirely, not a caller of coordinator_core.client.
         """
         src = self._source_text()
         self.assertNotIn(
@@ -1075,6 +1088,11 @@ class TestGrepGate(unittest.TestCase):
         """No Unix-domain socket usage — the UDS transport is DR-215-retired.
 
         Checks for socket.AF_UNIX (the Python socket constant that opens a UDS).
+        DR-315 §5 confirms this stays forbidden even after C14/C15 land: "no AF_UNIX
+        socket file exists on Windows to leak or sweep" — the added transport is a
+        named pipe, a different OS primitive from a different stdlib module, and
+        never opens a socket.AF_UNIX. This pin does not need to (and must not) widen
+        to forbid the pipe transport itself.
         """
         src = self._source_text()
         self.assertNotIn(
@@ -1087,7 +1105,11 @@ class TestGrepGate(unittest.TestCase):
         """No auth-token read — IPC auth tokens are DR-215-retired.
 
         Checks for the Python variable naming convention 'auth_token' and the env-var
-        form 'AUTH_TOKEN'. These patterns catch actual reads, not doc mentions.
+        form 'AUTH_TOKEN'. These patterns catch actual reads, not doc mentions. DR-315
+        §3.2 rules explicitly that "the two-tier token matrix and Invariant 3 stay
+        vacated" under the warm engine — the restricted-DACL pipe is the mitigation
+        for the new same-machine wire, not a per-partition token matrix. This pin
+        stays as-is; the pipe transport carries no auth_token/AUTH_TOKEN surface.
         """
         src = self._source_text()
         self.assertNotIn(
@@ -1102,9 +1124,17 @@ class TestGrepGate(unittest.TestCase):
         )
 
     def test_no_three_state_router(self) -> None:
-        """No three-state router — command-type transport is two-state only.
+        """No three-state router — cc_invoke.py's own route() stays two-state only.
 
         Checks for 'State-3' literal (a three-state label) and 'State3' (camelCase form).
+        DR-315 §3.3 amends the shape of this claim, not its truth: cc_invoke.py's
+        route() is unaffected — State-1 (seam-absent) and State-2 (seam-present) are
+        unchanged, and no third router state is added here. Warmth is a property of
+        what coordinator_core.invoke's own process does once seam-present dispatch
+        reaches it (a pipe-first, spawn-on-FileNotFoundError decision inside the
+        engine's entry path, C15) — not a state cc_invoke.py's router discriminates
+        on. This pin is therefore still correct unmodified: the router genuinely
+        stays two-state even though the engine process it dispatches to gains warmth.
         """
         src = self._source_text()
         self.assertNotIn(

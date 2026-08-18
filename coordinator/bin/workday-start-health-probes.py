@@ -56,19 +56,25 @@ Subcommands (argv[1] selects):
 
   working-repo-registration [--fix]
       Confirms `engine.working_repos.claude_klabauter` (the machine-local
-      registry key `_is_engine_working_repo()` — DoE-claude
-      `coordinator/hooks/scripts/_engine_root.py` — consults to decide
-      whether an engine-repo session resolves the LIVE engine working
-      tree or the PUBLISHED engine mirror) is registered and matches this
-      repo's own root. Written only at install time by
-      `scripts/setup.py::register_claude_klabauter_root()`; if wiped or
-      hand-corrupted, claude-klabauter's own sessions would silently resolve the
-      published engine instead (edits to `coordinator_core` stop
-      executing), and the live-tree fallback rungs do not rescue it because
-      the working-repo gate short-circuits first. Governing record: DR-132
-      (DoE-claude `docs/decisions/DR-132-engine-working-repos-is-its-own-
-      namespace-not-a-repos-star-inference.md`). Currently inert —
-      `_resolve_published_engine()` returns None while
+      registry key) is registered and matches this repo's own root.
+      Written only at install time by `scripts/setup.py::register_claude_klabauter_root()`.
+
+      2026-08-18 (C4): this key is a PURE LOCATOR on claude-klabauter's own plane —
+      claude-klabauter's own resolver (`coordinator/lib/resolve-claude-klabauter/
+      _resolve_claude_klabauter.py::resolve_claude_klabauter_root_with_class`) no longer
+      consults `engine.working_repos.*` at all; its live-tree-vs-published
+      discriminant is now structural (is the session's own root the
+      resolved `repos.claude_klabauter` value?), not a lookup against this
+      key. This probe still matters because OTHER consumers of this
+      namespace remain (DoE-claude's own resolver, per DR-132; other
+      cross-repo locator callers that resolve "where is claude-klabauter
+      checked out" via this key, e.g. `coordinator_core/ops/
+      setup_chain_walker.py`'s doe_claude analogue) — a wiped or
+      hand-corrupted entry still breaks THOSE reads, just not claude-klabauter's own
+      session resolution any more. Governing record: DR-132 (DoE-claude
+      `docs/decisions/DR-132-engine-working-repos-is-its-own-
+      namespace-not-a-repos-star-inference.md`). Currently inert on claude-klabauter's
+      own gate — `_resolve_published_engine()` returns None while
       `repos.claude_klabauter` is unregistered on this machine — and ARMS
       as soon as the OSS-release workstream registers klabauter; this probe
       lands detection ahead of that.

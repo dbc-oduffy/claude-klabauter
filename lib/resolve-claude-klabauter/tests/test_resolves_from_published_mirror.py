@@ -191,9 +191,17 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
         not_the_working_repo = scratch / "not-the-working-repo"
         not_the_working_repo.mkdir()
         registered_other_working_repo = scratch / "some-other-registered-working-repo"
+        # TOML single-quoted strings are LITERAL -- wrap the raw path in
+        # single quotes directly, never Python's `!r` repr. `!r` on a
+        # backslash-separated Windows path escapes each backslash a SECOND
+        # time before it lands in the TOML literal string, which the TOML
+        # parser then reads back with doubled backslashes -- this bug
+        # pre-dates C4 and is unrelated to the gate mechanism below;
+        # RESOLVED_CLASS parsed correctly either way, only RESOLVED_ROOT's
+        # string comparison broke.
         (ml_dir / "registry.local.toml").write_text(
-            f'"repos.claude_klabauter" = {_mirror_root()!r}\n'
-            f'"engine.working_repos.other" = {str(registered_other_working_repo)!r}\n',
+            f'"repos.claude_klabauter" = \'{_mirror_root()}\'\n'
+            f'"engine.working_repos.other" = \'{registered_other_working_repo}\'\n',
             encoding="utf-8",
         )
         cwd = scratch / "no-git-here"

@@ -9,9 +9,14 @@ log` scan of `Closes:` trailers (DECISION-2/DECISION-3). Multi-commit
 resolution ("is item X actually closed") is cockpit's read-side query over
 these rows, not a write-time claude-klabauter concern (DECISION-4).
 
+A row is either a CLOSE row (`reverts_sha` null, from a `Closes:` trailer match) or a REVERT
+row (`reverts_sha` non-null, from git's own auto-generated revert-body linkage) — never both.
+See `reverts_sha`'s own field docstring for the revert-row shape (C3, DR-318 §D4/D8).
+
 Spec backlinks:
   - docs/plans/2026-07-17-commit-closure-emission-fact.md § Chunk C2, AC2, AC3
   - docs/plans/2026-07-17-commit-closure-emission-fact.md § DECISION-4
+  - docs/plans/2026-08-18-sat-07-tier-a-wiring.md § Chunk C3, DR-318 §D4, §D8
 
 Logical identity: (repo, item_id, sha). A re-close, cherry-pick, or
 trailer copy-paste that lands the same item_id in two commits emits TWO
@@ -58,6 +63,32 @@ class CommitClosure(BaseModel):
     # True/false = resolved reachability on origin/main; null = indeterminate
     # (fetch-unavailable or equivalent degrade case) — never coerced to false.
     reachable_on_default_branch: bool | None
+
+    # C3 (DR-318 §D4/D8, revised 2026-08-18 after review finding F4). Null on an ordinary
+    # close row (a Closes:-trailer match). Non-null on a REVERT row: the sha of the OTHER
+    # commit this row's own `sha` verifiably reverts, per git's own auto-generated "This
+    # reverts commit <sha>" body line (never a `Reverts:` trailer — nothing in git or this
+    # tree produces one; that earlier design is withdrawn, see DR-318 §D4). Presence of this
+    # field is the sole revert/close distinguishing marker (no separate boolean flag).
+    #
+    # Its non-null value is ALSO the transitive-binding fact D8 states: the reverted commit
+    # (this field's value) was itself exact-match `Closes:`-trailer-bound to `item_id` — that
+    # is how the joined-against close row was produced — and this row's own `sha` is verified
+    # to revert it. C2's evidence builder reads this field to set `trailer_bound=True` on the
+    # revert arm for that transitive reason (AC5b), never reusing the assert arm's row-match
+    # justification (AC5a), which does not hold on this arm.
+    #
+    # Optional/default-None so ordinary close rows (which never carry this key) validate
+    # under this model's `extra="forbid"`.
+    reverts_sha: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{40}$",
+        description=(
+            "Non-null only on a revert row: the full 40-char sha of the commit this row's "
+            "own `sha` verifiably reverts (git's own auto-generated body linkage). Null on "
+            "a close row. See DR-318 §D4/D8."
+        ),
+    )
 
     # Review: code-reviewer (Finding 1, P1) — envelope.py's version-gated
     # _stamp_content_hash walks every SECMAP dotpath (including commit_closures,

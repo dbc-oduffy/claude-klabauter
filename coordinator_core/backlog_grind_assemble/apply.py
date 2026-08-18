@@ -159,6 +159,10 @@ from coordinator_core.ceremony_common.json_payload_flag import (
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.git_lock_retry import run_with_lock_retry
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 from coordinator_core.session.grant import write_tier_u_grant
 
 # ---------------------------------------------------------------------------
@@ -779,6 +783,7 @@ def apply(
     `drop()`'s own docstring).
     """
     root = repo_root or Path.cwd()
+    composition_budget = make_fleet_budget("backlog_grind_assemble")
 
     resolved_sid = _resolve_explicit_session_id(session_id)
     if resolved_sid is None:
@@ -806,13 +811,22 @@ def apply(
 
         prepared = _prepare_directives_for_dispatch(directives)
 
-        exit_code, report = apply_base.execute_directives(
-            prepared,
-            judgment_points,
-            root,
-            _CLI_DISPATCH,
-            decisions=effective_decisions,
-        )
+        outcome = "directive_failed"
+        try:
+            exit_code, report = apply_base.execute_directives(
+                prepared,
+                judgment_points,
+                root,
+                _CLI_DISPATCH,
+                decisions=effective_decisions,
+                composition_budget=composition_budget,
+            )
+            if exit_code == apply_base.APPLY_EXIT_OK:
+                outcome = "success"
+            elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
+                outcome = "partial_mutation"
+        finally:
+            flush_composition_record(composition_budget, outcome)
         return exit_code, report
 
 

@@ -266,10 +266,27 @@ def _run(coro):
 
 
 def _reconcile(repo: _Repo, *, dry_run: bool) -> dict:
-    params = {"dry_run": dry_run}
-    if dry_run is False:
-        params["dry_run_override_reason"] = "test: prove in-flight blocked_by retirement"
-    return _run(_reconcile_handler(params, repo_root=repo.common_dir))
+    # The reason is supplied in BOTH directions, not just for dry_run=False.
+    # `_resolve_dry_run` makes the LOADED POLICY the sole source of truth, and
+    # `policy_loader._resolve_policy_path` discovers a repo-resident
+    # `auto-reconcile-policy.local.yaml` by walking up from the process cwd —
+    # the real checkout's, never this fixture's. Claude-klabauter's own overlay
+    # declares `dry_run: false`, so an unreasoned `dry_run=True` here was
+    # REFUSED and the "preview" actually applied, making every assertion in
+    # test_dry_run_previews_without_writing fail on this repo. These tests
+    # assert an explicit posture in both directions and must name it in both.
+    return _run(
+        _reconcile_handler(
+            {
+                "dry_run": dry_run,
+                "dry_run_override_reason": (
+                    "test: prove in-flight blocked_by retirement — pinned against "
+                    "the ambient repo policy so the fixture governs its own posture"
+                ),
+            },
+            repo_root=repo.common_dir,
+        )
+    )
 
 
 def _fm_dict(path: Path) -> dict:

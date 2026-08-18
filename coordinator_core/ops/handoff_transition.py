@@ -2845,11 +2845,19 @@ def _gate_cascade_clear(
 ) -> dict:
     """Apply gate-cascade-clear transition (structured blocked_by narrow-or-flip).
 
-    Removes blocker_ids from blocked_by (and matched compound gate_dependency
-    prose clauses naming them), appends blocker_shas to gate_cleared_by:
-    (provenance). Flips awaiting_gate → ready_to_fire (+ strips gate_dependency
-    entirely) ONLY when blocked_by becomes empty after removal; otherwise stays
-    awaiting_gate (narrow-only, partial gate_dependency prose reduction).
+    MOVES blocker_ids out of blocked_by and into no_longer_blocked_by (and
+    drops matched compound gate_dependency prose clauses naming them) —
+    handoff.schema.json's union invariant across the two arrays, never a
+    plain removal (bug-backlog 2026-08-14-gate-cascade-clear-drops-blocked-
+    by-entries-instead-of-moving.yaml). Mirrors
+    `handoff_reconcile._handle_in_flight_blocked_by_retirement`'s MOVE shape,
+    this repo's other writer of `no_longer_blocked_by`. Also appends
+    blocker_shas to gate_cleared_by: (provenance) — a separate field
+    answering a separate question ("which commit discharged the gate" vs.
+    "which baton used to block"). Flips awaiting_gate → ready_to_fire (+
+    strips gate_dependency entirely) ONLY when blocked_by becomes empty after
+    removal; otherwise stays awaiting_gate (narrow-only, partial
+    gate_dependency prose reduction) — the MOVE itself happens on both paths.
 
     Fail-loud on full-drain narrow (Slice-B review Finding 1, P1): when a
     narrow request's prose clause-reduction collapses gate_dependency to empty
@@ -2947,11 +2955,35 @@ def _gate_cascade_clear(
 
         new_blocked_by = [bid for bid in current_blocked_by if bid not in blocker_ids]
 
+        # no_longer_blocked_by — MOVE semantics (handoff.schema.json union
+        # invariant, bug-backlog 2026-08-14): a cleared id relocates here, it
+        # is never simply dropped. Mirrors
+        # `handoff_reconcile._handle_in_flight_blocked_by_retirement`'s own
+        # append-if-absent shape exactly, so this repo's two writers of
+        # `no_longer_blocked_by` agree. Id-keyed dedupe on top of (not instead
+        # of) the `missing` MutateAbort above: `missing` is what makes a
+        # replay raise before reaching this line at all; this loop only
+        # guards against a pre-populated `no_longer_blocked_by` already
+        # carrying one of `blocker_ids` from an earlier partial history.
+        existing_no_longer = fm_dict.get("no_longer_blocked_by") or []
+        if not isinstance(existing_no_longer, list):
+            existing_no_longer = []
+        new_no_longer_blocked_by = list(existing_no_longer)
+        for bid in blocker_ids:
+            if bid not in new_no_longer_blocked_by:
+                new_no_longer_blocked_by.append(bid)
+
         fm = split.fm_text
 
         # blocked_by — replace with the reduced list (raw YAML flow-sequence;
         # see the array-field helpers above for why replace_fm_field is unsafe here).
         fm = _replace_fm_array_field(fm, "blocked_by", new_blocked_by)
+        if read_fm_field(fm, "no_longer_blocked_by") is not None:
+            fm = _replace_fm_array_field(fm, "no_longer_blocked_by", new_no_longer_blocked_by)
+        else:
+            fm = _insert_fm_array_field(
+                fm, "no_longer_blocked_by", new_no_longer_blocked_by, "blocked_by"
+            )
 
         # gate_dependency — drop matched compound-prose clauses naming a cleared
         # blocker id; only reachable when gate_dependency is present as prose.
@@ -3111,6 +3143,116 @@ def _gate_cascade_clear(
     return _ok(_state["applied"], _state["message"])
 
 
+def _record_disposition(
+    handoff_path: str,
+    disposition: str,
+    reason: str,
+    worktree: Path,
+    repo_root: Path,
+) -> dict:
+    """Apply record-disposition transition — writes the D1 disposition pair.
+
+    docs/plans/2026-08-18-auto-reconcile-must-fire.md § C4. Writes
+    `_DISPOSITION_FIELD` (`reconcile_disposition`) and
+    `_DISPOSITION_REASON_FIELD` (`reconcile_disposition_reason`) TOGETHER,
+    never one alone — `handoff_reconcile._has_recorded_disposition` (D1)
+    requires a non-empty PAIR to discharge a conservation violation, so a
+    writer able to leave one field set would mint a permanent violation. Both
+    constants are imported (locally, see below) from `handoff_reconcile`
+    rather than retyped, so the read side and this write side cannot drift
+    apart on spelling.
+
+    Local import, not module-level: `handoff_reconcile` already imports from
+    THIS module at load time (`_blocker_clears_gate`, `_validate_fm`, etc.),
+    so a module-level import here would be circular. Mirrors the existing
+    local-import precedent inside the `supersede` verb branch below (`from
+    coordinator_core.archival import claimed_or_shipped_at_path`).
+
+    Both fields are schema-declared as independent optional strings with no
+    cross-field coupling and no enum (handoff.schema.json 8.1.0) — this write
+    is not state-machine-coupled to `deployment_state` or any other lifecycle
+    field this file's other verbs stamp; it may run against a handoff in any
+    deployment_state.
+
+    Idempotency: no-op (exit_code=0, applied=False) ONLY when both fields
+    already equal the requested values (compared via `read_fm_field_unquoted`
+    — the comparison-safe reading, since free-text disposition/reason values
+    are YAML-quoted on disk). A call that changes either value overwrites
+    both — a session correcting a prior disposition is not blocked (mirrors
+    `_close`'s re-close-with-a-different-reason contract).
+
+    Routes the read-modify-write through locked_rmw for cross-process
+    serialisation. `MutateAbort` inside the mutate closure means no write.
+    """
+    from coordinator_core.ops.handoff_reconcile import (
+        _DISPOSITION_FIELD,
+        _DISPOSITION_REASON_FIELD,
+    )
+
+    try:
+        path = _resolve_path(handoff_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"record-disposition: {exc}")
+
+    _state: dict = {"applied": False, "message": ""}
+
+    def mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(
+                f"record-disposition: no parseable YAML frontmatter in {handoff_path}"
+            )
+
+        existing_disposition = read_fm_field_unquoted(split.fm_text, _DISPOSITION_FIELD)
+        existing_reason = read_fm_field_unquoted(split.fm_text, _DISPOSITION_REASON_FIELD)
+
+        if existing_disposition == disposition and existing_reason == reason:
+            _state["applied"] = False
+            _state["message"] = (
+                f"{handoff_path} already {_DISPOSITION_FIELD}: {disposition!r} / "
+                f"{_DISPOSITION_REASON_FIELD}: {reason!r} — no-op"
+            )
+            return old_text  # byte-identical → locked_rmw skips the write
+
+        fm = split.fm_text
+
+        if read_fm_field(fm, _DISPOSITION_FIELD) is not None:
+            fm = replace_fm_field(fm, _DISPOSITION_FIELD, disposition)
+        else:
+            fm = insert_fm_field(fm, _DISPOSITION_FIELD, disposition, "deployment_state")
+
+        if read_fm_field(fm, _DISPOSITION_REASON_FIELD) is not None:
+            fm = replace_fm_field(fm, _DISPOSITION_REASON_FIELD, reason)
+        else:
+            fm = insert_fm_field(fm, _DISPOSITION_REASON_FIELD, reason, _DISPOSITION_FIELD)
+
+        # Post-mutation schema validation gate — raise MutateAbort to skip the write.
+        errors = _validate_fm(fm)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(f"handoff frontmatter validation failed: {details}")
+
+        _state["applied"] = True
+        _state["message"] = (
+            f"recorded disposition on {handoff_path} "
+            f"({_DISPOSITION_FIELD}: {disposition!r}, {_DISPOSITION_REASON_FIELD}: {reason!r})"
+        )
+        return rebuild(split, fm)
+
+    try:
+        locked_rmw(path, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return _err(f"record-disposition: handoff not found: {handoff_path}")
+    except LockTimeout as exc:
+        return _err(
+            f"record-disposition: timed out waiting for file lock on {handoff_path}: {exc}"
+        )
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "record-disposition: mutation aborted")
+
+    return _ok(_state["applied"], _state["message"])
+
+
 # ---------------------------------------------------------------------------
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
@@ -3126,7 +3268,8 @@ async def _handler(
 
     Required params:
         verb         (str) — one of: claim | supersede | ship | close | repark |
-                              unclaim | gate-recheck | gate-cascade-clear.
+                              unclaim | gate-recheck | gate-cascade-clear |
+                              record-disposition.
                               Deprecated aliases (accepted, not advertised):
                               consume for claim, unconsume for unclaim — see
                               the claim/unclaim docstrings above for the DR-084
@@ -3154,6 +3297,11 @@ async def _handler(
         gate-cascade-clear : blocker_ids (list[str], required, non-empty),
                               blocker_shas (list[str], required, same length as
                               blocker_ids — 1:1 paired shipping SHA per blocker id)
+        record-disposition : disposition (str, required, non-empty), reason
+                              (str, required, non-empty) — writes
+                              handoff_reconcile's D1 `_DISPOSITION_FIELD` /
+                              `_DISPOSITION_REASON_FIELD` pair, together or
+                              not at all (see _record_disposition)
 
     Returns:
         {"exit_code": 0, "applied": bool,  "message": str} on success or no-op.
@@ -3175,8 +3323,9 @@ async def _handler(
         return _err(
             "handoff.transition: 'verb' is required "
             "(claim | supersede | ship | close | repark | unclaim | "
-            "gate-recheck | gate-cascade-clear — consume/unconsume are "
-            "accepted as deprecated aliases of claim/unclaim)"
+            "gate-recheck | gate-cascade-clear | record-disposition — "
+            "consume/unconsume are accepted as deprecated aliases of "
+            "claim/unclaim)"
         )
     if not handoff_path:
         return _err("handoff.transition: 'handoff_path' is required")
@@ -3298,9 +3447,22 @@ async def _handler(
             _gate_cascade_clear, handoff_path, blocker_ids, blocker_shas, worktree, repo_root
         )
 
+    if verb == "record-disposition":
+        disposition = (params.get("disposition") or "").strip()
+        reason = (params.get("reason") or "").strip()
+        if not disposition:
+            return _err("record-disposition: 'disposition' is required")
+        if not reason:
+            return _err("record-disposition: 'reason' is required")
+        # asyncio.to_thread for DR-212 D3 async-loop mandate.
+        # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
+        return await asyncio.to_thread(
+            _record_disposition, handoff_path, disposition, reason, worktree, repo_root
+        )
+
     return _err(
         f"handoff.transition: unknown verb {verb!r} — "
         "supported: claim, supersede, ship, close, repark, unclaim, "
-        "gate-recheck, gate-cascade-clear (consume/unconsume also accepted, "
-        "deprecated aliases of claim/unclaim)"
+        "gate-recheck, gate-cascade-clear, record-disposition "
+        "(consume/unconsume also accepted, deprecated aliases of claim/unclaim)"
     )

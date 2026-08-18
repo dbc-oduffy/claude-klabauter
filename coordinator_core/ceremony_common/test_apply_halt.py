@@ -20,6 +20,7 @@ Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, c
 from __future__ import annotations
 
 import enum
+import inspect
 
 from coordinator_core.ceremony_common import apply_halt
 
@@ -286,3 +287,73 @@ def test_build_ceremony_halt_exit_codes_matches_workday_and_workweeks_literal_la
         "TRANSPORT_FAIL": 3,
         "PARTIAL_MUTATION": 4,
     }
+
+
+# ---------------------------------------------------------------------------
+# Composition-budget wiring (chunk C3, docs/plans/2026-08-18-arm-the-
+# composition-budget.md): a structural, source-level assertion that every
+# ceremony consumer actually calls all three `apply_halt` budget primitives
+# AND flushes its composition record — not a behavioral test of the budget
+# arithmetic itself (that lives in `tests/test_composition_budget_
+# boundaries.py`, which stands the primitives in for a caller's own loop by
+# its own admission — this file is the one place that pins the ceremony
+# family's three hand-rolled loops actually wire them in). Mirrors C2's own
+# structural-coverage rationale for its five `*_assemble/apply.py` modules
+# (grep-shaped, not AST-shaped, per this repo's established source-
+# inspection test idiom — e.g. `test_no_unbatched_per_item_git_spawn.py`).
+# ---------------------------------------------------------------------------
+
+_CEREMONY_APPLY_MODULES = (
+    "coordinator_core.workday_complete.apply",
+    "coordinator_core.workweek_complete.apply",
+    "coordinator_core.workstream_complete.apply",
+)
+
+
+def _import_ceremony_apply_module(dotted_name: str):
+    import importlib
+
+    return importlib.import_module(dotted_name)
+
+
+def test_every_ceremony_apply_module_calls_the_pre_mutation_boundary() -> None:
+    for dotted_name in _CEREMONY_APPLY_MODULES:
+        source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
+        assert "budget_check_pre_mutation(" in source, (
+            f"{dotted_name} never calls apply_halt.budget_check_pre_mutation"
+        )
+
+
+def test_every_ceremony_apply_module_calls_the_post_mutation_boundary() -> None:
+    for dotted_name in _CEREMONY_APPLY_MODULES:
+        source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
+        assert "budget_check_post_mutation(" in source, (
+            f"{dotted_name} never calls apply_halt.budget_check_post_mutation"
+        )
+
+
+def test_every_ceremony_apply_module_calls_the_mid_directive_advisory() -> None:
+    for dotted_name in _CEREMONY_APPLY_MODULES:
+        source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
+        assert "budget_advisory_mid_directive(" in source, (
+            f"{dotted_name} never calls apply_halt.budget_advisory_mid_directive"
+        )
+
+
+def test_every_ceremony_apply_module_flushes_its_composition_record() -> None:
+    for dotted_name in _CEREMONY_APPLY_MODULES:
+        source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
+        assert "flush_composition_record(" in source, (
+            f"{dotted_name} never calls telemetry.composition_record.flush_composition_record"
+        )
+        assert "finally:" in source, (
+            f"{dotted_name} must flush from a try/finally, not a bare success-path call"
+        )
+
+
+def test_every_ceremony_apply_module_constructs_its_own_budget_via_the_factory() -> None:
+    for dotted_name in _CEREMONY_APPLY_MODULES:
+        source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
+        assert "make_fleet_budget(" in source, (
+            f"{dotted_name} never calls telemetry.composition_record.make_fleet_budget"
+        )

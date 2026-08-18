@@ -2503,9 +2503,18 @@ def resolve_hook_python_bin() -> str:
         return ""
 
 
-def run(setup_only: bool = False, check_only: bool = False) -> int:
+def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback: bool = False) -> int:
     """Entry point mirroring the full bash script body. Returns a process
-    exit code (0 success, 1 FATAL)."""
+    exit code (0 success, 1 FATAL).
+
+    ``allow_venv_fallback`` (default ``False``): gates Step C10a-3's
+    ``.coordinator-venv`` build/rebuild and legacy-venv reclaim -- the ONLY
+    route into ``ensure_venv.ensure_coordinator_venv`` this module reaches,
+    per docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4 (AC5).
+    Machine-interpreter ``coordinator_whoami`` provisioning is handled
+    independently of this flag by ``scripts/setup.py``'s post-registration
+    advisory step (chunk C10); this flag exists solely for the break-glass
+    venv fallback."""
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root_env:
         print(
@@ -2721,7 +2730,10 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
         _run_hardware_audit(check_only)
 
         # --- Steps C10a-1/2/3: whoami relocation, registry key, venv rebuild ---
-        rc = _c10a_steps(install_base, settings_home_path, plugin_root, bin_dst, check_only)
+        rc = _c10a_steps(
+            install_base, settings_home_path, plugin_root, bin_dst, check_only,
+            allow_venv_fallback=allow_venv_fallback,
+        )
         if rc != 0:
             return rc
 
@@ -3817,6 +3829,7 @@ def _percolation_and_path_steps(
 
 def _c10a_steps(
     install_base: str, settings_home_path: Path, plugin_root: Path, bin_dst: Path, check_only: bool,
+    *, allow_venv_fallback: bool = False,
 ) -> int:
     legacy_whoami = Path(install_base) / ".claude" / _WHOAMI_DIRNAME
     dst_whoami = settings_home_path / _WHOAMI_DIRNAME
@@ -3929,7 +3942,21 @@ def _c10a_steps(
     else:
         print(f"[install-substrate] WARNING: machine-local CLI not found at {ml_cli}; coordinator.whoami_src not persisted", file=sys.stderr)
 
-    # Step C10a-3: venv rebuild + legacy venv removal (native — coordinator_core.install.ensure_venv).
+    # Step C10a-3: venv rebuild + legacy venv removal (native —
+    # coordinator_core.install.ensure_venv). Reachable ONLY behind
+    # `allow_venv_fallback` (docs/plans/2026-08-18-retire-coordinator-venv.md
+    # chunk C4, AC5) -- machine-interpreter coordinator_whoami provisioning
+    # is handled independently by `scripts/setup.py`'s post-registration
+    # advisory step (chunk C10), so a fresh install with no explicit
+    # break-glass opt-in never reaches `ensure_coordinator_venv` here.
+    if not allow_venv_fallback:
+        print(
+            "[install-substrate] Step C10a-3 (venv rebuild) skipped -- "
+            "ensure_coordinator_venv is reachable only via --allow-venv-fallback "
+            "(docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4)."
+        )
+        return 0
+
     from coordinator_core.install.ensure_venv import (  # local import: avoid import cost on --help
         EnsureVenvError,
         _venv_healthy,
@@ -4943,9 +4970,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="install-substrate")
     parser.add_argument("--setup-only", action="store_true")
     parser.add_argument("--check-only", action="store_true")
+    parser.add_argument(
+        "--allow-venv-fallback", action="store_true",
+        help=(
+            "Explicit opt-in, break-glass only: builds/rebuilds the "
+            ".coordinator-venv fallback (Step C10a-3). Omitted by default per "
+            "docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
-        return run(setup_only=args.setup_only, check_only=args.check_only)
+        return run(
+            setup_only=args.setup_only, check_only=args.check_only,
+            allow_venv_fallback=args.allow_venv_fallback,
+        )
     except SubstrateFatalError as exc:
         print(str(exc), file=sys.stderr)
         return 1

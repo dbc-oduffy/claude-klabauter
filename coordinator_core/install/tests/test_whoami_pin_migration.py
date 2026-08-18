@@ -24,6 +24,7 @@ def _fake_ml(registry: dict, calls: list):
     def _set(cli, key, value):
         registry[key] = value
         calls.append((key, value))
+        return True
 
     return _get, _set
 
@@ -67,7 +68,11 @@ def test_verification_runs_from_neutral_cwd(tmp_path, monkeypatch):
     target = sys.executable
     registry = {m.WHOAMI_PIN_KEY: venv_py, m.GENERAL_PIN_KEY: target}
     monkeypatch.setattr(m, "_ml_get", lambda cli, key: registry.get(key, ""))
-    monkeypatch.setattr(m, "_ml_set", lambda cli, key, value: registry.__setitem__(key, value))
+    monkeypatch.setattr(
+        m,
+        "_ml_set",
+        lambda cli, key, value: (registry.__setitem__(key, value), True)[1],
+    )
 
     captured_kwargs = {}
 
@@ -252,3 +257,73 @@ def test_target_imports_whoami_true_for_this_interpreter_importing_sys():
         **no_console_creationflags(),
     )
     assert proc.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# A write that does not land is NOT a migrated box
+#
+# Regression guard for the read/write asymmetry the module's own `_ml_get`
+# docstring documents: the extensionless `machine-local` script raises
+# WinError 193 on Windows. That was handled on the read side and, until this
+# guard, fire-and-forget on the write side -- so a failed write printed
+# "repointed" and returned REPOINTED while the pin still named the venv that
+# C8 deletes from disk.
+# ---------------------------------------------------------------------------
+
+
+def test_failed_write_refuses_instead_of_reporting_migrated(tmp_path, monkeypatch):
+    ml_cli = [str(tmp_path / "machine-local")]
+    venv_py = _venv_python_str(tmp_path)
+    registry = {
+        m.WHOAMI_PIN_KEY: venv_py,
+        m.GENERAL_PIN_KEY: sys.executable,
+    }
+    monkeypatch.setattr(m, "_ml_get", lambda cli, key: registry.get(key, ""))
+    monkeypatch.setattr(m, "_ml_set", lambda cli, key, value: False)
+    monkeypatch.setattr(m, "_target_imports_whoami", lambda py: True)
+
+    result = m.migrate_whoami_pin(ml_cli)
+
+    assert result == m.REFUSED_WRITE_FAILED
+    assert result != m.REPOINTED
+
+
+def test_ml_set_reports_false_on_nonzero_exit(tmp_path, monkeypatch):
+    import subprocess as _sp
+
+    class _Proc:
+        returncode = 3
+        stdout = ""
+        stderr = "boom"
+
+    seen = {}
+
+    def _fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    monkeypatch.setattr(m.subprocess, "run", _fake_run)
+
+    assert m._ml_set([str(tmp_path / "machine-local")], "k", "v") is False
+    assert seen.get("timeout"), "the machine-local write must be bounded, never unbounded"
+
+
+def test_ml_set_reports_false_when_the_cli_cannot_be_launched(tmp_path, monkeypatch):
+    def _boom(argv, **kwargs):
+        raise OSError(193, "%1 is not a valid Win32 application")
+
+    monkeypatch.setattr(m.subprocess, "run", _boom)
+
+    assert m._ml_set([str(tmp_path / "machine-local")], "k", "v") is False
+
+
+def test_ml_set_reports_true_on_success(tmp_path, monkeypatch):
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(m.subprocess, "run", lambda argv, **kw: _Proc())
+
+    assert m._ml_set([str(tmp_path / "machine-local")], "k", "v") is True

@@ -57,10 +57,24 @@ import pytest
 # ---------------------------------------------------------------------------
 from coordinator_core.ops.review_trail_write import (  # noqa: E402
     ForeignSessionRangeRefused,
+    _ATTESTATION_BINDING_ASSERTED,
+    _ATTESTATION_BINDING_VERIFIED,
+    _ATTESTATION_FIELD_BINDING,
+    _ATTESTATION_FIELD_REVIEWER_SESSION_ID,
+    _ATTESTATION_FIELD_SHAS,
+    _ATTESTATION_FIELD_SIDECAR,
+    _classify_attestation_sidecar_binding,
     _build_json_record,
     _compute_timestamp,
     _diagnose_zero_chain_terminal_credit,
     _dispatch_id_resolvable,
+    _extract_frontmatter_list,
+    _load_bearing_fields_diverge,
+    _own_frozen_diff_shas,
+    _parse_reviewer_attestation,
+    _REVIEWER_ATTESTATION_KEY,
+    _serialize_reviewer_attestation,
+    _validate_reviewer_attestation,
     _walk_range_commit_session_trailers,
     _ZERO_CREDIT_KEY,
     write_review_trail_entry,
@@ -655,6 +669,276 @@ class TestExecutionBasis:
         )
         assert record == expected
         assert "execution_basis" not in record
+
+
+# ---------------------------------------------------------------------------
+# Tests: reviewer_attestation (C1, docs/plans/2026-08-18-chain-review-records-
+# and-credits-predecessors.md § C1) — proposed, NOT yet DoE-ratified shape.
+# ---------------------------------------------------------------------------
+
+
+_VALID_ATTESTATION = {
+    _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "reviewer-session-abc123",
+    _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/reviewer-session-abc123/sidecar.md",
+    _ATTESTATION_FIELD_SHAS: ["abc1234567", "def8901234"],
+}
+
+
+class TestReviewerAttestation:
+    """``reviewer_attestation`` is additive: one object key (not three scalars),
+    round-trippable (via the internally-resolved ``attestation_dispatch_id``
+    path only — see ``TestReviewerAttestationRefusesDirectSupply`` below),
+    validated, and omission is byte-identical to the pre-existing
+    (pre-this-chunk) record shape (AC5).
+
+    A caller-supplied ``reviewer_attestation`` is REFUSED outright (state/
+    subagent-share/d6287fad-9f71-4951-ade8-8cb1818b196e/coordinatorcode-
+    reviewer-e6e58b0b.md, BLOCK) — round-trip/scope_kind-carrying coverage for
+    the persistence shape itself lives at the ``_build_json_record`` unit
+    level above and at the guard-admitted path in
+    ``TestReviewerAttestationGuardIntegration`` below."""
+
+    def test_direct_reviewer_attestation_is_refused(self, tmp_path, monkeypatch):
+        """Passing reviewer_attestation=<object> directly to
+        write_review_trail_entry raises — an attestation may only be minted
+        by _resolve_reviewer_attestation via attestation_dispatch_id."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        with pytest.raises(ValueError, match="attestation_dispatch_id"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=10,
+                scope_kind="diff",
+                session_id=_TEST_SESSION,
+                workstream=None,
+                reviewer_attestation=_VALID_ATTESTATION,
+            )
+        assert not (tmp_path / "review-trail").exists() or not list(
+            (tmp_path / "review-trail").glob("*.json")
+        )
+
+    def test_direct_reviewer_attestation_is_refused_regardless_of_scope_kind(
+        self, tmp_path, monkeypatch
+    ):
+        """The refusal is not conditioned on scope_kind — a plan-scoped
+        record with a caller-supplied attestation is refused too."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        with pytest.raises(ValueError, match="attestation_dispatch_id"):
+            write_review_trail_entry(
+                sha_range="abc1234567",  # no ".." — valid for plan
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                scope_kind="plan",
+                session_id=_TEST_SESSION,
+                workstream=None,
+                reviewer_attestation=_VALID_ATTESTATION,
+            )
+
+    def test_omitted_reviewer_attestation_is_byte_identical_to_pre_existing_shape(self):
+        """reviewer_attestation=None (the default / omitted case) must produce the
+        exact same bytes _build_json_record produced before this key existed — the
+        load-bearing AC5 constraint. Asserted against a literal expected string, not
+        a re-derivation from the function under test."""
+        record = _build_json_record(
+            sha_range="abc1234..def5678",
+            reviewer="code-reviewer",
+            scope="chain",
+            scope_kind="diff",
+            verdict="ok",
+            diff_loc=100,
+            session_id="abc12345",
+            workstream=None,
+            reviewed_paths=None,
+            execution_basis=None,
+        )
+        expected = (
+            '{"sha_range":"abc1234..def5678",'
+            '"reviewer":"code-reviewer",'
+            '"scope":"chain",'
+            '"scope_kind":"diff",'
+            '"verdict":"ok",'
+            '"diff_loc":100,'
+            '"session_id":"abc12345",'
+            '"workstream":null,'
+            '"reviewed_paths":null}'
+        )
+        assert record == expected
+        assert _REVIEWER_ATTESTATION_KEY not in record
+
+    def test_reviewer_attestation_appended_after_execution_basis(self):
+        """When both are present, reviewer_attestation is appended AFTER
+        execution_basis (module docstring / _build_json_record docstring
+        ordering claim)."""
+        record = _build_json_record(
+            sha_range="abc1234..def5678",
+            reviewer="code-reviewer",
+            scope="chain",
+            scope_kind="diff",
+            verdict="ok",
+            diff_loc=100,
+            session_id="abc12345",
+            workstream=None,
+            reviewed_paths=None,
+            execution_basis="read-only",
+            reviewer_attestation=_VALID_ATTESTATION,
+        )
+        assert record.index('"execution_basis"') < record.index(f'"{_REVIEWER_ATTESTATION_KEY}"')
+        parsed = json.loads(record)
+        assert parsed[_REVIEWER_ATTESTATION_KEY] == _VALID_ATTESTATION
+
+    def test_serializer_key_order_is_session_id_sidecar_shas(self):
+        """_serialize_reviewer_attestation hand-builds the object with the
+        C0-memo-proposed field order: reviewer_session_id, sidecar, shas."""
+        fragment = _serialize_reviewer_attestation(_VALID_ATTESTATION)
+        assert fragment == (
+            '{"reviewer_session_id":"reviewer-session-abc123",'
+            '"sidecar":"state/subagent-share/reviewer-session-abc123/sidecar.md",'
+            '"shas":["abc1234567","def8901234"]}'
+        )
+
+    def test_serializer_returns_none_for_none_input(self):
+        assert _serialize_reviewer_attestation(None) is None
+
+    def test_parser_round_trips_through_serializer(self):
+        """_parse_reviewer_attestation is the single read-side access point —
+        it recovers exactly what was persisted."""
+        record_dict = {_REVIEWER_ATTESTATION_KEY: _VALID_ATTESTATION}
+        assert _parse_reviewer_attestation(record_dict) == _VALID_ATTESTATION
+
+    def test_parser_returns_none_when_key_absent(self):
+        assert _parse_reviewer_attestation({}) is None
+
+    @pytest.mark.parametrize(
+        "bad_sha",
+        [
+            "HEAD",
+            "a65e39850^..HEAD",
+            "--",
+            "ABCDEF12",
+            "zzzz",
+        ],
+    )
+    def test_shas_must_be_hex_not_symbolic(self, bad_sha):
+        """review-trail 2.1.0 pins `shas` items to ^[0-9a-f]{4,64}$ (DoE,
+        56cc5fba2). Without the producer enforcing the same anchor it could
+        write a record its own vendored schema rejects, and a symbolic ref
+        would re-resolve against a later HEAD -- naming a different commit on
+        read than it did on write. Same reason AC3 refuses the symbolic-ref
+        shape at the guard; this closes the caller-supplied path into the
+        attestation key."""
+        with pytest.raises(ValueError, match="hex SHA"):
+            _validate_reviewer_attestation(
+                {
+                    _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "reviewer-session",
+                    _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+                    _ATTESTATION_FIELD_SHAS: [bad_sha],
+                }
+            )
+
+    def test_shas_accept_abbreviated_and_full_hex(self):
+        _validate_reviewer_attestation(
+            {
+                _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "reviewer-session",
+                _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+                _ATTESTATION_FIELD_SHAS: ["a1fb", "a1fb455f9", "0" * 64],
+            }
+        )
+
+    def test_non_dict_raises_value_error(self):
+        with pytest.raises(ValueError, match="reviewer_attestation"):
+            _validate_reviewer_attestation(["not", "a", "dict"])
+
+    @pytest.mark.parametrize(
+        "missing_field",
+        [
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID,
+            _ATTESTATION_FIELD_SIDECAR,
+            _ATTESTATION_FIELD_SHAS,
+        ],
+    )
+    def test_missing_required_field_raises_value_error(self, missing_field):
+        attestation = {k: v for k, v in _VALID_ATTESTATION.items() if k != missing_field}
+        with pytest.raises(ValueError, match="reviewer_attestation"):
+            _validate_reviewer_attestation(attestation)
+
+    def test_unrecognized_extra_field_raises_value_error(self):
+        """Exercises `_validate_reviewer_attestation` directly (not via
+        `write_review_trail_entry`, which now refuses ANY caller-supplied
+        `reviewer_attestation` before shape validation ever runs — see
+        `TestReviewerAttestationRefusesDirectSupply` — but the shape checker
+        itself is still load-bearing on the internally-resolved path)."""
+        attestation = dict(_VALID_ATTESTATION, em_disposition="waived")
+        with pytest.raises(ValueError, match="unrecognized"):
+            _validate_reviewer_attestation(attestation)
+
+    def test_binding_field_is_optional_and_serializes(self):
+        """C2b: `binding` is an OPTIONAL fourth key — an attestation carrying
+        it validates and serializes it as the last key. Full write-path
+        persistence of `binding` is covered end-to-end via the guard-admitted
+        path in `TestReviewerAttestationBindingIntegration` below; this test
+        exercises validate+serialize directly since `write_review_trail_entry`
+        no longer accepts a caller-supplied `reviewer_attestation` at all."""
+        attestation = dict(_VALID_ATTESTATION, **{_ATTESTATION_FIELD_BINDING: _ATTESTATION_BINDING_VERIFIED})
+        _validate_reviewer_attestation(attestation)  # must not raise
+
+        fragment = _serialize_reviewer_attestation(attestation)
+        assert fragment == (
+            '{"reviewer_session_id":"reviewer-session-abc123",'
+            '"sidecar":"state/subagent-share/reviewer-session-abc123/sidecar.md",'
+            '"shas":["abc1234567","def8901234"],'
+            f'"binding":"{_ATTESTATION_BINDING_VERIFIED}"}}'
+        )
+
+    def test_binding_field_absent_is_byte_identical_to_pre_c2b_shape(self):
+        """Omitting `binding` (every attestation built before C2b existed,
+        and every caller that never sets it) reproduces the pre-existing
+        3-key serialization verbatim."""
+        fragment = _serialize_reviewer_attestation(_VALID_ATTESTATION)
+        assert _ATTESTATION_FIELD_BINDING not in fragment
+        assert fragment == (
+            '{"reviewer_session_id":"reviewer-session-abc123",'
+            '"sidecar":"state/subagent-share/reviewer-session-abc123/sidecar.md",'
+            '"shas":["abc1234567","def8901234"]}'
+        )
+
+    def test_invalid_binding_value_raises_value_error(self):
+        attestation = dict(_VALID_ATTESTATION, **{_ATTESTATION_FIELD_BINDING: "trust-me"})
+        with pytest.raises(ValueError, match="binding"):
+            _validate_reviewer_attestation(attestation)
+
+    def test_shas_must_be_a_list(self):
+        attestation = dict(_VALID_ATTESTATION, **{_ATTESTATION_FIELD_SHAS: "abc1234567"})
+        with pytest.raises(ValueError, match="shas"):
+            _validate_reviewer_attestation(attestation)
+
+    @pytest.mark.parametrize(
+        "unsafe_sidecar", ['has"quote', "has\\backslash", "has\ncontrol"]
+    )
+    def test_unsafe_json_characters_are_rejected(self, unsafe_sidecar):
+        """Same injection risk as sha_range/reviewed_paths — values are
+        interpolated directly into the hand-built record."""
+        attestation = dict(_VALID_ATTESTATION, **{_ATTESTATION_FIELD_SIDECAR: unsafe_sidecar})
+        with pytest.raises(ValueError, match="unsafe JSON character"):
+            _validate_reviewer_attestation(attestation)
+
+    def test_none_is_a_no_op(self):
+        """_validate_reviewer_attestation(None) is a silent no-op — reviewer_attestation
+        is genuinely optional and the default."""
+        _validate_reviewer_attestation(None)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1727,11 +2011,16 @@ class TestForeignSessionScopeGuard:
         self, tmp_path
     ) -> None:
         """Regression: the refusal message must not claim there is no
-        remedy at all. The chain-ancestry-waiver mint this docstring
-        formerly described was removed outright by K-005
-        (state/kill-ledger.md, 2026-08-16) — the surviving remedy is
-        re-committing through the trailer-emitting path (see the raise
-        site) rather than any waiver/retry ordering. See this module's
+        remedy at all. This fixture's sole commit carries a Session-Id
+        trailer naming a DIFFERENT session (`_GUARD_FOREIGN_SESSION`), so it
+        is the foreign-trailered population C5 (docs/plans/2026-08-18-
+        chain-review-records-and-credits-predecessors.md § C5, AC8) fixed:
+        the remedy this message now names is the reviewer-attestation route
+        (C2), not re-committing to add a trailer — that remedy belongs only
+        to the genuinely-untrailered branch, see
+        test_single_commit_case3_does_not_advise_impossible_narrowing.
+        Before C5 this message wrongly claimed the commit was untrailered
+        and pointed at that inapplicable remedy; see this module's
         docstring update for the full incident context."""
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -1754,15 +2043,15 @@ class TestForeignSessionScopeGuard:
         # (an exact substring of the old raised message) does the falsifying
         # work, along with the two positive-content checks.
         assert "there is no vouch, grant, or override" not in message
-        # K-005 (state/kill-ledger.md, 2026-08-16) removed the chain-ancestry
-        # waiver system, and with it the "coverage-gate --from-handoff" mint
-        # remedy this test previously pinned. The surviving remedy is
-        # re-committing through the trailer-emitting path so the commit
-        # carries this session's own Session-Id trailer, then retrying —
-        # still a performable action, not the absolute impossibility this
-        # test guards against.
-        assert "re-commit" in message
-        assert "trailer-emitting path" in message
+        # C5 (AC8): this commit carries a foreign trailer, so it must never
+        # again be told it "is untrailered" — that was the defect. The
+        # surviving remedy for THIS population is the reviewer-attestation
+        # route (C2), not re-committing to add a trailer (that remedy is
+        # for the genuinely-untrailered branch only).
+        assert "is untrailered" not in message
+        assert "names a different session" in message
+        assert "reviewer sidecar" in message
+        assert "attestation_dispatch_id" in message
 
 
     def test_untrailered_commit_placed_in_scope_by_touched_path_writes_and_logs(
@@ -2306,6 +2595,51 @@ class TestWalkRangeAdoptsP2GrepLeg:
         assert diagnostic is not None
         assert diagnostic["reason"] == "foreign_session_narrowing"
 
+    def test_attested_sha_narrows_shape_a_prediction_to_none(self, tmp_path) -> None:
+        """C5: the same fixture as
+        test_untrailered_non_grep_commit_still_predicted_zero_credit fires
+        the diagnostic with no `attested_shas` — passing the foreign
+        commit's own SHA as `attested_shas` (what a real C2-admitted
+        `reviewer_attestation`'s `shas` field would contain) must narrow
+        the prediction to None: an attested foreign commit is exactly the
+        case C3/C4 now credit, so it is no longer provably zero-credit."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit(repo, "peer work", session_id=_GUARD_FOREIGN_SESSION)
+
+        diagnostic = _diagnose_zero_chain_terminal_credit(
+            f"{base_sha}..{foreign_sha}", "chain", "plan", _GUARD_OWN_SESSION, repo,
+            attested_shas=frozenset({foreign_sha}),
+        )
+        assert diagnostic is None
+
+    def test_partially_attested_range_still_narrows_to_none(self, tmp_path) -> None:
+        """A range with TWO foreign commits, only one attested, must also
+        narrow to None — a partially-attested foreign set already credits
+        something at the discharge path, so it is not a zero-credit write
+        either. This is the case the old `vouched >= foreign` form (dead
+        code pre-C5, since `_resolve_write_time_vouched_shas` always
+        returned an empty set) would have gotten wrong had it ever become
+        reachable without this chunk's fix."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha_one = _make_commit(
+            repo, "peer work one", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        foreign_sha_two = _make_commit(
+            repo, "peer work two", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        diagnostic = _diagnose_zero_chain_terminal_credit(
+            f"{base_sha}..{foreign_sha_two}", "chain", "plan", _GUARD_OWN_SESSION, repo,
+            attested_shas=frozenset({foreign_sha_one}),
+        )
+        assert diagnostic is None
+
     def test_merge_commit_is_classified_foreign(self, tmp_path) -> None:
         """The window walk must see merges (no `--no-merges`) so a merge is
         classified foreign by `foreign_shas_from_window`'s merge rule — this
@@ -2658,6 +2992,667 @@ class TestDispatchIdResolvable:
         assert not _dispatch_id_resolvable(
             "anything@session-missing", tmp_path, "missing-session"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: C2 reviewer-attestation evidence source (docs/plans/2026-08-18-
+# chain-review-records-and-credits-predecessors.md § C2) — the seven named
+# refusals plus the happy-path admission/persistence.
+# ---------------------------------------------------------------------------
+
+_ATT_OWN_SESSION = "own-session-attest01"
+_ATT_FOREIGN_SESSION = "peer-session-attest02"
+_ATT_DISPATCH_ID = "code-reviewer@session-attestown"
+
+
+def _ledger_row(tmp_path: Path, session_id: str, dispatch_id: str) -> None:
+    ledger_dir = tmp_path / ".git" / "coordinator-sessions" / session_id
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger_dir / "dispatched-agents.txt"
+    ledger.write_text(f"{dispatch_id}\topus\tcode-reviewer\t1786451686\n", encoding="utf-8")
+
+
+def _write_sidecar(
+    repo: Path, rel_dir: str, filename: str, *, reviewed_range_yaml: str = "", extra_body: str = "",
+) -> str:
+    rel = f"state/subagent-share/{rel_dir}/{filename}"
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\nreviewer: code-reviewer\n{reviewed_range_yaml}---\n{extra_body}\n",
+        encoding="utf-8",
+    )
+    return rel
+
+
+def _write_pending_frozen_record(repo: Path, session_id: str, sha_range: str) -> None:
+    """Write a `verdict: pending`, `scope_kind: diff` review-trail record for
+    *session_id* directly to disk — the AC1c evidence source
+    (`_own_frozen_diff_shas`) scans exactly this shape."""
+    trail_dir = repo / "state" / "review-trail"
+    trail_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "sha_range": sha_range,
+        "reviewer": "code-reviewer",
+        "scope": "session",
+        "scope_kind": "diff",
+        "verdict": "pending",
+        "diff_loc": 1,
+        "session_id": session_id,
+        "workstream": None,
+    }
+    (trail_dir / f"2026-08-18-000000-{session_id[:8]}-pending.json").write_text(
+        json.dumps(record), encoding="utf-8",
+    )
+
+
+def _write_attested(
+    repo: Path,
+    sha_range: str,
+    *,
+    reviewer_evidence: Optional[str],
+    attestation_dispatch_id: Optional[str],
+    own_session_id: str = _ATT_OWN_SESSION,
+    scope: str = "chain",
+) -> dict:
+    return write_review_trail_entry(
+        sha_range=sha_range,
+        reviewer="code-reviewer",
+        scope=scope,
+        verdict="ok",
+        diff_loc=1,
+        scope_kind="diff",
+        session_id=own_session_id,
+        workstream="",
+        reviewer_evidence=reviewer_evidence,
+        attestation_dispatch_id=attestation_dispatch_id,
+        caller_worktree=repo,
+    )
+
+
+class TestReviewerAttestationEvidenceSource:
+    """C2: `_guard_foreign_session_range` gains an evidence source that
+    resolves and persists (via C1's key) the attested SHA set. Six named
+    refusals (AC1, AC1a, AC1c, AC1d, AC2, AC3), each closing a named
+    falsification, plus AC4 (unresolvable/absent/malformed sidecar refuses
+    CLOSED) and AC5 (no attestation ⇒ byte-identical / every existing
+    ForeignSessionRangeRefused test stays green — see
+    TestForeignSessionScopeGuard above, unmodified by this chunk)."""
+
+    def _repo_with_foreign_commit(self, tmp_path: Path) -> tuple[Path, str, str]:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_ATT_FOREIGN_SESSION,
+        )
+        return repo, base_sha, foreign_sha
+
+    # -- AC1: dispatch-ledger binding, not a directory name --------------
+
+    def test_ac1_unresolvable_dispatch_id_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        # No ledger row written at all — the dispatch id cannot resolve.
+        with pytest.raises(ForeignSessionRangeRefused, match="does not resolve"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence="state/subagent-share/irrelevant/x.md",
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    def test_ac1_resolvable_dispatch_id_but_no_sidecar_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        with pytest.raises(ForeignSessionRangeRefused, match="no reviewer_evidence"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=None,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    # -- AC1a: state/plan-sidecars/ excluded from attestation citation ---
+
+    def test_ac1a_plan_sidecars_prefix_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        lens_dir = repo / "state" / "plan-sidecars"
+        lens_dir.mkdir(parents=True)
+        (lens_dir / "some-plan.prior-art.md").write_text(
+            f"---\nreviewed_range:\n  - \"{foreign_sha}^..{foreign_sha}\"\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ForeignSessionRangeRefused, match="state/subagent-share/"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence="state/plan-sidecars/some-plan.prior-art.md",
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    # -- AC1d: pre-field / empty sidecars admit nothing -------------------
+
+    def test_ac1d_sidecar_with_no_reviewed_range_key_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        rel = _write_sidecar(repo, _ATT_OWN_SESSION, "prefield-8h3x9k2m.md")
+        with pytest.raises(ForeignSessionRangeRefused, match="no reviewed_range entries"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    def test_ac1d_empty_reviewed_range_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "empty-8h3x9k2m.md", reviewed_range_yaml="reviewed_range: []\n",
+        )
+        with pytest.raises(ForeignSessionRangeRefused, match="no reviewed_range entries"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    # -- AC3: the measured malformed shapes --------------------------------
+
+    def test_ac3_symbolic_ref_shape_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "symref-8h3x9k2m.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..HEAD"\n',
+        )
+        with pytest.raises(ForeignSessionRangeRefused, match="malformed"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    def test_ac3_literal_double_dash_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "dashdash-8h3x9k2m.md",
+            reviewed_range_yaml='reviewed_range:\n  - "--"\n',
+        )
+        with pytest.raises(ForeignSessionRangeRefused, match="malformed"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    # -- AC1c: frozen-range containment, the anti-forgery bound -----------
+
+    def test_ac1c_range_exceeding_frozen_diff_refuses(self, tmp_path):
+        """A well-formed, dispatch-bound attestation whose entry was never
+        frozen for this session at all (no pending scope_kind=diff record
+        exists) is a DEFECT — refused, not admitted as a superset claim."""
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "overreach-8h3x9k2m.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..{foreign_sha}"\n',
+        )
+        # Deliberately NOT writing a pending frozen-diff record — the
+        # attested range has no frozen slice to be contained within.
+        with pytest.raises(ForeignSessionRangeRefused, match="exceeds the dispatching slice"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    # -- AC4: unresolvable/malformed sidecar refuses CLOSED ----------------
+
+    def test_ac4_unresolvable_sidecar_path_refuses(self, tmp_path):
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        with pytest.raises(ForeignSessionRangeRefused, match="does not resolve under"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence=f"state/subagent-share/{_ATT_OWN_SESSION}/does-not-exist.md",
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    # -- AC2 + happy path: per-SHA admission, and end-to-end persistence --
+
+    def test_ac2_admits_attested_sha_and_refuses_the_unattested_one(self, tmp_path):
+        """A sidecar attesting {A} does not admit a range spanning {A, C} —
+        the write is still refused, naming the still-uncovered commit's
+        genuine ambiguity (this session's existing Case-3 disposition),
+        never silently widened past what was actually attested."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_a = _make_commit_touching(
+            repo, "peer_a.py", "peer work a", session_id=_ATT_FOREIGN_SESSION,
+        )
+        foreign_c = _make_commit_touching(
+            repo, "peer_c.py", "peer work c (unattested)", session_id=_ATT_FOREIGN_SESSION,
+        )
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        _write_pending_frozen_record(repo, _ATT_OWN_SESSION, f"{base_sha}..{foreign_a}")
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "partial-8h3x9k2m.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_a}^..{foreign_a}"\n',
+        )
+        with pytest.raises(ForeignSessionRangeRefused, match="genuinely ambiguous"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_c}",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+            )
+
+    def test_happy_path_admits_and_persists_reviewer_attestation(self, tmp_path):
+        """The full C2 path: a dispatch-bound, frozen-range-contained
+        attestation admits a foreign single-commit range that Case 3 would
+        otherwise refuse, and the resolved object is persisted via C1's key
+        (never overwriting a caller-supplied one — none is supplied here)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_ATT_FOREIGN_SESSION,
+        )
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        _write_pending_frozen_record(
+            repo, _ATT_OWN_SESSION, f"{base_sha}..{foreign_sha}",
+        )
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "happy-8h3x9k2m.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..{foreign_sha}"\n',
+        )
+
+        result = _write_attested(
+            repo, f"{foreign_sha}^..{foreign_sha}",
+            reviewer_evidence=rel,
+            attestation_dispatch_id=_ATT_DISPATCH_ID,
+        )
+
+        assert Path(result["out_path"]).is_file()
+        attestation = result[_REVIEWER_ATTESTATION_KEY]
+        assert attestation[_ATTESTATION_FIELD_REVIEWER_SESSION_ID] == _ATT_DISPATCH_ID
+        assert attestation[_ATTESTATION_FIELD_SIDECAR] == rel
+        assert attestation[_ATTESTATION_FIELD_SHAS] == [foreign_sha]
+
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk[_REVIEWER_ATTESTATION_KEY] == attestation
+
+    def test_attested_foreign_commit_does_not_trigger_false_zero_credit_advisory(
+        self, tmp_path
+    ) -> None:
+        """C5 (docs/plans/2026-08-18-chain-review-records-and-credits-
+        predecessors.md § C5): a foreign commit C2 admits via reviewer
+        attestation is exactly the case C3/C4 now credit at the
+        chain-terminal discharge path — `_diagnose_zero_chain_terminal_
+        credit`'s shape-(a) prediction must not still warn zero-credit for
+        it, or every attested write would carry a false advisory."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_ATT_FOREIGN_SESSION,
+        )
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        _write_pending_frozen_record(
+            repo, _ATT_OWN_SESSION, f"{base_sha}..{foreign_sha}",
+        )
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "zerocredit-8h3x9k2m.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..{foreign_sha}"\n',
+        )
+
+        result = _write_attested(
+            repo, f"{foreign_sha}^..{foreign_sha}",
+            reviewer_evidence=rel,
+            attestation_dispatch_id=_ATT_DISPATCH_ID,
+        )
+
+        assert _ZERO_CREDIT_KEY not in result, (
+            f"attested foreign commit falsely flagged zero-credit: "
+            f"{result.get(_ZERO_CREDIT_KEY)!r}"
+        )
+
+    def test_caller_supplied_attestation_is_never_overwritten(self, tmp_path):
+        """RULING CHANGED (state/subagent-share/d6287fad-9f71-4951-ade8-
+        8cb1818b196e/coordinatorcode-reviewer-e6e58b0b.md, BLOCK): a
+        caller-supplied `reviewer_attestation` previously "won" over
+        whatever C2 resolved — persisted verbatim with zero verification
+        against the dispatch ledger or frozen-diff range, bypassing every
+        one of `_resolve_reviewer_attestation`'s refusals. It is now refused
+        outright, even when it happens to name a real, legitimately-attested
+        SHA (as this fixture's `explicit_attestation` does) — the parameter
+        has no legitimate direct caller (see the class docstring); only
+        `_resolve_reviewer_attestation` may mint one, via
+        `attestation_dispatch_id`. Test name kept (grep continuity) though
+        the assertion inverted."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_ATT_FOREIGN_SESSION,
+        )
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        _write_pending_frozen_record(repo, _ATT_OWN_SESSION, f"{base_sha}..{foreign_sha}")
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "caller-supplied-8h3x9k2m.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..{foreign_sha}"\n',
+        )
+        explicit_attestation = {
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "explicit-value",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/explicit/whatever.md",
+            _ATTESTATION_FIELD_SHAS: [foreign_sha],
+        }
+        with pytest.raises(ValueError, match="attestation_dispatch_id"):
+            write_review_trail_entry(
+                sha_range=f"{foreign_sha}^..{foreign_sha}",
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=1,
+                scope_kind="diff",
+                session_id=_ATT_OWN_SESSION,
+                workstream="",
+                reviewer_evidence=rel,
+                attestation_dispatch_id=_ATT_DISPATCH_ID,
+                reviewer_attestation=explicit_attestation,
+                caller_worktree=repo,
+            )
+
+    def test_fabricated_attestation_naming_undispatched_out_of_range_sha_is_refused(
+        self, tmp_path
+    ):
+        """The forgery case the reviewer named as untested (Finding BLOCK):
+        a caller-supplied `reviewer_attestation` naming an arbitrary SHA that
+        was never dispatched, never reviewed, and never frozen for this
+        session — no ledger row, no sidecar, no pending frozen-diff record
+        exist for it at all — must be refused, not persisted as though C2
+        had admitted it. Exercises the write on this session's OWN
+        legitimately-authored commit (sha_range guard-passes on its own
+        merits) with an ADDITIONAL forged attestation attached, mirroring
+        the exact attack shape the finding describes."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        own_sha = _make_commit_touching(
+            repo, "own_work.py", "own work", session_id=_ATT_OWN_SESSION,
+        )
+        forged_sha = "deadbeef" * 5  # 40 hex chars; never dispatched/reviewed/frozen
+        forged_attestation = {
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "anything",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/anything/whatever.md",
+            _ATTESTATION_FIELD_SHAS: [forged_sha],
+        }
+        with pytest.raises(ValueError, match="attestation_dispatch_id"):
+            write_review_trail_entry(
+                sha_range=f"{own_sha}^..{own_sha}",
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=1,
+                scope_kind="diff",
+                session_id=_ATT_OWN_SESSION,
+                workstream="",
+                reviewer_attestation=forged_attestation,
+                caller_worktree=repo,
+            )
+        # Confirm nothing was persisted — a refused write leaves no record,
+        # forged or otherwise.
+        trail_dir = repo / "state" / "review-trail"
+        assert not trail_dir.exists() or not list(trail_dir.glob("*.json"))
+
+    # -- AC5: no attestation_dispatch_id ⇒ unchanged behaviour -------------
+
+    def test_ac5_no_attestation_dispatch_id_existing_refusal_unchanged(self, tmp_path):
+        """Not passing attestation_dispatch_id at all (every existing
+        caller) reproduces the pre-C2 Case-3 refusal verbatim — reviewer_evidence
+        alone never triggers attestation resolution."""
+        repo, base_sha, foreign_sha = self._repo_with_foreign_commit(tmp_path)
+        with pytest.raises(ForeignSessionRangeRefused, match="genuinely ambiguous"):
+            _write_attested(
+                repo, f"{base_sha}..{foreign_sha}",
+                reviewer_evidence="state/subagent-share/whatever/x.md",
+                attestation_dispatch_id=None,
+            )
+
+
+class TestClassifyAttestationSidecarBinding:
+    """C2b (docs/plans/2026-08-18-chain-review-records-and-credits-
+    predecessors.md § C2b): pure unit tests of the grammar-only classifier,
+    no filesystem/git involved — `_resolve_reviewer_attestation`'s
+    integration coverage below only needs the two end-to-end shapes."""
+
+    _OWN = "attest-own-session-id"
+
+    def test_provision_key_shaped_under_own_session_is_verified(self):
+        rel = f"state/subagent-share/{self._OWN}/no-window-subprocess-primitive.C1.md"
+        assert _classify_attestation_sidecar_binding(rel, self._OWN) == _ATTESTATION_BINDING_VERIFIED
+
+    def test_subagent_sidecar_suffix_provision_key_shaped_is_verified(self):
+        rel = f"state/subagent-share/{self._OWN}/coordinator-code-reviewer.agentid123.subagent-sidecar.md"
+        assert _classify_attestation_sidecar_binding(rel, self._OWN) == _ATTESTATION_BINDING_VERIFIED
+
+    def test_real_hex_nonce_suffix_is_asserted(self):
+        """A genuine `secrets.token_hex(4)` nonce (8 lowercase hex chars) —
+        the shape a hand-dispatched agent's sidecar actually gets — never
+        classifies verified, even though it sits under the own session dir."""
+        rel = f"state/subagent-share/{self._OWN}/code-reviewer-a1b2c3d4.md"
+        assert _classify_attestation_sidecar_binding(rel, self._OWN) == _ATTESTATION_BINDING_ASSERTED
+
+    def test_real_hex_sidecar_nonce_suffix_is_asserted(self):
+        rel = f"state/subagent-share/{self._OWN}/code-reviewer-sidecar-a1b2c3d4.md"
+        assert _classify_attestation_sidecar_binding(rel, self._OWN) == _ATTESTATION_BINDING_ASSERTED
+
+    def test_provision_key_shaped_under_a_different_session_is_asserted(self):
+        """Recomputing the expected path uses THIS session's own resolved
+        session_id, never the directory segment the citation itself names —
+        a citation naming a peer session's directory cannot recompute to
+        match and stays asserted rather than falsely verifying."""
+        rel = "state/subagent-share/some-other-session/no-window-subprocess-primitive.C1.md"
+        assert _classify_attestation_sidecar_binding(rel, self._OWN) == _ATTESTATION_BINDING_ASSERTED
+
+    def test_non_canonical_basename_is_asserted(self):
+        """A basename the sanitizer would have altered (here: a literal
+        space) could never have been the leaf the provisioner actually
+        wrote, so it cannot recompute cleanly — falls to asserted."""
+        rel = f"state/subagent-share/{self._OWN}/has space.md"
+        assert _classify_attestation_sidecar_binding(rel, self._OWN) == _ATTESTATION_BINDING_ASSERTED
+
+
+class TestReviewerAttestationBindingIntegration:
+    """C2b end-to-end: `_resolve_reviewer_attestation` persists the binding
+    classification alongside an admission it already granted on AC1's
+    existing basis — this class never re-tests the seven AC1/AC1a/AC1c/
+    AC1d/AC3 refusals above (untouched by C2b, see the anti-scope note)."""
+
+    def test_provision_key_shaped_sidecar_admits_as_verified(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_ATT_FOREIGN_SESSION,
+        )
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        _write_pending_frozen_record(repo, _ATT_OWN_SESSION, f"{base_sha}..{foreign_sha}")
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "some-plan.C1.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..{foreign_sha}"\n',
+        )
+
+        result = _write_attested(
+            repo, f"{foreign_sha}^..{foreign_sha}",
+            reviewer_evidence=rel,
+            attestation_dispatch_id=_ATT_DISPATCH_ID,
+        )
+
+        attestation = result[_REVIEWER_ATTESTATION_KEY]
+        assert attestation[_ATTESTATION_FIELD_BINDING] == _ATTESTATION_BINDING_VERIFIED
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk[_REVIEWER_ATTESTATION_KEY][_ATTESTATION_FIELD_BINDING] == _ATTESTATION_BINDING_VERIFIED
+
+    def test_nonce_shaped_sidecar_with_resolvable_dispatch_id_admits_as_asserted_never_verified(
+        self, tmp_path
+    ):
+        """The negative case: a real-hex-nonce-suffixed sidecar (the shape a
+        hand-dispatched agent's sidecar actually gets) paired with a
+        resolvable-but-otherwise-unrelated dispatch id is still admitted
+        (AC1's existing basis is unchanged by C2b) — but it must be marked
+        `asserted`, never `verified`, since there is no `provision_key` to
+        recompute a binding from."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_ATT_FOREIGN_SESSION,
+        )
+        _ledger_row(repo, _ATT_OWN_SESSION, _ATT_DISPATCH_ID)
+        _write_pending_frozen_record(repo, _ATT_OWN_SESSION, f"{base_sha}..{foreign_sha}")
+        rel = _write_sidecar(
+            repo, _ATT_OWN_SESSION, "code-reviewer-a1b2c3d4.md",
+            reviewed_range_yaml=f'reviewed_range:\n  - "{foreign_sha}^..{foreign_sha}"\n',
+        )
+
+        result = _write_attested(
+            repo, f"{foreign_sha}^..{foreign_sha}",
+            reviewer_evidence=rel,
+            attestation_dispatch_id=_ATT_DISPATCH_ID,
+        )
+
+        attestation = result[_REVIEWER_ATTESTATION_KEY]
+        assert attestation[_ATTESTATION_FIELD_BINDING] == _ATTESTATION_BINDING_ASSERTED
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk[_REVIEWER_ATTESTATION_KEY][_ATTESTATION_FIELD_BINDING] == _ATTESTATION_BINDING_ASSERTED
+
+
+class TestLoadBearingFieldsDivergeReviewerAttestation:
+    """EM ruling (C1/C2): `reviewer_attestation` joins
+    `_LOAD_BEARING_IDENTITY_FIELDS` — two records for the same
+    (session_id, sha_range) attesting different SHA sets is a genuine
+    divergence, never a silent first-writer convergence."""
+
+    def _record(self, **overrides) -> dict:
+        base = {
+            "verdict": "ok", "reviewer": "code-reviewer", "scope": "chain",
+            "scope_kind": "diff", "reviewed_paths": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_differing_attestation_shas_diverge(self):
+        existing = self._record(reviewer_attestation={
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "d1",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+            _ATTESTATION_FIELD_SHAS: ["aaa1111"],
+        })
+        new = self._record(reviewer_attestation={
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "d1",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+            _ATTESTATION_FIELD_SHAS: ["aaa1111", "bbb2222"],
+        })
+        assert _load_bearing_fields_diverge(existing, new)
+
+    def test_identical_attestation_with_reordered_shas_converges(self):
+        existing = self._record(reviewer_attestation={
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "d1",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+            _ATTESTATION_FIELD_SHAS: ["aaa1111", "bbb2222"],
+        })
+        new = self._record(reviewer_attestation={
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "d1",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+            _ATTESTATION_FIELD_SHAS: ["bbb2222", "aaa1111"],
+        })
+        assert not _load_bearing_fields_diverge(existing, new)
+
+    def test_absent_vs_present_attestation_diverges(self):
+        existing = self._record(reviewer_attestation=None)
+        new = self._record(reviewer_attestation={
+            _ATTESTATION_FIELD_REVIEWER_SESSION_ID: "d1",
+            _ATTESTATION_FIELD_SIDECAR: "state/subagent-share/s/x.md",
+            _ATTESTATION_FIELD_SHAS: ["aaa1111"],
+        })
+        assert _load_bearing_fields_diverge(existing, new)
+
+
+class TestExtractFrontmatterList:
+    """`_extract_frontmatter_list` — the array-valued sibling of
+    `extract_frontmatter_scalar`."""
+
+    def test_block_style(self):
+        text = '---\nreviewed_range:\n  - "abc1234^..abc1234"\n  - def5678^..def5678\n---\nBody.\n'
+        assert _extract_frontmatter_list(text, "reviewed_range") == [
+            "abc1234^..abc1234", "def5678^..def5678",
+        ]
+
+    def test_flow_style(self):
+        text = '---\nreviewed_range: ["abc1234^..abc1234", "def5678^..def5678"]\n---\nBody.\n'
+        assert _extract_frontmatter_list(text, "reviewed_range") == [
+            "abc1234^..abc1234", "def5678^..def5678",
+        ]
+
+    def test_empty_flow_array(self):
+        text = "---\nreviewed_range: []\n---\nBody.\n"
+        assert _extract_frontmatter_list(text, "reviewed_range") == []
+
+    def test_absent_key_returns_none(self):
+        text = "---\nreviewer: code-reviewer\n---\nBody.\n"
+        assert _extract_frontmatter_list(text, "reviewed_range") is None
+
+    def test_no_frontmatter_fences_returns_none(self):
+        assert _extract_frontmatter_list("just a body, no fences\n", "reviewed_range") is None
+
+
+class TestOwnFrozenDiffShas:
+    """`_own_frozen_diff_shas` — AC1c's evidence source: this session's own
+    pending scope_kind=diff review-trail records, never a peer's."""
+
+    def test_scoped_to_own_session_only(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit(repo, "tip")
+        _write_pending_frozen_record(repo, "own-sess", f"{base_sha}..{tip_sha}")
+        _write_pending_frozen_record(repo, "peer-sess", f"{base_sha}..{tip_sha}")
+
+        own_shas = _own_frozen_diff_shas("own-sess", repo)
+        # `git rev-list A..B` is exclusive of A (standard range semantics) —
+        # only the tip commit is reachable-and-excluded-of-base here.
+        assert tip_sha in own_shas
+        assert base_sha not in own_shas
+
+        # A peer's pending record must never widen this session's own
+        # frozen bound — re-scanning with the peer's id is independent, not
+        # additive, and this session's own scan is unaffected by it.
+        assert _own_frozen_diff_shas("nonexistent-sess", repo) == frozenset()
+
+    def test_non_pending_or_non_diff_records_excluded(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit(repo, "tip")
+        trail_dir = repo / "state" / "review-trail"
+        trail_dir.mkdir(parents=True)
+        (trail_dir / "ok-verdict.json").write_text(json.dumps({
+            "sha_range": f"{base_sha}..{tip_sha}", "session_id": "own-sess",
+            "verdict": "ok", "scope_kind": "diff",
+        }), encoding="utf-8")
+        (trail_dir / "plan-scope.json").write_text(json.dumps({
+            "sha_range": f"{base_sha}..{tip_sha}", "session_id": "own-sess",
+            "verdict": "pending", "scope_kind": "plan",
+        }), encoding="utf-8")
+        assert _own_frozen_diff_shas("own-sess", repo) == frozenset()
 
 
 # ---------------------------------------------------------------------------

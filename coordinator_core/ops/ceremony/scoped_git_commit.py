@@ -122,7 +122,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
@@ -147,7 +146,6 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import shape as session_shape
-from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
 
@@ -1808,24 +1806,34 @@ def _remote_sha_state(
     lookups with no network I/O. It narrows the race, it does not eliminate it
     -- which is exactly why the residual is `_REMOTE_UNKNOWN` and never a
     manufactured failure.
+
+    Routed through `git_native._git` (C-09,
+    `state/handoffs/2026-08-18_190000_roadmap-opro-01.md`) rather than bare
+    `subprocess.run`, for the same reason `_commit_paths_are_clean` is: it is
+    this op's sole native-git choke point, so a spawn issued outside it is a
+    spawn no budget can see. The push-raced path these calls live on is the
+    one that actually pays the probe's cost, and it was uncountable while
+    they bypassed the seam. `_git` converts a timeout to
+    `returncode=-1` instead of raising, which lands on the same
+    `_REMOTE_UNKNOWN` rung the `except` below gave it before.
     """
     if not sha:
         return _REMOTE_UNKNOWN
     try:
-        upstream = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd=worktree_root, capture_output=True, text=True, timeout=2,
-            **no_console_creationflags(),
+        upstream = git_native._git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd=worktree_root,
+            timeout=2,
         )
         if upstream.returncode != 0:
             return _REMOTE_UNKNOWN  # no upstream configured — nothing to violate
         upstream_ref = upstream.stdout.strip()
 
         for attempt in range(attempts):
-            contains = subprocess.run(
-                ["git", "merge-base", "--is-ancestor", sha, upstream_ref],
-                cwd=worktree_root, capture_output=True, text=True, timeout=2,
-                **no_console_creationflags(),
+            contains = git_native._git(
+                ["merge-base", "--is-ancestor", sha, upstream_ref],
+                cwd=worktree_root,
+                timeout=2,
             )
             if contains.returncode == 0:
                 return _REMOTE_PRESENT

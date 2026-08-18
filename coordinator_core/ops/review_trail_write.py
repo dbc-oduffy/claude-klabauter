@@ -16,6 +16,13 @@ JSON record shape (key order is canonical; hand-serialized for byte-parity):
     ``plan``/``integration`` records OMIT the key entirely; the original eight-key shape is
     otherwise unchanged and every existing by-key-name consumer keeps working.
 
+    A further optional key — ``execution_basis`` (docs/plans/2026-08-11-review-trail-carries-
+    execution-basis.md § C1) — and, proposed but NOT YET DoE-ratified, ``reviewer_attestation``
+    (docs/plans/2026-08-18-chain-review-records-and-credits-predecessors.md § C1; see the
+    "reviewer_attestation" comment block near ``_build_json_record`` for the full design and
+    ratification status) are each appended ONLY when supplied — absence omits the key entirely
+    and reproduces byte-identical output to a call made before that key existed.
+
 Filename derivation:
     ``{TIMESTAMP}-{SESSION_ID[:8]}.json``
     TIMESTAMP: ``YYYY-MM-DD-HHMMSS`` (macOS/Windows, second-precision, 17 chars) or
@@ -147,6 +154,7 @@ from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 
 logger = logging.getLogger(__name__)
 
@@ -1208,15 +1216,484 @@ def _deliverable_id_matched_untrailered_shas(
     return frozenset(matched)
 
 
+# ---------------------------------------------------------------------------
+# Reviewer-attestation evidence source (C2, docs/plans/2026-08-18-chain-
+# review-records-and-credits-predecessors.md § C2).
+#
+# `_guard_foreign_session_range` refuses (case 3) a range whose foreign/
+# untrailered commits the touched-path signal cannot place in scope. This
+# section adds ONE more evidence source it consults before refusing: a
+# reviewer's own sidecar `reviewed_range` attestation (DR-156), admitted only
+# when it is BOTH (a) bound to a dispatch this session's own ledger actually
+# recorded (AC1) and (b) itself contained within the dispatching slice's own
+# frozen-diff range (AC1c) — the two-sided bound the eng-director review
+# named as the anti-forgery property (F2, F3).
+#
+# Engaged ONLY when the caller supplies `attestation_dispatch_id` (new,
+# additive parameter) — never merely from `reviewer_evidence` alone, which
+# existing callers already pass for the unrelated execution_basis-derivation
+# purpose (C2 of the 2026-08-11 plan). This is what makes AC5 hold trivially:
+# no existing caller passes `attestation_dispatch_id`, so no existing
+# behaviour changes.
+#
+# C2b (docs/plans/2026-08-18-chain-review-records-and-credits-predecessors.md
+# § C2b, EM-ruled correction to C2): AC1 alone proves "a dispatch happened
+# this session" — it never proved the CITED SIDECAR is what that dispatch
+# produced. A caller can pair any own-session sidecar path with any
+# own-session dispatch id; AC1's ledger check does not catch that. C2b adds
+# a SECOND, structural check that fires only for a deterministic
+# (`provision_key`-shaped) sidecar citation: the cited path is recomputed
+# independently from this session's own resolved session_id plus the
+# `provision_key` implied by the citation's own basename, and admission is
+# only labelled "verified" when that recomputation lands on the exact cited
+# path (`_classify_attestation_sidecar_binding`). A nonce-shaped citation
+# (the fallback path a hand-dispatched agent's sidecar actually gets) has no
+# `provision_key` to recompute from and stays on the pre-existing,
+# AC1-only "asserted" basis — see that function's docstring. AC1 itself is
+# UNCHANGED and still gates every admission on either path; the binding
+# label records which of the two supporting bases actually held, it never
+# substitutes for AC1.
+#
+# AC1b residual, now stated PER PATH (not blanket) — do not read either half
+# as covering the other:
+#   - verified path: sidecar IDENTITY is derived (the path recomputation
+#     above), but DR-156 Condition 3 (content authored by the dispatched
+#     subagent, not pre-created by the EM) remains UNENFORCED — nothing here
+#     reads or attests to who actually typed the sidecar's body.
+#   - asserted path: sidecar identity is caller-asserted (AC1's dispatch-
+#     ledger proof only) AND Condition 3 is unenforced.
+# In both cases AC1c's frozen-range containment still bounds the claim —
+# this section closes "a real dispatch attested within its own frozen
+# range", never "the subagent, not the EM, wrote this sidecar" — see the
+# eng-director review's F3(c).
+# ---------------------------------------------------------------------------
+
+#: AC1a — only `state/subagent-share/` carries a session segment AC1 can bind
+#: a dispatch against; `state/plan-sidecars/` names lens sidecars (prior-art,
+#: coverage, docs checks), not review attestations, and is EXCLUDED from
+#: attestation citation specifically. `_SIDECAR_EVIDENCE_PREFIXES` itself is
+#: UNCHANGED for its existing (unrelated) reviewer-evidence purpose.
+_ATTESTATION_SIDECAR_PREFIXES = ("state/subagent-share/",)
+
+#: Mirrors `run-report.schema.json` / `review-findings.schema.json`'s own
+#: `reviewed_range.items` pattern exactly (DR-156) — hex-SHA-anchored ranges
+#: only, joined by `..`/`...`, with an optional `^`/`~<N>` on the LEFT
+#: endpoint. Anchored with `^...$` for the same reason the schema's own
+#: pattern is: an unanchored pattern would admit a symbolic ref merely
+#: containing a hex-shaped substring (`a65e39850^..HEAD`), or a bare `--`.
+_REVIEWED_RANGE_ITEM_RE = re.compile(
+    r"^[0-9a-fA-F]{4,64}(?:\^|~[0-9]+)?\.{2,3}[0-9a-fA-F]{4,64}$"
+)
+
+
+def _resolve_attestation_sidecar_path(evidence: str, caller_worktree: Path) -> Optional[Path]:
+    """AC1a: like `_resolve_sidecar_evidence_path` (same path-safety
+    normalization, same `_SIDECAR_EVIDENCE_PREFIXES` resolution — never a new
+    path rule, per AC4), narrowed further to `_ATTESTATION_SIDECAR_PREFIXES`
+    for ATTESTATION CITATION specifically. A sidecar resolving under
+    `state/plan-sidecars/` still resolves for ordinary reviewer-evidence
+    purposes (unaffected); it simply cannot serve as an attestation.
+    """
+    resolved = _resolve_sidecar_evidence_path(evidence, caller_worktree)
+    if resolved is None:
+        return None
+    normalized = evidence.strip().replace("\\", "/").lstrip("/")
+    if not normalized.startswith(_ATTESTATION_SIDECAR_PREFIXES):
+        return None
+    return resolved
+
+
+#: Matches a block-style YAML list item under a top-level frontmatter key,
+#: e.g. `  - "abc123^..abc123"` or `  - abc123^..abc123`.
+_YAML_LIST_ITEM_RE = re.compile(r"^\s*-\s*(.+?)\s*$")
+#: A new top-level (column-0) frontmatter key — ends a block-style list.
+_YAML_TOP_KEY_RE = re.compile(r"^\S")
+
+
+def _extract_frontmatter_list(text: str, field: str) -> Optional[List[str]]:
+    """Extract a YAML list field's string values from frontmatter (between
+    the first two ``---`` fences) — the array-valued sibling of
+    ``_fm_util.extract_frontmatter_scalar``, which only reads scalars.
+
+    Supports both shapes a sidecar's ``reviewed_range`` may carry:
+      - block style::
+
+            reviewed_range:
+              - "abc123^..abc123"
+              - def456^..def456
+
+      - flow style (single line)::
+
+            reviewed_range: ["abc123^..abc123", "def456^..def456"]
+            reviewed_range: []
+
+    Returns ``None`` when *field* does not appear in the frontmatter at all
+    (AC1d — a pre-field sidecar) or when the frontmatter fences themselves
+    are absent. Returns ``[]`` when the key is present but carries no items
+    (empty flow array, or a block header with no following ``- `` lines) —
+    a present-but-empty attestation, distinct from absent (mirrors the
+    schema's own "no empty-array sentinel" ABSENCE rule for the *producer*
+    side; this is the *consumer* side reading whatever is actually on disk).
+    Surrounding YAML quotes are stripped, matching
+    ``extract_frontmatter_scalar``'s existing convention.
+    """
+    lines = text.splitlines()
+    fence_count = 0
+    prefix = f"{field}:"
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "---":
+            fence_count += 1
+            if fence_count >= 2:
+                return None
+            continue
+        if fence_count != 1:
+            continue
+        if not line.startswith(prefix):
+            continue
+        rest = line[len(prefix):].strip()
+        if rest.startswith("["):
+            # Flow style — accumulate lines until the closing bracket.
+            flow_text = rest
+            j = idx
+            while "]" not in flow_text and j + 1 < len(lines):
+                j += 1
+                flow_text += lines[j]
+            flow_text = flow_text.strip()
+            if flow_text.startswith("[") and flow_text.endswith("]"):
+                inner = flow_text[1:-1].strip()
+            else:
+                inner = flow_text.lstrip("[")
+            if not inner:
+                return []
+            items = [tok.strip().strip("\"'") for tok in inner.split(",")]
+            return [tok for tok in items if tok]
+        if rest:
+            # A non-empty, non-flow scalar under an array-typed key is not a
+            # shape this function attempts to interpret further — treat as
+            # present-but-unparseable-as-a-list, i.e. no items recovered.
+            return []
+        # Block style: collect subsequent `- item` lines until a new
+        # column-0 key or a fence.
+        items = []
+        for follow in lines[idx + 1:]:
+            if follow.strip() == "---":
+                break
+            if _YAML_TOP_KEY_RE.match(follow):
+                break
+            item_match = _YAML_LIST_ITEM_RE.match(follow)
+            if item_match:
+                items.append(item_match.group(1).strip("\"'"))
+        return items
+    return None
+
+
+def _own_frozen_diff_shas(own_session_id: str, caller_worktree: Path) -> FrozenSet[str]:
+    """AC1c's evidence source: the union of commit SHAs reachable from every
+    ``verdict: "pending"``, ``scope_kind: "diff"`` review-trail record THIS
+    session itself wrote — i.e. every range ``freeze-review-diff.py``'s
+    ``_open_pending_trail_record`` froze and opened a review loop over.
+    That pending record's own ``sha_range`` field IS "the ``--range``
+    persisted by ``freeze-review-diff.py``'s ``_open_pending_trail_record``
+    at freeze time" the run-report schema's ``reviewed_range`` description
+    names — there is no second, separate frozen-range artifact.
+
+    Scoped to THIS session's own pending records only (never a peer's) —
+    the same session-scoping discipline every other evidence source in this
+    module already applies. Returns an empty set on any read/git failure —
+    fail-closed: an attestation that cannot be bounded is never admitted.
+    """
+    trail_dir = caller_worktree / "state" / "review-trail"
+    try:
+        candidates = sorted(trail_dir.glob("*.json"))
+    except OSError:
+        return frozenset()
+    ranges: List[str] = []
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("session_id") != own_session_id:
+            continue
+        if data.get("verdict") != "pending" or data.get("scope_kind") != "diff":
+            continue
+        sha_range = data.get("sha_range")
+        if isinstance(sha_range, str) and sha_range:
+            ranges.append(sha_range)
+    shas: set[str] = set()
+    for rng in ranges:
+        rc, out, _err = _git_runner(["git", "rev-list", rng], str(caller_worktree))
+        if rc != 0:
+            continue
+        shas.update(line.strip() for line in out.splitlines() if line.strip())
+    return frozenset(shas)
+
+
+def _resolve_range_shas(sha_range: str, caller_worktree: Path) -> Optional[FrozenSet[str]]:
+    """`git rev-list` a single already-shape-validated range to its enumerated
+    commit set, or ``None`` on any resolution failure (unknown SHA, etc.)."""
+    rc, out, _err = _git_runner(["git", "rev-list", sha_range], str(caller_worktree))
+    if rc != 0:
+        return None
+    return frozenset(line.strip() for line in out.splitlines() if line.strip())
+
+
+#: Nonce shape (`subagent_sandbox/CONTRACT.md` § Nonce rule): an 8-hex-char
+#: `secrets.token_hex(4)` suffix, hyphen-joined onto the sanitized label.
+#: `coordinator_core.dispatch.provision`'s sibling seam inserts a literal
+#: "-sidecar-" token between label and nonce for its own suffix
+#: (`<provision_key>.subagent-sidecar.md` when deterministic); match that
+#: shape FIRST since it is the longer, more specific suffix — a plain ".md"
+#: match would otherwise also fire on it.
+_ATTESTATION_NONCE_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}$")
+_ATTESTATION_SIDECAR_NONCE_SUFFIX_RE = re.compile(r"-sidecar-[0-9a-f]{8}$")
+_ATTESTATION_SIDECAR_SUFFIX = ".subagent-sidecar.md"
+
+
+def _classify_attestation_sidecar_binding(sidecar_rel_path: str, own_session_id: str) -> str:
+    """Grammar-only classification of an already-admitted attestation's
+    binding strength — `_ATTESTATION_BINDING_VERIFIED` when the cited
+    sidecar's basename is `provision_key`-shaped AND recomputing its
+    expected path from that key plus THIS session's own resolved
+    `session_id` lands on the exact cited path; `_ATTESTATION_BINDING_ASSERTED`
+    otherwise (nonce-shaped citation, or a provision_key-shaped one that does
+    not recompute to the cited path — e.g. it names a *different* session's
+    directory).
+
+    Contract boundary (`subagent_sandbox/CONTRACT.md`): callers own whether
+    they pass a `provision_key` and what they derive it from; claude-klabauter owns
+    only the GRAMMAR (single flat segment, the sanitizer, the path
+    template). This function stays on claude-klabauter's side of that line — it never
+    assumes a `provision_key` means `<plan-slug>.<chunk-id>` or any other
+    caller-specific semantic, it only checks "does the path this citation
+    names match the path THIS session's sanitizer would produce for the
+    token sitting in the citation's own basename." That is a strictly
+    WEAKER claim than "this is really the sidecar dispatch X produced" —
+    honestly, all it rules out is a citation that lies about which
+    session's directory it sits under, or a basename the sanitizer would
+    have mangled. It never reaches DR-156 Condition 3 (content authored by
+    the subagent, not the EM) — see this section's module-level "AC1b
+    residual" note.
+
+    Known narrow gap, mirrored from `_resolve_ref_to_sha`'s own documented
+    trade-off: a genuinely `provision_key`-shaped citation whose token
+    happens to end in `-<8 lowercase hex chars>` (or `-sidecar-<8 hex>`) is
+    indistinguishable from a nonce and is classified ASSERTED rather than
+    VERIFIED — a false negative (under-claims strength), never a false
+    positive. Left undisambiguated for the same reason: closing it needs
+    information (was this path opened with or without a caller-supplied
+    `provision_key`?) this read-time classifier does not have access to.
+
+    Never called for a caller-supplied ``reviewer_attestation`` (C1's
+    existing "never overwritten" precedence) — only for the object THIS
+    function's caller (`_resolve_reviewer_attestation`) resolves itself,
+    after AC1/AC1a/AC1c/AC1d/AC3 have already admitted the citation on
+    AC1's dispatch-ledger basis. This function only reclassifies an
+    admission that already happened; it never makes or blocks one.
+    """
+    normalized = sidecar_rel_path.strip().replace("\\", "/").lstrip("/")
+    basename = normalized.rsplit("/", 1)[-1]
+
+    if basename.endswith(_ATTESTATION_SIDECAR_SUFFIX):
+        suffix = _ATTESTATION_SIDECAR_SUFFIX
+        stem = basename[: -len(suffix)]
+        nonce_re = _ATTESTATION_SIDECAR_NONCE_SUFFIX_RE
+    elif basename.endswith(".md"):
+        suffix = ".md"
+        stem = basename[:-3]
+        nonce_re = _ATTESTATION_NONCE_SUFFIX_RE
+    else:
+        # Not a sidecar-shaped filename at all — nothing to recompute from.
+        return _ATTESTATION_BINDING_ASSERTED
+
+    if nonce_re.search(stem):
+        return _ATTESTATION_BINDING_ASSERTED
+
+    # The stem must already BE its own sanitized form — a citation whose
+    # basename the sanitizer would have altered could never have been the
+    # literal leaf the provisioner wrote, so it cannot recompute cleanly.
+    if _sanitize_segment(stem) != stem:
+        return _ATTESTATION_BINDING_ASSERTED
+
+    sanitized_own_session = _sanitize_segment(own_session_id)
+    if sanitized_own_session is None:
+        return _ATTESTATION_BINDING_ASSERTED
+
+    expected_path = f"state/subagent-share/{sanitized_own_session}/{stem}{suffix}"
+    if expected_path == normalized:
+        return _ATTESTATION_BINDING_VERIFIED
+    return _ATTESTATION_BINDING_ASSERTED
+
+
+def _resolve_reviewer_attestation(
+    *,
+    reviewer_evidence: Optional[str],
+    attestation_dispatch_id: Optional[str],
+    own_session_id: str,
+    caller_worktree: Path,
+) -> "tuple[FrozenSet[str], Optional[dict]]":
+    """Resolve C2's evidence source: an admitted SHA set plus the
+    ``reviewer_attestation`` object (C1's persistence shape) to carry it,
+    or raise ``ForeignSessionRangeRefused`` for any of the six named defect
+    shapes (AC1, AC1a, AC1c, AC1d, AC3, AC4).
+
+    Returns ``(frozenset(), None)`` — contributing nothing, refusing
+    nothing — only when *attestation_dispatch_id* is not supplied at all
+    (attestation was never attempted for this write; see this section's
+    module-level comment on why that is what keeps AC5 true).
+    """
+    if attestation_dispatch_id is None:
+        return frozenset(), None
+    dispatch_id = attestation_dispatch_id.strip()
+    if not dispatch_id:
+        return frozenset(), None
+
+    # AC1 — dispatch-ledger binding, not a directory name. F3(b): the sidecar
+    # sitting under state/subagent-share/<own sid>/ proves nothing about
+    # authorship, because the writing session controls that directory itself.
+    # This check alone also does not tie the CITED sidecar to this SPECIFIC
+    # dispatch_id — any own-session sidecar could be paired with any
+    # own-session dispatch id and still pass here; C2b's
+    # `_classify_attestation_sidecar_binding` (below, after admission) adds a
+    # second, structural check for the deterministic-path population that
+    # closes that gap. This AC1 check remains the sole GATE either way — see
+    # this section's module-level comment for what C2b changes and what it
+    # does not.
+    if not _dispatch_id_resolvable(dispatch_id, caller_worktree, own_session_id):
+        raise ForeignSessionRangeRefused(
+            "review_trail.write: reviewer_attestation dispatch_id "
+            f"{dispatch_id!r} does not resolve in this session's own "
+            f".git/coordinator-sessions/{own_session_id}/dispatched-agents.txt "
+            "— an attestation must be bound to a dispatch this session "
+            "actually made, not merely a file sitting under "
+            "state/subagent-share/."
+        )
+
+    if not reviewer_evidence:
+        raise ForeignSessionRangeRefused(
+            "review_trail.write: reviewer_attestation dispatch_id "
+            f"{dispatch_id!r} resolved against this session's own dispatch "
+            "ledger, but no reviewer_evidence sidecar path was supplied to "
+            "attest from."
+        )
+
+    # AC1a — state/plan-sidecars/ (lens sidecars) may not serve as an
+    # attestation citation; _SIDECAR_EVIDENCE_PREFIXES itself is unchanged.
+    sidecar_path = _resolve_attestation_sidecar_path(reviewer_evidence, caller_worktree)
+    if sidecar_path is None:
+        raise ForeignSessionRangeRefused(
+            "review_trail.write: reviewer_attestation sidecar "
+            f"{reviewer_evidence!r} does not resolve under "
+            "state/subagent-share/ — only that prefix carries a session "
+            "segment AC1 can bind a dispatch against; state/plan-sidecars/ "
+            "(lens sidecars: prior-art, coverage, docs checks) may not "
+            "serve as an attestation citation."
+        )
+
+    try:
+        text = sidecar_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        # AC4 — unresolvable/unreadable sidecar refuses CLOSED.
+        raise ForeignSessionRangeRefused(
+            f"review_trail.write: reviewer_attestation sidecar "
+            f"{reviewer_evidence!r} could not be read ({exc}) — refusing "
+            "closed rather than treating an unreadable attestation as absent."
+        ) from exc
+
+    reviewed_range = _extract_frontmatter_list(text, "reviewed_range")
+    if not reviewed_range:
+        # AC1d — a sidecar with no reviewed_range key (97.8% of the corpus,
+        # 149/6,748 measured carrying it) attests to nothing under any
+        # date-discrimination fallback. No spawned_at-proximity or
+        # empty-means-everything fallback is invented here — see this
+        # module's C2 comment block. A present-but-empty array is the same
+        # "attests to nothing" outcome, refused identically (AC4).
+        raise ForeignSessionRangeRefused(
+            f"review_trail.write: reviewer_attestation sidecar "
+            f"{reviewer_evidence!r} carries no reviewed_range entries — a "
+            "pre-field or empty sidecar attests to nothing; refusing closed "
+            "rather than inventing a fallback (e.g. spawned_at proximity, "
+            "or treating absence as 'reviewed everything')."
+        )
+
+    frozen_shas = _own_frozen_diff_shas(own_session_id, caller_worktree)
+    admitted: set[str] = set()
+    for entry in reviewed_range:
+        # AC3 — the measured malformed shapes (pre-2.0.0 symbolic-ref
+        # `a65e39850^..HEAD`, and a literal `--`) are refused, never
+        # silently resolved. `reviewed_targets` (working-tree:/uncommitted:/
+        # untracked:/diff-artifact: values) is a DIFFERENT array this
+        # function never reads — a non-committed target has no resolvable
+        # SHA and is refused at this seam by never appearing in
+        # reviewed_range in the first place.
+        if not _REVIEWED_RANGE_ITEM_RE.match(entry):
+            raise ForeignSessionRangeRefused(
+                f"review_trail.write: reviewer_attestation sidecar "
+                f"{reviewer_evidence!r} reviewed_range entry {entry!r} is "
+                "malformed (a symbolic-ref or non-hex-anchored shape, e.g. "
+                "'<sha>^..HEAD', or a bare '--') — refused, never silently "
+                "resolved."
+            )
+        entry_shas = _resolve_range_shas(entry, caller_worktree)
+        if entry_shas is None:
+            raise ForeignSessionRangeRefused(
+                f"review_trail.write: reviewer_attestation sidecar "
+                f"{reviewer_evidence!r} reviewed_range entry {entry!r} could "
+                "not be resolved by `git rev-list` — refusing closed."
+            )
+        # AC1c — the anti-forgery bound: an attested sub-range exceeding the
+        # dispatching slice's own frozen-diff range is a DEFECT in the
+        # attestation, not a valid superset claim (F2).
+        if not entry_shas.issubset(frozen_shas):
+            raise ForeignSessionRangeRefused(
+                f"review_trail.write: reviewer_attestation sidecar "
+                f"{reviewer_evidence!r} reviewed_range entry {entry!r} "
+                "exceeds the dispatching slice's own frozen-diff range "
+                "(this session's own pending scope_kind=diff review-trail "
+                "records) — a DEFECT in the attestation, not a valid "
+                "superset claim; refused."
+            )
+        admitted.update(entry_shas)
+
+    # C2b: reclassify — never re-gate — this already-admitted citation.
+    # `_classify_attestation_sidecar_binding` runs only after every AC1/
+    # AC1a/AC1c/AC1d/AC3 refusal above has already let this citation
+    # through; it cannot flip an admission into a refusal, it only records
+    # which of the two supporting bases held (see this section's
+    # module-level "AC1b residual" note for what each basis does and does
+    # not prove).
+    binding = _classify_attestation_sidecar_binding(reviewer_evidence, own_session_id)
+    attestation = {
+        _ATTESTATION_FIELD_REVIEWER_SESSION_ID: dispatch_id,
+        _ATTESTATION_FIELD_SIDECAR: reviewer_evidence,
+        _ATTESTATION_FIELD_SHAS: sorted(admitted),
+        _ATTESTATION_FIELD_BINDING: binding,
+    }
+    return frozenset(admitted), attestation
+
+
 def _guard_foreign_session_range(
     sha_range: str,
     own_session_id: str,
     caller_worktree: Path,
     *,
     batch_context: Optional[dict] = None,
-) -> FrozenSet[str]:
+    reviewer_evidence: Optional[str] = None,
+    attestation_dispatch_id: Optional[str] = None,
+) -> Optional[dict]:
     """Refuse, or force affirmative disambiguation of, a diff-shaped sha_range
     that spans commits not attributable to the writing session.
+
+    Returns ``None`` on every path that does not resolve a reviewer
+    attestation (the overwhelming majority of calls — every caller that does
+    not pass ``attestation_dispatch_id``, byte-identical to this function's
+    pre-C2 behaviour, AC5). Returns the resolved ``reviewer_attestation``
+    object (C1's persistence shape) when C2's evidence source (below)
+    admitted one or more otherwise-foreign commits — the caller
+    (``write_review_trail_entry``) persists it via C1's key.
 
     Three-way disposition (docs/plans/2026-07-27-review-trail-scope-guard.md § C2).
     2026-08-08 (docs/plans/2026-08-08-vouch-free-review-coverage-gates.md § C2):
@@ -1258,7 +1735,13 @@ def _guard_foreign_session_range(
     caller-supplied narrower range instead (the X-node / DR-502 J-node shape:
     docs/wiki/claude-klabauter-ceremony-lifecycle-machinery.md § DR-502 — "a
     heuristic-suggested default never silently self-resolves an ambiguous
-    judgment node").
+    judgment node"). Before this final disposition, a reviewer-attestation
+    evidence source (C2, docs/plans/2026-08-18-chain-review-records-and-
+    credits-predecessors.md § C2 — see this module's "Reviewer-attestation
+    evidence source" comment block above) can pull SOME commits back out of
+    the still-ambiguous set: only when the caller supplies
+    ``attestation_dispatch_id``, never merely from ``reviewer_evidence``
+    alone. Still-uncovered commits reach Case 3 exactly as before.
 
     Applies regardless of the record's ``scope`` value, INCLUDING
     ``scope="chain"`` — scope-blindness is deliberate (the reported defect
@@ -1321,7 +1804,7 @@ def _guard_foreign_session_range(
             str(caller_worktree),
             is_work_tree_rc,
         )
-        return frozenset()
+        return None
 
     # Case 1 — the hard refusal for a commit whose own Session-Id trailer
     # names a different session — is REMOVED (state/kill-ledger.md K-005,
@@ -1407,6 +1890,46 @@ def _guard_foreign_session_range(
                     sha for sha in unplaced_or_foreign if sha not in deliverable_matched
                 ]
 
+    # Reviewer-attestation evidence source (C2, docs/plans/2026-08-18-chain-
+    # review-records-and-credits-predecessors.md § C2) — see this module's
+    # "Reviewer-attestation evidence source" comment block above
+    # _resolve_reviewer_attestation for the full design. Engaged only when
+    # unplaced_or_foreign is non-empty (nothing to attest otherwise) AND the
+    # caller supplied attestation_dispatch_id (AC5: absent for every
+    # existing caller, so this is a no-op for all of them). Only ever PULLS
+    # commits OUT of unplaced_or_foreign — never widens it — mirroring the
+    # Deliverable-Id recovery pass immediately above.
+    resolved_attestation: Optional[dict] = None
+    if unplaced_or_foreign and attestation_dispatch_id is not None:
+        pre_attestation_foreign = frozenset(unplaced_or_foreign)
+        admitted_shas, resolved_attestation = _resolve_reviewer_attestation(
+            reviewer_evidence=reviewer_evidence,
+            attestation_dispatch_id=attestation_dispatch_id,
+            own_session_id=own_session_id,
+            caller_worktree=caller_worktree,
+        )
+        if admitted_shas:
+            # AC1b / AC6 discharge scoping: the persisted attestation names
+            # only the SHAs actually admitted for THIS write's foreign set —
+            # a reviewed_range entry may resolve wider than what was foreign
+            # here, and only the intersection is meaningful as this record's
+            # own attestation (C3/C4 read this key; a wider claim would
+            # over-report what this specific record discharges).
+            admitted_here = admitted_shas & pre_attestation_foreign
+            logger.info(
+                "review_trail.write: reviewer_attestation (sidecar=%r) "
+                "admitted %d of %d foreign commit(s) for sha_range %r",
+                reviewer_evidence,
+                len(admitted_here),
+                len(pre_attestation_foreign),
+                sha_range,
+            )
+            unplaced_or_foreign = [
+                sha for sha in unplaced_or_foreign if sha not in admitted_shas
+            ]
+            resolved_attestation = dict(resolved_attestation)
+            resolved_attestation[_ATTESTATION_FIELD_SHAS] = sorted(admitted_here)
+
     contiguous = session_attribution.range_is_contiguous_suffix(
         caller_worktree, sha_range, unplaced_or_foreign,
     )
@@ -1421,7 +1944,7 @@ def _guard_foreign_session_range(
             own_session_id,
             scoping_method,
         )
-        return frozenset()
+        return resolved_attestation
 
     # DEFECT 2 fix (2026-08-07 doe-claude-em memos: case3-remedy-is-not-
     # performable / review-trail-guard-remedy-unreachable, CONFIRMED-LIVE per
@@ -1441,19 +1964,48 @@ def _guard_foreign_session_range(
     )
 
     if is_single_commit:
+        # C5 (docs/plans/2026-08-18-chain-review-records-and-credits-
+        # predecessors.md § AC8): the two commits that can reach this branch
+        # are NOT the same population, and get different messages.
+        # `saw_untrailered` (computed above from the same single-commit
+        # `sha_range`, via `git log --no-merges`) is True only when the
+        # commit carries no Session-Id trailer at all; False means it
+        # carries one naming a different session (the `--no-merges` walk
+        # means a foreign-trailered MERGE commit also reads False here —
+        # the rarer shape, and still gets the accurate branch below rather
+        # than the untrailered one). Telling the second population their
+        # commit "is untrailered" was false for exactly the population this
+        # branch fires on in practice, and its remedy (re-commit to add a
+        # trailer) is not performable against already-landed history —
+        # measured cost: four sessions read that message and went looking
+        # for a route that does not exist.
+        if saw_untrailered:
+            raise ForeignSessionRangeRefused(
+                "review_trail.write: sha_range "
+                f"{sha_range!r} is already a single commit and is genuinely "
+                "ambiguous — it is untrailered and the touched-path signal "
+                f"cannot place it in this session's scope. "
+                f"{_FOREIGN_SESSION_UNDETERMINED_NOTE} "
+                "There is no narrower range than one commit, so narrowing "
+                "further is not a performable remedy here. The remedy is to "
+                "re-commit the same change through the trailer-emitting path "
+                "(ceremony.scoped_git_commit / the normal commit machinery, "
+                "not a raw git-commit or commit-tree invocation) so the "
+                "commit carries this session's own Session-Id trailer, then "
+                "retry the write against the new SHA."
+            )
         raise ForeignSessionRangeRefused(
             "review_trail.write: sha_range "
             f"{sha_range!r} is already a single commit and is genuinely "
-            "ambiguous — it is untrailered (or its own Session-Id trailer is "
-            "absent) and the touched-path signal cannot place it in this "
-            f"session's scope. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
+            "ambiguous — its own Session-Id trailer names a different "
+            f"session. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
             "There is no narrower range than one commit, so narrowing "
-            "further is not a performable remedy here. The remedy is to "
-            "re-commit the same change through the trailer-emitting path "
-            "(ceremony.scoped_git_commit / the normal commit machinery, not "
-            "a raw git-commit or commit-tree invocation) so the commit "
-            "carries this session's own Session-Id trailer, then retry the "
-            "write against the new SHA."
+            "further is not a performable remedy here. A record naming "
+            "this commit is admitted when it cites a reviewer sidecar "
+            "whose reviewed_range names it and resolves within that "
+            "dispatch's own frozen review range — supply reviewer_evidence "
+            "(the sidecar path) and attestation_dispatch_id (that "
+            "dispatch's own id in this session's dispatched-agents.txt)."
         )
 
     raise ForeignSessionRangeRefused(
@@ -1502,7 +2054,12 @@ def _guard_foreign_session_range(
 #
 #   (a) every commit named by a `scope_kind` "diff" or "plan" sha_range is
 #       foreign to the writing session AND not covered by a gate-minted
-#       chain-ancestry waiver — the read side's narrowing then empties this
+#       chain-ancestry waiver (that mint is gone, K-005) NOR by a C2
+#       reviewer-attestation this write's own `reviewer_attestation`
+#       admitted (docs/plans/2026-08-18-chain-review-records-and-credits-
+#       predecessors.md § C5 — an attested foreign commit is exactly the
+#       case C2/C3/C4 make creditable, so it must not still count toward
+#       this prediction) — the read side's narrowing then empties this
 #       record's raw set to `set()` regardless of what
 #       chain_dag/chain_code/chain_planning turn out to be later
 #       (intersecting the empty set with anything is still empty). This
@@ -2044,6 +2601,7 @@ def _diagnose_zero_chain_terminal_credit(
     caller_worktree: Optional[Path],
     *,
     batch_context: Optional[dict] = None,
+    attested_shas: FrozenSet[str] = frozenset(),
 ) -> Optional[dict]:
     """Predict, from write-time-available information only, whether this
     record is a PROVABLE zero-credit write at the chain-terminal discharge
@@ -2052,6 +2610,17 @@ def _diagnose_zero_chain_terminal_credit(
     whenever neither shape is provably present — including every case this
     function cannot resolve (no `caller_worktree`, an unparseable range, a
     git failure) — never a false positive on an ordinary write.
+
+    ``attested_shas`` — C5 (docs/plans/2026-08-18-chain-review-records-and-
+    credits-predecessors.md § C5): the SHA set C2's reviewer-attestation
+    evidence source admitted for THIS write (``reviewer_attestation``'s
+    persisted ``shas`` field, C1's key), passed by the caller because this
+    function has no guard-resolved state of its own to consult. Shape (a)
+    is a prediction that the discharge path's foreign-session narrowing
+    empties this record's contribution to `set()` — an attested foreign
+    commit is exactly the case C2/C3/C4 now make creditable, so it must
+    not still be counted toward that empty prediction, or this fires a
+    false advisory on every attested write.
     """
     if scope_kind in _ALWAYS_ZERO_CREDIT_SCOPE_KINDS:
         return {
@@ -2084,9 +2653,22 @@ def _diagnose_zero_chain_terminal_credit(
     foreign = frozenset(sha for sha, is_foreign in foreign_map.items() if is_foreign)
     if not foreign or len(foreign) != len(foreign_map):
         return None  # at least one commit is this session's own — not provably zero.
-    vouched = _resolve_write_time_vouched_shas(foreign, own_session_id, caller_worktree)
-    if vouched >= foreign:
-        return None  # every foreign commit is vouched/waived — will still credit.
+    vouched = _resolve_write_time_vouched_shas(foreign, own_session_id, caller_worktree) | (
+        attested_shas & foreign
+    )
+    if vouched:
+        # At least one foreign commit is vouched/waived/attested — the
+        # discharge path's narrowing no longer empties this record's
+        # contribution to `set()`, so this is not provably zero-credit.
+        # (Pre-C5 this branch only ever fired on `vouched >= foreign` — the
+        # narrower "any overlap" form here is what C5 corrects: a PARTIALLY
+        # attested foreign set already credits something, and the old
+        # `>=` form kept warning zero-credit for it. That old form was
+        # latent dead code in practice: `_resolve_write_time_vouched_shas`
+        # always returned `frozenset()`, so the branch was only ever
+        # reachable via a non-empty `attested_shas`, which did not exist
+        # before this chunk.)
+        return None
     shas = sorted(foreign_map)
     shown = shas[:_FOREIGN_SHA_DISPLAY_CAP]
     remainder = len(shas) - len(shown)
@@ -2330,6 +2912,200 @@ def _resolve_workstream(
 _VALID_EXECUTION_BASES = frozenset({"executed", "read-only"})
 
 
+# ---------------------------------------------------------------------------
+# reviewer_attestation — proposed additive key (C1, docs/plans/2026-08-18-
+# chain-review-records-and-credits-predecessors.md § C1).
+#
+# DoE owns ``review-trail.schema.json`` (vendored here, byte-pinned at
+# ``_QUEUE_SCHEMA_PINS['review-trail']``) and has NOT yet ruled on the exact
+# key name and nesting. The ask went out in
+# ``cross-repo/inbox/2026-08-18-claude-klabauter-em-review-trail-attestation-key.md``
+# (delivered, their commit ``515e923``); the ruling is routed to their PM.
+# The vendored schema pin has NOT moved for this key — C0's re-vendor leg is
+# still open. Isolating the name and nesting behind the constants below is
+# what makes DoE's eventual ruling a one-line change here rather than a
+# rework: every construction and every read of this key MUST go through
+# ``_serialize_reviewer_attestation`` / ``_parse_reviewer_attestation``; no
+# other call site may spell the literal key name.
+#
+# Shape: ONE additive optional object key, not three scalars — bundling what
+# the write actually resolved (reviewer_session_id, the cited sidecar path,
+# the SHA set attested and admitted at write time). A bare
+# ``reviewer_session_id`` scalar would force the read side to glob every
+# sidecar under that session and union their ``reviewed_range``s to recover
+# what a record actually attested — a per-session store consulted by both
+# writer and reader, the exact shape K-005 killed under a new name (eng-
+# director F1). Persisting the resolved object keeps admissions countable
+# for AC11's ratchet instead.
+_REVIEWER_ATTESTATION_KEY = "reviewer_attestation"
+_ATTESTATION_FIELD_REVIEWER_SESSION_ID = "reviewer_session_id"
+_ATTESTATION_FIELD_SIDECAR = "sidecar"
+_ATTESTATION_FIELD_SHAS = "shas"
+#: C2b (docs/plans/2026-08-18-chain-review-records-and-credits-predecessors.md
+#: § C2b) — OPTIONAL fourth field, absent from every attestation shape this
+#: module wrote before C2b existed (AC5 stays true: omission still reproduces
+#: the pre-existing 3-field byte shape, see `_serialize_reviewer_attestation`).
+#: Records which of the two supporting bases `_resolve_reviewer_attestation`
+#: actually used for THIS admission — see `_classify_attestation_sidecar_binding`.
+_ATTESTATION_FIELD_BINDING = "binding"
+#: The cited sidecar's path was independently RECOMPUTED from this session's
+#: own resolved session_id plus the `provision_key` implied by the citation's
+#: own basename, and the recomputation landed on the exact cited path.
+_ATTESTATION_BINDING_VERIFIED = "verified"
+#: No `provision_key`-shaped recomputation was possible (a nonce-suffixed
+#: sidecar, the shape a hand-dispatched agent actually gets) — admission
+#: rests solely on AC1's dispatch-ledger proof, same as pre-C2b.
+_ATTESTATION_BINDING_ASSERTED = "asserted"
+# Mirrors review-trail.schema.json 2.1.0's `reviewer_attestation.shas` item
+# pattern (DoE, 56cc5fba2). Same hex anchor `sha_range` endpoints already carry
+# and for the same reason AC3 refuses the symbolic-ref shape: a symbolic ref
+# re-resolves against a later HEAD, so it names a different commit on read than
+# it did on write. Without this the producer could write a record its own
+# vendored schema rejects.
+_ATTESTATION_SHA_RE = re.compile(r"^[0-9a-f]{4,64}$")
+
+_ATTESTATION_BINDING_VALUES = frozenset(
+    {_ATTESTATION_BINDING_VERIFIED, _ATTESTATION_BINDING_ASSERTED}
+)
+
+
+def _validate_reviewer_attestation(attestation: Optional[dict]) -> None:
+    """Validate the shape of an optional ``reviewer_attestation`` object.
+
+    C1 persists exactly what the write resolved — reviewer_session_id, the
+    cited sidecar path, and the attested SHA set — as one additive object
+    (see the module-level "reviewer_attestation" comment block above). C1 is
+    the persistence shape only: it does not resolve these values itself
+    (that is C2's dispatch-bound, frozen-range-bound guard); this validation
+    exists so a malformed caller-supplied value fails loud at write time
+    rather than landing in the JSON record.
+
+    C2b adds ONE optional fourth field, ``_ATTESTATION_FIELD_BINDING`` — see
+    that constant's comment. Optional, not required: a caller-supplied
+    attestation (C1's "never overwritten" precedence) or any attestation
+    built before C2b existed still validates without it.
+    """
+    if attestation is None:
+        return
+    if not isinstance(attestation, dict):
+        raise ValueError(
+            f"review_trail.write: reviewer_attestation must be an object, "
+            f"got {type(attestation).__name__}: {attestation!r}"
+        )
+    required = (
+        _ATTESTATION_FIELD_REVIEWER_SESSION_ID,
+        _ATTESTATION_FIELD_SIDECAR,
+        _ATTESTATION_FIELD_SHAS,
+    )
+    optional = (_ATTESTATION_FIELD_BINDING,)
+    allowed = required + optional
+    extra = sorted(set(attestation.keys()) - set(allowed))
+    if extra:
+        raise ValueError(
+            f"review_trail.write: reviewer_attestation has unrecognized "
+            f"key(s) {extra!r}; allowed: {list(allowed)!r}"
+        )
+    missing = [f for f in required if f not in attestation]
+    if missing:
+        raise ValueError(
+            f"review_trail.write: reviewer_attestation missing required "
+            f"key(s) {missing!r}"
+        )
+    if _ATTESTATION_FIELD_BINDING in attestation:
+        binding_value = attestation[_ATTESTATION_FIELD_BINDING]
+        if binding_value not in _ATTESTATION_BINDING_VALUES:
+            raise ValueError(
+                f"review_trail.write: reviewer_attestation."
+                f"{_ATTESTATION_FIELD_BINDING} {binding_value!r} is invalid; "
+                f"allowed: {sorted(_ATTESTATION_BINDING_VALUES)!r}"
+            )
+
+    def _reject_unsafe(label: str, value: object) -> None:
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"review_trail.write: reviewer_attestation.{label} must be "
+                f"a non-empty string, got {value!r}"
+            )
+        if any(c in value for c in ('"', "\\")) or any(ord(c) < 0x20 for c in value):
+            raise ValueError(
+                f"review_trail.write: reviewer_attestation.{label} contains "
+                f"unsafe JSON character (no '\"', '\\\\', or control "
+                f"characters allowed): {value!r}"
+            )
+
+    _reject_unsafe(
+        _ATTESTATION_FIELD_REVIEWER_SESSION_ID,
+        attestation[_ATTESTATION_FIELD_REVIEWER_SESSION_ID],
+    )
+    _reject_unsafe(_ATTESTATION_FIELD_SIDECAR, attestation[_ATTESTATION_FIELD_SIDECAR])
+    shas_value = attestation[_ATTESTATION_FIELD_SHAS]
+    if not isinstance(shas_value, list):
+        raise ValueError(
+            f"review_trail.write: reviewer_attestation.{_ATTESTATION_FIELD_SHAS} "
+            f"must be a list of strings, got {type(shas_value).__name__}: {shas_value!r}"
+        )
+    for idx, sha in enumerate(shas_value):
+        label = f"{_ATTESTATION_FIELD_SHAS}[{idx}]"
+        _reject_unsafe(label, sha)
+        if not _ATTESTATION_SHA_RE.match(sha):
+            raise ValueError(
+                f"review_trail.write: reviewer_attestation.{label} {sha!r} is "
+                f"not a hex SHA (4-64 lowercase hex chars); a symbolic ref "
+                f"re-resolves against a later HEAD and is not a legal element"
+            )
+
+
+def _serialize_reviewer_attestation(attestation: Optional[dict]) -> Optional[str]:
+    """Hand-build the ``reviewer_attestation`` JSON object fragment (just the
+    value, not the surrounding record) — matches this module's byte-parity
+    discipline (no ``json.dumps``; see ``_build_json_record``'s negative-spec).
+
+    Returns ``None`` when *attestation* is ``None`` — ``_build_json_record``
+    uses that to omit the key entirely (AC5: absent parameter -> absent key
+    -> byte-identical record).
+
+    Key order within the object — reviewer_session_id, sidecar, shas — is the
+    order proposed in the C0 memo and is NOT yet DoE-ratified; see the
+    module-level "reviewer_attestation" comment block. Caller
+    (``_validate_reviewer_attestation``) has already screened every value for
+    JSON-unsafe characters by the time this runs.
+
+    C2b: ``binding`` is appended as an OPTIONAL fourth key, LAST, only when
+    present in *attestation* — absence reproduces the exact
+    pre-C2b 3-key bytes (AC5-equivalent for this addition: an attestation
+    built without a binding classification serializes byte-identically to
+    before C2b existed).
+    """
+    if attestation is None:
+        return None
+    session_id_value = attestation[_ATTESTATION_FIELD_REVIEWER_SESSION_ID]
+    sidecar_value = attestation[_ATTESTATION_FIELD_SIDECAR]
+    shas_json = (
+        "[" + ",".join(f'"{s}"' for s in attestation[_ATTESTATION_FIELD_SHAS]) + "]"
+    )
+    record = (
+        f'{{"{_ATTESTATION_FIELD_REVIEWER_SESSION_ID}":"{session_id_value}",'
+        f'"{_ATTESTATION_FIELD_SIDECAR}":"{sidecar_value}",'
+        f'"{_ATTESTATION_FIELD_SHAS}":{shas_json}}}'
+    )
+    if _ATTESTATION_FIELD_BINDING in attestation:
+        binding_value = attestation[_ATTESTATION_FIELD_BINDING]
+        record = record[:-1] + f',"{_ATTESTATION_FIELD_BINDING}":"{binding_value}"}}'
+    return record
+
+
+def _parse_reviewer_attestation(record: dict) -> Optional[dict]:
+    """The single read-side access point for the ``reviewer_attestation``
+    key — returns the persisted object, or ``None`` when absent.
+
+    C1 does not consume this itself (persistence shape only); C2/C3/C4 are
+    the intended callers and must go through this function rather than
+    spelling ``record.get("reviewer_attestation")`` or the literal key name
+    directly — see the module-level "reviewer_attestation" comment block.
+    """
+    return record.get(_REVIEWER_ATTESTATION_KEY)
+
+
 def _build_json_record(
     sha_range: str,
     reviewer: str,
@@ -2341,6 +3117,7 @@ def _build_json_record(
     workstream: Optional[str],
     reviewed_paths: Optional[List[str]] = None,
     execution_basis: Optional[str] = None,
+    reviewer_attestation: Optional[dict] = None,
 ) -> str:
     """Hand-build the JSON record string matching oracle bash string interpolation exactly.
 
@@ -2363,6 +3140,17 @@ def _build_json_record(
     review has an execution basis just as a diff-scoped one does. When ``execution_basis``
     is ``None`` (not supplied), the key is omitted entirely and the produced bytes are
     byte-identical to what this function produced before this key existed (AC5).
+
+    ``reviewer_attestation`` (docs/plans/2026-08-18-chain-review-records-and-credits-
+    predecessors.md § C1 — see the module-level "reviewer_attestation" comment block for
+    the full design and its DoE-ratification status) is a further optional key, appended
+    AFTER ``execution_basis`` (when present) — ONLY when ``reviewer_attestation`` is not
+    ``None``. Like ``execution_basis`` and unlike ``reviewed_paths``, it is NOT conditioned
+    on ``scope_kind``. When ``reviewer_attestation`` is ``None`` (not supplied), the key is
+    omitted entirely and the produced bytes are byte-identical to what this function
+    produced before this key existed (AC5). Serialization goes through
+    ``_serialize_reviewer_attestation`` — never inline here — so the key name and nesting
+    stay isolated behind one seam pending DoE's ruling.
 
     Oracle: ``printf '%s'`` writes without trailing newline. This function also omits the newline.
 
@@ -2398,6 +3186,9 @@ def _build_json_record(
         )
     if execution_basis is not None:
         record = record[:-1] + f',"execution_basis":"{execution_basis}"}}'
+    attestation_json = _serialize_reviewer_attestation(reviewer_attestation)
+    if attestation_json is not None:
+        record = record[:-1] + f',"{_REVIEWER_ATTESTATION_KEY}":{attestation_json}}}'
     return record
 
 
@@ -2463,7 +3254,19 @@ _MAX_UNIQUE_SUFFIX_ATTEMPTS = 10_000
 #: AC6, which forbids two disagreeing records silently collapsing into one;
 #: it cannot cause an unsafe collapse, and a genuine same-scope_kind replay
 #: is unaffected (scope_kind is always identical on a true replay).
-_LOAD_BEARING_IDENTITY_FIELDS = ("verdict", "reviewer", "scope", "scope_kind", "reviewed_paths")
+#:
+#: ``reviewer_attestation`` IS included (EM ruling, docs/plans/2026-08-18-
+#: chain-review-records-and-credits-predecessors.md § C1/C2 — asked by C1's
+#: executor, decided here). ``execution_basis`` was left out as a mode label
+#: that safely converges on the first writer; ``reviewer_attestation`` is a
+#: different class — it DECIDES CREDIT, the same class as ``reviewed_paths``.
+#: Two records for the same ``(session_id, sha_range)`` attesting different
+#: SHA sets is exactly the divergence this mechanism exists to catch; a
+#: silent first-writer convergence would drop a broader second attestation
+#: and undercount AC11's admission census.
+_LOAD_BEARING_IDENTITY_FIELDS = (
+    "verdict", "reviewer", "scope", "scope_kind", "reviewed_paths", "reviewer_attestation",
+)
 
 
 def _load_bearing_fields_diverge(existing_record: dict, new_record: dict) -> bool:
@@ -2489,6 +3292,14 @@ def _load_bearing_fields_diverge(existing_record: dict, new_record: dict) -> boo
                 existing_value = sorted(existing_value)
             if isinstance(new_value, list):
                 new_value = sorted(new_value)
+        elif field == "reviewer_attestation":
+            # Same order-insensitivity rationale as reviewed_paths, applied
+            # to the nested `shas` list only — the object's other fields
+            # (reviewer_session_id, sidecar) are compared as plain scalars.
+            if isinstance(existing_value, dict) and isinstance(existing_value.get("shas"), list):
+                existing_value = {**existing_value, "shas": sorted(existing_value["shas"])}
+            if isinstance(new_value, dict) and isinstance(new_value.get("shas"), list):
+                new_value = {**new_value, "shas": sorted(new_value["shas"])}
         if existing_value != new_value:
             return True
     return False
@@ -2531,7 +3342,7 @@ def _reserve_unique_trail_path(
     ``(session_id, sha_range)`` and applies one of two rules:
 
       - AGREE on every field in ``_LOAD_BEARING_IDENTITY_FIELDS`` (verdict, reviewer,
-        scope, scope_kind, reviewed_paths) — CONVERGE-ON-FIRST-WRITER: return the existing path,
+        scope, scope_kind, reviewed_paths, reviewer_attestation) — CONVERGE-ON-FIRST-WRITER: return the existing path,
         write nothing new. This covers both the byte-identical replay case (an
         ``apply`` pass re-firing the same directive after a later step failed) and a
         derived-field-only difference (``execution_basis`` present on one write,
@@ -2781,6 +3592,8 @@ def write_review_trail_entry(
     reviewed_paths: Optional[List[str]] = None,
     reviewer_evidence: Optional[str] = None,
     execution_basis: Optional[str] = None,
+    reviewer_attestation: Optional[dict] = None,
+    attestation_dispatch_id: Optional[str] = None,
     caller_worktree: Optional[Path] = None,
     _timestamp: Optional[str] = None,
     _batch_context: Optional[dict] = None,
@@ -2821,6 +3634,37 @@ def write_review_trail_entry(
                       NEVER equivalent to ``read-only``; a record written without this
                       parameter is byte-identical to what the same call produces today
                       (AC5, docs/plans/2026-08-11-review-trail-carries-execution-basis.md).
+        reviewer_attestation — MUST be ``None``; a caller-supplied value raises
+                      ``ValueError`` (state/subagent-share/d6287fad-9f71-4951-
+                      ade8-8cb1818b196e/coordinatorcode-reviewer-e6e58b0b.md,
+                      BLOCK — a direct value bypassed every one of
+                      ``_resolve_reviewer_attestation``'s dispatch-ledger/
+                      frozen-range refusals and persisted verbatim). An
+                      attestation may only be minted by
+                      ``_resolve_reviewer_attestation`` (below, via
+                      ``attestation_dispatch_id``) and is then assigned into
+                      this same parameter internally before persistence — see
+                      ``_build_json_record`` and the module-level
+                      "reviewer_attestation" comment block for the persisted
+                      shape: ``{"reviewer_session_id": str, "sidecar": str,
+                      "shas": list[str]}``, appended after ``execution_basis``
+                      and NOT conditioned on ``scope_kind``. Absence (the
+                      common case) means the key is omitted entirely and the
+                      written record is byte-identical to what the same call
+                      produced before this parameter existed (AC5). The exact
+                      key name and nesting are DoE's to ratify and are NOT yet
+                      ratified.
+        attestation_dispatch_id — C2's evidence-source trigger (docs/plans/2026-08-18-
+                      chain-review-records-and-credits-predecessors.md § C2). When supplied,
+                      ``_guard_foreign_session_range`` attempts to resolve a reviewer
+                      attestation from ``reviewer_evidence`` (must then be a sidecar path
+                      under ``state/subagent-share/``) bound to this dispatch id via this
+                      session's own dispatch ledger, and — if the sidecar's own
+                      ``reviewed_range`` admits any otherwise-foreign commits within this
+                      dispatch's own frozen-diff range — persists the resolved object via
+                      ``reviewer_attestation`` (above) when the caller did not already
+                      supply one explicitly. ``None`` (the default) means attestation is
+                      never attempted: byte-identical to this parameter not existing (AC5).
         caller_worktree — the caller's repo worktree root (from main_worktree_root(repo_root)).
         _timestamp  — injectable timestamp string for test isolation (bypasses _compute_timestamp).
         _batch_context — intended for internal in-process passthrough only
@@ -2846,6 +3690,7 @@ def write_review_trail_entry(
          "scope_kind": str, "verdict": str, "diff_loc": int,
          "session_id": str, "workstream": str | None,
          "reviewed_paths": list[str] | None,  # key present only when scope_kind == "diff"
+         "reviewer_attestation": dict}  # key present only when the parameter was supplied
          "chain_terminal_zero_credit_warning": dict}  # key present ONLY when
         `_diagnose_zero_chain_terminal_credit` provably determines this record
         discharges zero commits at the chain-terminal read path — see that
@@ -2880,6 +3725,27 @@ def write_review_trail_entry(
         raise ValueError(
             f"review_trail.write: execution_basis {execution_basis!r} is invalid; "
             f"allowed: {' | '.join(sorted(_VALID_EXECUTION_BASES))}"
+        )
+
+    # Refuse a caller-supplied reviewer_attestation outright (state/subagent-
+    # share/d6287fad-9f71-4951-ade8-8cb1818b196e/coordinatorcode-reviewer-
+    # e6e58b0b.md, BLOCK): this parameter previously accepted an object
+    # naming arbitrary reviewer_session_id/sidecar/shas with zero
+    # verification against the dispatch ledger or frozen-diff range — every
+    # one of `_resolve_reviewer_attestation`'s seven refusals runs only on
+    # the `attestation_dispatch_id` path, so a caller-supplied value bypassed
+    # all of them and persisted verbatim, crediting review coverage for
+    # commits no reviewer ever touched. No in-tree caller passes this
+    # parameter directly (`coordinator-write-review-trail.py` and
+    # `wsc-coverage-gate-runner.py write-trail` expose only
+    # `--attestation-dispatch-id`); an attestation may only be minted by
+    # `_resolve_reviewer_attestation`. This check runs before that internal
+    # resolution ever assigns into `reviewer_attestation` below, so at this
+    # point any non-None value is necessarily caller-supplied.
+    if reviewer_attestation is not None:
+        raise ValueError(
+            "review_trail.write: reviewer_attestation cannot be supplied "
+            "directly — pass attestation_dispatch_id instead."
         )
 
     # Resolve session_id (before sha_range concretization — an unresolvable
@@ -3004,9 +3870,19 @@ def write_review_trail_entry(
     # caller_worktree is the same test-isolation no-op contract
     # _resolve_symbolic_range documents above.
     if scope_kind in ("diff", "plan") and caller_worktree is not None:
-        _guard_foreign_session_range(
+        resolved_attestation = _guard_foreign_session_range(
             sha_range, resolved_session_id, caller_worktree, batch_context=_batch_context,
+            reviewer_evidence=reviewer_evidence,
+            attestation_dispatch_id=attestation_dispatch_id,
         )
+        if resolved_attestation is not None:
+            # C2 resolved and admitted an attestation. `reviewer_attestation`
+            # is always None here (a caller-supplied value was refused
+            # outright above, before this point) — this is the only path
+            # that can assign into it, so this internally-derived value is
+            # validated for the first time here.
+            reviewer_attestation = resolved_attestation
+            _validate_reviewer_attestation(reviewer_attestation)
 
     # Empty-range rejection (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-
     # the-caret-in-a-git-rev-6679bf76eb8a.yaml): a caller-side mangler (the
@@ -3055,6 +3931,7 @@ def write_review_trail_entry(
         workstream=resolved_workstream,
         reviewed_paths=reviewed_paths,
         execution_basis=execution_basis,
+        reviewer_attestation=reviewer_attestation,
     )
     # Encode to bytes (ASCII — all values are validated ASCII-safe).
     record_bytes = json_record.encode("utf-8")
@@ -3087,6 +3964,8 @@ def write_review_trail_entry(
         result["reviewed_paths"] = reviewed_paths
     if execution_basis is not None:
         result["execution_basis"] = execution_basis
+    if reviewer_attestation is not None:
+        result[_REVIEWER_ATTESTATION_KEY] = reviewer_attestation
 
     # Advisory-only, additive: never persisted to the on-disk JSON record
     # (see the "Write-time zero-chain-terminal-credit diagnostic" section
@@ -3101,9 +3980,19 @@ def write_review_trail_entry(
     # persisting it into the record, re-opens the a76c9fa bypass class —
     # re-derive its inputs the way `_guard_foreign_session_range` does before
     # giving it any authority.
+    # C5: feed this write's own resolved reviewer_attestation (persisted or
+    # caller-supplied — either is admitted, both already validated above) so
+    # shape (a) does not warn zero-credit for a foreign commit C2/C3/C4 make
+    # creditable.
+    _attested_shas_for_diagnostic: FrozenSet[str] = (
+        frozenset(reviewer_attestation[_ATTESTATION_FIELD_SHAS])
+        if reviewer_attestation is not None
+        else frozenset()
+    )
     zero_credit_diagnostic = _diagnose_zero_chain_terminal_credit(
         sha_range, scope, scope_kind, resolved_session_id, caller_worktree,
         batch_context=_batch_context,
+        attested_shas=_attested_shas_for_diagnostic,
     )
     if zero_credit_diagnostic is not None:
         logger.warning(
@@ -3152,12 +4041,23 @@ async def _review_trail_write_handler(
                       docstring and the module-level "reviewer_evidence" comment block.
         execution_basis (str) — one of ``executed`` | ``read-only``; see
                       ``write_review_trail_entry``'s docstring. Absence means unknown.
+        reviewer_attestation (dict) — REFUSED when supplied directly (raises
+                      ``ValueError``); forwarded unmodified into
+                      ``write_review_trail_entry``, which is the single
+                      enforcement point. Use ``attestation_dispatch_id``
+                      instead — an attestation may only be minted by
+                      ``_resolve_reviewer_attestation``. See
+                      ``write_review_trail_entry``'s docstring.
+        attestation_dispatch_id (str) — C2's evidence-source trigger; see
+                      ``write_review_trail_entry``'s docstring. ``None``/absent means
+                      attestation is never attempted (AC5).
 
     Returns:
         {"out_path": str, "sha_range": str, "reviewer": str, "scope": str,
          "scope_kind": str, "verdict": str, "diff_loc": int,
          "session_id": str, "workstream": str | None,
-         "reviewed_paths": list[str] | None}  (key present only when scope_kind == "diff")
+         "reviewed_paths": list[str] | None,  # key present only when scope_kind == "diff"
+         "reviewer_attestation": dict}  # key present only when the param was supplied
 
     On unresolvable session_id: logs ERROR and raises ``ValueError``
     (callers must not invoke this handler without an active session).
@@ -3202,6 +4102,8 @@ async def _review_trail_write_handler(
         reviewed_paths=raw_reviewed_paths,
         reviewer_evidence=params.get("reviewer_evidence"),
         execution_basis=params.get("execution_basis"),
+        reviewer_attestation=params.get("reviewer_attestation"),
+        attestation_dispatch_id=params.get("attestation_dispatch_id"),
         caller_worktree=caller_worktree,
         # C1 (docs/plans/2026-08-15-the-review-trail-write-stops-paying-n-
         # wa.md): intended as an internal-only in-process passthrough —

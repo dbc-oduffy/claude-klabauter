@@ -3262,6 +3262,43 @@ class TestCompareObservedSetVectorsA14Table:
         assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_CONCURRENT
         assert compare_observed_set_vectors(vector_b, vector_a) == CAUSAL_ORDER_CONCURRENT
 
+    def test_one_unknown_component_and_one_absent_component_is_indeterminate(self):
+        # peer-a: A's component is unknown. peer-b: absent from A entirely
+        # (present only on B). Neither is the "both present" case — proves
+        # the unknown-first check still wins even when the OTHER key in the
+        # same vector pair is deciding via the absent row, not a concrete
+        # value.
+        vector_a = {"peer-a": OBSERVED_SET_UNKNOWN}
+        vector_b = {"peer-a": _concrete(1, ["e1"]), "peer-b": _concrete(1, ["e1"])}
+        assert compare_observed_set_vectors(vector_a, vector_b) == CAUSAL_ORDER_INDETERMINATE
+        assert compare_observed_set_vectors(vector_b, vector_a) == CAUSAL_ORDER_INDETERMINATE
+
+
+class TestCompareObservedSetComponentDegenerateBranches:
+    """The two rows _compare_observed_set_component's own docstring names as
+    "not exercised in practice" — both sides absent, and a present
+    sequence-0 component against an absent side. Calls the private helper
+    directly since ``compare_observed_set_vectors`` only ever invokes it for
+    a key present on at least one side, so these shapes cannot be reached
+    through the public entrypoint at all."""
+
+    def test_both_sides_absent_is_eq(self):
+        assert (
+            ts._compare_observed_set_component(ts._ABSENT, ts._ABSENT)
+            == "eq"
+        )
+
+    def test_present_sequence_zero_against_absent_is_eq_no_digest_test(self):
+        zero_component = {"sequence": 0, "prefix_digest": "irrelevant-never-read"}
+        assert (
+            ts._compare_observed_set_component(zero_component, ts._ABSENT)
+            == "eq"
+        )
+        assert (
+            ts._compare_observed_set_component(ts._ABSENT, zero_component)
+            == "eq"
+        )
+
 
 class TestCompareEventsCausalOrderFallback:
     """The event-level entrypoint: causal vector decides when it can, the
@@ -3428,6 +3465,26 @@ class TestCompareEventsCausalOrderFallback:
         assert compare_events_causal_order(event_a, event_b, repo_root=repo) == -1
         assert compare_events_causal_order(event_b, event_a, repo_root=repo) == 1
 
+    def test_missing_id_on_fallback_key_raises_trackerstoreerror(self, tmp_path):
+        # Both events resolve to the bare unknown sentinel (no marker ever
+        # existed), so the compare falls through to the (machine, id)
+        # fallback key — where event_b is missing "id" entirely. Must raise
+        # a named TrackerStoreError, never an incidental TypeError from
+        # comparing a tuple containing None against one containing a str,
+        # and never silently fabricate a default identity.
+        repo = _make_git_repo(tmp_path / "repo")
+        event_a = {"machine": "machine-a", "sequence": 1, "id": "evt-a"}
+        event_b = {"machine": "machine-b", "sequence": 1}
+        with pytest.raises(ts.TrackerStoreError):
+            compare_events_causal_order(event_a, event_b, repo_root=repo)
+
+    def test_missing_machine_on_fallback_key_raises_trackerstoreerror(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        event_a = {"machine": "machine-a", "sequence": 1, "id": "evt-a"}
+        event_b = {"sequence": 1, "id": "evt-b"}
+        with pytest.raises(ts.TrackerStoreError):
+            compare_events_causal_order(event_a, event_b, repo_root=repo)
+
 
 class TestSelfComponentUnionC4:
     """tmrg-03 C4 — ``resolve_observed_set_union_for_event``: cockpit's
@@ -3581,3 +3638,236 @@ class TestCompareEventsCausalOrderAC8ReadEventsUnaffected:
 
         sig = inspect.signature(read_events)
         assert list(sig.parameters) == ["repo_root"], "read_events must not gain a new parameter"
+
+
+# ---------------------------------------------------------------------------
+# tmrg-03 C1b — check-time conformance harness against cockpit's live oracle
+# ---------------------------------------------------------------------------
+#
+# TEST-ONLY: this is the one place in the repo allowed to resolve a peer
+# clone. tracker_store.py's runtime path (``_well_formedness`` itself, C1a)
+# must never do this — see the module docstring on ``_well_formedness`` and
+# CLAUDE.md's install-surface-completeness rule. On a machine with no
+# cockpit clone (or an cockpit clone missing the fixture), this SKIPS
+# loudly with a named reason; it must never hard-fail (a fresh clean clone
+# of claude-klabauter has no reason to have example-cockpit-repo checked out) and must
+# never silently pass.
+
+
+_COCKPIT_SKIP_REASON = (
+    "cockpit conformance fixture unresolvable: registry key "
+    "'repos.example_cockpit_repo' did not resolve a clone with "
+    "docs/reference/tracker-well-formedness-vectors.json — "
+    "skipping the live conformance check (not a failure; "
+    "claude-klabauter's suite must not depend on a peer repo being present on this box)"
+)
+
+
+def _cockpit_conformance_vectors_path():
+    """Resolve cockpit's live conformance fixture via the machine-local
+    registry (the same direct-tomllib ``registry_get`` seam
+    ``doe_root_pointer.py`` binds ``repos.doe_claude`` reads to — reused
+    here rather than authoring a second resolver). Returns the resolved
+    ``Path`` or ``None`` if the clone or the fixture file can't be found.
+    """
+    from coordinator_core.machine_resolver import registry_get
+
+    cockpit_root = registry_get("repos.example_cockpit_repo")
+    if not cockpit_root:
+        return None
+    path = Path(cockpit_root) / "docs" / "reference" / "tracker-well-formedness-vectors.json"
+    if not path.is_file():
+        return None
+    return path
+
+
+def _require_conformance_vectors_path():
+    """Resolve the fixture or skip loudly with the named reason — the one
+    call site both the real conformance test and the skip-path proof test
+    share, so the proof test exercises the actual skip, not a re-statement
+    of it."""
+    fixture_path = _cockpit_conformance_vectors_path()
+    if fixture_path is None:
+        pytest.skip(_COCKPIT_SKIP_REASON)
+    return fixture_path
+
+
+class TestWellFormednessConformanceAgainstCockpitOracle:
+    """C1b: ``ts._well_formedness`` (C1a) must agree with cockpit's A12
+    oracle on every vector in their live fixture. DEC-1/DR-210: read live
+    off their clone at check time, never co-vendored here — a copy would
+    drift in lockstep with our pinned implementation and this check would
+    keep reporting conformant against a stale contract."""
+
+    @pytest.mark.real_home
+    def test_agrees_with_every_conformance_vector(self):
+        fixture_path = _require_conformance_vectors_path()
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        assert fixture["predicate"] == "well_formedness", (
+            f"conformance fixture predicate changed shape: {fixture['predicate']!r} "
+            "(expected 'well_formedness' — contract drift, not a vector mismatch)"
+        )
+        assert fixture["version"] == 1, (
+            f"conformance fixture version changed: {fixture['version']!r} "
+            "(expected version 1 — this harness was built against version 1; "
+            "a version bump needs its own look, not a silent re-run)"
+        )
+
+        vectors = fixture["vectors"]
+        assert vectors, "conformance fixture has no vectors — fixture is empty or malformed"
+
+        for vector in vectors:
+            name = vector["name"]
+            sequences = vector["sequences"]  # file order, as given — never sorted
+            first_defect, resolves_unknown_from = ts._well_formedness(sequences)
+            assert first_defect == vector["first_defect"], (
+                f"vector {name!r}: first_defect mismatch — claude-klabauter returned "
+                f"{first_defect!r}, cockpit's oracle says {vector['first_defect']!r}"
+            )
+            assert resolves_unknown_from == vector["resolves_unknown_from"], (
+                f"vector {name!r}: resolves_unknown_from mismatch — claude-klabauter returned "
+                f"{resolves_unknown_from!r}, cockpit's oracle says "
+                f"{vector['resolves_unknown_from']!r}"
+            )
+
+    def test_skips_loudly_when_clone_unresolvable(self, monkeypatch):
+        # Proves the skip path itself: point resolution at a machine with no
+        # cockpit clone registered and confirm the SAME helper the real
+        # conformance test calls actually raises pytest's skip exception,
+        # with its named reason — never a hard fail, never a silent pass.
+        import coordinator_core.machine_resolver as machine_resolver
+
+        monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+        assert _cockpit_conformance_vectors_path() is None, (
+            "resolution helper must return None when the registry key doesn't resolve"
+        )
+
+        with pytest.raises(pytest.skip.Exception) as exc_info:
+            _require_conformance_vectors_path()
+        assert "repos.example_cockpit_repo" in str(exc_info.value)
+
+
+class TestAC4NoVendoredPredicateOrRuntimeCrossRepoRead:
+    """AC4's other half, not asserted anywhere above: "No copy of
+    cockpit's predicate exists in this repo ... [runtime] fails loud when
+    it cannot [resolve their clone]." C1b proves the consumption path
+    (test-only, skip-loudly). This class proves the two things C1b's own
+    passing does not: that ``tracker_store.py``'s RUNTIME path performs no
+    cross-repo read at all (the machine-resolver call lives only in the
+    test file, never in the module under test), and that cockpit's fixture
+    is not co-vendored into this tree — the drift-blind shape DEC-1 and
+    Anti-scope both refuse (a local copy would drift in lockstep with our
+    pinned predicate and this check would keep reporting conformant
+    against a stale contract)."""
+
+    @staticmethod
+    def _imports_cross_repo_resolver(tree: "ast.AST") -> "list[str]":
+        # Walks alias names (not just the dotted module path), matching the
+        # existing precedent in this file (`_mentions_tracker`,
+        # `_references_tracker_store_in_code` above): `import machine_resolver`
+        # and `from x import y as z` both bind a local name that a
+        # module-path-only check would miss (Review: slice-E integration,
+        # 2026-08-18 — `from coordinator_core import machine_resolver` has
+        # module="coordinator_core" and would evade a `node.module` check
+        # entirely; only the alias itself names `machine_resolver`).
+        imported_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_names.add(alias.name)
+                    imported_names.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported_names.add(node.module)
+                for alias in node.names:
+                    imported_names.add(alias.name)
+                    imported_names.add(alias.asname or alias.name)
+        return sorted(name for name in imported_names if "machine_resolver" in name)
+
+    @staticmethod
+    def _registry_lookup_calls(tree: "ast.AST") -> "list[str]":
+        # Belt-and-suspenders on the same claim, at the AST-call level rather
+        # than the import level. Checks BOTH call shapes a `registry_get`
+        # reference can take — a bare `Name` (`registry_get(...)`) and an
+        # `Attribute` access (`machine_resolver.registry_get(...)` or an
+        # aliased `mr.registry_get(...)`) — since a Name-only check lets any
+        # attribute-style call through undetected (Review: slice-E
+        # integration, 2026-08-18).
+        offending_calls = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and "registry_get" in func.id:
+                offending_calls.append(ast.dump(func))
+            elif isinstance(func, ast.Attribute) and "registry_get" in func.attr:
+                offending_calls.append(ast.dump(func))
+        return offending_calls
+
+    def test_tracker_store_module_imports_no_cross_repo_resolver(self):
+        # tracker_store.py's own top-level imports must not include
+        # machine_resolver (or any cross-repo resolution machinery) — if
+        # they did, _well_formedness's runtime callers (resolve_observed_set,
+        # resolve_observed_set_for_event) would risk a cross-repo dependency
+        # on a path that runs at session-boot cadence, on a machine that may
+        # have no cockpit clone at all.
+        source = ts.__file__ and Path(ts.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        offenders = self._imports_cross_repo_resolver(tree)
+
+        assert offenders == [], (
+            f"tracker_store.py imports cross-repo resolution machinery: {offenders!r} "
+            "— the well-formedness predicate must run entirely in-process"
+        )
+
+    def test_well_formedness_and_resolvers_call_no_registry_lookup(self):
+        # Belt-and-suspenders on the same claim, at the AST-call level rather
+        # than the import level: no call anywhere in the module named
+        # registry_get / machine_resolver, so a runtime path could not reach
+        # cross-repo resolution even via a deferred/local import.
+        source = Path(ts.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        offending_calls = self._registry_lookup_calls(tree)
+        assert offending_calls == [], (
+            f"tracker_store.py calls registry resolution at runtime: {offending_calls!r}"
+        )
+
+    def test_import_check_catches_from_coordinator_core_import_machine_resolver(self):
+        # Proves the tightened import guard actually has teeth: a synthetic
+        # module using the exact bypass shape the review flagged —
+        # `from coordinator_core import machine_resolver`, whose `node.module`
+        # is "coordinator_core" and would evade a module-path-only check —
+        # must still be caught via the alias walk.
+        synthetic = "from coordinator_core import machine_resolver\n"
+        tree = ast.parse(synthetic)
+        assert self._imports_cross_repo_resolver(tree) == ["machine_resolver"]
+
+    def test_call_check_catches_attribute_style_registry_get(self):
+        # Proves the tightened call guard has teeth against both
+        # attribute-call bypass shapes the review flagged: an unaliased
+        # `machine_resolver.registry_get(...)` and an aliased
+        # `mr.registry_get(...)`, neither of which is an `ast.Name` callee.
+        synthetic = (
+            "machine_resolver.registry_get('repos.example_cockpit_repo')\n"
+            "mr.registry_get('repos.example_cockpit_repo')\n"
+        )
+        tree = ast.parse(synthetic)
+        offenders = self._registry_lookup_calls(tree)
+        assert len(offenders) == 2
+
+    def test_no_vendored_copy_of_cockpits_conformance_fixture_in_this_repo(self):
+        # DEC-1 / Anti-scope: the fixture is read live off cockpit's clone
+        # at check-time only (see C1b above), never co-vendored. A file
+        # named after their fixture anywhere under coordinator_core/ or
+        # docs/ in THIS repo would be exactly the drift-blind shape refused.
+        repo_root = Path(ts.__file__).resolve().parents[1]
+        hits = [
+            p
+            for base in (repo_root / "coordinator_core", repo_root / "docs")
+            if base.exists()
+            for p in base.rglob("tracker-well-formedness-vectors.json")
+        ]
+        assert hits == [], (
+            f"cockpit's conformance fixture is co-vendored into this repo: {hits!r} "
+            "— DEC-1/Anti-scope require it be read live off their clone, never copied here"
+        )

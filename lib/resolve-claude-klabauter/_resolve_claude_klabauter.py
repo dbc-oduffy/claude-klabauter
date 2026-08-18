@@ -318,12 +318,10 @@ def _maybe_emit_skew_advisory(ml_dir: Path, published: str) -> None:
 def _flatten_registry(data: dict, _prefix: str = "") -> dict:
     """Flatten nested registry TOML tables to dotted keys.
 
-    Mirrors DoE's ``_engine_root.py::_flatten_registry`` bit-for-bit — the
-    two-tier readers below (``_engine_working_repo_roots``,
-    ``_registry_value``) need to enumerate or look up keys under a table
-    prefix (``engine.working_repos.*``, ``repos.claude_klabauter``) the same
-    way regardless of whether the on-disk TOML used the nested
-    ``[engine.working_repos]`` table form or the flat quoted-dotted-key form
+    Mirrors DoE's ``_engine_root.py::_flatten_registry`` bit-for-bit —
+    ``_registry_value`` below needs to look up keys under a table prefix
+    (e.g. ``repos.claude_klabauter``) the same way regardless of whether the
+    on-disk TOML used a nested table form or the flat quoted-dotted-key form
     ``machine-local set`` writes. ``_resolve_claude_klabauter_root`` above does not use
     this helper — it reads exactly one key with its own inline nested/flat
     handling, predates this extraction, and stays untouched (AC7:
@@ -433,38 +431,6 @@ def resolve_engine_target(ml_dir: Optional[Path] = None) -> Optional[str]:
     return value
 
 
-def _engine_working_repo_roots(ml_dir: Path) -> List[str]:
-    """Every non-empty registered ``engine.working_repos.*`` value,
-    UNIONED across both registry files.
-
-    Deliberately NOT first-hit-wins (unlike ``_registry_value`` and
-    ``_resolve_claude_klabauter_root``'s single-key read) — this reads a SET of
-    working repos, not one key, so a repo registered in either file is a
-    working repo. Mirrors DoE's ``_engine_working_repo_roots``. Dedupes by
-    value; never raises."""
-    try:
-        import tomllib
-    except ImportError:
-        return []
-
-    prefix = "engine.working_repos."
-    seen: dict = {}
-    for name in ("registry.local.toml", "registry.toml"):
-        reg = ml_dir / name
-        try:
-            if not reg.is_file():
-                continue
-            with reg.open("rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-        for k, v in _flatten_registry(data).items():
-            if k.startswith(prefix) and isinstance(v, str) and v:
-                seen[v] = None
-
-    return list(seen.keys())
-
-
 def _same_repo_path(a: str, b: str) -> bool:
     """Cross-platform path-equality check — mirrors DoE's
     ``_same_repo_path``: ``samefile`` when both paths exist, falling back to
@@ -519,41 +485,53 @@ def _session_repo_root() -> Optional[Path]:
     return None
 
 
-def _is_engine_working_repo(ml_dir: Path) -> Optional[bool]:
-    """Is the CURRENT session running inside a registered engine-working
-    repo (``engine.working_repos.*``)?
+def _is_claude_klabauter_source_tree(ml_dir: Path) -> Optional[bool]:
+    """Is the CURRENT session running inside the engine's OWN resolved
+    source tree — i.e. does ``_session_repo_root()`` equal
+    ``_resolve_claude_klabauter_root()``'s own resolved value?
 
-    Tri-state, deliberately: ``True``/``False`` are determinations; ``None``
-    means "could not determine" (no session root, unreadable registry, or an
-    empty working-repo set) — a genuinely different thing from ``False``. A
-    caller MUST NOT treat ``None`` as ``False``: diverting an undeterminable
-    repo away from the live tree, with nowhere principled to divert it FROM,
-    would silently strand it. See ``resolve_claude_klabauter_root_with_class``'s
-    ``is False`` check, never bare falsiness. Mirrors DoE's
-    ``_is_engine_working_repo``. Never raises."""
+    RETIRES the per-repo exemption family (``_is_engine_working_repo`` /
+    ``_engine_working_repo_roots``, both removed) that used to answer this
+    by scanning ``engine.working_repos.*`` set membership. PM ruling
+    2026-08-18: a per-repo exemption family cannot express a box-wide
+    choice, so it does not survive as the discriminant here — but the
+    discriminant this function DOES express is not a list either. It is one
+    STRUCTURAL relationship ("is this session inside the tree that IS the
+    engine"), derived from the single root the live-tree ladder already
+    computes, with nothing to enumerate and nothing to maintain per repo.
+    ``engine.working_repos`` itself survives unmodified as a PURE LOCATOR
+    (other callers still read it to find a named repo's root — see
+    ``setup_chain_walker.py``, ``workday-start-health-probes.py``) — it is
+    simply no longer consulted HERE, because resolution class was never a
+    box-wide-choice-shaped question and a locator was never the right tool
+    to answer a structural one. See the tripwire this must not re-derive:
+    ``coordinator-tripwires/repos-star-is-not-engine-working-set.md``
+    (``REPOS-STAR-IS-NOT-ENGINE-WORKING-SET``) — this function does not read
+    ``repos.*`` at all, only the ONE ``repos.claude_klabauter``-keyed value
+    ``_resolve_claude_klabauter_root`` itself already resolves for the live-tree leg,
+    so no working-set is being re-derived here under a new name.
+
+    Tri-state, deliberately, mirroring the retired function's contract:
+    ``True``/``False`` are determinations; ``None`` means "could not
+    determine" (no session root, or the live-tree ladder itself does not
+    resolve) — a genuinely different thing from ``False``. A caller MUST NOT
+    treat ``None`` as ``False``: diverting an undeterminable session away
+    from the live tree, with nowhere principled to divert it FROM, would
+    silently strand it. See ``resolve_claude_klabauter_root_with_class``'s ``is False``
+    check, never bare falsiness. Never raises."""
     session_root = _session_repo_root()
     if session_root is None:
         return None
 
     try:
-        working_roots = _engine_working_repo_roots(ml_dir)
+        live_root = _resolve_claude_klabauter_root(ml_dir)
+    except ClaudeKlabauterResolutionError:
+        return None
+
+    try:
+        return _same_repo_path(str(session_root), live_root)
     except Exception:
         return None
-
-    if not working_roots:
-        return None
-
-    session_str = str(session_root)
-    any_determined = False
-    for root in working_roots:
-        try:
-            if _same_repo_path(session_str, root):
-                return True
-            any_determined = True
-        except Exception:
-            continue
-
-    return False if any_determined else None
 
 
 def _resolve_published_engine(ml_dir: Path) -> Optional[str]:
@@ -596,9 +574,13 @@ def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
     it is exported for callers building their own class-comparison logic.
 
     Ladder:
-      1. A published engine registered/usable AND the working-repo gate
-         returns literally ``False`` (a CONFIRMED non-working repo, not an
-         undeterminable one) -> ``(published, RESOLUTION_RESOLVED_ENGINE)``.
+      1. A published engine registered/usable AND ``engine.target`` is
+         readable (AC20: presence/readability only — its VALUE is never
+         inspected here, same as DoE's own reader) AND the structural gate
+         (``_is_claude_klabauter_source_tree`` — is THIS session inside the engine's
+         own resolved source tree?) returns literally ``False`` (a
+         CONFIRMED not-the-source-tree session, not an undeterminable one)
+         -> ``(published, RESOLUTION_RESOLVED_ENGINE)``.
       2. Otherwise today's existing ladder (``_resolve_claude_klabauter_root``:
          registry key -> ``.claude-klabauter-root`` sentinel) -> if it resolves,
          ``(root, RESOLUTION_LIVE_WORKING_TREE)``.
@@ -608,14 +590,38 @@ def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
          "the existing" error, its remediation text now extended (see
          ``_resolve_claude_klabauter_root``) to also mention ``repos.claude_klabauter``.
 
-    Fail-open (AC7): on a single-tree box with no ``engine.working_repos.*``
-    and no ``repos.claude_klabauter``, ``published`` is always ``None`` and
-    step 1 never fires — behavior collapses to step 2 exactly as it runs
-    today, byte-identical."""
+    2026-08-18 (C4): step 1's discriminant used to be per-repo
+    ``engine.working_repos.*`` set membership (``_is_engine_working_repo``,
+    retired). PM ruling: a per-repo exemption family cannot express a
+    box-wide choice. The structural check that replaced it answers the same
+    question ("is this session the engine's own source, or does it fall
+    through to the published mirror") without a membership list — you
+    cannot develop the engine while running a different copy of it, which is
+    a structural fact about THIS session's root vs. the ONE resolved claude-klabauter
+    root, not a per-repo exemption. Consequence, deliberate: a session in
+    any OTHER repo (doe-claude, example-retrieval-repo, ...) now diverts to the
+    published engine where it may not have before, even if that repo
+    happens to be listed under ``engine.working_repos.*`` (that key remains
+    a pure LOCATOR for other callers — see ``setup_chain_walker.py`` — it is
+    simply not this gate's input any more).
+
+    ``engine.target`` GATES the divert too (AC20, ruling correction
+    2026-08-18): a box with ``repos.claude_klabauter`` registered but
+    ``engine.target`` never written (every machine installed before C8) MUST
+    NOT divert — "not yet rolled out" is the only meaning of absence, never
+    a silent opt-in, and C8's installer writes the key on the same pass that
+    registers the mirror. Presence/readability only; the VALUE (``main`` vs
+    ``candidate``) selects a channel elsewhere and is never inspected here,
+    matching DoE's own reader.
+
+    Fail-open (AC7): on a single-tree box with no ``repos.claude_klabauter``,
+    ``published`` is always ``None`` and step 1 never fires — behavior
+    collapses to step 2 exactly as it runs today, byte-identical."""
     ml_dir = _ml_dir()
     published = _resolve_published_engine(ml_dir)
+    target_readable = resolve_engine_target(ml_dir) is not None
 
-    if published and _is_engine_working_repo(ml_dir) is False:
+    if published and target_readable and _is_claude_klabauter_source_tree(ml_dir) is False:
         _maybe_emit_skew_advisory(ml_dir, published)
         return published, RESOLUTION_RESOLVED_ENGINE
 

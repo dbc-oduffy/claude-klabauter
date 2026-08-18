@@ -78,6 +78,19 @@ REUSE, NOT RE-IMPLEMENTATION, WITHOUT THE FAIL-OPEN (the Staff Engineer F7):
       to the identical `""`, which is precisely the ambiguity this module
       exists to undo. See `_resolve_frontmatter_field`'s docstring.
 
+ARCHIVE FALLBACK, path-keyed kinds only (`file_exists`, `frontmatter_field`):
+a miss at the literal `repo_root / path` probes `archive/handoffs/**` for a
+same-basename file before giving up — a target that shipped and archived is
+not "gone", and without this a `file_exists` leg would go `observed=False`
+and a `frontmatter_field` leg `read_ok=False` forever once its target moves,
+manufacturing a permanent false-negative wall. Live always wins over an
+archived namesake (mirrors `gate_eval` / `_resolve_blocker_deployment_state`'s
+slug-keyed resolution), and `source` names whichever path actually answered
+— see `_resolve_archive_handoffs_fallback`. `commit_ancestor` has no such
+fallback: a commit is not a path. Migrating these legs to a durable-id leg
+kind instead of a basename probe is a larger, separate change (docs/plans/
+2026-08-18-auto-reconcile-must-fire.md § C6, out of scope there too).
+
 Windows + macOS both first-class: `pathlib.Path` joins only, no POSIX
 separators, no shell.
 
@@ -198,15 +211,52 @@ def _resolve_frontmatter_field(path: Path, field: str) -> Tuple[bool, Optional[s
     return True, value, None
 
 
+def _resolve_archive_handoffs_fallback(repo_root: Path, rel_path: str) -> Optional[Path]:
+    """Probe `<repo_root>/archive/handoffs/**` for a same-basename file when a
+    path-keyed leg's literal target is missing.
+
+    Mirrors the live-then-archive ordering `gate_eval` and
+    `handoff_transition._resolve_blocker_deployment_state` already use for
+    slug-keyed blocker resolution (docs/plans/2026-08-18-auto-reconcile-must-
+    fire.md § C6): a live file always wins, this only fires on a miss at the
+    literal path, and a target that has moved to `archive/handoffs/` (month-
+    nested, hence `rglob`) still resolves rather than manufacturing a
+    permanent false negative.
+
+    Returns the single matching path, or `None` when the archive subtree is
+    absent, holds no match, or holds more than one same-basename file — an
+    ambiguous match is not guessed at, it is treated exactly like no match,
+    so `file_exists`/`frontmatter_field` stay genuine observations rather
+    than a silently-wrong pick.
+    """
+    archive_root = repo_root / "archive" / "handoffs"
+    if not archive_root.is_dir():
+        return None
+    matches = sorted(archive_root.rglob(Path(rel_path).name))
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def _resolve_file_exists(repo_root: Path, source: str, rel_path: str) -> Tuple[bool, bool, str, Optional[str]]:
     """`(read_ok, observed, source, error)` for a `file_exists` leg.
 
     Once the repo root itself resolves to a real on-disk directory,
     existence is always answerable — `observed` is a genuine `True`/`False`,
     never indeterminate, because there is no "could not ask" state for a
-    plain filesystem stat once the clone root is confirmed present."""
+    plain filesystem stat once the clone root is confirmed present.
+
+    Falls back to `archive/handoffs/**` on a miss at the literal path (see
+    `_resolve_archive_handoffs_fallback`); `source` then names the archive
+    path that actually answered, rather than the literal path the leg named
+    — the only way a reader can tell the fallback fired."""
     target = repo_root / rel_path
-    return True, target.exists(), str(target), None
+    if target.exists():
+        return True, True, str(target), None
+    archived = _resolve_archive_handoffs_fallback(repo_root, rel_path)
+    if archived is not None:
+        return True, True, str(archived), None
+    return True, False, str(target), None
 
 
 def resolve_leg(leg: Mapping[str, Any]) -> LegObservation:
@@ -261,6 +311,13 @@ def resolve_leg(leg: Mapping[str, Any]) -> LegObservation:
                 "missing required 'path' and/or 'field'"
             )
         target = repo_root / str(rel_path)
+        if not target.is_file():
+            # Live-then-archive (see _resolve_archive_handoffs_fallback):
+            # only probes archive/handoffs/ once the literal path misses,
+            # so `source` below still names whichever path answered.
+            archived = _resolve_archive_handoffs_fallback(repo_root, str(rel_path))
+            if archived is not None:
+                target = archived
         read_ok, observed, error = _resolve_frontmatter_field(target, str(field))
         return LegObservation(
             leg_id=str(leg_id), read_ok=read_ok, observed=observed, source=str(target), error=error

@@ -175,6 +175,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional
 
+from coordinator_core import dag
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
@@ -1517,18 +1518,41 @@ def _walk_deliverable_ancestor_set(
     A sibling reached only via a DIFFERENT chain (same parent, but not on
     THIS artifact's own ancestor path) is never visited and therefore never
     excluded -- genuine independent-mint duplicates still collide.
+
+    Ancestor refs (`predecessor` / `additional_predecessors`) are resolved
+    archive-aware via `dag.resolve_target` (same fix shape as the sibling
+    `_lineage_related_sessions` fix in `pickup_assemble`), not a bare
+    `root / ref` join. A bare join is correct only while the referenced
+    ancestor is still live under `state/handoffs/` -- once it archives to
+    `archive/handoffs/YYYY-MM/`, the join resolves to a now-nonexistent
+    path, `_read_frontmatter` returns "", and the walk silently `continue`s
+    past it: the archived node itself is already in `seen` (added before
+    the read) so it stays correctly excluded, but everything BEYOND it
+    (its own `predecessor`/`additional_predecessors`) is lost, truncating
+    the exclusion set one hop early.
     """
     import yaml
+
+    def _resolve_ancestor_ref(ref: str) -> Path:
+        resolved = dag.resolve_target(
+            ref,
+            handoff_dir=str(root / "state" / "handoffs"),
+            repo_root=str(root),
+            include_history_tier=False,
+        )
+        if resolved:
+            return Path(resolved)
+        ref_path = Path(ref)
+        if not ref_path.is_absolute():
+            ref_path = root / ref_path
+        return ref_path
 
     seen: set[Path] = set()
     frontier: list[Path] = []
     if lineage_source is not None:
         frontier.append(lineage_source)
     for _extra in additional_predecessor_paths or []:
-        _extra_path = Path(_extra)
-        if not _extra_path.is_absolute():
-            _extra_path = root / _extra_path
-        frontier.append(_extra_path)
+        frontier.append(_resolve_ancestor_ref(_extra))
 
     depth = 0
     while frontier and depth < max_depth:
@@ -1556,18 +1580,12 @@ def _walk_deliverable_ancestor_set(
                 continue
             pred = fm_dict.get("predecessor")
             if isinstance(pred, str) and pred.strip() and pred.strip().lower() != "none":
-                pred_path = Path(pred.strip())
-                if not pred_path.is_absolute():
-                    pred_path = root / pred_path
-                next_frontier.append(pred_path)
+                next_frontier.append(_resolve_ancestor_ref(pred.strip()))
             extras = fm_dict.get("additional_predecessors")
             if isinstance(extras, list):
                 for extra in extras:
                     if isinstance(extra, str) and extra.strip():
-                        extra_path = Path(extra.strip())
-                        if not extra_path.is_absolute():
-                            extra_path = root / extra_path
-                        next_frontier.append(extra_path)
+                        next_frontier.append(_resolve_ancestor_ref(extra.strip()))
         frontier = next_frontier
     return seen
 
@@ -3060,7 +3078,6 @@ def _build_directives(
     root: Optional[Path] = None,
     decisions: Optional[dict[str, Any]] = None,
     predecessor_canonical_kind: Optional[str] = None,
-    tracker_hand_curated: bool = False,
 ) -> list[dict[str, Any]]:
     # Review: coordinatorcode-reviewer-c2d43fc7 Finding 5 -- `predecessor_
     # canonical_kind`, when supplied, is `brief()`'s own already-computed
@@ -3298,9 +3315,10 @@ def _build_directives(
         # no-op.
         #
         # d4 (render-project-tracker) was retired 2026-08-14 alongside the
-        # renderer itself -- see `j-tracker-hand-curated` below for the
-        # judgment point that still names the tracker's hand-curated state
-        # (residue of d4's arming decision, kept for now).
+        # renderer itself. Nothing replaces it: `docs/project-tracker.md` is a
+        # retired rendered index, and per RENDERED-INDEX-NO-HAND-MAINTENANCE no
+        # directive or judgment point may ask an EM to maintain it by hand --
+        # the substrate is `state/workstreams/`, queried directly.
         # session-claim-cli is a multi-subcommand CLI (`<subcommand>
         # <args...>`, see coordinator_core.session.claims's
         # `release_artifact` docstring) -- the first arg MUST be the
@@ -3597,71 +3615,10 @@ def _build_directives(
 # verdict here.
 # ---------------------------------------------------------------------------
 
-_TRACKER_GENERATED_MARKER_PREFIX = "**Overall status:** generated from state/workstreams/"
-
-
-def _tracker_is_hand_curated(store_root: str) -> bool:
-    """Predicate answering "is this repo's docs/project-tracker.md a
-    hand-curated file rather than one the (now-retired) render-project-tracker
-    CLI generated?" -- inlined from `render_project_tracker.tracker_is_hand_curated`
-    (2026-08-14, that module deleted alongside d4) so `j-tracker-hand-curated`
-    below, which still reads this signal, keeps working without importing a
-    module that no longer exists.
-
-    Semantics (mirrors the deleted renderer's own `main()`
-    `existing_is_hand_curated` derivation exactly, not a re-design of it):
-      - tracker file ABSENT -> False.
-      - tracker PRESENT and carries the generated-marker prefix -> False.
-      - tracker PRESENT, non-blank, and lacks the marker -> True
-        (hand-curated)."""
-    tracker_path = os.path.join(store_root, "docs", "project-tracker.md")
-    if not os.path.isfile(tracker_path):
-        return False
-    with open(tracker_path, encoding="utf-8") as fh:
-        existing_body = fh.read()
-    if not existing_body.strip():
-        return False
-    return _TRACKER_GENERATED_MARKER_PREFIX not in existing_body
-
-
-def _tracker_hand_curated_evidence(root: Path, kind: str = "handoff") -> str:
-    """Evidence string for `j-tracker-hand-curated` -- states plainly that
-    the tracker at `docs/project-tracker.md` is hand-curated, names the
-    path, and states the obligation the skill previously only carried in
-    prose: the EM must update it by hand if this session progressed
-    anything. That obligation now stands on its own -- the `render-project-tracker`
-    CLI it once described (id `d4`) was retired 2026-08-14; see
-    `_build_directives`'s own comment on that removal.
-
-    2026-08-14 fix: `kind == "spinoff"` carries a DIFFERENT obligation than
-    `kind == "handoff"` -- a spinoff's SKILL prose (`/spinoff` step 2) asks
-    the EM to mark the fork in the SOURCE session's own tracker, not to
-    record this session's own progress in it (there is no "this session
-    progressed anything" framing for a spinoff, which forks off rather than
-    concluding). The `kind` parameter selects the correctly-framed sentence
-    so the evidence does not mislead a spinoff EM into reading a handoff's
-    framing."""
-    tracker_path = root / "docs" / "project-tracker.md"
-    if kind == "spinoff":
-        return (
-            f"{tracker_path} is hand-curated (predates render-project-tracker "
-            "and carries no generated-marker) -- the EM must mark this fork "
-            "in the SOURCE session's own tracker by hand, per the /spinoff "
-            "skill's own prose obligation (step 2)."
-        )
-    return (
-        f"{tracker_path} is hand-curated (predates the retired "
-        "render-project-tracker renderer and carries no generated-marker) "
-        "-- the EM must update this tracker by hand if this session "
-        "progressed anything worth recording in it."
-    )
-
 
 def _build_judgment_points(
     kind: str,
     dirty_tree_attribution: Optional[dict[str, Any]] = None,
-    tracker_hand_curated: bool = False,
-    root: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
     points = [
         build_untrusted_gate_judgment_point(
@@ -3806,52 +3763,6 @@ def _build_judgment_points(
                 dispositions=[build_disposition("mine", ["d1"])],
                 evidence=evidence,
                 reason="Judgment residue -- stays SKILL prose (C4/C5).",
-            )
-        )
-    # 2026-08-06 fix (2026-08-14: d4/render-project-tracker itself since
-    # retired, see `_build_directives`'s own comment): the hand-curated-
-    # tracker obligation does not vanish just because no directive renders
-    # it. The skill already stated it in prose ("update the hand-curated
-    # tracker yourself, by hand, if this session progressed items worth
-    # recording in it"); this surfaces it as an actual judgment point so it
-    # can be discharged rather than silently dropped.
-    # 2026-08-14 fix: widened from `kind == "handoff"` to also cover
-    # `kind == "spinoff"`. The prior gate mirrored d4's own handoff-only
-    # scope (d4/render-project-tracker never fires for a spinoff -- see
-    # `_build_directives`'s comment, "spinoff's own directive set already
-    # skips id d4 entirely"), but that narrowing was never a deliberate
-    # decision about THIS judgment point's own obligation: `git log -S
-    # 'j-tracker-hand-curated'` and the 2026-08-06 commit that introduced it
-    # only reason about d4's replacement on the handoff path, and no test
-    # asserted a spinoff must NOT receive it. The obligation still exists
-    # for a spinoff -- SKILL.md's own step 2 prose ("mark the fork in the
-    # source session's own task tracker") -- and was surviving only as that
-    # one sentence, queued for a size-reduction cut. See
-    # `_tracker_hand_curated_evidence`'s own kind-branch for why the
-    # question/evidence text differs by kind.
-    if kind in ("handoff", "spinoff") and tracker_hand_curated and root is not None:
-        if kind == "spinoff":
-            question = (
-                "This repo's docs/project-tracker.md is hand-curated -- has "
-                "this fork been marked in the SOURCE session's own tracker "
-                "by hand, per the /spinoff skill's step 2?"
-            )
-        else:
-            question = (
-                "This repo's docs/project-tracker.md is hand-curated -- did "
-                "this session progress anything worth recording in it, and "
-                "if so, has it been updated by hand?"
-            )
-        points.append(
-            build_untrusted_gate_judgment_point(
-                id="j-tracker-hand-curated",
-                question=question,
-                dispositions=[
-                    build_disposition("recorded", ["d1"]),
-                    build_disposition("nothing-to-record", ["d1"]),
-                ],
-                evidence=_tracker_hand_curated_evidence(root, kind=kind),
-                reason="Judgment residue -- a hand-curated tracker has no renderer to discharge this; the EM must decide and act by hand.",
             )
         )
     return points
@@ -4695,12 +4606,6 @@ def brief(
         if lineage.get("predecessor") is not None
         else ""
     )
-    # Computed ONCE here and threaded to both `_build_directives` (d4's
-    # arming gate) and `_build_judgment_points` (`j-tracker-hand-curated`'s
-    # arming gate) -- same shared-computation shape as
-    # `_predecessor_canonical_kind` immediately above, not re-derived at
-    # either call site.
-    _tracker_hand_curated = bool(root is not None and _tracker_is_hand_curated(str(root)))
     directives = _build_directives(
         kind,
         lineage,
@@ -4708,16 +4613,13 @@ def brief(
         root=root,
         decisions=decisions,
         predecessor_canonical_kind=_predecessor_canonical_kind,
-        tracker_hand_curated=_tracker_hand_curated,
     )
     # Backstop invariant (fail loud, not silent): no computed directive may
     # write its output over the input artifact just read for lineage. See
     # `_assert_no_directive_writes_over_input`'s own docstring.
     _assert_no_directive_writes_over_input(directives, normalized_artifact_path, root)
     dirty_tree_attribution = _compute_dirty_tree_attribution(root)
-    judgment_points = _build_judgment_points(
-        kind, dirty_tree_attribution, tracker_hand_curated=_tracker_hand_curated, root=root
-    )
+    judgment_points = _build_judgment_points(kind, dirty_tree_attribution)
     # C3 (PIN-3; re-scoped 2026-08-13, see the linked bug row that closed
     # the primary-only leak): surface one `{d6_id}-roadmap-baton-decline`
     # judgment point PER PREDECESSOR in the fan-in whose own resolved

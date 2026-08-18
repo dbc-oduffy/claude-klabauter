@@ -204,6 +204,10 @@ from coordinator_core.session.claims import (
     promote_claim_stage,
     release_artifact,
 )
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 
 # ---------------------------------------------------------------------------
 # Exit-code contract (AC9g, the Staff Engineer second-pass finding #7) — composed from
@@ -765,6 +769,7 @@ def _execute_directives(
     *,
     decisions: Optional[dict[str, Any]] = None,
     resolve_claim_grant: Optional[Callable[[], dict[str, Any]]] = None,
+    composition_budget: "Optional[apply_base.CompositionBudget]" = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (AC5c/AC5d unit-test seam decided C1d,
     shared with C2a's AC9e(a) test) — callable directly with two
@@ -820,7 +825,9 @@ def _execute_directives(
     Thin wrapper binding `apply_base.execute_directives`'s generic
     `dispatch_table` parameter to this module's own closed `_CLI_DISPATCH` —
     every other parameter and the returned `(exit_code, report)` shape pass
-    through unchanged.
+    through unchanged. `composition_budget` is threaded in from `apply()`'s
+    own construction, never built here, so its lifetime is the apply run's
+    and not this wrapper's.
     """
     return apply_base.execute_directives(
         directives,
@@ -829,6 +836,7 @@ def _execute_directives(
         _CLI_DISPATCH,
         decisions=decisions,
         resolve_claim_grant=resolve_claim_grant,
+        composition_budget=composition_budget,
     )
 
 
@@ -948,6 +956,8 @@ def apply(
     root = repo_root or _resolve_repo_root_for_apply()
     if root is None:
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": "could not resolve a git worktree root"}
+
+    composition_budget = make_fleet_budget("pickup_assemble")
 
     resolved_sid = _resolve_explicit_session_id(session_id)
     if resolved_sid is None:
@@ -1084,13 +1094,22 @@ def apply(
         # already at `apply` stage, and for one held by anybody else.
         promote_claim_stage(class_, basename, cwd=str(root))
 
-        exit_code, report = _execute_directives(
-            directives,
-            judgment_points,
-            root,
-            decisions=effective_decisions,
-            resolve_claim_grant=_resolve_claim_grant,
-        )
+        outcome = "directive_failed"
+        try:
+            exit_code, report = _execute_directives(
+                directives,
+                judgment_points,
+                root,
+                decisions=effective_decisions,
+                resolve_claim_grant=_resolve_claim_grant,
+                composition_budget=composition_budget,
+            )
+            if exit_code == APPLY_EXIT_OK:
+                outcome = "success"
+            elif exit_code == APPLY_EXIT_PARTIAL_MUTATION:
+                outcome = "partial_mutation"
+        finally:
+            flush_composition_record(composition_budget, outcome)
 
         # AMENDMENT 2026-07-24 (chunk C7 Part B(c), the Director of Engineering v2 finding 3, EM
         # ruling (a) BANK-THE-GRAB) — the "only APPLY_EXIT_OK commits"

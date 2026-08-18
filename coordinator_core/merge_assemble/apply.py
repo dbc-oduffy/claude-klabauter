@@ -60,6 +60,10 @@ from coordinator_core.merge_assemble import (
     normalize_decisions,
     resolve_repo_root,
 )
+from coordinator_core.telemetry.composition_record import (
+    flush_composition_record,
+    make_fleet_budget,
+)
 
 # ---------------------------------------------------------------------------
 # Exit-code contract — composed from apply_base, shared by every apply/
@@ -258,6 +262,8 @@ def apply(
     if root is None:
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": "could not resolve a git worktree root"}
 
+    composition_budget = make_fleet_budget("merge_assemble")
+
     resolved_sid = _resolve_explicit_session_id(session_id)
     if resolved_sid is None:
         return APPLY_EXIT_TRANSPORT_FAIL, {
@@ -287,13 +293,22 @@ def apply(
         directives = _apply_force_bypass(decision.get("directives", []), force)
         judgment_points = decision.get("judgment_points", [])
 
-        exit_code, report = apply_base.execute_directives(
-            directives,
-            judgment_points,
-            root,
-            _CLI_DISPATCH,
-            decisions=effective_decisions,
-        )
+        outcome = "directive_failed"
+        try:
+            exit_code, report = apply_base.execute_directives(
+                directives,
+                judgment_points,
+                root,
+                _CLI_DISPATCH,
+                decisions=effective_decisions,
+                composition_budget=composition_budget,
+            )
+            if exit_code == apply_base.APPLY_EXIT_OK:
+                outcome = "success"
+            elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
+                outcome = "partial_mutation"
+        finally:
+            flush_composition_record(composition_budget, outcome)
         # branch_state/release_tag_cut moved into the canonical envelope's
         # `artifact` key (Review: code-reviewer — Finding 1) — no longer
         # top-level siblings of directives/judgment_points.

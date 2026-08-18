@@ -1687,9 +1687,34 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # ONLY the archival move from here on (see the supersede block directly
     # above — the status flip is no longer subject to this guard). Tri-state:
     # exit 1 = safe-to-archive -> proceed; exit 0 OR exit 2 = DO-NOT-move.
+    #
+    # Succession-child exemption (C3, docs/plans/2026-08-18-supersede-stamps-
+    # and-archives-atomically.md, AC1/AC9 — THE PRIMARY DEFECT fix): for
+    # mode="supersede" ONLY, the guard is called with
+    # edge_kinds={"forked_from"} instead of its default (all three lineage
+    # kinds). The successor this call just named via continued_into is a
+    # SUCCESSION child (a `predecessor`/`additional_predecessors` edge) — its
+    # existence is the entire justification for archiving the predecessor,
+    # not a reason to retain it, and treating it as a live child made this
+    # guard retain on essentially every real supersede call (see the module
+    # docstring's § Status-flip-precedes-guard fix for the incident this
+    # narrowly stops short of fully fixing). A live `forked_from` child (a
+    # spinoff) still retains — dropping it would strand that spinoff's own
+    # origin pointer (DR-224, AC4) — so the exemption is narrow, not
+    # wholesale: archive despite a SUCCESSION child, never an arbitrary one.
+    # Every other mode (chain, stamp_shipped, stamp_only) keeps the full
+    # default edge_kinds — this exemption is scoped to the supersede write
+    # path the plan's Problem section names, not a general loosening of the
+    # guard. This is the SAME edge_kinds={"forked_from"} shape C4 applies at
+    # `archival.reverse_membership`'s own Check-3 call site — the two guards
+    # have deliberately different archive-residency semantics and are not
+    # unified, but the succession/fork partition they express is identical
+    # by design; do not diverge on its shape between the two.
     # ------------------------------------------------------------------
+    guard_edge_kinds = {"forked_from"} if mode == "supersede" else None
     guard_result = await _handoff_has_live_children(
-        {"candidate": str(contained), "exclude": exclude}, repo_root
+        {"candidate": str(contained), "exclude": exclude, "edge_kinds": guard_edge_kinds},
+        repo_root,
     )
     guard_exit = guard_result.get("exit_code")
 

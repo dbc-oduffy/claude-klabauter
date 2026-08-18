@@ -9,11 +9,21 @@ acceptance oracle, AC B2 — see ``_VENV_IMPORT_PROBES``/``_VENV_PIP_DEPS``),
 pin it via the machine-local registry (``coordinator.python``), and report a
 status word
 (``ready`` / ``rebuilt`` / ``would-rebuild`` / ``would-write``) that three
-call sites — ``substrate.py`` ``_c10a_steps``, ``first_run.py`` Step 4b,
-``maximalist.py`` Step 6 — each interpret under their own disposition
-(fallback-retain-vs-fatal, fatal, advisory respectively). This module owns
-ONLY the venv-ensure mechanics; the surrounding disposition stays at each
-call site (do not collapse the three sites' error handling here).
+call sites — ``substrate.py`` ``_c10a_steps``, ``scripts/setup.py``'s
+``_fallback_to_venv``, ``maximalist.py`` Step 6 — each interpret under their
+own disposition (fallback-retain-vs-fatal, fatal, advisory respectively).
+This module owns ONLY the venv-ensure mechanics; the surrounding
+disposition stays at each call site (do not collapse the three sites' error
+handling here).
+
+Break-glass only (docs/plans/2026-08-18-retire-coordinator-venv.md chunk
+C4, AC5): every one of the three call sites above now reaches
+``ensure_coordinator_venv`` ONLY behind an explicit `--allow-venv-fallback`
+opt-in threaded down from its own CLI. ``first_run.py``'s former Step 4b
+call site (Port B) is retired outright, not flag-gated -- that module's CLI
+carries no such flag, and machine-interpreter ``coordinator_whoami``
+provisioning no longer depends on this module having ever built a venv (see
+``scripts/setup.py``'s ``provision_whoami_under_general_pin``, chunk C10).
 
 Port backlink: docs/plans/2026-07-17-retire-doe-bash-bridges-native-python.md
     (chunk C2 — Port B).

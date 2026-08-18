@@ -45,6 +45,7 @@ _SPAWN_COUNT_HIGH_WATER = {
         "green_path": 12,
         "refusal_path_unanswerable": 0,
         "directory_pathspec_expansion": 13,
+        "probe_bearing_path": 24,
     },
     "changelog.cited_in_range_count": {
         "n_tokens": 1,

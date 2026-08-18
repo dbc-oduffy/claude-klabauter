@@ -103,12 +103,6 @@ _ALLOWLISTED_RELPATHS = {
     # bottoms out here by construction; this IS the resolver.
     "coordinator_core/install/ensure_venv.py":
         "owns and builds the venv",
-    # Purpose (a): whoami importability probes, fired only on explicit
-    # cadence/doctor invocation, never a hot-path hook fire.
-    "coordinator_core/plugin_health/sentinel.py":
-        "whoami importability probe (purpose a)",
-    "coordinator/bin/repo-setup-args-and-register.py":
-        "whoami probe (purpose a), fires only during repo-setup",
     # Purpose (c), consented-to by PM ruling 2026-08-14 (DR-307) and narrowed
     # 2026-08-17 (DR-317, machine-first-install-surface plan, C2): the opt-in
     # `--allow-venv-fallback` branch of `provision_deps`, now break-glass-only
@@ -117,9 +111,6 @@ _ALLOWLISTED_RELPATHS = {
     # never reached for a PEP-668 refusal.
     "scripts/setup.py":
         "provision_deps' opt-in --allow-venv-fallback branch (purpose c, C2)",
-    # Reclaims the venv on uninstall -- deletion, not dependency resolution.
-    "coordinator_core/install/uninstall_legs.py":
-        "reclaims the venv on uninstall",
 }
 
 

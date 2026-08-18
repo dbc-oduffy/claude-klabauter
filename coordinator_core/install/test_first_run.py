@@ -150,8 +150,11 @@ def test_build_plan_all_missing_lists_every_install_step():
     assert "brew install git-lfs  then  git lfs install  (global, idempotent)" in steps
     assert steps[-1] == "tell you to /reload-plugins"
     assert "seed machine-local registry  (post-toolchain, C1b, Step 3)" in steps
+    # Step 4b (ensure-coordinator-venv) is retired outright from this chain
+    # (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5) -- the
+    # documented plan line no longer names it.
     assert (
-        "run install-substrate -> ensure-coordinator-venv -> platform-localize  (post-toolchain, C1b, Step 4)"
+        "run install-substrate -> platform-localize  (post-toolchain, C1b, Step 4)"
         in steps
     )
 
@@ -305,12 +308,15 @@ def test_bash_version_ok_matches_live_bash_on_path():
 # ---------------------------------------------------------------------------
 
 
-def test_run_post_toolchain_ensure_venv_failure_fails(tmp_path, monkeypatch):
-    """Step 4b (native — coordinator_core.install.ensure_venv): a raised
-    EnsureVenvError propagates as EXIT_FAIL. Supersedes the pre-port
-    'ensure-coordinator-venv.sh not found' guard test — that guard's
-    premise (a bash script on disk) no longer exists post-port (Port B,
-    docs/plans/2026-07-17-retire-doe-bash-bridges-native-python.md)."""
+def test_run_post_toolchain_never_calls_ensure_venv(tmp_path, monkeypatch):
+    """Step 4b (ensure-coordinator-venv) is retired outright from this
+    module (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4,
+    AC5): `ensure_coordinator_venv` is reachable only via the explicit
+    `--allow-venv-fallback` opt-in elsewhere in the install chain
+    (`scripts/setup.py`, `substrate.py`'s Step C10a-3) — first-run.py's own
+    CLI carries no such flag, so a failing (or even present) implementation
+    of `ensure_coordinator_venv` must never be reached from here, and the
+    chain completes successfully regardless of it."""
     plugin_root = tmp_path / "coordinator"
     (plugin_root / "bin").mkdir(parents=True)
     (plugin_root / "scripts").mkdir(parents=True)
@@ -320,7 +326,7 @@ def test_run_post_toolchain_ensure_venv_failure_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(
         fr, "_seed_machine_local_registry", lambda *a, **k: None
     )
-    # Stub install-substrate to succeed so we exercise the Step 4b guard.
+    # Stub install-substrate to succeed.
     fake_substrate = mock.MagicMock()
     fake_substrate.main.return_value = 0
     monkeypatch.setitem(sys.modules, "coordinator_core.install.substrate", fake_substrate)
@@ -334,7 +340,7 @@ def test_run_post_toolchain_ensure_venv_failure_fails(tmp_path, monkeypatch):
 
     args = fr._Args()
     rc = fr.run_post_toolchain(plugin_root, args)
-    assert rc == fr.EXIT_FAIL
+    assert rc == fr.EXIT_OK
 
 
 def test_run_post_toolchain_platform_localize_nonzero_fails(tmp_path, monkeypatch):
@@ -430,9 +436,11 @@ def test_run_post_toolchain_install_substrate_import_error(tmp_path, monkeypatch
 
 def test_run_post_toolchain_success_runs_all_steps_in_order(tmp_path, monkeypatch, capsys):
     """AC5-parity (retired coordinator/scripts/tests/first-run-regeneration.bats
-    Test 1): asserts install-substrate -> ensure-coordinator-venv ->
-    platform-localize call order via output-marker ordering, plus the
-    closing /reload-plugins instruction. See
+    Test 1): asserts install-substrate -> platform-localize call order via
+    output-marker ordering, plus the closing /reload-plugins instruction.
+    Step 4b (ensure-coordinator-venv) is retired outright from this chain
+    (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5) and no
+    longer sits between the two. See
     coordinator/scripts/tests/first-run-regeneration.bats's retirement
     pointer (2026-07-17 BIG_PORT Wave C sidecar, EM directive) -- this test
     is the Python-native replacement for that bash-fixture E2E coverage."""
@@ -450,7 +458,13 @@ def test_run_post_toolchain_success_runs_all_steps_in_order(tmp_path, monkeypatc
 
     import coordinator_core.install.ensure_venv as ev
 
-    monkeypatch.setattr(ev, "ensure_coordinator_venv", lambda *a, **k: "ready")
+    def _fail_if_called(*a, **k):
+        raise AssertionError(
+            "ensure_coordinator_venv must not be reached from first_run.py "
+            "without --allow-venv-fallback (chunk C4, AC5)"
+        )
+
+    monkeypatch.setattr(ev, "ensure_coordinator_venv", _fail_if_called)
 
     fake_platform_localize = mock.MagicMock()
     fake_platform_localize.main.return_value = 0
@@ -465,9 +479,9 @@ def test_run_post_toolchain_success_runs_all_steps_in_order(tmp_path, monkeypatc
 
     out = capsys.readouterr().out
     idx_substrate = out.index("install-substrate: done.")
-    idx_venv = out.index("ensure-coordinator-venv: done (ready).")
     idx_localize = out.index("platform-localize: done.")
-    assert idx_substrate < idx_venv < idx_localize
+    assert idx_substrate < idx_localize
+    assert "ensure-coordinator-venv" not in out
     assert "/reload-plugins" in out
 
 

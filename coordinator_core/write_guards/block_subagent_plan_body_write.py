@@ -83,6 +83,36 @@ The AMBIGUOUS collision sentinel is UNAFFECTED by this narrowing — it is
 an identity-resolution failure, not a scope call, and stays the
 guard's unconditional fail-closed branch.
 
+Repaired 2026-08-18 (docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-
+emits.md § C3): the C16 narrowing above made the invented-kind deny leg
+(AC6/C3 of docs/plans/2026-08-10-deny-unenumerated-agent-types-at-
+dispatch.md) structurally unreachable for anything but
+``coordinator:executor``, because it routed a resolved-but-unenumerated
+kind through the SAME ``executing_keys`` sidecar check written for a
+legitimately-dispatched executor scoping its own plan. An invented kind
+has no sidecar and no "currently executing plan" concept to scope
+against, so C3 splits the two: a genuinely INVENTED kind (resolved,
+non-AMBIGUOUS, absent from the roster, and not the manufactured
+``PLACEHOLDER_TYPE`` placeholder — see below) now hard-denies
+unconditionally across the whole ``docs/plans/**``/``docs/problems/**``
+surface, ahead of and independent from the C16 narrowing.
+``coordinator:executor`` itself is untouched — it still only hard-denies
+via the C16 executing-plan-key narrowing above.
+
+``PLACEHOLDER_TYPE`` (``"unknown"``, the value
+``track_dispatched_agents._handler`` manufactures from an absent
+``subagent_type`` field) is routed onto the ``kind_unresolved`` allow leg
+alongside ``""`` rather than falling into the invented-kind deny above —
+it is the same unresolved-identity event as an empty string, not a
+resolved invented kind. This is what keeps a legitimate
+``coordinator:enricher``/``coordinator:review-integrator`` dispatch from
+hard-denying during the window documented in
+``state/bug-backlog/2026-08-10-posttooluse-agent-does-not-fire-for-
+some-*`` where the PostToolUse enrich fire never lands and the dispatch
+record is left carrying the placeholder — the exact 2026-07-03 incident
+shape (``state/lessons/2026-07-03-plan-body-edits-are-em-inline-work-
+not-e.yaml``) that drove a self-authorized override bypass last time.
+
 Allow conditions (pass through):
   (1) No agent_id (top-level EM write) -> always allow.
   (2) Path not under docs/plans/ or docs/problems/ -> allow. This
@@ -139,6 +169,18 @@ Negative-spec:
     cannot trust a plan-key comparison either — narrowing that branch would
     convert a fail-closed identity guard into a fail-open one on exactly
     the input it exists to distrust.
+  - Does NOT gate the invented-kind hard deny on a sidecar-declared
+    "currently executing plan" — that concept exists only for a
+    legitimately-dispatched ``coordinator:executor`` narrowing its OWN
+    plan scope (C16 above); an invented kind has no legitimate dispatch to
+    scope against, so gating it the same way would leave the deny leg
+    unreachable again (the exact defect C3 repairs).
+  - Does NOT treat ``PLACEHOLDER_TYPE`` ("unknown") as an invented kind.
+    It is folded into ``kind_unresolved`` alongside ``""`` because both
+    represent the SAME "identity never resolved" event
+    (``track_dispatched_agents._handler`` manufactures the placeholder
+    from an absent field) — see the C16-narrowing docstring section above
+    for the incident this prevents.
 """
 
 from __future__ import annotations
@@ -245,6 +287,18 @@ _EXECUTOR_TYPE = "coordinator:executor"
 #: dispatches share a canonical id but carry different subagent_types.
 #: Fails closed (unconditional block).
 _AMBIGUOUS_SENTINEL = "AMBIGUOUS"
+
+#: Manufactured-identity sentinel — mirrors
+#: ``coordinator_core.hooks.track_dispatched_agents.PLACEHOLDER_TYPE``
+#: verbatim (kept as a local literal, not an import, for the same hot-path
+#: import-budget reason ``_resolve_roster_accessor`` above defers its own
+#: import: importing anything from ``coordinator_core.hooks`` eagerly pulls
+#: that package's ``__init__`` and its 18-submodule registration onto this
+#: guard's hot path). ``track_dispatched_agents._handler`` writes this value
+#: when the dispatching event carried no ``subagent_type`` field at all —
+#: the SAME "identity never resolved" event as an empty string, not an
+#: invented kind. See ``kind_unresolved`` below.
+_PLACEHOLDER_TYPE = "unknown"
 
 
 def _normalize_path(file_path: str) -> str:
@@ -596,25 +650,37 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     is_ambiguous = subagent_type == _AMBIGUOUS_SENTINEL
 
+    # C3 (docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md):
+    # PLACEHOLDER_TYPE is a manufactured-absent-field identity, the same
+    # "never resolved" event as an empty string (see ``_PLACEHOLDER_TYPE``
+    # above) — NOT a resolved, enumerable kind. Folding it into
+    # ``kind_unresolved`` is what routes it onto the allow exit below
+    # alongside "", rather than falling through into the invented-kind
+    # deny path a few lines down.
+    is_placeholder = subagent_type == _PLACEHOLDER_TYPE
+
     # Emitted at the actual exit point with the actual verdict (``None``,
     # since that branch is the ONLY reachable exit for an unresolved,
     # non-ambiguous kind) rather than a hand-passed claim about the outcome.
-    kind_unresolved = not is_ambiguous and not subagent_type
+    kind_unresolved = not is_ambiguous and (not subagent_type or is_placeholder)
 
     # Block when SUBAGENT_TYPE is coordinator:executor OR AMBIGUOUS (AC14
-    # collision sentinel). All other types — including empty/lookup-failure —
-    # allow. AC6/C3: "all other types" is narrowed to enumerated-roster
-    # types only — a lookup FAILURE (kind_unresolved) still allows through
-    # this same exit, unchanged from the 2026-06-09 ruling above, but a
-    # type that resolves CLEANLY to something absent from the roster
-    # (C1's own union-of-three roster, coordinator_core.hooks.
-    # block_unenumerated_agent_type.resolve_roster) falls through to the
-    # SAME executor-scoped logic below rather than exiting here — an
-    # invented type gets no more trust than coordinator:executor for this
-    # guard's purposes. A roster-load error is a peer-repo hiccup, not this
-    # guard's problem to newly deny on: C1's PreToolUse(Agent) deny is the
-    # primary fix, so this stays defence in depth and falls back to
-    # today's allow rather than denying on an unresolvable roster.
+    # collision sentinel). All other types — including empty/lookup-failure/
+    # placeholder — allow. AC6/C3: "all other types" is narrowed to
+    # enumerated-roster types only — a lookup FAILURE or PLACEHOLDER_TYPE
+    # (kind_unresolved) still allows through this same exit, unchanged from
+    # the 2026-06-09 ruling above, but a type that resolves CLEANLY to
+    # something absent from the roster (C1's own union-of-three roster,
+    # coordinator_core.hooks. block_unenumerated_agent_type.resolve_roster)
+    # is a genuinely INVENTED kind: it hard-denies unconditionally across
+    # the whole protected surface below, not gated on any "currently
+    # executing plan" sidecar concept — an invented kind has no legitimate
+    # dispatch to protect (see module docstring negative-spec / C3 brief).
+    # A roster-load error is a peer-repo hiccup, not this guard's problem to
+    # newly deny on: C1's PreToolUse(Agent) deny is the primary fix, so this
+    # stays defence in depth and falls back to today's allow rather than
+    # denying on an unresolvable roster.
+    is_invented = False
     if not is_ambiguous and subagent_type != _EXECUTOR_TYPE:
         if kind_unresolved:
             emit_kind_resolution_failure_signal(
@@ -624,6 +690,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         roster, _roster_error = _resolve_roster_accessor()()
         if roster is None or subagent_type in roster:
             return None
+        is_invented = True
 
     # AMBIGUOUS collision sentinel: unconditional fail-closed, unaffected by
     # the C16 plan-scoping narrowing below (identity failure, not a scope
@@ -631,6 +698,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if is_ambiguous:
         _write_block_log(git_root, session_id, agent_id or raw_agent_id, file_path)
         reason = _deny_reason_ambiguous(agent_id or raw_agent_id, file_path, payload)
+        result = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+        _write_hook_emit_log(cwd, str(result))
+        return result
+
+    # Invented kind: hard-denies unconditionally, across the WHOLE
+    # docs/plans/** + docs/problems/** surface — deliberately NOT routed
+    # through the C16 executing-plan-key narrowing below, which exists only
+    # to scope a legitimate coordinator:executor dispatch to its OWN plan.
+    # An invented kind has no sidecar and no "currently executing plan"
+    # concept to narrow against.
+    if is_invented:
+        _write_block_log(git_root, session_id, agent_id or raw_agent_id, file_path)
+        reason = _deny_reason_executor(agent_id or raw_agent_id, file_path, subagent_type, payload)
         result = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

@@ -356,6 +356,25 @@ def test_consumed_handoff_completeness_element_reduction_is_total(leg_a_verdict,
     assert reading.status == expected_status
 
 
+def test_consumed_handoff_completeness_multi_element_clean_is_gate_level_clean():
+    """Distinguishes a real multi-element `clean` reduction from the
+    single-element case covered by the parametrized table above: two
+    elements, both reducing to `clean`, with no `open`/`indeterminate`/
+    `not-applicable` element in the mix, must still reduce to gate-level
+    `clean` — not by coincidence of being a single-element case."""
+    payload = {
+        "applies": True,
+        "blocks": False,
+        "elements": (
+            _element(handoff="a.md", leg_a_verdict="clean", leg_b_verdict="no-children"),
+            _element(handoff="b.md", leg_a_verdict="clean", leg_b_verdict="no-children"),
+        ),
+    }
+    reading = cv.consumed_handoff_completeness(payload)
+    assert reading.status == "clean"
+    assert reading.residue_items == ()
+
+
 def test_consumed_handoff_completeness_open_wins_across_elements():
     payload = {
         "applies": True,

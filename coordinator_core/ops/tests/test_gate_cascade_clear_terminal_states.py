@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
+import yaml
 
 import coordinator_core.ops.handoff_transition  # noqa: F401 -- fires @register_op
 from coordinator_core.ops.handoff_transition import _handler
@@ -216,6 +217,86 @@ def test_shipped_blocker_clears(gcc_repo):
     assert result["exit_code"] == 0, result
     fm = _read_fm(abs_path)
     assert read_fm_field(fm, "deployment_state") == "ready_to_fire"
+
+
+# ---------------------------------------------------------------------------
+# no_longer_blocked_by MOVE (AC1/AC2/AC3, bug-backlog 2026-08-14)
+# ---------------------------------------------------------------------------
+
+
+def test_flip_moves_cleared_id_into_no_longer_blocked_by(gcc_repo):
+    """AC1: a full-drain clear MOVES the cleared id into
+    no_longer_blocked_by rather than dropping it — the union of blocked_by
+    and no_longer_blocked_by is invariant across the call."""
+    gcc_repo.seed_handoff("blocker-move.md", _blocker_lines("stub-move", "shipped"))
+    gcc_repo.seed_handoff(
+        "gcc-move.md", _roadmap_extra("gcc-move", "['stub-move']", "stub-move work")
+    )
+    abs_path = gcc_repo.abs_path("gcc-move.md")
+
+    result = _run(_handler(
+        _gate_cascade_clear_params(abs_path, ["stub-move"], ["a" * 40]),
+        repo_root=gcc_repo.common_dir,
+    ))
+
+    assert result["exit_code"] == 0, result
+    fm = _read_fm(abs_path)
+    assert read_fm_field(fm, "deployment_state") == "ready_to_fire"
+    assert yaml.safe_load(fm)["blocked_by"] == []
+    assert yaml.safe_load(fm)["no_longer_blocked_by"] == ["stub-move"]
+
+
+def test_narrow_moves_only_the_shipped_blocker_and_stays_awaiting_gate(gcc_repo):
+    """AC2: narrowing a two-blocker gate where only one blocker (tc-1) has
+    shipped must move ONLY tc-1 into no_longer_blocked_by, leave tc-5 in
+    blocked_by untouched, and must NOT flip deployment_state — clearing a
+    shipped blocker is the ruling, clearing an unshipped one was never
+    asked for."""
+    gcc_repo.seed_handoff("blocker-tc-1.md", _blocker_lines("tc-1", "shipped"))
+    gcc_repo.seed_handoff("blocker-tc-5.md", _blocker_lines("tc-5", "in_flight"))
+    gcc_repo.seed_handoff(
+        "gcc-narrow.md",
+        _roadmap_extra("gcc-narrow", "['tc-1', 'tc-5']", "tc-1 work, tc-5 work"),
+    )
+    abs_path = gcc_repo.abs_path("gcc-narrow.md")
+
+    result = _run(_handler(
+        _gate_cascade_clear_params(abs_path, ["tc-1"], ["a" * 40]),
+        repo_root=gcc_repo.common_dir,
+    ))
+
+    assert result["exit_code"] == 0, result
+    fm = _read_fm(abs_path)
+    assert read_fm_field(fm, "deployment_state") == "awaiting_gate"
+    parsed = yaml.safe_load(fm)
+    assert parsed["blocked_by"] == ["tc-5"]
+    assert parsed["no_longer_blocked_by"] == ["tc-1"]
+
+
+def test_replay_against_prepopulated_no_longer_blocked_by_appends_no_duplicate(gcc_repo):
+    """AC3: the move and the shrink occur in one locked_rmw mutate() closure,
+    and a replay against a handoff whose no_longer_blocked_by already
+    carries the id being cleared (e.g. a prior partial history) appends no
+    duplicate."""
+    gcc_repo.seed_handoff("blocker-replay.md", _blocker_lines("stub-replay", "shipped"))
+    gcc_repo.seed_handoff(
+        "gcc-replay.md",
+        _roadmap_extra("gcc-replay", "['stub-replay']", "stub-replay work")
+        + ["no_longer_blocked_by: ['stub-replay']"],
+    )
+    abs_path = gcc_repo.abs_path("gcc-replay.md")
+
+    result = _run(_handler(
+        _gate_cascade_clear_params(abs_path, ["stub-replay"], ["a" * 40]),
+        repo_root=gcc_repo.common_dir,
+    ))
+
+    assert result["exit_code"] == 0, result
+    fm = _read_fm(abs_path)
+    assert read_fm_field(fm, "deployment_state") == "ready_to_fire"
+    parsed = yaml.safe_load(fm)
+    assert parsed["blocked_by"] == []
+    assert parsed["no_longer_blocked_by"] == ["stub-replay"]
 
 
 # ---------------------------------------------------------------------------

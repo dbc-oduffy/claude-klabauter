@@ -136,6 +136,22 @@ abort (the anti-scope's hard line):
       mid-mutation-abort prohibition would forbid instrumenting for
       abort purposes anyway.
 
+ARMED (chunk C2, docs/plans/2026-08-18-arm-the-composition-budget.md): all
+five composition apply entries this module serves — `backlog_grind_
+assemble`, `baton_assemble`, `consolidate_assemble`, `merge_assemble`,
+`pickup_assemble` — now construct a fresh `CompositionBudget` per apply run
+via `coordinator_core.telemetry.composition_record.make_fleet_budget` and
+pass it through as `composition_budget`, never `None`; the two wrapper
+callers (`baton_assemble`, `pickup_assemble`) thread it through their own
+`_execute_directives` wrapper rather than constructing it there, so its
+lifetime is the apply run's, not the wrapper's. Each call site also wraps
+its `execute_directives` call in a `try/finally` that calls
+`flush_composition_record` exactly once, whatever the run's outcome. A
+caller passing `None` explicitly (or, before this chunk, one that never
+threaded the parameter at all) still gets the byte-identical pre-C10
+behaviour described above — the fleet factory's ceilings themselves start
+at `None` too (pure recorder; C5 arms them from what this wiring records).
+
 SESSION IDENTITY SHAPE (chunk C6, docs/plans/2026-08-15-warm-engine-retires-
 the-per-invocation-cold-start.md): `session_identity()` is a per-CONTEXT
 `contextvars.ContextVar` scope, not a process-wide `os.environ` mutation.

@@ -235,6 +235,91 @@ _INDEX_RETRY_MAX_ATTEMPTS = 8
 _INDEX_RETRY_INITIAL_SLEEP_S = 0.1
 _INDEX_RETRY_BACKOFF_CAP_S = 1.0
 
+#: git's canonical empty tree — the sha `git write-tree` emits for an index
+#: holding zero entries. Load-bearing, not trivia: it is what a MISSING
+#: `GIT_INDEX_FILE` produces, silently. See `_empty_private_index_breach`.
+EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+async def _empty_private_index_breach(
+    worktree_root: Path,
+    env: dict,
+    caller: str,
+) -> Optional[str]:
+    """Refuse a pathspec-less commit whose private index would commit NOTHING.
+
+    Returns None when the index is safe to commit, or a reason string naming
+    the breach — callers route that string into their existing commit-failure
+    path (reverse the disk moves, report every item failed) rather than
+    committing.
+
+    WHY THIS EXISTS — the incident of 2026-08-18 (`fbfbd061d`), which committed
+    a tree of `4b825dc…` and thereby deleted all 26,264 files in the repo on a
+    shared branch that was already pushed:
+
+    1. `git write-tree` against a MISSING `GIT_INDEX_FILE` returns
+       `EMPTY_TREE_SHA` with **exit code 0 and empty stderr** — verified on git
+       2.55.0.windows.4. A zero-byte index fails loud (`index file smaller than
+       expected`, rc=128); only an *absent* one fails silent. So every `.ok` /
+       returncode check upstream of the commit is blind to this by
+       construction, and no amount of checking `read-tree`'s exit code catches
+       it — the index can go missing AFTER a successful seed.
+    2. This module's two commit seams (`archive_and_commit`, `rm_and_commit`)
+       commit from the private index with **no trailing pathspec**. That is
+       CORRECT and must stay: a `-- <paths>` pathspec makes git read the
+       WORKTREE for those paths instead of the index, which is the FORWARD-B
+       hazard that laundered 34 hand-edited frontmatter changes into
+       fleet-archival commits on 2026-07-26 (see `archive_and_commit`'s own
+       docstring).
+    3. Those two facts compose into the blast radius. WITH a pathspec, a lost
+       index commits nothing; WITHOUT one, a lost index commits the empty tree
+       — i.e. deletes every tracked file in the repo. The no-pathspec design is
+       not the bug, and "just add a pathspec" is not the fix — that trades a
+       loud, recoverable failure for a silent, recurring FORWARD-B leak.
+
+    NEGATIVE-SPEC: do NOT "simplify" this away by giving either commit a
+    pathspec. The tension in point 3 is the whole reason this check exists;
+    resolving it in the pathspec direction reintroduces FORWARD-B.
+
+    Deliberately trigger-independent: it does not care WHY the index went
+    missing (still open as of 2026-08-18), only that a commit is about to erase
+    the repo. Cost is one `write-tree` spawn per batch commit — per sweep, not
+    per item — which is the price of the failure mode being otherwise
+    undetectable.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git", "write-tree",
+        cwd=str(worktree_root),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        # A loud index failure (corrupt/truncated). Still a refusal — this
+        # function's contract is "safe to commit", and an unreadable index is
+        # not — but it is reported as itself, never as the empty-tree case.
+        return (
+            "private-index-unreadable: git write-tree failed — %s"
+            % stderr.decode(errors="replace").strip()
+        )
+
+    tree_sha = out.decode(errors="replace").strip()
+    if tree_sha == EMPTY_TREE_SHA:
+        _LOG.error(
+            "%s: REFUSED — private index resolves to git's empty tree (%s); "
+            "committing it would delete every tracked file in %s. The index "
+            "file named by GIT_INDEX_FILE is missing or holds zero entries.",
+            caller, EMPTY_TREE_SHA, worktree_root,
+        )
+        return (
+            "empty-private-index: git write-tree returned git's canonical "
+            "EMPTY TREE (%s), meaning the private index holds zero entries — "
+            "committing it with no pathspec would delete every tracked file. "
+            "Refused; nothing was committed." % EMPTY_TREE_SHA
+        )
+    return None
+
 
 async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> Optional[str]:
     """Run one git index-mutating subcommand (e.g. `update-index`, or
@@ -1489,18 +1574,30 @@ async def archive_and_commit(
         # git read the WORKTREE for those paths instead, which is FORWARD-B (see the
         # module/function docstring) — the mechanism that laundered 34 hand-edited
         # frontmatter changes into fleet-archival commits on 2026-07-26.
-        proc = await asyncio.create_subprocess_exec(
-            "git", "-c", "commit.gpgsign=false",  # GAP-6: neutralise repo/global signing config for this TTY-less invocation
-            "commit", "-m", subject,
-            cwd=str(worktree_root),
-            env=base_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # Empty-private-index refusal MUST precede the commit: this commit
+        # carries no pathspec, so an index that resolves to git's empty tree
+        # would delete every tracked file rather than commit nothing. See
+        # `_empty_private_index_breach` for the 2026-08-18 incident and for why
+        # the no-pathspec form above is correct and must stay.
+        index_breach = await _empty_private_index_breach(
+            worktree_root, base_env, "archive_and_commit"
         )
-        _out, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
+        if index_breach is not None:
+            commit_rc, err_msg = 1, index_breach
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-c", "commit.gpgsign=false",  # GAP-6: neutralise repo/global signing config for this TTY-less invocation
+                "commit", "-m", subject,
+                cwd=str(worktree_root),
+                env=base_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _out, stderr = await proc.communicate()
+            commit_rc = proc.returncode
             err_msg = stderr.decode(errors="replace").strip()
+
+        if commit_rc != 0:
             _LOG.error(
                 "archive_and_commit: git commit failed (cwd=%s): %s",
                 worktree_root, err_msg,
@@ -1837,18 +1934,28 @@ async def rm_and_commit(
         # note in this function's docstring: `git rm` (never -f) already refused
         # to stage any path whose worktree content diverged from HEAD, so the
         # index is the exact reaped-path scope by construction.
-        proc = await asyncio.create_subprocess_exec(
-            "git", "-c", "commit.gpgsign=false",  # GAP-6: neutralise repo/global signing config for this TTY-less invocation
-            "commit", "-m", subject,
-            cwd=str(worktree_root),
-            env=base_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # Empty-private-index refusal MUST precede the commit — same reasoning
+        # as archive_and_commit's: no pathspec means an empty index deletes the
+        # repo rather than committing nothing. See `_empty_private_index_breach`.
+        index_breach = await _empty_private_index_breach(
+            worktree_root, base_env, "rm_and_commit"
         )
-        _out, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
+        if index_breach is not None:
+            commit_rc, err_msg = 1, index_breach
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-c", "commit.gpgsign=false",  # GAP-6: neutralise repo/global signing config for this TTY-less invocation
+                "commit", "-m", subject,
+                cwd=str(worktree_root),
+                env=base_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _out, stderr = await proc.communicate()
+            commit_rc = proc.returncode
             err_msg = stderr.decode(errors="replace").strip()
+
+        if commit_rc != 0:
             _LOG.error(
                 "rm_and_commit: git commit failed (cwd=%s): %s",
                 worktree_root, err_msg,

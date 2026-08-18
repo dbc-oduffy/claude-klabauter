@@ -525,9 +525,33 @@ def _audit1_stub_coverage(r: _Reporter, run_id: str, data_root: Path, recon_path
     expected = keep_count + merge_count
 
     where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
-    live_count = len(query_records("handoff", data_root, where=where))
-    arch_count = len(query_records("handoff-archived", data_root, where=where))
-    stub_count = live_count + arch_count
+    live_records = query_records("handoff", data_root, where=where)
+    arch_records = query_records("handoff-archived", data_root, where=where)
+    live_count = len(live_records)
+    arch_count = len(arch_records)
+
+    # Coverage is a property of the STUB, not of the records carrying it. Under
+    # DR-172 a succession deliberately leaves two records sharing one `stub_id`
+    # — the archived predecessor and the live successor — permanently. Summing
+    # record counts therefore over-counts by one per succession and fails this
+    # audit forever after the first one, blocking Phase 3 dispatch on a roadmap
+    # whose graph is sound. Count distinct stub_ids instead.
+    # `stub_id` lives under the record's `frontmatter` mapping, not at top level —
+    # same access path `_build_stub_descriptors` uses.
+    all_records = [*live_records, *arch_records]
+    stub_ids = {
+        str(rec["frontmatter"]["stub_id"])
+        for rec in all_records
+        if rec.get("frontmatter", {}).get("stub_id")
+    }
+    # A record carrying no stub_id cannot be deduplicated against anything, so it
+    # counts as its own unit — preserving the pre-DR-172 arithmetic for malformed
+    # records rather than silently dropping them from coverage.
+    untagged_count = sum(
+        1 for rec in all_records if not rec.get("frontmatter", {}).get("stub_id")
+    )
+    stub_count = len(stub_ids) + untagged_count
+    record_count = len(all_records)
 
     if stub_count == 0 and expected == 0:
         r.fail(
@@ -542,13 +566,15 @@ def _audit1_stub_coverage(r: _Reporter, run_id: str, data_root: Path, recon_path
         )
     elif stub_count != expected:
         r.fail(
-            f"Stub-coverage mismatch: {stub_count} stubs on disk ({live_count} live + "
-            f"{arch_count} archived), {expected} expected (KEEP={keep_count} + "
-            f"MERGE={merge_count}). See {recon_path}."
+            f"Stub-coverage mismatch: {stub_count} stubs on disk across "
+            f"{record_count} record(s) ({live_count} live + {arch_count} "
+            f"archived), {expected} expected (KEEP={keep_count} + MERGE={merge_count}). "
+            f"See {recon_path}."
         )
     else:
         r.passed(
-            f"Stub-coverage: {stub_count} stubs ({live_count} live + {arch_count} "
+            f"Stub-coverage: {stub_count} stubs across "
+            f"{record_count} record(s) ({live_count} live + {arch_count} "
             f"archived) match {expected} verdicts (KEEP={keep_count}, MERGE={merge_count})."
         )
 

@@ -307,3 +307,61 @@ def test_non_heir_candidate_unaffected(heir_repo):
         f"a non-heir candidate must keep its pre-existing DR-084 disposition, "
         f"unaffected by the new heir-retain skip pass; got skip_map={skip_map!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Branch-B attribution — a terminal deployment_state never reached H4
+# ---------------------------------------------------------------------------
+
+
+def test_continued_predecessor_reports_cascade_not_h4(heir_repo):
+    """A `continued` predecessor with a live successor qualifies via
+    archive_handoffs._is_terminal's Branch B (checked FIRST, before the
+    Branch-A heir path), so H4 never ran and is not what retained it — the
+    live-successor check is. Reporting it under the H4 note misattributes
+    the gate and, via "retained for reaper", names an actor that will never
+    take it: reap-orphaned-in-flight-handoffs.py stamps shipped_in only for
+    a dead-holder orphan that provably shipped. The clearing actor is the
+    cascade (archive_handoffs module docstring "CASCADE archival").
+
+    Spec backlink: cross-repo/archive/2026-08-18-example-retrieval-repo-em-consumed-
+    handoff-archive-retained-for-absent-reaper.md.
+    """
+    parent_path = heir_repo.seed_handoff(
+        "2026-08-14-continued-predecessor.md", "consumed",
+        extra_frontmatter="deployment_state: continued",
+    )
+    parent_rel = "state/handoffs/2026-08-14-continued-predecessor.md"
+    heir_repo.seed_successor("2026-08-14-continued-child.md", parent_path)
+
+    result = _run(_handler({"dry_run": False}, repo_root=heir_repo.common_dir))
+
+    assert result["exit_code"] == 0, f"expected exit_code:0; got {result!r}"
+
+    archived_ids = [a["id"] for a in result["consumed_handoffs"]["archived"]]
+    assert parent_rel not in archived_ids, (
+        f"a Branch-B candidate with a LIVE successor is retained by Check 3, "
+        f"not archived; got archived_ids={archived_ids!r}"
+    )
+
+    skip_map = {s["id"]: s["reason"] for s in result["consumed_handoffs"]["skipped"]}
+    assert parent_rel in skip_map, (
+        f"the retention must still be surfaced (sweep-consumed-handoffs' "
+        f"never-silently-swallowed contract); got "
+        f"skipped={result['consumed_handoffs']['skipped']!r}"
+    )
+    reason = skip_map[parent_rel]
+    assert "reaper" not in reason, (
+        f"a `continued` record is never collected by the reaper — the note must "
+        f"not promise that actor; got {reason!r}"
+    )
+    assert "shipped_in" not in reason, (
+        f"H4's ship-evidence rationale did not run for this candidate and must "
+        f"not be cited as the retain reason; got {reason!r}"
+    )
+    assert "cascade" in reason and "deployment_state=continued" in reason, (
+        f"the note must name the actual gate and the clearing actor; got {reason!r}"
+    )
+    assert "2026-08-14-continued-child.md" in reason, (
+        f"the note must name the live successor it is waiting on; got {reason!r}"
+    )

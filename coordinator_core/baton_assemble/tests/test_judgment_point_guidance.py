@@ -64,9 +64,9 @@ class TestContinuationVsForkGuidance:
 
 
 class TestNoGuidanceDispositionsUnaffected:
-    """AC3 routes j-dirty-tree-case-c/j-tracker-hand-curated through
-    `build_disposition` too, but Out-of-scope explicitly withholds guidance
-    text for them this pass -- their shape must stay exactly as before."""
+    """AC3 routes j-dirty-tree-case-c through `build_disposition` too, but
+    Out-of-scope explicitly withholds guidance text for it this pass -- its
+    shape must stay exactly as before."""
 
     def test_dirty_tree_case_c_disposition_carries_no_guidance(self):
         attribution = {"degraded": False, "mine": ["a.txt"], "residue_count": 1}
@@ -74,50 +74,22 @@ class TestNoGuidanceDispositionsUnaffected:
         jp = next(p for p in points if p["id"] == "j-dirty-tree-case-c")
         assert jp["dispositions"] == [{"value": "mine", "resolves": ["d1"]}]
 
-    def test_tracker_hand_curated_dispositions_carry_no_guidance(self, tmp_path):
-        points = ba._build_judgment_points(
-            "handoff", tracker_hand_curated=True, root=tmp_path
-        )
-        jp = next(p for p in points if p["id"] == "j-tracker-hand-curated")
-        assert jp["dispositions"] == [
-            {"value": "recorded", "resolves": ["d1"]},
-            {"value": "nothing-to-record", "resolves": ["d1"]},
-        ]
 
-
-class TestTrackerHandCuratedSpinoff:
-    """2026-08-14 fix: `j-tracker-hand-curated` was gated on `kind ==
-    "handoff"` only, so a `/spinoff` never received the tracker obligation
-    as a judgment point -- it survived only as SKILL.md prose slated for a
-    size-reduction cut. Widened to also cover `kind == "spinoff"`, with its
-    own correctly-framed question/evidence (marking the fork in the SOURCE
-    session's tracker, not recording this session's own progress).
-
-    Spec backlink: break-class fix, j-tracker-hand-curated spinoff gate.
+class TestNoHandMaintainedTrackerJudgmentPoint:
+    """Negative spec (RENDERED-INDEX-NO-HAND-MAINTENANCE): `docs/project-tracker.md`
+    is a retired rendered index, so NO judgment point may ask an EM to update,
+    verify, or mirror it by hand -- for any `kind`, and regardless of whether a
+    repo still carries the file. The substrate is `state/workstreams/`, queried
+    directly. `j-tracker-hand-curated` and its two evidence/predicate helpers were
+    deleted 2026-08-18; this asserts they stay deleted rather than returning under
+    a narrower firing condition.
     """
 
-    def test_emitted_for_kind_spinoff(self, tmp_path):
-        points = ba._build_judgment_points(
-            "spinoff", tracker_hand_curated=True, root=tmp_path
-        )
-        assert any(p["id"] == "j-tracker-hand-curated" for p in points)
-
-    def test_still_emitted_for_kind_handoff(self, tmp_path):
-        points = ba._build_judgment_points(
-            "handoff", tracker_hand_curated=True, root=tmp_path
-        )
-        assert any(p["id"] == "j-tracker-hand-curated" for p in points)
-
-    def test_spinoff_evidence_names_source_session_not_this_session(self, tmp_path):
-        points = ba._build_judgment_points(
-            "spinoff", tracker_hand_curated=True, root=tmp_path
-        )
-        jp = next(p for p in points if p["id"] == "j-tracker-hand-curated")
-        assert "source session" in jp["evidence"].lower()
-        assert "this session progressed" not in jp["evidence"].lower()
-
-    def test_not_emitted_for_other_kinds_when_not_hand_curated(self, tmp_path):
-        points = ba._build_judgment_points(
-            "spinoff", tracker_hand_curated=False, root=tmp_path
-        )
-        assert not any(p["id"] == "j-tracker-hand-curated" for p in points)
+    def test_no_judgment_point_names_the_tracker(self):
+        for kind in ("handoff", "spinoff", "plan", "roadmap-baton"):
+            points = ba._build_judgment_points(kind)
+            assert not any(p["id"] == "j-tracker-hand-curated" for p in points)
+            blob = " ".join(
+                f"{p.get('question', '')} {p.get('evidence', '')}" for p in points
+            ).lower()
+            assert "project-tracker" not in blob, kind

@@ -15,8 +15,10 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import (
     MixedAgentTypeRowError,
     NoWavesError,
+    ReviewRosterFragmentError,
     assert_zero_errors,
     compose_script,
+    derive_review_tier,
     emit_script,
 )
 from coordinator_core.ops.dispatch_emit.pathspec import NoTestTargetError, NoWritesDeclaredError
@@ -87,6 +89,28 @@ def test_compose_script_refuses_before_touching_pathspec_derivation():
     with pytest.raises(NoWavesError) as excinfo:
         compose_script([], name="empty", description="empty spine")
     assert "zero waves" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# compose_script — top-level body, never an uninvoked wrapper (BREAK-CLASS)
+# ---------------------------------------------------------------------------
+
+
+def test_composed_script_never_wraps_body_in_an_uninvoked_run_function():
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "function run(" not in script
+    assert "function run (" not in script
+
+
+def test_first_statement_after_meta_block_is_a_phase_call():
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    meta_end = script.index("};\n") + len("};\n")
+    remainder = script[meta_end:].lstrip()
+    assert remainder.startswith("phase(")
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +296,7 @@ def test_preflight_agent_call_carries_git_commit_agent_type_and_union_pathspec()
 def test_preflight_call_carries_active_model_sonnet():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
-    body_start = script.index("async function run")
+    body_start = script.index("};\n") + len("};\n")  # end of the meta block
     preflight_block_start = script.index("Preflight: commit claimability", body_start)
     preflight_block_end = script.index("Wave 1", body_start)
     preflight_block = script[preflight_block_start:preflight_block_end]
@@ -443,6 +467,354 @@ def test_emit_script_honors_explicit_name_and_description(tmp_path):
 
     assert "name: 'custom-name'" in script
     assert "description: 'custom description'" in script
+
+
+# ---------------------------------------------------------------------------
+# (a) Review phases -- tier derivation + fixture roster fragment composition
+# ---------------------------------------------------------------------------
+
+
+_FIXTURE_ROSTER_FRAGMENT = {
+    "schema": "review-roster-fragment",
+    "tiers": {
+        "lightweight": ["coordinator:code-reviewer"],
+        "standard": ["coordinator:code-reviewer", "coordinator:integrator"],
+        "full": [
+            "coordinator:code-reviewer",
+            "coordinator:integrator",
+            "coordinator:staff-reviewer",
+        ],
+    },
+}
+
+
+def _write_plan_with_sizing(tmp_path, tshirt: str):
+    sizing_dir = tmp_path / "state" / "sizings"
+    sizing_dir.mkdir(parents=True)
+    sizing_path = sizing_dir / "example.yaml"
+    sizing_path.write_text(
+        f"schema: sizing-object\nestimate:\n  tshirt: {tshirt}\n  provisional: false\n",
+        encoding="utf-8",
+    )
+
+    plan_path = tmp_path / "example-plan.md"
+    plan_path.write_text(
+        "---\n"
+        "title: \"Example\"\n"
+        "sizing_object: \"state/sizings/example.yaml\"\n"
+        "---\n\n# Example\n",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
+@pytest.mark.parametrize(
+    "tshirt,expected_tier",
+    [
+        ("XS", "lightweight"),
+        ("S", "lightweight"),
+        ("M", "standard"),
+        ("L", "standard"),
+        ("XL", "full"),
+        ("XXL", "full"),
+    ],
+)
+def test_derive_review_tier_maps_every_tshirt_notch(tmp_path, tshirt, expected_tier):
+    plan_path = _write_plan_with_sizing(tmp_path, tshirt)
+    assert derive_review_tier(plan_path, repo_root=tmp_path) == expected_tier
+
+
+def test_derive_review_tier_returns_none_when_sizing_object_absent(tmp_path):
+    plan_path = tmp_path / "no-sizing-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"No sizing\"\nsizing_object: null\n---\n\n# No sizing\n",
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) is None
+
+
+def test_derive_review_tier_returns_none_when_citation_does_not_resolve(tmp_path):
+    plan_path = tmp_path / "dangling-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"Dangling\"\nsizing_object: \"state/sizings/missing.yaml\"\n---\n\n# Dangling\n",
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) is None
+
+
+def test_derive_review_tier_returns_none_when_citation_traverses_outside_root(tmp_path):
+    # (Review: code-reviewer S4-dispatch-emit, P2 finding 1 -- `../` is not
+    # normalized by `Path.__truediv__`; a citation traversing outside
+    # `repo_root` must be rejected, not silently resolved.)
+    outside_dir = tmp_path.parent / f"{tmp_path.name}-outside-sizing"
+    outside_dir.mkdir(exist_ok=True)
+    (outside_dir / "escape.yaml").write_text(
+        "schema: sizing-object\nestimate:\n  tshirt: M\n  provisional: false\n",
+        encoding="utf-8",
+    )
+
+    plan_path = tmp_path / "traversal-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"Traversal\"\n"
+        f"sizing_object: \"../{outside_dir.name}/escape.yaml\"\n"
+        "---\n\n# Traversal\n",
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) is None
+
+
+def test_derive_review_tier_returns_none_when_citation_is_absolute_path(tmp_path):
+    # (Review: code-reviewer S4-dispatch-emit, P2 finding 1 -- an absolute
+    # `cited` makes `root / cited` discard `root` entirely per pathlib
+    # semantics; it must not be silently followed outside `repo_root`.)
+    outside_dir = tmp_path.parent / f"{tmp_path.name}-absolute-sizing"
+    outside_dir.mkdir(exist_ok=True)
+    absolute_sizing_path = outside_dir / "absolute.yaml"
+    absolute_sizing_path.write_text(
+        "schema: sizing-object\nestimate:\n  tshirt: M\n  provisional: false\n",
+        encoding="utf-8",
+    )
+
+    plan_path = tmp_path / "absolute-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"Absolute\"\n"
+        f"sizing_object: \"{absolute_sizing_path.as_posix()}\"\n"
+        "---\n\n# Absolute\n",
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) is None
+
+
+def test_derive_review_tier_raises_on_unmapped_tshirt(tmp_path):
+    plan_path = _write_plan_with_sizing(tmp_path, "not-a-real-notch")
+    with pytest.raises(ValueError):
+        derive_review_tier(plan_path, repo_root=tmp_path)
+
+
+def test_compose_script_composes_no_review_phase_when_tier_or_fragment_absent():
+    waves = _two_wave_fixture()
+
+    script_neither = compose_script(waves, name="wf", description="no review")
+    assert "review:" not in script_neither
+
+    script_tier_only = compose_script(
+        waves, name="wf", description="tier only", review_tier="standard"
+    )
+    assert "review:" not in script_tier_only
+
+    script_fragment_only = compose_script(
+        waves,
+        name="wf",
+        description="fragment only",
+        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+    )
+    assert "review:" not in script_fragment_only
+
+
+def test_compose_script_composes_a_single_reviewer_review_phase():
+    waves = _two_wave_fixture()
+    script = compose_script(
+        waves,
+        name="wf",
+        description="lightweight review",
+        review_tier="lightweight",
+        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+    )
+
+    phase_titles = _extract_phase_titles(script)
+    assert "Review" in phase_titles
+    assert "review:coordinator:code-reviewer" in script
+    assert "await parallel(" not in script.split("Review")[-1]  # single reviewer, serial call
+
+
+def test_compose_script_composes_a_parallel_review_phase_for_multiple_reviewers():
+    waves = _two_wave_fixture()
+    script = compose_script(
+        waves,
+        name="wf",
+        description="full review",
+        review_tier="full",
+        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+    )
+
+    assert "review:coordinator:code-reviewer" in script
+    assert "review:coordinator:integrator" in script
+    assert "review:coordinator:staff-reviewer" in script
+    assert script.count("agentType: 'coordinator:staff-reviewer'") == 1
+
+
+def test_compose_script_review_phase_precedes_terminal_test_phase():
+    waves = _two_wave_fixture()
+    script = compose_script(
+        waves,
+        name="wf",
+        description="ordering",
+        review_tier="standard",
+        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+    )
+
+    phase_titles = _extract_phase_titles(script)
+    review_index = phase_titles.index("Review")
+    assert phase_titles[review_index + 1] == "Scoped test run"
+
+
+def test_reviewers_for_tier_raises_on_missing_tiers_key():
+    waves = _two_wave_fixture()
+    with pytest.raises(ReviewRosterFragmentError):
+        compose_script(
+            waves,
+            name="wf",
+            description="malformed fragment",
+            review_tier="standard",
+            review_roster_fragment={"schema": "review-roster-fragment"},
+        )
+
+
+def test_reviewers_for_tier_raises_on_unknown_tier_key():
+    waves = _two_wave_fixture()
+    with pytest.raises(ReviewRosterFragmentError):
+        compose_script(
+            waves,
+            name="wf",
+            description="unknown tier",
+            review_tier="not-a-real-tier",
+            review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+        )
+
+
+def _mirror_repo_test_targets(tmp_path):
+    """Mirror JUST enough of the real repo layout under ``tmp_path`` for
+    ``pathspec.terminal_test_scope``'s co-located-test-file check to resolve
+    the two write paths ``_FIXTURE_PLAN`` declares (``spine_read.py``,
+    ``wave_map.py``) -- so a ``repo_root=tmp_path`` sizing-citation test can
+    exercise ``emit_script`` end to end without touching the real repo tree.
+    """
+    dispatch_emit_dir = tmp_path / "coordinator_core" / "ops" / "dispatch_emit"
+    tests_dir = dispatch_emit_dir / "tests"
+    tests_dir.mkdir(parents=True)
+    for stem in ("spine_read", "wave_map"):
+        (dispatch_emit_dir / f"{stem}.py").write_text("", encoding="utf-8")
+        (tests_dir / f"test_{stem}.py").write_text("", encoding="utf-8")
+
+
+def test_emit_script_composes_a_review_phase_when_a_fragment_is_supplied(tmp_path):
+    _mirror_repo_test_targets(tmp_path)
+    plan_path = tmp_path / "fixture-plan.md"
+    sizing_dir = tmp_path / "state" / "sizings"
+    sizing_dir.mkdir(parents=True)
+    (sizing_dir / "fixture.yaml").write_text(
+        "schema: sizing-object\nestimate:\n  tshirt: M\n  provisional: false\n",
+        encoding="utf-8",
+    )
+    plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
+
+    script = emit_script(
+        plan_path, repo_root=tmp_path, review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT
+    )
+
+    phase_titles = _extract_phase_titles(script)
+    assert "Review" in phase_titles  # M -> standard tier, fragment supplied
+    assert "review:coordinator:integrator" in script
+
+
+# ---------------------------------------------------------------------------
+# (b) Commit-phase placement keyed to wave size (n>10 executors-per-wave)
+# ---------------------------------------------------------------------------
+
+
+_REAL_TEST_MAPPED_PATHS = [
+    "coordinator_core/ops/dispatch_emit/spine_read.py",
+    "coordinator_core/ops/dispatch_emit/wave_map.py",
+]
+
+
+def _large_wave(n: int, prefix: str = "C"):
+    # Each row's `writes:` cycles between two real, co-located-test-mapped
+    # repo paths -- write-overlap is a `wave_map.build_waves` concern this
+    # fixture bypasses by handing `compose_script` an already-built wave
+    # directly, so a shared write path across rows is fine here; only the
+    # row ids need to be distinct (asserted via each row's `work:<id>`
+    # label).
+    return [
+        _wave_row(f"{prefix}{i}", [_REAL_TEST_MAPPED_PATHS[i % 2]])
+        for i in range(1, n + 1)
+    ]
+
+
+def test_wave_at_threshold_gets_exactly_one_commit_phase():
+    waves = [_large_wave(10)]
+    script = compose_script(waves, name="wf", description="at threshold")
+
+    phase_titles = _extract_phase_titles(script)
+    commit_titles = [t for t in phase_titles if t.startswith("Commit wave")]
+    assert commit_titles == ["Commit wave 1"]
+
+
+def test_wave_over_threshold_splits_into_batches_each_with_its_own_commit_phase():
+    waves = [_large_wave(12)]
+    script = compose_script(waves, name="wf", description="over threshold")
+
+    phase_titles = _extract_phase_titles(script)
+    commit_titles = [t for t in phase_titles if t.startswith("Commit wave")]
+    wave_titles = [t for t in phase_titles if t.startswith("Wave ")]
+
+    assert commit_titles == [
+        "Commit wave 1 (batch 1/2)",
+        "Commit wave 1 (batch 2/2)",
+    ]
+    assert len(wave_titles) == 2
+    assert phase_titles.index(wave_titles[0]) < phase_titles.index(commit_titles[0])
+    assert phase_titles.index(commit_titles[0]) < phase_titles.index(wave_titles[1])
+    assert phase_titles.index(wave_titles[1]) < phase_titles.index(commit_titles[1])
+
+
+def _phase_body_slice(script: str, phase_title: str, next_phase_title: str) -> str:
+    """Return the script body between two ``phase(...)`` calls, exclusive of
+    the second — i.e. exactly the code emitted for ``phase_title``'s own
+    phase, not anything belonging to a later phase.
+
+    Locating by the ``phase('<title>')`` call text (not by index into
+    ``_extract_phase_titles``) so a title's OWN dispatch block is what's
+    checked, rather than merely whether a row id string appears anywhere in
+    the whole script -- the substring-anywhere shape this replaces could not
+    fail even when a batch's title wrongly enumerated the whole wave (see
+    Review: code-reviewer S4-dispatch-emit, P2 finding 2).
+    """
+    start_marker = f"phase('{phase_title}');"
+    end_marker = f"phase('{next_phase_title}');"
+    start = script.index(start_marker)
+    end = script.index(end_marker, start)
+    return script[start:end]
+
+
+def test_wave_over_threshold_batches_carry_disjoint_rows_in_order():
+    waves = [_large_wave(12)]
+    script = compose_script(waves, name="wf", description="disjoint batches")
+
+    phase_titles = _extract_phase_titles(script)
+    wave_titles = [t for t in phase_titles if t.startswith("Wave ")]
+    commit_titles = [t for t in phase_titles if t.startswith("Commit wave")]
+    assert wave_titles == ["Wave 1: C1, C2, C3, C4, C5, C6, C7, C8, C9, C10 (batch 1/2)", "Wave 1: C11, C12 (batch 2/2)"]
+
+    assert "await parallel([" in script
+
+    batch_1_slice = _phase_body_slice(script, wave_titles[0], commit_titles[0])
+    batch_2_slice = _phase_body_slice(script, wave_titles[1], commit_titles[1])
+
+    for i in range(1, 11):
+        assert f"work:C{i}'" in batch_1_slice
+        assert f"work:C{i}'" not in batch_2_slice
+    for i in range(11, 13):
+        assert f"work:C{i}'" in batch_2_slice
+        assert f"work:C{i}'" not in batch_1_slice
+
+
+def test_wave_over_threshold_script_passes_run_checks():
+    waves = [_large_wave(12)]
+    script = compose_script(waves, name="wf", description="round trip")
+
+    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
+    assert errors == []
 
 
 if __name__ == "__main__":

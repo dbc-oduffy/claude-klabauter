@@ -63,36 +63,41 @@ auto-transition regardless of clear/surface — gate_eval's structured-vs-prose 
 already enforces this upstream (see reconcile/gate_eval.py); this op simply routes
 whatever verdict comes back.
 
-PM ruling 2026-08-01 (surface-only `gate_evidence` sweep): the `_AWAITING_GATE_STATE`
-branch now reads each handoff's on-disk `gate_evidence:` block
-(`handoff_transition._read_gate_evidence_resolved`, live-resolving every leg) and
-threads it into `evaluate_gate` — previously this call always passed `gate_evidence=
-None`, leaving the sweep blind to a `covers_prose: true` block that a human could
-only reach via the manual `gate-recheck` verb. Consuming that evidence is explicitly
-NOT the same as acting on it: whenever a handoff carries ANY `gate_evidence` block at
-all, a would-be-transitioning `clear`/`narrow` verdict is intercepted before the
-clear/narrow -> `_handle_gate_cascade` routing above and forced onto the
-surfaced[]-only path (see the call site's own comment) — the PROSE-never-auto-
-transitions invariant this docstring already claimed therefore still holds, now for a
-REASON (an explicit guard) rather than an emergent property of `witness_candidates`
-always being empty.
+PM ruling 2026-08-01 (surface-only `gate_evidence` sweep), RE-KEYED 2026-08-18 (DR-320;
+pln-auto-reconcile-fires-shipped-b-fba276 § C2): the `_AWAITING_GATE_STATE` branch reads
+each handoff's on-disk `gate_evidence:` block (`handoff_transition._read_gate_evidence_
+resolved`, live-resolving every leg) and threads it into `evaluate_gate` — previously this
+call always passed `gate_evidence=None`, leaving the sweep blind to a `covers_prose: true`
+block that a human could only reach via the manual `gate-recheck` verb. Consuming that
+evidence is explicitly NOT the same as acting on it: a `clear`/`narrow` verdict on a
+handoff carrying a `gate_evidence` block still bypasses the ordinary clear/narrow ->
+`_handle_gate_cascade` routing above and is forced onto the surfaced[]-only path — but,
+as of DR-320, ONLY when that evidence was present on disk yet never actually reached by
+`evaluate_gate`'s rule 0 (`gate_evidence_resolved: False` — the structured/vacuous path
+computed the verdict instead). A genuinely evidence-derived verdict
+(`gate_evidence_resolved: True`, rule 0 fired, every leg read) now APPLIES via
+`_handle_gate_cascade` like any other clear/narrow verdict. The PROSE-never-auto-
+transitions invariant this docstring already claimed still holds unchanged — that is a
+different guard (see below), untouched by this re-keying.
 
-This guard is keyed on `gate_evidence` PRESENCE, not on whether a prose
-`gate_dependency` also happens to be present (a first landing of this feature keyed on
-`has_prose and covers_prose` — the ONLY combination `evaluate_gate`'s rule 0 actually
-consumes gate_evidence for — and that guard decays to a no-op exactly as the corpus
-migrates off `gate_dependency`, which `handoff.schema.json` marks DEPRECATED: an
-evidence-only gate with no prose never reaches rule 0, so it falls through to the
-pre-existing structured/vacuous path, which does NOT consult `gate_evidence` at all;
-a prose-keyed guard would let that class auto-flip unverified). The surfaced[] entry
-marks `gate_evidence_resolved: true` ONLY when the verdict was genuinely
-evidence-derived (rule 0 fired); a handoff whose `gate_evidence` block exists but
-wasn't actually consulted by this verdict (structured/vacuous path, no covering
-prose) still gets intercepted defensively but with `gate_evidence_resolved: false` and
-a reason naming the distinction — a human reading the orient surface can tell a
-machine-checked "all legs satisfied" apart from "evidence present but not what decided
-this" apart from a plain merely-surfaced gate. See docs/plans/2026-07-13-claude-klabauter-auto-
-reconcile-open-handoffs.md § D5 ("evidence never auto-clears a gate").
+This guard is keyed on `gate_evidence_resolved` (2026-08-18 on), not on `gate_evidence`
+PRESENCE (2026-08-01's original keying) and not on whether a prose `gate_dependency` also
+happens to be present (a first landing of this feature keyed on `has_prose and
+covers_prose` — the ONLY combination `evaluate_gate`'s rule 0 actually consumes
+gate_evidence for — and that guard decays to a no-op exactly as the corpus migrates off
+`gate_dependency`, which `handoff.schema.json` marks DEPRECATED). Presence-keying was
+correct in 2026-08-01 because the op did not yet distinguish "evidence was read" from
+"evidence exists on disk"; `evidence_consumed` (== `gate_evidence_resolved`) now makes
+that distinction directly, off `consumes_gate_evidence`, the same predicate `evaluate_gate`
+itself uses to decide whether rule 0 fired — so re-keying on it cannot drift from what
+`evaluate_gate` actually did. An evidence-only gate whose verdict came from the
+structured/vacuous path (no covering prose, rule 0 never reached) still gets intercepted
+defensively, `gate_evidence_resolved: False`, with a reason naming the distinction — a
+human reading the orient surface can tell a machine-checked "all legs satisfied" apart
+from a plain merely-surfaced gate. See DR-320 (docs/decisions/) for the full reconciliation
+of this ruling against the 2026-08-01 ruling it re-keys, and docs/plans/2026-07-13-claude-klabauter-
+auto-reconcile-open-handoffs.md § D5 ("evidence never auto-clears a gate" — the ORIGINAL,
+un-re-keyed 2026-08-01 statement of this guard).
 
 STEADY-STATE COST (Review: code-reviewer Finding 5): every `awaiting_gate` handoff
 carrying ANY `gate_evidence:` block pays LIVE sibling-repo I/O on every automatic
@@ -171,20 +176,23 @@ Negative-spec:
   - Does NOT auto-transition a PROSE gate_dependency verdict — surfaces only,
     regardless of the C3 verdict value, per DoE alignment reply #3 (EM judgment
     retained for prose gates).
-  - (PM ruling 2026-08-01) Does NOT let a `clear`/`narrow` verdict reach
-    `_handle_gate_cascade` for ANY handoff carrying a `gate_evidence` block —
-    keyed on gate_evidence PRESENCE, not on whether a prose `gate_dependency`
-    also happens to be present (that narrower keying would decay to a no-op
-    as the corpus migrates off the DEPRECATED `gate_dependency` field — an
-    evidence-only gate never reaches `evaluate_gate`'s rule 0, so its verdict
-    would come from the structured/vacuous path, which does not consult
-    `gate_evidence` at all, and could reach `clear` with the evidence never
-    actually checked). The resulting verdict is always forced onto
-    surfaced[] only, marked `gate_evidence_resolved: True` only when the
-    verdict was genuinely evidence-derived (rule 0 fired) and `False` when
-    the evidence was merely present-but-unconsumed — never applied either
-    way. Consuming `gate_evidence` to compute a BETTER answer is explicitly
-    not the same as acting on that answer.
+  - (PM ruling 2026-08-01, RE-KEYED 2026-08-18 — DR-320) Does NOT let a
+    `clear`/`narrow` verdict reach `_handle_gate_cascade` for a handoff
+    carrying a `gate_evidence` block whose evidence was present but never
+    actually consulted by this verdict — keyed on `gate_evidence_resolved`
+    (== `evidence_consumed`, from `consumes_gate_evidence`), not on
+    `gate_evidence` PRESENCE. A verdict computed via the structured/vacuous
+    path (evidence present on disk, `evaluate_gate`'s rule 0 never reached)
+    is always forced onto surfaced[] only, `gate_evidence_resolved: False`.
+    A verdict that IS genuinely evidence-derived (`gate_evidence_resolved:
+    True`, rule 0 fired, every leg actually read) now applies via the
+    ordinary clear/narrow routing, same as a handoff with no `gate_evidence`
+    at all — DR-320's 2026-08-18 ruling. Do NOT widen this to "apply
+    whenever the verdict is clear" regardless of `gate_evidence_resolved` —
+    that reopens 2026-08-01's actual hazard, a verdict reaching `clear` via
+    the unconsulted structured/vacuous path. See DR-320
+    (docs/decisions/DR-320-gate-evidence-resolved-discriminator.md) for the
+    full reconciliation of both rulings.
   - Does NOT transition anything when dry_run is true (the default, and the
     fail-closed value on any absent/malformed policy) — computes and returns
     verdicts only.
@@ -356,32 +364,28 @@ param may still diverge from the policy value, but ONLY as a named, logged
 escape (`dry_run_override_reason`, non-empty) — see `_resolve_dry_run`'s own
 docstring.
 
-D1 disposition-clearing mechanism — Review: code-reviewer (Finding 3): neither a
-schema declaration nor a writer verb exists yet for `_DISPOSITION_FIELD`/
-`_DISPOSITION_REASON_FIELD`, though `_has_recorded_disposition`/
-`_check_conservation` above are already the read side that treats a recorded
-pair as clearing a violation. Both gaps are DELIBERATE scope cuts for THIS
-integration pass, not oversights:
-  - Schema declaration: `handoff.schema.json`'s grammar SSOT is
-    `coordinator/schemas/handoff.schema.json` in DoE-claude, one-way vendored
-    into this repo's `coordinator_core/frontmatter/schemas/` copy (see that
-    vendored file's own tamper-check test,
-    `test_handoff_schema_matches_doe_head_after_dr084_revendor` in
-    `coordinator_core/frontmatter/tests/test_schema_validate.py`) — editing
-    the vendored copy in place without a matching DoE-side SSOT edit +
-    re-vendor makes the vendored copy diverge from DoE HEAD and fails that
-    tamper-check outright (confirmed: attempted in this integration pass,
-    reverted once the drift test failed). Declaring the fields is therefore a
-    cross-repo change this claude-klabauter-scoped integration pass cannot land alone.
-  - Writer verb: a dedicated op (e.g. `handoff.record_disposition` mirroring
-    `_repair_archived_shipped_in_handler`'s mandatory-reason shape) is real
-    new-op-surface work — registration, handler, tests — genuinely out of a
-    single-file review-integration pass.
-Both are tracked as debt-backlog entries (see `state/debt-backlog/`) rather
-than landed inline here. This is NOT fail-open: an unrecorded disposition
-still correctly counts as a violation (`_check_conservation`) — the gap is
-discoverability/ergonomics (schema-invisible, hand-edit-only), not
-correctness.
+D1 disposition-clearing mechanism — Review: code-reviewer (Finding 3): AT THE
+TIME OF THAT REVIEW, neither a schema declaration nor a writer verb existed
+for `_DISPOSITION_FIELD`/`_DISPOSITION_REASON_FIELD`, though
+`_has_recorded_disposition`/`_check_conservation` above were already the read
+side that treats a recorded pair as clearing a violation. Both gaps are now
+CLOSED:
+  - Schema declaration: landed upstream at DoE-claude's SSOT and vendored in
+    at `handoff.schema.json` 8.1.0 (`coordinator_core/frontmatter/schemas/`)
+    — both fields are declared optional top-level strings, no `required`
+    entry, no cross-field `allOf` coupling. Resolved ask 4 of
+    `cross-repo/inbox/2026-08-14-claude-klabauter-em-reviewed-range-pattern-and-direction-blind-parity-gate.md`.
+  - Writer verb: `handoff.transition`'s `record-disposition` verb
+    (`_record_disposition` in `handoff_transition.py`, docs/plans/
+    2026-08-18-auto-reconcile-must-fire.md § C4) writes both fields TOGETHER,
+    never one alone — mirrors `_repair_archived_shipped_in_handler`'s
+    mandatory-reason shape, and reads `_DISPOSITION_FIELD`/
+    `_DISPOSITION_REASON_FIELD` from this module rather than retyping the
+    field names.
+An unrecorded disposition still correctly counts as a violation
+(`_check_conservation`) — the mechanism above is what a caller now uses to
+record one; a candidate that has genuinely never been looked at still
+violates by design.
 
 D1 fail-loud read hazard — Review: code-reviewer (Finding 2), APPLY per EM
 adjudication 2026-07-27: `_load_surfaced_history`/`_save_surfaced_history` below
@@ -502,6 +506,8 @@ from coordinator_core.reconcile.commit_reality import (
     _touched_paths,
 )
 from coordinator_core.reconcile.gate_eval import (
+    _classify_blocked_by,
+    _index_by_id,
     consumes_gate_evidence,
     evaluate_gate,
 )
@@ -1694,6 +1700,7 @@ async def _handle_gate_cascade(
     dry_run: bool,
     gates_cleared: List[Dict[str, Any]],
     surfaced: List[Dict[str, Any]],
+    all_handoffs: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> None:
     """Route a C3 verdict in {clear, narrow} to C8's gate-cascade-clear verb.
 
@@ -1711,6 +1718,37 @@ async def _handle_gate_cascade(
     # blocked_by - remaining_blockers set difference against two
     # separately-sourced lists.
     blocker_ids = list(gate_verdict.get("cleared_blocker_ids") or [])
+
+    # Evidence-derived clears arrive UNPAIRED, and the verb refuses that.
+    #
+    # `evaluate_gate`'s rule 0 (covering `gate_evidence` over a non-empty
+    # `blocked_by`) reports the WHOLE gate cleared with `cleared_by_shas: []` —
+    # deliberately, and its own regression test pins that whole-gate semantics:
+    # the evidence legs discharge the gate, so no per-blocker ship is consulted
+    # to reach the verdict. That was inert until DR-320, because a rule-0 clear
+    # could never reach the mutating path. Now it can, and gate-cascade-clear
+    # requires each id to carry exactly one paired shipping SHA (it writes
+    # `gate_cleared_by` from them). strang-03 surfaced this immediately as a
+    # live asymmetry refusal: 2 id(s) vs 0 sha(s).
+    #
+    # Resolve the pairing HERE rather than in `evaluate_gate`, which must keep
+    # returning the whole-gate verdict its contract promises. Reuses gate_eval's
+    # own `_classify_blocked_by`/`_index_by_id` over the already-built
+    # `all_handoffs` — never a second shipped-state predicate, and no extra
+    # corpus scan. Only ids that independently resolve as shipped are passed on:
+    # the evidence says the GATE is discharged, but `gate_cleared_by`'s per-id
+    # commit provenance can only come from the blocker's own ship, and an id
+    # with no resolvable SHA is dropped rather than paired against a fabricated
+    # one. If none resolve, `blocker_ids` empties and the no-op branch below
+    # reports applied=False instead of writing an unprovenanced clear.
+    if blocker_ids and not cleared_by_shas and all_handoffs is not None:
+        resolved_ids, resolved_shas, *_ = _classify_blocked_by(
+            [b for b in blocker_ids if isinstance(b, str)],
+            _index_by_id(all_handoffs),
+            handoff.get("blocked_by_dispositions"),
+        )
+        blocker_ids = list(resolved_ids)
+        cleared_by_shas = list(resolved_shas)
 
     entry: Dict[str, Any] = {
         "handoff_id": handoff_id,
@@ -2430,27 +2468,23 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
             verdict = gate_verdict.get("verdict")
 
-            if gate_evidence_present and verdict in ("clear", "narrow"):
-                # Surface-only invariant: a would-be-transitioning verdict on
-                # a handoff carrying ANY gate_evidence is always forced onto
-                # surfaced[] instead of `_handle_gate_cascade` -- never
-                # auto-applied, regardless of dry_run.
-                if evidence_consumed:
-                    reason = (
-                        "gate_eval verdict=clear (gate_evidence resolved -- all legs "
-                        "satisfied; not auto-applied, review to confirm)"
-                        if verdict == "clear"
-                        else f"gate_eval verdict={verdict} (gate_evidence resolved -- "
-                             "narrow-mutation candidate, not auto-applied)"
-                    )
-                else:
-                    reason = (
-                        f"gate_eval verdict={verdict} (gate_evidence present on this "
-                        "handoff but not consumed by this verdict -- the structured/"
-                        "vacuous path does not consult gate_evidence without covering "
-                        "prose; surfaced defensively, never auto-applied while evidence "
-                        "is in play)"
-                    )
+            if gate_evidence_present and verdict in ("clear", "narrow") and not evidence_consumed:
+                # DR-320 discriminator (re-keying the 2026-08-01 guard): only
+                # an UNCONSUMED gate_evidence block still forces surfaced[]
+                # here. This is exactly 2026-08-01's protected hazard --
+                # gate_evidence present on disk but never actually reached by
+                # `evaluate_gate`'s rule 0 (the structured/vacuous path took
+                # the verdict instead), so this `clear`/`narrow` was NOT
+                # evidence-derived and must not auto-apply. See DR-320 for why
+                # this narrower keying closes 2026-08-01's hole rather than
+                # reopening it.
+                reason = (
+                    f"gate_eval verdict={verdict} (gate_evidence present on this "
+                    "handoff but not consumed by this verdict -- the structured/"
+                    "vacuous path does not consult gate_evidence without covering "
+                    "prose; surfaced defensively, never auto-applied while evidence "
+                    "is in play)"
+                )
                 surfaced.append({
                     "handoff_id": handoff_id,
                     "reason": reason,
@@ -2462,7 +2496,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if verdict in ("clear", "narrow"):
                 await _handle_gate_cascade(
                     handoff, gate_verdict, worktree_root, repo_root, dry_run,
-                    gates_cleared, surfaced,
+                    gates_cleared, surfaced, all_handoffs,
                 )
                 continue
 

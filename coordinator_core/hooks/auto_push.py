@@ -115,6 +115,46 @@ def __getattr__(name):
 # every platform, including Windows+SSH -- this has been the live behavior
 # since the spike resolved, so the deletion changes no runtime behavior.
 
+# ---------------------------------------------------------------------------
+# Subprocess wall-clock bounds
+# ---------------------------------------------------------------------------
+#
+# Every `subprocess.run` in this module is bounded. A post-commit hook that can
+# block forever is a process leak on a box that runs 50-70 concurrent sessions,
+# and it makes "auto-push is healthy" unfalsifiable from the outside: a hung
+# instance and a working one are indistinguishable in the log. Reported by
+# example-retrieval-repo-em 2026-08-18 with a live 5.5h-resident instance, root-caused to
+# an SSH leg that never returns when no usable key reaches the agent -- the
+# credentials recover on their own, but the child never does.
+#
+# `stdin=DEVNULL` (already set at every site) stops git prompting; it does not
+# bound a network or agent stall, which is what actually hangs.
+#
+# A timeout here means a slow op, not a hung one -- and it does NOT stop the
+# engine, so every caller treats expiry as a normal failure on its existing
+# fail-path, never as an exception that could block the commit.
+
+GIT_READ_TIMEOUT_SECS = 30
+"""Wall-clock bound for read-only local git queries (rev-parse, merge-base).
+
+Local and disk-bound; 30s is far past any honest completion on this box and
+is a hang detector, not a performance budget."""
+
+GIT_PUSH_TIMEOUT_SECS = 120
+"""Wall-clock bound for `git push`, the one network-bound call here.
+
+Sized against the load norm rather than a fast path: 50-70 concurrent LLMs
+plus a dozen sessions sharing this checkout means a genuine push can be slow.
+Expiry is classified as a retryable network-class failure, which is what a
+stalled SSH leg actually is."""
+
+CONTRACT_PUBLISH_TIMEOUT_SECS = 300
+"""Wall-clock bound for the DoE cockpit-contract publish child.
+
+Longest-running of the four (it is a full release publish), and its failure is
+already advisory -- it prints a runnable remediation rather than failing the
+hook, so expiry routes to that same never-block path."""
+
 # Test seam: skip all backoff sleeps (mirrors COORDINATOR_AUTO_PUSH_NO_SLEEP=1
 # in the bash source).
 _ENV_NO_SLEEP = "COORDINATOR_AUTO_PUSH_NO_SLEEP"
@@ -304,8 +344,16 @@ def _run_git(repo_root: str | None, args: list[str]) -> str | None:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
+            timeout=GIT_READ_TIMEOUT_SECS,
             **no_console_creationflags(),
         )
+    except subprocess.TimeoutExpired:
+        print(
+            f"coordinator-auto-push: git {' '.join(args)} exceeded "
+            f"{GIT_READ_TIMEOUT_SECS}s and was killed",
+            file=sys.stderr,
+        )
+        return None
     except Exception as exc:
         print(f"coordinator-auto-push: git {' '.join(args)} failed to spawn: {exc}", file=sys.stderr)
         return None
@@ -426,7 +474,16 @@ def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool)
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
+            timeout=GIT_PUSH_TIMEOUT_SECS,
             **no_console_creationflags(),
+        )
+    except subprocess.TimeoutExpired:
+        # Phrased to land in the network-class bucket of the classification
+        # ladder: a stalled SSH leg IS a network failure, and the retry policy
+        # is the correct response to it.
+        return False, (
+            f"fatal: push exceeded {GIT_PUSH_TIMEOUT_SECS}s and was killed "
+            f"(Could not read from remote repository: timed out)"
         )
     except Exception as exc:
         return False, str(exc)
@@ -592,9 +649,13 @@ def _is_ancestor(repo_root: str, candidate_sha: str, ref: str) -> bool:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
+            timeout=GIT_READ_TIMEOUT_SECS,
             **no_console_creationflags(),
         )
     except Exception:
+        # Includes TimeoutExpired. False is this helper's documented safe
+        # default -- it falls through to the normal retry/fail-loud path
+        # rather than silently swallowing a real divergence.
         return False
     return result.returncode == 0
 
@@ -758,6 +819,7 @@ def _invoke_cockpit_publish(repo_root: str, script: Path) -> None:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
+            timeout=CONTRACT_PUBLISH_TIMEOUT_SECS,
             **no_console_creationflags(),
         )
     except Exception as exc:

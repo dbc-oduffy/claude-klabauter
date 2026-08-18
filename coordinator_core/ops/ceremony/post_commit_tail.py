@@ -94,6 +94,42 @@ own soft-fail discipline — one bad cascade call must not fail the whole tail.
 This step runs UNTIMED (see "Timing-span preservation" below) — it does not
 widen `wsc_tail.py`'s own pinned `_TailTiming` step-name contract.
 
+Third leg (C3, docs/plans/2026-08-18-auto-reconcile-must-fire.md § C3, dlv-
+auto-reconcile-must-fire-not-surface-e1e90e): the PM's "a shipped blocker's id
+comes out of every dependent's blocked_by the moment it ships" — cascade-
+clearing PROMPTLY rather than only on C5's cadence backstop. For the SAME
+`stamped` set the deliverable-cascade leg above already reads, this leg calls
+`ops.handoff_children.blocked_by_dependents` per newly-shipped baton and
+fires `handoff.transition`'s `gate-cascade-clear` verb (C1's MOVE-not-drop
+writer) once per live dependent whose `blocked_by` names that baton.
+`blocked_by_dependents` is TRI-STATE — its own "indeterminate" (a non-empty
+`scan_errors`, or an unresolvable candidate identifier) is fail-closed-and-
+logged here, never read as "no dependents": silently declining a fan-out
+because a scan hiccuped is how a shipped-blocker wall survives. Exactly THREE
+named `_gate_cascade_clear` `MutateAbort` shapes — dependent not
+`awaiting_gate`, requested blocker id no longer in `blocked_by`, blocker's
+live state does not clear the gate — classify as a named skip; every other
+error (validation failure, lock timeout, malformed frontmatter, a usage
+error) propagates into `failed`, never silently swallowed as a no-op.
+
+COST (part (c) of the chunk body): `blocked_by_dependents` walks the full
+live+archive handoff corpus once per stamped baton, and `_gate_cascade_clear`
+re-resolves each blocker id against LIVE disk a second time per call (its own
+act-time re-verification guard against the shared-worktree carry-forward-
+laundering race — Anti-scope: that re-resolution is NOT cached here). Chosen
+option: (ii) BOUND the per-tail fan-out
+(`_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED`) with the remainder left in
+`blocked_by` — untouched, not dropped — for C5's cadence backstop to clear on
+its own pass. Measured against this repo's own live corpus on 2026-08-18:
+`state/handoffs/*.md` = 142, `archive/handoffs/**/*.md` = 444,
+`archive/completed/**/*.md` = 440 — a ~1026-file walk per stamped baton, run
+synchronously on the commit hot path `ipc.py::_timeout_for` bounds, at the
+50-70-concurrent-session load norm (`docs/wiki/machine-load-norm.md`) this
+plan is sized against. An unbounded fan-out multiplies that corpus-sized walk
+by every live dependent of every stamped baton in ONE tail call; bounding it
+caps a single tail's worst case to a small, known multiple of one corpus
+walk regardless of how many dependents a baton accumulates.
+
 Negative-spec (hard-won):
   - Does NOT acquire any ceremony-wide serialization lock — see HARD
     CONSTRAINT above. Do not add one back; DEC-3 removed the hold around this
@@ -120,6 +156,19 @@ Negative-spec (hard-won):
     `handoff.close_origin_stub`. A second cascade implementation here would
     give the repo two propagation paths that can disagree — precisely the
     dispatch-fragility footgun this repo's conventions warn about.
+  - Does NOT reimplement `_gate_cascade_clear`'s MOVE-not-drop write, its
+    reverse-dependents resolution, or its act-time re-verification (C3) —
+    composes `ops.handoff_children.blocked_by_dependents` (read-only) and
+    dispatches the SAME `handoff.transition` op every other caller of
+    `gate-cascade-clear` uses. A second writer of `no_longer_blocked_by`
+    here is exactly the disagreement this repo's two-writers-must-agree
+    precedent (C1) exists to prevent.
+  - Does NOT treat `blocked_by_dependents`'s `"indeterminate"` state as
+    `"none"` — see "Third leg (C3)" above. Both fail-closed-and-log; neither
+    silently declines the fan-out as if there were nothing to clear.
+  - Does NOT cache `_gate_cascade_clear`'s act-time re-resolution, and does
+    NOT widen the per-tail fan-out bound past a measured, named option — see
+    "Third leg (C3)" § COST above.
 """
 
 from __future__ import annotations
@@ -135,6 +184,7 @@ from typing import Any, Awaitable, Callable, Optional
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import get_op_handler, register_op
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
+from coordinator_core.ops.handoff_children import blocked_by_dependents
 from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_MODE_SYNC,
     PUSH_STATUS_DECLINED,
@@ -167,6 +217,28 @@ OP_CLOSE_ORIGIN_STUB = "handoff.close_origin_stub"
 #: `deliverable_cascade.py`). Fetched via `get_op_handler` at call time,
 #: never re-implemented here (module docstring "RE-ENTRANCY" addition below).
 OP_DELIVERABLE_CASCADE = "deliverable.cascade_terminal"
+
+#: C3's third leg — the registered op `handoff_transition.py` exposes; this
+#: leg dispatches its `gate-cascade-clear` verb. Fetched via `get_op_handler`
+#: at call time (see module docstring "Third leg (C3)"), never a top-level
+#: import of the verb's own implementation function.
+OP_HANDOFF_TRANSITION = "handoff.transition"
+
+#: Label prefix for this leg's own skip/fail strings below — mirrors
+#: `OP_CLOSE_ORIGIN_STUB`/`OP_DELIVERABLE_CASCADE`'s use as a string prefix,
+#: not a second op name.
+OP_GATE_CASCADE_CLEAR = "handoff.transition:gate-cascade-clear"
+
+#: COST bound (option (ii), module docstring "Third leg (C3)" § COST) — caps
+#: the number of live dependents cascade-cleared per stamped baton, per tail
+#: invocation. A dependent past this cap is left in `blocked_by` (untouched,
+#: not dropped) for C5's cadence backstop (`handoff.reconcile_open` on
+#: `boot_sweep`) to clear on its own pass. Deliberately small: this repo's
+#: own live corpus measured 2026-08-18 at ~1026 handoff files
+#: (`state/handoffs/` + `archive/handoffs/` + `archive/completed/`), one full
+#: walk of which `blocked_by_dependents` performs per stamped baton, on the
+#: synchronous commit hot path, at the 50-70-concurrent-session load norm.
+_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED = 5
 
 
 def _measure(timing: Optional[Any], name: str):
@@ -640,6 +712,186 @@ async def _run_deliverable_cascade(
     return {"acted": acted, "skipped": skipped, "failed": failed}
 
 
+#: The three named `_gate_cascade_clear` `MutateAbort` message shapes (see
+#: `handoff_transition.py`) that are an expected, non-corrupting refusal —
+#: classified as a named skip, never as `failed`. Matched by fixed prefix;
+#: each message also interpolates caller-specific detail (a deployment_state
+#: value, a missing-id list, a blocker id) that this match deliberately does
+#: not pin, since only the FIXED lead text identifies which of the three
+#: shapes fired.
+_GCC_SKIP_PREFIXES = (
+    "gate-cascade-clear requires deployment_state:awaiting_gate",
+    "gate-cascade-clear: requested blocker id(s) not present in blocked_by",
+)
+
+
+def _is_gate_cascade_clear_named_skip(error_message: str) -> bool:
+    """True for exactly the three `_gate_cascade_clear` `MutateAbort` shapes
+    this leg treats as a skip (see `_GCC_SKIP_PREFIXES` and module docstring
+    "Third leg (C3)"): dependent not `awaiting_gate`, requested blocker id no
+    longer present in `blocked_by`, or a blocker whose live state does not
+    clear the gate. Everything else — a lock timeout, an unparseable
+    frontmatter, a post-mutation schema-validation failure, the
+    blocker_ids/blocker_shas usage errors — is a real problem and must
+    propagate into `failed` rather than be swallowed as a no-op.
+    """
+    if not error_message:
+        return False
+    if error_message.startswith(_GCC_SKIP_PREFIXES):
+        return True
+    return (
+        error_message.startswith("gate-cascade-clear: blocker ")
+        and "does not clear the gate" in error_message
+    )
+
+
+async def _run_gate_cascade_clear(
+    worktree_root: Path,
+    repo_root: Path,
+    stamped: list[str],
+    committed_sha: str,
+    gate_cascade_clear_handler: Optional[Callable[[dict, Path], Awaitable[dict]]],
+) -> dict:
+    """C3's third leg: for each handoff `stamp_and_ship` just flipped to
+    `deployment_state: shipped` (a relpath in ``stamped``), resolve its LIVE
+    dependents via `ops.handoff_children.blocked_by_dependents` and fire
+    `handoff.transition`'s `gate-cascade-clear` verb once per dependent whose
+    `blocked_by` names it — see module docstring "Third leg (C3)" for the
+    full design rationale (fail-closed indeterminate handling, the three
+    named skip shapes, and the measured fan-out bound).
+
+    ``gate_cascade_clear_handler`` mirrors ``cascade_handler``'s own
+    optional-injection shape (not ``close_origin_stub_handler``'s required
+    one): resolved by the caller via `get_op_handler` when not supplied, so
+    an existing in-process caller that predates C3 needs no call-site change.
+    A `None` handler (the op genuinely not registered) is a clean skip, same
+    posture as `_run_deliverable_cascade`'s own "not-registered" branch.
+
+    Returns a tail_ops-shaped `{acted, skipped, failed}` dict. `acted` names
+    each dependent path whose `blocked_by` was actually narrowed/emptied;
+    `skipped` carries the indeterminate-fan-out case, the fan-out-bound
+    overflow, the three named `MutateAbort` refusals, and a genuine no-op
+    (already at target state); `failed` carries everything else — a raised
+    exception, a malformed reply, or any other `_gate_cascade_clear` error —
+    mirroring `_run_deliverable_cascade`'s own soft-fail discipline: one bad
+    cascade-clear call must not fail the rest of the tail.
+    """
+    import asyncio
+
+    acted: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+
+    if not stamped:
+        return {"acted": acted, "skipped": skipped, "failed": failed}
+
+    if gate_cascade_clear_handler is None:
+        return {
+            "acted": acted,
+            "skipped": [f"{OP_GATE_CASCADE_CLEAR}:not-registered"],
+            "failed": failed,
+        }
+
+    for relpath in stamped:
+        candidate_abs = worktree_root / relpath
+        # blocked_by_dependents walks the full live+archive corpus per call
+        # (module docstring § COST) — off the event loop, same hygiene
+        # rationale as this module's own `_to_thread_commit_and_push`.
+        result = await asyncio.to_thread(blocked_by_dependents, str(candidate_abs), worktree_root)
+        state = result.get("state")
+
+        if state == "indeterminate":
+            # Tri-state: a scan hiccup or an unresolvable candidate id is
+            # "we could not fully look", never "no dependents" — fail-closed
+            # and logged, not silently declined (module docstring "Third leg
+            # (C3)").
+            _LOG.warning(
+                "post_commit_tail: gate-cascade-clear fan-out for %s came back "
+                "indeterminate (scan_errors=%s) — fail-closed, no dependent acted on",
+                relpath, result.get("scan_errors"),
+            )
+            skipped.append(
+                f"{OP_GATE_CASCADE_CLEAR}:{relpath}:indeterminate: {result.get('error')}"
+            )
+            continue
+
+        if state != "dependents":
+            continue  # "none" — no live dependent for this stamped baton
+
+        dependents = result.get("dependents") or []
+        candidate_identifiers = set(result.get("identifiers") or [])
+        bounded = dependents[:_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED]
+        overflow = dependents[_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED:]
+        for dep_path in overflow:
+            skipped.append(
+                f"{OP_GATE_CASCADE_CLEAR}:{relpath}:{dep_path}:deferred-to-cadence-backstop "
+                f"(fan-out bound {_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED} exceeded)"
+            )
+
+        for dep_path in bounded:
+            dep_meta = _read_meta(dep_path) or {}
+            dep_blocked_by = dep_meta.get("blocked_by")
+            if isinstance(dep_blocked_by, str):
+                dep_blocked_by = [dep_blocked_by]
+            if dep_blocked_by is not None and not isinstance(dep_blocked_by, (list, tuple)):
+                failed.append(
+                    f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: blocked_by has unexpected type "
+                    f"{type(dep_blocked_by).__name__!r} on live re-read"
+                )
+                continue
+            matched_ids = [bid for bid in (dep_blocked_by or []) if bid in candidate_identifiers]
+            if not matched_ids:
+                # A concurrent writer (another session, or this tail's own
+                # earlier iteration over a shared blocker) already cleared
+                # this edge between blocked_by_dependents' enumeration read
+                # and this re-read. Not an error.
+                skipped.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}:no-longer-blocked-on-reread")
+                continue
+
+            try:
+                gcc_result = await gate_cascade_clear_handler(
+                    {
+                        "verb": "gate-cascade-clear",
+                        "handoff_path": dep_path,
+                        "blocker_ids": matched_ids,
+                        "blocker_shas": [committed_sha] * len(matched_ids),
+                    },
+                    repo_root,
+                )
+            except Exception as exc:  # noqa: BLE001 -- soft-fail, never raise past this tail step
+                _LOG.warning(
+                    "post_commit_tail: gate-cascade-clear raised %s: %s", type(exc).__name__, exc
+                )
+                failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {exc}")
+                continue
+
+            if not isinstance(gcc_result, dict):
+                failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: malformed reply {gcc_result!r}")
+                continue
+
+            if gcc_result.get("exit_code") == 0:
+                if gcc_result.get("applied"):
+                    acted.append(dep_path)
+                else:
+                    skipped.append(
+                        f"{OP_GATE_CASCADE_CLEAR}:{dep_path}:no-op: {gcc_result.get('message')}"
+                    )
+                continue
+
+            error_message = gcc_result.get("error") or ""
+            if _is_gate_cascade_clear_named_skip(error_message):
+                skipped.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {error_message}")
+            else:
+                # (b): every OTHER _gate_cascade_clear error — a lock
+                # timeout, unparseable frontmatter, schema-validation
+                # failure, a usage error — is a real problem and must
+                # propagate, never be swallowed as "treat every error as a
+                # no-op" would (module docstring "Third leg (C3)").
+                failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {error_message}")
+
+    return {"acted": acted, "skipped": skipped, "failed": failed}
+
+
 async def _to_thread_commit_and_push(
     worktree_root: Path,
     closed_paths: list[str],
@@ -682,6 +934,11 @@ class PostCommitTailOutcome:
     deliverable_cascade_result: dict = field(
         default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
     )
+    #: C3's third leg — tail_ops-shaped `{acted, skipped, failed}`, same
+    #: shape the other two legs carry. See module docstring "Third leg (C3)".
+    gate_cascade_clear_result: dict = field(
+        default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
+    )
 
 
 async def run(
@@ -698,6 +955,7 @@ async def run(
     timing: Optional[Any] = None,
     cascade_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
     delivery_proof: Optional[dict] = None,
+    gate_cascade_clear_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
 ) -> PostCommitTailOutcome:
     """Compose steps 5c (post-commit consumed-handoff stamp+ship), 5d
     (origin-stub close), and C6b's second trigger (deliverable cascade) into
@@ -716,16 +974,20 @@ async def run(
     C6b need no call-site change. `timing`, when supplied, records the SAME
     two named spans as before C6b ("stamp_and_ship", "origin_stub_close") --
     see module docstring "Timing-span preservation"; the deliverable-cascade
-    step deliberately runs untimed so as not to widen `wsc_tail.py`'s pinned
-    step-name contract.
+    and gate-cascade-clear steps deliberately run untimed so as not to widen
+    `wsc_tail.py`'s pinned step-name contract. `gate_cascade_clear_handler`
+    (C3) mirrors `cascade_handler`'s own OPTIONAL shape -- when omitted, it
+    is resolved here via `get_op_handler(OP_HANDOFF_TRANSITION)`, so existing
+    callers that predate C3 need no call-site change either.
 
-    All three steps run unconditionally in sequence -- a stamp+ship exception
-    propagates BEFORE origin-stub close or the deliverable cascade ever run
-    (matches the pre-extraction inline sequencing exactly: a crash mid-stamp
-    on the fresh pass must leave the origin stub untouched, recovered only on
-    the AC18-resumed re-invoke). An origin-stub-close failure or a
-    deliverable-cascade failure, by contrast, is caught and soft-failed
-    inside their own helper -- neither propagates past this function.
+    All four steps run unconditionally in sequence -- a stamp+ship exception
+    propagates BEFORE origin-stub close, the deliverable cascade, or the
+    gate-cascade-clear fan-out ever run (matches the pre-extraction inline
+    sequencing exactly: a crash mid-stamp on the fresh pass must leave the
+    origin stub untouched, recovered only on the AC18-resumed re-invoke). An
+    origin-stub-close failure, a deliverable-cascade failure, or a gate-
+    cascade-clear failure, by contrast, is caught and soft-failed inside its
+    own helper -- none of the three propagates past this function.
     """
     with _measure(timing, "stamp_and_ship"):
         stamp_outcome = await consumed_handoff_stamp.post_commit_stamp_and_ship(
@@ -767,10 +1029,25 @@ async def run(
         resolved_cascade_handler,
     )
 
+    resolved_gate_cascade_clear_handler = gate_cascade_clear_handler
+    if resolved_gate_cascade_clear_handler is None:
+        resolved_gate_cascade_clear_handler = get_op_handler(OP_HANDOFF_TRANSITION)
+
+    # NOT wrapped in `_measure()` -- same rationale as the deliverable-cascade
+    # step immediately above (module docstring "Timing-span preservation").
+    gate_cascade_clear_result = await _run_gate_cascade_clear(
+        worktree_root,
+        common_dir,
+        stamp_outcome.stamped,
+        committed_sha,
+        resolved_gate_cascade_clear_handler,
+    )
+
     return PostCommitTailOutcome(
         stamp_outcome=stamp_outcome,
         origin_stub_result=origin_stub_result,
         deliverable_cascade_result=deliverable_cascade_result,
+        gate_cascade_clear_result=gate_cascade_clear_result,
     )
 
 
@@ -805,15 +1082,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns `{exit_code, stamped, empty_consumed_set, follow_up_committed_sha,
     follow_up_committed_shas, follow_up_pushed, origin_stub_close,
-    deliverable_cascade}` on success (`follow_up_committed_shas` carries every
-    follow-up commit the stamp leg landed -- one per `deliverable_id` in the
-    stamped set, so a multi-baton close reports all of them rather than only
-    the tip named by `follow_up_committed_sha`);
+    deliverable_cascade, gate_cascade_clear}` on success
+    (`follow_up_committed_shas` carries every follow-up commit the stamp leg
+    landed -- one per `deliverable_id` in the stamped set, so a multi-baton
+    close reports all of them rather than only the tip named by
+    `follow_up_committed_sha`);
     `{exit_code: 1, error}` on a setup error (missing required param,
     unregistered `handoff.close_origin_stub`, no `repo_root`).
-    `deliverable.cascade_terminal` (C6b) is resolved on a best-effort basis --
-    if it is not registered, `deliverable_cascade` comes back a clean
-    `{"acted": [], "skipped": [...], "failed": []}`, not a setup error.
+    `deliverable.cascade_terminal` (C6b) and `handoff.transition` (C3) are
+    both resolved on a best-effort basis -- if either is not registered, its
+    result field comes back a clean `{"acted": [], "skipped": [...],
+    "failed": []}`, not a setup error.
     """
     sid = str(params.get("sid") or "")
     if not sid:
@@ -857,6 +1136,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         bool(outcome.stamp_outcome.errors)
         or bool(outcome.origin_stub_result.get("failed"))
         or bool(outcome.deliverable_cascade_result.get("failed"))
+        or bool(outcome.gate_cascade_clear_result.get("failed"))
     )
 
     return {
@@ -868,4 +1148,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "follow_up_pushed": outcome.stamp_outcome.follow_up_pushed,
         "origin_stub_close": outcome.origin_stub_result,
         "deliverable_cascade": outcome.deliverable_cascade_result,
+        "gate_cascade_clear": outcome.gate_cascade_clear_result,
     }

@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.hooks.track_dispatched_agents import PLACEHOLDER_TYPE
 from coordinator_core.write_guards import block_subagent_plan_body_write as guard
 
 
@@ -419,6 +420,119 @@ class TestUnenumeratedTypeNarrowing:
 
         payload = _payload(tmp_path, "docs/plans/2026-08-10-x.md")
         assert guard.check(payload) is None
+
+
+class TestInventedKindDenyReachableWithoutSidecar:
+    """C3 (docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md):
+    the invented-kind deny leg must be reachable for a genuinely invented
+    kind WITHOUT any sidecar declaring a "currently executing plan" --
+    prior to C3 this leg was routed through the SAME ``executing_keys``
+    check C16 wrote for a legitimate coordinator:executor, which made it
+    structurally unreachable for anything else (no sidecar -> advisory,
+    never deny). ``PLACEHOLDER_TYPE`` ("unknown") is the opposite pole --
+    it must ALLOW, not deny, because it is an unresolved identity, not an
+    invented kind.
+    """
+
+    def test_invented_kind_denies_with_no_sidecar_at_all(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("hookprobe-named")
+        )
+        monkeypatch.setattr(
+            guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
+        )
+        monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
+        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
+        # Deliberately NO sidecar seeded -- prior shape would have advised
+        # only, never denied, in this exact configuration.
+
+        payload = _payload(tmp_path, "docs/plans/2026-08-18-x.md")
+        result = guard.check(payload)
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_invented_kind_denies_on_a_wholly_unrelated_plan_body(self, tmp_path, monkeypatch):
+        """A different plan than any sidecar names still hard-denies for an
+        invented kind -- unlike coordinator:executor's C16 scoping, an
+        invented kind's deny is NOT scoped to a single "executing" body.
+        """
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("hookprobe-named")
+        )
+        monkeypatch.setattr(
+            guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
+        )
+        monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
+        monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
+        _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/some-other-plan.md")
+
+        payload = _payload(tmp_path, "docs/plans/wholly-unrelated.md")
+        result = guard.check(payload)
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_placeholder_type_allows_not_denies(self, tmp_path, monkeypatch, capsys):
+        """PLACEHOLDER_TYPE ("unknown") is the manufactured-absent-field
+        identity track_dispatched_agents._handler writes -- the SAME
+        unresolved-identity event as "", not an invented kind. Must allow,
+        and must still trip the kind-resolution-failure instrumentation
+        signal (same measurement path as an empty-string lookup miss).
+        """
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("unknown")
+        )
+
+        payload = _payload(tmp_path, "docs/plans/2026-08-18-placeholder.md")
+        result = guard.check(payload)
+
+        assert result is None
+        assert "kind-resolution-failed" in capsys.readouterr().err
+
+    def test_placeholder_type_allows_even_with_no_sidecar(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("unknown")
+        )
+
+        payload = _payload(tmp_path, "docs/problems/2026-08-18-placeholder.md")
+        assert guard.check(payload) is None
+
+    def test_executor_kind_still_scoped_to_executing_plan_after_c3(self, tmp_path, monkeypatch):
+        """Regression pin -- coordinator:executor's C16 scoping is
+        unchanged by the invented-kind split: a DIFFERENT plan than the
+        sidecar-declared executing body still advises, not denies.
+        """
+        monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
+        )
+        _seed_executing_sidecar(tmp_path, "sess-12345678", "docs/plans/2026-08-18-x.md")
+
+        payload = _payload(tmp_path, "docs/plans/some-other-plan.md")
+        result = guard.check(payload)
+
+        assert result is not None
+        assert "permissionDecision" not in result["hookSpecificOutput"]
+
+
+class TestPlaceholderTypeMirrorsCanonicalConstant:
+    """Review finding (coordinatorcode-reviewer-s2guards, F1, P2):
+    ``guard._PLACEHOLDER_TYPE`` is a local literal deliberately mirroring
+    ``track_dispatched_agents.PLACEHOLDER_TYPE`` rather than importing it
+    (hot-path import-budget rationale -- see the guard module's docstring).
+    Nothing previously asserted the two stay equal; if the canonical
+    constant is ever renamed, this guard's copy would silently stop
+    recognizing the placeholder and hard-deny the exact enrich-fire-miss
+    case its docstring says it allows.
+    """
+
+    def test_local_placeholder_literal_matches_canonical_constant(self):
+        assert guard._PLACEHOLDER_TYPE == PLACEHOLDER_TYPE
 
 
 class TestAmbiguousBranchMessageNamesIdentifyingDetail:

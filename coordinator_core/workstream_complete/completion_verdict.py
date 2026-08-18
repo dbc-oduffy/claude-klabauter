@@ -118,7 +118,7 @@ def _row_reference(row: Any) -> str:
 
 # --- open_spine_row_worklist -------------------------------------------
 #
-# `OpenSpineRowGate.verdict` (directives_spine_worklist.py, ~line 99) is
+# `OpenSpineRowGate.verdict` (directives_spine_worklist.py) is
 # already a total three-way read: `applicable` / `not-applicable` /
 # `indeterminate`. This reader TRANSLATES that existing verdict; it does
 # not re-derive a status the gate already computed.
@@ -176,7 +176,7 @@ def open_spine_row_worklist(payload: Mapping[str, Any]) -> GateReading:
 
 # --- landed_reconciliation ----------------------------------------------
 #
-# `LandedReconciliationGate.verdict` (__init__.py, ~line 2069) shares the
+# `LandedReconciliationGate.verdict` (__init__.py) shares the
 # exact same three-way idiom as `OpenSpineRowGate.verdict` by design (its
 # own docstring states it mirrors that gate). Re-read live at execution
 # time per the plan's cross-plan-coordination note — `2026-08-14-landed-
@@ -204,7 +204,10 @@ def landed_reconciliation(payload: Mapping[str, Any]) -> GateReading:
 
     Residue: on `open`, one residue item naming this gate, the gate's own
     `open_count`/`total_count` as the owned reference, and its
-    `summary_line` — no next-step verb.
+    `summary_line` — no next-step verb. The reference string interpolates
+    both keys with no fallback: `LandedReconciliationGate` (__init__.py)
+    declares `open_count`/`total_count` as required NamedTuple fields with
+    no defaults, so a shallow `._asdict()` always carries both.
     """
     if "verdict" not in payload:
         return _unrecognised_shape("landed_reconciliation", "verdict")
@@ -250,7 +253,7 @@ def _completeness_item_field(item: Any, field: str) -> str:
 # --- completeness_checklist ----------------------------------------------
 #
 # Post-C0, `CompletenessChecklistGate.verdict` (directives_session_hygiene.py,
-# ~line 406) is already the same total four-way read the gate itself
+#) is already the same total four-way read the gate itself
 # computes: `not-applicable` / `indeterminate` / `clean` / `open`. This
 # reader TRANSLATES that existing verdict; it does not re-derive a status
 # the gate already computed, and it never falls back to the three-way
@@ -314,12 +317,12 @@ def completeness_checklist(payload: Mapping[str, Any]) -> GateReading:
 
 # --- consumed_handoff_completeness ----------------------------------------
 #
-# `ConsumedHandoffCompletenessGate` (__init__.py, ~line 2295) carries no
+# `ConsumedHandoffCompletenessGate` (__init__.py) carries no
 # top-level verdict key by design — its payload is
 # `{applies, blocks, elements[]}`, and every judgment lives per-element in
 # `elements[i]["leg_a"]["verdict"]` / `elements[i]["leg_b"]["verdict"]`
 # (`_evaluate_consumed_handoff_completeness_element`, __init__.py,
-# ~line 2165 — both docstrings read in full before writing this reader).
+# — both docstrings read in full before writing this reader).
 # This reader states its OWN two-stage TOTAL mapping: element legs reduce
 # to one element status, then element statuses reduce to one gate status.
 # Neither stage consults `payload["applies"]` or `payload["blocks"]` — both
@@ -443,7 +446,7 @@ def consumed_handoff_completeness(payload: Mapping[str, Any]) -> GateReading:
 
 # --- review_scale -----------------------------------------------------
 #
-# `review_scale_payload` (`__init__.py`, ~line 4029; built from
+# `review_scale_payload` (`__init__.py`; built from
 # `directives_review.ReviewScaleDecision._asdict()`) answers a different
 # question from the other four gates: F5, "how much review does this close
 # owe", never "is there outstanding completeness work". It has no

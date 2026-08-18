@@ -230,7 +230,11 @@ def _resolve_row_collision(
 
     Returns the replacement column list, or None when the existing row stands unchanged.
 
-        existing type == incoming type          → None (idempotent dedup)
+        existing type == incoming type          → upgrade cols[1] in place when it still
+                                                  holds the model placeholder and the
+                                                  incoming model does not (a real type at
+                                                  create time must not strand model);
+                                                  otherwise None (idempotent dedup)
         incoming type is the placeholder        → None (a late or out-of-order
                                                   identity-only write never downgrades
                                                   an already-resolved row)
@@ -254,6 +258,12 @@ def _resolve_row_collision(
     existing_type = cols[2]
 
     if existing_type == subagent_type:
+        # A real type at create time must not strand model at the placeholder:
+        # upgrade cols[1] here rather than relying on a later enrich leg that,
+        # for a Workflow agent() spawn, never fires (no PostToolUse Agent call).
+        if cols[1] == PLACEHOLDER_TYPE and model != PLACEHOLDER_TYPE:
+            cols[1] = model
+            return cols
         return None
     if subagent_type == PLACEHOLDER_TYPE:
         return None

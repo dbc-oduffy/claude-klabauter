@@ -149,6 +149,18 @@ _VALID_DISPOSITIONS = frozenset({SKIP_AND_SURFACE, FAIL_LOUD})
 #: below is an opt-in helper, never invoked implicitly).
 DEFAULT_COMPOSITION_ID_ENV = "COORDINATOR_COMPOSITION_ID"
 
+#: Fleet ceiling constants (chunk C1, docs/plans/2026-08-18-arm-the-composition-budget.md).
+#: Both start at `None` -- "no ceiling", matching this module's own
+#: `aggregate_elapsed_budget`/`max_invocations` "either, both, or neither" contract --
+#: so `coordinator_core.telemetry.composition_record.make_fleet_budget()` (the sole
+#: reader of these two names) constructs a PURE RECORDER: it observes every composition
+#: via `on_count` and cannot alter any outcome even in principle. C5 arms these from this
+#: recorder's own data; nothing in this chunk reads C5's numbers early. Constants only --
+#: no import here reaches `telemetry/`, preserving this module's DEPENDENCY-FREE LEAF
+#: property (see module docstring).
+FLEET_AGGREGATE_ELAPSED_BUDGET: "float | None" = None
+FLEET_MAX_INVOCATIONS: "int | None" = None
+
 
 class BudgetBreach(Exception):
     """Raised by `CompositionBudget.check()` when `disposition="fail-loud"` and a breach fires.

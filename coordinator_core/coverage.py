@@ -84,6 +84,18 @@ from coordinator_core.dag import CONTINUATION_EDGE_KINDS as _DAG_CONTINUATION_ED
 from coordinator_core.dag import walk_forward
 from coordinator_core import session_attribution
 
+# C4 (docs/plans/2026-08-18-chain-review-records-and-credits-predecessors.md
+# § C4): the read-side counterpart of C2's write-time attestation admission.
+# `_parse_reviewer_attestation` is the single read-side access point C1's
+# module-level comment block mandates for every consumer of the
+# `reviewer_attestation` key — this module must not spell the literal key
+# name itself. `_ATTESTATION_FIELD_SHAS` is imported for the same reason,
+# rather than re-spelling `"shas"` as a literal here.
+from coordinator_core.ops.review_trail_write import (
+    _ATTESTATION_FIELD_SHAS,
+    _parse_reviewer_attestation,
+)
+
 # Canonical frontmatter-key resolution. `coordinator_core.frontmatter.primitives`
 # is the single home for the `^key:` pattern — see the negative-specs on
 # _parse_handoff_consumed_by / _parse_handoff_deliverable_id below for why a
@@ -419,11 +431,44 @@ class _ForeignSessionLookupError(RuntimeError):
     """
 
 
+def _record_attested_shas(rec: dict) -> FrozenSet[str]:
+    """The attested-and-admitted SHA set a review-trail record persisted via
+    C1's ``reviewer_attestation`` key (docs/plans/2026-08-18-chain-review-
+    records-and-credits-predecessors.md § C1/C2), read through
+    ``_parse_reviewer_attestation`` — the single read-side access point that
+    module's docstring mandates, never a bare
+    ``rec.get("reviewer_attestation")`` or the literal key name.
+
+    This is the SAME set C3 (`_record_membership_shas`) credits for the
+    chain-terminal discharge path (AC6) — both readers subtract exactly this
+    set from a record's foreign-strip computation, never anything derived
+    from ancestry, lineage, or chain membership (Anti-scope).
+
+    Residual (AC1b, restated at this read site): admission here proves a
+    real dispatch happened and stayed inside its own frozen review range at
+    WRITE time (C2's guard) — it does not re-verify that bound on read, and
+    it does not prove the cited sidecar's content was authored by the
+    subagent rather than the EM (DR-156 Condition 3). This function trusts
+    what C1 persisted; it is not a second enforcement point.
+
+    Returns an empty set when the key is absent or malformed — fail-closed:
+    an unreadable attestation contributes nothing, never a blanket admission.
+    """
+    attestation = _parse_reviewer_attestation(rec)
+    if not isinstance(attestation, dict):
+        return frozenset()
+    shas = attestation.get(_ATTESTATION_FIELD_SHAS)
+    if not isinstance(shas, list):
+        return frozenset()
+    return frozenset(sha for sha in shas if isinstance(sha, str) and sha)
+
+
 def _narrow_foreign_session_scope(
     sha_range: str,
     own_session_id: Optional[str],
     cwd: str,
     cache: Dict[Tuple[str, Optional[str]], FrozenSet[str]],
+    attested_shas: FrozenSet[str] = frozenset(),
 ) -> FrozenSet[str]:
     """Within `sha_range`, return the commits whose OWN Session-Id git trailer is
     set and names a DIFFERENT session than `own_session_id` — i.e. commits
@@ -513,7 +558,29 @@ def _narrow_foreign_session_scope(
     C2/C3): the PM-vouch waiver source (`_pm_vouched_waiver_shas`,
     `state/review-trail/pm-vouches/`) was deleted outright before this one.
     No waiver source of any kind remains — a foreign-attributed commit is
-    now unconditionally stripped, with no exception.
+    now unconditionally stripped, with no exception, EXCEPT the one added
+    next.
+
+    NEW (C4, docs/plans/2026-08-18-chain-review-records-and-credits-
+    predecessors.md § C4): `attested_shas` — the record's own persisted
+    `reviewer_attestation` set (see `_record_attested_shas`), NOT this
+    function's business to resolve. A commit that is both foreign (per the
+    trailer classification above) AND present in `attested_shas` is pulled
+    back OUT of the returned set, i.e. it is no longer stripped and remains
+    credited. This mirrors C3's `_record_membership_shas` narrowing exactly
+    (AC6: the two readers must admit the identical set over the same
+    fixture) and never widens what `_FOREIGN_STRIPPED_SCOPES` itself means —
+    a foreign commit with no attestation is stripped exactly as before, for
+    every scope (AC7). `attested_shas` defaults to an empty set, so a caller
+    that does not thread it through gets byte-identical behaviour to before
+    this parameter existed.
+
+    Deliberately applied AFTER the (possibly cached) trailer classification
+    — never folded into the cache key — because the raw foreign set for a
+    given `(sha_range, own_session_id)` pair is a fact about git history
+    alone and is reusable across records citing that same pair regardless
+    of which record's attestation is being applied; only the final
+    subtraction is per-call.
     """
     try:
         foreign = session_attribution.trailer_foreign_shas(
@@ -521,6 +588,8 @@ def _narrow_foreign_session_scope(
         )
     except session_attribution.GitLogFailed as exc:
         raise _ForeignSessionLookupError(str(exc)) from exc
+    if attested_shas:
+        foreign = foreign - attested_shas
     return foreign
 
 
@@ -1808,6 +1877,9 @@ def _reviewed_via_graph_walk(
     on_record_error: str,
     graph_base: str,
     graph_range: Optional[str] = None,
+    attested_by_range_session: Optional[
+        Dict[Tuple[str, Optional[str], Optional[str], str], FrozenSet[str]]
+    ] = None,
 ) -> Dict[str, Set[str]]:
     """Resolve every distinct range against the in-memory graph and union the result,
     PARTITIONED BY `kind` (C5, docs/plans/2026-08-05-coverage-gate-planning-
@@ -1854,6 +1926,11 @@ def _reviewed_via_graph_walk(
     symref_cache: Dict[str, Any] = {}  # symbolic ref (HEAD, branch) → full SHA, resolved once
     session_cache: Dict[Tuple[str, Optional[str]], FrozenSet[str]] = {}
     oow_cache = _OutOfWindowCache()  # per-token resolution + lazy ancestor-of-base set
+    # C4: attested-set lookup this walk's `_narrow` closure consults per
+    # (sha_range, scope, session_id, kind) — see `attested_by_range_session`'s
+    # own parameter comment; empty when the caller (a direct test-only call,
+    # or a pre-C4 caller) does not supply one.
+    _attested_by_range_session = attested_by_range_session or {}
 
     # Upfront batch pre-scan: collect every distinct hex BASE token (across both
     # endpoints of every distinct range) that a zero-spawn prefix-scan against
@@ -1940,12 +2017,18 @@ def _reviewed_via_graph_walk(
         return cached
 
     def _narrow(
-        shas: Set[str], sha_range: str, scope: Optional[str], session_id: Optional[str]
+        shas: Set[str], sha_range: str, scope: Optional[str], session_id: Optional[str],
+        kind: str,
     ) -> Set[str]:
         if scope not in _FOREIGN_STRIPPED_SCOPES:
             return shas
+        _attested = _attested_by_range_session.get(
+            (sha_range, scope, session_id, kind), frozenset()
+        )
         try:
-            foreign = _narrow_foreign_session_scope(sha_range, session_id, cwd, session_cache)
+            foreign = _narrow_foreign_session_scope(
+                sha_range, session_id, cwd, session_cache, _attested,
+            )
         except _ForeignSessionLookupError:
             # Fail closed: the git subprocess backing the foreign-session
             # exclusion errored, so we cannot safely narrow this record.
@@ -1981,11 +2064,11 @@ def _reviewed_via_graph_walk(
                 raise RuntimeError(f"git rev-list {sha_range!r} failed for {artifact!r}")
             bucket |= _narrow(
                 {s.strip() for s in shas_out.splitlines() if s.strip()} & chain_set,
-                sha_range, scope, session_id,
+                sha_range, scope, session_id, kind,
             )
             continue
         raw = (reach(l_sha) ^ reach(r_sha)) if symmetric else (reach(r_sha) - reach(l_sha))
-        bucket |= _narrow(raw, sha_range, scope, session_id)
+        bucket |= _narrow(raw, sha_range, scope, session_id, kind)
     return {kind: (shas & chain_set) for kind, shas in reviewed_by_kind.items()}
 
 
@@ -2219,6 +2302,35 @@ def build_reviewed_set(
     # chunk (see the plan's Anti-scope: only "plan" becomes creditable).
     valid_ranges: List[Tuple[str, str, Optional[str], Optional[str], str]] = []
 
+    # C4 (docs/plans/2026-08-18-chain-review-records-and-credits-
+    # predecessors.md § C4): the attested SHA set a record persisted (C1),
+    # keyed by (sha_range, scope, session_id, kind) — kept as a SIDE
+    # structure, never folded into `valid_ranges`'/`distinct_ranges`' tuple
+    # shape, mirroring how `session_cache` is already threaded alongside
+    # those tuples rather than embedded in them. Only ever populated for a
+    # `_FOREIGN_STRIPPED_SCOPES` record (unioned per key, since two records
+    # sharing an identical (sha_range, scope, session_id, kind) both
+    # attesting is at least as permissive as either alone — each record's
+    # own attested set was already intersected with ITS OWN foreign set at
+    # write time, C2).
+    #
+    # `scope` and `kind` MUST join the key — mirroring `distinct_ranges`'
+    # own dedup key just below, which documents why: a "plan" record and a
+    # "diff" record (or a "session"- and "chain"-scope record) citing the
+    # identical (sha_range, session_id) are NOT the same obligation. Keying
+    # this dict on (sha_range, session_id) alone let a "plan" record's
+    # attestation get pulled into narrowing a sibling "diff" record at the
+    # same range/session that carried no attestation of its own — crediting
+    # the code obligation off a plan-only attestation that never named it
+    # for that purpose (review finding, coordinatorcode-reviewer-e2cc5b19,
+    # slice B BLOCKING). Since this dict is only ever populated when `scope
+    # in _FOREIGN_STRIPPED_SCOPES` (see the `if` below), `session_id` here
+    # is always already `distinct_ranges`' `dedup_session_id` — no separate
+    # normalization needed.
+    attested_by_range_session: Dict[
+        Tuple[str, Optional[str], Optional[str], str], FrozenSet[str]
+    ] = {}
+
     # Per-run accumulator for unrecognized scope_kind records (AC1). The
     # per-record WARN below is replaced by ONE aggregated stderr line emitted
     # after the walk — see the emission after this loop. Keyed by scope_kind
@@ -2292,6 +2404,12 @@ def build_reviewed_set(
                 continue
 
             valid_ranges.append((sha_range, artifact, scope, session_id, kind))
+            if scope in _FOREIGN_STRIPPED_SCOPES:
+                _attested_key = (sha_range, scope, session_id, kind)
+                attested_by_range_session[_attested_key] = (
+                    attested_by_range_session.get(_attested_key, frozenset())
+                    | _record_attested_shas(rec)
+                )
 
     emit_unrecognized_kind_warning(unrecognized_kind_counts)
 
@@ -2367,6 +2485,7 @@ def build_reviewed_set(
             reviewed_by_kind = _reviewed_via_graph_walk(
                 distinct_ranges, intersect_shas, parent_map, cwd, on_record_error,
                 _range_base(graph_range), graph_range,
+                attested_by_range_session=attested_by_range_session,
             )
             return _credit_from_kind_partition(reviewed_by_kind, cwd)
         # else: fall through to the per-range fan-out (graceful degradation)
@@ -2487,8 +2606,13 @@ def build_reviewed_set(
                 continue
             raise RuntimeError(f"git rev-list {sha_range!r} failed for {artifact!r}")
         if scope in _FOREIGN_STRIPPED_SCOPES:
+            _attested = attested_by_range_session.get(
+                (sha_range, scope, session_id, kind), frozenset()
+            )
             try:
-                foreign = _narrow_foreign_session_scope(sha_range, session_id, cwd, session_cache)
+                foreign = _narrow_foreign_session_scope(
+                    sha_range, session_id, cwd, session_cache, _attested,
+                )
             except _ForeignSessionLookupError:
                 # Fail closed (see _ForeignSessionLookupError): route through
                 # the same skip/raise semantics as the git rev-list failure

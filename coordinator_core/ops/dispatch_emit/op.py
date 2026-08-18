@@ -152,7 +152,12 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     error_count = sum(1 for f in findings if f.severity is Severity.ERROR)
     warn_count = sum(1 for f in findings if f.severity is Severity.WARN)
 
-    guarded_path.write_text(script, encoding="utf-8")
+    # newline="" suppresses the platform line-ending translation Python's text
+    # mode applies by default: on Windows that rewrites every "\n" to "\r\n",
+    # and a CRLF-carrying .mjs is rejected by the harness Workflow surface that
+    # fires it (control characters in the approval payload), making an emitted
+    # script unfireable on the platform this repo treats as first-class.
+    guarded_path.write_text(script, encoding="utf-8", newline="")
 
     return {
         "path": str(guarded_path),

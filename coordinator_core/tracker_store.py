@@ -964,7 +964,7 @@ def resolve_observed_set(marker: dict, *, repo_root: Path) -> dict:
         # item 3): a claim strictly below resolves_unknown_from still
         # resolves concretely — a shard that goes bad late must not
         # retroactively invalidate its own good prefix.
-        _first_defect, resolves_unknown_from = _well_formedness(shard_sequences)
+        _, resolves_unknown_from = _well_formedness(shard_sequences)
         if resolves_unknown_from is not None and claimed_seq >= resolves_unknown_from:
             resolved[slug] = OBSERVED_SET_UNKNOWN
             continue
@@ -1203,11 +1203,34 @@ def _resolve_self_component(
     append hashes bytes a later git merge rewrites, so it could never
     detect the rewrite it exists to detect.
 
-    Reads *machine*'s own shard exactly once — the same shard already
-    read (by the caller, ``resolve_observed_set_union_for_event``) to
-    recover the event's own record — so this adds NO peer-shard access,
-    preserving ``resolve_observed_set_for_event``'s byte-derivability
-    property.
+    Reads *machine*'s own shard via its own ``read_text()`` call — a
+    SECOND, independent read of that shard within one
+    ``resolve_observed_set_union_for_event`` invocation, not a reuse of
+    any read already performed. *machine*/*sequence* come from the
+    caller-supplied *event* dict itself, never from a shard read; the
+    caller's own shard read happens separately, inside
+    ``resolve_observed_set_for_event`` (which reads *machine*'s shard to
+    scan for the marker in effect). This function adds no PEER-shard
+    access over that call, so ``resolve_observed_set_for_event``'s
+    byte-derivability property still holds unchanged — it just does so
+    via two own-shard reads, not one.
+
+    The two reads are not atomic with each other, so this is the same
+    double-read *shape* ``resolve_observed_set`` and ``fold_observed_set``
+    warn against for peer shards — but narrower in exposure, not just in
+    frequency: a peer shard can be rewritten wholesale by a git merge
+    between two reads, which is what those TOCTOU warnings guard against.
+    *machine*'s own shard cannot — under this module's own append
+    discipline (``append_event``/``append_events``, both single-writer via
+    ``locked_rmw`` on this exact machine), it is append-only and
+    monotonic: a write landing between the marker scan's read and this
+    read can only add new lines at strictly higher ``sequence`` values, it
+    can never mutate or reorder a line either read already saw. Every line
+    at or below *sequence* — the whole input to this function's
+    well-formedness check and digest — is therefore already immutable by
+    the time of either read. The two reads can disagree only about lines
+    ABOVE *sequence*, which this function does not consult. Accepted as
+    benign on that basis, not asserted as a single shared read.
 
     Applies cockpit's DEC-5 / § SELF-SHARD APPLICABILITY: the
     well-formedness precondition covers the reader's OWN shard too, not
@@ -1245,7 +1268,7 @@ def _resolve_self_component(
                 )
             event_ids.append(record_id)
 
-    _first_defect, resolves_unknown_from = _well_formedness(shard_sequences)
+    _, resolves_unknown_from = _well_formedness(shard_sequences)
     if resolves_unknown_from is not None and sequence >= resolves_unknown_from:
         return OBSERVED_SET_UNKNOWN
 
@@ -1467,8 +1490,32 @@ def compare_events_causal_order(event_a: dict, event_b: dict, *, repo_root: Path
     if outcome == CAUSAL_ORDER_B_DOMINATES:
         return -1
 
-    key_a = (event_a.get("machine"), event_a.get("id"))
-    key_b = (event_b.get("machine"), event_b.get("id"))
+    key_a = _fallback_tiebreak_key(event_a)
+    key_b = _fallback_tiebreak_key(event_b)
     if key_a == key_b:
         return 0
     return -1 if key_a < key_b else 1
+
+
+def _fallback_tiebreak_key(event: dict) -> tuple[str, str]:
+    """The ``(machine, id)`` fallback key for ``compare_events_causal_order``,
+    validated the same way ``resolve_observed_set_for_event`` validates those
+    two fields on its own ``event`` argument — a contract violation surfaces
+    as a named ``TrackerStoreError``, never as an incidental ``TypeError``
+    from comparing a tuple with a ``None`` in it, and never as a silently
+    fabricated default identity (``""``, ``0``) that would order two events
+    on made-up grounds.
+
+    Both fields are required by every caller in this module today
+    (``resolve_observed_set_union_for_event`` and its own callees already
+    demand ``machine``; cockpit's applied-event shape guarantees ``id``) —
+    this only makes that precondition explicit at the one call site that
+    was reading the fields without checking them.
+    """
+    machine = event.get("machine")
+    event_id = event.get("id")
+    if not isinstance(machine, str) or not machine:
+        raise TrackerStoreError(f"event is missing required field: machine ({event!r})")
+    if not isinstance(event_id, str) or not event_id:
+        raise TrackerStoreError(f"event is missing required field: id ({event!r})")
+    return (machine, event_id)
