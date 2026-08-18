@@ -818,6 +818,17 @@ def ensure_prepare_commit_msg_hook(
 #: hook chain we deliberately refuse to touch) and are reported separately.
 _HEALED_OUTCOMES = frozenset({"installed-absent", "rewritten-stale", "appended"})
 
+#: `repos.*` keys whose value is a CONTAINER of repos rather than a repo. They
+#: share the `repos.` prefix but not its semantics, so the heal sweep must not
+#: treat them as targets: `_classify_target` finds no `.git` at the container
+#: path and reports `missing`, i.e. a broken registry entry, on a daily
+#: ceremony -- for an entry that is correct and that no fix could ever satisfy.
+#: That is the exact failure the three-way classification exists to avoid
+#: (see `_classify_target`), reintroduced through the enumeration instead.
+#: Excluded here rather than in `_classify_target` because these are not
+#: unclassifiable repos; they are not repos at all, and never reach a verdict.
+_CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})
+
 
 def _registry_repo_roots(bin_dir: str) -> List[tuple]:
     """Enumerate `(key, path)` for every `repos.*` entry set on this machine.
@@ -834,15 +845,20 @@ def _registry_repo_roots(bin_dir: str) -> List[tuple]:
     *registered* through the TOML files this reads). `bin_dir` is unused —
     kept for call-site compatibility; the prior CLI-based implementation
     needed it to locate the `machine-local` binary, this one no longer
-    shells out to a binary at all. Best-effort: any failure (unreadable
-    registry) yields an empty list, because a hook installer must degrade to
-    "healed nothing" rather than raise on a session-boot path.
+    shells out to a binary at all. Container keys
+    (`_CONTAINER_REGISTRY_KEYS`) are skipped: they carry the `repos.` prefix
+    but name a directory repos live UNDER, not a repo. Best-effort: any
+    failure (unreadable registry) yields an empty list, because a hook
+    installer must degrade to "healed nothing" rather than raise on a
+    session-boot path.
     """
     del bin_dir
     flat = _merged_flat_registry()
     roots = []
     for key, val in flat.items():
         if not key.startswith("repos."):
+            continue
+        if key in _CONTAINER_REGISTRY_KEYS:
             continue
         s = ("" if val is None else str(val)).strip()
         if s:

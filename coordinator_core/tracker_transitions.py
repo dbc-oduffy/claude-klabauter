@@ -14,6 +14,10 @@ computed by `tracker_projection` at read time, never stored here.
 Spec backlink: pln-sat-03-event-sourced-completio-c270a1
 § Tasks C2 (AC7, AC11 partially) — the substrate C3 (per-axis idempotency
 scoping), C4 (reopen cascade), and C5 (snapshot/compaction) build on.
+C3's `generation` addressing fix itself lands under
+`docs/plans/2026-08-18-sat-04-completion-axis-policy.md` § Tasks C3
+(AC5, AC5b, AC5c, AC5d, AC6, AC7, AC7a, AC11), which amends this module's
+originating plan — see that plan's D7/D8 for the decision record.
 
 DR-217 disambiguating note: "transition" in DR-217 means a handoff-lifecycle
 transition (see `handoff_transition.py`), and `ops/tracker/advance_status.py`'s
@@ -23,8 +27,23 @@ greppable; do not conflate any of the three.
 
 Event fields (binding, closed list): `id`, `item_id`, `axis`, `from_state`,
 `to_state`, `actor`, `evidence` (JSON), `tier`, `source_observation_id`,
-`observed_at`, `applied_at`, `schema_version`. Nothing else rides in a
-transition event's payload for this plan.
+`observed_at`, `applied_at`, `schema_version`, `generation`. Nothing else
+rides in a transition event's payload for this plan.
+
+C3/D8 widens this list by exactly one field, `generation` — the ONE place
+C3 widens sat-03's event *shape* rather than only its addressing. It is
+stamped by `_emit`/`_emit_batch` at emit time (never part of
+`transition_event`'s own constructor signature or its closed field set,
+which are unchanged — AC5c), and is load-bearing only for `code_complete`'s
+address (`_code_complete_dedup_key`); the null-SHA axes stamp it too, for
+schema uniformity, but never read it back. A stored event from before C3
+landed carries no `generation` field at all — every reader of it MUST
+treat that absence as `0`, never re-derive it from current store contents
+(AC7a). See `_code_complete_dedup_key` and `_code_complete_retract_generation`'s
+docstrings, and D8 in
+`docs/plans/2026-08-18-sat-04-completion-axis-policy.md`, for the full
+mechanism and the two-cycle probe that shows why a live re-derivation
+silently reintroduces the bug C3 fixes.
 
 `applied_at` semantics (settled): `applied_at = observed_at` at creation for
 auto and direct-human events; `applied_at` is `null` ONLY for `tier:
@@ -196,6 +215,82 @@ def transition_event(
     }
 
 
+def _code_complete_dedup_key(payload: dict) -> tuple:
+    """Shared address tail for the `code_complete` axis. THE ONE HELPER
+    `_mint_address` and `_dedup_check_address` both call for that axis
+    (C3/AC6), so the mint arm and the dedup arm can never drift apart.
+
+    Two distinct tails, chosen by `to_state` (post-review fix — see the
+    module docstring's Retract-idempotency note and D9 in
+    `docs/plans/2026-08-18-sat-04-completion-axis-policy.md`):
+
+    `to_state == "retracted"`: `(source_observation_id, evidence_sha)` —
+    the generation does NOT participate. A retract is one of the events
+    `_code_complete_retract_generation` sums over, so a retract's own
+    generation is unstable across re-observation: first mint sees 0 stored
+    retracts (excludes itself, not yet stored), any later re-observation
+    of the SAME retract sees the now-stored retract and counts itself,
+    landing on 1. Addressing a retract on its own generation therefore
+    makes the address disagree with itself between mint time and replay
+    time, defeating the dedup check outright (the BLOCKED defect this key
+    exists to close). Keying on `source_observation_id` instead — this
+    branch is only ever reached when it is non-`None`, since both callers
+    already short-circuit the `None` case before calling this helper —
+    gives a retract an address that is stable across time, mirroring how
+    the null-SHA axes (`qa_verified`, `manual_close`) already address on
+    `source_observation_id`.
+
+    Every other `to_state` (the assert arm): `(generation, evidence_sha)`,
+    unchanged from C3/D8 — `generation` is READ from `payload["generation"]`,
+    defaulting to `0` (AC7a) — this function never COMPUTES the generation
+    itself; that is `_code_complete_retract_generation`'s job, called once
+    at emit time (`_emit`/`_emit_batch`) BEFORE either address function
+    ever sees the payload. For a fresh payload about to be minted, the
+    caller has already stamped the freshly-computed generation onto it;
+    for an existing STORED event being rescanned by
+    `_find_existing_by_address`, this reads that event's own persisted
+    `generation` field back unchanged. Recomputing it live from current
+    store contents here would make a stored assert's address drift upward
+    the moment a later retract lands, silently reintroducing the
+    revert-of-revert collision this chunk exists to fix (D8, probe D) — do
+    not do that. The generation stays load-bearing for asserts: it is what
+    separates a re-assert of the same completing sha across different
+    revert cycles (C3's whole purpose) — an assert never contributes to
+    its own count (AC7a), so this arm does not share the retract arm's
+    instability.
+    """
+    evidence = payload.get("evidence") or {}
+    evidence_sha = evidence.get("sha") if isinstance(evidence, dict) else None
+    if payload.get("to_state") == "retracted":
+        return (payload.get("source_observation_id"), evidence_sha)
+    generation = payload.get("generation", 0)
+    return (generation, evidence_sha)
+
+
+def _code_complete_retract_generation(item_id: str, events: list[dict]) -> int:
+    """Compute the retract GENERATION to stamp onto a fresh `code_complete`
+    payload for *item_id* (D8): the count of already-stored `code_complete`
+    events with `to_state == "retracted"` for that `item_id`, found in
+    *events* — an already-loaded `tracker_store.read_events` result, so
+    callers can share ONE scan between this count and the existing-match
+    lookup (`_find_existing_by_address`) rather than reading the shard
+    twice per emit.
+
+    Called exactly once per fresh payload, at emit time, to STAMP the
+    generation onto it before either address function ever runs — never
+    called again to re-derive a stored event's address; see
+    `_code_complete_dedup_key`'s docstring for why that distinction is
+    load-bearing.
+    """
+    return sum(
+        1
+        for event in events
+        if event.get("axis") == "code_complete"
+        and event.get("to_state") == "retracted"
+        and event.get("item_id") == item_id
+    )
+
+
 def _mint_address(payload: dict) -> tuple:
     """Compute the content-address key used to MINT a transition-event id.
 
@@ -217,16 +312,27 @@ def _mint_address(payload: dict) -> tuple:
     `test_ac4_ac5_precedence_direct_human_code_complete_with_sha_never_deduped`
     in `coordinator_core/tests/test_tracker_transitions.py`.
 
-    `source_observation_id` PRESENT: unchanged from C2 — content-addressed
-    on the axis-appropriate key (`evidence.sha` for `code_complete`,
-    `source_observation_id` for the null-SHA axes), matching
-    `_dedup_check_address`'s address for the same payload so two racing
-    dedup-misses mint the SAME id and collide on
-    `TrackerStoreDuplicateIdError` — the operative race guard described in
-    `_find_existing_by_address`'s docstring. Do not regress this branch.
+    `source_observation_id` PRESENT, axis `code_complete`: addressed via
+    `_code_complete_dedup_key` (C3/D8, post-review fix) — the assert arm
+    (`to_state != "retracted"`) on `(generation, evidence.sha)`, the
+    retract arm (`to_state == "retracted"`) on
+    `(source_observation_id, evidence.sha)` with the generation excluded.
+    The assert-arm generation closes the revert-of-revert collision that a
+    bare `evidence.sha` key left open (two assert-of-A events after two
+    different retracts used to mint the SAME id); the retract arm cannot
+    use the same generation, because a retract is one of the events that
+    generation counts, making its own address unstable across
+    re-observation — see `_code_complete_dedup_key`'s docstring. See also
+    the module docstring's "Event-id minting" section.
+
+    `source_observation_id` PRESENT, the null-SHA axes (`qa_verified`,
+    `manual_close`): unchanged from C2 — content-addressed on
+    `source_observation_id`, matching `_dedup_check_address`'s address for
+    the same payload so two racing dedup-misses mint the SAME id and
+    collide on `TrackerStoreDuplicateIdError` — the operative race guard
+    described in `_find_existing_by_address`'s docstring. Do not regress
+    this branch.
     """
-    evidence = payload.get("evidence") or {}
-    evidence_sha = evidence.get("sha") if isinstance(evidence, dict) else None
     source_observation_id = payload.get("source_observation_id")
     item_id = payload["item_id"]
     axis = payload["axis"]
@@ -246,7 +352,8 @@ def _mint_address(payload: dict) -> tuple:
         )
 
     if axis == "code_complete":
-        return ("dedup", item_id, axis, to_state, evidence_sha)
+        key_head, key_tail = _code_complete_dedup_key(payload)
+        return ("dedup", item_id, axis, to_state, key_head, key_tail)
     # The null-SHA axes (qa_verified, manual_close): addressed on the
     # source observation instead.
     return ("dedup", item_id, axis, to_state, source_observation_id)
@@ -265,17 +372,22 @@ def _dedup_check_address(payload: dict) -> tuple | None:
     never look for an existing match" — never fall back to minting logic
     for this address.
 
-    `source_observation_id` PRESENT: unchanged from C2/C3 — dedup on the
-    axis-appropriate key (`evidence.sha` for `code_complete`,
-    `source_observation_id` for the null-SHA axes), matching
-    `_mint_address`'s address for the same payload.
+    `source_observation_id` PRESENT, axis `code_complete`: addressed via
+    `_code_complete_dedup_key` — the SAME helper `_mint_address` calls, so
+    the two arms can never drift apart (AC6) — which returns
+    `(generation, evidence.sha)` for the assert arm or
+    `(source_observation_id, evidence.sha)` for the retract arm. See that
+    function's docstring for why `generation` is read from the payload,
+    never recomputed here, and why the retract arm cannot use it at all.
+
+    `source_observation_id` PRESENT, the null-SHA axes: unchanged from
+    C2/C3 — dedup on `source_observation_id`, matching `_mint_address`'s
+    address for the same payload.
 
     C3 owns the full per-axis idempotency SCOPING rule (whether a given
     address actually blocks a re-append); this function only computes the
     address a given payload would be looked up under.
     """
-    evidence = payload.get("evidence") or {}
-    evidence_sha = evidence.get("sha") if isinstance(evidence, dict) else None
     source_observation_id = payload.get("source_observation_id")
     item_id = payload["item_id"]
     axis = payload["axis"]
@@ -287,7 +399,8 @@ def _dedup_check_address(payload: dict) -> tuple | None:
         return None
 
     if axis == "code_complete":
-        return ("dedup", item_id, axis, to_state, evidence_sha)
+        key_head, key_tail = _code_complete_dedup_key(payload)
+        return ("dedup", item_id, axis, to_state, key_head, key_tail)
     # The null-SHA axes (qa_verified, manual_close): addressed on the
     # source observation instead.
     return ("dedup", item_id, axis, to_state, source_observation_id)
@@ -329,11 +442,14 @@ _SCHEMA_VERSION = 1
 
 
 def _find_existing_by_address(
-    address: tuple, *, repo_root: Path
+    address: tuple, events: list[dict]
 ) -> dict | None:
-    """C3's pre-append idempotency check: scan `tracker_store.read_events`
-    for an event that would mint under the SAME content-address *address*
-    as the payload about to be emitted.
+    """C3's pre-append idempotency check: scan an already-loaded *events*
+    list (a `tracker_store.read_events` result, shared with the
+    `_code_complete_retract_generation` count computed just before this
+    call in `_emit`/`_emit_batch` — one shard read, not two) for an event
+    that would mint under the SAME content-address *address* as the
+    payload about to be emitted.
 
     An existing event minted under *address* is recomputed from its own
     fields via `_dedup_check_address` rather than compared by stored `id`
@@ -378,7 +494,7 @@ def _find_existing_by_address(
     `KeyError` or, worse, a bare `except KeyError` that would also hide a
     real bug in a transition-shaped payload.
     """
-    for existing in tracker_store.read_events(repo_root=repo_root):
+    for existing in events:
         if existing.get("kind") == "snapshot":
             continue
         if not all(key in existing for key in ("item_id", "axis", "to_state")):
@@ -405,6 +521,15 @@ def _emit(payload: dict, *, repo_root: Path) -> dict:
     (content-addressed on the MINTING address, `_mint_address`, no
     `applied_at` nonce) — see module docstring.
 
+    Stamps `generation` (C3/D8, AC5c) BEFORE either address function runs:
+    reads `tracker_store.read_events` ONCE and computes
+    `_code_complete_retract_generation` from that same list, so the
+    generation this payload mints/dedups under is derived at emit time
+    from stored events, never supplied or defaulted by a caller — the
+    generation is not part of `transition_event`'s public signature, so no
+    caller can pass a stale one. That one read is then reused for
+    `_find_existing_by_address` below rather than reading the shard twice.
+
     C3's per-axis idempotency scoping (AC4/AC5): before appending, computes
     *payload*'s DEDUP-CHECK address via `_dedup_check_address` — deliberately
     NOT `_mint_address` — and checks it against already-stored events via
@@ -430,9 +555,15 @@ def _emit(payload: dict, *, repo_root: Path) -> dict:
     race this check does not (and by construction cannot) close, and the
     two mitigations that make it safe anyway.
     """
+    events = list(tracker_store.read_events(repo_root=repo_root))
+    payload = dict(payload)
+    payload["generation"] = _code_complete_retract_generation(
+        payload["item_id"], events
+    )
+
     address = _dedup_check_address(payload)
     if address is not None:
-        existing = _find_existing_by_address(address, repo_root=repo_root)
+        existing = _find_existing_by_address(address, events)
         if existing is not None:
             return existing
 
@@ -581,30 +712,66 @@ def _emit_batch(payloads: list[dict], *, repo_root: Path) -> list[dict]:
     `test_emit_batch_partial_dedup_keeps_only_new_payloads_in_append_call`
     in `test_tracker_transitions.py` — kept live rather than deleted for
     whatever future caller passes a `source_observation_id`-bearing batch.
+
+    Generation (C3/D8, AC5d): reads `tracker_store.read_events` ONCE up
+    front and seeds a per-`item_id` running generation counter from
+    `_code_complete_retract_generation` over that one read — shared with
+    `_find_existing_by_address` below, so this costs no additional read
+    over the pre-C3 shape. Each payload is stamped with its `item_id`'s
+    CURRENT running generation, and if that stamped payload is itself a
+    `code_complete` retract, the counter for that `item_id` advances by
+    one immediately after stamping — so payload N in the batch sees every
+    retract STAMPED by payloads 0..N-1, never resolved against the
+    pre-batch count alone. Two retracts for the same item in one batch
+    therefore land at different generations instead of collapsing onto
+    the same address (AC5d); this is DECIDED, not incidental — see the
+    C3 plan-task body.
     """
+    events = list(tracker_store.read_events(repo_root=repo_root))
+    generation_by_item: dict[str, int] = {}
+
     prepared: list[tuple[bool, dict]] = []
     to_append: list[dict] = []
 
     for payload in payloads:
+        item_id = payload["item_id"]
+        if item_id not in generation_by_item:
+            generation_by_item[item_id] = _code_complete_retract_generation(
+                item_id, events
+            )
+        payload = dict(payload)
+        payload["generation"] = generation_by_item[item_id]
+
         address = _dedup_check_address(payload)
         existing = (
-            _find_existing_by_address(address, repo_root=repo_root)
+            _find_existing_by_address(address, events)
             if address is not None
             else None
         )
         if existing is not None:
             prepared.append((False, existing))
-            continue
+        else:
+            observed_at = _stamp_applied_at()
+            applied_at = None if payload.get("tier") == _SUGGEST_TIER else observed_at
+            event = dict(payload)
+            event["observed_at"] = observed_at
+            event["applied_at"] = applied_at
+            event["schema_version"] = _SCHEMA_VERSION
+            event["id"] = _mint_transition_event_id(payload)
+            prepared.append((True, event))
+            to_append.append(event)
 
-        observed_at = _stamp_applied_at()
-        applied_at = None if payload.get("tier") == _SUGGEST_TIER else observed_at
-        event = dict(payload)
-        event["observed_at"] = observed_at
-        event["applied_at"] = applied_at
-        event["schema_version"] = _SCHEMA_VERSION
-        event["id"] = _mint_transition_event_id(payload)
-        prepared.append((True, event))
-        to_append.append(event)
+            if payload.get("axis") == "code_complete" and payload.get("to_state") == "retracted":
+                # Advance only on an actual fresh append (post-review fix):
+                # a retract that resolved to an existing dedup match above
+                # was never newly stored, so it must not inflate the
+                # running counter for later payloads in this same batch.
+                # Dormant today (`reopen_cascade`'s payloads always carry
+                # `source_observation_id=None`, which `_dedup_check_address`
+                # always resolves to `None` — never a match), but activates
+                # the moment a future caller batches a real
+                # observation-bearing retract (sat-06/sat-07 ingest).
+                generation_by_item[item_id] += 1
 
     if to_append:
         appended_iter = iter(

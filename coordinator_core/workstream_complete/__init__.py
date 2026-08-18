@@ -203,6 +203,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping, NamedTuple, Optional
 
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.ops import list_review_trail_records
 from coordinator_core.ops.review_brightline_gate import classify_surface
 from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
@@ -4088,25 +4092,26 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
 
 
 def _usage(prog: str) -> int:
-    print(f"usage: {prog} brief [--decisions <json>]", file=sys.stderr)
-    print(f"       {prog} apply [--decisions <json>]", file=sys.stderr)
+    print(f"usage: {prog} brief [--decisions <json> | --decisions-file <path>]", file=sys.stderr)
+    print(f"       {prog} apply [--decisions <json> | --decisions-file <path>]", file=sys.stderr)
     return EXIT_USAGE
 
 
 def _main_brief(rest: list[str]) -> int:
     decisions: dict[str, Any] = {}
+    conflict = detect_conflicting_payload_channels(rest)
+    if conflict is not None:
+        print(f"workstream-complete-assemble: {conflict}", file=sys.stderr)
+        return EXIT_USAGE
     i = 0
     while i < len(rest):
         tok = rest[i]
-        if tok == "--decisions":
-            if i + 1 >= len(rest):
-                return _usage("workstream-complete-assemble")
-            try:
-                decisions = json.loads(rest[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"workstream-complete-assemble: malformed --decisions JSON: {exc}", file=sys.stderr)
+        if (payload := resolve_json_payload_flag(rest, i)).consumed:
+            if payload.error is not None:
+                print(f"workstream-complete-assemble: {payload.error}", file=sys.stderr)
                 return EXIT_USAGE
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         else:
             print(f"workstream-complete-assemble: unrecognized argument {tok!r}", file=sys.stderr)
             return EXIT_USAGE
@@ -4170,8 +4175,8 @@ def main(argv: list[str]) -> int:
         return _usage("workstream-complete-assemble")
 
     if argv[0] in ("--help", "-h"):
-        print("usage: workstream-complete-assemble brief [--decisions <json>]")
-        print("       workstream-complete-assemble apply [--decisions <json>]")
+        print("usage: workstream-complete-assemble brief [--decisions <json> | --decisions-file <path>]")
+        print("       workstream-complete-assemble apply [--decisions <json> | --decisions-file <path>]")
         return EXIT_OK
 
     subcmd, rest = argv[0], argv[1:]

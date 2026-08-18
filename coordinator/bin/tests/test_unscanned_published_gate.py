@@ -272,6 +272,52 @@ class TestUnscannedPublishedCheckDirect:
         assert "unscanned-published check FAILED" in captured.err
         assert ".fleet-env" not in captured.err
 
+    def test_fleet_env_prior_is_structurally_excluded_not_flagged(self, tmp_path):
+        """`.fleet-env.prior/*` is the rollback copy left by a fleet-env migration in
+        flight -- a SIBLING directory to `.fleet-env`, not a sub-path of it, so
+        segment-exact matching (§ surface.STRUCTURAL_NEVER_PUBLISHED_PREFIXES) needs
+        its own individual name to cover it. Same dest-local, never-source class as
+        `.fleet-env` itself. Observed live: a real
+        claude-klabauter-publish-repo-toplevel run reported
+        `.fleet-env.prior/Lib/site-packages/psutil/_psutil_windows.pyd` (and
+        `rpds`/`_yaml`/`python.exe`) as unscanned-published, dying the run's
+        end-of-run gate."""
+        target = _target(tmp_path)
+        venv = target.dest_dir / ".fleet-env.prior" / "Lib" / "site-packages" / "psutil"
+        venv.mkdir(parents=True)
+        (venv / "_psutil_windows.pyd").write_bytes(b"\x00fake pyd bytes")
+        section = {"file_surface": {"include_extensions": ["*.py"]}}
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)], target_filtered=False
+        )
+        assert ok is True
+
+    def test_unscanned_source_file_still_fails_alongside_fleet_env_prior_noise(self, tmp_path, capsys):
+        """The direction that proves the `.fleet-env.prior` fix is a narrow noise
+        exclusion, not a hole: a real unscanned SOURCE file sitting right next to
+        `.fleet-env.prior` noise in the same tree must still fail the gate, loudly,
+        and no `.fleet-env.prior` path may appear in the failure output."""
+        target = _target(tmp_path)
+        venv = target.dest_dir / ".fleet-env.prior" / "Lib" / "site-packages"
+        venv.mkdir(parents=True)
+        (venv / "psutil.pyd").write_bytes(b"\x00fake pyd bytes")
+        section = {"file_surface": {}}
+        (target.dest_dir / "unscanned_leak.py").write_text(
+            "print('this should have been scanned')\n", encoding="utf-8"
+        )
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)],
+            target_filtered=False,
+            visited_files_by_repo_root={publish._dest_repo_root(target.dest_dir) or target.dest_dir: set()},
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "unscanned_leak.py" in captured.err
+        assert "unscanned-published check FAILED" in captured.err
+        assert ".fleet-env.prior" not in captured.err
+
     def test_every_published_file_scanned_passes(self, tmp_path):
         target = _target(tmp_path)
         (target.dest_dir / "a.py").write_text("print('clean')\n", encoding="utf-8")

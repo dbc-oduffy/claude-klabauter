@@ -1,21 +1,24 @@
 """
 coordinator_core.install.test_sitepackages_pointer — Tier T coverage for the
-site-packages pointer file `ensure_coordinator_venv` publishes at
-`<settings-home>/bin/hook-sitepackages.txt` (2026-08-10-interpreter-surface-
-four-asks.md chunk C5, ask (c)).
+RETIREMENT of the site-packages pointer file `ensure_coordinator_venv` used
+to publish at `<settings-home>/bin/hook-sitepackages.txt`
+(docs/plans/2026-08-18-retire-coordinator-venv.md chunk C2, superseding
+2026-08-10-interpreter-surface-four-asks.md chunk C5, ask (c)).
 
-Purpose: pin the writer-side contract a sibling repo's hook bootstrap
-already relies on -- exactly one absolute, existing path, written on every
-REAL success exit (including the already-healthy fast path, the easiest one
-to silently miss), and never written on a dry-run/check-only invocation.
+Purpose: pin the retirement contract -- `ensure_coordinator_venv` no longer
+writes the pointer on any exit, `_write_sitepackages_pointer` no longer
+exists as a callable, and a pointer left on disk from a pre-migration box is
+left alone by `ensure_coordinator_venv` itself (its removal is the orphan
+prune's job, not this function's -- see
+`test_substrate_write_surface.py`/`_prune_orphaned_static_bin_names`).
 
 Negative-spec:
-  - Does NOT test reader-side validation (is-it-writable, is-it-under-an-
-    expected-root) -- that trust boundary belongs to the sibling repo, not
-    this writer (see ensure_venv.py's chunk-C5 docstring notes).
+  - Does NOT test reader-side (DoE `_hook_venv_inject.py`) behaviour -- that
+    is verified live, not via this repo's Tier T suite (chunk C2's AC3
+    real-hook verification step).
   - Does NOT exercise a real venv build/pip install -- monkeypatches
-    `_venv_healthy`/`_site_packages_dir` the same way the rest of this
-    module's test suite fakes venv mechanics.
+    `_venv_healthy` the same way the rest of this module's test suite fakes
+    venv mechanics.
 """
 
 from __future__ import annotations
@@ -46,127 +49,76 @@ def _settings_home(tmp_path: Path) -> Path:
     return sh
 
 
-def _make_fake_site_packages(venv_dir: Path) -> Path:
-    site_packages = venv_dir / "Lib" / "site-packages"
-    site_packages.mkdir(parents=True)
-    return site_packages
+def test_write_sitepackages_pointer_no_longer_exists():
+    """Chunk C2 deletes `_write_sitepackages_pointer` outright -- keeping a
+    dead function around after its only call site is removed is exactly the
+    "unread computation is cost" case the plan's north star names."""
+    assert not hasattr(ensure_venv_mod, "_write_sitepackages_pointer")
 
 
-def test_fast_path_already_healthy_writes_pointer(tmp_path, monkeypatch):
-    """The already-healthy fast path (no lock, no rebuild) is the exit this
-    chunk exists to cover -- it is the easiest of the real success exits to
-    silently miss and the failure mode is invisible (no exception, no red
-    test) if missed."""
+def test_sitepackages_pointer_name_constant_still_present():
+    """The constant survives the authorship retirement -- `substrate.py`'s
+    Step 3e orphan-prune union still needs it to recognize a stale
+    pre-migration pointer as a prune candidate rather than an orphan outside
+    the mechanism meant to clean it up."""
+    assert SITEPACKAGES_POINTER_NAME == "hook-sitepackages.txt"
+
+
+def test_fast_path_already_healthy_does_not_write_pointer(tmp_path, monkeypatch):
+    """The already-healthy fast path (no lock, no rebuild) used to be the
+    exit this chunk's predecessor most easily missed. Post-retirement it
+    must not write the pointer on any real success exit."""
     settings_home = _settings_home(tmp_path)
     venv_dir = settings_home / ".coordinator-venv"
     venv_dir.mkdir()
-    site_packages = _make_fake_site_packages(venv_dir)
 
     monkeypatch.setattr(ensure_venv_mod, "_venv_healthy", lambda venv_py: True)
     monkeypatch.setattr(ensure_venv_mod, "_resolve_ml_cli", lambda plugin_root: None)
-    monkeypatch.setattr(ensure_venv_mod, "_site_packages_dir", lambda vd, is_win: site_packages)
 
     result = ensure_coordinator_venv(tmp_path, settings_home, site="test")
 
     assert result == "ready"
     pointer = settings_home / "bin" / SITEPACKAGES_POINTER_NAME
-    assert pointer.is_file()
-    lines = pointer.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    assert lines[0] == str(site_packages)
-    assert Path(lines[0]).is_absolute()
-    assert Path(lines[0]).exists()
+    assert not pointer.exists()
 
 
-def test_check_only_writes_nothing(tmp_path, monkeypatch):
-    """A dry-run/check-only invocation must not mutate disk (AC: no pointer
-    write on `would-rebuild`/`would-write`/check-only `ready`)."""
+def test_preexisting_pointer_from_prior_run_is_left_in_place(tmp_path, monkeypatch):
+    """A pointer left on disk by a pre-migration box is not this function's
+    concern to remove -- `ensure_coordinator_venv` neither writes nor
+    deletes it; the self-cleaning orphan prune in `substrate.py` owns
+    removal via the Step 3e union (see `SITEPACKAGES_POINTER_NAME`'s
+    docstring)."""
     settings_home = _settings_home(tmp_path)
     venv_dir = settings_home / ".coordinator-venv"
     venv_dir.mkdir()
-    site_packages = _make_fake_site_packages(venv_dir)
+    bin_dir = settings_home / "bin"
+    bin_dir.mkdir()
+    stale_pointer = bin_dir / SITEPACKAGES_POINTER_NAME
+    stale_pointer.write_text(str(venv_dir / "Lib" / "site-packages") + "\n", encoding="utf-8")
 
     monkeypatch.setattr(ensure_venv_mod, "_venv_healthy", lambda venv_py: True)
     monkeypatch.setattr(ensure_venv_mod, "_resolve_ml_cli", lambda plugin_root: None)
-    monkeypatch.setattr(ensure_venv_mod, "_site_packages_dir", lambda vd, is_win: site_packages)
+
+    result = ensure_coordinator_venv(tmp_path, settings_home, site="test")
+
+    assert result == "ready"
+    # Left untouched -- ensure_coordinator_venv is not the removal mechanism.
+    assert stale_pointer.exists()
+
+
+def test_check_only_still_writes_nothing(tmp_path, monkeypatch):
+    """A dry-run/check-only invocation must not mutate disk -- unaffected by
+    the retirement, still asserted here so a future re-add of pointer
+    authorship can't slip past check_only."""
+    settings_home = _settings_home(tmp_path)
+    venv_dir = settings_home / ".coordinator-venv"
+    venv_dir.mkdir()
+
+    monkeypatch.setattr(ensure_venv_mod, "_venv_healthy", lambda venv_py: True)
+    monkeypatch.setattr(ensure_venv_mod, "_resolve_ml_cli", lambda plugin_root: None)
 
     result = ensure_coordinator_venv(tmp_path, settings_home, site="test", check_only=True)
 
     assert result == "ready"
     pointer = settings_home / "bin" / SITEPACKAGES_POINTER_NAME
     assert not pointer.exists()
-
-
-def test_unresolvable_site_packages_skips_write_without_raising(tmp_path, monkeypatch):
-    """A `None`/nonexistent derivation must SKIP the write, never publish a
-    malformed pointer, and never fail venv provisioning itself."""
-    settings_home = _settings_home(tmp_path)
-    venv_dir = settings_home / ".coordinator-venv"
-    venv_dir.mkdir()
-
-    monkeypatch.setattr(ensure_venv_mod, "_venv_healthy", lambda venv_py: True)
-    monkeypatch.setattr(ensure_venv_mod, "_resolve_ml_cli", lambda plugin_root: None)
-    monkeypatch.setattr(ensure_venv_mod, "_site_packages_dir", lambda vd, is_win: None)
-
-    result = ensure_coordinator_venv(tmp_path, settings_home, site="test")
-
-    assert result == "ready"
-    pointer = settings_home / "bin" / SITEPACKAGES_POINTER_NAME
-    assert not pointer.exists()
-
-
-def test_failed_publish_leaves_no_tmp_residue(tmp_path, monkeypatch):
-    """A failed `os.replace` (simulated) must not leak a `.tmp-<pid>` file
-    under `<settings-home>/bin/`, and must not raise into the caller --
-    pins finding 1 (temp-file leak on failed publish) and finding 2
-    (structural "never raises" via a broad `except Exception`)."""
-    settings_home = _settings_home(tmp_path)
-    venv_dir = settings_home / ".coordinator-venv"
-    venv_dir.mkdir()
-    site_packages = _make_fake_site_packages(venv_dir)
-
-    monkeypatch.setattr(ensure_venv_mod, "_venv_healthy", lambda venv_py: True)
-    monkeypatch.setattr(ensure_venv_mod, "_resolve_ml_cli", lambda plugin_root: None)
-    monkeypatch.setattr(ensure_venv_mod, "_site_packages_dir", lambda vd, is_win: site_packages)
-
-    def _boom(*args, **kwargs):
-        raise OSError("simulated os.replace failure")
-
-    monkeypatch.setattr(ensure_venv_mod.os, "replace", _boom)
-
-    result = ensure_coordinator_venv(tmp_path, settings_home, site="test")
-
-    assert result == "ready"
-    bin_dir = settings_home / "bin"
-    pointer = bin_dir / SITEPACKAGES_POINTER_NAME
-    assert not pointer.exists()
-    leftover = list(bin_dir.glob(f".{SITEPACKAGES_POINTER_NAME}.tmp-*"))
-    assert leftover == []
-
-
-def test_non_oserror_from_derivation_is_swallowed_and_warned(tmp_path, monkeypatch, capsys):
-    """A non-`OSError` from the derivation path (e.g. a caller bug surfacing
-    as a `TypeError`) must not propagate and must not publish a pointer --
-    but unlike an `OSError`, it must emit a visible warning naming the
-    swallowed exception type, since a silently-swallowed caller bug is
-    exactly the failure mode chunk C5 exists to prevent (Review:
-    coordinator:code-reviewer, e47656b7, finding 2 -- EM-overridden P2)."""
-    settings_home = _settings_home(tmp_path)
-    venv_dir = settings_home / ".coordinator-venv"
-    venv_dir.mkdir()
-
-    def _boom(vd, is_win):
-        raise TypeError("simulated caller bug")
-
-    monkeypatch.setattr(ensure_venv_mod, "_venv_healthy", lambda venv_py: True)
-    monkeypatch.setattr(ensure_venv_mod, "_resolve_ml_cli", lambda plugin_root: None)
-    monkeypatch.setattr(ensure_venv_mod, "_site_packages_dir", _boom)
-
-    result = ensure_coordinator_venv(tmp_path, settings_home, site="test")
-
-    assert result == "ready"
-    pointer = settings_home / "bin" / SITEPACKAGES_POINTER_NAME
-    assert not pointer.exists()
-    err = capsys.readouterr().err
-    assert "TypeError" in err
-    assert "not published" in err

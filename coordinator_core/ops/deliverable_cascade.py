@@ -181,6 +181,7 @@ import yaml
 
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta
+from coordinator_core.frontmatter.baton_class import canonical_kind, kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -211,6 +212,19 @@ _SCHEMA_PATH: Path = (
 )
 
 _LIVE_DEPLOYMENT_STATES = frozenset({"ready_to_fire", "in_flight"})
+
+# Leg (d)'s excluded-kind set (this chunk, C2) — sourced from
+# `coordinator_core.frontmatter.baton_class`, the repo's single owning table
+# for `kind` membership (`test_baton_class_is_the_only_membership_set.py`
+# enforces at most one `kind` string literal per call site; a second literal
+# anywhere is a defect). Mirrors `deliverable_carry._ROADMAP_STUB_KINDS`'s own
+# `kind_values_for_canonical(...)` call shape exactly, so C3 and C4 can import
+# THIS constant rather than re-deriving it. `spinoff` carries no D1
+# pre-rename alias of its own (unlike `roadmap-baton`/`roadmap-seed`/
+# `goal-seed`) — `kind_values_for_canonical` returns a one-element set today
+# — but routing through the helper means a future alias, were one ever added,
+# is picked up here automatically rather than silently missed.
+_SPINOFF_KINDS: FrozenSet[str] = frozenset(kind_values_for_canonical("spinoff"))
 
 # Vendored sizing-object schema path — the sizing kind's own validator, mirroring
 # `_SCHEMA_PATH` above's per-module-local-copy convention. x-schema-version 1.8.0
@@ -351,7 +365,7 @@ class _KindDescriptor:
     live_values: FrozenSet[str]
     schema_path: Path
     strict_unreadable: bool
-    predicate_legs: Dict[str, _PredicateLeg]  # keys: "a", "b", "c"
+    predicate_legs: Dict[str, _PredicateLeg]  # keys: "a", "b", "c", "d"
 
 
 _HANDOFF_KIND = _KindDescriptor(
@@ -368,6 +382,7 @@ _HANDOFF_KIND = _KindDescriptor(
         "a": _PredicateLeg(applies=True),
         "b": _PredicateLeg(applies=True),
         "c": _PredicateLeg(applies=True),
+        "d": _PredicateLeg(applies=True),
     },
 )
 
@@ -394,6 +409,16 @@ _SIZING_KIND = _KindDescriptor(
             ),
         ),
         "c": _PredicateLeg(applies=True),
+        # A sizing-object has no `kind: spinoff` vocabulary — its schema's own
+        # `kind` (a handoff-family field) does not exist on this record shape
+        # at all, so there is nothing for this leg to read. Exempted here,
+        # exactly as leg (b) is above, rather than the underlying `fm.get`
+        # silently seeing `None` and never matching by accident (AC3: byte-
+        # identical sizing-kind behaviour before and after this leg exists).
+        "d": _PredicateLeg(
+            applies=False,
+            reason="a sizing-object carries no `kind` field — spinoff-kind policy does not apply",
+        ),
     },
 )
 
@@ -650,6 +675,46 @@ async def _predicate_refusal(
             return (
                 "live-successor check indeterminate: "
                 f"{children_result.get('error', 'unknown error')} — refusing (fail-closed)"
+            )
+
+    # Leg (d) — kind policy (AC1/AC2/AC3, this chunk): a `kind: spinoff`
+    # candidate is never advanced through this join, even when its
+    # `deliverable_id` exact-matches the query. A spinoff is not the same
+    # deliverable as the plan/handoff it was forked from (docs/plans/2026-08-
+    # 18-a-spinoff-is-not-its-parents-deliverable.md § "Why minting fresh
+    # does not violate carry-not-remint") — an inherited id is a legacy
+    # defect, not a true join.
+    #
+    # Detector semantics: exact-equality-after-`canonicalize` on the
+    # candidate's OWN `kind` field (`baton_class.canonical_kind`), never the
+    # origin edge (`origin_plan_id`/`origin_handoff` — 95% of spinoffs carry
+    # neither, see the plan's Problem section) and never a slug-prefix match.
+    # `_SPINOFF_KINDS` is the excluded-kind set this leg tests against —
+    # sourced from `baton_class.py`, never a second hand-rolled literal here.
+    #
+    # Engaging staff-eng-063f0261 finding 3 (cited in
+    # `cascade_backstop_sweep`'s own docstring): "adding a `kind` filter to
+    # the same exact-equality join would not see [the slug-prefix-family]
+    # shape" — true, and not what this leg is for. This leg only ever stops a
+    # candidate that ALREADY cleared the exact-equality `deliverable_id` join
+    # upstream in `_collect_live_candidates_for_kind`; it adds no join
+    # capability of its own and does nothing for the slug-prefix-family case
+    # `cascade_backstop_sweep`'s separate, second check exists to catch.
+    #
+    # Reader's note, not a bug: unlike legs (a)/(b)/(c), which are
+    # state-dependent and re-evaluated fresh every fixpoint pass (a candidate
+    # refused this pass may clear on a later one as the corpus around it
+    # changes), a `kind` refusal here is permanent for the life of the
+    # candidate — nothing this cascade does changes a record's `kind`. A
+    # refused spinoff still sits in `still_pending` and is re-judged every
+    # pass up to `max_passes`, at the (small, single `fm.get`) cost of
+    # re-deriving the same refusal each time.
+    leg_d = kind.predicate_legs["d"]
+    if leg_d.applies:
+        if canonical_kind(fm.get("kind")) in _SPINOFF_KINDS:
+            return (
+                f"kind={fm.get('kind')!r} is a spinoff — a spinoff's deliverable_id, "
+                "even when it exact-matches this join, is not its parent's deliverable"
             )
 
     return None

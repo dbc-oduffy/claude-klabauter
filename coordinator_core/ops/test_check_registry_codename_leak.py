@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from coordinator_core.ops.check_registry_codename_leak import _resolve_registry_keys, main
+from coordinator_core.ops.check_registry_codename_leak import _is_kept, _resolve_registry_keys, main
 
 
 def _env(**overrides):
@@ -76,6 +76,26 @@ def test_keepset_experiments_not_flagged(tmp_path, capsys):
     (d / "notes.md").write_text("See docs/experiments/2026-07-09-batch-results.md.\n")
     rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.experiments"))
     assert rc == 0
+
+
+def test_keepset_fleet_root_not_flagged(tmp_path, capsys):
+    """repos.fleet_root names the fleet's container dir, not a private repo.
+
+    Regression for the claude-klabauter-coordinator-bin post_rsync
+    no-residual-pattern failure on 'fleet_root' in
+    lib/git_hook_install.py's _CONTAINER_REGISTRY_KEYS constant.
+    """
+    d = tmp_path / "kept-fleet-root"
+    d.mkdir()
+    (d / "git_hook_install.py").write_text(
+        '_CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})\n'
+    )
+    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.fleet_root"))
+    assert rc == 0
+
+
+def test_is_kept_fleet_root():
+    assert _is_kept("fleet_root") is True
 
 
 def test_keepset_prefix_match_coordinator_claude(tmp_path):

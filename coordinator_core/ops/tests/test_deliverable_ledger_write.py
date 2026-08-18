@@ -45,7 +45,7 @@ def _write_artifact(tmp_path: Path, ledger_block: str) -> Path:
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = state_dir / "deliverable-equivalence.yaml"
-    artifact_path.write_text(_HEADER + ledger_block, encoding="utf-8")
+    artifact_path.write_text(_HEADER + ledger_block, encoding="utf-8", newline="")
     return artifact_path
 
 
@@ -164,7 +164,7 @@ def test_upsert_preserves_content_after_ledger_block(tmp_path):
     state_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = state_dir / "deliverable-equivalence.yaml"
     footer = "\n# a future footer section, unrelated to the ledger\nfooter_key: footer_value\n"
-    artifact_path.write_text(_HEADER + "ledger: []\n" + footer, encoding="utf-8")
+    artifact_path.write_text(_HEADER + "ledger: []\n" + footer, encoding="utf-8", newline="")
 
     upsert_deliverable_ledger_rows(tmp_path, [_open_row("dlv-new")])
 
@@ -188,6 +188,7 @@ def test_upsert_preserves_content_after_populated_ledger_block(tmp_path):
         "    evidence_source: state/handoffs/existing.md\n"
         + footer,
         encoding="utf-8",
+        newline="",
     )
 
     upsert_deliverable_ledger_rows(tmp_path, [_open_row("dlv-new")])
@@ -238,7 +239,7 @@ def test_header_missing_trailing_newline_before_ledger_key_refused(tmp_path):
     artifact_path = state_dir / "deliverable-equivalence.yaml"
     # _HEADER ends with a trailing newline; strip it so the last header line
     # runs directly into "ledger: []" with no separating newline.
-    artifact_path.write_text(_HEADER.rstrip("\n") + "ledger: []\n", encoding="utf-8")
+    artifact_path.write_text(_HEADER.rstrip("\n") + "ledger: []\n", encoding="utf-8", newline="")
 
     with pytest.raises(DeliverableLedgerWriteError):
         upsert_deliverable_ledger_rows(tmp_path, [_open_row("dlv-no-trailing-nl")])
@@ -255,6 +256,7 @@ def test_malformed_existing_row_on_disk_raises_rather_than_silently_dropping(tmp
     artifact_path.write_text(
         _HEADER + "ledger:\n  - just a bare string, not a mapping\n",
         encoding="utf-8",
+        newline="",
     )
 
     with pytest.raises(DeliverableLedgerWriteError):
@@ -459,6 +461,7 @@ def test_duplicate_column_zero_ledger_key_refused(tmp_path):
     artifact_path.write_text(
         _HEADER + "ledger: this-is-not-the-real-key\nledger: []\n",
         encoding="utf-8",
+        newline="",
     )
 
     with pytest.raises(DeliverableLedgerWriteError):

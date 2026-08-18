@@ -1963,6 +1963,70 @@ class TestFoldObservedSetNoStoreOptIn:
 # ---------------------------------------------------------------------------
 
 
+class TestResolveObservedSetC2aPerComponentResolution:
+    """tmrg-03 C2a — cockpit's § RESOLUTION GRANULARITY IS PER COMPONENT
+    (their § VALIDATOR CONTRACT (A12) item 5): one damaged peer component
+    must not collapse the whole marker to OBSERVED_SET_UNKNOWN. A caller
+    must still be able to order events against an intact peer, in the SAME
+    returned mapping as the damaged peer's unknown.
+
+    Spec backlink: docs/plans/2026-08-18-tmrg-03-ordering-contract-in-
+    tracker-store.md § C2a.
+    """
+
+    def test_one_damaged_peer_and_one_intact_peer_resolve_independently(self, tmp_path):
+        # peer-a: a genuine gap ([1, 2, 4] claiming 4) — damaged.
+        # peer-b: a clean, contiguous shard — intact.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "peer-a",
+            [
+                {**_event("a-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"},
+                {**_event("a-evt-2", "2026-01-01T00:00:01Z"), "sequence": 2, "machine": "peer-a"},
+                {**_event("a-evt-4", "2026-01-01T00:00:03Z"), "sequence": 4, "machine": "peer-a"},
+            ],
+        )
+        _write_shard(
+            repo,
+            "peer-b",
+            [
+                {**_event("b-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-b"},
+                {**_event("b-evt-2", "2026-01-01T00:00:01Z"), "sequence": 2, "machine": "peer-b"},
+            ],
+        )
+        damaged_digest = ts._prefix_digest(["a-evt-1", "a-evt-2", "a-evt-4"])
+        intact_digest = ts._prefix_digest(["b-evt-1", "b-evt-2"])
+        marker = {
+            "id": "this-machine-fold-abc123",
+            "kind": "observed_set_fold",
+            "observed_at": "2026-01-01T00:00:05Z",
+            "applied_at": None,
+            "observed_set": {
+                "peer-a": {"sequence": 4, "prefix_digest": damaged_digest},
+                "peer-b": {"sequence": 2, "prefix_digest": intact_digest},
+            },
+        }
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+
+        # The intact peer resolves concretely — a caller can still order
+        # against it, in the SAME returned mapping as the damaged peer.
+        assert resolved["peer-b"] == {"sequence": 2, "prefix_digest": intact_digest}
+        assert resolved["peer-b"] is not OBSERVED_SET_UNKNOWN
+
+        # The damaged peer resolves unknown — not a whole-marker collapse.
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
+
+        # AC3: unknown is distinguishable from a genuine {} directly and by
+        # identity, never via truthiness — both are falsy by design.
+        assert not resolved["peer-a"]
+        assert resolved["peer-a"] != {}
+        assert type(resolved["peer-a"]) is not dict
+
+        assert set(resolved) == {"peer-a", "peer-b"}
+
+
 class TestResolveObservedSetAC4PeerSequenceExceedsCurrentMax:
     def test_truncated_peer_shard_resolves_unknown(self, tmp_path, monkeypatch):
         repo = _make_git_repo(tmp_path / "repo")
@@ -1992,8 +2056,11 @@ class TestResolveObservedSetAC4PeerSequenceExceedsCurrentMax:
         )
         assert max_sequence(repo_root=repo, machine="peer-a") == 5
 
+        # Per-component resolution (tmrg-03 C2a): the return is a dict whose
+        # peer-a VALUE is the sentinel, not the sentinel itself at top level.
         resolved = resolve_observed_set(marker, repo_root=repo)
-        assert resolved is OBSERVED_SET_UNKNOWN
+        assert resolved == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
 
 
 class TestResolveObservedSetAC5MidRangeHoleDigestMismatch:
@@ -2019,7 +2086,8 @@ class TestResolveObservedSetAC5MidRangeHoleDigestMismatch:
         assert max_sequence(repo_root=repo, machine="peer-a") == 10
 
         resolved = resolve_observed_set(marker, repo_root=repo)
-        assert resolved is OBSERVED_SET_UNKNOWN
+        assert resolved == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
 
 
 class TestResolveObservedSetAC5bContentBoundRebaseCounterexample:
@@ -2110,10 +2178,11 @@ class TestResolveObservedSetAC5bContentBoundRebaseCounterexample:
         )
 
         resolved = resolve_observed_set(marker, repo_root=repo)
-        assert resolved is OBSERVED_SET_UNKNOWN, (
+        assert resolved == {"machine-b": OBSERVED_SET_UNKNOWN}, (
             "content-bound check must catch a position-preserving rebase-"
             "and-re-append substitution, never resolve to a trusted set"
         )
+        assert resolved["machine-b"] is OBSERVED_SET_UNKNOWN
 
 
 class TestResolveObservedSetAC6EmptyVsUnknownNeverConflated:
@@ -2220,6 +2289,74 @@ class TestResolveObservedSetForEventAC6cEventMarkerMapping:
         assert resolved_e3 == marker2["observed_set"], "event after both markers must map to the SECOND"
 
 
+class TestMarkerSelectionTiebreaksOnIdNotLinePosition:
+    """A git text-merge can leave two markers at one ``sequence`` and can
+    reorder lines without reordering applies, so marker selection must be
+    total on ``(sequence, id)`` rather than resolving to whichever duplicate
+    the shard happens to list first.
+
+    Spec backlink: cross-repo/inbox/2026-08-18-example-cockpit-repo-em-tmrg-03-
+    ordering-contract-and-prefix-closure-ownership.md § (e).
+    """
+
+    @staticmethod
+    def _shard_with_markers_in_order(repo, low_first: bool) -> tuple[dict, dict, dict]:
+        _write_shard(
+            repo,
+            "peer-a",
+            [{**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"}],
+        )
+        _write_shard(
+            repo,
+            "peer-b",
+            [{**_event("peer-evt-b1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-b"}],
+        )
+
+        low_marker = {
+            "id": "machine-a-fold-aaaaaaaaaaaaaaaa",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 5,
+            "observed_at": "2026-01-01T00:00:05Z",
+            "applied_at": None,
+            "observed_set": {
+                "peer-a": {"sequence": 1, "prefix_digest": ts._prefix_digest(["peer-evt-1"])}
+            },
+        }
+        high_marker = {
+            **low_marker,
+            "id": "machine-a-fold-zzzzzzzzzzzzzzzz",
+            "observed_set": {
+                "peer-b": {"sequence": 1, "prefix_digest": ts._prefix_digest(["peer-evt-b1"])}
+            },
+        }
+        ordered = [low_marker, high_marker] if low_first else [high_marker, low_marker]
+        event = {
+            **_event("a-evt-later", "2026-01-01T00:00:06Z", applied_at="2026-01-01T00:00:06Z"),
+            "machine": "machine-a",
+            "sequence": 6,
+        }
+        _write_shard(repo, "machine-a", [*ordered, event])
+        return low_marker, high_marker, event
+
+    def test_duplicate_sequence_markers_resolve_to_the_higher_id(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        _low, high_marker, event = self._shard_with_markers_in_order(repo, low_first=True)
+
+        assert resolve_observed_set_for_event(event, repo_root=repo) == high_marker["observed_set"]
+
+    def test_selection_is_independent_of_line_order(self, tmp_path):
+        repo_a = _make_git_repo(tmp_path / "repo-a")
+        repo_b = _make_git_repo(tmp_path / "repo-b")
+        _l1, high_marker, event_a = self._shard_with_markers_in_order(repo_a, low_first=True)
+        _l2, _h2, event_b = self._shard_with_markers_in_order(repo_b, low_first=False)
+
+        resolved_a = resolve_observed_set_for_event(event_a, repo_root=repo_a)
+        resolved_b = resolve_observed_set_for_event(event_b, repo_root=repo_b)
+
+        assert resolved_a == resolved_b == high_marker["observed_set"]
+
+
 class TestResolveObservedSetMalformedMarkerRaises:
     def test_missing_observed_set_field_raises_trackerstoreerror(self, tmp_path):
         repo = _make_git_repo(tmp_path / "repo")
@@ -2273,6 +2410,285 @@ class TestResolveObservedSetHappyPath:
         resolved = resolve_observed_set(marker, repo_root=repo)
         assert resolved == marker["observed_set"]
         assert resolved is not OBSERVED_SET_UNKNOWN
+        assert resolved is not marker["observed_set"], (
+            "the all-concrete return must be a fresh dict, never the "
+            "marker's own observed_set object by reference"
+        )
+
+
+class TestResolveObservedSetWellFormedness:
+    def test_gapped_prefix_with_matching_digest_resolves_unknown(self, tmp_path):
+        # AC1i — cockpit's A12 well-formedness predicate: sequences 1, 2, 4
+        # (a hole at 3) with a marker claiming sequence 4 whose prefix_digest
+        # matches the recomputed digest over ids [1, 2, 4] exactly. Before
+        # C1a, the digest check alone was sufficient to return concrete —
+        # this is the regression guard that a hole is caught even when the
+        # digest recomputes identical.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "peer-a",
+            [
+                {**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"},
+                {**_event("peer-evt-2", "2026-01-01T00:00:01Z"), "sequence": 2, "machine": "peer-a"},
+                {**_event("peer-evt-4", "2026-01-01T00:00:03Z"), "sequence": 4, "machine": "peer-a"},
+            ],
+        )
+        digest = ts._prefix_digest(["peer-evt-1", "peer-evt-2", "peer-evt-4"])
+        marker = {
+            "id": "this-machine-fold-abc123",
+            "kind": "observed_set_fold",
+            "observed_at": "2026-01-01T00:00:05Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 4, "prefix_digest": digest}},
+        }
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+
+        assert resolved == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
+
+    def test_duplicate_at_tail_claim_at_duplicated_value_resolves_unknown(self, tmp_path):
+        # cockpit's "duplicate-at-tail" conformance vector: shard sequences
+        # [1, 2, 3, 3] — the git text-merge shape, two branches each
+        # appending sequence = tail + 1 from their own tail. first_defect is
+        # file position 4, but resolves_unknown_from is 3 (the DUPLICATED
+        # VALUE, not the position) — a claim of 3 is already unresolvable.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "peer-a",
+            [
+                {**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"},
+                {**_event("peer-evt-2", "2026-01-01T00:00:01Z"), "sequence": 2, "machine": "peer-a"},
+                {**_event("peer-evt-3a", "2026-01-01T00:00:02Z"), "sequence": 3, "machine": "peer-a"},
+                {**_event("peer-evt-3b", "2026-01-01T00:00:03Z"), "sequence": 3, "machine": "peer-a"},
+            ],
+        )
+        digest = ts._prefix_digest(["peer-evt-1", "peer-evt-2", "peer-evt-3a", "peer-evt-3b"])
+        marker = {
+            "id": "this-machine-fold-def456",
+            "kind": "observed_set_fold",
+            "observed_at": "2026-01-01T00:00:05Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 3, "prefix_digest": digest}},
+        }
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+
+        assert resolved == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
+
+    def test_duplicate_at_tail_claim_below_defect_resolves_concrete(self, tmp_path):
+        # Point-of-failure scope (A12 item 3): the SAME defective shard as
+        # above, but a claim of 2 — strictly below resolves_unknown_from (3)
+        # — must still resolve concretely. A shard that goes bad late must
+        # not retroactively invalidate its own good prefix.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "peer-a",
+            [
+                {**_event("peer-evt-1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"},
+                {**_event("peer-evt-2", "2026-01-01T00:00:01Z"), "sequence": 2, "machine": "peer-a"},
+                {**_event("peer-evt-3a", "2026-01-01T00:00:02Z"), "sequence": 3, "machine": "peer-a"},
+                {**_event("peer-evt-3b", "2026-01-01T00:00:03Z"), "sequence": 3, "machine": "peer-a"},
+            ],
+        )
+        digest = ts._prefix_digest(["peer-evt-1", "peer-evt-2"])
+        marker = {
+            "id": "this-machine-fold-def456",
+            "kind": "observed_set_fold",
+            "observed_at": "2026-01-01T00:00:05Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 2, "prefix_digest": digest}},
+        }
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+
+        assert resolved == marker["observed_set"]
+        assert resolved is not OBSERVED_SET_UNKNOWN
+
+    def test_out_of_file_order_resolves_unknown(self, tmp_path):
+        # cockpit's "out-of-file-order" conformance vector: the SET
+        # {1, 2, 3, 4} is contiguous, but the shard's FILE order is
+        # [1, 3, 2, 4] — exactly what a git text-merge produces (bytes
+        # reordered without applies being reordered). A validator that
+        # sorts before checking passes this and is wrong; the predicate
+        # reads shard order as given. first_defect/resolves_unknown_from
+        # are both 2 for this vector, so a claim of 2 must resolve unknown.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "peer-a",
+            [
+                {**_event("peer-evt-seq1", "2026-01-01T00:00:00Z"), "sequence": 1, "machine": "peer-a"},
+                {**_event("peer-evt-seq3", "2026-01-01T00:00:01Z"), "sequence": 3, "machine": "peer-a"},
+                {**_event("peer-evt-seq2", "2026-01-01T00:00:02Z"), "sequence": 2, "machine": "peer-a"},
+                {**_event("peer-evt-seq4", "2026-01-01T00:00:03Z"), "sequence": 4, "machine": "peer-a"},
+            ],
+        )
+        digest = ts._prefix_digest(["peer-evt-seq1", "peer-evt-seq2"])
+        marker = {
+            "id": "this-machine-fold-ghi789",
+            "kind": "observed_set_fold",
+            "observed_at": "2026-01-01T00:00:05Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 2, "prefix_digest": digest}},
+        }
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+
+        assert resolved == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
+
+
+class TestResolveObservedSetForEventPointOfFailureScope:
+    """tmrg-03 C2b — AC2a, point-of-failure scope on the PER-EVENT path
+    (cockpit's § VALIDATOR CONTRACT (A12) item 3), proven through
+    ``resolve_observed_set_for_event`` itself rather than through
+    ``resolve_observed_set`` directly. A test that only exercises
+    ``resolve_observed_set`` does not prove ``resolve_observed_set_for_event``'s
+    own marker-selection step preserves the scoping — this class walks the
+    actual event path: two distinct own-machine events selecting two
+    distinct markers, each with a distinct claim against the SAME
+    defective peer shard.
+
+    Mirrors cockpit's ``defect-late-in-long-shard`` conformance vector:
+    peer-a sequences ``[1..12, 14]`` (13 is missing) — ``first_defect`` and
+    ``resolves_unknown_from`` are both 13.
+
+    Spec backlink: docs/plans/2026-08-18-tmrg-03-ordering-contract-in-
+    tracker-store.md § C2b; docs/plans/2026-07-28-sat-01b-observed-set-fold-
+    actuator.md § Design, "The event→marker mapping".
+    """
+
+    @staticmethod
+    def _peer_ids_and_shard(repo) -> list[str]:
+        peer_ids = [f"peer-evt-{i}" for i in range(1, 13)] + ["peer-evt-14"]
+        records = [
+            {**_event(peer_ids[i], f"2026-01-01T00:00:{i:02d}Z"), "sequence": i + 1, "machine": "peer-a"}
+            for i in range(12)
+        ]
+        records.append(
+            {**_event("peer-evt-14", "2026-01-01T00:00:13Z"), "sequence": 14, "machine": "peer-a"}
+        )
+        _write_shard(repo, "peer-a", records)
+        return peer_ids
+
+    def test_claim_strictly_below_defect_resolves_concrete_via_event_path(self, tmp_path):
+        # A marker claiming sequence 12 — the last good position, one below
+        # resolves_unknown_from (13) — must resolve concretely for the
+        # event that maps to it. This is the assertion that actually
+        # discriminates point-of-failure scope from the whole-marker
+        # collapse the plan warns a weaker test would pass.
+        repo = _make_git_repo(tmp_path / "repo")
+        peer_ids = self._peer_ids_and_shard(repo)
+
+        good_digest = ts._prefix_digest(peer_ids[:12])
+        marker_low = {
+            "id": "machine-a-fold-low",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:20Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 12, "prefix_digest": good_digest}},
+        }
+        event_low = {
+            **_event("a-evt-low", "2026-01-01T00:00:21Z"),
+            "machine": "machine-a",
+            "sequence": 2,
+        }
+        _write_shard(repo, "machine-a", [marker_low, event_low])
+
+        resolved = resolve_observed_set_for_event(event_low, repo_root=repo)
+
+        assert resolved == {"peer-a": {"sequence": 12, "prefix_digest": good_digest}}
+        assert resolved["peer-a"] is not OBSERVED_SET_UNKNOWN
+
+    def test_claim_at_defect_resolves_unknown_via_event_path(self, tmp_path):
+        # A marker claiming sequence 13 — AT resolves_unknown_from — must
+        # resolve unknown for the event that maps to it, on the SAME
+        # defective peer shard as the concrete case above.
+        repo = _make_git_repo(tmp_path / "repo")
+        self._peer_ids_and_shard(repo)
+
+        # The digest is irrelevant here — well-formedness fails before the
+        # digest recompute is even compared — but it is computed honestly
+        # (over the 12 ids with sequence <= 13) rather than left deliberately
+        # wrong, so this test cannot be accused of forcing unknown via a
+        # digest mismatch instead of via the well-formedness gate.
+        claim_digest = ts._prefix_digest([f"peer-evt-{i}" for i in range(1, 13)])
+        marker_high = {
+            "id": "machine-a-fold-high",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:20Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 13, "prefix_digest": claim_digest}},
+        }
+        event_high = {
+            **_event("a-evt-high", "2026-01-01T00:00:21Z"),
+            "machine": "machine-a",
+            "sequence": 2,
+        }
+        _write_shard(repo, "machine-a", [marker_high, event_high])
+
+        resolved = resolve_observed_set_for_event(event_high, repo_root=repo)
+
+        assert resolved == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved["peer-a"] is OBSERVED_SET_UNKNOWN
+
+    def test_two_events_same_defective_peer_scope_independently(self, tmp_path):
+        # Both claims, both events, one shard, one test: two own-machine
+        # events select two DIFFERENT markers (by sequence position) against
+        # the SAME defective peer-a shard, and resolve oppositely per the
+        # claim each marker carries — the clearest demonstration that scope
+        # is per-claim, not per-shard.
+        repo = _make_git_repo(tmp_path / "repo")
+        peer_ids = self._peer_ids_and_shard(repo)
+
+        low_digest = ts._prefix_digest(peer_ids[:12])
+        marker_low = {
+            "id": "machine-a-fold-low",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 1,
+            "observed_at": "2026-01-01T00:00:20Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 12, "prefix_digest": low_digest}},
+        }
+        event_low = {
+            **_event("a-evt-low", "2026-01-01T00:00:21Z"),
+            "machine": "machine-a",
+            "sequence": 2,
+        }
+        high_digest = ts._prefix_digest(peer_ids)
+        marker_high = {
+            "id": "machine-a-fold-high",
+            "kind": "observed_set_fold",
+            "machine": "machine-a",
+            "sequence": 3,
+            "observed_at": "2026-01-01T00:00:22Z",
+            "applied_at": None,
+            "observed_set": {"peer-a": {"sequence": 14, "prefix_digest": high_digest}},
+        }
+        event_high = {
+            **_event("a-evt-high", "2026-01-01T00:00:23Z"),
+            "machine": "machine-a",
+            "sequence": 4,
+        }
+        _write_shard(repo, "machine-a", [marker_low, event_low, marker_high, event_high])
+
+        resolved_low = resolve_observed_set_for_event(event_low, repo_root=repo)
+        resolved_high = resolve_observed_set_for_event(event_high, repo_root=repo)
+
+        assert resolved_low == {"peer-a": {"sequence": 12, "prefix_digest": low_digest}}
+        assert resolved_low["peer-a"] is not OBSERVED_SET_UNKNOWN
+        assert resolved_high == {"peer-a": OBSERVED_SET_UNKNOWN}
+        assert resolved_high["peer-a"] is OBSERVED_SET_UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -2456,10 +2872,11 @@ class TestFoldObservedSetAC7EndToEndRevertProperty:
         )
 
         resolved_after = resolve_observed_set(marker, repo_root=repo)
-        assert resolved_after is OBSERVED_SET_UNKNOWN, (
+        assert resolved_after == {"peer-a": OBSERVED_SET_UNKNOWN}, (
             "a marker whose claimed peer bytes were reverted must resolve to "
             "unknown even though the marker record itself survives untouched"
         )
+        assert resolved_after["peer-a"] is OBSERVED_SET_UNKNOWN
 
 
 # ---------------------------------------------------------------------------

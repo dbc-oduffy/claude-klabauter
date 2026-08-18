@@ -9,24 +9,25 @@ read-only `brief()` preview (which calls the same builders `apply()` does)
 before the gate ever ran, and caches a WARN/FAIL result as done. This file
 now asserts the FIXED contract:
 
-  - The builders (`build_review_brightline_gate_directive`,
-    `build_chain_coverage_gate_directive`) are READ-ONLY at build time: a
-    `gate_memo_hit` lookup only, never a write, regardless of how many
-    times they are called.
+  - The builder (`build_review_brightline_gate_directive`) is READ-ONLY at
+    build time: a `gate_memo_hit` lookup only, never a write, regardless of
+    how many times it is called.
   - The write happens exactly once, from `directives_review.
     record_gate_verdict_if_passed` — the function `apply.py::
     _execute_directives` calls after a directive actually dispatched this
-    pass, verdict-aware:
-      * the brightline gate records only on a resolved-range (3-arg) call
-        that exited 0 — never the symbolic-default (2-arg) shape, which can
-        go stale without the key changing (see that function's own
-        docstring for why).
-      * the coverage gate records only on exit 0 AND a stdout NOT carrying
-        `VERDICT=WARN` — a WARN is an offer, never a confirmed pass.
+    pass, verdict-aware: the brightline gate records only on a
+    resolved-range (3-arg) call that exited 0 — never the symbolic-default
+    (2-arg) shape, which can go stale without the key changing (see that
+    function's own docstring for why).
   - `apply.py::_execute_directives` end-to-end: unchanged inputs after a
     confirmed PASS skip the gate's dispatch entirely on the next pass; a
-    changed input re-fires it; a WARN/FAIL verdict leaves no memo and does
-    NOT skip the next pass.
+    changed input re-fires it.
+
+The chain-end coverage gate (`build_chain_coverage_gate_directive`,
+`d-coverage-gate` memo recording, `_coverage_directive`) was removed by
+K-001 (state/kill-ledger.md) — every test that exercised it here is
+retired along with it; see that commit (55e64be13) for the removal
+evidence.
 
 Run scoped only:
     python3 -m pytest coordinator_core/workstream_complete/test_directives_review_gate_memo.py -q
@@ -43,7 +44,6 @@ import pytest
 from coordinator_core.workstream_complete import apply as ws_apply
 from coordinator_core.workstream_complete import build_write_trail_directives
 from coordinator_core.workstream_complete.directives_review import (
-    build_chain_coverage_gate_directive,
     build_review_brightline_gate_directive,
     gate_memo_hit,
     record_gate_memo,
@@ -54,35 +54,6 @@ from coordinator_core.workstream_complete.directives_review import (
 # ---------------------------------------------------------------------------
 # Builders are read-only at build time — never write, regardless of repeats.
 # ---------------------------------------------------------------------------
-
-
-def test_coverage_gate_directive_omits_repo_root_stays_byte_identical(tmp_path: Path) -> None:
-    d1 = build_chain_coverage_gate_directive("state/handoffs/2026-08-10-x.md")
-    d2 = build_chain_coverage_gate_directive("state/handoffs/2026-08-10-x.md")
-    assert d1 == d2
-    assert d1["already_satisfied"] is False
-
-
-def test_coverage_gate_directive_build_alone_never_writes_a_memo(tmp_path: Path) -> None:
-    """A read-only `brief()` preview (or any repeated build call) must
-    record nothing — the C4 retry #1/#2 defect this file exists to catch."""
-    handoff = "state/handoffs/2026-08-10-x.md"
-    for _ in range(3):
-        directive = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-        assert directive["already_satisfied"] is False
-    memo_dir = tmp_path / "state" / "ceremony" / "wsc-gate-verdict-memo"
-    assert not memo_dir.exists() or list(memo_dir.iterdir()) == []
-
-
-def test_coverage_gate_directive_build_sees_an_execution_time_hit(tmp_path: Path) -> None:
-    handoff = "state/handoffs/2026-08-10-x.md"
-    assert build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)["already_satisfied"] is False
-    # Simulate what `record_gate_verdict_if_passed` does after a real
-    # execution-time PASS — the builder itself never calls this.
-    record_gate_memo(tmp_path, "d-run-chain-coverage-gate", handoff)
-    directive = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-    assert directive["already_satisfied"] is True
-    assert directive["cli"] == "wsc-coverage-gate-runner"
 
 
 def test_brightline_gate_directive_build_alone_never_writes_a_memo(tmp_path: Path) -> None:
@@ -177,14 +148,6 @@ def _brightline_directive(args: list[str]) -> dict[str, Any]:
     return {"id": "d-run-review-brightline-gate", "cli": "review-brightline-gate", "args": args}
 
 
-def _coverage_directive(consumed_handoff: str) -> dict[str, Any]:
-    return {
-        "id": "d-coverage-gate",
-        "cli": "wsc-coverage-gate-runner",
-        "args": ["coverage-gate", "--from-handoff", consumed_handoff],
-    }
-
-
 #: Review-integrator (Finding 1, 2026-08-11): `record_gate_verdict_if_passed`
 #: now requires BOTH range halves to be concrete 40-hex-digit object ids
 #: (never a bare/abbreviated ref) before it memoizes a brightline range —
@@ -244,24 +207,6 @@ def test_record_gate_verdict_does_not_record_brightline_on_nonzero_exit(tmp_path
     directive = _brightline_directive(["--session-id", "sid-1", f"{_FLOOR_SHA}..{_TIP_SHA}"])
     record_gate_verdict_if_passed(tmp_path, directive, 1, "")
     assert gate_memo_hit(tmp_path, directive["id"], *directive["args"]) is False
-
-
-def test_record_gate_verdict_records_coverage_gate_on_covered_pass(tmp_path: Path) -> None:
-    directive = _coverage_directive("state/handoffs/2026-08-10-x.md")
-    record_gate_verdict_if_passed(tmp_path, directive, 0, "VERDICT=COVERED")
-    assert gate_memo_hit(tmp_path, directive["id"], "state/handoffs/2026-08-10-x.md") is True
-
-
-def test_record_gate_verdict_never_records_coverage_gate_on_warn(tmp_path: Path) -> None:
-    directive = _coverage_directive("state/handoffs/2026-08-10-x.md")
-    record_gate_verdict_if_passed(tmp_path, directive, 0, "VERDICT=WARN threshold below 0.6")
-    assert gate_memo_hit(tmp_path, directive["id"], "state/handoffs/2026-08-10-x.md") is False
-
-
-def test_record_gate_verdict_never_records_coverage_gate_on_indeterminate_exit(tmp_path: Path) -> None:
-    directive = _coverage_directive("state/handoffs/2026-08-10-x.md")
-    record_gate_verdict_if_passed(tmp_path, directive, 2, "")
-    assert gate_memo_hit(tmp_path, directive["id"], "state/handoffs/2026-08-10-x.md") is False
 
 
 def test_record_gate_verdict_is_a_noop_for_unrelated_directive_ids(tmp_path: Path) -> None:
@@ -370,85 +315,6 @@ def test_execute_directives_symbolic_tip_re_dispatches_every_pass(
     assert directive_2["already_satisfied"] is False  # never memoized -- symbolic tip
     ws_apply._execute_directives([directive_2], [], {}, repo_root=tmp_path)
     assert dispatch_count["n"] == 2  # re-fired, not skipped
-
-
-def test_execute_directives_changed_input_re_fires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    dispatch_count = {"n": 0}
-
-    def gate_main(argv: list[str]) -> int:
-        dispatch_count["n"] += 1
-        return 0
-
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: _fake_module(gate_main))
-
-    d1 = _coverage_directive("state/handoffs/2026-08-10-a.md")
-    ws_apply._execute_directives([d1], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 1
-
-    d2 = build_chain_coverage_gate_directive("state/handoffs/2026-08-10-b.md", repo_root=tmp_path)
-    assert d2["already_satisfied"] is False
-    ws_apply._execute_directives([d2], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 2
-
-
-def test_execute_directives_warn_verdict_leaves_no_memo_and_does_not_skip_next_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    dispatch_count = {"n": 0}
-
-    def gate_main(argv: list[str]) -> int:
-        dispatch_count["n"] += 1
-        print("VERDICT=WARN threshold below 0.6")
-        return 0
-
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: _fake_module(gate_main))
-
-    handoff = "state/handoffs/2026-08-10-x.md"
-    d1 = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-    assert d1["already_satisfied"] is False
-    ws_apply._execute_directives([d1], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 1
-
-    d2 = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-    assert d2["already_satisfied"] is False  # WARN never memoized
-    ws_apply._execute_directives([d2], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 2  # re-fired, not skipped
-
-
-def test_execute_directives_failed_verdict_leaves_no_memo_and_does_not_skip_next_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    dispatch_count = {"n": 0}
-
-    def gate_main(argv: list[str]) -> int:
-        dispatch_count["n"] += 1
-        return 2  # INDETERMINATE
-
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: _fake_module(gate_main))
-
-    handoff = "state/handoffs/2026-08-10-x.md"
-    d1 = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-    ws_apply._execute_directives([d1], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 1
-
-    d2 = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-    assert d2["already_satisfied"] is False
-    ws_apply._execute_directives([d2], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 2
-
-
-def test_read_only_preview_build_records_nothing(tmp_path: Path) -> None:
-    """A `brief()`-shaped read-only preview call — builder invoked with
-    `repo_root` but no execution ever happening — must never poison the
-    memo. This is the exact C4 retry #1/#2 regression: build-time
-    unconditional recording would have made this preview's SECOND call
-    already_satisfied=True despite the gate never having run once."""
-    handoff = "state/handoffs/2026-08-10-x.md"
-    for _ in range(5):
-        preview = build_chain_coverage_gate_directive(handoff, repo_root=tmp_path)
-        assert preview["already_satisfied"] is False
-    preview = build_review_brightline_gate_directive("sid-1", repo_root=tmp_path)
-    assert preview["already_satisfied"] is False
 
 
 # ---------------------------------------------------------------------------

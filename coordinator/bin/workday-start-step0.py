@@ -500,7 +500,13 @@ def main(argv: list[str]) -> int:
     except SuffixCollisionError as exc:
         _err(f"ERROR: {exc}")
         return 1
-    if ensure.result == "FRESH-CUT":
+    if ensure.result in ("FRESH-CUT", "ADOPTED-EXISTING", "INHERITED"):
+        # ADOPTED-EXISTING (today's branch already existed and HEAD was at its
+        # tip) and INHERITED (another session won the cut lock) are the same
+        # settled-on-a-day-branch terminal as FRESH-CUT: the invariant HOLDS.
+        # They are deliberately NOT folded into REFUSED-LIVE-PEERS, which
+        # reports the opposite state -- see session_ensure_branch's negative
+        # spec on the result vocabulary.
         return _exec_reconcile()
     if ensure.result == "REFUSED-LIVE-PEERS":
         # Settled-on-this-branch terminal, same shape as FRESH-CUT and

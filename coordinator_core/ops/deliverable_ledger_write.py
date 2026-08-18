@@ -246,7 +246,7 @@ def _restore_original_content(
     preservation, then reset the ledger memo so a subsequent read sees the restored
     (not the failed-write) bytes."""
     restore_tmp_path = f"{artifact_path}.ledger-write.restore.{os.getpid()}"
-    with open(restore_tmp_path, "w", encoding="utf-8") as fh:
+    with open(restore_tmp_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(original_content)
     if orig_mode is not None:
         try:
@@ -452,7 +452,7 @@ def upsert_deliverable_ledger_rows(
             )
 
         tmp_path = f"{artifact_path}.ledger-write.tmp.{os.getpid()}"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
+        with open(tmp_path, "w", encoding="utf-8", newline="") as fh:
             fh.writelines(header_lines)
             fh.writelines(ledger_lines)
             fh.writelines(footer_lines)

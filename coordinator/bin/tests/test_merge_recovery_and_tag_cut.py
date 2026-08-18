@@ -204,7 +204,7 @@ def test_refused_verdict_blocks_all_mutation(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(
         _mod,
         "_branch_mutation_verdict",
-        lambda: (lambda cwd=None: _FakeVerdict(
+        lambda: (lambda cwd=None, **kw: _FakeVerdict(
             "refused", "1 live peer session(s): abc123 (on main)"
         )),
     )
@@ -228,7 +228,7 @@ def test_unknown_verdict_treated_same_as_refused(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(
         _mod,
         "_branch_mutation_verdict",
-        lambda: (lambda cwd=None: _FakeVerdict(
+        lambda: (lambda cwd=None, **kw: _FakeVerdict(
             "unknown", "cannot resolve live-session set"
         )),
     )
@@ -248,7 +248,7 @@ def test_ok_verdict_still_runs_recovery_dance(tmp_path: Path, monkeypatch, capsy
     monkeypatch.setattr(
         _mod,
         "_branch_mutation_verdict",
-        lambda: (lambda cwd=None: _FakeVerdict("ok", "no live peer sessions")),
+        lambda: (lambda cwd=None, **kw: _FakeVerdict("ok", "no live peer sessions")),
     )
 
     rc = cmd_recovery_branch(_Args(work))

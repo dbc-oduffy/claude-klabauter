@@ -7,9 +7,11 @@ Port source: coordinator/scripts/lib/manifest_reader.sh [DoE-claude repo]
 (bash lib is SOURCED by coordinator/scripts/lib/dep_check.sh — it stays in
 place; this module is a parallel Python-native implementation for
 Python-side consumers, NOT a trampoline over the bash file.
-manifest_reader.sh is additionally vendored BYTE-STABLE by
-Example-retrieval-repo-ue-addon and deep-research as part of the prereq_probe.sh
-self-sourcing unit — this port does not touch that vendored surface.)
+Example-retrieval-repo-ue-addon vendors THIS module (not the bash) since its
+2026-07-28 de-bash re-vendor — see that repo's
+example_retrieval_repo_ue_addon_scripts/lib/coordinator_prereq/VENDOR.md, which pins
+a SHA of this file; changing this module's Step Zero contract obligates a
+cross-repo memo so they can re-pin.)
 
 Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase-b.md §7 C3
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md

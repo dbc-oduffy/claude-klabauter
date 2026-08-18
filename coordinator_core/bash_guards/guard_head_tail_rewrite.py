@@ -382,12 +382,22 @@ def _check_head_tail_plumbing_powershell(
     (`_bt_select_object_first_last`, keyed on `Select-Object -First`/
     `-Last` rather than a `head`/`tail` binary choice).
 
-    There is no PowerShell-dialect `_shape_classifier.classify_command` this
-    module can call (out of scope for this cohort -- see docs/reference/
-    guard-dialect-coverage.md row 9's note that the shape-classifier wiring
-    is a separate concern) -- this function re-derives just the ONE gate it
-    needs locally (does any segment pipe into a `Select-Object -First`/
-    `-Last` invocation at all) rather than widen `_shape_classifier.py`.
+    STALE CLAIM CORRECTED (C3, pln-the-shape-classifier-reaches-a-e743e5):
+    this docstring used to say "there is no PowerShell-dialect
+    `_shape_classifier.classify_command` this module can call" -- C2 of that
+    plan made that sentence false; the classifier's POWERSHELL table now
+    exists. It remains correct that this function does NOT call it: D3 (that
+    plan's own negative spec) rules an in-process cmdlet like `Select-Object
+    -First N` is never a classifier shape MEMBER -- it forks nothing on its
+    own, so `_shape_classifier`'s POWERSHELL table carries no HEAD_TAIL_
+    PLUMBING entry keyed on it (that shape's classifier detector is the
+    bash-native `head`/`tail`-binary predicate, reused unchanged, which a
+    `Select-Object` cmdlet never matches). This function's own `Select-Object
+    -First`/`-Last` recognition is therefore a guard-level concern, not a
+    classifier one -- re-deriving just the ONE gate it needs locally (does
+    any segment pipe into a `Select-Object -First`/`-Last` invocation at
+    all) is correct on its own terms, not a workaround for a capability gap
+    that no longer exists.
     Returns bare `None` (a genuine clean, not a decline) for any PowerShell
     command that never pipes into `Select-Object`/`select` at all.
     """
@@ -531,6 +541,42 @@ def check_head_tail_plumbing_rewrite(
     `head`/`tail` count is one of `_bt_head_tail_count`'s recognized forms.
     Advises with a skeleton, unchanged command, when any stage is not.
     Never denies -- see this section's module comment.
+
+    AC16 CALLEE-GRAPH AUDIT (C6, pln-the-shape-classifier-reaches-a-e743e5):
+    this function's own `dialect` gate below (`if dialect is Dialect.
+    POWERSHELL`) already dispatches correctly -- the risk C6 exists to close
+    is a CALLER that reaches PowerShell text down to this function's BASH-
+    default branch without ever passing `dialect=Dialect.POWERSHELL`. Audited
+    both live call sites at the time `guard_multiprobe_banner.py` and
+    `guard_plumbing_and_loops.py` had their own `MATCHERS` widened in this
+    same change:
+
+      - `guard_plumbing_and_loops.py` -- SAFE. `check()`'s own
+        `if dialect is _dialect.Dialect.POWERSHELL: return _verdict_
+        powershell(...)` runs BEFORE either of its two calls into this
+        function (`_verdict_head_tail` -> here with no `dialect=`, only
+        reachable once `check()` has already ruled out POWERSHELL;
+        `_verdict_powershell` -> here WITH `dialect=Dialect.POWERSHELL`
+        explicitly). Neither call site can hand this function PowerShell
+        text on the BASH-default branch.
+      - `guard_multiprobe_banner.py` -- was NOT safe (its own seam call,
+        `check_multiprobe_banner_rewrite` in `dispatch_checks.py`, has the
+        identical bash-default shape as this function but no `dialect=`
+        parameter at all to gate with) -- fixed in this same change by
+        gating that call to `Dialect.BASH` at the call site instead (see
+        that module's `_POWERSHELL_BANNER_GENERIC_SUMMARY` comment).
+
+    This function's own BASH-default (`dialect=None` behaves identically to
+    `dialect=Dialect.BASH`) is D1's contract, not a gap: "a caller not
+    participating in dialect routing passes nothing [and] gets `Dialect.
+    BASH` -- today's behaviour exactly." The dispatch.py `"head-tail-
+    plumbing-rewrite"` chain entry (a SEPARATE registration from either
+    guard above, out of this chunk's write scope) calls this function with
+    no `dialect=` too, but its own `matchers=("Bash",)` is a literal in
+    `dispatch.py`, not sourced from this module -- that entry cannot reach
+    this function on a PowerShell payload regardless of anything this file
+    declares, so no module-level `MATCHERS` is added here (there is no
+    consumer that would read it).
     """
     if not cmd:
         return None

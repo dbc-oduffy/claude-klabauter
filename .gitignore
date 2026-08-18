@@ -39,8 +39,12 @@ Saved/
 # (`percolate-round.py::_reconcile_dest_discard`, `git reset --hard HEAD`
 # then `git clean -fd`, no `-x`) an ignored path survives that reconcile, so
 # ignoring it here is what keeps a provisioned environment from being
-# destroyed by the standard dirty-dest recovery path.
+# destroyed by the standard dirty-dest recovery path. `.fleet-env.prior/` is
+# the rollback copy left by a fleet-env migration in flight -- same class,
+# same remedy, and NOT covered by the `.fleet-env/` entry above (sibling
+# directory, not a sub-path) -- so it needs the same explicit ignore.
 .fleet-env/
+.fleet-env.prior/
 
 # --- Editor / OS detritus ---
 *.bak

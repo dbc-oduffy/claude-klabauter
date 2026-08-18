@@ -90,6 +90,10 @@ from coordinator_core.ceremony_common.apply_halt import (
     _directive_gate_open,
     build_ceremony_halt_exit_codes,
 )
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
     classify_cli_exit,
@@ -504,8 +508,9 @@ def apply(
 
 
 def main(argv: list[str]) -> int:
-    """`main()`'s `apply` dispatch arm — `--decisions <json>`, `--for-date
-    <date>`, and `--only` are the supported flags, mirroring
+    """`main()`'s `apply` dispatch arm — `--decisions <json>` (or its
+    file-borne sibling `--decisions-file <path>`), `--for-date <date>`, and
+    `--only` are the supported flags, mirroring
     `brief.main`'s own `--for-date`/`--only` spelling (this module keeps
     its existing hand-rolled token loop rather than switching to
     `brief.main`'s argparse, matching this file's established style).
@@ -517,19 +522,19 @@ def main(argv: list[str]) -> int:
     decisions: Optional[dict[str, Any]] = None
     for_date: Optional[str] = None
     only_mode = False
+    conflict = detect_conflicting_payload_channels(argv)
+    if conflict is not None:
+        print(f"workday-complete-apply: {conflict}", file=sys.stderr)
+        return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "--decisions":
-            if i + 1 >= len(argv):
-                print("workday-complete-apply: --decisions requires a value", file=sys.stderr)
+        if (payload := resolve_json_payload_flag(argv, i)).consumed:
+            if payload.error is not None:
+                print(f"workday-complete-apply: {payload.error}", file=sys.stderr)
                 return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
-            try:
-                decisions = json.loads(argv[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"workday-complete-apply: malformed --decisions JSON: {exc}", file=sys.stderr)
-                return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         elif tok == "--for-date":
             if i + 1 >= len(argv):
                 print("workday-complete-apply: --for-date requires a value", file=sys.stderr)

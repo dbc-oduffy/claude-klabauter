@@ -472,9 +472,11 @@ def _sweep_orphaned_swap_dirs(env_root: Path) -> None:
     else is concurrently populating its own `.build-*` sibling of THIS
     environment right now. Never raises — a sweep failure must not block the
     rebuild it is merely tidying up after. Same reasoning as
-    `ensure_venv._sweep_orphaned_swap_dirs`: every `.stale-*` match already
-    failed the health probe that triggered its own rebuild, so there is no
-    "still-good" tree here to lose."""
+    `uninstall_legs._sweep_orphaned_swap_dirs` (relocated there from
+    `ensure_venv` — docs/plans/2026-08-18-retire-coordinator-venv.md chunk
+    C3): every `.stale-*` match already failed the health probe that
+    triggered its own rebuild, so there is no "still-good" tree here to
+    lose."""
     parent = env_root.parent
     build_prefix = f"{env_root.name}.build-"
     stale_prefix = f"{env_root.name}.stale-"

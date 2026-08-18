@@ -777,6 +777,14 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 # that second call names the same target state or a different one. See
 # coordinator_core/test_archive_stamp.py::TestRepairArchivedDeploymentState::
 # test_second_call_after_repair_refuses_self_extinguishing for the assertion.
+#
+# AC13 (2026-08-18) carves ONE narrow exception into this otherwise-
+# unconditional set membership check, inside
+# _repair_archived_deployment_state_handler._mutate (`moving_off_shipped`):
+# `shipped` -> a NON-terminal target is permitted, clearing the shipped-
+# implied provenance triple in the same write. `continued` and `closed`
+# remain unconditionally terminal — this set's membership is unchanged, only
+# one caller's use of it gained a same-write bypass for one specific member.
 _TERMINAL_DEPLOYMENT_STATES = frozenset({"shipped", "continued", "closed"})
 
 # Cross-repo continued_into reference shape (e.g. "claude-klabauter:docs/plans/x.md")
@@ -981,11 +989,42 @@ async def _repair_archived_deployment_state_handler(
                                     ``continued_into_override=True``; None
                                     when the target state is not
                                     ``"continued"`` (field not applicable).
+        provenance_cleared (list[str]) — the subset of
+                                    ``["shipped_in", "advanced_by",
+                                    "advanced_at"]`` actually removed in this
+                                    call (AC13, § off-shipped provenance
+                                    repair below). Always ``[]`` unless this
+                                    call moved the record OFF ``shipped`` to a
+                                    non-terminal target.
         reason       (str)        — echoes the caller-supplied reason, present
                                     on every exit_code 0 response.
         message      (str)        — human-readable outcome description
                                     (exit_code 0 only).
         error        (str)        — human-readable reason (exit_code 1 only).
+
+    § off-shipped provenance repair (AC13, 2026-08-18): the one carve-out in
+    the terminal-lock below. A record whose ``deployment_state`` is
+    ``shipped`` may be repaired to a NON-TERMINAL target
+    (``awaiting_gate``/``ready_to_fire``/``in_flight``) — never to
+    ``continued``/``closed``, and never restated as ``shipped`` (both of
+    those stay refused by the unchanged terminal-lock). This is for the
+    deliverable-cascade co-tenancy defect: a record swept to ``shipped`` only
+    because it happened to sit alongside a DIFFERENT deliverable's real
+    target is lifecycle-correct once un-shipped, but its ``shipped_in``/
+    ``advanced_by``/``advanced_at`` still assert ship evidence and an
+    advancing deliverable that were never true for THIS record. This call
+    clears all three (whichever are present) IN THE SAME WRITE as the
+    ``deployment_state`` flip — never as a separate call to
+    ``_repair_archived_shipped_in_handler`` — because
+    ``schema_validate._cf_shipped_in_required`` fires only while
+    ``deployment_state == "shipped"``: a clear-then-flip sequence persists an
+    intermediate ``shipped`` record with no ``shipped_in`` (invalid) between
+    the two calls, and a flip-then-clear sequence persists an intermediate
+    ``shipped_in``-bearing-but-no-longer-``shipped`` record that only
+    validates by accident of the validator not checking `shipped_in` absent
+    ``deployment_state == "shipped"``. One ``_mutate``/one ``locked_rmw``
+    write means neither intermediate is ever the on-disk state — the caller
+    (C6) never sequences this by hand.
 
     Negative-spec (repair verb, hard-won — mirrors
     ``_repair_archived_shipped_in_handler``'s):
@@ -1004,20 +1043,33 @@ async def _repair_archived_deployment_state_handler(
       - Requires a non-empty ``reason`` on every call.
       - REFUSES (exit_code 1) unless the record's CURRENT on-disk
         ``deployment_state`` is non-terminal (``awaiting_gate``,
-        ``ready_to_fire``, ``in_flight``) or absent. Terminal
-        (``shipped``/``continued``/``closed``) means the record was already
-        validly archived — mutating it is out of this door's reach by
-        design, checked BEFORE the idempotent-no-op comparison so a call
-        that merely restates an already-terminal state also refuses rather
-        than silently succeeding. This is what makes the door
-        self-extinguishing: the only legal transition is
-        non-terminal/absent -> terminal, so a record this door just
-        repaired can never be reached by a second call, same target state
-        or not — see ``_TERMINAL_DEPLOYMENT_STATES``'s docstring.
+        ``ready_to_fire``, ``in_flight``) or absent, OR this is the
+        off-shipped provenance repair (§ above): current state ``shipped``
+        AND the target is non-terminal. Every other terminal case —
+        ``shipped`` restated as ``shipped``, and ``shipped``/``continued``/
+        ``closed`` targeting ``continued``/``closed`` — still refuses exactly
+        as before; the carve-out widens WHERE the door reaches
+        (shipped -> non-terminal), never HOW MANY terminal states remain
+        reachable-by-repair (still only via that one path). Checked BEFORE
+        the idempotent-no-op comparison so a call that merely restates an
+        already-terminal, non-carved-out state also refuses rather than
+        silently succeeding. This keeps the door self-extinguishing for
+        every state but the carve-out: the only legal transitions are
+        non-terminal/absent -> terminal (unchanged) and the new
+        shipped -> non-terminal repair, so a record this door just repaired
+        to a TERMINAL state can never be reached by a second call, same
+        target state or not — see ``_TERMINAL_DEPLOYMENT_STATES``'s
+        docstring. A record repaired OFF shipped lands back in non-terminal
+        territory and is deliberately NOT extinguished — it re-enters normal
+        lifecycle progression (a later legitimate ship advances it again).
       - Does NOT extend archived-record mutability to any other field — only
-        ``deployment_state``, ``continued_into``, and ``closed_reason`` are
-        ever touched. Does NOT extend to any other archived lifecycle verb —
-        ``archive/handoffs/`` remains closed to
+        ``deployment_state``, ``continued_into``, ``closed_reason``, and (on
+        the off-shipped provenance-repair path only) ``shipped_in``/
+        ``advanced_by``/``advanced_at`` are ever touched, and the latter
+        three are only ever CLEARED, never stamped with a caller-supplied
+        value — this door still never resolves ship evidence or an advancing
+        deliverable of its own. Does NOT extend to any other archived
+        lifecycle verb — ``archive/handoffs/`` remains closed to
         ``handoff.transition``/``handoff.stamp``/``handoff.archive_transition``/
         etc. Archival otherwise remains a freeze.
       - Does NOT perform the live-children guard
@@ -1135,6 +1187,7 @@ async def _repair_archived_deployment_state_handler(
 
     _applied = [False]
     _prior_state: list[Optional[str]] = [None]
+    _cleared_provenance: list[list[str]] = [[]]
 
     def _mutate(old_text: str) -> str:
         split = split_frontmatter(old_text)
@@ -1147,28 +1200,49 @@ async def _repair_archived_deployment_state_handler(
         existing_closed_reason = read_fm_field(split.fm_text, "closed_reason")
         _prior_state[0] = existing_state
 
+        # Off-shipped provenance repair (AC13, 2026-08-18): the ONE exception
+        # to the terminal-lock below. `shipped` is the sole terminal state a
+        # co-tenant cascade casualty can carry FALSELY — `advanced_by`
+        # asserts a named deliverable advanced this record, and that
+        # assertion is wrong for every co-tenant swept along by another
+        # spinoff's ship. `continued`/`closed` carry no such falsifiable
+        # claim, so they keep the unconditional terminal-lock; only a
+        # shipped -> NON-TERMINAL target counts as "moving off shipped" —
+        # shipped -> shipped (E1's existing already-terminal refusal) and
+        # shipped -> continued/closed (sideways between two terminal states,
+        # not an undo) are both still refused, unchanged, by the check below.
+        moving_off_shipped = (
+            existing_state == "shipped" and target_state not in _TERMINAL_DEPLOYMENT_STATES
+        )
+
         # Enforced precondition (E1): refuse unless the record's CURRENT
-        # on-disk deployment_state is non-terminal or absent. A terminal
-        # state means this record was already validly archived — mutating it
-        # is the exact harm this door's containment (archive/handoffs/-only)
-        # otherwise stays silent about. Checked before the no-op comparison
-        # below on purpose: a same-target-as-current call against an already-
-        # terminal record must still refuse (exit_code 1), not silently
-        # succeed as a no-op — that refusal is what makes the transition
-        # self-extinguishing (see _TERMINAL_DEPLOYMENT_STATES docstring).
-        if existing_state in _TERMINAL_DEPLOYMENT_STATES:
+        # on-disk deployment_state is non-terminal or absent, UNLESS this is
+        # the off-shipped provenance repair carved out above. A terminal
+        # state otherwise means this record was already validly archived —
+        # mutating it is the exact harm this door's containment
+        # (archive/handoffs/-only) otherwise stays silent about. Checked
+        # before the no-op comparison below on purpose: a same-target-as-
+        # current call against an already-terminal record must still refuse
+        # (exit_code 1), not silently succeed as a no-op — that refusal is
+        # what makes the transition self-extinguishing (see
+        # _TERMINAL_DEPLOYMENT_STATES docstring) for every state but the
+        # carved-out shipped -> non-terminal repair path.
+        if existing_state in _TERMINAL_DEPLOYMENT_STATES and not moving_off_shipped:
             raise MutateAbort(
                 f"refusing repair: {handoff_path_raw} already carries a "
                 f"terminal deployment_state ({existing_state!r}) — this door "
                 "only repairs a record whose current deployment_state is "
                 "non-terminal (awaiting_gate/ready_to_fire/in_flight) or "
-                "absent; a terminal state means the record was already "
-                "validly archived and mutating it is outside this door's "
-                "reach, by design"
+                "absent, OR a 'shipped' record being moved OFF shipped to a "
+                "non-terminal target (provenance repair, AC13); a terminal "
+                "state means the record was already validly archived and "
+                "mutating it is outside this door's reach, by design"
             )
 
         # Byte-identical no-op: requested state (and its companion field,
-        # when applicable) already holds.
+        # when applicable) already holds. Unreachable when moving_off_shipped
+        # is True — that path requires existing_state ("shipped") != target_state
+        # (non-terminal by construction), so the states always differ.
         if (
             existing_state == target_state
             and (target_state != "continued" or existing_continued_into == continued_into)
@@ -1199,6 +1273,33 @@ async def _repair_archived_deployment_state_handler(
                     fm_text, "closed_reason", closed_reason, after_key="deployment_state"
                 )
 
+        # Provenance clear (AC13): moving OFF shipped in this SAME write also
+        # clears the provenance triple the shipped state implied —
+        # `shipped_in` (ship evidence), `advanced_by`/`advanced_at` (which
+        # deliverable advanced this record, and when). All three are false
+        # once the record is known to have shipped only as a co-tenant
+        # casualty of a DIFFERENT deliverable's cascade. Doing this in the
+        # SAME `_mutate` call (one locked_rmw write) rather than a second,
+        # separate call to `_repair_archived_shipped_in_handler` is the whole
+        # point: `_cf_shipped_in_required` fires only WHILE
+        # deployment_state == "shipped", so a caller clearing shipped_in
+        # FIRST (while the on-disk deployment_state still reads "shipped")
+        # would persist a state the validator rejects; a caller flipping
+        # deployment_state first and clearing shipped_in second leaves that
+        # same invalid state on disk for the gap between the two writes. This
+        # handler never persists either intermediate — the flip and the
+        # clear land in one file write — so the ordering question the
+        # validator poses does not arise. See
+        # test_repair_archived_verbs.py for the two-call trap pinned against
+        # `_cf_shipped_in_required` directly.
+        _provenance_cleared: list[str] = []
+        if moving_off_shipped:
+            for _field in ("shipped_in", "advanced_by", "advanced_at"):
+                if read_fm_field(fm_text, _field) is not None:
+                    fm_text = remove_fm_field(fm_text, _field)
+                    _provenance_cleared.append(_field)
+        _cleared_provenance[0] = _provenance_cleared
+
         _applied[0] = True
         return rebuild(split, fm_text)
 
@@ -1226,6 +1327,10 @@ async def _repair_archived_deployment_state_handler(
             f"repaired deployment_state in {handoff_path_raw}: "
             f"{_prior_state[0]!r} -> {target_state!r} — {reason}"
         )
+        if _cleared_provenance[0]:
+            message += (
+                f"; cleared shipped provenance ({', '.join(_cleared_provenance[0])})"
+            )
     else:
         message = (
             f"deployment_state in {handoff_path_raw} already {target_state!r} "
@@ -1238,6 +1343,7 @@ async def _repair_archived_deployment_state_handler(
         "prior_state": _prior_state[0],
         "new_state": target_state,
         "continued_into_verified": continued_into_verified,
+        "provenance_cleared": _cleared_provenance[0],
         "reason": reason,
         "message": message,
     }

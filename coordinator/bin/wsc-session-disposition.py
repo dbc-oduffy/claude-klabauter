@@ -111,7 +111,7 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-import cc_invoke  # noqa: E402
+import cc_invoke  # noqa: E402  # pyright: ignore[reportMissingImports] — added to sys.path at runtime by the _LIB_DIR injection above, not statically resolvable
 
 cc_invoke.ensure_engine_on_path(__file__)
 
@@ -128,11 +128,15 @@ _SESSION_ID_UNRESOLVED = 4
 # ---------------------------------------------------------------------------
 
 
-def resolve_session_id(repo_root: Path) -> str:
+def resolve_session_id(_repo_root: Path) -> str:
     """Resolve the current session id, first hit wins: the em_sid env var, then
     CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID, then a hex-timestamp
     fallback (last 6 digits of the current epoch second, mirroring the
     ported bash's `date +%s | tail -c 7 | head -c 6`).
+
+    `_repo_root` is unused by this env-var-only resolution — kept for call
+    signature conformance with `_cmd_resolve`'s call site and this module's
+    own test suite, both of which pass a repo root positionally.
 
     The `.current-session-id` sentinel tier that used to sit here was
     REMOVED (KS-3, 2026-08-07): unsound under concurrency (documented
@@ -671,6 +675,8 @@ class CrashRecoveryOutcome(tuple):
     per-match kind data already in hand here, not a recomputation of the
     matching logic.)"""
 
+    match_facts: dict[str, Any] | None
+
     def __new__(cls, path: str | None, status: str | None, match_facts: dict[str, Any] | None) -> "CrashRecoveryOutcome":
         self = super().__new__(cls, (path, status))
         self.match_facts = match_facts
@@ -733,7 +739,11 @@ def _resolve_crash_recovery(
         rel_path = baton.handoff_path
         repo_root_str = str(repo_root)
         if baton.handoff_path.startswith(repo_root_str + os.sep):
-            rel_path = baton.handoff_path[len(repo_root_str) + 1 :]
+            # POSIX separators — same wire-id reasoning as the primary scan's
+            # own return above (primary_consumed_handoff_paths); this value
+            # is returned as CrashRecoveryOutcome's path and flows out as
+            # DispositionResolution's consumed-handoff identity.
+            rel_path = Path(baton.handoff_path).relative_to(repo_root).as_posix()
         matched_count = len(baton.matched_scope_entries)
         exact_count = sum(1 for em in baton.matched_scope_entries if em.kind == "exact")
         first = baton.matched_scope_entries[0]
@@ -1111,6 +1121,8 @@ class DispositionResolution(tuple):
         matched, present only on a `deciding_leg == "memo-predecessor"`
         resolution.
     """
+
+    detection: dict[str, Any]
 
     def __new__(
         cls,

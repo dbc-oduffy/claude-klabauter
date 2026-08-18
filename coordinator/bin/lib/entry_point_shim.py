@@ -9,13 +9,13 @@
 # has one) and is REJECTED. Loading the target module in-process and calling
 # its own `main(argv)` — no child process, no second interpreter — was
 # measured at -0.0963 (inside the 46% A/A noise floor, i.e. free). This
-# module is the in-process shape, applied to the 13 `-assemble` entry
+# module is the in-process shape, applied to the 14 `-assemble` entry
 # points; `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py :: exec_cli`
 # already ships the same choice (`runpy.run_path` in-process on Windows,
 # `os.execv` process-replacement on POSIX) for the general forwarder case —
 # that module's docstring documents choosing this over "spawning a second
 # Python interpreter and subprocess.run-ing the target". This module does
-# NOT reinvent that ladder; it is narrower (fixed set of 13 known-shape
+# NOT reinvent that ladder; it is narrower (fixed set of 14 known-shape
 # targets under `coordinator/bin/`, no POSIX execv leg needed because the
 # caller — coordinator-assemble.py — is itself already the single process
 # multiple subcommands share, so there is nothing to replace this process
@@ -47,7 +47,7 @@
 # independent implementations — see § Name-to-callable mapping below.
 # Loading a shim BY PATH (the old `_load_module`/`_target_path` shape) would
 # recurse: the shim's own `main`/module-exec would call back into
-# `run_target` for the same name. So `run_target` now resolves 12 of the 13
+# `run_target` for the same name. So `run_target` now resolves 13 of the 14
 # names directly to an ENGINE module + entry callable (never back through
 # the shim .py file); only `workday-start-inbox-blitz-assemble` — real
 # 496-line logic, not a wrapper, deliberately left unconverted — is still
@@ -72,8 +72,9 @@ from typing import Callable, List
 
 BIN_DIR = Path(__file__).resolve().parent.parent
 
-# The 13 `-assemble` entry points this chunk's dispatcher fans in. Plan's
-# § Problem counting-rule correction: 13 distinct entry points, not 36 —
+# The 14 `-assemble` entry points this chunk's dispatcher fans in. Plan's
+# § Problem counting-rule correction: distinct entry points, not one per
+# launcher suffix —
 # the earlier count double-counted each stem's `.cmd`/`.ps1` launcher
 # siblings, which are not separate logic, only separate OS-launch rungs
 # over the same `.py`.
@@ -85,6 +86,7 @@ ASSEMBLE_TARGETS = (
     "orient-assemble",
     "pickup-assemble",
     "plan-assemble",
+    "quick-wrap-assemble",
     "review-assemble",
     "sizing-assemble",
     "staff-session-assemble",
@@ -191,7 +193,7 @@ def _import_engine_module(dotted: str):
 
 
 def _simple_entry(name: str, dotted: str) -> Callable[[List[str]], int]:
-    """Build the entry callable for one of the 10 single-module targets —
+    """Build the entry callable for one of the single-module targets —
     each original bin/*.py file's `_import_module` + `main(argv)` body was
     exactly this shape (resolve CLAUDE_KLABAUTER_ROOT, import one `coordinator_core`
     module, call its own `main(argv)`), differing only in `name` and
@@ -307,7 +309,7 @@ def _workday_complete_assemble_entry(argv: List[str]) -> int:
 
 
 # Name -> engine entry callable, `argv -> int`, for every target NOT in
-# BY_PATH_TARGETS. Derived by reading each of the 13 bin/*.py files' actual
+# BY_PATH_TARGETS. Derived by reading each of the 14 bin/*.py files' actual
 # imports/calls (not guessed from the entry-point name) — see the module
 # docstring above and each target's own comment for the file it was derived
 # from.
@@ -319,6 +321,7 @@ _ENGINE_ENTRIES: dict[str, Callable[[List[str]], int]] = {
     "orient-assemble": _simple_entry("orient-assemble", "coordinator_core.orient_assemble"),
     "pickup-assemble": _simple_entry("pickup-assemble", "coordinator_core.pickup_assemble"),
     "plan-assemble": _simple_entry("plan-assemble", "coordinator_core.plan_assemble"),
+    "quick-wrap-assemble": _simple_entry("quick-wrap-assemble", "coordinator_core.quick_wrap_assemble"),
     "review-assemble": _simple_entry("review-assemble", "coordinator_core.review_assemble"),
     "sizing-assemble": _simple_entry("sizing-assemble", "coordinator_core.sizing_assemble"),
     "staff-session-assemble": _simple_entry("staff-session-assemble", "coordinator_core.staff_session_assemble"),
@@ -362,7 +365,7 @@ _load_module._counter = 0  # type: ignore[attr-defined]
 #
 # 60 entry points, one dispatcher (coordinator-gate.py). Same shim mechanism
 # as ASSEMBLE_TARGETS above (in-process, no subprocess), but this family is
-# far less uniform than the 13 `-assemble` entries: at least four distinct
+# far less uniform than the 14 `-assemble` entries: at least four distinct
 # CLI-trampoline shapes coexist (a `cli_entry.run_op_main` wrapper with
 # fail-loud vs never-block exit-code conventions; a bare top-level
 # `run_op_main` call with no wrapper; fully standalone modules with no
@@ -572,7 +575,7 @@ def run_gate_target(name: str, argv: List[str]) -> int:
     """Run one of the 60 GATE_TARGETS entry points in-process and return its
     exit code. `argv` excludes the subcommand name itself.
 
-    Unlike `run_target` above (whose 13 ASSEMBLE_TARGETS members' `main`
+    Unlike `run_target` above (whose 14 ASSEMBLE_TARGETS members' `main`
     always RETURNS an int), several GATE_TARGETS members' `main()` calls
     `sys.exit(code)` internally and returns None — reproducing that call
     in-process inside a batched `coordinator-gate` invocation would raise

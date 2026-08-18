@@ -1289,6 +1289,25 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
 #: under this class is a repo-relative PATH, not a claim-store basename.
 ARTIFACT_CLASS_PATH = "artifact"
 
+#: The three mkdir-based claim-record classes. Each stores under a
+#: ``<class>-claims`` directory -- that directory NAME is the attractor a
+#: caller reaches for instead of the class token (``plan-claims`` for
+#: ``plan``), so ``_class_token_hint`` defuses it in the fail-loud text.
+_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan")
+
+
+def _class_token_hint(class_: str) -> str:
+    """Trailing hint naming the class token when *class_* is its ``<class>-claims``
+    directory name, else empty.
+
+    Negative spec: no hint on an unrelated typo -- guessing a nearest match
+    would assert an intent the caller never expressed.
+    """
+    stem = class_[: -len("-claims")] if class_.endswith("-claims") else ""
+    if stem in _CLASSED_CLAIM_CLASSES:
+        return f" -- '{class_}' is the on-disk directory; the class token is '{stem}'"
+    return ""
+
 
 def _release_path_claim_everywhere(
     path: str, sids: set, base: str, cwd: Optional[str] = None
@@ -1531,8 +1550,11 @@ def release_artifact(
     of the ``<class>-claims`` lookup below runs. See ``ARTIFACT_CLASS_PATH``'s
     own docstring for why this plane needed widening onto here.
 
-    ALWAYS returns True (bash ``return 0`` on every path — the no-op paths are
-    successes, not errors).
+    Returns True on every no-op path (bash ``return 0`` — not-the-holder,
+    absent claim, bad baton root are successes, not errors). The ONE False is
+    an invalid ``class_``: mirroring ``clear_claim_if_dead``, an unrecognised
+    token would otherwise build ``<typo>-claims/<basename>``, find nothing,
+    and report a silent no-op as a successful release.
 
     ``class_`` / ``basename`` REQUIRED — empty raises ValueError.
 
@@ -1545,6 +1567,15 @@ def release_artifact(
 
     if class_ == ARTIFACT_CLASS_PATH:
         return _release_path_claim_artifact(basename, baton_repo_root, cwd)
+
+    if class_ not in _CLASSED_CLAIM_CLASSES:
+        print(
+            f"cs_release_artifact: invalid class '{class_}' "
+            f"(must be handoff, memo, plan, or {ARTIFACT_CLASS_PATH})"
+            f"{_class_token_hint(class_)}",
+            file=sys.stderr,
+        )
+        return False
 
     if baton_repo_root:
         if not (Path(baton_repo_root) / ".git").is_dir():
@@ -1690,10 +1721,11 @@ def clear_claim_if_dead(
     if class_ == ARTIFACT_CLASS_PATH:
         return _clear_path_claim_if_dead(basename, baton_repo_root, cwd)
 
-    if class_ not in ("handoff", "memo", "plan"):
+    if class_ not in _CLASSED_CLAIM_CLASSES:
         print(
             f"cs_clear_claim_if_dead: invalid class '{class_}' "
-            f"(must be handoff, memo, plan, or {ARTIFACT_CLASS_PATH})",
+            f"(must be handoff, memo, plan, or {ARTIFACT_CLASS_PATH})"
+            f"{_class_token_hint(class_)}",
             file=sys.stderr,
         )
         return False

@@ -154,9 +154,16 @@ def test_directives_only_name_known_real_clis_and_never_invoke_them(monkeypatch,
         # cannot fail a ceremony); `advisory` is optional per
         # docs/plans/2026-08-15-coverage-gate-advisory-failure-and-warn-flood.md
         # chunk C2 (an advisory directive's failure never takes the run to
-        # APPLY_EXIT_PARTIAL_MUTATION) — the required set is what this guard
-        # pins; an optional key landing later must not silently widen it.
-        assert set(directive.keys()) - {"best_effort", "advisory"} == {
+        # APPLY_EXIT_PARTIAL_MUTATION); `_gate_memo_key_parts` is optional
+        # build-time metadata `_apply_write_trail_gate_memo` stamps and
+        # `directives_review.py::record_gate_verdict_if_passed` reads
+        # in-process to record the gate verdict under the same
+        # `(session_id, sha_range)` identity the gate just checked -- it is
+        # underscore-prefixed, never dispatched to a CLI, never part of the
+        # wire shape a directive-consuming caller sees. The required set is
+        # what this guard pins; an optional key landing later must not
+        # silently widen it.
+        assert set(directive.keys()) - {"best_effort", "advisory", "_gate_memo_key_parts"} == {
             "id",
             "cli",
             "args",
@@ -546,18 +553,54 @@ def test_review_scale_judgment_point_is_advisory_no_dependency_edge_on_commit_ta
     """(d) the ADVISORY posture (C0's implemented default) actually holds:
     `d-run-wsc-tail` carries NO dependency edge on `jp-review-scale`, on
     either a chain-terminal or a single-session close, so a future reader
-    cannot mistake the edge's absence for an oversight."""
-    for gate, decisions in (
+    cannot mistake the edge's absence for an oversight.
+
+    Fixture picked to resolve `jp-review-scale` (row 6 on the chain-terminal
+    leg via `chain_partition_verdict="PARTITION-MANDATORY"`) so its RESOLVED
+    branch — the one that actually carries a `recommendation` — is the one
+    under test. As of `docs/plans/2026-08-15-judgment-points-that-gate-
+    nothing-stop-being-questions.md` C2, that resolved branch always sets
+    `reportable=True` with `resolves=[]`, so `contract/decision_object/
+    judgment.py::partition_reportable` demotes it out of
+    `decision_object["judgment_points"]` into `narration` on every
+    resolved row — `"jp-review-scale" in ids` is no longer a valid
+    precondition for this test's actual subject (see test 3 below for the
+    narration-facing assertion on that recommendation). This test's real
+    subject, DR-068's advisory posture, is asserted two independent ways:
+
+    1. No directive's `depends_on` names `jp-review-scale` directly — the
+       DR-068 property itself, checked on both legs below.
+    2. On the chain-terminal leg (the fixture that RESOLVES the decision,
+       so the recommendation-carrying branch actually fires),
+       `jp-review-scale` is absent from `judgment_points` (observed
+       demotion). `partition_reportable`'s own contract says a point named
+       in ANY directive's `depends_on` is NEVER classified `reported`, even
+       when marked `reportable=True` — so the observed demotion is itself
+       independent evidence that no dependency edge exists. Two
+       mechanisms, one property, not a duplicate check. The single-session
+       leg's `decisions={}` fixture leaves the decision UNRESOLVED, which
+       builds one of the untrusted-gate branches instead (no
+       `recommendation`, so `partition_reportable` does not demote it) —
+       (1) alone is the right check there; asserting (2) on that leg would
+       pin an accident of an unrelated, unresolved-only code path rather
+       than this test's actual subject.
+    """
+    for gate, decisions, expect_resolved in (
         (
             _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
             _review_scale_decisions(chain_partition_verdict="PARTITION-MANDATORY"),
+            True,
         ),
-        (_gate("single-session", consumed_handoff_paths=()), {}),
+        (_gate("single-session", consumed_handoff_paths=()), {}, False),
     ):
         _patch_gate(monkeypatch, gate)
         decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+        assert decision_object["gates"]["review_scale"]["resolved"] is expect_resolved
+        for directive in decision_object["directives"]:
+            assert "jp-review-scale" not in (directive.get("depends_on") or ())
         ids = {jp["id"] for jp in decision_object["judgment_points"]}
-        assert "jp-review-scale" in ids
+        if expect_resolved:
+            assert "jp-review-scale" not in ids
         wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
         depends_on = wsc_tail["depends_on"]
         depends_on_list = [depends_on] if isinstance(depends_on, str) else list(depends_on)
@@ -891,18 +934,32 @@ def test_review_scale_presence_rejects_a_from_handoff_mismatched_record(monkeypa
 
 def test_review_scale_judgment_point_resolved_non_trivial_row_keeps_acknowledge_scale(monkeypatch, tmp_path):
     """(f) the RESOLVED branch is untouched by the mechanism-3 fix: a
-    resolved, non-1/2 row (here row 5) still carries the trusted
-    `acknowledge-scale` recommendation via `build_judgment_point`."""
+    resolved, non-1/2 row (here row 5, the base `_review_scale_decisions()`
+    fixture's own resolution -- already non-trivial, left as-is) still
+    carries the trusted `acknowledge-scale` recommendation via
+    `build_judgment_point`.
+
+    Surface moved (`docs/plans/2026-08-15-judgment-points-that-gate-
+    nothing-stop-being-questions.md` C2): the resolved branch always sets
+    `reportable=True` with `resolves=[]`, so `contract/decision_object/
+    judgment.py::partition_reportable` now demotes it out of
+    `decision_object["judgment_points"]` -- `narration` (the only surface
+    `_narration_and_next_move` folds a reported point's id/question/
+    rationale into; the C2 plan deliberately added no new envelope key)
+    is what this test asserts against instead. Checked on the specific
+    disposition and rationale text, not a bare `"jp-review-scale"`
+    substring, so a narration change unrelated to this recommendation
+    still fails this test rather than passing on any narration edit."""
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
-    assert jp["recommendation"] == {
-        "disposition": "acknowledge-scale",
-        "rationale": (
-            "review scale row 5 (code-reviewer): chain-terminal with a resolved, "
-            "non-mandatory chain-scoped brightline verdict"
-        ),
-    }
+    ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-review-scale" not in ids
+    narration = decision_object["narration"]
+    assert "jp-review-scale (" in narration
+    assert (
+        "-- review scale row 5 (code-reviewer): chain-terminal with a resolved, "
+        "non-mandatory chain-scoped brightline verdict" in narration
+    )
 
 
 def test_review_scale_resolved_false_triviality_but_missing_metric_stays_unresolved(monkeypatch, tmp_path):
@@ -3342,7 +3399,6 @@ def test_classify_session_authored_files_with_none_start_time_issues_no_git_log_
 def test_classify_session_authored_files_batches_one_git_log_call_regardless_of_dirty_count(tmp_path, monkeypatch):
     """Regression guard for the N+1 hang: with N dirty files, the number of
     `git log --diff-filter=A` calls must stay 1, not scale with N."""
-    import subprocess as subprocess_module
     from datetime import datetime, timedelta, timezone
 
     from coordinator_core.workstream_complete import directives_memo_lifecycle
@@ -3417,7 +3473,7 @@ def test_classify_session_authored_files_equivalent_to_per_path_predicate(tmp_pa
     predicate, including exact `reason` strings."""
     import subprocess as subprocess_module
     import time
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
 
     from coordinator_core.workstream_complete import directives_memo_lifecycle
 
@@ -4077,7 +4133,7 @@ def test_build_close_tail_args_directive_no_diagnostic_when_review_present_corre
     decisions = {
         "review": {
             "sha_range": "a..b",
-            "reviewer": "someone",
+            "reviewer": "staff-eng",
             "scope": "chain",
             "verdict": "ok",
             "diff_loc": 10,
@@ -4123,7 +4179,7 @@ def test_review_flags_reach_the_wsc_tail_argv_token_transport():
             "sha_range": "abc123..def456",
             "reviewer": "staff-eng",
             "scope": "chain",
-            "verdict": "approved",
+            "verdict": "ok",
             "diff_loc": 42,
         },
         "deleted_paths": ["state/old-file.md"],
@@ -4159,7 +4215,7 @@ def test_build_wsc_tail_directive_composes_adjudication_present_for_nonempty_rev
             "sha_range": "abc123..def456",
             "reviewer": "staff-eng",
             "scope": "chain",
-            "verdict": "approved",
+            "verdict": "ok",
             "diff_loc": 42,
         },
     }
@@ -4234,7 +4290,7 @@ def test_build_close_tail_args_directive_single_dict_review_byte_identical():
             "sha_range": "abc123..def456",
             "reviewer": "staff-eng",
             "scope": "chain",
-            "verdict": "approved",
+            "verdict": "ok",
             "diff_loc": 42,
         },
     }
@@ -4244,7 +4300,7 @@ def test_build_close_tail_args_directive_single_dict_review_byte_identical():
         "--review-sha-range", "abc123..def456",
         "--review-reviewer", "staff-eng",
         "--review-scope", "chain",
-        "--review-verdict", "approved",
+        "--review-verdict", "ok",
         "--review-diff-loc", "42",
     ]
     assert "--review-slice" not in directive["args"]
@@ -4399,7 +4455,7 @@ def test_validate_review_shape_accepts_legal_single_dict_and_still_emits_five_fl
             "sha_range": "abc123..def456",
             "reviewer": "staff-eng",
             "scope": "chain",
-            "verdict": "approved",
+            "verdict": "ok",
             "diff_loc": 42,
         },
     }
@@ -4409,7 +4465,7 @@ def test_validate_review_shape_accepts_legal_single_dict_and_still_emits_five_fl
         "--review-sha-range", "abc123..def456",
         "--review-reviewer", "staff-eng",
         "--review-scope", "chain",
-        "--review-verdict", "approved",
+        "--review-verdict", "ok",
         "--review-diff-loc", "42",
     ]
 
@@ -4448,6 +4504,120 @@ def test_validate_review_shape_stays_silent_on_falsy_review(falsy_review, capsys
     assert capsys.readouterr().err == ""
 
     assert wsc.build_write_trail_directives(falsy_review) == []
+
+
+# ---------------------------------------------------------------------------
+# cross-repo/inbox/2026-08-18-doe-claude-em-review-trail-write-enums-
+# undiscoverable-until-apply.md -- the four review enums were reachable ONLY
+# by being rejected by them, and the rejection landed at `d-write-trail`,
+# which runs FIRST in apply order: a wrong value turned the whole pass into
+# `EXIT: 4 PARTIAL_MUTATION`. `_raise_on_review_enum_values` moves that
+# verdict to assemble time, where nothing has moved yet.
+# ---------------------------------------------------------------------------
+
+
+def test_illegal_review_enums_are_rejected_at_assemble_time():
+    """The exact triple from the memo -- a namespaced reviewer, a `scope`
+    filled with a file list, and `scope_kind: files` -- must be rejected by
+    the composer, before any directive reaches `directives[]`."""
+    decisions = {
+        "review": {
+            "sha_range": "a..b",
+            "reviewer": "coordinator:code-reviewer",
+            "scope": "coordinator/hooks/x.py coordinator/tests/y.py",
+            "verdict": "ok",
+            "scope_kind": "files",
+            "diff_loc": 10,
+        },
+    }
+    with pytest.raises(ValueError) as excinfo:
+        _dc_tail.build_close_tail_args_directive(decisions)
+    message = str(excinfo.value)
+    # All three offending fields in ONE raise, not first-wins -- the caller
+    # fixes a closed-vocabulary mistake in one round trip, not three.
+    assert "reviewer 'coordinator:code-reviewer' is invalid" in message
+    assert "scope_kind 'files' is invalid" in message
+    assert "scope 'coordinator/hooks/x.py coordinator/tests/y.py' is invalid" in message
+    # The bare-name hint survives the move to the earlier seam.
+    assert "did you mean 'code-reviewer'?" in message
+
+
+def test_assemble_time_enum_message_is_byte_identical_to_the_writer_s():
+    """Both seams render from `review_enum_errors`, so the text a caller sees
+    cannot depend on WHICH gate caught them -- a second, hand-copied allow-list
+    in the composer would drift from the writer's silently."""
+    from coordinator_core.ops.review_trail_write import review_enum_errors
+
+    writer_errors = review_enum_errors(
+        reviewer="staff-eng", scope="partitioned", verdict="ok", scope_kind="diff"
+    )
+    with pytest.raises(ValueError) as excinfo:
+        _dc_tail.build_close_tail_args_directive(
+            {
+                "review": {
+                    "sha_range": "a..b",
+                    "reviewer": "staff-eng",
+                    "scope": "partitioned",
+                    "verdict": "ok",
+                    "diff_loc": 10,
+                },
+            }
+        )
+    assert len(writer_errors) == 1
+    assert writer_errors[0] in str(excinfo.value)
+    # `partitioned` is decide_review_scale's vocabulary -- the axis-collision
+    # hint is the one the memo's sender would have needed first.
+    assert "partition-strategy" in writer_errors[0]
+
+
+def test_illegal_enum_in_a_review_slice_names_its_index():
+    """A list-shaped review names WHICH slice is wrong -- an unindexed message
+    across N slices leaves the caller diffing every entry by hand."""
+    decisions = {
+        "review": [
+            dict(_REVIEW_SLICE_A),
+            {**dict(_REVIEW_SLICE_B), "scope": "not-a-scope"},
+        ],
+    }
+    with pytest.raises(ValueError) as excinfo:
+        _dc_tail.build_close_tail_args_directive(decisions)
+    assert "slice[1]" in str(excinfo.value)
+    assert "slice[0]" not in str(excinfo.value)
+
+
+def test_legal_review_enums_compose_exactly_as_before():
+    """The gate changes what is REJECTED, never what a legal payload emits."""
+    decisions = {
+        "review": {
+            "sha_range": "abc123..def456",
+            "reviewer": "code-reviewer",
+            "scope": "session",
+            "verdict": "ok",
+            "scope_kind": "diff",
+            "diff_loc": 42,
+        },
+    }
+    directive = _dc_tail.build_close_tail_args_directive(decisions)
+    assert directive["args"] == [
+        "tail-args",
+        "--review-sha-range", "abc123..def456",
+        "--review-reviewer", "code-reviewer",
+        "--review-scope", "session",
+        "--review-verdict", "ok",
+        "--review-diff-loc", "42",
+        "--review-scope-kind", "diff",
+    ]
+
+
+def test_incomplete_review_entry_is_not_this_gate_s_class():
+    """An entry missing required fields composes no token at all, so its enum
+    values never reach the writer -- `_raise_on_review_truthy_unqualified`
+    owns that class, and this gate must not pre-empt its message."""
+    with pytest.raises(ValueError) as excinfo:
+        _dc_tail.build_close_tail_args_directive(
+            {"review": {"sha_range": "a..b", "reviewer": "someone"}}
+        )
+    assert "missing required field(s)" in str(excinfo.value)
 
 
 def test_build_write_trail_directives_absent_review_key_stays_silent(monkeypatch, tmp_path):
@@ -5751,6 +5921,7 @@ def test_apply_execute_directives_repo_identity_unresolved_does_not_refuse(monke
     exit_code, report = wsc_apply._execute_directives(
         [_wsc_landing_directive()], [], {}, repo_root=None, sid="sess-apply-unresolved"
     )
+    assert exit_code == 0
     assert "d-x" in report["landed"]
 
 
@@ -5770,6 +5941,7 @@ def test_apply_execute_directives_repo_identity_match_records_and_lands(monkeypa
     exit_code, report = wsc_apply._execute_directives(
         [_wsc_landing_directive()], [], {}, repo_root=None, sid=sid
     )
+    assert exit_code == 0
     assert "d-x" in report["landed"]
 
 
@@ -5790,6 +5962,7 @@ def test_apply_execute_directives_explicit_repo_root_never_refused(monkeypatch, 
     exit_code, report = wsc_apply._execute_directives(
         [_wsc_landing_directive()], [], {}, repo_root=repo_root, sid=sid
     )
+    assert exit_code == 0
     assert "d-x" in report["landed"]
 
 

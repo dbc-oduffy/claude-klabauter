@@ -175,6 +175,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional
 
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.contract.decision_object.envelope import build_envelope
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -193,7 +197,10 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.ceremony.completion_entry import _slug_from_title as _title_slug
-from coordinator_core.ops.deliverable_carry import resolve_deliverable_and_initiative
+from coordinator_core.ops.deliverable_carry import (
+    DivergentDeliverableIdError,
+    resolve_deliverable_and_initiative,
+)
 from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_id
@@ -2026,6 +2033,10 @@ def resolve_lineage(
         # fires too late, after this cut has already happened. When either
         # rung is absent there is no agreement to detect (only one source
         # exists), so the cut proceeds as before.
+        # Scope note: this guard concerns the two CARRYING rungs only.
+        # Fan-in legs are excluded from the divergence check outright --
+        # see `_cascade_additional_predecessors` below -- so no excise
+        # decision here has anything to say about them.
         _rungs_diverge_on_deliverable_id = True
         if excise_rung in ("plan_file", "predecessor_file") and _plan_file and _predecessor_file:
             from coordinator_core.ops.deliverable_equivalence import canonicalize
@@ -2059,12 +2070,33 @@ def resolve_lineage(
         # names no deliverable_id) is NOT caught here -- it must propagate to
         # the caller rather than be swallowed into a silent mint-from-slug
         # (AC4).
+        # Fan-in legs never reach the divergence check (2026-08-14). A leg
+        # cannot become the carried id -- `resolve_deliverable_and_
+        # initiative` pins the winner as `plan_dlvr_id or
+        # predecessor_dlvr_id` -- so a leg whose id differs raises a question
+        # with no answer: there is no winner to pick, only a drop. Feeding
+        # them in made the ordinary N->1 fan-in (Resolution 1: "correct and
+        # stays") fail outright, which also made `j-fan-in-cardinality`
+        # unreachable in exactly the case it exists to narrate.
+        #
+        # The signal is not lost, it is relocated to where it is actionable:
+        # `j-fan-in-cardinality` names every additional predecessor's
+        # deliverable_id and states that it is dropped, not carried. That is
+        # the whole content of a fan-in "divergence".
+        #
+        # Negative-spec: this is NOT a widening of the no-auto-pick refusal.
+        # Divergence between the two CARRYING rungs still raises and still
+        # routes to `j-divergent-deliverable-id` -- see the sibling
+        # `excise_rung` block above. Only rungs that were never candidates
+        # are excluded.
+        _cascade_additional_predecessors: list[str] = []
+
         deliverable_id, initiative = resolve_deliverable_and_initiative(
             _tracked_read,
             _mint_deliverable_id,
             _plan_file,
             _predecessor_file,
-            additional_predecessors=resolved_additional_predecessors,
+            additional_predecessors=_cascade_additional_predecessors,
             equivalence_map=load_equivalence_map(root),
             predecessor_is_plan_input=_predecessor_plan_input,
         )
@@ -2849,6 +2881,100 @@ def _build_fan_in_cardinality_judgment_point(
             "legible to the operator rather than silent; it is narration "
             "only and never gates `apply` (see this function's own "
             "docstring for the 2026-07-29 hazard this must not reopen)."
+        ),
+    )
+
+
+def _build_divergent_deliverable_id_judgment_point(
+    plan_file: Optional[str],
+    predecessor_file: Optional[str],
+    additional_predecessor_files: list[str],
+    root: Path,
+    error: Exception,
+) -> dict[str, Any]:
+    """`j-divergent-deliverable-id` -- surfaced by `brief()` when the
+    carry-or-mint cascade's rungs disagree and no disposition has named a
+    winner yet. Replaces the terminal `DivergentDeliverableIdError` crash
+    with the same judgment-point round trip every other genuine judgment
+    call in this assembler takes: `brief` emits the candidates, the
+    operator picks, `brief` is re-run with `--decisions`, and the existing
+    `excise_rung` cut removes the losing rung BEFORE the cascade reaches
+    the raise.
+
+    Negative-spec, load-bearing (DR-207 DD#1 and
+    `DivergentDeliverableIdError`'s own docstring): NOTHING here picks a
+    winner. `build_untrusted_gate_judgment_point` structurally forbids a
+    `recommendation`, no disposition is defaulted, and an unresolved point
+    leaves `directives` empty so `apply` cannot proceed on a guess. The
+    tiebreak is the earliest-artifact test, which is a fact about artifact
+    history this engine cannot see -- exactly why it is asked rather than
+    computed.
+
+    Scoped to the CARRYING rungs (`plan_file`/`predecessor_file`) -- the
+    only two that can supply the id. Fan-in legs never reach the divergence
+    check at all (see `resolve_lineage`'s own comment): a leg cannot become
+    the carried id, so its disagreement is a drop for `j-fan-in-cardinality`
+    to narrate, never a question for this point to ask.
+
+    Spec backlink: state/handoffs/2026-08-14-multi-plan-sessions-cannot-hand-off.md
+    """
+
+    def _deliverable_id_for(path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        candidate = Path(path)
+        full_path = candidate if candidate.is_absolute() else root / candidate
+        return _read_frontmatter_field(str(full_path), "deliverable_id") or None
+
+    plan_id = _deliverable_id_for(plan_file)
+    predecessor_id = _deliverable_id_for(predecessor_file)
+
+    entries = [
+        f"claimed-plan rung {plan_file!r} names deliverable_id {plan_id!r}",
+        f"predecessor rung {predecessor_file!r} names deliverable_id {predecessor_id!r}",
+    ]
+    # Fan-in rungs are listed as CONTEXT only -- they never reach the
+    # divergence check (see `resolve_lineage`) and never carry, so there is
+    # no per-leg verdict to compute here; naming their ids still helps the
+    # operator run DR-207 DD#1's earliest-artifact test across the whole
+    # picture rather than just the two carrying rungs.
+    for extra_path in additional_predecessor_files:
+        extra_id = _deliverable_id_for(extra_path)
+        if extra_id:
+            entries.append(
+                f"fan-in rung {extra_path!r} names deliverable_id {extra_id!r} "
+                "(context: never carried, not part of this divergence)"
+            )
+
+    dispositions = [
+        {"value": "keep-plan", "resolves": []},
+        {"value": "keep-predecessor", "resolves": []},
+    ]
+    question = (
+        "The two rungs that can carry a deliverable_id disagree. Per DR-207 "
+        "DD#1 the EARLIEST artifact's id wins -- apply that test to the "
+        "artifact history and name the rung that survives. 'keep-plan' "
+        "carries the claimed plan's id and cuts the predecessor rung; "
+        "'keep-predecessor' carries the predecessor's id and cuts the "
+        "claimed-plan rung. Re-run `brief` with --decisions "
+        "'{\"j-divergent-deliverable-id\": {\"disposition\": <value>, "
+        "\"decision_note\": <which artifact came first, and how you "
+        "know>}}'. decision_note is REQUIRED and non-empty."
+    )
+
+    return build_untrusted_gate_judgment_point(
+        id="j-divergent-deliverable-id",
+        question=question,
+        dispositions=dispositions,
+        evidence="; ".join(entries) + f" || raised: {error}",
+        reason=(
+            "DR-207 DD#1 and DivergentDeliverableIdError's own docstring "
+            "both refuse an auto-pick: preferring the plan is right on the "
+            "ordinary plan->handoff edge and wrong when a roadmap stub "
+            "predates a re-minting plan, and preferring the predecessor is "
+            "wrong in the mirror case. This point removes the dead end "
+            "without weakening that refusal -- the operator applies the "
+            "earliest-artifact test, and no code path selects a winner."
         ),
     )
 
@@ -4379,6 +4505,53 @@ def brief(
     if _excise_predecessor and kind == "handoff":
         _excise_rung = "plan_file" if artifact_path else "predecessor_file"
 
+    # Divergent-deliverable_id resolution (`j-divergent-deliverable-id`),
+    # reaching the SAME cut `j-continuation-vs-fork` already threads: the
+    # operator names which rung carries, and `resolve_lineage`'s existing
+    # excise removes the loser before `resolve_deliverable_and_initiative`
+    # would raise. No auto-pick is introduced -- an absent or unresolved
+    # decision leaves `_excise_rung` alone and the raise below converts to
+    # a judgment point instead, per DR-207 DD#1.
+    _divergence_decision = decisions.get("j-divergent-deliverable-id")
+    _divergence_disposition: Optional[str] = None
+    if isinstance(_divergence_decision, dict):
+        _divergence_disposition = _divergence_decision.get("disposition")
+    if _divergence_disposition in ("keep-plan", "keep-predecessor"):
+        if kind != "handoff":
+            raise ValueError(
+                "baton_assemble.brief: j-divergent-deliverable-id is a "
+                f"handoff-cascade point and does not apply to kind={kind!r} "
+                "-- the spinoff branch resolves its deliverable_id from the "
+                "progenitor read, not from the claimed-plan/predecessor rungs"
+            )
+        _divergence_note = _divergence_decision.get("decision_note")
+        if not isinstance(_divergence_note, str) or not _divergence_note.strip():
+            raise ValueError(
+                "baton_assemble.brief: j-divergent-deliverable-id requires "
+                "a non-empty decision_note -- DR-207 DD#1 resolves a "
+                "divergence by the earliest-artifact test, and which "
+                "artifact came first is exactly the fact this engine cannot "
+                "recompute later from the id it carried"
+            )
+        _divergence_cut = (
+            "predecessor_file" if _divergence_disposition == "keep-plan" else "plan_file"
+        )
+        if _excise_rung is not None and _excise_rung != _divergence_cut:
+            raise ValueError(
+                "baton_assemble.brief: j-continuation-vs-fork and "
+                "j-divergent-deliverable-id name opposing rungs "
+                f"({_excise_rung!r} vs {_divergence_cut!r}) -- excise_rung "
+                "cuts exactly one rung, so these two dispositions cannot "
+                "both be honoured; resolve them to the same rung and re-run"
+            )
+        _excise_rung = _divergence_cut
+    elif _divergence_disposition is not None:
+        raise ValueError(
+            "baton_assemble.brief: j-divergent-deliverable-id disposition "
+            f"{_divergence_disposition!r} is not one of 'keep-plan' / "
+            "'keep-predecessor'"
+        )
+
     # Also asserts the shared operator-config resolution seam (B0) resolves
     # cleanly -- a corrupt settings_home/claude_klabauter_root/doe_root value fails
     # loud here rather than downstream in a directive dispatch.
@@ -4418,15 +4591,77 @@ def brief(
         else:
             artifact_path = resolved_predecessor
 
-    lineage = resolve_lineage(
-        kind,
-        artifact_path,
-        root,
-        additional_predecessor_paths=additional_predecessor_paths,
-        title=title,
-        explicit_deliverable_id=explicit_deliverable_id,
-        excise_rung=_excise_rung,
-    )
+    try:
+        lineage = resolve_lineage(
+            kind,
+            artifact_path,
+            root,
+            additional_predecessor_paths=additional_predecessor_paths,
+            title=title,
+            explicit_deliverable_id=explicit_deliverable_id,
+            excise_rung=_excise_rung,
+        )
+    except DivergentDeliverableIdError as _divergence_exc:
+        # Actionable, not terminal. The refusal to auto-pick is UNCHANGED --
+        # this converts a crash with no sanctioned exit into the assembler's
+        # ordinary judgment-point round trip. `directives` is empty by
+        # construction, so `apply` cannot proceed until the operator names a
+        # winner; nothing here selects one. A multi-plan session (the
+        # `/mise-en-place` shape) reaches this arm rather than the dead end.
+        _divergence_plan_rel = resolve_claimed_plan_path(cwd=root)
+        _divergence_plan_file = (
+            str(root / _divergence_plan_rel) if _divergence_plan_rel else None
+        )
+        # Archive-aware, matching what `resolve_lineage` actually read:
+        # a predecessor already swept to `archive/handoffs/` is the routine
+        # case, and reporting the caller-supplied live path would read its
+        # deliverable_id as absent -- losing the very fact DR-207 DD#1's
+        # earliest-artifact test needs. Fail-soft: this is an error-reporting
+        # path, so an unresolvable path degrades to the raw one rather than
+        # raising over the top of the divergence being reported.
+        _divergence_predecessor_file = artifact_path or None
+        if _divergence_predecessor_file:
+            try:
+                _divergence_predecessor_file = str(
+                    _resolve_qualified_path_or_raise(
+                        _normalize_artifact_path(_divergence_predecessor_file), root, kind
+                    )
+                )
+            except Exception:  # noqa: BLE001 -- see fail-soft note above
+                pass
+        _divergence_point = _build_divergent_deliverable_id_judgment_point(
+            _divergence_plan_file,
+            _divergence_predecessor_file,
+            _resolve_additional_predecessor_paths(
+                additional_predecessor_paths, root, kind
+            ),
+            root,
+            _divergence_exc,
+        )
+        _divergence_narration = (
+            "Blocked on a deliverable_id divergence -- the carry-or-mint "
+            "cascade's rungs disagree. Resolve j-divergent-deliverable-id "
+            "and re-run `brief`."
+        )
+        return _emit(
+            build_envelope(
+                artifact={"path": artifact_path, "kind": kind, "lineage": {}},
+                preflight={},
+                gates={},
+                directives=[],
+                judgment_points=[_divergence_point],
+                decisions=decisions,
+                narration=_divergence_narration,
+                next_move=(
+                    "Apply DR-207 DD#1's earliest-artifact test to the rungs "
+                    "named in j-divergent-deliverable-id's evidence, then "
+                    "re-run `brief` with --decisions naming the surviving "
+                    "rung and a decision_note recording which artifact came "
+                    "first. No directive fires until then."
+                ),
+            ),
+            EXIT_OK,
+        )
     lineage["standalone_no_predecessor_reason"] = standalone_no_predecessor_reason
     if _brief_ledger_degraded is not None:
         lineage["predecessor_ordering_degraded"] = _brief_ledger_degraded
@@ -4702,8 +4937,8 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
 
 
 _USAGE_LINES = (
-    "usage: {prog} brief <kind> [artifact-path] [--decisions <json>] [--title <text>]",
-    "       {prog} apply <kind> [artifact-path] [--session-id <id>] [--decisions <json>] [--title <text>]",
+    "usage: {prog} brief <kind> [artifact-path] [--decisions <json> | --decisions-file <path>] [--title <text>]",
+    "       {prog} apply <kind> [artifact-path] [--session-id <id>] [--decisions <json> | --decisions-file <path>] [--title <text>]",
     "       (artifact-path is optional for kind=handoff on BOTH verbs -- self-resolves",
     "        the predecessor from the current session's own claim ledger)",
     "       --decisions is a JSON object: {{\"<jp-id>\": {{\"disposition\": \"<value>\", ...}}}}",
@@ -4794,6 +5029,10 @@ def main(argv: list[str]) -> int:
     decisions: dict[str, Any] = {}
     title: Optional[str] = None
     deliverable_id: Optional[str] = None
+    conflict = detect_conflicting_payload_channels(tail)
+    if conflict is not None:
+        print(f"baton-assemble: {conflict}", file=sys.stderr)
+        return EXIT_USAGE
     i = 0
     while i < len(tail):
         tok = tail[i]
@@ -4802,19 +5041,16 @@ def main(argv: list[str]) -> int:
                 return _usage("baton-assemble")
             deliverable_id = tail[i + 1]
             i += 2
-        elif tok == "--decisions":
-            if i + 1 >= len(tail):
-                return _usage("baton-assemble")
-            try:
-                decisions = json.loads(tail[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"baton-assemble: malformed --decisions JSON: {exc}", file=sys.stderr)
+        elif (payload := resolve_json_payload_flag(tail, i)).consumed:
+            if payload.error is not None:
+                print(f"baton-assemble: {payload.error}", file=sys.stderr)
                 return EXIT_USAGE
+            decisions = payload.value
             shape_error = validate_decisions_shape(decisions)
             if shape_error is not None:
                 print(f"baton-assemble: {shape_error}", file=sys.stderr)
                 return EXIT_USAGE
-            i += 2
+            i += payload.consumed
         elif tok == "--title":
             if i + 1 >= len(tail):
                 return _usage("baton-assemble")

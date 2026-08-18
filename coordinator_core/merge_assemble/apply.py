@@ -47,6 +47,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.contract import apply_base
 from coordinator_core.merge_assemble import (
     GATE_DIRECTIVE_IDS,
@@ -170,7 +174,9 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
 }
 
 
-def _fill_gate_verdicts(report: dict[str, Any]) -> dict[str, str]:
+def _fill_gate_verdicts(
+    report: dict[str, Any], directives: Optional[list[dict[str, Any]]] = None
+) -> dict[str, str]:
     """C3 fix — populates the `gates` key `merge_assemble`'s module
     docstring already claimed `apply()` fills in but never did (no `gates`
     key was ever written; this function is the first writer). Reads only
@@ -180,19 +186,37 @@ def _fill_gate_verdicts(report: dict[str, Any]) -> dict[str, str]:
     only on `APPLY_EXIT_PARTIAL_MUTATION`) — never re-runs or re-derives
     anything. A gate whose directive never reached either list (blocked on
     an unresolved judgment point, or the run halted before it) stays
-    `"pending"`, exactly as `build_gate_verdicts_scaffold` seeds it."""
+    `"pending"`, exactly as `build_gate_verdicts_scaffold` seeds it.
+
+    D5 fix: `directives` (the pre-dispatch list `apply()` already computed
+    via `_apply_force_bypass(decision["directives"], force)`) is read ONLY
+    to recover each `already_satisfied` directive's own `skipped_reason` —
+    `DirectiveResult.to_report()` never carries it (`detail` is `None` for
+    an `already_satisfied` entry), so this is the one place that reason is
+    still in hand. An `already_satisfied` gate directive WITH a
+    `skipped_reason` (an absent producer, e.g. `d5` when
+    `portability-sweep.py` does not exist) reports `"unavailable"` —
+    distinct from both `"passed"` and the scaffold's own `"pending"`. An
+    `already_satisfied` gate directive with NO `skipped_reason` (e.g. a
+    `--force` bypass, if one is ever added for a gate directive) still
+    never asserts `"passed"` for work it did not observe (the original C3
+    unobserved-fact-hazard finding) — it stays `"pending"`."""
     gates = build_gate_verdicts_scaffold()
     directive_id_to_gate = {v: k for k, v in GATE_DIRECTIVE_IDS.items()}
+    skipped_reason_by_id = {
+        d["id"]: d.get("skipped_reason")
+        for d in (directives or [])
+        if d.get("already_satisfied") and d.get("skipped_reason")
+    }
     for result in report.get("results", []):
-        # Review: code-reviewer — an `already_satisfied` result (e.g. a
-        # `--force` bypass) was skipped without dispatching, so it never
-        # observed the gate's directive succeed; "passed" must not be
-        # asserted for it (unobserved-fact hazard named in the brief).
-        if result.get("already_satisfied"):
-            continue
         gate = directive_id_to_gate.get(result.get("id"))
-        if gate is not None:
-            gates[gate] = "passed"
+        if gate is None:
+            continue
+        if result.get("already_satisfied"):
+            if result.get("id") in skipped_reason_by_id:
+                gates[gate] = "unavailable"
+            continue
+        gates[gate] = "passed"
     failed_gate = directive_id_to_gate.get(report.get("failed_directive"))
     if failed_gate is not None:
         gates[failed_gate] = "failed"
@@ -276,13 +300,14 @@ def apply(
         artifact = decision.get("artifact") or {}
         report["branch_state"] = artifact.get("branch_state")
         report["release_tag_cut"] = artifact.get("release_tag_cut")
-        report["gates"] = _fill_gate_verdicts(report)
+        report["gates"] = _fill_gate_verdicts(report, directives)
         return exit_code, report
 
 
 def _usage(prog: str) -> int:
     print(
-        f"usage: {prog} apply [--session-id <id>] [--force] [--decisions <json>] [--tag-prefix <prefix>]",
+        f"usage: {prog} apply [--session-id <id>] [--force] "
+        "[--decisions <json> | --decisions-file <path>] [--tag-prefix <prefix>]",
         file=sys.stderr,
     )
     return APPLY_EXIT_TRANSPORT_FAIL
@@ -293,6 +318,10 @@ def main_apply(argv: list[str]) -> int:
     decisions: Optional[dict[str, Any]] = None
     force = False
     tag_prefix = "v"
+    conflict = detect_conflicting_payload_channels(argv)
+    if conflict is not None:
+        print(f"merge-assemble apply: {conflict}", file=sys.stderr)
+        return _usage("merge-assemble")
     i = 0
     while i < len(argv):
         tok = argv[i]
@@ -309,15 +338,12 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("merge-assemble")
             tag_prefix = argv[i + 1]
             i += 2
-        elif tok == "--decisions":
-            if i + 1 >= len(argv):
+        elif (payload := resolve_json_payload_flag(argv, i)).consumed:
+            if payload.error is not None:
+                print(f"merge-assemble apply: {payload.error}", file=sys.stderr)
                 return _usage("merge-assemble")
-            try:
-                decisions = json.loads(argv[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"merge-assemble apply: malformed --decisions JSON: {exc}", file=sys.stderr)
-                return _usage("merge-assemble")
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         else:
             print(f"merge-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage("merge-assemble")

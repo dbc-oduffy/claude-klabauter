@@ -549,3 +549,236 @@ def test_handler_multi_stub_fan_out_reruns_proof_check_per_stub(tmp_path, monkey
     # need to have been for stub A (proof applies) — asserted via the closed
     # basis above; guard_calls confirms it was reached at all for B.
     assert any("stub-b.md" in (c or "") for c in guard_calls)
+
+
+# ---------------------------------------------------------------------------
+# predecessor_handoff path-keyed leg (C2)
+# ---------------------------------------------------------------------------
+
+
+def _seed_non_roadmap_spinoff_stub(
+    worktree: Path, name: str = "origin-stub.md", *, deployment_state: str = "ready_to_fire"
+) -> Path:
+    """Seed a NON-ROADMAP `kind: spinoff` origin stub — schema-legal without
+    `roadmap_id`/`stub_id` (those are legal only on `kind: spinoff-roadmap`/
+    `roadmap-baton`), the exact population `predecessor_handoff` exists to
+    reach: `_is_baton_kind` admits `kind: spinoff`, but the pair-keyed
+    `_scan_matches`/`_try_close` pipeline can never match it (no pair to
+    match on)."""
+    stub = worktree / "state" / "handoffs" / name
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_text(
+        "---\n"
+        "kind: spinoff\n"
+        "title: Non-roadmap origin stub\n"
+        "created: 2026-08-13\n"
+        "branch: main\n"
+        "status: open\n"
+        "predecessor: none\n"
+        "category: infra\n"
+        "summary: non-roadmap spinoff origin stub fixture\n"
+        f"deployment_state: {deployment_state}\n"
+        "---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    return stub
+
+
+def _seed_session_handoff(worktree: Path, name: str = "not-a-baton.md") -> Path:
+    """Seed a `kind: session-handoff` record — NOT baton-kind
+    (`_is_baton_kind` refuses it), the fixture for "predecessor_handoff names
+    a file that is not baton-kind" (never closed)."""
+    stub = worktree / "state" / "handoffs" / name
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_text(
+        "---\n"
+        "kind: session-handoff\n"
+        "title: Not a baton\n"
+        "created: 2026-08-13\n"
+        "branch: main\n"
+        "status: open\n"
+        "predecessor: none\n"
+        "category: infra\n"
+        "summary: session-handoff fixture, refused by _is_baton_kind\n"
+        "deployment_state: ready_to_fire\n"
+        "---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    return stub
+
+
+def _seed_plan(
+    worktree: Path,
+    name: str = "plan.md",
+    *,
+    predecessor_handoff: str | None = None,
+    roadmap_id: str | None = None,
+    stub_id: str | None = None,
+) -> Path:
+    plans_dir = worktree / "docs" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    plan = plans_dir / name
+    fm = "status: draft\n"
+    if predecessor_handoff is not None:
+        fm += f"predecessor_handoff: {predecessor_handoff}\n"
+    if roadmap_id is not None:
+        fm += f"roadmap_id: {roadmap_id}\n"
+    if stub_id is not None:
+        fm += f"stub_id: {stub_id}\n"
+    plan.write_text(f"---\n{fm}---\n\nBody.\n", encoding="utf-8")
+    return plan
+
+
+def test_predecessor_handoff_closes_non_roadmap_spinoff_stub(tmp_path, monkeypatch):
+    """(1) A plan's `predecessor_handoff` naming a `ready_to_fire` non-roadmap
+    `kind: spinoff` stub with NO roadmap_id/stub_id closes it, with
+    `stubs_resolved == 1`."""
+    worktree = tmp_path
+    _fake_git_common_dir(worktree, monkeypatch)
+    _seed_non_roadmap_spinoff_stub(worktree)
+    plan = _seed_plan(
+        worktree, predecessor_handoff="state/handoffs/origin-stub.md"
+    )
+
+    async def _fake_guard(params, repo_root):
+        return {"exit_code": 1, "referenced": False, "children": []}
+
+    monkeypatch.setattr(m, "_live_children_guard", _fake_guard)
+
+    result = _run(
+        m._handler(
+            {"plan_path": "docs/plans/plan.md", "sha": "deadbeef1234"}, worktree
+        )
+    )
+
+    assert result["exit_code"] == 0
+    assert result["stubs_resolved"] == 1
+    assert len(result["closed"]) == 1
+    closed_entry = result["closed"][0]
+    assert closed_entry["stub_path"] == "state/handoffs/origin-stub.md"
+    assert closed_entry["join_source"] == "predecessor_handoff"
+    assert closed_entry["roadmap_id"] is None
+    assert closed_entry["stub_id"] is None
+
+
+def test_predecessor_handoff_shipped_stub_excluded_not_no_candidates(tmp_path, monkeypatch):
+    """(2) A `predecessor_handoff`-named stub already `deployment_state:
+    shipped` is NOT closed, is reported as state-excluded, and the call is
+    NOT `no_candidates`."""
+    worktree = tmp_path
+    (worktree / ".git").mkdir(parents=True, exist_ok=True)
+    _seed_non_roadmap_spinoff_stub(worktree, deployment_state="shipped")
+    _seed_plan(worktree, predecessor_handoff="state/handoffs/origin-stub.md")
+
+    result = _run(
+        m._handler({"plan_path": "docs/plans/plan.md"}, worktree)
+    )
+
+    assert result["exit_code"] == 0
+    assert result.get("no_candidates") is not True
+    assert result["closed"] == []
+    assert len(result["skipped"]) == 1
+    skip_entry = result["skipped"][0]
+    assert skip_entry["reason"] == "no-match-filtered-deployment-state"
+    excluded = skip_entry["excluded"]
+    assert len(excluded) == 1
+    assert excluded[0]["stub_path"] == "state/handoffs/origin-stub.md"
+    assert excluded[0]["deployment_state"] == "shipped"
+    assert excluded[0]["exclusion_reason"] == "state-not-eligible"
+
+
+def test_predecessor_handoff_dedupes_against_pair_leg(tmp_path, monkeypatch):
+    """(3) A stub reachable by BOTH a (roadmap_id, stub_id) pair (the plan's
+    own direct frontmatter) AND `predecessor_handoff` (naming the SAME stub)
+    closes exactly once."""
+    worktree = tmp_path
+    _fake_git_common_dir(worktree, monkeypatch)
+    stub = _seed_stub(worktree)  # kind: roadmap-baton, roadmap_id: r1, stub_id: s1
+    assert stub.name == "origin-stub.md"
+    _seed_plan(
+        worktree,
+        predecessor_handoff="state/handoffs/origin-stub.md",
+        roadmap_id="r1",
+        stub_id="s1",
+    )
+
+    close_calls = []
+
+    async def _fake_guard(params, repo_root):
+        close_calls.append(params.get("candidate"))
+        return {"exit_code": 1, "referenced": False, "children": []}
+
+    monkeypatch.setattr(m, "_live_children_guard", _fake_guard)
+
+    result = _run(
+        m._handler(
+            {"plan_path": "docs/plans/plan.md", "sha": "deadbeef1234"}, worktree
+        )
+    )
+
+    assert result["exit_code"] == 0
+    assert result["pairs_resolved"] == 1
+    assert result["stubs_resolved"] == 1
+    assert len(result["closed"]) == 1
+    assert result["closed"][0]["stub_path"] == "state/handoffs/origin-stub.md"
+    # Closed exactly once — the live-children guard (called once per actual
+    # close attempt) must have been consulted exactly once, not twice.
+    assert len(close_calls) == 1
+
+
+def test_predecessor_handoff_absent_is_byte_identical_to_today(tmp_path, monkeypatch):
+    """(4) `predecessor_handoff` absent -> byte-identical behaviour to today,
+    including `no_candidates: true` on a plan with no linkage at all
+    (regression guard on the quiet path)."""
+    worktree = tmp_path
+    (worktree / ".git").mkdir(parents=True, exist_ok=True)
+    _seed_plan(worktree)  # no predecessor_handoff, no roadmap_id/stub_id
+
+    result = _run(
+        m._handler({"plan_path": "docs/plans/plan.md"}, worktree)
+    )
+
+    assert result["exit_code"] == 0
+    assert result["no_candidates"] is True
+    assert result["closed"] == []
+    assert result["skipped"] == []
+    assert result["pairs_resolved"] == 0
+
+
+def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path, monkeypatch):
+    """(5) `predecessor_handoff` naming a non-existent path does not crash;
+    behaves as no linkage from that leg."""
+    worktree = tmp_path
+    (worktree / ".git").mkdir(parents=True, exist_ok=True)
+    _seed_plan(
+        worktree, predecessor_handoff="state/handoffs/does-not-exist.md"
+    )
+
+    result = _run(
+        m._handler({"plan_path": "docs/plans/plan.md"}, worktree)
+    )
+
+    assert result["exit_code"] == 0
+    assert result["no_candidates"] is True
+    assert result["closed"] == []
+    assert result["skipped"] == []
+
+
+def test_predecessor_handoff_non_baton_kind_refused(tmp_path, monkeypatch):
+    """(6) `predecessor_handoff` naming a file that is NOT baton-kind (e.g. a
+    `session-handoff`) is refused, not closed."""
+    worktree = tmp_path
+    (worktree / ".git").mkdir(parents=True, exist_ok=True)
+    _seed_session_handoff(worktree)
+    _seed_plan(
+        worktree, predecessor_handoff="state/handoffs/not-a-baton.md"
+    )
+
+    result = _run(
+        m._handler({"plan_path": "docs/plans/plan.md"}, worktree)
+    )
+
+    assert result["exit_code"] == 0
+    assert result["no_candidates"] is True
+    assert result["closed"] == []
+    assert result["skipped"] == []

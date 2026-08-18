@@ -63,6 +63,7 @@ import pytest
 from coordinator_core.ops import handoff_normalize
 from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.ops.handoff_normalize import (
+    _carry_value_for_file,
     _handler,
     _normalize_one_text,
     _resolve_claimed_plan_deliverable_id,
@@ -540,3 +541,123 @@ def test_batch_sweep_backfills_placeholder_summary_on_a_committed_record(
     assert (
         handoff_normalize.read_fm_field(clean_before, "summary") is None
     )  # sanity: was absent, not placeholder, before the sweep
+
+
+# ---------------------------------------------------------------------------
+# AC6 (2026-08-18 spinoff-deliverable-id plan, C4): `_carry_value_for_file`
+# must not stamp a claimed plan's `deliverable_id` onto a `kind: spinoff`
+# record, in the key-absent case that reaches the sweep's carry branch --
+# and every non-spinoff kind's carry behaviour must be byte-identical to
+# today's.
+#
+# Baseline measured directly against `_carry_value_for_file` before this
+# chunk's fix (see dispatch report for the raw pre-fix output):
+#   kind: spinoff, id PRESENT, claimed by this session   -> not carried
+#       (the function itself returned the carried value, but
+#       `_normalize_one_text`'s key-absent gate never applies it -- so
+#       end-to-end this was already "not carried"; unaffected by this fix)
+#   kind: spinoff, id ABSENT,  claimed by this session   -> CARRIED (the defect)
+#   id absent, claimed by another session / unclaimed    -> not carried
+# ---------------------------------------------------------------------------
+
+_CARRY_ID = "dlv-parent-plan-abc123"
+_SELF_SESSION = "sid-carry-self"
+
+
+def _fm(*, kind: str, claimed_by: str | None, deliverable_id: str | None = None) -> str:
+    lines = ["---", "title: t", f"kind: {kind}"]
+    if deliverable_id is not None:
+        lines.append(f"deliverable_id: {deliverable_id}")
+    if claimed_by is not None:
+        lines.append(f"claimed_by: {claimed_by}")
+    lines += ["---", "", "body", ""]
+    return "\n".join(lines)
+
+
+def test_spinoff_id_present_claimed_by_self_not_carried():
+    """AC6 fixture 1: id PRESENT is untouched regardless of kind -- this was
+    already true before the fix (the caller's key-absent gate never applies
+    the carry here) and must remain true after it."""
+    content = _fm(kind="spinoff", claimed_by=_SELF_SESSION, deliverable_id="dlv-spinoff-own-abc123")
+
+    assert _carry_value_for_file(content, _CARRY_ID, _SELF_SESSION) is None
+
+
+def test_spinoff_id_absent_claimed_by_self_not_carried():
+    """AC6 fixture 2 -- the defect this chunk closes: a key-absent spinoff
+    claimed by this session used to receive the claimed plan's id. Must now
+    return None so the caller falls through to mint-from-slug."""
+    content = _fm(kind="spinoff", claimed_by=_SELF_SESSION)
+
+    assert _carry_value_for_file(content, _CARRY_ID, _SELF_SESSION) is None
+
+
+def test_spinoff_id_absent_claimed_by_other_session_not_carried():
+    """AC6 fixture 3a: id-absent, claimed by a DIFFERENT session -- already
+    refused by the pre-existing claimed_by gate; unaffected by this fix."""
+    content = _fm(kind="spinoff", claimed_by="sid-someone-else")
+
+    assert _carry_value_for_file(content, _CARRY_ID, _SELF_SESSION) is None
+
+
+def test_spinoff_id_absent_unclaimed_not_carried():
+    """AC6 fixture 3b: id-absent, unclaimed -- already refused by the
+    pre-existing claimed_by gate; unaffected by this fix."""
+    content = _fm(kind="spinoff", claimed_by=None)
+
+    assert _carry_value_for_file(content, _CARRY_ID, _SELF_SESSION) is None
+
+
+@pytest.mark.parametrize(
+    "kind", ["session-handoff", "roadmap-baton", "goal-seed", "roadmap-seed", "recovery"]
+)
+def test_non_spinoff_kind_id_absent_claimed_by_self_still_carried(kind):
+    """AC6 non-regression: every OTHER kind's carry behaviour is byte-identical
+    to before this fix -- a key-absent record of any non-spinoff kind, claimed
+    by this session, is still carried."""
+    content = _fm(kind=kind, claimed_by=_SELF_SESSION)
+
+    assert _carry_value_for_file(content, _CARRY_ID, _SELF_SESSION) == _CARRY_ID
+
+
+def test_missing_kind_field_id_absent_claimed_by_self_still_carried():
+    """AC6 non-regression: a record with no `kind:` field at all (legacy
+    shape) is unaffected -- `_CARRY_EXCLUDED_KINDS` only matches the literal
+    `spinoff` string, and an absent kind reads back `None`, which is not a
+    member of that set."""
+    content = "\n".join(
+        ["---", "title: t", f"claimed_by: {_SELF_SESSION}", "---", "", "body", ""]
+    )
+
+    assert _carry_value_for_file(content, _CARRY_ID, _SELF_SESSION) == _CARRY_ID
+
+
+def test_batch_sweep_end_to_end_spinoff_key_absent_not_stamped(tmp_path, monkeypatch):
+    """AC10-adjacent, end-to-end: drives the real `handoff.normalize` batch
+    handler (real git init, per this module's spawn-heavy fixture pattern)
+    over a key-absent `kind: spinoff` record claimed by this session, and
+    asserts the claimed plan's id is never stamped onto it -- the shape the
+    defect actually manifested in before this fix."""
+    session_id = "sid-carry-spinoff-e2e"
+    monkeypatch.setattr(
+        core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions")
+    )
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    plan_path = _write_plan(repo, "2026-08-18-carry-spinoff-plan", _CARRY_ID)
+    claim_dir = plan_claim_dir(repo / ".git", plan_path.relative_to(repo))
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+    (claim_dir / "claimed_at").write_text("2026-08-18T09:00:00Z", encoding="utf-8")
+
+    spinoff_path = repo / "state" / "handoffs" / "2026-08-18-legacy-spinoff.md"
+    spinoff_path.parent.mkdir(parents=True, exist_ok=True)
+    spinoff_path.write_text(_fm(kind="spinoff", claimed_by=session_id), encoding="utf-8")
+
+    result = asyncio.run(_handler({"write": True}, repo_root=repo / ".git"))
+
+    assert result["errors"] == []
+    after = spinoff_path.read_text(encoding="utf-8")
+    stamped_id = handoff_normalize.read_fm_field(after, "deliverable_id")
+    assert stamped_id != _CARRY_ID

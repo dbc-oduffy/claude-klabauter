@@ -2222,11 +2222,20 @@ def _publish_call_kwargs(spy):
     ]
 
 
+def _commit_call_kwargs(spy):
+    return [
+        kw
+        for c, kw in zip(spy.calls, spy.call_kwargs)
+        if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)
+    ]
+
+
 def _non_publish_call_kwargs(spy):
     return [
         kw
         for c, kw in zip(spy.calls, spy.call_kwargs)
         if str(_mod._PUBLISH) not in " ".join(str(x) for x in c)
+        and str(_mod._SCOPED_GIT_COMMIT) not in " ".join(str(x) for x in c)
     ]
 
 
@@ -2255,7 +2264,9 @@ def test_publish_legs_use_heavier_timeout_other_legs_keep_default(tmp_path, monk
     discarded `**kwargs`, so no test asserted `timeout=_PUBLISH_LEG_TIMEOUT_SECS`
     actually reached the two `publish.py` legs (`519cc8baf7`'s whole point).
     Pins both the heavier bound on the publish legs and the shared default
-    on every other leg."""
+    on every other leg. The `scoped-git-commit` leg is excluded from "other"
+    here -- it carries the same heavier bound, covered by
+    test_commit_leg_uses_publish_leg_timeout_not_shared_default below."""
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
@@ -2268,6 +2279,26 @@ def test_publish_legs_use_heavier_timeout_other_legs_keep_default(tmp_path, monk
     assert other_kwargs, "expected at least one non-publish.py invocation"
     for kw in other_kwargs:
         assert kw.get("timeout") == _mod._SUBPROCESS_TIMEOUT_SECS, kw
+
+
+def test_commit_leg_uses_publish_leg_timeout_not_shared_default(tmp_path, monkeypatch):
+    """The `scoped-git-commit` leg commits a full publish round's files --
+    the same weight class as the two `publish.py` legs, not the light
+    single-`git`-command legs the shared 600s bound is sized for (see the
+    `_PUBLISH_LEG_TIMEOUT_SECS` docstring). Covers BOTH call sites: the
+    `--dry-run-first` path (`_cmd_round`'s inline branch) and the default
+    no-dry-run path (`_cmd_round_default`)."""
+    for dry_run_first in (True, False):
+        case_dir = tmp_path / str(dry_run_first)
+        case_dir.mkdir()
+        rc, out, spy, dest = _run_round(case_dir, monkeypatch, dry_run_first=dry_run_first)
+        assert rc == _mod._EXIT_OK
+
+        commit_kwargs = _commit_call_kwargs(spy)
+        assert len(commit_kwargs) == 1, (dry_run_first, commit_kwargs)
+        assert commit_kwargs[0].get("timeout") == _mod._PUBLISH_LEG_TIMEOUT_SECS, (
+            dry_run_first, commit_kwargs[0],
+        )
 
 
 # ---------------------------------------------------------------------------

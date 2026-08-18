@@ -180,20 +180,20 @@ class TestBranchMutationVerdict:
     def test_ok_when_only_live_session_is_self(self, tmp_path):
         repo = _make_repo(tmp_path)
         _write_session(repo, "self-sid", _live_meta())
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="self-sid")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="self-sid")
         assert v.outcome == "ok"
         assert v.peers == ()
 
     def test_ok_when_no_sessions_at_all(self, tmp_path):
         repo = _make_repo(tmp_path)
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="self-sid")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="self-sid")
         assert v.outcome == "ok"
 
     def test_refused_names_peer_and_its_branch(self, tmp_path):
         repo = _make_repo(tmp_path)
         _write_session(repo, "self-sid", _live_meta())
         _write_session(repo, "peer-sid", {**_live_meta(), "branch": "work/peer/2026-01-01"})
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="self-sid")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="self-sid")
         assert v.outcome == "refused"
         assert v.peers == (("peer-sid", "work/peer/2026-01-01"),)
         assert "peer-sid" in v.reason
@@ -203,7 +203,7 @@ class TestBranchMutationVerdict:
         repo = _make_repo(tmp_path)
         _write_session(repo, "self-sid", _live_meta())
         _write_session(repo, "peer-sid", _live_meta())
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="self-sid")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="self-sid")
         assert v.outcome == "refused"
         assert v.peers == (("peer-sid", None),)
 
@@ -213,7 +213,7 @@ class TestBranchMutationVerdict:
         _write_session(
             repo, "stale-peer", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"}
         )
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="self-sid")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="self-sid")
         assert v.outcome == "ok"
 
     def test_unknown_when_liveness_probe_raises(self, tmp_path, monkeypatch):
@@ -223,7 +223,7 @@ class TestBranchMutationVerdict:
             raise RuntimeError("registry unreadable")
 
         monkeypatch.setattr(worktree_safety._liveness, "live_session_verdicts", _boom)
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="self-sid")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="self-sid")
         assert v.outcome == "unknown"
 
     def test_unknown_when_self_unresolvable_and_live_set_nonempty(self, tmp_path, monkeypatch):
@@ -232,11 +232,11 @@ class TestBranchMutationVerdict:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="")
         assert v.outcome == "unknown"
         assert v.peers == (("peer-sid", None),)
 
     def test_outcome_is_always_one_of_the_three_values(self, tmp_path):
         repo = _make_repo(tmp_path)
-        v = worktree_safety.branch_mutation_verdict(cwd=str(repo), self_session_id="x")
+        v = worktree_safety.branch_mutation_verdict(operation=worktree_safety.UNQUALIFIED_BRANCH_CUT, cwd=str(repo), self_session_id="x")
         assert v.outcome in ("ok", "refused", "unknown")

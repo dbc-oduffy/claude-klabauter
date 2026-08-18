@@ -557,6 +557,46 @@ def _prefix_digest(event_ids: list[str]) -> str:
     ).hexdigest()[:16]
 
 
+def _well_formedness(sequences: list[int]) -> tuple[int | None, int | None]:
+    """cockpit's A12 well-formedness predicate over ONE shard's full
+    ``sequence`` list, read in SHARD-FILE ORDER — never sorted.
+
+    Returns ``(first_defect, resolves_unknown_from)``:
+      - ``first_defect`` — the 1-based POSITION at which *sequences* first
+        fails contiguous ``1..len(sequences)`` (the first index ``i``, 1-based,
+        where ``sequences[i-1] != i``). ``None`` if the whole shard is
+        well-formed.
+      - ``resolves_unknown_from`` — the LOWEST claimed ``sequence`` for which
+        resolution must answer ``unknown``: ``min(first_defect,
+        sequences[first_defect - 1])``. Distinct from ``first_defect`` on a
+        duplicate — a duplicate's file POSITION and its untrustworthy VALUE
+        are different numbers (e.g. shard ``[1, 2, 3, 3]``: the defect is at
+        file position 4, but the value duplicated is 3, so a claim of 3 is
+        already unresolvable even though position 3 itself was fine). A
+        claim strictly below ``resolves_unknown_from`` still resolves
+        concretely (A12 item 3, the point-of-failure scope: a shard that
+        goes bad late must not retroactively invalidate its own good
+        prefix). ``None`` when the shard is well-formed.
+
+    Deliberately NOT sorted: shard-file order is the input a git text-merge
+    can reorder without reordering applies, and reordering here would hide
+    exactly the defect this predicate exists to catch (cockpit's
+    ``out-of-file-order`` vector — ``[1, 3, 2, 4]`` is a contiguous SET but a
+    non-monotonic file order, and must resolve ``unknown`` from position 2).
+
+    Conformance oracle: example-cockpit-repo
+    ``docs/reference/tracker-well-formedness-vectors.json`` (normative spec:
+    their ``docs/wiki/tracker-observed-set-and-concurrency.md`` § VALIDATOR
+    CONTRACT (A12)) — every named vector in that file reproduces under this
+    exact rule. C1b wires the live conformance harness against that fixture;
+    this function is the implementation it checks.
+    """
+    for position, value in enumerate(sequences, start=1):
+        if value != position:
+            return position, min(position, value)
+    return None, None
+
+
 def fold_observed_set(*, repo_root: Path) -> dict | None:
     """Read every PEER shard and append ONE ``observed_set_fold`` marker to
     this machine's own shard, recording what this machine has observed.
@@ -741,29 +781,50 @@ def fold_observed_set(*, repo_root: Path) -> dict | None:
         return None
 
 
-def resolve_observed_set(
-    marker: dict, *, repo_root: Path
-) -> dict | _UnknownObservedSet:
+def resolve_observed_set(marker: dict, *, repo_root: Path) -> dict:
     """Re-derive an ``observed_set_fold`` marker's justification against
     CURRENT bytes on every call — nothing is trusted because it was once
     written.
 
-    Returns one of three values (DEC-F, never conflated):
-      - a concrete ``{machine: {sequence, prefix_digest}}`` mapping — every
-        claimed peer component still validates against current bytes;
-      - ``{}`` — the marker genuinely observed nothing (its own
-        ``observed_set`` was empty at fold time);
-      - ``OBSERVED_SET_UNKNOWN`` — at least one claimed peer component no
-        longer validates: the peer shard's current tail is below the claimed
-        ``sequence`` (the justifying bytes have left the repository), or the
-        recomputed prefix digest over the claimed prefix no longer matches
-        the claimed ``prefix_digest`` (tail substitution, mid-prefix
-        substitution, or a prefix-closure hole — one digest comparison
-        subsumes all three, per § Design; no separate hole-detection rule is
-        added here).
+    Resolution granularity is PER COMPONENT, not per marker (cockpit's
+    ratified § VALIDATOR CONTRACT (A12) item 5, § RESOLUTION GRANULARITY IS
+    PER COMPONENT). The return is ALWAYS a ``dict`` — never the sentinel at
+    top level — whose per-component VALUES carry the three-valued result:
+      - a concrete ``{sequence, prefix_digest}`` value — this claimed
+        component still validates against current bytes;
+      - ``OBSERVED_SET_UNKNOWN`` — this claimed component no longer
+        validates. Two INDEPENDENT checks, not one: the digest recompute
+        detects that bytes CHANGED (tail substitution or mid-prefix
+        substitution — the claimed prefix's ids no longer hash to the
+        claimed ``prefix_digest``); ``_well_formedness`` detects a hole
+        that was ALREADY THERE at fold time (a peer shard holding
+        sequences 1, 2, 4 for a claim of 4 recomputes an identical digest
+        over the same three ids, so the digest check alone cannot see the
+        gap at 3). Also unknown if the peer shard's current tail is below
+        the claimed ``sequence`` (the justifying bytes have left the
+        repository).
+    A caller gets e.g. ``{peer_A: {sequence, prefix_digest}, peer_B:
+    OBSERVED_SET_UNKNOWN}`` and can still order events against ``peer_A``,
+    degrading to incomparable only against ``peer_B`` — one damaged
+    component no longer blinds the caller against every peer.
 
-    A malformed ``marker["observed_set"]`` (missing or not a dict) is a
-    contract violation, not an ``unknown`` — raises ``TrackerStoreError``.
+    The top-level return is ``{}`` only for the marker's own genuinely-empty
+    ``observed_set`` — a positive assertion that nothing was observed (its
+    own ``observed_set`` was empty at fold time). This is a real
+    signature-semantics change for callers versus the prior whole-marker
+    contract: ``resolve_observed_set_for_event`` still returns
+    ``OBSERVED_SET_UNKNOWN`` at its own top level for the no-marker case
+    (no assertion was ever made), so the two functions' top-level return
+    shapes now differ on purpose — see that function's own docstring.
+
+    The success path always returns a FRESH dict, never ``marker
+    ["observed_set"]`` by reference — a caller mutating the result must
+    never corrupt the in-memory marker record.
+
+    A malformed ``marker["observed_set"]`` (missing or not a dict), a
+    non-dict component, or a non-int claimed ``sequence`` is a contract
+    violation, not an ``unknown`` — raises ``TrackerStoreError`` exactly as
+    before; these raises are NOT accumulated per component.
 
     Each claimed peer shard is read EXACTLY ONCE (a single ``read_text()``
     call) per component — this function must NOT call ``max_sequence``
@@ -778,8 +839,16 @@ def resolve_observed_set(
 
     Negative-spec — a future editor must NOT:
       - Collapse ``OBSERVED_SET_UNKNOWN`` into ``{}`` or into a trusted
-        maximum anywhere in this function. That collapse is the exact
+        maximum anywhere in this function, for any component (DEC-6; their
+        § VALIDATOR CONTRACT (A12) item 7). That collapse is the exact
         over-claim cockpit's property (c) exists to prevent.
+      - Return early on the first failing component, collapsing the WHOLE
+        marker to ``OBSERVED_SET_UNKNOWN``. Resolution is per component
+        (A12 item 5) — one damaged peer must not blind the caller against
+        every other peer's still-valid claim.
+      - Return ``marker["observed_set"]`` (or any of its nested values) by
+        reference on the all-concrete path. Build and return a fresh
+        mapping every time.
       - Re-implement the prefix-digest serialization inline. ALWAYS call
         ``_prefix_digest`` — any drift between fold-time and resolve-time
         digest computation silently breaks the whole mechanism.
@@ -791,14 +860,17 @@ def resolve_observed_set(
         mandatory, not an optimization to skip when the sequence check
         passes.
 
-    PROVISIONAL, not a closed reimplementation of cockpit's own
-    well-formedness/prefix-closure validator — whether this digest-mismatch
-    predicate lands on the same `unknown` cases as theirs is C0's second
-    first-wave ask (§ Design, "The prefix-closure/`unknown` predicate is
-    provisional"). Revisit if their answer names a different contract.
+    Well-formedness predicate adopted from cockpit's ratified § VALIDATOR
+    CONTRACT (A12): a claimed peer prefix must be contiguous ``1..claimed_seq``
+    with no duplicates and no gaps, or the component resolves ``unknown`` —
+    see ``_well_formedness``. No longer provisional as of tmrg-03 C1a;
+    the prior caveat here pended cockpit's answer, which now names this
+    contract.
 
     Spec backlink: pln-sat-01b-observed-set-fold-actu-8b3f7a
     § Design, "Resolution, and the three-valued return"; § Tasks C2.
+    docs/plans/2026-08-18-tmrg-03-ordering-contract-in-tracker-store.md
+    § C1a, § C2a.
     """
     observed_set = marker.get("observed_set")
     if not isinstance(observed_set, dict):
@@ -809,6 +881,7 @@ def resolve_observed_set(
     if not observed_set:
         return {}
 
+    resolved: dict[str, object] = {}
     for slug, claim in observed_set.items():
         if not isinstance(claim, dict):
             raise TrackerStoreError(
@@ -847,9 +920,11 @@ def resolve_observed_set(
             current_max = 0
 
         if current_max < claimed_seq:
-            return OBSERVED_SET_UNKNOWN
+            resolved[slug] = OBSERVED_SET_UNKNOWN
+            continue
 
         event_ids: list[str] = []
+        shard_sequences: list[int] = []
         for line in lines:
             try:
                 record = json.loads(line)
@@ -862,7 +937,16 @@ def resolve_observed_set(
                     f"malformed line in shard {path}: not a JSON object"
                 )
             sequence = record.get("sequence")
-            if isinstance(sequence, int) and sequence <= claimed_seq:
+            if not isinstance(sequence, int):
+                continue
+            # shard_sequences covers the WHOLE shard, in file order,
+            # regardless of claimed_seq — cockpit's well-formedness predicate
+            # is a property of the shard, not of one claim (see
+            # _well_formedness). event_ids stays filtered to
+            # sequence <= claimed_seq — it is the digest recompute's input,
+            # a separate, claim-scoped check.
+            shard_sequences.append(sequence)
+            if sequence <= claimed_seq:
                 record_id = record.get("id")
                 if not record_id:
                     raise TrackerStoreError(
@@ -871,11 +955,28 @@ def resolve_observed_set(
                     )
                 event_ids.append(record_id)
 
+        # cockpit's A12 well-formedness predicate, over the SAME
+        # shard_sequences collected in the pass above — no second read.
+        # Independent of the digest recompute below: a gap that was already
+        # present when the marker was written (e.g. sequences 1, 2, 4 for a
+        # claim of 4) recomputes an identical digest over the same three ids
+        # and would pass the digest check alone. Point-of-failure scope (A12
+        # item 3): a claim strictly below resolves_unknown_from still
+        # resolves concretely — a shard that goes bad late must not
+        # retroactively invalidate its own good prefix.
+        _first_defect, resolves_unknown_from = _well_formedness(shard_sequences)
+        if resolves_unknown_from is not None and claimed_seq >= resolves_unknown_from:
+            resolved[slug] = OBSERVED_SET_UNKNOWN
+            continue
+
         recomputed_digest = _prefix_digest(event_ids)
         if recomputed_digest != claimed_digest:
-            return OBSERVED_SET_UNKNOWN
+            resolved[slug] = OBSERVED_SET_UNKNOWN
+            continue
 
-    return observed_set
+        resolved[slug] = {"sequence": claimed_seq, "prefix_digest": claimed_digest}
+
+    return resolved
 
 
 def resolve_observed_set_for_event(
@@ -902,12 +1003,47 @@ def resolve_observed_set_for_event(
     fold time; no marker at all means no assertion was ever made, which is
     exactly ``unknown``.
 
-    PROVISIONAL alongside ``resolve_observed_set`` — see that function's
-    docstring for the pending-cockpit-answer caveat, which applies here too
-    since this function delegates to it.
+    No longer PROVISIONAL — delegates to ``resolve_observed_set``, which
+    adopted cockpit's ratified § VALIDATOR CONTRACT (A12) well-formedness
+    predicate as of tmrg-03 C1a; see that function's docstring.
+
+    Point-of-failure scope (their § VALIDATOR CONTRACT (A12) item 3) is a
+    per-event property, and this is the function that actually exposes it:
+    a peer shard that goes bad at position 40 must leave events whose
+    marker claims a sequence below 40 resolving concretely, while events
+    whose marker claims 40 or above resolve ``unknown`` for that
+    component. This function needs no code of its own for that scoping —
+    ``resolve_observed_set`` already applies it PER COMPONENT (a claim
+    strictly below ``resolves_unknown_from`` resolves concrete; see
+    ``_well_formedness``), and this function's only job is to pick the one
+    marker in effect for *event* and delegate. Verified here — not just
+    assumed — by tests that walk the actual event path (distinct events
+    selecting distinct markers with distinct claims against one defective
+    peer shard), because a test that only exercises ``resolve_observed_set``
+    directly does not prove this function's own marker-selection step
+    preserves it.
+
+    Return-shape asymmetry with ``resolve_observed_set``, deliberate and
+    NOT to be smoothed over: this function's own top-level return may
+    still be the bare ``OBSERVED_SET_UNKNOWN`` sentinel — the no-marker
+    case above, where no assertion was ever made for *event*.
+    ``resolve_observed_set`` itself never returns the bare sentinel at top
+    level as of C2a; it always returns a ``dict`` (possibly ``{}`` for a
+    genuinely-empty ``observed_set``, possibly with per-component
+    ``OBSERVED_SET_UNKNOWN`` values). Once this function finds a marker and
+    delegates, its return takes on ``resolve_observed_set``'s dict shape;
+    only the no-marker branch above stays the bare sentinel.
+
+    Negative-spec: marker selection breaks ties on ``(sequence, id)``, never
+    on line position. ``sequence`` is unique only under one working tree's
+    lock — a git text-merge of a shard can leave two markers at the same
+    ``sequence``, and it can reorder lines without reordering applies, so
+    first-in-file-order is an artifact of how the shard was written to disk
+    rather than a fact about event order.
 
     Spec backlink: pln-sat-01b-observed-set-fold-actu-8b3f7a
-    § Design, "The event→marker mapping"; § Tasks C2.
+    § Design, "The event→marker mapping"; § Tasks C2;
+    ``cross-repo/inbox/2026-08-18-example-cockpit-repo-em-tmrg-03-ordering-contract-and-prefix-closure-ownership.md`` § (e).
     """
     machine = event.get("machine")
     sequence = event.get("sequence")
@@ -920,7 +1056,7 @@ def resolve_observed_set_for_event(
     text = path.read_text(encoding="utf-8") if path.exists() else ""
 
     latest_marker: dict | None = None
-    latest_marker_sequence = -1
+    latest_marker_key: tuple[int, str] | None = None
     for line in _split_lines(text):
         try:
             record = json.loads(line)
@@ -933,8 +1069,10 @@ def resolve_observed_set_for_event(
         record_sequence = record.get("sequence")
         if not isinstance(record_sequence, int) or record_sequence >= sequence:
             continue
-        if record_sequence > latest_marker_sequence:
-            latest_marker_sequence = record_sequence
+        record_id = record.get("id")
+        record_key = (record_sequence, record_id if isinstance(record_id, str) else "")
+        if latest_marker_key is None or record_key > latest_marker_key:
+            latest_marker_key = record_key
             latest_marker = record
 
     if latest_marker is None:

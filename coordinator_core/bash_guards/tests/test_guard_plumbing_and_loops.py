@@ -67,6 +67,7 @@ Spec backlink (verbatim-alternative promotion): DoE-claude:pln-bash-guard-merged
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 
@@ -74,6 +75,22 @@ import pytest
 
 from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
+
+#: Same bridge-to-C8 skip pattern as `test_guard_multiprobe_banner.py`'s own
+#: `requires_powershell_grammar` -- the grammar package is not yet declared
+#: in `pyproject.toml` (C8), so a peer/clean-install run without it must not
+#: go red for a dependency no manifest asked them to have.
+_GRAMMAR_PRESENT = all(
+    importlib.util.find_spec(name) is not None
+    for name in ("tree_sitter", "tree_sitter_pwsh")
+)
+requires_powershell_grammar = pytest.mark.skipif(
+    not _GRAMMAR_PRESENT,
+    reason=(
+        "PowerShell grammar package not installed; C8 declares it in "
+        "pyproject.toml."
+    ),
+)
 
 
 def _payload(command):
@@ -584,7 +601,22 @@ class TestPowerShellDialect:
         assert hso["permissionDecision"] == "allow"
         assert "permissionDecisionReason" not in hso
 
-    def test_non_head_tail_powershell_command_declares_silent(self):
+    def test_non_head_tail_powershell_command_fires_no_advisory(self):
+        # A no-shape-matched PowerShell command must not fire an advisory --
+        # that is this test's load-bearing assertion, and it is unchanged.
+        #
+        # It does, however, record SILENT rather than returning a bare
+        # clean. C6 widened this guard's `MATCHERS` to include PowerShell,
+        # which subjects it to the standing repo-wide contract in
+        # `tests/test_no_false_clean_on_unparsed_dialect.py`: a guard
+        # DECLARING PowerShell must back that declaration with measured
+        # behaviour, and a bare `None` is indistinguishable from "this
+        # guard was never invoked" -- precisely the confusion C6 exists to
+        # end. That contract is owned by another workstream and is not this
+        # plan's to weaken, so the recorded-silence side won.
+        #
+        # `record_silent` is inert outside `collecting()`, so nothing about
+        # what an agent actually sees changed here.
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -599,3 +631,72 @@ class TestPowerShellDialect:
             result = guard.check(_ps_payload(""))
         assert result is None
         assert not was_silent("guard_plumbing_and_loops", silences)
+
+
+class TestPowerShellForLoopAndPipelineForeachObject:
+    """C3 (pln-the-shape-classifier-reaches-a-e743e5): row 14's SILENT
+    ruling for FOR_LOOP is overturned by D2, and PIPELINE_FOREACH_OBJECT
+    (new member, no bash analogue) gets its own generic advisory. Both route
+    through `classify_command(cmd, dialect=Dialect.POWERSHELL)` -- the same
+    call `_verdict_powershell` now makes for both shapes, no private
+    classification path (AC11)."""
+
+    @requires_powershell_grammar
+    def test_powershell_for_loop_advises_not_silent(self):
+        # Row-14 superseding note (D2): `foreach ($x in $y) { git log -1 $x }`
+        # now classifies as a real FOR_LOOP match and gets the same generic
+        # advisory the bash leg's bare-glob FOR_LOOP fallback renders.
+        out = guard.check(
+            _ps_payload("foreach ($f in $files) { git log -1 $f }"),
+            host_is_windows=True,
+        )
+        assert out is not None
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        ctx = hso["additionalContext"]
+        assert "for-loop" in ctx
+        # AC9: the alternative is a subprocess invocation (`python3 -c`),
+        # never a bash-only construct -- no `xargs`, no `$(...)`, no
+        # `for ... do ... done`.
+        assert "python3" in ctx
+        assert "xargs" not in ctx
+        assert "do ... done" not in ctx and " do \n" not in ctx
+
+    @requires_powershell_grammar
+    def test_powershell_pipeline_foreach_object_advises(self):
+        out = guard.check(
+            _ps_payload("Get-ChildItem *.py | ForEach-Object { python3 lint.py $_.FullName }"),
+            host_is_windows=True,
+        )
+        assert out is not None
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        assert "pipeline-foreach-object" in ctx
+        # AC9: PowerShell-valid alternative -- a `python3 -c` invocation,
+        # never `xargs -P` or any other bash-only remediation.
+        assert "python3" in ctx
+        assert "xargs" not in ctx
+
+    @requires_powershell_grammar
+    def test_powershell_percent_alias_for_foreach_object_advises(self):
+        out = guard.check(
+            _ps_payload("Get-ChildItem -Recurse | % { git log -1 $_ }"),
+            host_is_windows=False,
+        )
+        assert out is not None
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        assert "pipeline-foreach-object" in ctx
+
+    def test_no_private_shape_precedence_walk_remains(self):
+        # AC11: `_verdict_powershell` must classify via
+        # `_shape_classifier.classify_command` -- the module-level
+        # `classify_command` name it calls is that same function, not a
+        # locally re-derived SHAPE_PRECEDENCE walk.
+        import inspect
+
+        from coordinator_core.bash_guards._shape_classifier import (
+            classify_command as _canonical_classify_command,
+        )
+
+        assert guard.classify_command is _canonical_classify_command
+        source = inspect.getsource(guard)
+        assert "SHAPE_PRECEDENCE" not in source

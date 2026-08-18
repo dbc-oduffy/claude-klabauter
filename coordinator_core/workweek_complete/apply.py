@@ -78,6 +78,10 @@ from coordinator_core.ceremony_common.apply_halt import (
     _directive_gate_open,
     build_ceremony_halt_exit_codes,
 )
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
     classify_cli_exit,
@@ -402,22 +406,23 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
 
 
 def main(argv: list[str]) -> int:
-    """`main()`'s `apply` dispatch arm — `--decisions <json>` is the one
-    supported flag, mirroring `workday_complete.apply`'s CLI shape."""
+    """`main()`'s `apply` dispatch arm — `--decisions <json>` (or its
+    file-borne sibling `--decisions-file <path>`) is the one supported flag,
+    mirroring `workday_complete.apply`'s CLI shape."""
     decisions: Optional[dict[str, Any]] = None
+    conflict = detect_conflicting_payload_channels(argv)
+    if conflict is not None:
+        print(f"workweek-complete-apply: {conflict}", file=sys.stderr)
+        return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "--decisions":
-            if i + 1 >= len(argv):
-                print("workweek-complete-apply: --decisions requires a value", file=sys.stderr)
+        if (payload := resolve_json_payload_flag(argv, i)).consumed:
+            if payload.error is not None:
+                print(f"workweek-complete-apply: {payload.error}", file=sys.stderr)
                 return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
-            try:
-                decisions = json.loads(argv[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"workweek-complete-apply: malformed --decisions JSON: {exc}", file=sys.stderr)
-                return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         else:
             print(f"workweek-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
             return int(WorkweekApplyExitCode.TRANSPORT_FAIL)

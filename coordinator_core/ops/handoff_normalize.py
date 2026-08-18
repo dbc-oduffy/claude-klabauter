@@ -93,6 +93,10 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from coordinator_core.frontmatter.baton_class import (
+    canonical_kind,
+    kind_values_for_canonical,
+)
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -191,6 +195,17 @@ def _resolve_claimed_plan_deliverable_id(worktree_root: Optional[Path]) -> Optio
     return deliverable_id or None
 
 
+#: Kinds excluded from the batch-sweep carry (AC6, 2026-08-18 spinoff-deliverable-id
+#: plan, C4). Sourced from `baton_class.py` — the repo's single owning table for
+#: `kind` membership — via the same `kind_values_for_canonical()` helper C2
+#: (`deliverable_cascade.py`) and C3 (`handoff_transition.py`) use for this identical
+#: policy, matching `deliverable_carry._ROADMAP_STUB_KINDS`'s own sourcing shape. A
+#: `kind: spinoff` record must remain the sole bearer of its own `deliverable_id` —
+#: see the plan's "Where the wrong id actually comes from" section — so it is never
+#: entitled to a claimed plan's carried value, independent of `claimed_by`.
+_CARRY_EXCLUDED_KINDS = frozenset(kind_values_for_canonical("spinoff"))
+
+
 def _carry_value_for_file(
     content: str, carried_deliverable_id: Optional[str], session_id: str
 ) -> Optional[str]:
@@ -206,10 +221,18 @@ def _carry_value_for_file(
     so it falls through to the mint-from-slug path instead of being silently
     stamped with an unrelated session's claimed-plan identity.
 
-    Returns `carried_deliverable_id` iff `session_id` is non-empty AND this file's
-    frontmatter `claimed_by` equals `session_id`. Returns `None` in every other
-    case, INCLUDING when `session_id` is unresolvable (`""`) — fail toward
-    not-stamping, never toward stamping.
+    Second break-class fix (AC6, 2026-08-18): a `kind: spinoff` record must never
+    receive a claimed plan's `deliverable_id` through this door either, even when
+    `claimed_by` matches — a spinoff is not the same deliverable as the plan that
+    spun it off (see the plan's "Why minting fresh does not violate carry-not-remint"
+    section), and the caller's own key-absent gate (`_normalize_one_text` step 5)
+    is the one live producer of the inherited-id defect this closes.
+
+    Returns `carried_deliverable_id` iff `session_id` is non-empty, this file's
+    frontmatter `claimed_by` equals `session_id`, AND this file's `kind` is not in
+    `_CARRY_EXCLUDED_KINDS`. Returns `None` in every other case, INCLUDING when
+    `session_id` is unresolvable (`""`) — fail toward not-stamping, never toward
+    stamping.
 
     Negative-spec:
       - Does NOT change `_normalize_one_text`'s own carry-vs-mint branch — that
@@ -217,6 +240,8 @@ def _carry_value_for_file(
         shared byte-for-byte with `handoff_author_fork.py` /
         `queue_scaffold_baton.py`, which legitimately carry unconditionally
         because they are authoring THIS session's own new artifact.
+      - Does NOT touch any kind other than the ones `_CARRY_EXCLUDED_KINDS`
+        names — every other kind's carry behaviour is unchanged (AC6).
     """
     if not carried_deliverable_id or not session_id:
         return None
@@ -224,9 +249,17 @@ def _carry_value_for_file(
     if split is None:
         return None
     claimed_by = read_fm_field(split.fm_text, "claimed_by")
-    if claimed_by == session_id:
-        return carried_deliverable_id
-    return None
+    if claimed_by != session_id:
+        return None
+    # Canonicalize before the membership test, matching `deliverable_cascade`'s
+    # leg (d) and `handoff_transition`'s backstop exactly. A raw compare agrees
+    # with those two only while `spinoff` has no pre-rename alias; the moment
+    # one is added to `baton_class._PRE_RENAME_ALIASES`, a raw compare would
+    # let the aliased spelling through this door while the other two refuse it.
+    kind = canonical_kind(read_fm_field_unquoted(split.fm_text, "kind"))
+    if kind in _CARRY_EXCLUDED_KINDS:
+        return None
+    return carried_deliverable_id
 
 
 # ---------------------------------------------------------------------------

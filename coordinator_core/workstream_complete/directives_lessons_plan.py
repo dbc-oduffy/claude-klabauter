@@ -81,6 +81,7 @@ Negative-spec:
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
 
 
@@ -526,6 +527,19 @@ def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str,
     directives: list[dict[str, Any]] = []
     for idx, lesson in enumerate(decisions.get(_KEY_LESSONS, []) or []):
         add_id = lesson_add_directive_id(idx)
+        if not isinstance(lesson, Mapping):
+            # A bare string is the natural first guess at this shape, and it
+            # used to reach `.get` and die on AttributeError -- a traceback
+            # where the block below is deliberately designed to name the
+            # offending entry and its missing keys. Same refusal, same
+            # nothing-written guarantee, just legible.
+            raise ValueError(
+                f"decisions[{_KEY_LESSONS!r}][{idx}] is a "
+                f"{type(lesson).__name__}, not a mapping (required keys: "
+                f"{list(_LESSON_REQUIRED_KEYS)!r}). Supply them and re-run "
+                "apply -- this is a malformed decisions map, not a ceremony "
+                "failure, and nothing has been written."
+            )
         missing = [k for k in _LESSON_REQUIRED_KEYS if not str(lesson.get(k) or "").strip()]
         if missing:
             raise ValueError(

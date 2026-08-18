@@ -35,7 +35,7 @@ def _load_dispatcher_module():
     return module
 
 
-def test_rung_inventory_matches_thirteen_stems():
+def test_rung_inventory_matches_fourteen_stems():
     expected = {
         "backlog-grind-assemble",
         "baton-assemble",
@@ -44,6 +44,7 @@ def test_rung_inventory_matches_thirteen_stems():
         "orient-assemble",
         "pickup-assemble",
         "plan-assemble",
+        "quick-wrap-assemble",
         "review-assemble",
         "sizing-assemble",
         "staff-session-assemble",
@@ -52,7 +53,7 @@ def test_rung_inventory_matches_thirteen_stems():
         "workstream-complete-assemble",
     }
     assert set(entry_point_shim.ASSEMBLE_TARGETS) == expected
-    assert len(entry_point_shim.ASSEMBLE_TARGETS) == 13
+    assert len(entry_point_shim.ASSEMBLE_TARGETS) == 14
 
 
 def test_each_target_py_cmd_present_ps1_asymmetric():
@@ -65,7 +66,7 @@ def test_each_target_py_cmd_present_ps1_asymmetric():
         assert has_ps1 == (name not in ps1_missing)
         if has_ps1:
             ps1_present_count += 1
-    assert ps1_present_count == 10
+    assert ps1_present_count == 11
 
 
 def test_assemble_targets_partition_engine_vs_by_path():

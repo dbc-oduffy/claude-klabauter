@@ -28,7 +28,6 @@ import importlib.util
 import io
 import os
 import subprocess
-import sys
 import tempfile
 import time
 
@@ -50,8 +49,9 @@ def _load_module():
     """Import sweep-shipped-handoffs.py as a fresh module object each call."""
     path = os.path.join(SCRIPT_DIR, "sweep-shipped-handoffs.py")
     spec = importlib.util.spec_from_file_location("sweep_shipped_handoffs_under_test", path)
+    assert spec is not None, f"spec_from_file_location returned None for {path}"
+    assert spec.loader is not None, f"spec {spec!r} has no loader"
     mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
 
@@ -118,9 +118,9 @@ def test_repo_root_derived_from_state_root_not_git_root():
         _write_handoff(handoffs_dir, "a-shipped.md", "shipped", "deadbeef")
         _write_handoff(handoffs_dir, "b-abandoned.md", "abandoned")
 
-        mod._resolve_repo_root = lambda: git_repo_root
-        mod._resolve_state_root = lambda repo_root: state_root
-        mod._batch_resolve_shipped_shas = lambda shas, cwd: {s: True for s in shas}  # every SHA resolves
+        setattr(mod, "_resolve_repo_root", lambda: git_repo_root)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
+        setattr(mod, "_batch_resolve_shipped_shas", lambda shas, cwd: {s: True for s in shas})  # every SHA resolves
 
         seen = {}
 
@@ -142,9 +142,11 @@ def test_repo_root_derived_from_state_root_not_git_root():
         )
 
         candidate_ids = seen.get("candidate_ids") or []
+        # Always forward-slash — wire_paths.rel_id()'s convention, not os.sep
+        # (2026-08-18 Windows-separator fix; see rel_candidates in main()).
         expected_rel = {
-            os.path.join("state", "handoffs", "a-shipped.md"),
-            os.path.join("state", "handoffs", "b-abandoned.md"),
+            "state/handoffs/a-shipped.md",
+            "state/handoffs/b-abandoned.md",
         }
         assert set(candidate_ids) == expected_rel, (
             "coupling regression: candidate_ids relativized against "
@@ -193,13 +195,13 @@ def test_frontmatter_selection_and_staleness():
         # f: active -> skipped entirely, never a candidate
         _write_handoff(handoffs_dir, "f-active.md", "active")
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
 
         def fake_batch_resolve(shas, cwd):
             return {sha: sha == "goodsha1" for sha in shas}
 
-        mod._batch_resolve_shipped_shas = fake_batch_resolve
+        setattr(mod, "_batch_resolve_shipped_shas", fake_batch_resolve)
 
         seen = {}
 
@@ -212,10 +214,12 @@ def test_frontmatter_selection_and_staleness():
         assert rc == 0, f"frontmatter selection: exit 0, got rc={rc}"
 
         candidate_ids = set(seen.get("candidate_ids") or [])
+        # Always forward-slash — wire_paths.rel_id()'s convention, not os.sep
+        # (2026-08-18 Windows-separator fix; see rel_candidates in main()).
         expected_candidates = {
-            os.path.join("state", "handoffs", "a-shipped-ok.md"),
-            os.path.join("state", "handoffs", "d-abandoned.md"),
-            os.path.join("state", "handoffs", "e-closed.md"),
+            "state/handoffs/a-shipped-ok.md",
+            "state/handoffs/d-abandoned.md",
+            "state/handoffs/e-closed.md",
         }
         assert candidate_ids == expected_candidates, (
             "frontmatter selection: shipped-resolvable + abandoned + closed "
@@ -245,8 +249,8 @@ def test_empty_tree_no_dispatch():
         state_root = os.path.join(tmp, "state")
         os.makedirs(os.path.join(state_root, "handoffs"))
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
 
         called = {"n": 0}
 
@@ -285,8 +289,8 @@ def test_route_runtime_error_is_a_dispatch_failure_not_success():
         os.makedirs(handoffs_dir)
         _write_handoff(handoffs_dir, "a-abandoned.md", "abandoned")
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
 
         def fake_route(op, params, repo_root, legacy_fn):
             raise RuntimeError("simulated transport failure")
@@ -316,8 +320,8 @@ def test_route_partial_exit_code_is_a_dispatch_failure_not_success():
         _write_handoff(handoffs_dir, "a-abandoned.md", "abandoned")
         _write_handoff(handoffs_dir, "b-superseded.md", "superseded")
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
 
         def fake_route(op, params, repo_root, legacy_fn):
             candidate_ids = params.get("candidate_ids", [])
@@ -354,9 +358,9 @@ def test_all_retained_no_candidates_still_returns_zero():
         _write_handoff(handoffs_dir, "a-shipped-unresolvable.md", "shipped", "badsha1")
         _write_handoff(handoffs_dir, "b-shipped-unresolvable.md", "shipped", "badsha2")
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
-        mod._batch_resolve_shipped_shas = lambda shas, cwd: {s: False for s in shas}  # nothing resolves
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
+        setattr(mod, "_batch_resolve_shipped_shas", lambda shas, cwd: {s: False for s in shas})  # nothing resolves
 
         called = {"n": 0}
 
@@ -420,8 +424,8 @@ def test_c9_unresolvable_escape_leaves_shipped_in_kind_untouched():
         old_time = time.time() - (20 * 86400)  # past the default 14-day threshold
         os.utime(path, (old_time, old_time))
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
         # _batch_resolve_shipped_shas runs for real here (tmp is a real,
         # commit-less repo, so `deadbee1` never resolves) -- exercising the
         # actual batch resolvability gate, not a stand-in.
@@ -437,7 +441,9 @@ def test_c9_unresolvable_escape_leaves_shipped_in_kind_untouched():
         assert rc == 0, f"expected exit 0, got {rc}"
         assert "1 shipped handoffs escaped via unresolvable-shipped_in marker" in out, out
         candidate_ids = seen.get("candidate_ids") or []
-        assert os.path.join("state", "handoffs", "shipped-dead.md") in candidate_ids, candidate_ids
+        # Always forward-slash — wire_paths.rel_id()'s convention, not os.sep
+        # (2026-08-18 Windows-separator fix; see rel_candidates in main()).
+        assert "state/handoffs/shipped-dead.md" in candidate_ids, candidate_ids
         assert "retained" not in out, (
             f"escaped handoff must not also be reported as retained: {out!r}"
         )
@@ -567,8 +573,8 @@ def test_c9_unresolvable_escape_stamp_failure_falls_back_to_retained():
         old_time = time.time() - (20 * 86400)
         os.utime(path, (old_time, old_time))
 
-        mod._resolve_repo_root = lambda: tmp
-        mod._resolve_state_root = lambda repo_root: state_root
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
 
         seen = {}
 
@@ -585,3 +591,131 @@ def test_c9_unresolvable_escape_stamp_failure_falls_back_to_retained():
         assert (seen.get("candidate_ids") or []) == []
 
 
+# ===========================================================================
+# Windows-separator portability tripwire (dispatch brief, 2026-08-18):
+# rel_candidates built at main()'s dispatch site must always carry forward
+# slashes, matching wire_paths.rel_id()'s ALWAYS-forward-slash convention
+# that fleet.archive_completed_handoffs' live_handoffs map is keyed by.
+# handoffs_dir/candidate paths here are built via the real os.path.join, so
+# on a Windows CI/dev host this exercises the genuine os.sep == "\\" shape
+# natively (no ntpath-monkeypatching needed for that host) — the assertion
+# itself has no host-OS branch, so a POSIX host merely finds nothing to
+# normalize and still passes; only Windows exercises the actual regression.
+# ===========================================================================
+def test_rel_candidates_are_always_forward_slash():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+        _write_handoff(handoffs_dir, "a-abandoned.md", "abandoned")
+
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
+
+        seen = {}
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            seen["candidate_ids"] = params.get("candidate_ids")
+            return {"acted": params.get("candidate_ids", [])}
+
+        rc, _out, _err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, f"expected exit 0, got {rc}"
+        candidate_ids = seen.get("candidate_ids") or []
+        assert candidate_ids, "expected exactly one dispatched candidate_id"
+        for cid in candidate_ids:
+            assert "\\" not in cid, f"candidate_id must be forward-slash only, got {cid!r}"
+            assert "/" in cid, f"candidate_id must be repo-relative with a separator, got {cid!r}"
+
+
+# ===========================================================================
+# Companion to the above: a dispatch where candidates went in non-empty but
+# acted came back empty (every skip reason "already-archived") must WARN on
+# stderr, not print an indistinguishable "no terminal handoffs archived" —
+# this is the observable symptom the Windows-separator bug produced for
+# days before the boundary/op-side fixes above.
+# ===========================================================================
+def test_nonempty_candidates_all_already_archived_warns_not_silent():
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state_root = os.path.join(tmp, "state")
+        handoffs_dir = os.path.join(state_root, "handoffs")
+        os.makedirs(handoffs_dir)
+        _write_handoff(handoffs_dir, "a-abandoned.md", "abandoned")
+
+        setattr(mod, "_resolve_repo_root", lambda: tmp)
+        setattr(mod, "_resolve_state_root", lambda repo_root: state_root)
+
+        def fake_route(op, params, repo_root, legacy_fn):
+            candidate_ids = params.get("candidate_ids", [])
+            return {
+                "acted": [],
+                "skipped": [{"id": cid, "reason": "already-archived"} for cid in candidate_ids],
+            }
+
+        rc, out, err = _run_main_capturing(mod, fake_route=fake_route)
+
+        assert rc == 0, out
+        assert "no terminal handoffs archived" in out, out
+        assert "WARN" in err and "already-archived" in err, err
+
+
+
+
+# ===========================================================================
+# sedge-17 — advisory referent dangle report over realized_by/gate_cleared_by.
+# Report-only by contract: no write, no stamp, no exit-code influence, and it
+# rides the SAME single batch-check spawn as the shipped_in gate.
+# ===========================================================================
+def test_extract_referent_tokens_reads_scalar_and_inline_flow():
+    """The research corpus's own counter handled block-sequence but not
+    inline-flow YAML, which is exactly the shape `gate_cleared_by` carries in
+    this repo -- both forms must yield their tokens here."""
+    mod = _load_module()
+
+    assert mod._extract_referent_tokens("abc1234") == ["abc1234"]
+    assert mod._extract_referent_tokens("'abc1234'") == ["abc1234"]
+    assert mod._extract_referent_tokens("['abc1234', 'def5678']") == ["abc1234", "def5678"]
+    assert mod._extract_referent_tokens("") == []
+    assert mod._extract_referent_tokens("null") == []
+    assert mod._extract_referent_tokens("[]") == []
+
+
+def test_referent_fields_are_opt_in_never_hex_pattern_matched():
+    """Field-opt-in by construction: a hex-shaped value in a NON-member field
+    (execution_authorized_sha is a `git hash-object` without -w, never in the
+    ODB) must never be picked up as a commit referent."""
+    mod = _load_module()
+
+    assert mod._REFERENT_ADVISORY_FIELDS == ("realized_by", "gate_cleared_by")
+    assert "execution_authorized_sha" not in mod._REFERENT_ADVISORY_FIELDS
+    assert "shipped_in" not in mod._REFERENT_ADVISORY_FIELDS
+
+    fields = {"execution_authorized_sha": "dead1234", "realized_by": "beef5678"}
+    dangling = mod._report_dangling_referents([("h.md", fields)], {"beef5678": True})
+    assert dangling == 0, "a resolving realized_by must not report, and the non-member field is invisible"
+
+
+def test_dangling_referent_is_reported_but_nothing_is_stamped(capsys):
+    """AC1: report-only. A dead realized_by prints an advisory and leaves the
+    file byte-identical -- unlike the shipped_in path, which stamps an escape."""
+    mod = _load_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        handoffs_dir = os.path.join(tmp, "handoffs")
+        os.makedirs(handoffs_dir)
+        path = os.path.join(handoffs_dir, "h.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("---\ntitle: t\nrealized_by: dead1234\n---\nbody\n")
+        before = open(path, "rb").read()
+
+        fields = mod._parse_frontmatter(path)
+        dangling = mod._report_dangling_referents([(path, fields)], {"dead1234": False})
+
+        assert dangling == 1
+        out = capsys.readouterr().out
+        assert "advisory" in out and "dead1234" in out and "realized_by" in out, out
+        assert open(path, "rb").read() == before, "report-only: the file must not be rewritten"

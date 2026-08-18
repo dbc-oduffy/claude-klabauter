@@ -201,7 +201,7 @@ def resolve_session_state_parent_deliverable_id(
     if kind not in _ROADMAP_STUB_KINDS:
         print(
             "deliverable_carry: session-state parent tier — held claim "
-            f"{held_claim_path!r} has kind {kind!r}, not a roadmap stub kind "
+            f"'{held_claim_path}' has kind {kind!r}, not a roadmap stub kind "
             f"({sorted(_ROADMAP_STUB_KINDS)!r}) — holding a claim is not "
             "evidence this plan descends from it; rejecting as parent "
             "candidate, falling through to mint-from-slug",
@@ -213,7 +213,7 @@ def resolve_session_state_parent_deliverable_id(
     if not dlvr_id:
         print(
             "deliverable_carry: session-state parent tier — held roadmap stub "
-            f"{held_claim_path!r} (kind {kind!r}) carries no deliverable_id "
+            f"'{held_claim_path}' (kind {kind!r}) carries no deliverable_id "
             "(absent/null/blank) — falling through to mint-from-slug",
             file=sys.stderr,
         )
@@ -221,7 +221,7 @@ def resolve_session_state_parent_deliverable_id(
 
     print(
         "deliverable_carry: session-state parent tier — held roadmap stub "
-        f"{held_claim_path!r} (kind {kind!r}) carries deliverable_id {dlvr_id!r} "
+        f"'{held_claim_path}' (kind {kind!r}) carries deliverable_id {dlvr_id!r} "
         "— carrying",
         file=sys.stderr,
     )
@@ -279,7 +279,7 @@ def resolve_explicit_predecessor_edge_deliverable_id(
     if not dlvr_id:
         print(
             "deliverable_carry: explicit-predecessor-edge tier — predecessor "
-            f"{predecessor_path!r} carries no deliverable_id (absent/null/blank) "
+            f"'{predecessor_path}' carries no deliverable_id (absent/null/blank) "
             "— falling through",
             file=sys.stderr,
         )
@@ -287,7 +287,7 @@ def resolve_explicit_predecessor_edge_deliverable_id(
 
     print(
         "deliverable_carry: explicit-predecessor-edge tier — predecessor "
-        f"{predecessor_path!r} carries deliverable_id {dlvr_id!r} — carrying",
+        f"'{predecessor_path}' carries deliverable_id {dlvr_id!r} — carrying",
         file=sys.stderr,
     )
     return dlvr_id
@@ -419,8 +419,14 @@ def resolve_deliverable_and_initiative(
     dlvr_id = plan_dlvr_id or predecessor_dlvr_id
 
     if not dlvr_id and plan_active:
+        # Windows-portability: paths are interpolated PLAIN, never `!r` --
+        # `repr()` doubles each backslash in a Windows path, which breaks a
+        # caller's plain `path in message` substring check on Windows only
+        # (POSIX paths have no separator to escape, so it is invisible there).
+        # Same fix, same reason as the DivergentDeliverableIdError message
+        # above; ids keep `!r` since they contain no separators.
         raise DroppedDeliverableJoinError(
-            f"active plan {plan_file!r} names no deliverable_id (absent field, "
+            f"active plan '{plan_file}' names no deliverable_id (absent field, "
             "unreadable file, or literal `null` — all indistinguishable at this layer), "
             "and the predecessor handoff fallback also yielded nothing — refusing to "
             "silently mint-from-slug under an active plan"
@@ -428,10 +434,10 @@ def resolve_deliverable_and_initiative(
 
     if not dlvr_id and predecessor_is_plan_input:
         raise DroppedDeliverableJoinError(
-            f"predecessor {predecessor!r} arrived on the predecessor axis as a plan "
+            f"predecessor '{predecessor}' arrived on the predecessor axis as a plan "
             "input and names no deliverable_id (absent field, unreadable file, or "
             "literal `null` — all indistinguishable at this layer) — refusing to "
-            f"silently mint-from-slug; add deliverable_id to {predecessor!r}"
+            f"silently mint-from-slug; add deliverable_id to '{predecessor}'"
         )
 
     if dlvr_id:

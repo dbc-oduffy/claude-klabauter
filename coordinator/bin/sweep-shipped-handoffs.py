@@ -109,8 +109,8 @@ from pathlib import Path
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-import cc_invoke  # noqa: E402
-from repo_identity import resolve_checked_repo_root  # noqa: E402
+import cc_invoke  # noqa: E402  # pyright: ignore[reportMissingImports] — added to sys.path at runtime by the _LIB_DIR injection above, not statically resolvable
+from repo_identity import resolve_checked_repo_root  # noqa: E402  # pyright: ignore[reportMissingImports] — same runtime _LIB_DIR sys.path injection as cc_invoke above
 
 
 def _ensure_claude_klabauter_on_path() -> str:
@@ -347,12 +347,84 @@ def _batch_resolve_shipped_shas(shas: "set[str]", cwd: str) -> "dict[str, bool]"
     return out
 
 
-def _resolve_state_root(repo_root: str) -> str:
+#: Referent-bearing frontmatter fields checked by the advisory dangle report.
+#: FIELD-OPT-IN BY CONSTRUCTION (sedge-17 load-bearing constraint): membership is
+#: this literal tuple, never a hex-pattern match over arbitrary field values.
+#: A blanket hex rule is measurably wrong on this corpus -- `execution_authorized_sha`
+#: is a `git hash-object` without `-w` (never in the ODB), `plan.schema.json`'s
+#: `sha256:` digests and `handoff.schema.json`'s `cf-` ids are hex-shaped but are
+#: not commit referents. Those stay excluded because they are absent HERE, not
+#: because some exclusion list a future editor can forget to maintain omits them.
+_REFERENT_ADVISORY_FIELDS = ("realized_by", "gate_cleared_by")
+
+_REFERENT_TOKEN_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+
+
+def _extract_referent_tokens(raw: str) -> "list[str]":
+    """Extract commit-referent tokens from ONE frontmatter value.
+
+    Handles both shapes the corpus actually carries: a bare/quoted scalar
+    (`realized_by: abc1234`) and an inline-flow sequence
+    (`gate_cleared_by: ['abc1234']`). The research corpus's own count parser
+    handled block-sequence but NOT inline-flow, which is why the
+    referents-per-artifact figure was suspected of undercounting; re-derived
+    against this repo's corpus at 1.01 per bearing artifact (554 `realized_by`,
+    2 `gate_cleared_by` -- both inline-flow), so the suspicion is real in kind
+    but negligible in magnitude.
+
+    Negative-spec: block-sequence values are NOT seen here, because
+    `_parse_frontmatter` is a scalar-only top-level reader that returns "" for
+    them. That is a silent under-report, which is the correct failure direction
+    for a fail-open advisory -- a missed field yields no report, never a false
+    dangle claim against a referent that resolves fine.
+    """
+    value = _strip_quotes(raw.strip())
+    if not value or value in ("null", "~", "[]"):
+        return []
+    return _REFERENT_TOKEN_RE.findall(value)
+
+
+def _report_dangling_referents(
+    scanned: "list[tuple[str, dict[str, str]]]",
+    resolved: "dict[str, bool]",
+) -> int:
+    """Print the advisory dangle report for `_REFERENT_ADVISORY_FIELDS`.
+
+    REPORT-ONLY BY CONTRACT (sedge-17 AC1): writes nothing, stamps nothing, and
+    never influences the caller's exit code. This is deliberately weaker than
+    the `shipped_in` path above, which stamps an unresolvable-escape and changes
+    a handoff's archive disposition -- a dangling `realized_by`/`gate_cleared_by`
+    is an observation, not an archival fact, and no recovery mechanism exists to
+    justify acting on it.
+
+    Returns the number of dangling (field, token) pairs, for the caller's
+    summary line only.
+    """
+    dangling = 0
+    for path, fields in scanned:
+        for field in _REFERENT_ADVISORY_FIELDS:
+            for token in _extract_referent_tokens(fields.get(field, "")):
+                if not resolved.get(token, False):
+                    print(
+                        f"sweep-shipped-handoffs.py: advisory: {path}: "
+                        f"{field} referent {token} does not resolve to a commit"
+                    )
+                    dangling += 1
+    return dangling
+
+
+def _resolve_state_root(_repo_root: str) -> str:
     """Resolve per-repo state root via the native coordinator_state_root seam.
 
     Big-bang cutover: no bash-lib fallback. A resolution failure here means
     a broken install (claude-klabauter is a mandatory dependency) — fail
     loud, matching the campaign posture.
+
+    `_repo_root` is unused by `coordinator_state_root()` (a global-seam
+    resolver, not a per-repo-root one) — kept for call signature
+    conformance with `main()`'s call site (positional `git_repo_root`) and
+    with `test_sweep_shipped_handoffs.py`'s monkeypatched
+    `lambda repo_root: state_root` stand-ins across every test.
     """
     _ensure_claude_klabauter_on_path()
     from coordinator_core.state_root import coordinator_state_root  # noqa: PLC0415
@@ -388,7 +460,13 @@ def _no_fallback() -> None:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(_argv: list[str] | None = None) -> int:
+    """`_argv` is unused: this script owns no argv-parsed options and delegates
+    everything to `fleet.archive_completed_handoffs` via `cc_invoke.route()` (see
+    the module-level `if __name__` block's docstring note). Kept for call
+    signature conformance with `test_sweep_shipped_handoffs.py`'s harness, which
+    calls `mod.main(argv if argv is not None else [])` uniformly across sibling
+    sweep-script tests."""
     git_repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if git_repo_root is None:
         print("sweep-shipped-handoffs.py: not inside a git repo", file=sys.stderr)
@@ -450,6 +528,13 @@ def main(argv: list[str] | None = None) -> int:
     # logic as before against the resolved map.
     scan_results: list[tuple[str, dict[str, str], str]] = []
     shipped_shas: set[str] = set()
+    # Advisory referent scan (sedge-17) rides the SAME enumeration and the same
+    # single batch-check spawn as shipped_in -- it is not a second pass and adds
+    # no frontmatter read. Collected for every enumerated handoff, not just
+    # archive candidates: a dangling referent is worth reporting whatever the
+    # handoff's archival disposition.
+    referent_scan: list[tuple[str, dict[str, str]]] = []
+    referent_shas: set[str] = set()
 
     if os.path.isdir(handoffs_dir):
         for name in sorted(os.listdir(handoffs_dir)):
@@ -464,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
             fields = _parse_frontmatter(f)
             deployment_state = fields.get("deployment_state", "")
 
+            referent_scan.append((f, fields))
+            for _field in _REFERENT_ADVISORY_FIELDS:
+                referent_shas.update(_extract_referent_tokens(fields.get(_field, "")))
+
             if not _is_archive_candidate(deployment_state, terminal_states):
                 continue
 
@@ -474,7 +563,8 @@ def main(argv: list[str] | None = None) -> int:
                 if sha and sha != "null":
                     shipped_shas.add(sha)
 
-    resolved_shas = _batch_resolve_shipped_shas(shipped_shas, repo_root)
+    resolved_shas = _batch_resolve_shipped_shas(shipped_shas | referent_shas, repo_root)
+    dangling_referents = _report_dangling_referents(referent_scan, resolved_shas)
 
     for f, fields, deployment_state in scan_results:
         if deployment_state == "shipped":
@@ -512,8 +602,15 @@ def main(argv: list[str] | None = None) -> int:
     dispatch_failed = False
 
     if candidates:
+        # rel_candidates must match wire_paths.rel_id()'s ALWAYS-forward-slash
+        # convention -- fleet.archive_completed_handoffs' live_handoffs map is
+        # keyed by rel_id() output, so an os.sep-sliced id (backslash on
+        # Windows) silently misses every lookup and every candidate here
+        # falls into the op's "already-archived" idempotent-replay branch
+        # instead of being archived -- a shape main()'s reporting block
+        # below distinguishes from a genuine no-op.
         rel_candidates = [
-            c[len(repo_root) + 1 :] if c.startswith(repo_root + os.sep) else c
+            (c[len(repo_root) + 1 :] if c.startswith(repo_root + os.sep) else c).replace(os.sep, "/")
             for c in candidates
         ]
         sweep_params = {"mode": "already-terminal", "dry_run": False, "candidate_ids": rel_candidates}
@@ -526,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
             dispatch_failed = True
         else:
             acted = sweep_result.get("acted", []) if isinstance(sweep_result, dict) else []
+            skipped_result = sweep_result.get("skipped", []) if isinstance(sweep_result, dict) else []
             archived += len(acted) if isinstance(acted, list) else 0
             op_exit = sweep_result.get("exit_code", 0) if isinstance(sweep_result, dict) else 0
             if op_exit == 2:
@@ -535,6 +633,28 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 dispatch_failed = True
+            elif rel_candidates and not acted:
+                # A dispatch with candidates going in but nothing acted is not
+                # a normal steady state -- distinguish it from the ordinary
+                # "nothing was ever terminal" no-op below (both otherwise
+                # print the identical "no terminal handoffs archived" line).
+                reasons = {
+                    s.get("reason", "") for s in skipped_result if isinstance(s, dict)
+                }
+                if reasons and all(r == "already-archived" for r in reasons):
+                    print(
+                        f"sweep-shipped-handoffs.py: WARN: {len(rel_candidates)} "
+                        "candidate(s) dispatched, 0 archived -- every skip reason "
+                        "was already-archived (candidate_id / live_handoffs key "
+                        "mismatch, not a genuine no-op)",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"sweep-shipped-handoffs.py: WARN: {len(rel_candidates)} "
+                        "candidate(s) dispatched, 0 archived",
+                        file=sys.stderr,
+                    )
 
     if archived == 0:
         print("no terminal handoffs archived")
@@ -546,6 +666,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if stale_unresolvable > 0:
         print(f"WARNING: {stale_unresolvable} shipped handoffs retained -- shipped_in SHA no longer resolves")
+
+    if dangling_referents > 0:
+        print(
+            f"advisory: {dangling_referents} dangling referent(s) across "
+            f"{'/'.join(_REFERENT_ADVISORY_FIELDS)} -- report-only, nothing stamped"
+        )
 
     if escaped > 0:
         print(

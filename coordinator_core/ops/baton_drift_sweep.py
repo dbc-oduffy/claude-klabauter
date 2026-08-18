@@ -133,10 +133,12 @@ Negative-spec:
   - Does NOT follow additional_predecessors/forked_from — only the primary `predecessor`
     spine (aliased to `predecessor_id`), matching CLAUDE.md's "Predecessor is whatever
     handoff this session was opened with — the primary spine; adjacency is not ancestry."
-  - Does NOT distinguish "dangling continued_into" as a third bucket — a baton with
-    continued_into set already carries deployment_state:continued (terminal by
-    construction, see _TERMINAL_DEPLOYMENT_STATES), so it never reaches the non-terminal
-    population this sweep classifies; that shape falls under terminal_not_archived instead.
+  - A baton with continued_into set already carries deployment_state:continued (terminal
+    by construction, see _TERMINAL_DEPLOYMENT_STATES), so it never reaches the
+    non-terminal population (held/stranded/never_started/tips/reconciled_no_successor/
+    reaped_orphan/desynced) this sweep classifies above; that shape falls under
+    terminal_not_archived — FIFTH LEG (below) is the one exception that looks inside
+    that population for the specific `continued`-with-dangling-move shape.
   - (SECOND LEG) Does NOT re-derive whether a baton's next-steps are actually closed —
     reads only the audit record's EXISTENCE, its `kind: audit-record` frontmatter, its
     filename suffix, and a plain textual scan for a live handoff path in its body; never
@@ -196,6 +198,41 @@ Negative-spec (FOURTH LEG / C8):
     only ever evaluates the same no-successor population `reconciled_no_successor` and
     `reaped_orphan` already isolate.
 
+FIFTH LEG (C1, docs/plans/2026-08-18-retained-supersede-finishes-its-archive.md): `RETAINED`
+looks INSIDE the `terminal_not_archived` population (not the non-terminal one every other
+leg partitions) for one specific shape: `handoff.archive_transition` mode=supersede's own
+retain grounds (`retain_kind: "live-holder"` / `"live-parent"` / `"indeterminate"`) commit
+the status flip (deployment_state -> continued, continued_into -> successor) but
+deliberately skip the archival git-mv — and nothing ever drains that promise once the
+retain ground clears (see that op's own module docstring). A `state/handoffs/` record
+with deployment_state:continued AND a non-empty continued_into IS that shape by
+definition — the location predicate is load-bearing (a `continued` record already moved
+to `archive/handoffs/` is the SUCCESS case, not a hit). REPORT-ONLY: computes and returns
+per-hit CURRENT eligibility (holder now dead AND live-children guard now clears, using the
+SAME two accessors the retain grounds themselves call) — never the unrecoverable historical
+retain_kind, never a mutation. Draining a hit is a separate, operator-initiated act.
+
+Reuses, does not reimplement: `handoff_archive_transition._handoff_live_holder_session` and
+`handoff_children._handoff_has_live_children` — the exact two accessors the retain grounds
+this leg detects call internally, so eligibility can never drift from what a re-run of
+`archive_transition` mode=supersede would itself decide.
+
+Negative-spec (FIFTH LEG / C1):
+  - REPORT-ONLY — computes and returns; calls no `archive_transition` verb, no git mv, no
+    stamp. Draining is a separate, operator-initiated act, not this sweep's job.
+  - Does NOT widen `baton_assemble.apply._dispatch_handoff_supersede_predecessor`'s
+    `superseded`-only assertion, and does NOT make a retain raise anywhere — out of scope
+    entirely (see that plan's own Anti-scope: a 2026-08-03 live repro shows a deterministic
+    raise there deleting a freshly-minted successor on every retry, unable to converge).
+  - Does NOT treat a `continued` record under `archive/handoffs/` as a hit — that is the
+    SUCCESS case (the move already landed); this leg's location predicate keys on
+    `state/handoffs/` specifically.
+  - Does NOT persist or attempt to recover the original `retain_kind` — it was never
+    written to disk and this leg does not re-derive it; only CURRENT eligibility is
+    reported.
+
+Spec backlink (FIFTH LEG / C1): pln-retained-supersede-finishes-it-d1deb5 § Tasks C1, AC1-AC3.
+
 Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d § D2d
 Spec backlink (SECOND LEG): cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 3.
@@ -209,6 +246,7 @@ recording the collision.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -224,7 +262,8 @@ from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta, build_handoff_id_index, handoff_edges, resolve_target
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.lifecycle import git_common_dir
-from coordinator_core.ops.handoff_children import _collect_handoff_paths
+from coordinator_core.ops.handoff_archive_transition import _handoff_live_holder_session
+from coordinator_core.ops.handoff_children import _collect_handoff_paths, _handoff_has_live_children
 
 # Mirrors handoff_archive_transition._TERMINAL_DEPLOYMENT_STATES (vendored, not
 # imported — see module docstring).
@@ -392,6 +431,74 @@ def _referencers_of(
     return referencers
 
 
+def _retained_supersede_eligibility(
+    path: str,
+    continued_into: str,
+    node_repo_root: str,
+    id_index: Dict[str, str],
+    common_dir: "Path | None",
+) -> bool:
+    """CURRENT eligibility (AC2) for a `retained`-bucket hit — whether the
+    supersede move this record's `continued_into` promised can be completed
+    TODAY, not why it was retained originally (that cause was never
+    persisted — see the module's `retained` docstring entry).
+
+    Eligible only when BOTH retain grounds
+    `handoff_archive_transition::_supersede_continued`'s own gates check have
+    now cleared:
+      - holder liveness: `_handoff_live_holder_session` (the SAME accessor
+        the live-holder retain ground calls) returns None for this record.
+      - live children: `handoff.has_live_children` (the SAME guard the
+        live-parent/indeterminate retain ground calls), with `exclude` set
+        to the successor's OWN absolute path — omitting the exclude makes
+        the successor read as its own live child (it names this record via
+        `predecessor:`/`continued_into` by construction) and every hit would
+        read ineligible regardless of the true holder/child state.
+
+    A `continued_into` value this module cannot resolve to an on-disk path
+    (id/path shape it has no evidence for) cannot be safely excluded, so the
+    live-children guard is called WITHOUT an exclude in that case — fail-
+    closed (the successor then counts as its own live child, reading
+    ineligible) rather than guessing a path. `include_history_tier=False`
+    on the resolve: this call must never spawn a per-record git subprocess
+    (coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py governs
+    this file's family) — the successor is always disk-resident by the time
+    a `continued` stamp names it, so tiers 1-2 (pure filesystem) are
+    sufficient.
+    """
+    handoff_dir = os.path.dirname(path)
+    target_abs = resolve_target(
+        continued_into,
+        handoff_dir,
+        node_repo_root,
+        id_index=id_index,
+        include_history_tier=False,
+    )
+    exclude = [target_abs] if target_abs and target_abs != "git-history" else []
+
+    if common_dir is not None:
+        try:
+            holder_session = _handoff_live_holder_session(Path(path), common_dir)
+        except Exception:
+            holder_session = "<indeterminate>"
+    else:
+        holder_session = "<indeterminate>"
+    holder_cleared = holder_session is None
+
+    guard_repo_root = common_dir if common_dir is not None else Path(node_repo_root)
+    try:
+        guard_result = asyncio.run(
+            _handoff_has_live_children(
+                {"candidate": path, "exclude": exclude}, guard_repo_root
+            )
+        )
+        children_cleared = guard_result.get("exit_code") == 1
+    except Exception:
+        children_cleared = False
+
+    return holder_cleared and children_cleared
+
+
 def baton_drift_sweep(worktree_root: Path) -> dict:
     """Classify every open baton (state/handoffs/*.md) by archival/succession drift.
 
@@ -450,6 +557,21 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
                                            # fully-worked baton is misfiled as ordinary live
                                            # work (`tips`).
           "desynced_paths": [str, ...],   # absolute paths of that population
+          "retained": int,                # REPORT-ONLY (pln-retained-supersede-finishes-it-d1deb5,
+                                           # C1) — a `state/handoffs/` record with
+                                           # deployment_state:continued AND a non-empty
+                                           # continued_into: the supersede's status flip
+                                           # landed but its archival git-mv never did (see
+                                           # module docstring's Anti-scope). NOT drained here
+                                           # — computes and returns only; no
+                                           # archive_transition call, no git mv, no stamp.
+          "retained_paths": [str, ...],   # absolute paths of that population
+          "retained_eligible": {str: bool},  # per-path CURRENT eligibility (AC2) keyed by
+                                           # the same absolute path — True only when both the
+                                           # holder-liveness and live-children retain grounds
+                                           # have now cleared, i.e. the move could complete
+                                           # today. NOT the historical retain_kind (never
+                                           # persisted, unrecoverable).
         }
     """
     open_dir = worktree_root / "state" / "handoffs"
@@ -483,6 +605,17 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
     reaped_orphan_paths: List[str] = []
     desynced = 0
     desynced_paths: List[str] = []
+    retained = 0
+    retained_paths: List[str] = []
+    retained_eligible: Dict[str, bool] = {}
+
+    # Built once, off the SAME dag_index the reverse-predecessor index above
+    # already scanned (its per-file reads are cache-backed by _read_meta — see
+    # that function's own docstring — so this second pass costs no new I/O on
+    # the common case). Reused only to resolve `continued_into` values that
+    # are a handoff_id rather than a path (C1's retained-bucket eligibility
+    # check, below).
+    id_index = build_handoff_id_index(dag_index)
 
     # C8: resolved once for the whole sweep, mirroring resolve_claim_state's own
     # hot-path contract (pass a pre-resolved common_dir to skip a second
@@ -501,6 +634,22 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
 
         if deployment_state in _TERMINAL_DEPLOYMENT_STATES:
             terminal_not_archived += 1
+
+            # C1 (pln-retained-supersede-finishes-it-d1deb5): a `continued`
+            # record still under state/handoffs/ (this loop's own scan root —
+            # see module docstring's Anti-scope fourth bullet: a `continued`
+            # record under archive/handoffs/ is the SUCCESS case, never a
+            # hit, and this loop never walks that tree) with a non-empty
+            # continued_into is a supersede whose status flip landed but
+            # whose archival move never did.
+            if deployment_state == "continued":
+                continued_into = meta.get("continued_into")
+                if isinstance(continued_into, str) and continued_into.strip():
+                    retained += 1
+                    retained_paths.append(path)
+                    retained_eligible[path] = _retained_supersede_eligibility(
+                        path, continued_into.strip(), repo_root, id_index, common_dir
+                    )
             continue
 
         # One referencer computation feeds both HELD (filtered to still-live
@@ -567,4 +716,7 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
         "reaped_orphan_paths": reaped_orphan_paths,
         "desynced": desynced,
         "desynced_paths": desynced_paths,
+        "retained": retained,
+        "retained_paths": retained_paths,
+        "retained_eligible": retained_eligible,
     }

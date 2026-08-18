@@ -38,11 +38,14 @@ case.
 
 from __future__ import annotations
 
+from coordinator_core.bash_guards import _command_tokenizer
+from coordinator_core.bash_guards._dialect import Dialect
 from coordinator_core.bash_guards._shape_classifier import (
     Shape,
     SHAPE_PRECEDENCE,
     classify_command,
 )
+from coordinator_core.bash_guards._verdict import collecting
 
 
 class TestQuotedMetacharacters:
@@ -142,6 +145,7 @@ class TestPrecedence:
             Shape.MULTI_PROBE_BANNER,
             Shape.HEAD_TAIL_PLUMBING,
             Shape.FOR_LOOP,
+            Shape.PIPELINE_FOREACH_OBJECT,
             Shape.WHILE_READ_LOOP,
             Shape.FIND_EXEC_XARGS,
         )
@@ -393,6 +397,263 @@ class TestWhileReadLoop:
         assert not result.has_shape(Shape.WHILE_READ_LOOP)
 
 
+class TestPowerShellShapeSet:
+    """C2 of pln-the-shape-classifier-reaches-a-e743e5 -- the six-shape
+    POWERSHELL table entry (D2). AC6 (the four blind-spawn shapes classify),
+    AC7 (in-process cmdlets are a hard-gate negative), AC8 (WHILE_READ_LOOP
+    stays absent), AC12 (the three reused binary-identity detectors
+    regression-tested under `dialect=POWERSHELL` explicitly, not just via
+    the bash-default path).
+    """
+
+    # -- AC6: the four blind-spawn shapes classify --------------------
+
+    def test_foreach_object_block_calling_a_process_matches(self) -> None:
+        result = classify_command(
+            "Get-ChildItem *.py | ForEach-Object { python3 script.py $_.FullName }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+    def test_percent_alias_block_calling_a_process_matches(self) -> None:
+        result = classify_command(
+            "Get-ChildItem -Recurse | % { git log -1 $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+    def test_foreach_statement_matches_for_loop(self) -> None:
+        result = classify_command(
+            "foreach ($f in $files) { git log -1 $f }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.FOR_LOOP,)
+
+    def test_write_host_banner_sequence_matches(self) -> None:
+        result = classify_command(
+            "Write-Host '=== status ==='; git status; git log -1; pwd",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.MULTI_PROBE_BANNER,)
+
+    def test_write_output_banner_vocabulary_also_matches(self) -> None:
+        result = classify_command(
+            "Write-Output '=== status ==='; git status; git log -1; pwd",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.MULTI_PROBE_BANNER,)
+
+    def test_echo_alias_of_write_output_is_banner_vocabulary(self) -> None:
+        # PowerShell ships `echo` as a live ALIAS of `Write-Output`, so an
+        # echo-led probe sequence spawns per probe exactly as its
+        # `Write-Host` spelling does. Omitting the alias left a shape the
+        # PowerShell leg could not see -- i.e. the escape hatch this whole
+        # dialect leg exists to close, reachable by spelling the banner
+        # `echo` instead of `Write-Host`.
+        result = classify_command(
+            'echo "=== facts ==="; pwd; whoami; git status',
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.MULTI_PROBE_BANNER,)
+
+    def test_printf_is_not_powershell_banner_vocabulary(self) -> None:
+        # The negative half of the alias reasoning: PowerShell ships no
+        # `printf` alias, so admitting it would match a name that cannot
+        # run. Only `echo` crosses over from bash's banner vocabulary.
+        result = classify_command(
+            'printf "=== facts ==="; pwd; whoami; git status',
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    # -- AC7: in-process cmdlets are NOT members (D3) -- hard gate -----
+
+    def test_select_string_does_not_match(self) -> None:
+        result = classify_command(
+            "Select-String -Pattern TODO -Path src/*.py",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    def test_get_content_select_object_first_does_not_match(self) -> None:
+        result = classify_command(
+            "Get-Content foo.txt | Select-Object -First 20",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    def test_get_item_does_not_match(self) -> None:
+        result = classify_command("Get-Item .", dialect=Dialect.POWERSHELL)
+        assert result.matched_shapes == ()
+
+    def test_bare_write_host_no_probe_sequence_does_not_match(self) -> None:
+        # A lone banner call is not banner-shaped -- the shape requires N
+        # probe segments (`_MIN_BANNER_SEGMENTS`).
+        result = classify_command("Write-Host 'hello'", dialect=Dialect.POWERSHELL)
+        assert result.matched_shapes == ()
+
+    def test_bare_write_host_banner_marker_no_probe_sequence_does_not_match(
+        self,
+    ) -> None:
+        result = classify_command(
+            "Write-Host '=== section ==='", dialect=Dialect.POWERSHELL
+        )
+        assert result.matched_shapes == ()
+
+    def test_bare_write_output_does_not_match(self) -> None:
+        result = classify_command("Write-Output 'x'", dialect=Dialect.POWERSHELL)
+        assert result.matched_shapes == ()
+
+    def test_foreach_object_block_pure_property_access_does_not_match(self) -> None:
+        # The block-content check (D2/D3): pure member/property access
+        # spawns nothing and must not match, even though the outer segment
+        # shape (ForEach-Object piped a block) looks identical to the
+        # true-positive case.
+        result = classify_command(
+            "Get-ChildItem *.py | ForEach-Object { $_.Name }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    # -- Finding 2 fix: in-process ForEach-Object block content must not
+    # -- false-positive as PIPELINE_FOREACH_OBJECT (D3) -----------------
+
+    def test_foreach_object_block_write_host_only_does_not_match(self) -> None:
+        result = classify_command(
+            "Get-ChildItem *.py | ForEach-Object { Write-Host $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    def test_foreach_object_block_select_object_first_does_not_match(self) -> None:
+        result = classify_command(
+            "Get-ChildItem | ForEach-Object { Select-Object -First 1 }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    def test_percent_block_write_output_alias_does_not_match(self) -> None:
+        result = classify_command(
+            "Get-ChildItem | % { Write-Output $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    def test_percent_block_get_content_does_not_match(self) -> None:
+        result = classify_command(
+            "Get-ChildItem | % { Get-Content $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    def test_foreach_object_block_native_call_still_matches(self) -> None:
+        # Regression: the AC6 true positive must not be swept up by the
+        # in-process exclusion.
+        result = classify_command(
+            "Get-ChildItem *.py | ForEach-Object { python3 script.py $_.FullName }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+    def test_percent_block_native_call_still_matches(self) -> None:
+        result = classify_command(
+            "Get-ChildItem -Recurse | % { git log -1 $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+    def test_percent_block_hyphenated_native_executable_still_matches(self) -> None:
+        # docker-compose is not an approved-verb cmdlet, despite the
+        # hyphen -- anchored on the approved-verb list, not "contains a
+        # hyphen".
+        result = classify_command(
+            "Get-ChildItem | % { docker-compose up $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+    def test_percent_block_start_process_still_matches(self) -> None:
+        # Start-/Invoke- are the deliberate carve-out: they genuinely
+        # spawn, so they stay native calls despite the Verb-Noun shape.
+        result = classify_command(
+            "Get-ChildItem | % { Start-Process python3 $_ }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
+
+    def test_foreach_object_block_pure_property_access_still_does_not_match(
+        self,
+    ) -> None:
+        # Existing negative, must not regress under the new discriminator.
+        result = classify_command(
+            "Get-ChildItem *.py | ForEach-Object { $_.Name }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.matched_shapes == ()
+
+    # -- AC8: WHILE_READ_LOOP absent, with a stated reason --------------
+
+    def test_while_read_loop_has_no_powershell_detector(self) -> None:
+        # PowerShell has no `while read` idiom -- WHILE_READ_LOOP is not a
+        # member of the POWERSHELL table entry at all (see the table's own
+        # comment). A pwsh-flavoured attempt at the bash spelling must not
+        # accidentally match either.
+        result = classify_command(
+            "while ($true) { $x = Read-Host; git log -1 $x }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert not result.has_shape(Shape.WHILE_READ_LOOP)
+
+    # -- AC12: the three reused binary-identity detectors, regression- ---
+    # -- tested explicitly under dialect=POWERSHELL ----------------------
+
+    def test_grep_via_bash_detector_reused_unchanged_under_powershell_dialect(
+        self,
+    ) -> None:
+        result = classify_command("grep -rn TODO src/", dialect=Dialect.POWERSHELL)
+        assert result.matched_shapes == (Shape.GREP_VIA_BASH,)
+
+    def test_find_exec_detector_reused_unchanged_under_powershell_dialect(
+        self,
+    ) -> None:
+        result = classify_command(
+            "find . -name '*.log' -exec rm {} ;", dialect=Dialect.POWERSHELL
+        )
+        assert result.matched_shapes == (Shape.FIND_EXEC_XARGS,)
+
+    def test_head_tail_plumbing_detector_reused_unchanged_under_powershell_dialect(
+        self,
+    ) -> None:
+        result = classify_command(
+            "Get-Content foo.txt | head -20", dialect=Dialect.POWERSHELL
+        )
+        assert result.matched_shapes == (Shape.HEAD_TAIL_PLUMBING,)
+
+    # -- precedence: the new member seats correctly ----------------------
+
+    def test_pipeline_foreach_object_seats_immediately_after_for_loop(self) -> None:
+        assert SHAPE_PRECEDENCE.index(Shape.PIPELINE_FOREACH_OBJECT) == (
+            SHAPE_PRECEDENCE.index(Shape.FOR_LOOP) + 1
+        )
+        assert SHAPE_PRECEDENCE.index(Shape.PIPELINE_FOREACH_OBJECT) < (
+            SHAPE_PRECEDENCE.index(Shape.WHILE_READ_LOOP)
+        )
+
+    def test_grep_outranks_pipeline_foreach_object_on_powershell_leg(self) -> None:
+        # A single command that is both grep-via-Bash and pipeline-foreach-
+        # object shaped resolves to the precedence winner, with the other
+        # surfacing in residue -- same overlap discipline as the bash leg.
+        result = classify_command(
+            "grep -rn TODO src/; Get-ChildItem *.py | ForEach-Object "
+            "{ python3 script.py $_.FullName }",
+            dialect=Dialect.POWERSHELL,
+        )
+        assert result.primary is not None
+        assert result.primary.shape is Shape.GREP_VIA_BASH
+        assert result.has_shape(Shape.PIPELINE_FOREACH_OBJECT)
+        assert result.residue[0].shape is Shape.PIPELINE_FOREACH_OBJECT
+
+
 class TestUnparseableCommand:
     def test_unterminated_quote_returns_none_tokens_and_no_matches(self) -> None:
         result = classify_command('grep -n "unterminated')
@@ -404,3 +665,74 @@ class TestUnparseableCommand:
         result = classify_command("grep -n foo file.txt \\")
         assert result.tokens is None
         assert result.matches == ()
+
+
+class TestDialectParameter:
+    """AC1/AC2/AC3/AC5 -- the keyword-only `dialect` parameter (D1) and the
+    dialect-indexed detector table (D4) landed in C1. Every case in every
+    OTHER test class above already covers AC2 (byte-for-byte bash behaviour
+    with no `dialect=` argument at all, i.e. the pre-existing bash suite
+    passing unmodified); this class adds the cases specific to the new
+    parameter's own contract.
+    """
+
+    def test_default_dialect_is_bash(self) -> None:
+        # AC1: no `dialect=` argument at all defaults to `Dialect.BASH`.
+        default_result = classify_command("grep -rn TODO src/")
+        explicit_result = classify_command(
+            "grep -rn TODO src/", dialect=Dialect.BASH
+        )
+        assert default_result.matched_shapes == explicit_result.matched_shapes
+        assert default_result.matched_shapes == (Shape.GREP_VIA_BASH,)
+
+    def test_bash_default_byte_for_byte_on_canonical_overlap_case(self) -> None:
+        # AC2: the default-`dialect` path and an explicit `dialect=BASH`
+        # path must be indistinguishable, even on the plan's own canonical
+        # triple-overlap command.
+        cmd = 'echo "=== git status ==="; git status | grep -i modified | head'
+        default_result = classify_command(cmd)
+        explicit_result = classify_command(cmd, dialect=Dialect.BASH)
+        assert default_result.tokens == explicit_result.tokens
+        assert default_result.matches == explicit_result.matches
+
+    def test_explicit_none_dialect_is_silent_not_bash_fallback(self) -> None:
+        # AC3: an explicit `dialect=None` returns an empty classification
+        # with `tokens=None` -- never the bash-default result the same
+        # command text would produce.
+        bash_result = classify_command("grep -rn TODO src/")
+        assert bash_result.primary is not None  # sanity: this text IS a match on bash
+
+        none_result = classify_command("grep -rn TODO src/", dialect=None)
+        assert none_result.tokens is None
+        assert none_result.matches == ()
+        assert none_result.primary is None
+
+    def test_explicit_none_dialect_records_silent(self) -> None:
+        # AC3: the SILENT declaration is real and test-observable via the
+        # existing `_verdict.collecting()` mechanism.
+        with collecting() as silences:
+            result = classify_command("grep -rn TODO src/", dialect=None)
+        assert result.tokens is None
+        assert len(silences) == 1
+        assert "None" in silences[0].reason
+
+    def test_powershell_dialect_never_calls_posix_tokenizer(self, monkeypatch) -> None:
+        # AC5: PowerShell text must never reach `tokenize_full_command`
+        # (the `shlex(posix=True)` tokenizer) -- spy on it directly.
+        def _fail_if_called(*args, **kwargs):
+            raise AssertionError(
+                "tokenize_full_command must not be called under "
+                "dialect=Dialect.POWERSHELL"
+            )
+
+        monkeypatch.setattr(
+            _command_tokenizer, "tokenize_full_command", _fail_if_called
+        )
+        result = classify_command(
+            "Get-ChildItem *.py | ForEach-Object { git log -1 $_.FullName }",
+            dialect=Dialect.POWERSHELL,
+        )
+        # C2 fills the POWERSHELL table entry -- this now classifies for
+        # real (PIPELINE_FOREACH_OBJECT), which is itself further proof the
+        # posix tokenizer was never invoked to produce it.
+        assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)

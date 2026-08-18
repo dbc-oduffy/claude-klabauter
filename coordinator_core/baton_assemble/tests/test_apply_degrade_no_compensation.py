@@ -114,7 +114,10 @@ class TestADegradeCompensatesNothing:
         # items shape. It lands (not degrades) here: the never-claimed
         # predecessor still has readable `carried_items` frontmatter, so the
         # gate itself is satisfied -- only d6's DR-242 supersede gate declines.
-        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        # d4 (render-project-tracker) was retired 2026-08-14 -- see
+        # `_build_directives`'s own note in coordinator_core/baton_assemble/
+        # __init__.py. The retirement landed without updating this list.
+        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
 
     def test_the_decline_triggers_no_compensation_pass_at_all(
         self, tmp_path, monkeypatch

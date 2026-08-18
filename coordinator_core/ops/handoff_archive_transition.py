@@ -25,7 +25,8 @@ chain into ONE in-process op. Four modes, all operating on one handoff .md path:
                       deployment_state:shipped (ship verb); NO git mv (the file
                       stays in state/handoffs/ for a later async archival sweep).
   supersede        — stamp_shipped_in, THEN the status flip (status:claimed +
-                      deployment_state:continued + continued_into:<successor>,
+                      deployment_state:continued + continued_into:<successor> +
+                      pickup_ready:false,
                       the supersede verb, DR-084 split — see § Supersede-verb
                       split below), BOTH BEFORE the live-children guard (see
                       § Status-flip-precedes-guard fix below); only the git mv
@@ -694,20 +695,31 @@ def _supersede_continued(
         status = read_fm_field(split.fm_text, "status")
         deployment = read_fm_field(split.fm_text, "deployment_state")
         existing_continued_into = read_fm_field_unquoted(split.fm_text, "continued_into")
+        # pickup_ready is read unquoted for the idempotency compare below —
+        # see § pickup_ready cleared on supersede.
+        existing_pickup_ready = read_fm_field_unquoted(split.fm_text, "pickup_ready")
 
         if status == "claimed" and deployment == "continued" and existing_continued_into:
             if existing_continued_into == continued_into:
-                _state["message"] = (
-                    f"{handoff_abs} already claimed+continued into {continued_into} — no-op"
+                # Idempotency: no-op ONLY at the full target state (the
+                # succession edge already recorded AND pickup_ready already
+                # false). Without the second condition a re-supersede call
+                # against a pre-fix record would short-circuit on the edge
+                # alone and never pick up the pickup_ready clear.
+                if existing_pickup_ready == "false":
+                    _state["message"] = (
+                        f"{handoff_abs} already claimed+continued into "
+                        f"{continued_into} (pickup_ready: false) — no-op"
+                    )
+                    return old_text  # byte-identical → locked_rmw skips the write
+            else:
+                raise MutateAbort(
+                    f"supersede conflict: {handoff_abs} is already deployment_state:"
+                    f"continued with continued_into={existing_continued_into!r}, but "
+                    f"this call requested continued_into={continued_into!r} — refusing "
+                    "to silently overwrite one real succession edge with a different "
+                    "one; resolve the conflict by hand before retrying"
                 )
-                return old_text  # byte-identical → locked_rmw skips the write
-            raise MutateAbort(
-                f"supersede conflict: {handoff_abs} is already deployment_state:"
-                f"continued with continued_into={existing_continued_into!r}, but "
-                f"this call requested continued_into={continued_into!r} — refusing "
-                "to silently overwrite one real succession edge with a different "
-                "one; resolve the conflict by hand before retrying"
-            )
 
         fm = split.fm_text
 
@@ -733,6 +745,25 @@ def _supersede_continued(
             fm = replace_fm_field(fm, "continued_into", continued_into)
         else:
             fm = insert_fm_field(fm, "continued_into", continued_into, "deployment_state")
+
+        # pickup_ready → false (§ pickup_ready cleared on supersede).
+        # `continued` is a terminal deployment_state, so the same "two fields
+        # are one logical state" reasoning that closed this hazard on `close`
+        # (2026-08-10, cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-
+        # close-terminal-and-scrub-key.md § 1) and on `ship`
+        # (handoff_transition._ship § pickup_ready cleared on ship) applies
+        # here — a superseded baton left advertising pickup_ready:true is the
+        # same double-dispatch hazard on the LAST uncovered terminal-write
+        # path. `status` stays claimed by the DR-084 P4 narrow (its live enum
+        # admits only open/claimed, so terminality is never carried there);
+        # pickup_ready carries no such constraint and is the field this seam
+        # can co-own with deployment_state. Replace if present, insert if
+        # absent (a record minted before pickup_ready existed gets the same
+        # guarantee going forward).
+        if read_fm_field(fm, "pickup_ready") is not None:
+            fm = replace_fm_field(fm, "pickup_ready", "false")
+        else:
+            fm = insert_fm_field(fm, "pickup_ready", "false", "deployment_state")
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         try:

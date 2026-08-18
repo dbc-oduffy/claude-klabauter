@@ -252,6 +252,10 @@ from coordinator_core.ceremony_common.apply_halt import (
     assert_disjoint_dependency_namespaces,
     build_ceremony_halt_exit_codes,
 )
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
     classify_cli_exit,
@@ -1171,24 +1175,25 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
 
 
 def main(argv: list[str]) -> int:
-    """`main()`'s `apply` dispatch arm — `--decisions <json>` is the one
-    supported flag, mirroring `workday_complete.apply`/`workweek_complete.
+    """`main()`'s `apply` dispatch arm — `--decisions <json>` (or its
+    file-borne sibling `--decisions-file <path>`) is the one supported flag,
+    mirroring `workday_complete.apply`/`workweek_complete.
     apply`'s CLI shape. Invoked via `workstream_complete.__init__._main_apply`
     (C3's `apply` subcommand wiring), never directly by an operator."""
     decisions: Optional[dict[str, Any]] = None
+    conflict = detect_conflicting_payload_channels(argv)
+    if conflict is not None:
+        print(f"workstream-complete-apply: {conflict}", file=sys.stderr)
+        return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "--decisions":
-            if i + 1 >= len(argv):
-                print("workstream-complete-apply: --decisions requires a value", file=sys.stderr)
+        if (payload := resolve_json_payload_flag(argv, i)).consumed:
+            if payload.error is not None:
+                print(f"workstream-complete-apply: {payload.error}", file=sys.stderr)
                 return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
-            try:
-                decisions = json.loads(argv[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"workstream-complete-apply: malformed --decisions JSON: {exc}", file=sys.stderr)
-                return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         else:
             print(f"workstream-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
             return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)

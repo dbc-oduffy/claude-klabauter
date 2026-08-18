@@ -167,6 +167,7 @@ from coordinator_core.bash_guards.guard_head_tail_rewrite import (
 from coordinator_core._hook_envelope import allow_advisory
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards import _dialect
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 
 #: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
@@ -174,32 +175,21 @@ from coordinator_core.bash_guards._verdict import record_silent
 #: `MATCHERS`/`PRIORITY` for the full explanation. `dispatch.py` hardcodes
 #: ordering explicitly; this `PRIORITY` governs nothing here.
 CLASS = "hard-deny"
-#: HELD at Bash-only (C4, docs/plans/2026-08-07-command-guards-fire-under-
-#: both-tool-names.md). CORRECTED 2026-08-07 -- the wave-map's original
-#: reason for this hold (a fail-closed free-text tokenizer fallback that
-#: misreads unparseable PowerShell input) does not apply to this file:
-#: `_evaluate_legacy` does not appear here. That mechanism belongs to a
-#: DIFFERENT guard family (the stash/worktree/subagent-destructive/suite-
-#: invocation cohort), not this one. This guard's capability objection is
-#: substantially discharged: `_dialect.py` already wires a real, lazily-
-#: imported `tree-sitter-pwsh` parser, with `record_silent` on parse
-#: failure or `has_error` -- this module already has a working
-#: `_verdict_powershell` leg built on it (see that function below), which
-#: returns a live advisory/deny verdict, not a guess.
-#:
-#: What actually holds this file: SEQUENCING, not capability. (1) A
-#: concurrent workstream (DR-280, 2026-08-07) is mid-rewrite on this exact
-#: file right now, retiring its Windows deny leg to advisory-only (four
-#: `host_is_windows=False` call sites as of this writing) -- widening
-#: `MATCHERS` while that rewrite is in flight risks landing a widening
-#: onto a half-changed verdict shape. (2) Five known-red cells are open
-#: against this file's own test suite under this plan's ownership
-#: (`TestVerbatimHeadTailAlternativeIsRealAndEquivalent`, a POSIX-only
-#: `shell=True` alternative that fails on Windows `cmd.exe`) -- widening a
-#: guard whose own tests are red is a coverage claim, not a coverage gain.
-#: Next step here is re-evaluating once DR-280 lands and the red cells
-#: clear, not a capability fix.
-MATCHERS = ("Bash",)
+#: WIDENED (C6, pln-the-shape-classifier-reaches-a-e743e5 § D6, PM ruling
+#: 2026-08-18). The prior hold here named two conditions: DR-280's rewrite
+#: landing, and `state/bash-guards/known-red.json`'s three
+#: `TestVerbatimHeadTailAlternativeIsRealAndEquivalent` `pending_fix` cells
+#: clearing. DR-280 landed (`b1e2bc932` / `62f66c01a`); the red cells have
+#: NOT cleared -- the PM ruled to widen ahead of that second precondition
+#: anyway, accepting the five-cell debt (across this file and
+#: `guard_multiprobe_banner.py`) explicitly (AC17) rather than leave this
+#: guard -- the only in-repo consumer of `FOR_LOOP`/`WHILE_READ_LOOP`/
+#: `HEAD_TAIL_PLUMBING`/`FIND_EXEC_XARGS` -- unreachable on a PowerShell
+#: payload. Reference by DIRECT IDENTITY, never a copy or re-wrap --
+#: `test_tool_name_membership.py` asserts `is`.
+_GUARD_NAME = "guard_plumbing_and_loops"
+
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 100
 
 #: This guard's OWN escape hatch -- suppresses BOTH shapes' policy outright,
@@ -274,6 +264,24 @@ _WHILE_READ_GENERIC_EXAMPLE = (
     "<generator> | python3 -c 'import sys\\nfor line in sys.stdin:\\n"
     "    f = line.strip()\\n    ...'  "
     "# do the per-item work in-process, zero per-iteration forks"
+)
+
+#: PIPELINE_FOREACH_OBJECT -- PowerShell-only, no bash analogue (D2, C3 of
+#: pln-the-shape-classifier-reaches-a-e743e5). A `ForEach-Object`/`%` block
+#: spawns once PER PIPELINE OBJECT when its body calls a native executable
+#: -- the same fork-per-iteration cost `_FOR_LOOP_GENERIC_EXAMPLE` addresses
+#: for a bash/pwsh `for`/`foreach` loop, so it gets the identical remedy
+#: shape: collapse the per-item spawn into one in-process python3 call over
+#: the whole collection, rather than one call per object flowing through
+#: the pipeline. No seam exists to consult here (no bash rewrite to reuse,
+#: no sibling BX-16 check) -- always the generic, every-platform advisory.
+_PIPELINE_FOREACH_OBJECT_SUMMARY = (
+    "a single in-process python3 call over the whole collection, zero per-item forks"
+)
+_PIPELINE_FOREACH_OBJECT_EXAMPLE = (
+    "python3 -c 'import glob\\nfor f in glob.glob(\"*.py\"):\\n    ...'  "
+    "# do the per-item work in-process instead of forking once per "
+    "pipeline object"
 )
 
 
@@ -587,6 +595,27 @@ def _verdict_while_read(
     )
 
 
+def _record_powershell_non_verdict(reason: str) -> None:
+    """Record SILENT when the PowerShell leg returns without a verdict.
+
+    `MATCHERS` declaring `PowerShell` (C6/AC14) is a claim that this guard
+    reaches a verdict on a PowerShell payload. `tests/test_no_false_clean_
+    on_unparsed_dialect.py` holds every PowerShell-declaring guard to that
+    claim by construction: a bare `None` with no SILENT recorded is a
+    false clean, indistinguishable from "this guard was never invoked" --
+    the exact confusion C6 exists to end.
+
+    This function is only ever called from `_verdict_powershell`, which
+    `check()` reaches only after resolving the dialect, so it needs no
+    dialect argument of its own -- the bash leg's `primary is None` return
+    is untouched (Anti-scope: the bash leg's behaviour is not changed to
+    make the port symmetrical). `record_silent` is a no-op outside a
+    `_verdict.collecting()` context, so this adds an assertion surface and
+    no production cost.
+    """
+    record_silent(_GUARD_NAME, reason)
+
+
 def _verdict_powershell(
     cmd: str,
     session_id: str,
@@ -594,18 +623,40 @@ def _verdict_powershell(
     payload: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg of `check()` (row 14, docs/reference/
-    guard-dialect-coverage.md). HEAD_TAIL_PLUMBING gets the same fix as row
-    13 (`check_head_tail_plumbing_rewrite`'s own `dialect=` parameter, which
-    reuses this guard's existing `_seam_confirmed_rewrite`/
-    `platform_verdict_for_shape` verdict shaping unchanged). FOR_LOOP has no
-    PowerShell statement-grammar analogue at all (`for...in...;do...done` is
-    bash syntax; `foreach ($x in ...) {...}` is a different grammar, not a
-    verb/flag variant -- module docstring, "FOR_LOOP -> ...") and there is
-    no PowerShell-dialect `_shape_classifier.classify_command` this module
-    can call to even ask the question (out of scope for this cohort) -- so
-    for any PowerShell command that is not a confirmed head-tail-plumbing
-    match, this guard declares SILENT for its for-loop leg rather than
-    assert a clean it cannot back up.
+    guard-dialect-coverage.md -- superseded in part by
+    `pln-the-shape-classifier-reaches-a-e743e5` § D2, C3).
+
+    HEAD_TAIL_PLUMBING keeps row 13's fix unchanged:
+    `check_head_tail_plumbing_rewrite`'s own `dialect=` parameter, keyed on
+    `Select-Object -First`/`-Last` rather than `head`/`tail`. This leg is
+    still consulted FIRST, and still NOT routed through `classify_command`
+    -- D3 (the classifier plan's own negative spec) rules that an
+    in-process cmdlet like `Select-Object -First N` is never a
+    `_shape_classifier` shape MEMBER (it forks nothing on its own), so
+    `_shape_classifier`'s POWERSHELL table has no HEAD_TAIL_PLUMBING entry
+    keyed on it -- this guard's own `Select-Object` recognition is a
+    guard-level concern, not a classifier one, the same asymmetry
+    documented at `docs/reference/guard-dialect-coverage.md` rows 12/13.
+
+    FOR_LOOP -- ROW 14'S SUPERSEDING NOTE (D2): row 14's original ruling
+    ("no PowerShell-dialect `classify_command` this module can call, so
+    declare SILENT") is OVERTURNED, not re-litigated. `_shape_classifier`'s
+    `_DETECTOR_TABLE[Dialect.POWERSHELL]` now carries `_detect_for_loop_pwsh`,
+    a real predicate over measured tree-sitter-pwsh tokens that matches
+    `foreach ($x in $y) { }` as a genuine FOR_LOOP shape -- the AST seam
+    that ruling predates now exists, so "declare SILENT because the
+    question cannot be asked" no longer describes reality; asking it via
+    `classify_command(cmd, dialect=Dialect.POWERSHELL)`, the same call the
+    BASH leg already makes, is the correct move now. PIPELINE_FOREACH_OBJECT
+    (new member, D2) is asked the same way -- there is no bash analogue for
+    it to have been silent about in the first place.
+
+    A command that is neither a confirmed head-tail-plumbing match nor a
+    FOR_LOOP/PIPELINE_FOREACH_OBJECT match is now a GENUINE clean (`None`,
+    no `record_silent`) -- the same treatment the BASH leg already gives a
+    `primary is None` result. The old blanket SILENT was compensating for a
+    question this module could not ask; now that it can, a real "no shape
+    matched" answer is not a decline, it is an answer.
     """
     seam_result = check_head_tail_plumbing_rewrite(
         cmd, session_id, dialect=_dialect.Dialect.POWERSHELL, payload=payload
@@ -628,15 +679,43 @@ def _verdict_powershell(
             "head-tail-plumbing", cmd, summary, example, host_is_windows=False
         )
 
-    record_silent(
-        "guard_plumbing_and_loops",
-        "PowerShell input is not a 'generator | Select-Object -First/-Last' "
-        "shape this guard's head-tail-plumbing leg recognizes, and bash's "
-        "'for...in...;do...done' for-loop grammar has no PowerShell "
-        "statement-grammar analogue ('foreach ($x in ...) {...}' is a "
-        "different construct entirely, per this module's own FOR_LOOP "
-        "docstring) -- this guard's for-loop leg cannot rule on PowerShell "
-        "input, so it declines rather than guesses.",
+    classification = classify_command(cmd, dialect=_dialect.Dialect.POWERSHELL)
+    if classification.tokens is None:
+        # `_dialect.py` already recorded SILENT for the parse failure itself;
+        # this guard records its own non-verdict so the PowerShell leg is
+        # never a bare clean (see `_record_powershell_non_verdict`).
+        _record_powershell_non_verdict("unparseable command text")
+        return None
+    primary = classification.primary
+    if primary is None:
+        _record_powershell_non_verdict("no spawn shape matched on the PowerShell leg")
+        return None
+
+    if primary.shape is Shape.FOR_LOOP:
+        # D2 reversal: same generic, every-platform advisory the BASH leg's
+        # bare-glob for-loop fallback already renders -- the alternative
+        # text (a `python3 -c` loop) is a subprocess invocation, not shell
+        # syntax, so it is equally valid run from a PowerShell prompt.
+        return _generic_advisory(
+            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _FOR_LOOP_GENERIC_EXAMPLE, payload
+        )
+    if primary.shape is Shape.PIPELINE_FOREACH_OBJECT:
+        # New member (D2) -- no bash analogue, no seam to consult. Same
+        # remedy shape as FOR_LOOP: the per-item spawn inside the
+        # `ForEach-Object`/`%` block collapses into one in-process call over
+        # the whole collection.
+        return _generic_advisory(
+            "pipeline-foreach-object",
+            cmd,
+            _PIPELINE_FOREACH_OBJECT_SUMMARY,
+            _PIPELINE_FOREACH_OBJECT_EXAMPLE,
+            payload,
+        )
+    # WHILE_READ_LOOP is deliberately absent from the classifier's POWERSHELL
+    # table (AC8) -- no PowerShell idiom exists, so `primary.shape` can never
+    # be WHILE_READ_LOOP here; no branch is needed or possible for it.
+    _record_powershell_non_verdict(
+        "matched a shape with no PowerShell-leg advisory of its own"
     )
     return None
 

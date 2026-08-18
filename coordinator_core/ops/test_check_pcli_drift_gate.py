@@ -358,3 +358,110 @@ def test_run_gate_missing_dispatch_feed_schema_raises_gate_error(tmp_path):
 
     with pytest.raises(gate.GateError):
         gate.run_gate(doe_root, today=date(2026, 8, 10))
+
+
+# ---------------------------------------------------------------------------
+# Two-tier staleness window (select_window_days) — the 14/90 reconciliation.
+# Negative-spec under test: the wide tier is EARNED by a second capture, never
+# defaulted to and never settable from the capture's own bytes.
+# ---------------------------------------------------------------------------
+
+
+def test_select_window_days_narrow_until_a_second_capture_exists():
+    assert gate.select_window_days(0) == gate._MAX_AGE_DAYS
+    assert gate.select_window_days(1) == gate._MAX_AGE_DAYS
+    assert gate.select_window_days(2) == gate._MAX_AGE_DAYS_WITH_EM_LEG
+    assert gate.select_window_days(7) == gate._MAX_AGE_DAYS_WITH_EM_LEG
+
+
+def test_wide_tier_boundary_is_tested_not_assumed():
+    fresh = gate.compute_staleness(
+        "2026-08-01",
+        "workflow-tool-api-capture.2026-08-01.json",
+        base_max_age_days=gate._MAX_AGE_DAYS_WITH_EM_LEG,
+        today=date(2026, 10, 30),
+    )
+    assert fresh["verdict"] == "FRESH" and fresh["days_since"] == 90
+
+    stale = gate.compute_staleness(
+        "2026-08-01",
+        "workflow-tool-api-capture.2026-08-01.json",
+        base_max_age_days=gate._MAX_AGE_DAYS_WITH_EM_LEG,
+        today=date(2026, 11, 1),
+    )
+    assert stale["verdict"] == "STALE" and stale["threshold_days"] == 90
+
+
+def test_capture_max_age_days_still_only_shortens_the_wide_tier():
+    shortened = gate.compute_staleness(
+        "2026-08-01",
+        "workflow-tool-api-capture.2026-08-01.json",
+        max_age_days_capture=30,
+        base_max_age_days=gate._MAX_AGE_DAYS_WITH_EM_LEG,
+        today=date(2026, 9, 15),
+    )
+    assert shortened["threshold_days"] == 30 and shortened["verdict"] == "STALE"
+
+    not_lengthened = gate.compute_staleness(
+        "2026-08-01",
+        "workflow-tool-api-capture.2026-08-01.json",
+        max_age_days_capture=365,
+        base_max_age_days=gate._MAX_AGE_DAYS_WITH_EM_LEG,
+        today=date(2026, 11, 1),
+    )
+    assert not_lengthened["threshold_days"] == 90 and not_lengthened["verdict"] == "STALE"
+
+
+def test_run_gate_one_capture_applies_narrow_window(tmp_path):
+    doe_root, schemas_dir = _doe_root(tmp_path)
+    _write_contract(schemas_dir)
+    _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
+    _write_resolution(doe_root, schemas_dir)
+
+    lines = gate.run_gate(doe_root, today=date(2026, 8, 20))
+    assert any("threshold_days=14" in line for line in lines)
+    assert any("1 capture on disk" in line for line in lines)
+
+
+def test_run_gate_second_capture_widens_window_and_clears_the_stale_fail(tmp_path):
+    doe_root, schemas_dir = _doe_root(tmp_path)
+    _write_contract(schemas_dir)
+    _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
+    _write_capture(schemas_dir, captured_at="2026-08-14", filename_date="2026-08-14")
+    _write_resolution(doe_root, schemas_dir)
+
+    # 19d past the newest capture: STALE under the narrow tier, FRESH under the
+    # wide one. The second capture is the only thing that changed.
+    lines = gate.run_gate(doe_root, today=date(2026, 9, 2))
+    assert lines == [], lines
+
+
+def test_run_gate_wide_tier_still_fails_past_90_days(tmp_path):
+    doe_root, schemas_dir = _doe_root(tmp_path)
+    _write_contract(schemas_dir)
+    _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
+    _write_capture(schemas_dir, captured_at="2026-08-14", filename_date="2026-08-14")
+    _write_resolution(doe_root, schemas_dir)
+
+    lines = gate.run_gate(doe_root, today=date(2026, 11, 20))
+    assert any("threshold_days=90" in line for line in lines)
+    assert any("2 captures on disk" in line for line in lines)
+
+
+def test_run_gate_reads_the_newest_capture_when_several_exist(tmp_path):
+    doe_root, schemas_dir = _doe_root(tmp_path)
+    _write_contract(schemas_dir)
+    _write_capture(schemas_dir, captured_at="2026-08-01", filename_date="2026-08-01")
+    _write_capture(
+        schemas_dir,
+        captured_at="2026-08-14",
+        filename_date="2026-08-14",
+        extra_opts={"brandNewLiveOption": "prose"},
+    )
+    _write_resolution(doe_root, schemas_dir)
+
+    # The drift lives ONLY in the newest capture — proving the gate reads it
+    # rather than the lexicographically-first one.
+    lines = gate.run_gate(doe_root, today=date(2026, 8, 20))
+    assert any("LEG 1" in line for line in lines)
+    assert any("brandNewLiveOption" in line for line in lines)

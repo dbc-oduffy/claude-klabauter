@@ -541,8 +541,23 @@ def _ship_golden_to_new_vocab(text: str) -> str:
     reads consumed_at/consumed_by (those fields are absent from the ship fixtures),
     so only the status token itself needs the rename — same never-recaptured
     rationale as _consume_golden_to_new_vocab above.
+
+    Also inserts ``pickup_ready: false``: the JS oracle never wrote the field on
+    a terminal transition, and the native ``_ship`` now does (2026-08-18 — the
+    deployment_state/pickup_ready pair, see
+    coordinator_core/ops/tests/test_lifecycle_pair_consistency.py). This is a
+    DELIBERATE divergence from the frozen oracle, not drift: a shipped baton
+    left advertising pickup_ready:true is re-advertised to /pickup by
+    claims.py's SUCCEEDED-BATON CARVE-OUT. Anchored after deployment_state
+    because that is where the op's own insert_fm_field anchors it.
     """
-    return re.sub(r"^status: active$", "status: open", text, flags=re.MULTILINE)
+    text = re.sub(r"^status: active$", "status: open", text, flags=re.MULTILINE)
+    return re.sub(
+        r"^deployment_state: shipped$",
+        "deployment_state: shipped\npickup_ready: false",
+        text,
+        flags=re.MULTILINE,
+    )
 
 
 def _supersede_golden_to_new_vocab(text: str, continued_into: str) -> str:
@@ -552,11 +567,18 @@ def _supersede_golden_to_new_vocab(text: str, continued_into: str) -> str:
     automated-writer-eligible replacement and requires continued_into as positive
     succession proof, so this also inserts that field (absent from the pre-DR-084
     golden by construction).
+
+    Also inserts ``pickup_ready: false``, for the same reason and on the same
+    2026-08-18 ruling as _ship_golden_to_new_vocab above — `continued` is a
+    terminal deployment_state, so the pair binds here too. Field order mirrors
+    the op: pickup_ready is anchored after deployment_state and therefore lands
+    BEFORE continued_into, which was inserted at that anchor first.
     """
     text = re.sub(r"^status: consumed$", "status: claimed", text, flags=re.MULTILINE)
     text = re.sub(
         r"^deployment_state: abandoned$",
-        f"deployment_state: continued\ncontinued_into: {continued_into}",
+        "deployment_state: continued\npickup_ready: false\n"
+        f"continued_into: {continued_into}",
         text,
         flags=re.MULTILINE,
     )

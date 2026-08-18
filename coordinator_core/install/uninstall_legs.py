@@ -1129,6 +1129,53 @@ def _rmtree_target(path: Path, label: str, errors: List[str]) -> None:
             errors.append(f"failed to remove {label} ({path}): {exc}")
 
 
+def _sweep_orphaned_swap_dirs(venv_dir: Path) -> None:
+    """Best-effort reclaim of ``.build-*``/``.stale-*`` siblings abandoned by
+    a prior venv-rebuild process that crashed mid-rebuild (before cleanup) or
+    mid-swap (a Windows deferred-reclaim leftover).
+
+    Relocated here (docs/plans/2026-08-18-retire-coordinator-venv.md chunk
+    C3) from ``coordinator_core.install.ensure_venv``, whose own
+    ``_ensure_coordinator_venv_impl``/``_swap_in_new_venv`` still call this
+    function to sweep siblings ahead of and after a rebuild — this module
+    now owns the definition and ``ensure_venv`` imports it back, inverting
+    the prior dependency direction. The uninstall leg below
+    (``uninstall_remove_substrate``) must be able to reclaim these siblings
+    on both the settings-home and legacy trees even after the venv builder
+    itself is retired (C4/C5) — a lazy import of a since-deleted
+    ``ensure_venv`` symbol would otherwise break uninstall permanently once
+    that retirement lands. Behaviour, prefix match, and both call sites'
+    tree targets are unchanged by this move.
+
+    Safe to run unconditionally: a rebuild caller holds the venv build lock
+    before calling this, so no OTHER process is concurrently populating its
+    own ``.build-*`` sibling of THIS venv right now — anything matching the
+    prefix at that point belongs to a run that has already ended. The
+    uninstall leg below calls this with no lock held at all, which is still
+    safe for the same underlying reason a rebuild's post-lock call is: by
+    the time uninstall runs, no builder is (or, once C4/C5 land, can be)
+    concurrently active against the same tree either. Never raises — a
+    sweep failure must not block whatever operation is merely tidying up
+    after it.
+
+    Every ``.stale-*`` match already failed the health probe that triggered
+    its own rebuild (or, for uninstall's purposes, is simply debris left
+    behind by a distinct process's rebuild), so there is no "still-good"
+    tree here to lose — see ``ensure_venv._swap_in_new_venv``'s crash-window
+    disclosure for the full reasoning this sweep relies on.
+    """
+    parent = venv_dir.parent
+    build_prefix = f"{venv_dir.name}.build-"
+    stale_prefix = f"{venv_dir.name}.stale-"
+    try:
+        children = list(parent.iterdir())
+    except OSError:
+        return
+    for child in children:
+        if child.name.startswith(build_prefix) or child.name.startswith(stale_prefix):
+            shutil.rmtree(child, ignore_errors=True)
+
+
 def _uninstall_remove_setup_dir(claude_home: str, errors: List[str]) -> None:
     """Removal leg for the installed percolation ``setup/`` directory (AC9/
     AC10): ``<claude_home>/.claude/setup`` — the SAME ``.claude/setup``
@@ -1336,12 +1383,12 @@ def uninstall_remove_substrate(
     # ensure_venv.py's `_swap_in_new_venv`), so a crashed rebuild or a
     # Windows deferred-reclaim can leave `.coordinator-venv.build-<pid>-
     # <hex>`/`.coordinator-venv.stale-<pid>-<hex>` siblings on disk.
-    # `_sweep_orphaned_swap_dirs` only runs on the venv's NEXT rebuild
-    # (ensure_venv.py's own comment) — an uninstall that removes the live
-    # dir and never rebuilds again would otherwise leave those siblings
-    # behind permanently. Reuse the same sweep here rather than
-    # reimplementing the `.build-`/`.stale-` prefix match a second time.
-    from coordinator_core.install.ensure_venv import _sweep_orphaned_swap_dirs
+    # `_sweep_orphaned_swap_dirs` (this module's own — see its docstring
+    # above) only otherwise runs on the venv's NEXT rebuild — an uninstall
+    # that removes the live dir and never rebuilds again would otherwise
+    # leave those siblings behind permanently. Reuse the same sweep here
+    # rather than reimplementing the `.build-`/`.stale-` prefix match a
+    # second time.
     _sweep_orphaned_swap_dirs(Path(sh) / ".coordinator-venv")
     whoami_compat = Path(claude_home) / "coordinator-whoami"
     _rm_target(whoami_compat, "compat symlink", errors)

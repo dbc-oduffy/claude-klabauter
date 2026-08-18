@@ -13,6 +13,14 @@ import pytest
 
 from coordinator_core.archival import reverse_membership
 from coordinator_core.dag import referenced_by
+import coordinator_core.ops.baton_drift_sweep as _sweep_mod
+# Import guard (FIFTH LEG / C1): fires @register_op("handoff.archive_transition")
+# and gives this file the SAME import site
+# `coordinator_core.ops.handoff_archive_transition.cs_claim_holder_live` that
+# baton_drift_sweep's `_handoff_live_holder_session` reads from — mirrors
+# ops/tests/test_handoff_archive_transition_holder_live.py's own monkeypatch
+# idiom (see that file's docstring), never a real live session.
+import coordinator_core.ops.handoff_archive_transition as _archive_transition_mod
 from coordinator_core.ops.baton_drift_sweep import baton_drift_sweep
 
 
@@ -362,6 +370,9 @@ def test_no_open_handoffs_dir_returns_zeroed_result(tmp_path: Path) -> None:
         "reaped_orphan_paths": [],
         "desynced": 0,
         "desynced_paths": [],
+        "retained": 0,
+        "retained_paths": [],
+        "retained_eligible": {},
     }
 
 
@@ -696,3 +707,215 @@ def test_sweep_is_read_only_content_and_mtime_unchanged(tmp_path: Path) -> None:
         content_after, mtime_after = p.read_bytes(), p.stat().st_mtime_ns
         assert content_after == before[p][0], f"{p} content changed"
         assert mtime_after == before[p][1], f"{p} mtime changed"
+
+
+# ---------------------------------------------------------------------------
+# FIFTH LEG (C1, docs/plans/2026-08-18-retained-supersede-finishes-its-archive.md)
+# — the `retained` bucket. `handoff.archive_transition` mode=supersede's own
+# retain grounds commit the status flip (deployment_state:continued +
+# continued_into) but skip the archival git-mv; nothing ever drains that
+# promise. These fixtures pin AC1 (hit predicate), AC2 (current eligibility),
+# AC3 (report-only), and the Anti-scope location predicate (a `continued`
+# record already under archive/handoffs/ is the SUCCESS case, never a hit).
+# ---------------------------------------------------------------------------
+
+
+def _write_retained_handoff(
+    path: Path,
+    *,
+    continued_into: str | None,
+    predecessor: str = "none",
+    status: str | None = None,
+) -> None:
+    """A `state/handoffs/`-shaped record with deployment_state:continued and
+    an optional continued_into. `continued_into=None` omits the field
+    entirely (AC1 negative: absent); `continued_into=""` writes it as an
+    explicit empty string (AC1 negative: blank) — both must NOT be a hit.
+    """
+    lines = ["---", f"predecessor: {predecessor}", "deployment_state: continued"]
+    if status is not None:
+        lines.append(f"status: {status}")
+    if continued_into is not None:
+        lines.append(f'continued_into: "{continued_into}"')
+    lines.append("---")
+    lines.append("# handoff")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_retained_hit_when_continued_with_nonempty_continued_into(tmp_path: Path) -> None:
+    """AC1: a state/handoffs/ record with deployment_state:continued AND a
+    non-empty continued_into is reported in the `retained` bucket — its
+    archival move never landed even though the status flip did."""
+    root = tmp_path / "repo"
+    parent = root / "state" / "handoffs" / "parent.md"
+    _write_retained_handoff(parent, continued_into="successor.md")
+
+    result = baton_drift_sweep(root)
+
+    assert result["retained"] == 1
+    assert result["retained_paths"] == [str(parent.resolve())]
+    # Still counted in terminal_not_archived too — this leg looks INSIDE that
+    # population, not instead of it (module docstring, FIFTH LEG).
+    assert result["terminal_not_archived"] == 1
+
+
+def test_retained_ignores_continued_into_absent(tmp_path: Path) -> None:
+    """AC1 negative: deployment_state:continued with NO continued_into field
+    at all is not a supersede-drift shape (no successor was ever named)."""
+    root = tmp_path / "repo"
+    parent = root / "state" / "handoffs" / "parent.md"
+    _write_retained_handoff(parent, continued_into=None)
+
+    result = baton_drift_sweep(root)
+
+    assert result["retained"] == 0
+    assert result["retained_paths"] == []
+    assert result["terminal_not_archived"] == 1
+
+
+def test_retained_ignores_continued_into_empty(tmp_path: Path) -> None:
+    """AC1 negative: deployment_state:continued with continued_into explicitly
+    blank must not be a hit either — same non-hit as the absent-field case."""
+    root = tmp_path / "repo"
+    parent = root / "state" / "handoffs" / "parent.md"
+    _write_retained_handoff(parent, continued_into="")
+
+    result = baton_drift_sweep(root)
+
+    assert result["retained"] == 0
+    assert result["retained_paths"] == []
+
+
+def test_retained_ignores_archived_location(tmp_path: Path) -> None:
+    """Anti-scope fourth bullet: a `continued` record already moved to
+    archive/handoffs/ is the SUCCESS case (the move landed) — never a hit,
+    even though its deployment_state/continued_into shape is identical to
+    the state/handoffs/ hit above. The location predicate is load-bearing."""
+    root = tmp_path / "repo"
+    archived = root / "archive" / "handoffs" / "2026-07" / "parent.md"
+    _write_retained_handoff(archived, continued_into="successor.md")
+
+    result = baton_drift_sweep(root)
+
+    assert result["retained"] == 0
+    assert result["retained_paths"] == []
+    # Never walked as a live baton at all — archive/handoffs/ is outside
+    # open_paths (state/handoffs/ only).
+    assert result["total_live"] == 0
+
+
+def test_retained_bucket_is_report_only(tmp_path: Path) -> None:
+    """AC3: the FIFTH LEG's own source must call no mutating verb — no
+    archive_transition call, no git mv, no stamp. Grepped against the module
+    source rather than behaviourally, per the plan's own AC3 verification."""
+    import inspect
+
+    source = inspect.getsource(_sweep_mod)
+    fifth_leg_start = source.index("def _retained_supersede_eligibility")
+    fifth_leg_and_caller = source[fifth_leg_start:]
+
+    assert "archive_transition(" not in fifth_leg_and_caller
+    assert "git_native" not in fifth_leg_and_caller
+    assert "locked_rmw" not in fifth_leg_and_caller
+    assert "stamp_shipped" not in fifth_leg_and_caller
+
+
+def _fake_common_dir(root: Path) -> Path:
+    """A directory NAMED `.git` under root, satisfying
+    `lifecycle.main_worktree_root`'s tier-1 shape (name == '.git' ->
+    .parent == worktree root) without a real git repo underneath — none of
+    the accessors this leg calls (`handoff_claim_dir`, `_handoff_has_live_
+    children`'s frontmatter scan) shell out to git."""
+    common_dir = root / ".git"
+    common_dir.mkdir(parents=True, exist_ok=True)
+    return common_dir
+
+
+def _make_claim_dir(common_dir: Path, handoff_name: str, *, session_id: str) -> None:
+    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+
+
+def test_retained_eligible_false_when_holder_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2 live-holder fixture: a LIVE claim holder means the move cannot
+    complete today — eligible must be False."""
+    root = tmp_path / "repo"
+    common_dir = _fake_common_dir(root)
+    monkeypatch.setattr(_sweep_mod, "git_common_dir", lambda worktree_root: common_dir)
+    monkeypatch.setattr(_archive_transition_mod, "cs_claim_holder_live", lambda claim_dir_str: True)
+
+    parent = root / "state" / "handoffs" / "parent.md"
+    _write_retained_handoff(parent, continued_into="successor.md")
+    _make_claim_dir(common_dir, "parent.md", session_id="live-session-abc123")
+
+    result = baton_drift_sweep(root)
+
+    assert result["retained"] == 1
+    key = str(parent.resolve())
+    assert result["retained_paths"] == [key]
+    assert result["retained_eligible"][key] is False
+
+
+def test_retained_eligible_true_when_holder_dead_and_exclude_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2 dead-holder fixture: holder dead AND the only live child is the
+    continued_into target itself — eligible must be True. This is the case
+    that regresses if the exclude is dropped or passed relative (the
+    successor names `parent.md` via `predecessor:`, so without an absolute
+    exclude the guard reads the successor as its own live child and the hit
+    reads ineligible)."""
+    root = tmp_path / "repo"
+    common_dir = _fake_common_dir(root)
+    monkeypatch.setattr(_sweep_mod, "git_common_dir", lambda worktree_root: common_dir)
+    monkeypatch.setattr(
+        _archive_transition_mod, "cs_claim_holder_live", lambda claim_dir_str: False
+    )
+
+    parent = root / "state" / "handoffs" / "parent.md"
+    _write_retained_handoff(parent, continued_into="successor.md")
+    successor = root / "state" / "handoffs" / "successor.md"
+    _write_handoff(successor, predecessor="parent.md")
+    _make_claim_dir(common_dir, "parent.md", session_id="dead-session-xyz789")
+
+    result = baton_drift_sweep(root)
+
+    assert result["retained"] == 1
+    key = str(parent.resolve())
+    assert result["retained_paths"] == [key]
+    assert result["retained_eligible"][key] is True
+
+
+# ---------------------------------------------------------------------------
+# AC5 — the existing stranded/desynced buckets are byte-identical to
+# pre-change for a corpus that ALSO carries a retained hit (the additive
+# guarantee, not just "the old tests still pass in isolation").
+# ---------------------------------------------------------------------------
+
+
+def test_retained_bucket_is_additive_stranded_and_desynced_unaffected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    # An ordinary stranded shape (module docstring's existing fixture idiom).
+    stranded_parent = root / "state" / "handoffs" / "stranded-parent.md"
+    stranded_child = root / "state" / "handoffs" / "stranded-child.md"
+    _write_handoff(stranded_parent, predecessor="none", status="claimed")
+    _write_handoff(stranded_child, predecessor="stranded-parent.md", status="superseded")
+
+    # A retained-supersede shape alongside it.
+    retained_parent = root / "state" / "handoffs" / "retained-parent.md"
+    _write_retained_handoff(retained_parent, continued_into="retained-successor.md")
+
+    result = baton_drift_sweep(root)
+
+    assert result["stranded"] == 1
+    assert result["stranded_paths"] == [str(stranded_parent.resolve())]
+    assert result["desynced"] == 0
+    assert result["desynced_paths"] == []
+    assert result["retained"] == 1
+    assert result["retained_paths"] == [str(retained_parent.resolve())]

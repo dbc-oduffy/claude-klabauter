@@ -87,39 +87,6 @@ def _bypass_throttle(session_id):
     pad._save_advisory_state(tempfile.gettempdir(), session_id, {"throttle_last_check": 0.0})
 
 
-def test_check_context_pressure_fallback_bark_once_per_transcript(tmp_path):
-    """The fail-loud disclosure fires at most once per transcript_hash, same
-    dedup discipline as the token-accurate path -- not on every throttle-gated
-    call for the life of a long, usage-block-less session."""
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-4-5-20250929"})
-    context_window = 200_000
-    bytes_per_token = 7
-    critical_pct = 50
-    critical_bytes = context_window * critical_pct * bytes_per_token // 100
-    filler_line = json.dumps({"type": "user", "message": {"content": "x" * 500}})
-    lines = [model_line]
-    needed_lines = (critical_bytes // len(filler_line)) + 10
-    lines.extend([filler_line] * needed_lines)
-    transcript.write_text("\n".join(lines) + "\n")
-
-    session_id = "test-session-fallback-bark-once"
-    _bypass_throttle(session_id)
-    first = pad._check_context_pressure_sync(session_id, str(transcript))
-    assert "CONTEXT PRESSURE — UNKNOWN" in first
-
-    # Re-arm ONLY the throttle timestamp -- `_bypass_throttle` overwrites the
-    # whole state file, which would also wipe the critical_fired/advisory_fired
-    # dedup this test is specifically checking survives a throttle re-arm.
-    tmpdir = tempfile.gettempdir()
-    state = pad._load_advisory_state(tmpdir, session_id)
-    state["throttle_last_check"] = 0.0
-    pad._save_advisory_state(tmpdir, session_id, state)
-
-    second = pad._check_context_pressure_sync(session_id, str(transcript))
-    assert second == ""
-
-
 # ---------------------------------------------------------------------------
 # Durable-state regression tests.
 #
@@ -135,23 +102,29 @@ def test_check_context_pressure_fallback_bark_once_per_transcript(tmp_path):
 
 
 def test_throttle_suppresses_second_call_within_window_across_separate_invocations(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
-    transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-4-5-20250929"})
-    user_line = json.dumps({"type": "user", "message": {"content": "hi"}})
-    transcript.write_text("\n".join([model_line, user_line]) + "\n")
+    """The durable 5-minute throttle, proven across two calls that share
+    nothing but the state file on disk.
 
+    Invocation 1 needs a signal that the check actually RAN rather than being
+    throttled away, so it is given a real sidecar reading in the red band. An
+    unmeasured session is silent now, which is indistinguishable from
+    throttled — hence the sidecar rather than an absent one.
+    """
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    from coordinator_core.session import context_usage_sidecar as sidecar_module
+
+    sidecar_module._last_written.clear()
     session_id = "test-session-throttle-cross-invocation"
+    sidecar_module.write_usage(
+        session_id,
+        {"used_percentage": 48, "context_window_size": 1_000_000},
+        now=time.time(),
+    )
 
-    # "Invocation" 1: no prior state on disk anywhere for this session, so the
-    # throttle does NOT suppress -- the real check runs and persists
-    # throttle_last_check as a side effect. No sidecar is present in tmp_path,
-    # so the sidecar-sourced path reports UNKNOWN rather than "" -- that is
-    # the measurement outcome, not a throttle outcome; what this test isolates
-    # is that the check ran at all (as opposed to being throttled away).
-    first = pad._check_context_pressure_sync(session_id, str(transcript))
-    assert "CONTEXT PRESSURE — UNKNOWN" in first
+    first = pad._check_context_pressure_sync(session_id, "")
+    assert "CONTEXT PRESSURE — HANDOFF NOW" in first
 
     state_path = pad._advisory_state_path(tempfile.gettempdir(), session_id)
     assert os.path.isfile(state_path)
@@ -162,9 +135,8 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     # "Invocation" 2: same session, well within the 5-minute throttle window.
     # Nothing in this test process hands state from call 1 to call 2 directly
     # -- only the file on disk does.
-    second = pad._check_context_pressure_sync(session_id, str(transcript))
+    second = pad._check_context_pressure_sync(session_id, "")
     assert second == ""
-
 
 def test_throttle_suppresses_even_when_content_would_otherwise_fire(tmp_path):
     """Isolates the throttle guard specifically (not bark-once): pre-seed
@@ -530,6 +502,50 @@ def test_handler_unauthorized_handoff_respects_kind_recovery_suppression():
 # ---------------------------------------------------------------------------
 
 
+def test_runtime_tripwire_is_off_unless_explicitly_armed(tmp_path, monkeypatch):
+    """Default off, and off BEFORE any work happens.
+
+    The check returns "" without consulting git, the agents dir, or the
+    dispatch record — so an unarmed tripwire costs nothing on a hot path that
+    runs once per tool call, and no fixture can accidentally revive it by
+    arranging state further down.
+    """
+    from coordinator_core.git import repo_root as repo_root_seam
+
+    monkeypatch.delenv("COORDINATOR_RUNTIME_TRIPWIRE", raising=False)
+
+    consulted = []
+
+    def _tripwire_should_not_reach_here(cwd=None):
+        consulted.append(cwd)
+        return str(tmp_path)
+
+    monkeypatch.setattr(
+        repo_root_seam, "show_toplevel", _tripwire_should_not_reach_here
+    )
+
+    assert pad._check_runtime_tripwire_sync("test-session-rt-default-off", "") == ""
+    assert not consulted, "unarmed tripwire did work before checking its gate"
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes", "1 "])
+def test_runtime_tripwire_arms_only_on_exactly_one(value, tmp_path, monkeypatch):
+    """Only the literal "1" arms it — a truthy-looking value does not, so a
+    stray export cannot silently restore fleet-wide wrap-up nagging."""
+    from coordinator_core.git import repo_root as repo_root_seam
+
+    monkeypatch.setenv("COORDINATOR_RUNTIME_TRIPWIRE", value)
+    consulted = []
+    monkeypatch.setattr(
+        repo_root_seam,
+        "show_toplevel",
+        lambda cwd=None: (consulted.append(cwd), str(tmp_path))[1],
+    )
+
+    assert pad._check_runtime_tripwire_sync("test-session-rt-arm-strict", "") == ""
+    assert not consulted
+
+
 def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
     # Review: code-reviewer (P2, W2) -- `_fail_on_spawn` raising AssertionError
     # is itself an Exception, and every spawn site it could intercept lives
@@ -542,6 +558,8 @@ def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
     import subprocess as _subprocess
 
     from coordinator_core.git import repo_root as repo_root_seam
+
+    monkeypatch.setenv("COORDINATOR_RUNTIME_TRIPWIRE", "1")
 
     spawned = []
 
@@ -574,6 +592,12 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
     dispatch-record / threshold logic, covering the path that actually
     changed."""
     from coordinator_core.git import repo_root as repo_root_seam
+
+    # The tripwire is opt-in (PM ruling, 2026-08-18: no wall-clock mechanism
+    # may prescribe a checkpoint, because it cannot honour a context floor).
+    # Arming it here keeps the mechanism itself under test for the day it is
+    # re-derived against context rather than elapsed time.
+    monkeypatch.setenv("COORDINATOR_RUNTIME_TRIPWIRE", "1")
 
     git_root = tmp_path
     session_id = "test-session-rt-happy-path"

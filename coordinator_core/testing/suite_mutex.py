@@ -43,8 +43,12 @@ from a process which will NOT outlive the run MUST pass ``pid=`` explicitly.
 
 Staleness has two independent signals; either one alone marks the lock stale:
   1. Dead PID (see above).
-  2. Hard TTL (``STALE_TTL_SECS``) — age-expired is stale regardless of PID,
-     so a wedged-but-alive runner cannot hold the fleet hostage forever.
+  2. Hard TTL — age-expired is stale, so a wedged runner cannot hold the fleet
+     hostage forever. The ceiling depends on what liveness says: a holder shown
+     alive gets ``LIVE_HOLDER_TTL_SECS``; a holder that is dead, or whose
+     liveness is indeterminate, gets the much shorter ``STALE_TTL_SECS``. A
+     single age-based ceiling applied regardless of PID used to reclaim honest
+     long runs mid-suite — see ``LIVE_HOLDER_TTL_SECS``.
 
 Negative-spec — what this lock is NOT:
     - NOT a per-repo lock. It is deliberately machine-global; two different
@@ -92,6 +96,27 @@ _LOG = logging.getLogger(__name__)
 # hung runner, a stopped process, a PID reused by an unrelated long-lived
 # process) self-heals within one working session rather than wedging the fleet.
 STALE_TTL_SECS: float = 45 * 60.0
+
+# Hard ceiling for a holder whose PID is DEMONSTRABLY alive. `STALE_TTL_SECS`
+# above is premised on "a full suite in this repo runs ~10 minutes"; that
+# premise no longer holds — the marker-scoped fast tier alone was measured at
+# 22m22s on 2026-08-18, and a full-tier gate run on the same box passed 45
+# minutes while still executing. Applying the 45-minute TTL to a live holder
+# therefore did exactly what its own comment promises never happens: an honest
+# run was reclaimed out from under itself, mid-suite, and a second pytest
+# started against the same tree. That is the precise condition
+# `with-suite-mutex` exists to prevent, and it failed silently — a log line,
+# then two concurrent runs producing mutually untrustworthy output.
+#
+# Splitting the ceiling keeps both intents intact. A holder that cannot be
+# shown alive (dead, or liveness indeterminate) still expires at
+# `STALE_TTL_SECS`, so a crash never wedges the fleet. A holder that IS alive
+# gets this far longer ceiling, so a legitimately slow suite finishes — while
+# a genuinely wedged-but-alive runner still cannot hold the fleet hostage
+# forever. Derive the real budget rather than trusting either number in prose:
+# `docs/reference/test-tiers.md` § Known-red set makes the same point about
+# suite figures generally, and they drift on every edit to the tier.
+LIVE_HOLDER_TTL_SECS: float = 6 * 60 * 60.0
 
 # Grace window for a lock dir whose meta.json is absent, truncated, or
 # unparseable. mkdir and the metadata write are two operations, so a reader can
@@ -338,8 +363,14 @@ def holder() -> Optional[dict]:
         meta = _read_meta(path)
         age = _age_secs(path, meta)
 
-        if age is not None and age > STALE_TTL_SECS:
-            _reclaim(path, f"age {age:.0f}s exceeds TTL {STALE_TTL_SECS:.0f}s", meta)
+        # Liveness is resolved BEFORE the age ceiling, because it selects which
+        # ceiling applies. Order matters: checking age first reclaims a live
+        # holder mid-run, which is the defect `LIVE_HOLDER_TTL_SECS` documents.
+        holder_alive = _pid_alive(meta["pid"]) if meta is not None else None
+        effective_ttl = LIVE_HOLDER_TTL_SECS if holder_alive is True else STALE_TTL_SECS
+
+        if age is not None and age > effective_ttl:
+            _reclaim(path, f"age {age:.0f}s exceeds TTL {effective_ttl:.0f}s", meta)
             return None
 
         if meta is None:
@@ -348,7 +379,7 @@ def holder() -> Optional[dict]:
                 return None
             return {"pid": 0, "owner": _UNKNOWN_OWNER, "started_at": "", "cmd": ""}
 
-        if _pid_alive(meta["pid"]) is False:
+        if holder_alive is False:
             _reclaim(path, f"holder pid {meta['pid']} is not alive", meta)
             return None
 

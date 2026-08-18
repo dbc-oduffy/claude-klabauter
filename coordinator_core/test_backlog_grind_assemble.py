@@ -67,6 +67,7 @@ import coordinator_core.backlog_grind_assemble as bga
 import coordinator_core.backlog_grind_assemble.apply as bga_apply
 import coordinator_core.backlog_grind_assemble.directives as bga_directives
 import coordinator_core.backlog_grind_assemble.verifier as bga_verifier
+from coordinator_core.contract import apply_base
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -3493,3 +3494,79 @@ class TestCommitOneLockRetry:
         from coordinator_core.git_lock_retry import DEFAULT_MAX_ATTEMPTS
 
         assert sum(1 for c in calls if c[0] == "add") == DEFAULT_MAX_ATTEMPTS
+
+
+class TestSingleDispositionResolvesWiring:
+    """A boot-time gate whose sole disposition ships `resolves=[]` must still
+    be satisfiable by directives whose ids did not exist when it was built.
+
+    Spec backlink: `apply._wire_single_disposition_resolves`. Regression: the
+    documented `--wave-path --granularity per-item` commit path could not
+    commit at all — `readers_blitz` wires every bug-blitz commit directive's
+    `depends_on` to `j-bug-blitz-commit-readiness`, whose only disposition
+    carried an empty `resolves`, so `disposition_resolves_directive` returned
+    False for every payload and the gate never opened.
+    """
+
+    def _jp(self, dispositions):
+        return [{"id": "j-gate", "dispositions": dispositions}]
+
+    def test_single_disposition_gains_its_dependent_directive_ids(self):
+        jps = self._jp([{"value": "go", "resolves": []}])
+        directives = [
+            {"id": "commit-0", "depends_on": "j-gate"},
+            {"id": "commit-1", "depends_on": "j-gate"},
+            {"id": "unrelated", "depends_on": None},
+        ]
+        wired = bga_apply._wire_single_disposition_resolves(jps, directives)
+        assert wired[0]["dispositions"][0]["resolves"] == ["commit-0", "commit-1"]
+
+    def test_wired_gate_actually_opens_the_directive(self):
+        """The predicate, not just the shape — this is the bug's real surface."""
+        jps = self._jp([{"value": "go", "resolves": []}])
+        directive = {"id": "commit-0", "depends_on": "j-gate"}
+        decisions = {"j-gate": {"disposition": "go"}}
+
+        before = apply_base.directive_gate_open(
+            directive, apply_base.judgment_points_by_id(jps), decisions
+        )
+        assert before[0] is False, "precondition: the unwired gate is shut"
+
+        wired = bga_apply._wire_single_disposition_resolves(jps, [directive])
+        after = apply_base.directive_gate_open(
+            directive, apply_base.judgment_points_by_id(wired), decisions
+        )
+        assert after[0] is True
+
+    def test_multi_disposition_gate_is_left_alone(self):
+        """`resolves` encodes terminal-vs-non-terminal ACROSS dispositions, so
+        an empty list there is an authored distinction, not a missing id."""
+        jps = self._jp(
+            [{"value": "go", "resolves": ["commit-0"]}, {"value": "defer", "resolves": []}]
+        )
+        wired = bga_apply._wire_single_disposition_resolves(
+            jps, [{"id": "commit-0", "depends_on": "j-gate"}]
+        )
+        assert wired[0]["dispositions"][1]["resolves"] == []
+
+    def test_already_populated_resolves_is_never_widened(self):
+        jps = self._jp([{"value": "go", "resolves": ["commit-0"]}])
+        wired = bga_apply._wire_single_disposition_resolves(
+            jps,
+            [{"id": "commit-0", "depends_on": "j-gate"}, {"id": "commit-1", "depends_on": "j-gate"}],
+        )
+        assert wired[0]["dispositions"][0]["resolves"] == ["commit-0"]
+
+    def test_does_not_mutate_the_caller_s_judgment_points(self):
+        jps = self._jp([{"value": "go", "resolves": []}])
+        bga_apply._wire_single_disposition_resolves(
+            jps, [{"id": "commit-0", "depends_on": "j-gate"}]
+        )
+        assert jps[0]["dispositions"][0]["resolves"] == []
+
+    def test_gate_with_no_dependents_is_untouched(self):
+        jps = self._jp([{"value": "go", "resolves": []}])
+        wired = bga_apply._wire_single_disposition_resolves(
+            jps, [{"id": "unrelated", "depends_on": None}]
+        )
+        assert wired[0]["dispositions"][0]["resolves"] == []

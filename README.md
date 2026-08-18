@@ -190,6 +190,31 @@ From a Claude Code session with coordinator-claude present, its setup flow walks
 install chain and delegates to `INSTALL.md`'s installer. This repo itself ships no plugin or
 skills surface — discovery-resolved surfaces belong in coordinator-claude.
 
+### Where the shared fleet environment lives
+
+On a fleet machine the shared Python environment is **`.fleet-env`, directly under this repo's
+root** — dot-prefixed and gitignored, so it survives a mirror reconcile. It is a real venv, built
+by `uv`, and its absolute path is authoritative in the machine-local registry key
+`fleet_env.root`; read that key rather than assuming a location.
+
+**It is not `.venv`, and it is not the box's system interpreter.** Looking for either and finding
+nothing is not evidence that the environment has not been provisioned — twice now a sibling team
+has concluded exactly that from a `.venv` search and held work on an environment that already
+existed. Two further things will mislead a filesystem check: a rebuild swaps a tree in from a
+transient `.fleet-env.build-<pid>-<hex>` sibling, so a mid-rebuild look can catch the root with
+the build directory present and the live one briefly absent; and the environment's Python minor is
+pinned by `.fleet-env.lock`, which is a different question from whichever `python3` answers on
+`PATH`.
+
+Check it the way its owner does — resolve `fleet_env.root`, then run the interpreter under it:
+
+```
+python3 coordinator/bin/fleet-env.py get
+```
+
+Contract and provisioning detail live in claude-klabauter's
+`docs/reference/fleet-shared-environment-contract.md`.
+
 **A plain `pip install .` is not wrong, only narrower than it looks:** it does genuinely
 work, as an ordinary library-dependency install for a downstream project that only needs
 `coordinator_core` importable or its one console script

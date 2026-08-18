@@ -79,18 +79,49 @@ pair — additive fallback, never a second source of truth. It is plan
 frontmatter, not handoff frontmatter, and is deliberately absent from
 ``handoff.schema.json``.
 
+A fifth, additive leg (``join_source: "predecessor_handoff"``): all four legs
+above are PAIR-keyed — they resolve a ``(roadmap_id, stub_id)`` value that
+then flows through the pair-keyed ``_scan_matches``/``_try_close`` pipeline.
+That pipeline is structurally inert for a NON-ROADMAP ``kind: spinoff``
+origin stub, which carries neither ``roadmap_id`` nor ``stub_id`` at all
+(measured: every ``kind: spinoff*`` stub at ``deployment_state:
+ready_to_fire`` in ``state/handoffs/`` at authoring time carried neither
+field) — such a stub can never be a match target for any of the four legs,
+however many of them run, and is left ``ready_to_fire``/``pickup_ready: true``
+forever: precisely the pathology this module's own opening paragraph exists
+to fix. The one edge that DOES name such a stub is the executing plan's own
+``predecessor_handoff:`` frontmatter field — a PATH under
+``state/handoffs/``, not a pair. This leg is therefore PATH-keyed, not
+pair-keyed: it resolves that path directly (``_predecessor_handoff_stub``)
+and feeds it straight to ``_try_close`` (which is already path-keyed — it
+takes ``stub_path`` and uses ``roadmap_id``/``stub_id`` only for reporting,
+never for resolution), bypassing ``_scan_matches`` entirely rather than
+manufacturing a synthetic pair to rejoin against a scan that would never
+have found this stub. Negative-spec: this leg reads ``predecessor_handoff``
+off the PLAN only, never the consumed handoff (no equivalent field exists
+on ``handoff.schema.json``) and never ``archive/handoffs/`` (only the
+``repair-archived-*`` verbs reach the archive; an already-archived stub is
+out of scope for an in-place, stamp-only close). Deduped against every
+pair-resolved leg above by STUB PATH (not pair value, since this leg's
+target stub may carry no pair to dedupe against) — a stub reachable by both
+a pair and ``predecessor_handoff`` closes exactly once. Counted separately
+from ``pairs_resolved`` via its own ``stubs_resolved`` field (see
+``_handler``'s Returns docstring) — folding it into ``pairs_resolved`` would
+retroactively change an existing machine-readable contract for a value that
+was never a pair.
+
 Trust boundary (documented, load-bearing, preserved verbatim from bash):
 this op trusts the plan's/handoff's/baton's self-asserted ``(roadmap_id,
 stub_id)`` as an honest complete claim — it does NOT verify the plan actually
 satisfied the stub's acceptance criteria. A premature close is bounded and
 self-correcting (a later re-pickup of still-open work reopens the stub). The
-``deliverable_id`` and ``closes_stubs`` legs inherit this SAME posture
-verbatim: each trusts its self-asserted claim exactly as the other legs
-trust a self-asserted ``(roadmap_id, stub_id)`` pair — no additional
-verification is layered onto any one leg alone. Any of the four legs
-behaving differently from the others on the same trust question would itself
-be the defect; a caller must not be able to tell which leg resolved a pair
-from close-precision alone.
+``deliverable_id``, ``closes_stubs``, and ``predecessor_handoff`` legs
+inherit this SAME posture verbatim: each trusts its self-asserted claim
+exactly as the other legs trust a self-asserted ``(roadmap_id, stub_id)``
+pair — no additional verification is layered onto any one leg alone. Any of
+the five legs behaving differently from the others on the same trust
+question would itself be the defect; a caller must not be able to tell
+which leg resolved a stub from close-precision alone.
 
 Compose, don't reimplement (mirrors ``handoff_ship_archive.py``'s composition
 shape exactly — same three primitives, same in-process call convention):
@@ -552,6 +583,89 @@ def _read_closes_stubs(meta: dict) -> List[Tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# predecessor_handoff path-keyed leg (C2; additive; see module docstring)
+# ---------------------------------------------------------------------------
+
+
+def _read_predecessor_handoff(meta: dict) -> Optional[str]:
+    """Return the non-empty ``predecessor_handoff`` scalar from parsed plan
+    frontmatter, or None.
+
+    Mirrors ``_read_deliverable_id``'s strip-and-require-non-empty
+    discipline. ``predecessor_handoff`` is plan frontmatter — a path (under
+    ``state/handoffs/``) to the origin stub the plan's own work forked out
+    of, not a ``(roadmap_id, stub_id)`` pair — see
+    ``_predecessor_handoff_stub`` for why that makes it path-keyed rather
+    than a fifth pair-resolution leg.
+    """
+    val = meta.get("predecessor_handoff")
+    val_s = val.strip() if isinstance(val, str) else ""
+    return val_s or None
+
+
+async def _predecessor_handoff_stub(
+    plan_meta: dict, worktree: Path, handoffs_dir: Path, common_dir: Path
+) -> Tuple[Optional[Path], Optional[Tuple[Path, Optional[str], str]]]:
+    """predecessor_handoff path-keyed join leg (C2; see module docstring).
+
+    Unlike the four pair-resolution legs above, ``predecessor_handoff``
+    names the origin stub's own PATH directly — the one edge that survives
+    for a non-roadmap ``kind: spinoff`` stub, which carries no
+    ``roadmap_id``/``stub_id`` at all and so can never be a match target for
+    the pair-keyed ``_scan_matches``/``_try_close`` pipeline (measured: all
+    ``kind: spinoff*`` stubs at ``deployment_state: ready_to_fire`` in
+    ``state/handoffs/`` at authoring time carried neither field). Since
+    ``_try_close`` is already path-keyed — it takes ``stub_path`` directly,
+    and uses ``roadmap_id``/``stub_id`` only for reporting, never for
+    resolution — this leg feeds it a resolved stub path straight, bypassing
+    ``_scan_matches`` entirely rather than manufacturing a pair to rejoin
+    against a scan that would never have found this stub in the first place.
+
+    Reads the plan's own ``predecessor_handoff`` ONLY — see this op's
+    negative-spec: only the PLAN is a legitimate source (the executing plan
+    is what names the stub it forked out of; a consumed handoff has no
+    equivalent field on ``handoff.schema.json``).
+
+    Resolves under ``state/handoffs/`` ONLY (``handoffs_dir``, not
+    ``archive/handoffs/``) via the shared ``_resolve_input_path`` helper
+    (path-containment, never hand-joined) — an already-archived stub is out
+    of scope for this leg; only the ``repair-archived-*`` verbs reach
+    ``archive/handoffs/``, and this op's own stamp-only close (in place, no
+    ``git mv``) has no business touching an archived record.
+
+    Returns:
+      - ``(stub_path, None)`` — resolved to a readable, baton-kind
+        (``_is_baton_kind``) stub that is state-eligible per
+        ``_stub_state_eligibility`` (the SAME eligibility ladder
+        ``_scan_matches`` uses — see that function's own docstring for why a
+        second literal of the ladder is refused).
+      - ``(None, (path, deployment_state, exclusion_reason))`` — resolved to
+        a readable, baton-kind stub, but state-EXCLUDED (mirrors
+        ``_scan_matches``'s ``filtered`` triple shape exactly, so the caller
+        can report it as a skip rather than silently dropping it).
+      - ``(None, None)`` — ``predecessor_handoff`` absent, unresolvable
+        (does not exist / escapes ``handoffs_dir``), or resolves to a
+        non-baton-kind record (e.g. a ``session-handoff`` — refused, never
+        closed).
+    """
+    raw = _read_predecessor_handoff(plan_meta)
+    if raw is None:
+        return None, None
+    resolved = _resolve_input_path(raw, worktree, [handoffs_dir])
+    if resolved is None or not resolved.is_file():
+        return None, None
+    meta = _read_meta(str(resolved))
+    if not _is_baton_kind(meta.get("kind")):
+        return None, None
+    eligible, deployment_state, exclusion_reason = await _stub_state_eligibility(
+        resolved, meta, common_dir
+    )
+    if eligible:
+        return resolved, None
+    return None, (resolved, deployment_state, exclusion_reason)
+
+
+# ---------------------------------------------------------------------------
 # in_flight claim-liveness gate (M1, Leg A)
 # ---------------------------------------------------------------------------
 
@@ -615,6 +729,39 @@ async def _in_flight_eligible(
 # ---------------------------------------------------------------------------
 
 
+async def _stub_state_eligibility(
+    stub_path: Path, meta: dict, common_dir: Path
+) -> Tuple[bool, Optional[str], str]:
+    """Score one already-kind-matched stub's ``deployment_state`` for closure.
+
+    Returns ``(eligible, deployment_state, exclusion_reason)`` —
+    ``exclusion_reason`` is ``""`` exactly when ``eligible`` is True, and a
+    non-empty reason on every exclusion path. Typed ``str`` rather than
+    ``Optional[str]`` so both consumers can feed it straight into their
+    ``(stub_path, deployment_state, exclusion_reason)`` triple, whose third
+    slot is non-optional, without a defensive coalesce that would silently
+    invent a reason if this ladder ever grew a path that forgot one.
+    ``ready_to_fire``/``awaiting_gate`` are unconditionally eligible,
+    ``in_flight`` is liveness-gated via ``_in_flight_eligible``, and every
+    other state (terminal or unrecognized) is excluded as
+    ``"state-not-eligible"``.
+
+    Extracted so the pair-keyed scan (``_scan_matches``) and the path-keyed
+    ``predecessor_handoff`` leg (``_predecessor_handoff_stub``) score
+    eligibility through ONE implementation. A second literal of this ladder
+    would let the two legs drift into closing stubs the other refuses.
+    """
+    deployment_state = meta.get("deployment_state")
+    if deployment_state in _UNCONDITIONAL_NON_TERMINAL_STATES:
+        return True, deployment_state, ""
+    if deployment_state == _LIVENESS_GATED_DEPLOYMENT_STATE:
+        eligible, exclusion_reason = await _in_flight_eligible(stub_path, common_dir)
+        if eligible:
+            return True, deployment_state, ""
+        return False, deployment_state, exclusion_reason or "claim-live"
+    return False, deployment_state, "state-not-eligible"
+
+
 async def _scan_matches(
     handoffs_dir: Path, roadmap_id: str, stub_id: str, common_dir: Path
 ) -> Tuple[List[Path], List[Tuple[Path, Optional[str], str]]]:
@@ -653,18 +800,13 @@ async def _scan_matches(
         pair = _read_pair(meta)
         if pair != (roadmap_id, stub_id):
             continue
-        deployment_state = meta.get("deployment_state")
-        if deployment_state in _UNCONDITIONAL_NON_TERMINAL_STATES:
+        eligible, deployment_state, exclusion_reason = await _stub_state_eligibility(
+            p, meta, common_dir
+        )
+        if eligible:
             matches.append(p)
-            continue
-        if deployment_state == _LIVENESS_GATED_DEPLOYMENT_STATE:
-            eligible, exclusion_reason = await _in_flight_eligible(p, common_dir)
-            if eligible:
-                matches.append(p)
-                continue
-            filtered.append((p, deployment_state, exclusion_reason or "claim-live"))
-            continue
-        filtered.append((p, deployment_state, "state-not-eligible"))
+        else:
+            filtered.append((p, deployment_state, exclusion_reason))
     return matches, filtered
 
 
@@ -677,14 +819,23 @@ async def _try_close(
     stub_path: Path,
     worktree: Path,
     repo_root: Path,
-    roadmap_id: str,
-    stub_id: str,
+    roadmap_id: Optional[str],
+    stub_id: Optional[str],
     join_source: str,
     sha: str,
     guard_exclude: List[str],
     delivery_proof: Optional[dict] = None,
 ) -> Tuple[Optional[dict], Optional[dict]]:
     """Attempt to stamp-close one matched origin stub.
+
+    `roadmap_id`/`stub_id` are Optional — every pair-resolution leg always
+    supplies both (a baton-kind stub matched by pair always carries them),
+    but the path-keyed `predecessor_handoff` leg (C2) may resolve a
+    non-roadmap `kind: spinoff` stub carrying NEITHER field; this function
+    never joins on them (`stub_path` alone is the resolution key), it only
+    threads them through into `closed`/`skipped` reporting, so `None` here
+    means "this stub carries no roadmap-origin identity" — an honest report,
+    not a degraded one.
 
     Returns (closed_entry, skipped_entry) — exactly one is non-None.
 
@@ -970,7 +1121,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
           "exit_code": 0,
           "closed": [{"stub_path", "roadmap_id", "stub_id",
                       "join_source": "direct"|"baton_walk"|"deliverable_id"|
-                                      "closes_stubs",
+                                      "closes_stubs"|"predecessor_handoff",
+                      # "roadmap_id"/"stub_id" are None on a
+                      # "predecessor_handoff"-joined entry when the closed
+                      # stub is a non-roadmap `kind: spinoff` carrying
+                      # neither field (see `_try_close`'s own docstring) —
+                      # every other join_source always carries both.
                       # "close_basis" (delivery-proof threading, see
                       # `delivery_proof` param docs above): "delivery-proof"
                       # when a complete, stub-specific proof closed this
@@ -1004,6 +1160,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                        "blocking_children": [str],
                        "guard_error": Optional[str]}],
           "pairs_resolved": int,
+          # count of resolved (roadmap_id, stub_id) pairs ONLY — an existing
+          # machine-readable contract, deliberately NOT folded together with
+          # the path-keyed predecessor_handoff leg below (see "stubs_resolved").
+          "stubs_resolved": int,
+          # count of stubs resolved via the predecessor_handoff leg (C2) —
+          # kept SEPARATE from "pairs_resolved" (see above); a stub resolved
+          # by BOTH a pair and predecessor_handoff is counted in both, but
+          # closed exactly once (deduped in the direct-stubs close loop).
           "message": str,
         }
       or {"exit_code": 1, "closed": [], "skipped": [], "pairs_resolved": 0, "error": str}
@@ -1102,6 +1266,26 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         for pair in _read_closes_stubs(_read_meta(str(plan_resolved))):
             _record(pair, "closes_stubs")
 
+    # predecessor_handoff path-keyed leg (C2; see module docstring and
+    # `_predecessor_handoff_stub`). Plan-only — the executing plan is the
+    # one legitimate source (only a plan can name the stub it forked out
+    # of); a consumed handoff carries no equivalent field. Path-keyed, not
+    # pair-keyed: `_try_close` is already path-keyed, so this leg feeds it a
+    # resolved stub path directly rather than manufacturing a pair to
+    # rejoin against `_scan_matches` — the exact pipeline this leg exists to
+    # bypass for a non-roadmap `kind: spinoff` stub, which carries no
+    # `roadmap_id`/`stub_id` at all.
+    direct_stubs: List[Tuple[Path, str]] = []  # (stub_path, join_source)
+    filtered_stubs: List[Tuple[Path, Optional[str], str]] = []
+    if plan_resolved is not None and plan_resolved.is_file():
+        stub_path, filtered_entry = await _predecessor_handoff_stub(
+            _read_meta(str(plan_resolved)), worktree, handoffs_dir, repo_root
+        )
+        if stub_path is not None:
+            direct_stubs.append((stub_path, "predecessor_handoff"))
+        elif filtered_entry is not None:
+            filtered_stubs.append(filtered_entry)
+
     # Guard-exclude list (Latent-bug fix — see _try_close docstring): the
     # caller-supplied handoff_path is excluded from the live-children guard's
     # scan, mirroring coordinator-handoff-archive.sh's own --exclude
@@ -1116,7 +1300,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if handoff_resolved is not None and handoff_resolved.is_file():
         guard_exclude = [str(handoff_resolved)]
 
-    if not pairs:
+    if not pairs and not direct_stubs and not filtered_stubs:
         # `pairs_resolved == 0` on its own does NOT discriminate loud vs
         # quiet (AC2/AC14 correction — see this function's own docstring and
         # state/audits/2026-08-04-terminal-state-closer-exit-code-caller-
@@ -1186,8 +1370,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "message": (
                     f"no (roadmap_id,stub_id) resolvable from {artifact_desc} — "
                     "looked for a direct (roadmap_id,stub_id) pair, a "
-                    "deliverable_id-joined origin stub, and a closes_stubs "
-                    f"list; {'; '.join(detail_bits)}"
+                    "deliverable_id-joined origin stub, a closes_stubs "
+                    "list, and a predecessor_handoff-joined origin stub; "
+                    f"{'; '.join(detail_bits)}"
                 ),
             }
 
@@ -1210,13 +1395,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 # `exit_code`/`no_candidates` first could misread it as loud).
                 f"no roadmap-origin linkage present on {artifact_desc} — "
                 "nothing to do (checked: direct (roadmap_id,stub_id) pair, "
-                "deliverable_id-joined origin stub, closes_stubs list; none "
-                "present, and no artifact carries partial/contradictory linkage)"
+                "deliverable_id-joined origin stub, closes_stubs list, and "
+                "predecessor_handoff-joined origin stub; none present, and no "
+                "artifact carries partial/contradictory linkage)"
             ),
         }
 
     closed: List[dict] = []
     skipped: List[dict] = []
+    # Dedupe across the pairs loop and the predecessor_handoff direct-stubs
+    # loop below — a stub reachable by BOTH a (roadmap_id, stub_id) pair and
+    # `predecessor_handoff` must close exactly once, never twice.
+    attempted_stub_paths: Set[Path] = set()
 
     for roadmap_id, stub_id, join_source in pairs:
         matches, filtered = await _scan_matches(
@@ -1255,6 +1445,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
             continue
 
+        attempted_stub_paths.add(matches[0])
         closed_entry, skipped_entry = await _try_close(
             matches[0],
             worktree,
@@ -1272,14 +1463,66 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             assert skipped_entry is not None  # exactly one of the pair is non-None
             skipped.append(skipped_entry)
 
+    # (M1, Leg B analog for the path-keyed leg) a predecessor_handoff-named
+    # stub that resolved to a real, baton-kind record but was excluded by
+    # the state/liveness gate is reported as a skip — not folded into the
+    # zero-candidate bail above (see the `if not pairs and not direct_stubs
+    # and not filtered_stubs:` guard).
+    for stub_path, deployment_state, exclusion_reason in filtered_stubs:
+        skipped.append({
+            "roadmap_id": None,
+            "stub_id": None,
+            "reason": "no-match-filtered-deployment-state",
+            "excluded": [
+                {
+                    "stub_path": rel_id(stub_path, worktree),
+                    "deployment_state": deployment_state,
+                    "exclusion_reason": exclusion_reason,
+                }
+            ],
+        })
+
+    # predecessor_handoff direct-stubs leg (C2). Path-keyed — `_try_close` is
+    # called directly per resolved stub, bypassing `_scan_matches` entirely
+    # (see `_predecessor_handoff_stub`'s own docstring for why). Deduped
+    # against every stub path the pairs loop above already attempted.
+    stubs_resolved = len(direct_stubs)
+    for stub_path, join_source in direct_stubs:
+        if stub_path in attempted_stub_paths:
+            continue
+        attempted_stub_paths.add(stub_path)
+        stub_meta = _read_meta(str(stub_path))
+        stub_rid = stub_meta.get("roadmap_id")
+        stub_sid = stub_meta.get("stub_id")
+        stub_rid_s = stub_rid.strip() if isinstance(stub_rid, str) else None
+        stub_sid_s = stub_sid.strip() if isinstance(stub_sid, str) else None
+        closed_entry, skipped_entry = await _try_close(
+            stub_path,
+            worktree,
+            repo_root,
+            stub_rid_s or None,
+            stub_sid_s or None,
+            join_source,
+            sha,
+            guard_exclude,
+            delivery_proof,
+        )
+        if closed_entry is not None:
+            closed.append(closed_entry)
+        else:
+            assert skipped_entry is not None  # exactly one of the pair is non-None
+            skipped.append(skipped_entry)
+
     message = (
         f"closed {len(closed)} origin stub(s); skipped {len(skipped)} of "
-        f"{len(pairs)} resolved (roadmap_id,stub_id) pair(s)"
+        f"{len(pairs)} resolved (roadmap_id,stub_id) pair(s) and "
+        f"{stubs_resolved} resolved predecessor_handoff stub(s)"
     )
     return {
         "exit_code": 0,
         "closed": closed,
         "skipped": skipped,
         "pairs_resolved": len(pairs),
+        "stubs_resolved": stubs_resolved,
         "message": message,
     }

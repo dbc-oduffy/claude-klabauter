@@ -535,6 +535,372 @@ def test_emit_batch_partial_dedup_keeps_only_new_payloads_in_append_call(
     assert calls[0][0]["axis"] == "qa_verified"
 
 
+# ---------------------------------------------------------------------------
+# C3 (sat-04) — retract generation closes the revert-of-revert collision.
+# See docs/plans/2026-08-18-sat-04-completion-axis-policy.md § D8, AC5,
+# AC5b, AC5c, AC5d, AC6, AC7a, AC11.
+# ---------------------------------------------------------------------------
+
+
+def test_ac5_revert_of_revert_re_assert_is_a_distinct_event(repo_root):
+    assert_a = tt.emit_transition(
+        "item-gen-1",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a",
+        repo_root=repo_root,
+    )
+    tt.emit_transition(
+        "item-gen-1",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-sha-1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+    re_assert_a = tt.emit_transition(
+        "item-gen-1",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a-2",
+        repo_root=repo_root,
+    )
+
+    assert re_assert_a["id"] != assert_a["id"]
+    from coordinator_core import tracker_projection
+
+    assert (
+        tracker_projection.current_state("item-gen-1", "code_complete", repo_root=repo_root)
+        == "asserted"
+    )
+
+
+def test_ac5b_two_full_revert_cycles_yield_five_distinct_events(repo_root):
+    events_out = []
+    events_out.append(
+        tt.emit_transition(
+            "item-gen-2",
+            "code_complete",
+            "asserted",
+            actor="reconciler",
+            evidence={"sha": "sha-a"},
+            tier="auto",
+            source_observation_id="obs-a0",
+            repo_root=repo_root,
+        )
+    )
+    events_out.append(
+        tt.emit_transition(
+            "item-gen-2",
+            "code_complete",
+            "retracted",
+            from_state="asserted",
+            actor="reconciler",
+            evidence={"sha": "revert-sha-1"},
+            tier="auto",
+            source_observation_id="obs-r1",
+            repo_root=repo_root,
+        )
+    )
+    events_out.append(
+        tt.emit_transition(
+            "item-gen-2",
+            "code_complete",
+            "asserted",
+            actor="reconciler",
+            evidence={"sha": "sha-a"},
+            tier="auto",
+            source_observation_id="obs-a1",
+            repo_root=repo_root,
+        )
+    )
+    events_out.append(
+        tt.emit_transition(
+            "item-gen-2",
+            "code_complete",
+            "retracted",
+            from_state="asserted",
+            actor="reconciler",
+            evidence={"sha": "revert-sha-2"},
+            tier="auto",
+            source_observation_id="obs-r2",
+            repo_root=repo_root,
+        )
+    )
+    events_out.append(
+        tt.emit_transition(
+            "item-gen-2",
+            "code_complete",
+            "asserted",
+            actor="reconciler",
+            evidence={"sha": "sha-a"},
+            tier="auto",
+            source_observation_id="obs-a2",
+            repo_root=repo_root,
+        )
+    )
+
+    ids = {event["id"] for event in events_out}
+    assert len(ids) == 5
+
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-gen-2"
+    ]
+    assert len(stored) == 5
+
+    from coordinator_core import tracker_projection
+
+    assert (
+        tracker_projection.current_state("item-gen-2", "code_complete", repo_root=repo_root)
+        == "asserted"
+    )
+
+
+def test_ac5c_generation_is_not_a_caller_supplied_field(repo_root):
+    with pytest.raises(TypeError):
+        tt.transition_event(
+            "item-gen-3",
+            "code_complete",
+            "asserted",
+            actor="human",
+            evidence={"sha": "sha-gen"},
+            tier="direct",
+            source_observation_id="obs-gen",
+            generation=5,
+        )
+    with pytest.raises(TypeError):
+        tt.emit_transition(
+            "item-gen-3",
+            "code_complete",
+            "asserted",
+            actor="human",
+            evidence={"sha": "sha-gen"},
+            tier="direct",
+            source_observation_id="obs-gen",
+            generation=5,
+            repo_root=repo_root,
+        )
+
+
+def test_ac5d_emit_batch_advances_generation_within_batch(repo_root):
+    payload_1 = tt.transition_event(
+        "item-gen-4",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-sha-shared"},
+        tier="auto",
+        source_observation_id="obs-r1",
+    )
+    payload_2 = tt.transition_event(
+        "item-gen-4",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-sha-shared"},
+        tier="auto",
+        source_observation_id="obs-r2",
+    )
+
+    result = tt._emit_batch([payload_1, payload_2], repo_root=repo_root)
+
+    assert result[0]["id"] != result[1]["id"]
+    assert result[0]["generation"] == 0
+    assert result[1]["generation"] == 1
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-gen-4"
+    ]
+    assert len(stored) == 2
+
+
+def test_ac7a_pre_c3_event_missing_generation_field_reads_as_zero(repo_root):
+    pre_c3_event = {
+        "id": "evt-this-machine-precthreeabc",
+        "item_id": "item-gen-5",
+        "axis": "code_complete",
+        "from_state": None,
+        "to_state": "asserted",
+        "actor": "reconciler",
+        "evidence": {"sha": "sha-pre"},
+        "tier": "auto",
+        "source_observation_id": "obs-pre",
+        "observed_at": "2026-01-01T00:00:00.000000+00:00",
+        "applied_at": "2026-01-01T00:00:00.000000+00:00",
+        "schema_version": 1,
+        # deliberately no "generation" field — pre-C3 shape.
+    }
+    tracker_store.append_event(pre_c3_event, repo_root=repo_root)
+
+    # Re-observed at generation 0 (no retracts stored yet): dedups to the
+    # pre-C3 event, whose absent generation reads as 0.
+    reobserved = tt.emit_transition(
+        "item-gen-5",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-pre"},
+        tier="auto",
+        source_observation_id="obs-pre",
+        repo_root=repo_root,
+    )
+    assert reobserved["id"] == pre_c3_event["id"]
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-gen-5"
+    ]
+    assert len(stored) == 1
+
+    tt.emit_transition(
+        "item-gen-5",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-sha-pre"},
+        tier="auto",
+        source_observation_id="obs-pre-retract",
+        repo_root=repo_root,
+    )
+
+    # Post-retract re-assert lands at generation 1 — appends rather than
+    # matching the generation-0 pre-C3 event (the fix this chunk exists
+    # to admit).
+    post_retract_reassert = tt.emit_transition(
+        "item-gen-5",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-pre"},
+        tier="auto",
+        source_observation_id="obs-pre",
+        repo_root=repo_root,
+    )
+    assert post_retract_reassert["id"] != pre_c3_event["id"]
+    assert post_retract_reassert["generation"] == 1
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-gen-5"
+    ]
+    assert len(stored) == 3
+
+
+def test_ac6_mint_and_dedup_addresses_change_together_no_duplicate_id_error(repo_root):
+    tt.emit_transition(
+        "item-gen-6",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a0",
+        repo_root=repo_root,
+    )
+    tt.emit_transition(
+        "item-gen-6",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-sha-1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+    # Must not raise TrackerStoreDuplicateIdError: the mint address and the
+    # dedup-check address both carry the same generation (AC6), so this
+    # re-assert mints a distinct id rather than colliding with the
+    # cycle-0 assert's id at append time.
+    re_assert = tt.emit_transition(
+        "item-gen-6",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a1",
+        repo_root=repo_root,
+    )
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-gen-6"
+    ]
+    assert len(stored) == 3
+    assert re_assert in stored
+
+
+def test_ac11_replay_inside_one_generation_still_dedups_to_a_single_event(repo_root):
+    tt.emit_transition(
+        "item-gen-7",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a0",
+        repo_root=repo_root,
+    )
+    tt.emit_transition(
+        "item-gen-7",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-sha-1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+    # Generation is now 1. Two racing appends of the SAME re-assert
+    # observation (same evidence.sha, same generation) must still collide
+    # to a single stored event — DR-241 bound (i)'s collision-as-guard,
+    # unweakened by the generation addition (D7).
+    first = tt.emit_transition(
+        "item-gen-7",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a1",
+        repo_root=repo_root,
+    )
+    second = tt.emit_transition(
+        "item-gen-7",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-a"},
+        tier="auto",
+        source_observation_id="obs-a1",
+        repo_root=repo_root,
+    )
+    assert first["id"] == second["id"]
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-gen-7"
+    ]
+    assert len(stored) == 3
+
+
 def test_suggest_tier_event_invisible_to_read_events(repo_root):
     tt.emit_transition(
         "item-8",
@@ -549,3 +915,159 @@ def test_suggest_tier_event_invisible_to_read_events(repo_root):
 
     events = tracker_store.read_events(repo_root=repo_root)
     assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Post-review fix (BLOCKED finding, state/subagent-share/1c3928ee-abbf-49ce-
+# b35c-d6727a4b903c/review-s1-transitions.md): a retract counts itself in
+# `_code_complete_retract_generation`'s sum, so addressing a retract on its
+# own generation makes the address unstable across re-observation. The
+# retract arm of `_code_complete_dedup_key` now addresses on
+# `(source_observation_id, evidence.sha)` instead, leaving the generation
+# load-bearing for the assert arm only.
+# ---------------------------------------------------------------------------
+
+
+def test_retract_re_observed_dedups_to_the_same_stored_event(repo_root):
+    """The regression this fix exists for. Re-emitting the SAME retract
+    observation (same item_id/axis/to_state/evidence.sha/
+    source_observation_id) must resolve to the already-stored event, not
+    mint a second one — this is exactly AC14's "exactly one retract event
+    is ever stored" contract, which the pre-fix generation-keyed address
+    broke (the retract counted itself the second time round, so its
+    address recomputed to a different generation and never matched).
+    """
+    first = tt.emit_transition(
+        "item-retract-replay",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+    second = tt.emit_transition(
+        "item-retract-replay",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+
+    assert second["id"] == first["id"]
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-retract-replay" and e.get("to_state") == "retracted"
+    ]
+    assert len(stored) == 1
+
+
+def test_out_of_order_retract_replay_still_dedups_to_its_own_original(repo_root):
+    """Two distinct retracts (different sha/observation) land as two
+    events; replaying the FIRST one again — after the second has already
+    been stored — must still dedup to R1's own original event, not mint a
+    duplicate or accidentally match R2's.
+    """
+    r1 = tt.emit_transition(
+        "item-retract-out-of-order",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-r1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+    tt.emit_transition(
+        "item-retract-out-of-order",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-r2"},
+        tier="auto",
+        source_observation_id="obs-r2",
+        repo_root=repo_root,
+    )
+    r1_replay = tt.emit_transition(
+        "item-retract-out-of-order",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-r1"},
+        tier="auto",
+        source_observation_id="obs-r1",
+        repo_root=repo_root,
+    )
+
+    assert r1_replay["id"] == r1["id"]
+    stored = [
+        e
+        for e in tracker_store.read_events(repo_root=repo_root)
+        if e.get("item_id") == "item-retract-out-of-order"
+        and e.get("to_state") == "retracted"
+    ]
+    assert len(stored) == 2
+
+
+def test_emit_batch_duplicate_retract_does_not_advance_counter_for_later_payloads(
+    repo_root,
+):
+    """A batch containing a retract that matches an already-stored event
+    must not inflate the running generation counter for later payloads in
+    the same batch (the secondary, dormant defect from the same review
+    finding) — exercised directly against `_emit_batch` since
+    `reopen_cascade` is the only production caller today and always passes
+    `source_observation_id=None`, which never dedups.
+    """
+    existing_retract = tt.emit_transition(
+        "item-batch-retract-gen",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-existing"},
+        tier="auto",
+        source_observation_id="obs-existing",
+        repo_root=repo_root,
+    )
+
+    dup_payload = tt.transition_event(
+        "item-batch-retract-gen",
+        "code_complete",
+        "retracted",
+        from_state="asserted",
+        actor="reconciler",
+        evidence={"sha": "revert-existing"},
+        tier="auto",
+        source_observation_id="obs-existing",
+    )
+    assert_payload = tt.transition_event(
+        "item-batch-retract-gen",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "sha-fresh"},
+        tier="auto",
+        source_observation_id="obs-fresh",
+    )
+
+    result = tt._emit_batch([dup_payload, assert_payload], repo_root=repo_root)
+
+    assert result[0]["id"] == existing_retract["id"]
+    # The batch had exactly one PRIOR stored retract (from the setup call
+    # above) before either payload in this batch was processed; since the
+    # duplicate retract in this batch was not newly appended, the running
+    # counter must not advance past that prior count, so the assert
+    # payload stamps generation 1 (count of retracts stored BEFORE this
+    # batch), not 2.
+    assert result[1]["generation"] == 1

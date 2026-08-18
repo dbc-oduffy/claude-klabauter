@@ -95,6 +95,10 @@ from pathlib import Path
 from typing import Any, NamedTuple, Optional, Union
 
 from coordinator_core.artifact_basename import md_fallback_candidates
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.shipped_in_tokens import (
     _NO_COMMIT_TOKEN_RE as _SHIPPED_NO_COMMIT_RE,
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
@@ -3480,7 +3484,13 @@ def compute_branch_gate(
     if branch.startswith("work/"):
         return {"action": "resume", "current_branch": branch}
 
-    verdict = _worktree_safety.branch_mutation_verdict(str(repo_root))
+    # UNQUALIFIED_BRANCH_CUT, not FRESH_CUT_AT_HEAD: this function PRESCRIBES
+    # a cut to a caller that controls how it is performed, so it cannot
+    # establish content-neutrality from its own inputs and must not inherit
+    # the boot path's narrowing.
+    verdict = _worktree_safety.branch_mutation_verdict(
+        str(repo_root), operation=_worktree_safety.UNQUALIFIED_BRANCH_CUT
+    )
     if verdict.outcome == "ok":
         return {"action": "create", "current_branch": branch}
     return {
@@ -9127,9 +9137,13 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
 
 def _usage(prog: str, stream=None) -> int:
     stream = sys.stderr if stream is None else stream
-    print(f"usage: {prog} brief <artifact-path> [--decisions <json>]", file=stream)
     print(
-        f"       {prog} apply <artifact-path> [--session-id <id>] [--decisions <json>]",
+        f"usage: {prog} brief <artifact-path> [--decisions <json> | --decisions-file <path>]",
+        file=stream,
+    )
+    print(
+        f"       {prog} apply <artifact-path> [--session-id <id>] "
+        "[--decisions <json> | --decisions-file <path>]",
         file=stream,
     )
     print(f"       {prog} drop <artifact-path> [--session-id <id>]", file=stream)
@@ -9188,22 +9202,23 @@ def main(argv: list[str]) -> int:
     artifact_path = rest[0]
     tail = rest[1:]
     decisions: dict[str, Any] = {}
+    conflict = detect_conflicting_payload_channels(tail)
+    if conflict is not None:
+        print(f"pickup-assemble: {conflict}", file=sys.stderr)
+        return EXIT_USAGE
     i = 0
     while i < len(tail):
         tok = tail[i]
-        if tok == "--decisions":
-            if i + 1 >= len(tail):
-                return _usage("pickup-assemble")
-            try:
-                decisions = json.loads(tail[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"pickup-assemble: malformed --decisions JSON: {exc}", file=sys.stderr)
+        if (payload := resolve_json_payload_flag(tail, i)).consumed:
+            if payload.error is not None:
+                print(f"pickup-assemble: {payload.error}", file=sys.stderr)
                 return EXIT_USAGE
+            decisions = payload.value
             shape_error = validate_decisions_shape(decisions)
             if shape_error is not None:
                 print(f"pickup-assemble: {shape_error}", file=sys.stderr)
                 return EXIT_USAGE
-            i += 2
+            i += payload.consumed
         else:
             print(f"pickup-assemble: unrecognized argument {tok!r}", file=sys.stderr)
             return EXIT_USAGE

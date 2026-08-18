@@ -136,7 +136,18 @@ to write content into it. The `<guard_name>` and `<session_id>` to use are
 whichever values the deny message that just fired names — do not guess
 them.
 
-**Scoping (AC2).** Keyed on both the session id *and* the guard module name.
+**`<guard_name>` is the registered CHAIN name, not the module name.** Every
+`GuardEntry` in `bash_guards/dispatch.py` registers a hyphenated name
+(`block-stash-destruction`), while its implementing module is underscored
+(`block_stash_destruction.py`). `_consume_unlock` is keyed on the chain
+name, so a sentinel written with the module spelling names no guard in the
+chain and is never consumed — the deny simply fires again, with nothing to
+indicate the grant was misaddressed. Read the name off the `GuardEntry`, not
+off the filename, and note that guard names elsewhere in this document are
+prose references to modules rather than sentinel-ready keys.
+
+**Scoping (AC2).** Keyed on both the session id *and* the registered guard
+chain name.
 Granting it clears exactly one guard in exactly one session — never a
 blanket "all guards off" switch, and never something a peer session can
 benefit from. A sentinel for guard A does nothing for guard B; a sentinel
@@ -150,7 +161,7 @@ disabling the guard for the rest of the session.
 
 **Coverage (AC4).** Every hard-deny guard is reachable through this channel,
 with no exemptions — including the sentinel-removal / irreversible-harm
-cohort (`block_worktree_sentinel_creation`, `block_stash_destruction`, and
+cohort (`block-worktree-sentinel-creation`, `block-stash-destruction`, and
 siblings). `block_dev_repo_sentinel_removal` was itself flipped to advisory
 by the 2026-08-06 guard-class census (its deny leg deleted, not merely
 gated) and is no longer part of this hard-deny cohort — dropped from this

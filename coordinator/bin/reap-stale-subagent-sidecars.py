@@ -98,7 +98,9 @@ import glob
 import os
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
 from typing import Optional
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -172,6 +174,33 @@ def _age_days(path: str, now: float) -> float:
     except OSError:
         return 0.0
     return max(0.0, (now - mtime) / 86400.0)
+
+
+def _write_pathspec_file(paths: list) -> str:
+    """Write ``paths`` to a uniquely-named temp file, one per line, and
+    return its path — the newline-delimited input ``git ...
+    --pathspec-from-file=<f>`` expects by default. Mirrors
+    ``coordinator_core.ops.ceremony.git_native._write_pathspec_file``'s own
+    convention (PID+uuid uniqueness, newline-delimited: no path this op
+    ever reaps — a session-id dir plus a sidecar key — contains a literal
+    newline byte).
+
+    Sidesteps the ~32KB Windows ``CreateProcess`` command-line ceiling
+    (WinError 206) that an argv-list ``git rm``/``git commit -- <paths>``
+    hits once the tracked-reap population is large (measured live: 6617
+    tracked sidecars under ``state/subagent-share/``, 621047 bytes of
+    pathspec argv — 19x the limit). ``--pathspec-from-file`` is supported
+    by both ``git rm`` and ``git commit`` since git 2.25, and — unlike
+    chunking — keeps the tracked-reap commit atomic: one commit for the
+    whole population, not one per chunk. Caller owns cleanup
+    (``finally: os.remove(path)``).
+    """
+    pathspec_path = os.path.join(
+        tempfile.gettempdir(), f"reap-stale-sidecars-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
+    )
+    with open(pathspec_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(paths) + "\n")
+    return pathspec_path
 
 
 def _is_tracked(repo_root: str, rel_path: str) -> bool:
@@ -302,27 +331,40 @@ def main(argv: Optional[list] = None) -> int:
 
     if tracked_to_reap:
         tracked_rel = [os.path.relpath(f, repo_root) for f in tracked_to_reap]
-        rm_res = subprocess.run(
-            ["git", "rm", "-q", "--", *tracked_rel], cwd=repo_root,
-            capture_output=True, text=True, check=False, **no_console_creationflags(),
-        )
-        if rm_res.returncode != 0:
-            sys.stderr.write(rm_res.stderr)
-            return rm_res.returncode
-
-        commit_msg = f"reap {len(tracked_to_reap)} stale subagent-share sidecar(s)"
-        commit_res = subprocess.run(
-            ["git", "commit", "-q", "-m", commit_msg, "--", *tracked_rel], cwd=repo_root,
-            capture_output=True, text=True, check=False, **no_console_creationflags(),
-        )
-        if commit_res.returncode != 0:
-            sys.stderr.write(
-                f"reap-stale-subagent-sidecars.py: git commit failed after git rm — "
-                f"{len(tracked_to_reap)} sidecar(s) staged for deletion, not committed:\n"
+        # --pathspec-from-file=<f> instead of a full argv pathspec list --
+        # see _write_pathspec_file's docstring: at scale (thousands of
+        # tracked sidecars) the argv form blows Windows's ~32KB
+        # CreateProcess command-line ceiling (WinError 206). One pathspec
+        # file feeds both calls, preserving single-commit atomicity.
+        pathspec_file = _write_pathspec_file(tracked_rel)
+        try:
+            rm_res = subprocess.run(
+                ["git", "rm", "-q", f"--pathspec-from-file={pathspec_file}"], cwd=repo_root,
+                capture_output=True, text=True, check=False, **no_console_creationflags(),
             )
-            for f in tracked_to_reap:
-                sys.stderr.write(f"  {f}\n")
-            return commit_res.returncode
+            if rm_res.returncode != 0:
+                sys.stderr.write(rm_res.stderr)
+                return rm_res.returncode
+
+            commit_msg = f"reap {len(tracked_to_reap)} stale subagent-share sidecar(s)"
+            commit_res = subprocess.run(
+                ["git", "commit", "-q", "-m", commit_msg, f"--pathspec-from-file={pathspec_file}"],
+                cwd=repo_root,
+                capture_output=True, text=True, check=False, **no_console_creationflags(),
+            )
+            if commit_res.returncode != 0:
+                sys.stderr.write(
+                    f"reap-stale-subagent-sidecars.py: git commit failed after git rm — "
+                    f"{len(tracked_to_reap)} sidecar(s) staged for deletion, not committed:\n"
+                )
+                for f in tracked_to_reap:
+                    sys.stderr.write(f"  {f}\n")
+                return commit_res.returncode
+        finally:
+            try:
+                os.remove(pathspec_file)
+            except OSError:
+                pass
         for f in tracked_to_reap:
             print(f"reaped {f}")
 

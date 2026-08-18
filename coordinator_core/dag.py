@@ -211,7 +211,19 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 _FRONTMATTER_CACHE: Dict[Tuple[str, str], dict] = {}
-_MAX_FRONTMATTER_CACHE: int = 512
+
+# NEGATIVE SPEC: this cap must stay comfortably ABOVE the largest handoff corpus
+# the engine scans, or corpus-wide consumers fall off a capacity cliff.
+# `referenced_by` rescans the caller's whole path list on every call, so a loop
+# over N live batons touches N x M paths in sequential order. Once M exceeds the
+# cap, oldest-half eviction drops each entry before the next pass revisits it —
+# a ~100% miss rate that silently turns O(N + M) parses into O(N x M).
+# Measured on the 2026-08-18 corpora (DoE-claude M=676/N=231, claude-klabauter M=567/N=147):
+# at cap 512 the differential-oracle sweeps cost ~110s each and stalled the fast
+# tier at 98-99%; sizing the cap above M cut ~64% of that. Raise this, never
+# lower it, when a corpus grows — and do not tune it down for memory without
+# re-measuring those sweeps.
+_MAX_FRONTMATTER_CACHE: int = 4096
 
 # ---------------------------------------------------------------------------
 # Minimal YAML frontmatter parser (stdlib-only, handles handoff file subset)

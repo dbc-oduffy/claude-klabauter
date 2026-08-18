@@ -243,7 +243,7 @@ import asyncio
 import datetime
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
 
 import yaml
 
@@ -268,6 +268,7 @@ from coordinator_core.frontmatter.schema_validate import (
     format_validation_errors,
     validate_frontmatter,
 )
+from coordinator_core.frontmatter.baton_class import canonical_kind, kind_values_for_canonical
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.machine_resolver import registry_get
@@ -284,6 +285,26 @@ from coordinator_core.sibling_fact import resolve_leg
 _SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "handoff.schema.json"
 )
+
+# `_unclaim`'s governing-plan backstop exemption (C3, AC5, docs/plans/2026-08-
+# 18-a-spinoff-is-not-its-parents-deliverable.md). Identical shape to
+# `deliverable_cascade._SPINOFF_KINDS` and `handoff_normalize._CARRY_EXCLUDED_
+# KINDS` — same call against the same `baton_class.py` owning table — but
+# derived LOCALLY rather than imported from `deliverable_cascade`, unlike
+# that module's own stated preference: importing `deliverable_cascade.
+# _SPINOFF_KINDS` here creates a real circular import (measured, not assumed
+# — `python -c "import coordinator_core.ops.handoff_transition"` fails with
+# "cannot import name '_SPINOFF_KINDS' from partially initialized module
+# ...deliverable_cascade") via `deliverable_cascade -> cascade_baton_rows ->
+# execute_plan_assemble.close_out_and_stamp -> ops.ceremony.post_commit_tail
+# -> ops.ceremony.consumed_handoff_stamp -> handoff_transition`
+# (`consumed_handoff_stamp.py` imports `_PathNotContained`/`_resolve_path`/
+# `build_ship_mutate` from this module at its own top level). AC5's "one
+# shared kind-membership constant, not two literals" is still satisfied: the
+# only literal string `"spinoff"` lives in `baton_class.py`'s own enum data;
+# this is a second CALL of `kind_values_for_canonical("spinoff")`, not a
+# second hand-rolled membership set.
+_SPINOFF_KINDS: FrozenSet[str] = frozenset(kind_values_for_canonical("spinoff"))
 
 
 # ---------------------------------------------------------------------------
@@ -708,13 +729,20 @@ def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root
         status = read_fm_field(split.fm_text, "status")
         deployment = read_fm_field(split.fm_text, "deployment_state")
         existing_continued_into = read_fm_field(split.fm_text, "continued_into")
+        # pickup_ready is read unquoted for the idempotency compare below —
+        # same reason _ship reads it that way (§ pickup_ready cleared on ship).
+        existing_pickup_ready = read_fm_field_unquoted(split.fm_text, "pickup_ready")
 
-        # Idempotency: no-op at full target state (including continued_into
-        # already matching the supplied successor).
+        # Idempotency: no-op at full target state (continued_into already
+        # matching the supplied successor AND pickup_ready already false).
+        # Without that last condition a pre-fix record already carrying the
+        # succession edge would short-circuit on the edge alone and never pick
+        # up the pickup_ready clear below.
         if (
             _status_is(status, "claimed")
             and deployment == "continued"
             and existing_continued_into == continued_into
+            and existing_pickup_ready == "false"
         ):
             _state["applied"] = False
             _state["message"] = (
@@ -756,6 +784,19 @@ def _supersede(handoff_path: str, continued_into: str, worktree: Path, repo_root
             fm = replace_fm_field(fm, "continued_into", continued_into)
         else:
             fm = insert_fm_field(fm, "continued_into", continued_into, "deployment_state")
+
+        # pickup_ready → false. `continued` is terminal, so the same reasoning
+        # that clears it on ship (§ pickup_ready cleared on ship) and on close
+        # (2026-08-10) applies — a superseded baton left advertising
+        # pickup_ready:true is re-advertised to /pickup by claims.py's
+        # SUCCEEDED-BATON CARVE-OUT. This is the sibling write site of
+        # handoff_archive_transition._supersede_continued, which carries the
+        # identical clear; the two supersede implementations must not diverge
+        # on the pair they both write.
+        if read_fm_field(fm, "pickup_ready") is not None:
+            fm = replace_fm_field(fm, "pickup_ready", "false")
+        else:
+            fm = insert_fm_field(fm, "pickup_ready", "false", "deployment_state")
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
@@ -802,10 +843,17 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
     `handoff_archive_transition.py`, this module's own `transition` verb
     dispatch) is unaffected.
 
-    ``mutate`` is a pure ``str -> str`` callable — same idempotent no-op on
-    an already-shipped record, same legacy-status canonicalization, same
-    post-mutation schema-validation gate (`MutateAbort` on failure) as
-    `_ship` had inline before this extraction.
+    ``mutate`` is a pure ``str -> str`` callable — same legacy-status
+    canonicalization, same post-mutation schema-validation gate
+    (`MutateAbort` on failure) as `_ship` had inline before this extraction,
+    now ALSO clearing `pickup_ready` to `false` in the same write as the
+    `deployment_state` flip (AC12, this chunk — mirrors `_close`'s
+    2026-08-10 pickup_ready fix; see the mutate closure's own comment for
+    why `pickup_ready`, not `status`, is the field this seam co-owns with
+    `deployment_state`). Idempotency is now a two-condition no-op
+    (deployment_state==shipped AND pickup_ready==false), not deployment_
+    state alone — a pre-fix already-shipped record with a stale
+    pickup_ready:true still gets one real write on its next `ship` call.
 
     ``state`` is a dict the closure writes into as it runs — ``{"applied":
     bool, "message": str}`` — read AFTER `locked_rmw` returns (or raises
@@ -820,11 +868,21 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
             raise MutateAbort(f"ship: no parseable YAML frontmatter in {handoff_path}")
 
         deployment = read_fm_field(split.fm_text, "deployment_state")
+        # pickup_ready is read unquoted for the idempotency compare below —
+        # see § pickup_ready cleared on ship.
+        existing_pickup_ready = read_fm_field_unquoted(split.fm_text, "pickup_ready")
 
-        # Idempotency: no-op when already shipped.
-        if deployment == "shipped":
+        # Idempotency: no-op ONLY at the full target state (deployment_state
+        # already shipped AND pickup_ready already false — see § pickup_ready
+        # cleared on ship below; without the second condition, a re-ship call
+        # against a pre-fix record already at shipped would short-circuit on
+        # the first condition and never pick up the pickup_ready fix).
+        if deployment == "shipped" and existing_pickup_ready == "false":
             state["applied"] = False
-            state["message"] = f"{handoff_path} already deployment_state:shipped — no-op"
+            state["message"] = (
+                f"{handoff_path} already deployment_state:shipped "
+                "(pickup_ready: false) — no-op"
+            )
             return old_text  # byte-identical → locked_rmw skips the write
 
         fm = split.fm_text
@@ -843,6 +901,26 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
         status = read_fm_field(split.fm_text, "status")
         fm = _canonicalize_legacy_status(fm, status)
 
+        # pickup_ready → false (§ pickup_ready cleared on ship). deployment_
+        # state:shipped and pickup_ready:true are one logical state
+        # disagreeing with itself — same double-dispatch hazard the
+        # 2026-08-10 close-terminal fix closed (cross-repo/inbox/2026-08-10-
+        # doe-claude-em-reconcile-close-terminal-and-scrub-key.md § 1: "The
+        # two fields are one logical state"), un-fixed on this OTHER
+        # terminal-write path until now. `status` is deliberately left
+        # untouched (DR-084 P4 narrow decouples status from terminality —
+        # see this function's own docstring and `_close`'s "status
+        # untouched" contract); pickup_ready carries no such constraint, so
+        # it is the field this seam can actually co-own with
+        # deployment_state. Replace if present (covers a stale true AND a
+        # stale already-quoted value); insert if absent (a record minted
+        # before pickup_ready existed gets the same guarantee going
+        # forward).
+        if read_fm_field(fm, "pickup_ready") is not None:
+            fm = replace_fm_field(fm, "pickup_ready", "false")
+        else:
+            fm = insert_fm_field(fm, "pickup_ready", "false", "deployment_state")
+
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
         if errors:
@@ -850,19 +928,23 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
             raise MutateAbort(f"handoff frontmatter validation failed: {details}")
 
         state["applied"] = True
-        state["message"] = f"shipped {handoff_path} (deployment_state: shipped)"
+        state["message"] = (
+            f"shipped {handoff_path} (deployment_state: shipped, pickup_ready: false)"
+        )
         return rebuild(split, fm)
 
     return mutate, state
 
 
 def _ship(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
-    """Apply ship transition (deployment_state→shipped, status untouched).
+    """Apply ship transition (deployment_state→shipped, pickup_ready→false,
+    status untouched — see `build_ship_mutate`'s docstring, AC12, for why
+    pickup_ready and not status is the field co-owned with deployment_state).
 
     Stamp-only path — the handoff remains in state/handoffs/ for the async
     sweep-shipped-handoffs janitor.  shipped_in is assumed already stamped
     by stamp_shipped_in() before this call.  Idempotency: no-op when
-    deployment_state==shipped.
+    deployment_state==shipped AND pickup_ready==false.
 
     Routes the read-modify-write through locked_rmw for cross-process serialisation.
     Domain-abort paths raise MutateAbort from inside the mutate closure so no write occurs.
@@ -1428,8 +1510,25 @@ def _unclaim(
         # deployment_state at all, refuse when this handoff's governing plan is
         # stamped implemented. A bare abort here would strand an operator with no
         # next move, so the refusal NAMES the plan.
+        #
+        # Kind-aware exemption (C3, docs/plans/2026-08-18-a-spinoff-is-not-its-
+        # parents-deliverable.md § C3, AC4/AC5): a `kind: spinoff` record's
+        # `deliverable_id` is not a true join onto the plan it happens to
+        # match — see `deliverable_cascade.py`'s leg (d), which this backstop
+        # deliberately mirrors rather than diverges from. Read `kind` off THIS
+        # closure's own `split.fm_text` (this function has no `fm` dict to
+        # read it from otherwise) and skip the governing-plan lookup entirely
+        # for a spinoff, so a legacy inherited id never strands the unclaim.
+        # `_SPINOFF_KINDS` is derived locally from the same `baton_class.py`
+        # owning table `deliverable_cascade` uses — NOT imported from it; that
+        # import is a real circular one. See the constant's own comment.
+        record_kind = canonical_kind(read_fm_field_unquoted(split.fm_text, "kind"))
         deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id")
-        if isinstance(deliverable_id, str) and deliverable_id.strip():
+        if (
+            record_kind not in _SPINOFF_KINDS
+            and isinstance(deliverable_id, str)
+            and deliverable_id.strip()
+        ):
             governing_plan = _find_implemented_governing_plan(worktree, deliverable_id.strip())
             if governing_plan is not None:
                 raise MutateAbort(

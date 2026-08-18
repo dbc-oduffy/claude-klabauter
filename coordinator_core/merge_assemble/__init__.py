@@ -77,6 +77,12 @@ BRANCH_STATE_DIVERGED = "diverged"
 #: module's `d0` directive preserves as the first hard-gate (chunk C6 AC).
 NODE_CEREMONY_TEST_RELPATH = ("coordinator", "tests", "plugin-ecosystem", "run.js")
 
+#: `coordinator/bin/` resolved from THIS module's own location (matches
+#: `merge_assemble.apply._BIN_DIR`) — `portability-sweep.py` is a producer
+#: this claude-klabauter install ships (or doesn't), never a path inside the target
+#: repo `repo_root` names (unlike `NODE_CEREMONY_TEST_RELPATH`).
+_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+
 
 def node_ceremony_gate_entrypoint(repo_root: Path) -> Path:
     """Resolves `NODE_CEREMONY_TEST_RELPATH` against `repo_root`. The suite it
@@ -84,6 +90,18 @@ def node_ceremony_gate_entrypoint(repo_root: Path) -> Path:
     exists in a repo that owns discovery surfaces — so this path is present in
     the coordinator clone and absent in every consumer repo."""
     return repo_root.joinpath(*NODE_CEREMONY_TEST_RELPATH)
+
+
+def portability_sweep_entrypoint() -> Path:
+    """Resolves `coordinator/bin/portability-sweep.py` from this module's own
+    location (D5 fix). The script has never existed in this repo's history
+    (confirmed via `git log --all -- coordinator/bin/portability-sweep.py`)
+    — presence is checked so an absent producer can be reported as an
+    explicit `unavailable` gate verdict rather than surfacing as a
+    `RuntimeError` from `_run_py_script` that reads identically to any other
+    dispatch failure (D5's defect: a missing producer currently reads as a
+    clean sweep once a caller stops treating "exited 2" as fatal)."""
+    return _BIN_DIR / "portability-sweep.py"
 
 
 class _TransportFailure(Exception):
@@ -284,7 +302,16 @@ def build_gate_verdicts_scaffold() -> dict[str, str]:
     was ever written to `apply()`'s report). `active_branch_guard` is
     deliberately absent — `build_directives` emits no directive for it, so
     there is no CLI result that could ever fill it in; see
-    `GATE_DIRECTIVE_IDS`'s docstring."""
+    `GATE_DIRECTIVE_IDS`'s docstring.
+
+    Four terminal-or-pending values are possible once `apply()`'s
+    `_fill_gate_verdicts` has run (D5 fix): `"pending"` (never reached this
+    run), `"passed"`, `"failed"`, and `"unavailable"` — the last one only
+    for a gate whose directive was marked `already_satisfied` with a
+    `skipped_reason` naming an absent producer (`portability_sweep`/`d5`
+    when `coordinator/bin/portability-sweep.py` does not exist). A missing
+    producer must never be reported `"passed"` — that ambiguity is the
+    defect D5 exists to close."""
     return {
         "portability_sweep": "pending",
         "check_no_illegal_paths": "pending",
@@ -398,11 +425,62 @@ def build_judgment_points(
     ]
 
 
+#: D4 fix default — `pr-body`'s `--ship-verdict` is required TEXT
+#: (`cmd_pr_body` does `args.ship_verdict.rstrip("\n")` directly into the PR
+#: body, it is not a path). d4 only ever dispatches once the `ship_verdict`
+#: judgment point has actually resolved to the `"ship"` disposition
+#: (`disposition_resolves_directive` gates it) — this default names that
+#: fact rather than inventing rationale text `build_directives` has no way
+#: to know at compute time. A caller with real rationale to attach threads
+#: it via `decisions["ship_verdict"]["value"]` (same override shape as
+#: `version_bump_final`, see `_resolve_ship_verdict_text`).
+_DEFAULT_SHIP_VERDICT_TEXT = (
+    "Ship — every hard gate reported and the ship_verdict judgment point "
+    "resolved to \"ship\"."
+)
+
+
+def _resolve_ship_verdict_text(decisions: dict[str, Any]) -> str:
+    """Reads an optional free-text override off the SAME `decisions
+    ["ship_verdict"]` entry `disposition_resolves_directive` already reads
+    for gating (its `"value"` key, alongside the existing `"disposition"`
+    key) — not a second parallel decisions key, so a caller supplying
+    rationale text does so on the one entry that already carries this
+    judgment point's decision. Falls back to `_DEFAULT_SHIP_VERDICT_TEXT`
+    when no non-empty string `value` is present."""
+    entry = (decisions or {}).get("ship_verdict")
+    if isinstance(entry, dict):
+        value = entry.get("value")
+        if isinstance(value, str) and value.strip():
+            return value
+    return _DEFAULT_SHIP_VERDICT_TEXT
+
+
+def _resolve_release_notes_text(decisions: dict[str, Any], *, cut_tag: str) -> str:
+    """Reads an optional free-text override off `decisions["release_notes"]`
+    (a bare string, or `{"value": "<text>"}` — same two accepted shapes as
+    `version_bump_final`/`normalize_decisions`, checked directly here since
+    `release_notes` gates nothing and so has no judgment-point entry of its
+    own to share). Falls back to a computed default naming the resolved
+    release tag — the "computable" value the EM's brief names — when no
+    override is supplied."""
+    entry = (decisions or {}).get("release_notes")
+    if isinstance(entry, str) and entry.strip():
+        return entry
+    if isinstance(entry, dict):
+        value = entry.get("value")
+        if isinstance(value, str) and value.strip():
+            return value
+    return f"Release {cut_tag}."
+
+
 def build_directives(
     repo_root: Path,
     *,
     tag_prefix: str,
     proposed_tag: Optional[str],
+    ship_verdict_text: str = _DEFAULT_SHIP_VERDICT_TEXT,
+    release_notes_text: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """The ORDERED directive list over the existing merge CLIs
     `merging-to-main/SKILL.md` currently hand-sequences. `d0` is the node
@@ -420,8 +498,33 @@ def build_directives(
     repo does not own. Absence therefore lands `d0` as `already_satisfied`
     with `skipped_reason` naming the missing path — a narrated no-op, not a
     silent pass. Presence still gates hard: a suite that exists and fails
-    aborts the run exactly as before."""
+    aborts the run exactly as before.
+
+    **`d4`'s `pr-body` args are frozen HERE from resolved values (D4 fix),
+    never left to default-fill downstream.** `merge-gate-and-pr.py`'s
+    `pr-body` subcommand declares `--ship-verdict`/`--release-notes` as
+    `required=True` with no default — the prior shape omitted both, so
+    every `/merge-to-main` run hit `exited 2` (argparse usage error) at
+    this exact directive, the ceremony's only hard-blocking defect (D4).
+    `ship_verdict_text`/`release_notes_text` are computed by `brief()` (via
+    `_resolve_ship_verdict_text`/`_resolve_release_notes_text`) from the
+    SAME resolved `decisions`/`cut_tag` this function already threads into
+    `d2`'s `cut-tag` arg — argument threading, not new behaviour.
+
+    **`d5` is presence-conditional on `portability_sweep_entrypoint()`
+    (D5 fix).** `coordinator/bin/portability-sweep.py` has never existed in
+    this repo (confirmed via git history) — dispatching it unconditionally
+    raises `RuntimeError` from `_run_py_script`/`_dispatch_result`, which
+    reads identically to "the sweep ran and found something," silently
+    passing a gate nothing actually checked. Absence lands `d5` as
+    `already_satisfied` with `skipped_reason` naming the missing CLI, the
+    same narrated-no-op shape `d0` already uses — `apply()`'s
+    `_fill_gate_verdicts` reads that `skipped_reason` to report
+    `gates["portability_sweep"] = "unavailable"`, distinct from both
+    `"passed"` and `"failed"`."""
     cut_tag = proposed_tag or f"{tag_prefix}0.0.0"
+    if release_notes_text is None:
+        release_notes_text = f"Release {cut_tag}."
     gate_entrypoint = node_ceremony_gate_entrypoint(repo_root)
     gate_absent = not gate_entrypoint.is_file()
     node_gate: dict[str, Any] = {
@@ -435,6 +538,20 @@ def build_directives(
         node_gate["skipped_reason"] = (
             f"no node ceremony suite in this repo ({'/'.join(NODE_CEREMONY_TEST_RELPATH)} "
             "absent) — nothing to gate"
+        )
+    portability_script = portability_sweep_entrypoint()
+    portability_absent = not portability_script.is_file()
+    portability_gate: dict[str, Any] = {
+        "id": "d5",
+        "cli": "portability-sweep",
+        "args": [str(repo_root), "--diff-only", "origin/main..HEAD", "--report-format", "md"],
+        "depends_on": None,
+        "already_satisfied": portability_absent,
+    }
+    if portability_absent:
+        portability_gate["skipped_reason"] = (
+            f"portability-sweep CLI not installed ({portability_script}) — "
+            "gate reports unavailable, not passed"
         )
     return [
         node_gate,
@@ -455,17 +572,19 @@ def build_directives(
         {
             "id": "d4",
             "cli": "merge-gate-and-pr",
-            "args": ["pr-body", "--commit-range", "main..HEAD"],
+            "args": [
+                "pr-body",
+                "--ship-verdict",
+                ship_verdict_text,
+                "--release-notes",
+                release_notes_text,
+                "--commit-range",
+                "main..HEAD",
+            ],
             "depends_on": ["ship_verdict"],
             "already_satisfied": False,
         },
-        {
-            "id": "d5",
-            "cli": "portability-sweep",
-            "args": [str(repo_root), "--diff-only", "origin/main..HEAD", "--report-format", "md"],
-            "depends_on": None,
-            "already_satisfied": False,
-        },
+        portability_gate,
         {
             "id": "d6",
             "cli": "check-no-illegal-paths",
@@ -586,7 +705,14 @@ def brief(
         version_bump = {**version_bump, "override": override_tag}
 
     gate_verdicts = build_gate_verdicts_scaffold()
-    directives = build_directives(root, tag_prefix=tag_prefix, proposed_tag=cut_tag_input)
+    resolved_cut_tag = cut_tag_input or f"{tag_prefix}0.0.0"
+    directives = build_directives(
+        root,
+        tag_prefix=tag_prefix,
+        proposed_tag=cut_tag_input,
+        ship_verdict_text=_resolve_ship_verdict_text(effective_decisions),
+        release_notes_text=_resolve_release_notes_text(effective_decisions, cut_tag=resolved_cut_tag),
+    )
     judgment_points = build_judgment_points(
         portability_sweep_result=effective_decisions.get("portability_sweep_result")
     )

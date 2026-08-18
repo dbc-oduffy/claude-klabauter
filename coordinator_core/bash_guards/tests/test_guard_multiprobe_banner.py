@@ -60,13 +60,16 @@ Spec backlink: coordinator_core/bash_guards/guard_multiprobe_banner.py
 from __future__ import annotations
 
 import importlib.util
+import json
 
 import pytest
 
+from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_multiprobe_banner as guard
 from coordinator_core.bash_guards._dialect import Dialect
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 #: Same bridge-to-C8 skip pattern as
 #: `test_command_tokenizer_length_ceiling.py`'s own `requires_powershell_
@@ -536,6 +539,88 @@ class TestPowerShellDialectWiring:
         assert guard.dialect_from_tool_name("Read") is None
 
 
+class TestDispatchReachability:
+    """C6, pln-the-shape-classifier-reaches-a-e743e5 § AC14/AC15.
+
+    AC14: `MATCHERS` is `COMMAND_TOOL_NAMES` by DIRECT IDENTITY -- a `list()`
+    or hand-retyped copy would satisfy a contents-only check while breaking
+    this.
+
+    AC15 -- the criterion that separates closing the bypass from appearing
+    to: the EM's own pre-plan measurement called `guard.check()` directly,
+    which bypasses `dispatch.py`'s `MATCHERS`-gated chain builder entirely,
+    and consequently reported this guard as "blind" on a PowerShell payload
+    when it had simply never been INVOKED. `test_powershell_multiprobe_
+    banner_reaches_same_primary_as_bash` above (and every other test in this
+    file) calls `guard.check(...)` or `guard._classify_for_dialect(...)`
+    directly -- none of them prove reachability through the real dispatcher.
+    This class routes through `dispatch.evaluate_payload_json`, the actual
+    PreToolUse entry point, instead.
+    """
+
+    def test_matchers_is_command_tool_names_by_identity(self):
+        assert guard.MATCHERS is COMMAND_TOOL_NAMES
+
+    @requires_powershell_grammar
+    def test_powershell_fanout_reaches_a_verdict_through_the_real_dispatch_chain(self):
+        # The plan's own measured blind-spawn banner case (Problem section
+        # table, row 4): a `Write-Host` banner followed by three probes.
+        # Bash-default classification calls this "nothing" (Write-Host is
+        # not echo/printf-shaped); the PowerShell-dialect predicate C2 built
+        # recognizes it.
+        cmd = "Write-Host '=== facts ==='; git status; git log -1; pwd"
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": cmd},
+            "session_id": "sess-ac15-multiprobe",
+            "cwd": "/repo",
+        }
+        result = dispatch.evaluate_payload_json(json.dumps(payload))
+        assert result is not None, (
+            "a PowerShell multi-probe-banner payload produced no verdict "
+            "through dispatch.evaluate_payload_json -- either MATCHERS "
+            "reverted to Bash-only, or the guard chain silently rejected "
+            "the tool_name before this guard's own check() ever ran"
+        )
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "multi-probe-banner" in hso["additionalContext"]
+        # PowerShell-valid alternative (AC9): a bash-only construct
+        # (a raw pipe into `head`/`tail`, `xargs`, a `sh -c` wrapper) must
+        # never appear in the offered remedy.
+        assert "python3" in hso["additionalContext"]
+
+    @requires_powershell_grammar
+    def test_reverting_matchers_to_bash_only_makes_the_same_payload_unreachable(
+        self, monkeypatch
+    ):
+        """Proof this is a real reachability assertion, not a tautology: a
+        `guard.MATCHERS = ("Bash",)` revert must make the IDENTICAL
+        PowerShell payload above produce no verdict at all through the real
+        chain -- because `_build_guard_chain` never even calls `guard.check`
+        for a `tool_name` its own `matchers=` entry excludes. Mirrors this
+        module's own dispatch.py docstring: "the master gate... rejected...
+        before... the guard loop ever run"."""
+        monkeypatch.setattr(guard, "MATCHERS", ("Bash",))
+        monkeypatch.setattr(dispatch, "_matchers_multiprobe_banner", ("Bash",))
+        monkeypatch.setattr(dispatch, "_ANY_DECLARED_MATCHERS_CACHE", None)
+
+        cmd = "Write-Host '=== facts ==='; git status; git log -1; pwd"
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": cmd},
+            "session_id": "sess-ac15-reverted",
+            "cwd": "/repo",
+        }
+        result = dispatch.evaluate_payload_json(json.dumps(payload))
+        assert result is None, (
+            "reverting guard.MATCHERS to Bash-only should have made this "
+            "PowerShell payload unreachable through the real dispatch "
+            "chain -- if this still produces a verdict, the test above is "
+            "not actually proving chain-level reachability"
+        )
+
+
 class TestCrashPropagatesForFailClosed:
     """Review: code-reviewer -- Finding 3: this guard is registered in
     `dispatch.py`'s `guard_chain` with `fail_closed=True`, whose whole
@@ -547,7 +632,7 @@ class TestCrashPropagatesForFailClosed:
     `guard_grep_via_bash.check`."""
 
     def test_classify_command_crash_propagates(self, monkeypatch):
-        def _boom(cmd):
+        def _boom(cmd, **_kwargs):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(guard, "classify_command", _boom)

@@ -1,17 +1,22 @@
 """test_spinoff_deliverable_and_commit — pytest coverage for
 spinoff-deliverable-and-commit.py.
 
-Purpose: exercises the three concerns ported out of DoE-claude
+Purpose: exercises the two concerns ported out of DoE-claude
 coordinator/skills/spinoff/SKILL.md into coordinator/bin/spinoff-deliverable-and-commit.py:
-  1. resolve-deliverable — D1 carry-not-remint cascade (single parent artifact,
-     fail-loud empty-slug guard).
-  2. resolve-origin-handoff-id — C2 ID-companion, same-file resolve.
-  3. commit-scope — scope: block extraction (awk port) + fail-loud-on-empty +
+  1. resolve-origin-handoff-id — C2 ID-companion, same-file resolve.
+  2. commit-scope — scope: block extraction (awk port) + fail-loud-on-empty +
      scoped commit including the handoff file.
 
-Spec backlink: coordinator/skills/spinoff/SKILL.md § "Deliverable-spine threading
-               (D1 carry-not-remint)" (C3d block), § "origin_handoff_id:" (C2 block),
-               § "Step 4: Commit" — DoE-claude
+Negative-spec: there is deliberately NO coverage of a `resolve-deliverable`
+subcommand or a local `resolve_deliverable_and_initiative`. That forked carry
+function was removed (AC9) because it carried a parent artifact's
+`deliverable_id` unconditionally, contradicting the 2026-08-05 PM ruling that a
+`kind: spinoff` baton mints its own id — `baton_assemble.resolve_lineage` owns
+that branch, and `deliverable_carry.py` forbids a second copy of the function.
+Re-adding such a test means re-adding the defect.
+
+Spec backlink: coordinator/skills/spinoff/SKILL.md § "origin_handoff_id:" (C2
+               block), § "Step 4: Commit" — DoE-claude
 """
 from __future__ import annotations
 
@@ -63,97 +68,8 @@ def _load_ops():
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
-    from coordinator_core.ops.mint_deliverable_id import mint
 
-    return read_frontmatter_field, mint
-
-
-# ---------------------------------------------------------------------------
-# resolve_deliverable_and_initiative (C3d)
-# ---------------------------------------------------------------------------
-
-
-def test_carries_deliverable_id_from_parent_artifact(tmp_path):
-    read_frontmatter_field, mint = _load_ops()
-    parent = tmp_path / "roadmap-stub.md"
-    _write_frontmatter(parent, deliverable_id="dlv-parent-thing-abc123", initiative="init-foo")
-
-    dlvr_id, initiative_id = _module.resolve_deliverable_and_initiative(
-        read_frontmatter_field, mint, str(parent), "some-slug"
-    )
-
-    assert dlvr_id == "dlv-parent-thing-abc123"
-    assert initiative_id == "init-foo"
-
-
-def test_mints_fresh_from_slug_when_no_parent_artifact(tmp_path):
-    read_frontmatter_field, mint = _load_ops()
-
-    dlvr_id, initiative_id = _module.resolve_deliverable_and_initiative(
-        read_frontmatter_field, mint, None, "my-spinoff-slug"
-    )
-
-    assert dlvr_id.startswith("dlv-my-spinoff-slug-")
-    assert initiative_id == ""
-
-
-def test_mints_fresh_from_slug_when_parent_lacks_deliverable_id(tmp_path):
-    read_frontmatter_field, mint = _load_ops()
-    parent = tmp_path / "plan.md"
-    _write_frontmatter(parent)  # no deliverable_id field at all
-
-    dlvr_id, initiative_id = _module.resolve_deliverable_and_initiative(
-        read_frontmatter_field, mint, str(parent), "fallback-slug"
-    )
-
-    assert dlvr_id.startswith("dlv-fallback-slug-")
-    assert initiative_id == ""
-
-
-def test_fail_loud_guard_raises_when_no_parent_and_empty_slug(tmp_path):
-    read_frontmatter_field, mint = _load_ops()
-
-    try:
-        _module.resolve_deliverable_and_initiative(read_frontmatter_field, mint, None, "")
-        assert False, "expected ValueError for empty slug"
-    except ValueError as exc:
-        assert "slug is empty" in str(exc)
-
-
-def test_cli_resolve_deliverable_carry_path_emits_shell_assignments(tmp_path):
-    parent = tmp_path / "plan.md"
-    _write_frontmatter(parent, deliverable_id="dlv-cli-check-111222", initiative="init-cli")
-
-    proc = subprocess.run(
-        [sys.executable, _CLI, "resolve-deliverable", "--parent-artifact", str(parent), "--slug", "unused"],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=child_env(),
-        **no_console_creationflags(),
-    )
-
-    assert proc.returncode == 0, proc.stderr
-    stdout_lines = proc.stdout.strip().splitlines()
-    assert stdout_lines == [
-        "DLVR_ID=dlv-cli-check-111222",
-        "INITIATIVE_ID=init-cli",
-    ]
-    assert "carry path" in proc.stderr
-
-
-def test_cli_resolve_deliverable_empty_slug_guard_exits_nonzero_fail_loud():
-    proc = subprocess.run(
-        [sys.executable, _CLI, "resolve-deliverable", "--slug", ""],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=child_env(),
-        **no_console_creationflags(),
-    )
-
-    assert proc.returncode == 1
-    assert "slug is empty" in proc.stderr
+    return read_frontmatter_field
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +78,7 @@ def test_cli_resolve_deliverable_empty_slug_guard_exits_nonzero_fail_loud():
 
 
 def test_resolve_origin_handoff_id_reads_handoff_id_from_named_file(tmp_path):
-    read_frontmatter_field, _mint = _load_ops()
+    read_frontmatter_field = _load_ops()
     origin = tmp_path / "origin-handoff.md"
     _write_frontmatter(origin, handoff_id="hnd-origin-xyz")
 
@@ -172,14 +88,14 @@ def test_resolve_origin_handoff_id_reads_handoff_id_from_named_file(tmp_path):
 
 
 def test_resolve_origin_handoff_id_empty_when_unset():
-    read_frontmatter_field, _mint = _load_ops()
+    read_frontmatter_field = _load_ops()
 
     assert _module.resolve_origin_handoff_id(read_frontmatter_field, None) == ""
     assert _module.resolve_origin_handoff_id(read_frontmatter_field, "") == ""
 
 
 def test_resolve_origin_handoff_id_empty_when_file_missing(tmp_path):
-    read_frontmatter_field, _mint = _load_ops()
+    read_frontmatter_field = _load_ops()
     missing = tmp_path / "does-not-exist.md"
 
     assert _module.resolve_origin_handoff_id(read_frontmatter_field, str(missing)) == ""

@@ -56,6 +56,32 @@ monkeypatchable — a test substitutes a fast fake for any one of them (e.g.
 install or a fake shell script on disk.
 
 Negative-spec:
+  - Does NOT publish ``<settings-home>/bin/hook-sitepackages.txt`` (retired
+    2026-08-18, docs/plans/2026-08-18-retire-coordinator-venv.md chunk C2).
+    That pointer was rung 2 of DoE's ``_hook_venv_inject.py::
+    _hook_venv_inject::_resolve_site_packages`` three-rung ladder (env var →
+    pointer file → settings-home-layout join). The target of "repoint the
+    pointer at the machine interpreter" is unreachable through EVERY rung,
+    not just this one: ``_coord_hook_inject`` applies ``_find_venv_root`` +
+    ``_version_ok`` AFTER ladder resolution and declines whenever no
+    ``pyvenv.cfg`` is found within 6 parents of the resolved path — a
+    machine interpreter has none, by construction. Rung 2 (this pointer)
+    dies at DoE's realpath-containment check before ``_find_venv_root`` even
+    runs; rung 1 (``COORDINATOR_HOOK_SITE_PACKAGES``) clears containment and
+    then dies at ``_find_venv_root`` itself; rung 3 (layout) keeps resolving
+    to the real venv tree for as long as that tree exists on disk (its
+    removal is a separate, gated chunk — C8). None of the three is an
+    available fallback, so this module stops publishing the pointer outright
+    rather than repointing it: this is the deliberate, documented end-state,
+    not a silent regression. Once the venv tree itself is gone,
+    ``_coord_hook_inject`` writes its ``COORDINATOR HOOK SEAM: ... injection
+    skipped -- missing`` stderr banner on every hook fire, leaves
+    ``sys.path`` untouched, and does not repoint ``sys.executable`` --
+    "no rung resolves" is the intended terminal state, chosen, not missed.
+    ``SITEPACKAGES_POINTER_NAME`` (the constant) is kept, unlike the
+    function that wrote through it, purely so ``substrate.py``'s orphan-prune
+    union can still recognize and clean up a stale pointer left by a
+    pre-migration box.
   - Does NOT re-derive settings-home resolution — callers pass
     ``settings_home_path`` (from ``coordinator_core._settings_home.settings_home()``).
   - Does NOT use ``locked_rmw`` — that helper is a file-*content*
@@ -89,7 +115,11 @@ Negative-spec:
     ``_install_deps`` without re-litigating this call.
 
 Rebuild-vs-live-reader safety (``_build_dir_for``/``_swap_in_new_venv``/
-``_sweep_orphaned_swap_dirs``): the build-lock above only serialises
+``_sweep_orphaned_swap_dirs`` — the latter relocated to
+``coordinator_core.install.uninstall_legs`` and imported back here, see
+docs/plans/2026-08-18-retire-coordinator-venv.md chunk C3, so the uninstall
+leg that also calls it survives this module's own eventual retirement):
+the build-lock above only serialises
 BUILDERS against each other — every other session on the box executes
 Python out of ``<venv_dir>/bin/python`` with no lock at all (cannot be
 asked to take one). A rebuild therefore never mutates ``venv_dir`` in
@@ -122,9 +152,9 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.locked_write import _plat_try_lock, _plat_unlock
-from coordinator_core.plugin_health.drift import _detect_is_windows, _site_packages_dir
 from coordinator_core.trusted_root_guard import coordinator_trusted_root_guard
 from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.install.uninstall_legs import _sweep_orphaned_swap_dirs
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -132,72 +162,17 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 
-#: Basename of the site-packages pointer file, published under
-#: ``<settings-home>/bin/`` at the end of every successful (non-dry-run)
-#: ``ensure_coordinator_venv`` exit. A sibling repo's hook bootstrap reads
-#: this to resolve our venv's site-packages without globbing for it (ask
-#: (c), 2026-08-10-interpreter-surface-four-asks.md chunk C5). Filename is
-#: a pinned cross-repo contract -- do not rename.
+#: Basename of the site-packages pointer file. Retired 2026-08-18
+#: (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C2): this module
+#: no longer writes ``<settings-home>/bin/hook-sitepackages.txt`` -- see the
+#: module docstring's "No rung resolves" section. The constant itself is
+#: kept (not deleted) because ``substrate.py``'s Step 3e orphan-prune union
+#: (``_install_bin_resolvers``) still needs it to recognize and prune a
+#: stale pointer left on a pre-migration box -- an unregistered name is
+#: never a prune candidate in the first place, so deleting the constant
+#: would strand that file outside the mechanism meant to clean it up.
 SITEPACKAGES_POINTER_NAME = "hook-sitepackages.txt"
 
-
-def _write_sitepackages_pointer(venv_dir: Path, settings_home_path: Path) -> None:
-    """Best-effort publication of the resolved site-packages path.
-
-    Writes exactly one absolute, existing path (no trailing content, no
-    second line) to ``<settings-home>/bin/hook-sitepackages.txt``,
-    atomically (temp file + ``os.replace``) so a concurrent reader never
-    observes a half-written file. Never raises: this is advisory
-    publication, not a gate on venv provisioning succeeding. If the
-    site-packages dir cannot be resolved (or doesn't exist), the write is
-    SKIPPED rather than publishing a malformed pointer -- a bad path is
-    worse than an absent one, because the reader trusts it outright. The
-    reader's own fallback rung (globbing) covers the skip case.
-    """
-    tmp_path: Optional[Path] = None
-    try:
-        site_packages = _site_packages_dir(venv_dir, _detect_is_windows())
-        if site_packages is None or not site_packages.is_dir():
-            return
-        bin_dir = Path(settings_home_path) / "bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        pointer_path = bin_dir / SITEPACKAGES_POINTER_NAME
-        tmp_path = bin_dir / f".{SITEPACKAGES_POINTER_NAME}.tmp-{os.getpid()}"
-        tmp_path.write_text(str(site_packages) + "\n", encoding="utf-8")
-        os.replace(tmp_path, pointer_path)
-    except Exception as exc:
-        # Best-effort publication -- a failure here must never fail venv
-        # provisioning itself (module docstring: "never exits the process
-        # itself" / disposition stays at the caller). Broadened from
-        # `OSError` to `Exception` so "never raises" holds structurally
-        # rather than by accident of `_site_packages_dir`'s current
-        # implementation (Review: coordinator:code-reviewer,
-        # 258121ce, finding 2 -- deferral overridden by EM). An `OSError`
-        # is an ordinary, expected environmental outcome and stays quiet;
-        # anything else is a caller bug (e.g. a bad `venv_dir`/
-        # `settings_home_path` type) and must not be swallowed silently --
-        # loud but non-fatal (Review: coordinator:code-reviewer, e47656b7,
-        # finding 2 -- EM-overridden P2).
-        if not isinstance(exc, OSError):
-            # The warning itself is guarded: an unwritable or closed stderr
-            # would otherwise propagate out of this handler and break the
-            # very "never raises" contract the warning exists to shore up,
-            # moving the failure one layer down rather than closing it
-            # (Review: coordinator:code-reviewer, e47656b7, re-verification
-            # of bbf6cb8cd133).
-            try:
-                print(
-                    f"[ensure-coordinator-venv] WARNING: site-packages pointer not "
-                    f"published ({type(exc).__name__}: {exc}).",
-                    file=sys.stderr,
-                )
-            except Exception:
-                pass
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
 
 _NETWORK_ERROR_RE = re.compile(
     r"Could not find a version|ConnectionError|TimeoutError|"
@@ -681,49 +656,6 @@ def _build_dir_for(venv_dir: Path) -> Path:
     return venv_dir.parent / f"{venv_dir.name}.build-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
-def _sweep_orphaned_swap_dirs(venv_dir: Path) -> None:
-    """Best-effort reclaim of ``.build-*``/``.stale-*`` siblings abandoned by
-    a prior process that crashed mid-rebuild (before cleanup) or mid-swap
-    (a Windows deferred-reclaim leftover — see ``_swap_in_new_venv``).
-
-    Safe to run unconditionally here: the caller holds the build lock before
-    calling this, so no OTHER process is concurrently populating its own
-    ``.build-*`` sibling of THIS venv right now — anything matching the
-    prefix at this point belongs to a run that has already ended, one way or
-    another. Never raises; a sweep failure must not block the rebuild it is
-    merely tidying up after.
-
-    Crash-window disclosure: a ``.stale-*`` sibling can also be the leftover
-    of a crash in ``_swap_in_new_venv`` between its first rename (old tree
-    moved to ``.stale-*``) and its second (build tree moved into
-    ``venv_dir``), leaving ``venv_dir`` genuinely absent. That ``.stale-*``
-    tree is NOT a discardable husk by accident — it is the tree that had
-    already FAILED ``_venv_healthy`` and triggered the rebuild that was
-    mid-swap when the crash happened (``_swap_in_new_venv`` is only ever
-    reached after the health probe has returned False). So this sweep's
-    unconditional ``rmtree`` of every ``.stale-*`` match is correct, not a
-    tradeoff: there is no "still-good" tree here to lose. The real cost of
-    that crash window is borne by the ``.build-*`` sibling swept alongside
-    it — a verified-healthy replacement discarded before it ever got
-    swapped in — so the next process pays a full rebuild
-    (``_create_venv`` + ``_install_deps``) rather than reusing it, a real
-    cost on a box regularly running 50-70 concurrent LLM sessions. The
-    sweep does not attempt to distinguish that mid-swap ``.build-*`` from
-    an ordinary post-build leftover; both are equally safe to discard since
-    neither has been published to ``venv_dir`` yet.
-    """
-    parent = venv_dir.parent
-    build_prefix = f"{venv_dir.name}.build-"
-    stale_prefix = f"{venv_dir.name}.stale-"
-    try:
-        children = list(parent.iterdir())
-    except OSError:
-        return
-    for child in children:
-        if child.name.startswith(build_prefix) or child.name.startswith(stale_prefix):
-            shutil.rmtree(child, ignore_errors=True)
-
-
 def _swap_in_new_venv(venv_dir: Path, build_dir: Path) -> None:
     """Publish ``build_dir`` as ``venv_dir`` via a rename-swap — never an
     in-place ``rmtree`` of the live tree — so a reader mid-execution against
@@ -1002,18 +934,22 @@ def ensure_coordinator_venv(
     site: str = "ensure-coordinator-venv",
     clear_pin_on_failure: bool = False,
 ) -> str:
-    """Thin wrapper around ``_ensure_coordinator_venv_impl`` that adds a
-    single site-packages-pointer publication point covering every real
-    (non-dry-run) success exit -- see that function's docstring for the
-    actual venv-ensure mechanics and status-word contract.
+    """Thin wrapper around ``_ensure_coordinator_venv_impl`` -- see that
+    function's docstring for the actual venv-ensure mechanics and
+    status-word contract.
 
-    The pointer write is deliberately NOT inlined into each of the impl's
-    multiple ``return`` statements: a call site added later would silently
-    skip an inlined write, and that failure mode is invisible (no
-    exception, no red test -- the sibling repo's hook bootstrap just falls
-    back to its glob rung forever). Routing every real exit through one
-    wrapper call makes that class of miss structurally impossible instead
-    of relying on someone remembering to touch N call sites.
+    Retired 2026-08-18 (docs/plans/2026-08-18-retire-coordinator-venv.md
+    chunk C2): this wrapper used to also publish
+    ``<settings-home>/bin/hook-sitepackages.txt`` on every real
+    (non-dry-run) success exit -- DoE's hook-injection ladder's rung 2. That
+    publication is retired outright, not repointed: the target state of
+    "repoint the pointer at the machine interpreter" is unreachable through
+    every rung of DoE's ``_hook_venv_inject.py::_resolve_site_packages``
+    ladder, not just this one (see module docstring). The deliberate
+    end-state is no rung resolves -- ``_coord_hook_inject`` writes its
+    declined-injection stderr banner on every hook fire, and third-party
+    imports resolve because the hook itself now runs under the machine
+    interpreter, not because a rung pointed it at a venv.
 
     ``check_only=True`` (dry-run) exits are excluded on purpose -- a
     check-only invocation must not mutate disk.
@@ -1028,7 +964,6 @@ def ensure_coordinator_venv(
     )
     if not check_only:
         venv_dir = Path(settings_home_path) / ".coordinator-venv"
-        _write_sitepackages_pointer(venv_dir, Path(settings_home_path))
         # `ml_cli`/`whoami_pkg` resolution now happens INSIDE
         # `_ensure_whoami_under_general_pin`'s own try/except, not here as
         # call-site arguments — see that function's docstring (Review:

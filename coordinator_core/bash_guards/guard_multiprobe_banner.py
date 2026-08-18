@@ -177,22 +177,16 @@ from coordinator_core.bash_guards._command_tokenizer import (
 from coordinator_core.bash_guards._dialect import (
     Dialect,
     dialect_from_tool_name,
-    resolve_segments_for_dialect,
 )
 from coordinator_core.bash_guards._shape_classifier import (
-    SHAPE_PRECEDENCE,
     Shape,
     ShapeClassification,
     classify_command,
 )
-from coordinator_core.bash_guards._shape_classifier import (
-    _detect_find_exec_xargs,
-    _detect_grep_via_bash,
-    _detect_head_tail_plumbing,
-    _detect_multi_probe_banner,
-)
 from coordinator_core.bash_guards.dispatch_checks import check_multiprobe_banner_rewrite
 from coordinator_core.bash_guards._helpers import operator_override_note, resolve_git_root
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
     resolve_agent_class,
@@ -201,57 +195,56 @@ from coordinator_core.bash_guards._write_bump_message import (
 _GUARD_NAME = "guard_multiprobe_banner"
 
 
+def _record_powershell_non_verdict(dialect: Optional[Dialect], reason: str) -> None:
+    """Record SILENT when the PowerShell leg returns without a verdict.
+
+    `MATCHERS` declaring `PowerShell` (C6/AC14) is a claim that this guard
+    reaches a verdict on a PowerShell payload. `tests/test_no_false_clean_
+    on_unparsed_dialect.py` holds every PowerShell-declaring guard to that
+    claim by construction: a bare `None` with no SILENT recorded is a
+    false clean, indistinguishable from "this guard was never invoked" --
+    the exact confusion C6 exists to end.
+
+    Deliberately BASH-inert: the bash leg's own `primary is None` return
+    stays byte-for-byte what it was (Anti-scope -- the bash leg's
+    behaviour is not changed to make the port symmetrical), and
+    `record_silent` is itself a no-op outside a `_verdict.collecting()`
+    context, so this adds an assertion surface and no production cost.
+    """
+    if dialect is Dialect.POWERSHELL:
+        record_silent(_GUARD_NAME, reason)
+
+
 def _classify_for_dialect(cmd: str, dialect: Optional[Dialect]) -> ShapeClassification:
     """Dialect-aware analogue of `_shape_classifier.classify_command` (row 9,
-    `docs/reference/guard-dialect-coverage.md`). BASH is delegated UNCHANGED
-    to `classify_command` -- zero behaviour change on the bash leg (AC4).
+    `docs/reference/guard-dialect-coverage.md`).
 
-    POWERSHELL routes its tokenize call through `_dialect.
-    resolve_segments_for_dialect` (the C2 wiring seam) instead of
-    `classify_command`'s own `tokenize_full_command` call, then reuses the
-    SAME per-shape detector functions `classify_command` itself calls, in
-    the SAME `SHAPE_PRECEDENCE` order -- no new verb/flag table, per the
-    triage row's own finding that detection here is structural
-    (separator-count), not verb-specific.
+    RETIRED AS A CLASSIFICATION PATH (C3, pln-the-shape-classifier-reaches-
+    a-e743e5 § AC11): this used to hand-walk `SHAPE_PRECEDENCE` itself
+    (a second, independently-reasoned classification loop that predated
+    `classify_command` having a `dialect` parameter at all -- C1/C2 of this
+    same plan). Now that `classify_command(cmd, dialect=dialect)` IS the
+    dialect-aware entry point, re-deriving a parallel walk here is exactly
+    the duplication AC11 forbids: this function is kept ONLY as a
+    name-stable shim (this guard's own test module,
+    `tests/test_guard_multiprobe_banner.py::TestPowerShellDialectWiring`,
+    calls it directly and is not in this chunk's write set) -- it does no
+    classification of its own any more, it forwards to the canonical
+    classifier unconditionally, on every dialect including BASH.
 
-    `Shape.FOR_LOOP` is skipped (never matches) on the POWERSHELL branch:
-    its detector (`_detect_for_loop`) keys on the bash `for ... ; do ...
-    done` structural grammar, which has no PowerShell analogue
-    (`foreach ($x in ...) {...}` is a different statement grammar, not a
-    verb/flag variant) -- guessing here is exactly what this guard's own
-    dialect seam exists to avoid; guessing wrong risks a false clean on a
-    shape this guard does not detect for PowerShell, not the multi-probe
-    banner shape this row actually owns. `guard_multiprobe_banner` never
-    reads `Shape.FOR_LOOP` itself (only `Shape.MULTI_PROBE_BANNER`'s
-    precedence position relative to `Shape.GREP_VIA_BASH`, both above it in
-    `SHAPE_PRECEDENCE`, matters here), so this omission cannot change this
-    guard's own verdict either way.
+    The old hand-rolled walk deliberately SKIPPED `Shape.FOR_LOOP` on the
+    POWERSHELL branch (`_detect_for_loop` keys on bash's `for ... ; do ...
+    done` grammar, no PowerShell analogue) -- D2's row-14 superseding note
+    OVERTURNS that: `_DETECTOR_TABLE[Dialect.POWERSHELL]` now carries
+    `_detect_for_loop_pwsh`, a real predicate over measured tree-sitter-pwsh
+    tokens, so FOR_LOOP is a genuine match on the PowerShell leg via
+    `classify_command` itself. This guard never reads `Shape.FOR_LOOP`
+    (only `Shape.MULTI_PROBE_BANNER`'s precedence position relative to
+    `Shape.GREP_VIA_BASH` matters here), so the reversal cannot change this
+    guard's own verdict either way -- carried forward for the record, not
+    because this function still needs to special-case it.
     """
-    if dialect is Dialect.BASH:
-        return classify_command(cmd)
-
-    segments = resolve_segments_for_dialect(cmd, dialect, guard_name=_GUARD_NAME)
-    if segments is None:
-        return ShapeClassification(tokens=None, matches=())
-
-    matches = []
-    for shape in SHAPE_PRECEDENCE:
-        match = None
-        if shape is Shape.GREP_VIA_BASH:
-            match = _detect_grep_via_bash(segments)
-        elif shape is Shape.MULTI_PROBE_BANNER:
-            match = _detect_multi_probe_banner(segments)
-        elif shape is Shape.HEAD_TAIL_PLUMBING:
-            match = _detect_head_tail_plumbing(segments)
-        elif shape is Shape.FOR_LOOP:
-            match = None
-        elif shape is Shape.FIND_EXEC_XARGS:
-            match = _detect_find_exec_xargs(segments)
-        if match is not None:
-            matches.append(match)
-
-    tokens = [tok for seg_tokens, _pipe in segments for tok in seg_tokens]
-    return ShapeClassification(tokens=tokens, matches=tuple(matches))
+    return classify_command(cmd, dialect=dialect)
 
 #: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
 #: see `guard_grep_via_bash.py`'s identical comment above `CLASS`/
@@ -259,31 +252,19 @@ def _classify_for_dialect(cmd: str, dialect: Optional[Dialect]) -> ShapeClassifi
 #: ordering explicitly; this `PRIORITY` governs nothing (it is not unique
 #: either -- `block_worktree_creation` reuses `41`).
 CLASS = "hard-deny"
-#: HELD at Bash-only (C4, docs/plans/2026-08-07-command-guards-fire-under-
-#: both-tool-names.md). CORRECTED 2026-08-07 -- the wave-map's original
-#: reason for this hold (a fail-closed free-text tokenizer fallback that
-#: misreads unparseable PowerShell input) does not apply to this file:
-#: `_evaluate_legacy` does not appear here. That mechanism belongs to a
-#: DIFFERENT guard family (the stash/worktree/subagent-destructive/suite-
-#: invocation cohort), not this one. This guard's capability objection is
-#: substantially discharged: `_dialect.py` already wires a real, lazily-
-#: imported `tree-sitter-pwsh` parser, with `record_silent` on parse
-#: failure or `has_error`, and `_classify_for_dialect` above already
-#: dispatches on it -- this file already has a working PowerShell shape
-#: match, not a guess.
-#:
-#: What actually holds this file: SEQUENCING, not capability. (1) A
-#: concurrent workstream (DR-280, 2026-08-07) is mid-rewrite on this exact
-#: file right now, retiring its Windows deny leg to advisory-only (two
-#: `host_is_windows=False` call sites as of this writing) -- widening
-#: `MATCHERS` while that rewrite is in flight risks landing a widening
-#: onto a half-changed verdict shape. (2) Two known-red cells are open
-#: against this file's own test suite under this plan's ownership
-#: (`TestSubagentOutlet`, a native-vs-POSIX path-separator defect in
-#: `_sandbox_script_hint`) -- widening a guard whose own tests are red is
-#: a coverage claim, not a coverage gain. Next step here is re-evaluating
-#: once DR-280 lands and the red cells clear, not a capability fix.
-MATCHERS = ("Bash",)
+#: WIDENED (C6, pln-the-shape-classifier-reaches-a-e743e5 § D6, PM ruling
+#: 2026-08-18). The prior hold here named two conditions: DR-280's rewrite
+#: landing, and `state/bash-guards/known-red.json`'s two
+#: `TestSubagentOutlet` `pending_fix` cells clearing. DR-280 landed
+#: (`b1e2bc932` / `62f66c01a`); the red cells have NOT cleared -- the PM
+#: ruled to widen ahead of that second precondition anyway, accepting the
+#: five-cell debt (across this file and `guard_plumbing_and_loops.py`)
+#: explicitly (AC17) rather than leave the guard unreachable on a
+#: PowerShell payload indefinitely. `guard_plumbing_and_loops.py` is
+#: widened in the same change for the identical reason. Reference by
+#: DIRECT IDENTITY, never a copy or re-wrap -- `test_tool_name_membership.py`
+#: asserts `is`.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
 #: Escape hatch, read inline at `check()` call time only (F2 discipline --
@@ -297,6 +278,49 @@ _SHAPE_NAME = "multi-probe-banner"
 #: Session-scratchpad script filename this guard recommends a SUBAGENT
 #: caller write its batched probe to -- see `_sandbox_script_hint`.
 _SCRATCH_SCRIPT_NAME = "multiprobe.py"
+
+#: POWERSHELL-LEG GENERIC ADVISORY (C6 callee-graph audit,
+#: pln-the-shape-classifier-reaches-a-e743e5 § AC16). `check_multiprobe_
+#: banner_rewrite` (`dispatch_checks.py`, out of this chunk's write scope)
+#: classifies its OWN input with `_shape_classifier.classify_command(cmd)`
+#: -- no `dialect=` argument, so it takes the `Dialect.BASH` default (D1)
+#: and tokenizes via `shlex(posix=True)` regardless of what dialect this
+#: guard was actually invoked under. Before C6 widened `MATCHERS`, `check()`
+#: below only ever ran on a Bash payload, so that internal bash-default was
+#: always correct for the caller's own dialect. Widening `MATCHERS` to
+#: `COMMAND_TOOL_NAMES` makes `check()` reachable on a PowerShell payload
+#: too, and this guard's own `primary.shape is Shape.MULTI_PROBE_BANNER`
+#: gate above is now dialect-aware (`_classify_for_dialect`) -- so a
+#: PowerShell command CAN reach the seam call below with PowerShell syntax
+#: (a here-string, a backtick escape) as `cmd`, which is exactly the
+#: Anti-scope violation ("never feed PowerShell text into the posix
+#: tokenizer") this plan forbids. Probed live (here-string and backtick
+#: cases): `_command_tokenizer.tokenize_full_command` already catches a
+#: `shlex` `ValueError` internally and degrades to `tokens=None` rather
+#: than raising, and no probed case produced a false-positive BASH-shape
+#: match either (`Write-Host` is not `_bt_probe_segment_kind`'s echo/printf
+#: vocabulary) -- so today's blast radius is narrow. It is not zero by
+#: construction, though, and the seam has no PowerShell leg to consult in
+#: the first place (unlike `check_head_tail_plumbing_rewrite`, which DOES
+#: take a `dialect=` parameter): there is nothing this call could confirm
+#: for a PowerShell command even if the tokenizer behaved. `check()` below
+#: therefore gates this call to `Dialect.BASH` explicitly and renders this
+#: fixed, every-platform advisory for the `Dialect.POWERSHELL` leg instead
+#: -- the same "no seam to consult, generic advisory" shape
+#: `guard_plumbing_and_loops.py` already uses for `PIPELINE_FOREACH_OBJECT`
+#: and the bare-glob `FOR_LOOP` fallback, applied here for the identical
+#: reason (AC9: the alternative must be PowerShell-valid; a `python3 -c`
+#: invocation is a subprocess call, not shell syntax, so it runs the same
+#: from a PowerShell prompt).
+_POWERSHELL_BANNER_GENERIC_SUMMARY = (
+    "a single in-process python3 call batching every probe, zero per-probe forks"
+)
+_POWERSHELL_BANNER_GENERIC_EXAMPLE = (
+    "python3 -c 'import subprocess\\n"
+    "print(subprocess.run([\"git\", \"status\", \"--porcelain=v2\", \"--branch\"], "
+    "capture_output=True, text=True).stdout)'  "
+    "# batch every probe into one process instead of one call per probe"
+)
 
 
 def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
@@ -494,15 +518,35 @@ def check(
 
     classification = _classify_for_dialect(cmd, dialect)
     if classification.tokens is None:
+        _record_powershell_non_verdict(dialect, "unparseable command text")
         return None
 
     primary = classification.primary
     if primary is None or primary.shape is not Shape.MULTI_PROBE_BANNER:
+        _record_powershell_non_verdict(
+            dialect, "no MULTI_PROBE_BANNER match on the PowerShell leg"
+        )
         return None
 
     session_id = payload.get("session_id") or ""
     if not isinstance(session_id, str):
         session_id = ""
+
+    # AC16 callee-graph audit (see `_POWERSHELL_BANNER_GENERIC_SUMMARY`'s own
+    # comment above): `check_multiprobe_banner_rewrite` classifies internally
+    # with a BASH default and has no PowerShell leg to consult -- gate the
+    # seam call to Bash explicitly rather than let a PowerShell `cmd` reach
+    # its posix tokenizer. This branch is reachable ONLY after C6 widened
+    # `MATCHERS`; before that, `check()` never ran on a PowerShell payload.
+    if dialect is Dialect.POWERSHELL:
+        bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload)
+        return platform_verdict_for_shape(
+            _SHAPE_NAME,
+            cmd,
+            _POWERSHELL_BANNER_GENERIC_SUMMARY,
+            "%s\n  %s" % (_POWERSHELL_BANNER_GENERIC_EXAMPLE, bypass_note),
+            host_is_windows=False,
+        )
 
     # 2026-07-29 duty-of-care promotion: consult the sibling rewrite chain
     # entry's OWN confirmation for this exact command before deciding
@@ -512,7 +556,8 @@ def check(
     # named a template unrelated to the segment actually present -- a nag
     # this guard cannot discharge (no outlet describes THIS command) -- so
     # it now allows silently instead of firing an advisory with no
-    # actionable, command-accurate content.
+    # actionable, command-accurate content. BASH-only from this point on
+    # (see the `dialect is Dialect.POWERSHELL` gate immediately above).
     seam_result = check_multiprobe_banner_rewrite(cmd, session_id)
     if not _seam_confirmed_rewrite(seam_result):
         return None

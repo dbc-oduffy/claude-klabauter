@@ -578,7 +578,7 @@ def test_ac10_vendored_schema_versions_are_pinned(filename, pinned, doe_coordina
 def test_ac11_predicate_leg_shape_is_closed_vocabulary():
     for kind in (cascade_mod._HANDOFF_KIND, cascade_mod._SIZING_KIND):
         for leg_name, leg in kind.predicate_legs.items():
-            assert leg_name in ("a", "b", "c")
+            assert leg_name in ("a", "b", "c", "d")
             assert isinstance(leg, cascade_mod._PredicateLeg)
             assert isinstance(leg.applies, bool)
             if not leg.applies:

@@ -27,19 +27,42 @@ from coordinator_core.session.context_usage_sidecar import (
 def _isolated_tempdir(tmp_path, monkeypatch):
     """Sandbox every test into its own tempdir and clear the in-process
     write-elision memo, so tests don't leak state across each other."""
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    (tmp_path / "state" / "context-window").mkdir(parents=True, exist_ok=True)
     sidecar_module._last_written.clear()
     yield
 
 
-def test_sidecar_path_uses_platform_tempdir_not_hardcoded_posix_tmp(monkeypatch):
-    sandboxed = "/sandboxed/windows-shaped-temp"
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: sandboxed)
+def test_sidecar_path_resolves_the_producers_settings_home(monkeypatch, tmp_path):
+    """The path is the producer's, not a tempdir.
 
+    Regression pin: this resolver was built against a claude-klabauter-side producer
+    that was withdrawn before shipping, leaving it pointed at
+    `tempfile.gettempdir()/context-usage-<sid>` — a file nothing writes. The
+    live producer is DoE-claude's statusline, publishing to
+    `$COORDINATOR_SETTINGS_HOME/state/context-window/<sid>.json`. A reader on
+    the wrong path fails silently, so this asserts the shape end to end.
+    """
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     result = sidecar_path("abc123")
+    assert result == tmp_path / "state" / "context-window" / "abc123.json"
+    assert "context-usage-" not in str(result)
 
-    assert result == Path(sandboxed) / "context-usage-abc123"
-    assert str(result) != "/tmp/context-usage-abc123"
+
+def test_sidecar_path_defaults_to_the_conventional_settings_home(monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    result = sidecar_path("abc123")
+    assert result.parent.parent.parent.name == ".coordinator-claude-settings"
+    assert result.name == "abc123.json"
+
+
+def test_sidecar_path_sanitises_the_session_id(monkeypatch, tmp_path):
+    """Matches the producer's own `_safe_stem`. A separator that survived here
+    would name a file in another directory entirely."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    result = sidecar_path("../../evil/ab c1_2-3")
+    assert result.name == "evilabc1_2-3.json"
+    assert result.parent == tmp_path / "state" / "context-window"
 
 
 def test_sidecar_path_is_keyed_on_session_id():
@@ -47,8 +70,8 @@ def test_sidecar_path_is_keyed_on_session_id():
     b = sidecar_path("session-b")
 
     assert a != b
-    assert a.name == "context-usage-session-a"
-    assert b.name == "context-usage-session-b"
+    assert a.name == "session-a.json"
+    assert b.name == "session-b.json"
 
 
 def test_round_trip_write_then_read():
@@ -105,15 +128,15 @@ def test_read_usage_truncated_file_returns_none():
 def test_read_usage_missing_context_window_key_returns_none():
     session_id = "sess-wrong-shape"
     target = sidecar_path(session_id)
-    target.write_text('{"stamp": 1000.0}')
+    target.write_text('{"captured_at": 1000.0}')
 
     reading = read_usage(session_id, now=1000.0)
 
     assert reading is None
 
 
-def test_read_usage_missing_stamp_key_returns_none():
-    session_id = "sess-no-stamp"
+def test_read_usage_missing_captured_at_key_returns_none():
+    session_id = "sess-no-captured-at"
     target = sidecar_path(session_id)
     target.write_text('{"context_window": {"used_percentage": 10.0}}')
 

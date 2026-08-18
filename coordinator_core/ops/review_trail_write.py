@@ -660,6 +660,52 @@ def _bare_reviewer_hint(reviewer: str) -> str:
     return ""
 
 
+def review_enum_errors(
+    *, reviewer: str, scope: str, verdict: str, scope_kind: str
+) -> list[str]:
+    """Every closed-vocabulary violation among the four review-record enum
+    fields, one message per offending field, empty when all four are legal.
+
+    THE single authority for these messages. `_validate_review_fields` (the
+    apply-time writer gate) and `workstream_complete.directives_commit_tail.
+    _raise_on_review_enum_values` (the assemble-time gate that fires before
+    any ceremony directive mutates) both call this, so a caller sees
+    byte-identical text no matter which seam rejects them — a second,
+    hand-copied allow-list in the composer would drift from this one silently.
+
+    Exported (not `_`-private like the frozensets it reads) precisely because
+    the vocabularies were unreachable outside this module: the discovery path
+    for a caller composing `decisions["review"]` was author-a-guess, run
+    apply, get rejected. Spec backlink: cross-repo/inbox/2026-08-18-doe-claude-
+    em-review-trail-write-enums-undiscoverable-until-apply.md § 1.
+    """
+    errors: list[str] = []
+    if reviewer not in _VALID_REVIEWERS:
+        errors.append(
+            f"review_trail.write: reviewer {reviewer!r} is invalid; "
+            f"allowed: {' | '.join(sorted(_VALID_REVIEWERS))}"
+            f"{_bare_reviewer_hint(reviewer)}"
+        )
+    if scope not in _VALID_SCOPES:
+        errors.append(
+            f"review_trail.write: scope {scope!r} is invalid; "
+            f"allowed: {' | '.join(sorted(_VALID_SCOPES))} "
+            "(scope is the record's coverage breadth, not the review's partition scale)"
+            f"{_scale_shaped_scope_hint(scope)}"
+        )
+    if verdict not in _VALID_VERDICTS:
+        errors.append(
+            f"review_trail.write: verdict {verdict!r} is invalid; "
+            f"allowed: {' | '.join(sorted(_VALID_VERDICTS))}"
+        )
+    if scope_kind not in _VALID_SCOPE_KINDS:
+        errors.append(
+            f"review_trail.write: scope_kind {scope_kind!r} is invalid; "
+            f"allowed: {' | '.join(sorted(_VALID_SCOPE_KINDS))}"
+        )
+    return errors
+
+
 def _scale_shaped_scope_hint(scope: str) -> str:
     """`_bare_reviewer_hint`'s sibling for `scope`: `""` unless *scope* is a
     member of `decide_review_scale`'s `scale` vocabulary (`none` |
@@ -2691,30 +2737,9 @@ def _validate(
             f"review_trail.write: diff_loc must be a non-negative integer, got {diff_loc}"
         )
 
-    enum_errors: list[str] = []
-    if reviewer not in _VALID_REVIEWERS:
-        enum_errors.append(
-            f"review_trail.write: reviewer {reviewer!r} is invalid; "
-            f"allowed: {' | '.join(sorted(_VALID_REVIEWERS))}"
-            f"{_bare_reviewer_hint(reviewer)}"
-        )
-    if scope not in _VALID_SCOPES:
-        enum_errors.append(
-            f"review_trail.write: scope {scope!r} is invalid; "
-            f"allowed: {' | '.join(sorted(_VALID_SCOPES))} "
-            "(scope is the record's coverage breadth, not the review's partition scale)"
-            f"{_scale_shaped_scope_hint(scope)}"
-        )
-    if verdict not in _VALID_VERDICTS:
-        enum_errors.append(
-            f"review_trail.write: verdict {verdict!r} is invalid; "
-            f"allowed: {' | '.join(sorted(_VALID_VERDICTS))}"
-        )
-    if scope_kind not in _VALID_SCOPE_KINDS:
-        enum_errors.append(
-            f"review_trail.write: scope_kind {scope_kind!r} is invalid; "
-            f"allowed: {' | '.join(sorted(_VALID_SCOPE_KINDS))}"
-        )
+    enum_errors = review_enum_errors(
+        reviewer=reviewer, scope=scope, verdict=verdict, scope_kind=scope_kind
+    )
     # ALL invalid enum fields in one raise, not first-wins: a caller fixing a
     # closed-vocabulary mistake one field per invocation pays a round trip per
     # field, and every one of those round trips happens at a ceremony seam.

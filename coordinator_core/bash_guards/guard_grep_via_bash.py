@@ -217,6 +217,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._shape_classifier import (
     Shape as _Shape,
+    ShapeClassification as _ShapeClassification,
     classify_command as _classify_command,
 )
 from coordinator_core.bash_guards.dispatch_checks import (
@@ -601,15 +602,67 @@ def _composed_advisory(
     )
 
 
+def _evaluate_grep_via_bash_match(
+    classification: _ShapeClassification, payload: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Shared composed/substitutable-residue evaluation for a command whose
+    `classification.primary` is already confirmed `GREP_VIA_BASH`, on EITHER
+    dialect (C3, pln-the-shape-classifier-reaches-a-e743e5). `_substitutable
+    _rewrite`/`_partial_pipe_rewrite`/`_has_gnu_only_construct` all operate
+    on already-tokenized argv, which carries no dialect-specific syntax of
+    its own once split -- D2's own finding that GREP_VIA_BASH "works
+    unchanged" on the PowerShell leg (the same binary-identity detector
+    fires on `grep`/`rg` regardless of which shell spawned it) extends to
+    this guard's rewrite/advisory payload too, which is shaped around POSIX
+    grep's own short-flag surface -- a surface `grep`/`rg` present the same
+    way under either dialect, since the BINARY itself does not change.
+    Extracted so the PowerShell leg can reuse it instead of re-deriving a
+    parallel copy (AC11).
+
+    Substitutable residue (a full rewrite exists) still returns `None` here
+    on EITHER dialect: on Bash, `grep-via-bash-rewrite` (registered earlier
+    in `dispatch.py`'s chain) already claims it; on PowerShell, no sibling
+    rewrite chain entry is reachable for this shape at all
+    (`grep-via-bash-rewrite`'s own `matchers=("Bash",)` -- out of this
+    chunk's write set to widen), so this guard stays silent rather than
+    invent a rewrite outlet that does not exist to point at.
+    """
+    rewrite, reason = _substitutable_rewrite(classification.tokens)
+    if rewrite is not None:
+        return None
+    partial_rewrite = (
+        _partial_pipe_rewrite(classification.tokens)
+        if reason == _REASON_CHAINED
+        else None
+    )
+    if partial_rewrite is None and not _has_gnu_only_construct(classification.tokens):
+        return None
+    match = classification.primary
+    assert match is not None
+    return _composed_advisory(match.evidence, partial_rewrite, payload=payload)
+
+
 def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg (row 12, docs/reference/guard-dialect-
     coverage.md): declares SILENT for a Select-String/sls invocation this
     guard can SEE but cannot safely translate (see
     `_POWERSHELL_GREP_FAMILY_BINARIES`'s own comment) -- never a bare clean
-    for input this guard actually recognized. Returns a genuine `None` (no
-    SILENT) for any PowerShell command that is not grep-family-shaped at
-    all -- that is a true clean, not a decline, mirroring how the Bash leg
-    below returns bare `None` for a non-GREP_VIA_BASH command.
+    for input this guard actually recognized.
+
+    ALSO (C3, pln-the-shape-classifier-reaches-a-e743e5 § AC4/AC12): carries
+    `dialect_from_tool_name`'s result into `classify_command` -- a native
+    `grep`/`rg` invocation is the SAME binary-identity match on either
+    dialect (D2), so this leg reuses `_evaluate_grep_via_bash_match` (the
+    same composed/GNU-only-construct advisory the Bash leg renders) rather
+    than only recognizing the Select-String vocabulary and staying silent
+    on everything else, which is what this leg did before C3 -- a genuine
+    `grep -rn TODO src/` run from a PowerShell prompt used to get no verdict
+    from this guard at all.
+
+    Returns a genuine `None` (no SILENT) for any PowerShell command that is
+    not grep-family-shaped at all -- that is a true clean, not a decline,
+    mirroring how the Bash leg below returns bare `None` for a
+    non-GREP_VIA_BASH command.
     """
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
@@ -639,7 +692,13 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "docs/reference/guard-dialect-coverage.md row 12.",
             )
             return None
-    return None
+
+    classification = _classify_command(cmd, dialect=_dialect.Dialect.POWERSHELL)
+    if classification.tokens is None:
+        return None
+    if not classification.has_shape(_Shape.GREP_VIA_BASH):
+        return None
+    return _evaluate_grep_via_bash_match(classification, payload)
 
 
 def check(
@@ -680,31 +739,17 @@ def check(
     # `classification.primary.shape` is always GREP_VIA_BASH too, so this
     # guard's message never misdescribes a command whose primary match is
     # actually some other shape (AC-7).
-    match = classification.primary
-    assert match is not None  # has_shape already confirmed this
-
-    rewrite, reason = _substitutable_rewrite(classification.tokens)
-    if rewrite is not None:
-        # Substitutable residue -- `grep-via-bash-rewrite` (dispatch_checks.
-        # check_grep_via_bash_rewrite), registered EARLIER in dispatch.py's
-        # guard chain and sharing this module's own classification/parsing
-        # helpers, already claims every command in this set as an
-        # ADVISORY_REWRITE. This guard's own platform-conditioned deny/
-        # advise for the same set was provably unreachable in production
-        # (0 denies on either platform across the full corpus) and was
-        # removed 2026-07-30 (H11(a)) -- nothing left to add here.
-        return None
-
-    partial_rewrite = (
-        _partial_pipe_rewrite(classification.tokens)
-        if reason == _REASON_CHAINED
-        else None
-    )
-    if partial_rewrite is None and not _has_gnu_only_construct(classification.tokens):
-        # Neither a real rewrite nor a genuine GNU/BSD divergence to name
-        # -- per design-as-offers, the honest output where no actionable
-        # alternative exists is silence, not a ~2.2KB advisory naming none
-        # (H11(c) evidence: 99.67% of this guard's prior firing set was
-        # exactly this case).
-        return None
-    return _composed_advisory(match.evidence, partial_rewrite, payload=payload)
+    #
+    # Substitutable residue (a full rewrite exists) is claimed by
+    # `grep-via-bash-rewrite` (dispatch_checks.check_grep_via_bash_rewrite),
+    # registered EARLIER in dispatch.py's guard chain -- this guard's own
+    # platform-conditioned deny/advise for that set was provably
+    # unreachable in production (0 denies on either platform across the
+    # full corpus) and was removed 2026-07-30 (H11(a)). Composed residue
+    # (a chained/piped command, or a genuine GNU-only construct) has
+    # nothing upstream to claim it -- `_evaluate_grep_via_bash_match`
+    # (shared with the PowerShell leg, C3) renders that advisory, or stays
+    # silent per design-as-offers when neither a real partial rewrite nor a
+    # genuine GNU/BSD divergence exists to name (H11(c) evidence: 99.67% of
+    # this guard's prior firing set was exactly that silent case).
+    return _evaluate_grep_via_bash_match(classification, payload)

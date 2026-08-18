@@ -67,19 +67,41 @@ def _import_run_op_main():
     return run_op_main
 
 
-def _resolve_default_paths() -> tuple[str, str]:
-    """Mirror the bash oracle's default-path derivation exactly.
+def _default_skill_path() -> str:
+    """Resolve workstream-complete/SKILL.md via `coordinator_data_root.data_root()`'s
+    co-located/codename-free/DoE-resident ladder, not a bare `__file__`-relative walk.
 
-    SCRIPT_DIR = this file's own directory; COORDINATOR_DIR = its parent.
-    WSC_SKILL_PATH defaults to COORDINATOR_DIR/skills/workstream-complete/SKILL.md;
-    WSC_BASELINE_FILE defaults to SCRIPT_DIR/.wsc-inline-budget-baseline.
+    Skills are a coordinator-claude (DoE-claude) discovery-resolved surface, not
+    part of this engine repo (CLAUDE.md: "Discovery-resolved surfaces (skills,
+    plugins, hooks) belong in coordinator-claude, not here") — the prior
+    `<this file's dir>/../skills/...` derivation assumed skills/ was co-located
+    with this CLI's own bin/ dir, which is only ever true if someone materializes
+    a skills/ tree inside claude-klabauter (an inversion of the tri-plane boundary; do not
+    do that — see the dispatch note this fix responds to). `data_root("skills")`
+    is the shared resolver every other cross-plane data lookup in this repo
+    already uses (see check-multi-event-hook-hardcoded-event.py's
+    `_default_hooks_json()`, same shape) — resolved lazily so an explicit
+    WSC_SKILL_PATH override never pays this cost.
+    """
+    from coordinator_data_root import data_root
+
+    return str(data_root("skills") / "workstream-complete" / "SKILL.md")
+
+
+def _resolve_default_paths() -> tuple[str, str]:
+    """Resolve WSC_SKILL_PATH and WSC_BASELINE_FILE, honoring env overrides.
+
+    WSC_SKILL_PATH defaults to `_default_skill_path()` (the settings-home/
+    DoE-root ladder — see that function's docstring); WSC_BASELINE_FILE defaults
+    to SCRIPT_DIR/.wsc-inline-budget-baseline (this repo's own state, unaffected
+    by the skills cross-plane resolution).
+
+    Raises RuntimeError, naming which rungs were tried, if WSC_SKILL_PATH is
+    unset and `data_root("skills")` cannot resolve a skills/ directory on this
+    box (e.g. a consumer repo whose coordinator-claude mirror lacks it).
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    coordinator_dir = os.path.dirname(script_dir)
-    skill_path = os.environ.get(
-        "WSC_SKILL_PATH",
-        os.path.join(coordinator_dir, "skills", "workstream-complete", "SKILL.md"),
-    )
+    skill_path = os.environ.get("WSC_SKILL_PATH", "").strip() or _default_skill_path()
     baseline_file = os.environ.get(
         "WSC_BASELINE_FILE",
         os.path.join(script_dir, ".wsc-inline-budget-baseline"),
@@ -100,7 +122,12 @@ def main() -> None:
         )
         sys.exit(2)
 
-    skill_path, baseline_file = _resolve_default_paths()
+    try:
+        skill_path, baseline_file = _resolve_default_paths()
+    except RuntimeError as exc:
+        print(f"check-wsc-inline-budget.sh: could not resolve workstream-complete/SKILL.md: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     try:
         code = run_op_main("coordinator_core.ops.check_wsc_inline_budget", [skill_path, baseline_file])
     except ImportError as exc:

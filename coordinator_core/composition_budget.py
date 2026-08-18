@@ -9,10 +9,22 @@ single-process, single-run. `CompositionBudget.check()` below extracts exactly t
 timing half (same monotonic-delta comparison, same "checked before dispatch, not merely
 before report" contract). Everything else here -- the invocation counter, the injectable
 cross-process identity channel, and the fail-loud disposition -- is NEW WORK, not a
-percolate extraction. percolate remains this primitive's first caller and its
-skip-and-surface disposition is unchanged by this module: `disposition="skip-and-surface"`
-(the default) reproduces percolate's existing behaviour exactly; `disposition="fail-loud"`
-is additive, for AC9's caller (chunk C10), and does not alter percolate's own call sites.
+percolate extraction. percolate is the PRECEDENT this primitive was extracted FROM, not a
+caller of it: `run_entrypoint_gate` still runs its own private `_budget_ok()` closure and
+its own `budget_exceeded[]` bookkeeping, and has not been converted. This module leaves
+that behaviour unchanged: `disposition="skip-and-surface"` (the default) reproduces
+percolate's existing behaviour exactly; `disposition="fail-loud"` is additive, for AC9's
+caller (chunk C10), and does not alter percolate's own call sites.
+
+NEGATIVE-SPEC -- THIS PRIMITIVE IS BUILT AND UNARMED. As of 2026-08-18 there is NO
+production caller anywhere in the tree that passes a real budget: every reachable call
+site into the wired seams (`contract/apply_base.py :: execute_directives`, and
+`ceremony_common/apply_halt.py`'s `budget_check_pre_mutation` /
+`budget_check_post_mutation` / `budget_advisory_mid_directive`) leaves
+`composition_budget` at its `None` default, which is a no-op. A grep for a non-`None`
+`composition_budget=` outside `coordinator_core/tests/` returns nothing. Arming it is
+roadmap `fact-layer-core` stub `fl-core-03`, gated on a PM ruling about which disposition
+the fleet runs. Do not read the wiring above as evidence that a budget is being enforced.
 
 WHY ELAPSED TIME IS NOT OPTIONAL (docs/research/2026-08-15-wsc-close-cost-attribution.md,
 chunk C1, gates this chunk): on a real PARTITION-MANDATORY `/workstream-complete` close,

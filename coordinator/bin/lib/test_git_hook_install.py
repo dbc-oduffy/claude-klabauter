@@ -210,3 +210,31 @@ def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
     assert result is None
     captured = capsys.readouterr()
     assert "could not execute machine-local resolver" in captured.err
+
+
+def test_container_registry_keys_are_not_heal_targets(monkeypatch):
+    """A `repos.*` container key must never reach `_classify_target`.
+
+    `repos.fleet_root` names the directory the fleet's repos live UNDER, so it
+    has no `.git` of its own and classifies as `missing` — a broken-registry
+    warning, printed on a DAILY ceremony, for an entry that is correct and that
+    no operator action could ever satisfy. Negative spec: this warning trains
+    operators to scroll past fleet-heal output, which is the failure mode
+    `_classify_target`'s three-way split exists to prevent.
+    """
+    monkeypatch.setattr(
+        ghi,
+        "_merged_flat_registry",
+        lambda: {
+            "repos.fleet_root": "X:/",
+            "repos.claude_klabauter": "X:/claude-klabauter",
+        },
+    )
+
+    roots = ghi._registry_repo_roots("")
+
+    assert [key for key, _ in roots] == ["repos.claude_klabauter"]
+    assert ghi._classify_target("X:/") == "missing", (
+        "guards the premise: fleet_root is excluded because it WOULD warn, "
+        "not because it happens to classify cleanly"
+    )

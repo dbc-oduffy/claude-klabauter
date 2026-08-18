@@ -83,6 +83,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.apply_base import (
     APPLY_EXIT_OK,
@@ -1758,7 +1762,7 @@ def apply(
 
 _USAGE_LINE = (
     "usage: {prog} apply <kind> [artifact-path] [--session-id <id>] "
-    "[--decisions <json>] [--title <text>]\n"
+    "[--decisions <json> | --decisions-file <path>] [--title <text>]\n"
     "       --decisions is a JSON object: {{\"<jp-id>\": {{\"disposition\": \"<value>\", ...}}}}\n"
     "       (\"value\" is accepted as an exact equivalent of \"disposition\" -- brief's own\n"
     "        output uses that key). Legal <value>s for a given jp-id are that judgment\n"
@@ -1847,6 +1851,10 @@ def main_apply(argv: list[str]) -> int:
     decisions: Optional[dict[str, Any]] = None
     title: Optional[str] = None
     explicit_deliverable_id: Optional[str] = None
+    conflict = detect_conflicting_payload_channels(tail)
+    if conflict is not None:
+        print(f"baton-assemble apply: {conflict}", file=sys.stderr)
+        return APPLY_EXIT_TRANSPORT_FAIL
     i = 0
     while i < len(tail):
         tok = tail[i]
@@ -1855,19 +1863,16 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("baton-assemble")
             session_id = tail[i + 1]
             i += 2
-        elif tok == "--decisions":
-            if i + 1 >= len(tail):
-                return _usage("baton-assemble")
-            try:
-                decisions = json.loads(tail[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"baton-assemble apply: malformed --decisions JSON: {exc}", file=sys.stderr)
+        elif (payload := resolve_json_payload_flag(tail, i)).consumed:
+            if payload.error is not None:
+                print(f"baton-assemble apply: {payload.error}", file=sys.stderr)
                 return APPLY_EXIT_TRANSPORT_FAIL
+            decisions = payload.value
             shape_error = validate_decisions_shape(decisions)
             if shape_error is not None:
                 print(f"baton-assemble apply: {shape_error}", file=sys.stderr)
                 return APPLY_EXIT_TRANSPORT_FAIL
-            i += 2
+            i += payload.consumed
         elif tok == "--title":
             if i + 1 >= len(tail):
                 return _usage("baton-assemble")

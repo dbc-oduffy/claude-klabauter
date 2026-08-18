@@ -78,6 +78,48 @@ class RewriteVerdict(NamedTuple):
     peer_session_ids: Tuple[str, ...]
 
 
+# --- Branch-mutation operation kinds (C1) -------------------------------
+#
+# ``branch_mutation_verdict`` answers ONE question -- "do live peers share
+# this worktree?" -- but the ANSWER it should give depends on which mutation
+# the caller is about to perform. Before C1 the predicate answered one
+# question for three structurally different mutations and refused all of
+# them identically. The axis below is REQUIRED and KEYWORD-ONLY so no caller
+# can inherit a permissive default by omission.
+#
+# Only FRESH_CUT_AT_HEAD is narrowed. Every other kind takes the unchanged
+# refuse-under-peers path.
+
+#: Create-and-switch a NEW branch AT CURRENT HEAD. Content-neutral: no file
+#: touched, no index entry changed, HEAD does not move. Requires
+#: ``current_branch`` and is permitted under live peers on ``main`` ONLY.
+FRESH_CUT_AT_HEAD = "FRESH_CUT_AT_HEAD"
+#: Checking out a DIFFERENT existing commit. Moves HEAD under every peer.
+CHECKOUT_EXISTING = "CHECKOUT_EXISTING"
+#: Renaming a branch with a remote delete. Genuinely destructive.
+RENAME_WITH_REMOTE_DELETE = "RENAME_WITH_REMOTE_DELETE"
+#: Catch-all for a branch mutation whose content-neutrality this predicate
+#: cannot establish from its own inputs -- a cut bundled with a reset, or a
+#: cut merely PRESCRIBED to a caller that controls how it is performed. Not
+#: named in the originating plan; added because the two pre-existing
+#: non-ceremony call sites (`coordinator/bin/merge-recovery-and-tag-cut.py`
+#: cuts a recovery branch AND hard-resets main; `pickup_assemble`'s
+#: `compute_branch_gate` prescribes an unqualified cut) are neither of the
+#: three hazardous kinds by name, and mapping them onto one of those would
+#: have been a lie in the argument. Behaviour is identical to the hazardous
+#: kinds: refuse under peers.
+UNQUALIFIED_BRANCH_CUT = "UNQUALIFIED_BRANCH_CUT"
+
+_BRANCH_MUTATION_KINDS = frozenset(
+    {
+        FRESH_CUT_AT_HEAD,
+        CHECKOUT_EXISTING,
+        RENAME_WITH_REMOTE_DELETE,
+        UNQUALIFIED_BRANCH_CUT,
+    }
+)
+
+
 class BranchMutationVerdict(NamedTuple):
     """Verdict for a proposed branch-cutting operation (creating a NEW
     branch, as opposed to committing on one already checked out).
@@ -96,7 +138,11 @@ class BranchMutationVerdict(NamedTuple):
 
 
 def branch_mutation_verdict(
-    cwd: Optional[str] = None, self_session_id: Optional[str] = None
+    cwd: Optional[str] = None,
+    self_session_id: Optional[str] = None,
+    *,
+    operation: str,
+    current_branch: Optional[str] = None,
 ) -> BranchMutationVerdict:
     """Decide whether cutting a NEW branch in the shared worktree at ``cwd``
     is safe right now, i.e. whether any OTHER live session is sharing this
@@ -132,7 +178,41 @@ def branch_mutation_verdict(
           not gate committing on an already-checked-out branch, and it does
           not duplicate ``history_rewrite_verdict``'s history-rewrite
           question — a caller needing both must call both.
+        - ``operation`` is REQUIRED and KEYWORD-ONLY. There is deliberately
+          no default: a default would be inherited silently by every future
+          caller, and the only safe default (the hazardous path) would make
+          the narrowing unreachable while a permissive one would hand every
+          caller the relaxation. Callers name the mutation they are about
+          to perform; the predicate answers for that mutation.
+        - ``operation=FRESH_CUT_AT_HEAD`` is narrowed ONLY when
+          ``current_branch == "main"``. A detached HEAD and a zero-ahead
+          non-span branch are NOT "on main" and route to the unchanged
+          refusal — widening this admission set to match
+          ``session_ensure_branch``'s ceremony-time set would silently
+          extend a PM-authorised reversal past what was authorised, on a
+          path that now fires on every boot.
+
+    Empirical proof carried per C1 (negative-spec — read this before
+    widening anything):
+        A fresh cut at current HEAD while on ``main`` is CONTENT-NEUTRAL. It
+        was reproduced in a scratch repo with a peer's modified-tracked,
+        untracked, and staged files all present across the cut: all three
+        survived and HEAD did not move. That proof is NARROWER than the
+        doctrine it bumps into and does not rebut it. The
+        ``SHARED-TREE-BRANCH-NOT-ISOLABLE`` hazard is IDENTITY SURPRISE —
+        the peer's NEXT commit, on unrelated files, lands on a branch it
+        never checked out. The experiment says nothing about that. What
+        authorises accepting that residual hazard is the PM ruling of
+        2026-08-18 ("we cut automatically if we're on main"), not this
+        proof. Do not cite the experiment as though it discharged the
+        doctrine.
     """
+    if operation not in _BRANCH_MUTATION_KINDS:
+        raise ValueError(
+            f"unknown branch-mutation operation {operation!r}; "
+            f"expected one of {sorted(_BRANCH_MUTATION_KINDS)}"
+        )
+
     try:
         verdicts = _liveness.live_session_verdicts(cwd)
     except Exception as exc:
@@ -165,6 +245,19 @@ def branch_mutation_verdict(
 
     peers = tuple((sid, _peer_branch(sid, cwd)) for sid in peer_ids)
     named = ", ".join(f"{sid} (on {branch or 'unknown branch'})" for sid, branch in peers)
+
+    if operation == FRESH_CUT_AT_HEAD and current_branch == "main":
+        return BranchMutationVerdict(
+            outcome="ok",
+            reason=(
+                f"content-neutral fresh cut at HEAD while on main; "
+                f"{len(peers)} live peer session(s) sharing this worktree are "
+                f"unaffected (no file touched, no index entry changed, HEAD "
+                f"unmoved): {named}"
+            ),
+            peers=peers,
+        )
+
     return BranchMutationVerdict(
         outcome="refused",
         reason=f"{len(peers)} live peer session(s) sharing this worktree: {named}",

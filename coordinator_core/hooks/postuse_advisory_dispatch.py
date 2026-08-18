@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -80,14 +81,15 @@ GENERATES: list = []
 #
 # This is NOT one of our tunables — it is a fixed cost/attention ceiling
 # Anthropic applies on the 1M window (observed 2026-07-13, unchanged since),
-# decoupled from window size. Do not re-express the 1M-tier threshold as a
-# percentage of context_window: a flat 50%-of-window critical threshold
-# coincides EXACTLY with this ceiling on a 1M window (500_000 tokens),
-# which fires the warning level with the cut instead of ahead of it and
-# defeats the whole point of a pre-emptive advisory (a handoff needs
-# runway to compose before an involuntary, lossy auto-compaction lands).
-# Anchor the 1M tier to absolute tokens below this ceiling instead — see
-# the tier-aware threshold block in _check_context_pressure_sync.
+# decoupled from window size. It is why the red band in
+# _check_context_pressure_sync sits at 47% and not 50%: on a 1M window a flat
+# 50% coincides EXACTLY with this ceiling (500_000 tokens), firing the warning
+# level with the cut instead of ahead of it and defeating the whole point of a
+# pre-emptive advisory — a handoff needs runway to compose before an
+# involuntary, lossy auto-compaction lands. 47% leaves ~30K tokens of that
+# runway. Referenced by comment rather than by arithmetic: the bands are
+# PM-set percentages, not values derived from this constant, and deriving them
+# from it would silently move them if Anthropic moves the ceiling.
 # ---------------------------------------------------------------------------
 _AUTO_COMPACT_CEILING_TOKENS_1M = 500_000
 
@@ -274,17 +276,21 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         alarm and consume silently.
 
     Phase 2: Throttled (5 min) threshold warnings, sidecar-sourced.
+        Two bands and only two: 40% of window (orange — consider a handoff if
+        the work cannot close in ~5% more) and 47% (red — handoff now, ahead of
+        compaction). Nothing fires below 40, and a session with no usable
+        reading gets silence, not an escalating UNKNOWN notice.
+
+        The percentage comes from
+        `coordinator_core.session.context_usage_sidecar.read_usage` — the
+        registered statusline is that sidecar's sole writer — never from the
+        transcript (see the module Anti-scope comment above Phase 2 below).
         Self-throttle + bark-once guards persisted to a durable per-session JSON
         state file (_load_advisory_state / _save_advisory_state) — survives the
         fresh-process-per-fire execution model (see the module-level state-
-        management comment above _advisory_state_path). Occupancy and window
-        size come from `coordinator_core.session.context_usage_sidecar.read_usage`
-        — a pass-through statusline is this sidecar's sole writer — never from
-        the transcript (see the module Anti-scope comment above Phase 2 below).
-        A missing or unusable reading escalates through a bounded UNKNOWN
-        ladder (1st/3rd/10th consecutive miss) rather than repeating identical
-        text forever. Bark-once guards keyed by a hash of transcript_path
-        (stable for the life of a session — this never opens the transcript).
+        management comment above _advisory_state_path). Bark-once guards keyed
+        by a hash of transcript_path (stable for the life of a session — this
+        never opens the transcript).
     """
     if not session_id:
         return ""
@@ -389,7 +395,8 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # Phase 2: Throttled threshold warnings, sourced from the context-usage
     # sidecar (coordinator_core.session.context_usage_sidecar) — never the
     # transcript. Anti-scope: no tail scan, no count_tokens call, no default
-    # window. Sidecar-absence (or an unusable reading) is UNKNOWN, full stop.
+    # window, and no estimate of any kind. Sidecar-absence (or an unusable
+    # reading) is silence, full stop.
     # -----------------------------------------------------------------------
     throttle_seconds = 300  # 5 minutes
 
@@ -422,207 +429,107 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     reading = read_usage(session_id, now=time.time())
     context_window_block = reading.context_window if reading is not None else None
 
-    # --- Occupancy sum: EXACT match to the deleted extractor's basis so the
-    # preserved 400K/450K anchors stay calibrated (AC4). output_tokens is
-    # deliberately excluded.
-    current_usage = (
-        context_window_block.get("current_usage")
-        if isinstance(context_window_block, dict)
-        else None
-    )
-    occupancy_tokens = None
-    if isinstance(current_usage, dict):
-        try:
-            occupancy_tokens = (
-                int(current_usage["input_tokens"])
-                + int(current_usage["cache_creation_input_tokens"])
-                + int(current_usage["cache_read_input_tokens"])
-            )
-        except (KeyError, TypeError, ValueError):
-            occupancy_tokens = None
-
-    window_size = (
-        context_window_block.get("context_window_size")
-        if isinstance(context_window_block, dict)
-        else None
-    )
-    window_usable = isinstance(window_size, (int, float)) and window_size > 0
-
     used_percentage = (
         context_window_block.get("used_percentage")
         if isinstance(context_window_block, dict)
         else None
     )
-    pct_usable = isinstance(used_percentage, (int, float))
 
-    age_seconds = reading.age_seconds if reading is not None else None
+    # --- Unmeasured is SILENT. Not a ladder, not a streak, not a one-time
+    # heads-up. A session with no usable reading gets nothing from this check,
+    # for the whole session.
+    #
+    # This replaces a bounded UNKNOWN escalation (1st/3rd/10th consecutive
+    # miss). PM ruling, 2026-08-18, after that ladder ran unbounded across the
+    # fleet: the reader had been resolving a path nothing wrote, so EVERY
+    # interactive session took this branch on every fire and the escalation was
+    # the only context signal anyone ever saw. The ruling is not "the ladder
+    # was mistuned" — it is that an advisory with no measurement behind it is
+    # noise by construction, and noise on this channel costs an EM's attention
+    # on every tool call. The operator already has a live percentage in the
+    # terminal status line; that surface is where an unmeasurable reading shows
+    # up (rendered as an em-dash), and it costs nothing to ignore.
+    # `bool` is an `int` and would read as 1%; NaN/inf survive an isinstance
+    # check and then raise on int(); a negative is a figure the harness should
+    # never emit and must not round toward "this session is empty". All four
+    # are no-reading, not zero.
+    if (
+        isinstance(used_percentage, bool)
+        or not isinstance(used_percentage, (int, float))
+        or not math.isfinite(used_percentage)
+        or used_percentage < 0
+    ):
+        # The throttle stamp was already persisted above and nothing has
+        # mutated cp_state since, so this path saves nothing further — it is
+        # the common case for headless sessions and runs once per tool call.
+        return ""
 
-    # --- AC4 full path: both the token sum and the window size are usable.
-    # Tier-aware absolute-token thresholds, unchanged from before the rewire.
-    if occupancy_tokens is not None and window_usable:
-        cp_state["unmeasured_streak"] = 0
+    # `round`, not `int`. The statusline renders the same figure with round()
+    # and colours its orange band at 40, so truncating here would show the
+    # operator an orange "40%" in the terminal with no advisory behind it for
+    # every raw value in [39.5, 40.0). The two halves of this contract agree
+    # at the boundary or the boundary is not observable.
+    # Review: code-reviewer (P2).
+    display_pct = round(used_percentage)
+    age_note = f" (measured {int(reading.age_seconds)}s ago)" if reading is not None else ""
 
-        context_window = int(window_size)
-        if context_window >= 1_000_000:
-            advisory_tokens = 400_000
-            critical_tokens = 450_000
-        else:
-            advisory_tokens = context_window * 40 // 100
-            critical_tokens = context_window * 50 // 100
-
-        display_pct = int(used_percentage) if pct_usable else occupancy_tokens * 100 // context_window
-
-        if context_window >= 1_000_000:
-            compact_desc = (
-                f"auto-compaction fires at a fixed ~{_AUTO_COMPACT_CEILING_TOKENS_1M // 1000}K"
-                f" tokens on this 1M tier"
+    # --- The two bands, and there are only two (PM-set, 2026-08-18).
+    #
+    # 40 — ORANGE. "Consider a handoff if this work cannot close within about
+    #      another 5% of window." An orientation signal, not an instruction.
+    # 47 — RED. "Go to handoff now, before compaction takes the choice away."
+    #
+    # Why 47 and not 50 on the 1M tier: auto-compaction fires at a fixed
+    # ~500K tokens there (_AUTO_COMPACT_CEILING_TOKENS_1M), so a 50% trigger
+    # coincides EXACTLY with the cut instead of landing ahead of it, and a
+    # handoff needs runway to compose. 47% of 1M is ~470K — the last point
+    # with enough headroom left to write one.
+    #
+    # NOTHING fires below 40. No checkpoint prompts, no "consider wrapping",
+    # no informational heads-up at 15/20/25%. That is the PM ruling, stated as
+    # a floor rather than a default: a check added here that fires under 40
+    # violates it no matter how quiet its wording.
+    if display_pct >= 47 and transcript_hash not in cp_state.get("critical_fired", []):
+        _mark_advisory_fired(cp_state, transcript_hash, critical=True)
+        _save_advisory_state(tmpdir, session_id, cp_state)
+        base = (
+            f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window used{age_note},"
+            f" measured from the harness's own context_window block."
+            f" This is the point to run /handoff, not to finish one more thing first —"
+            f" the handoff itself consumes context, and compaction from here is"
+            f" involuntary and lossy."
+        )
+        if autonomous_run:
+            return (
+                base
+                + " Autonomous run active — continuing per PM instruction."
+                " Verify all progress is in TaskList and committed to disk."
+                " Compaction will compress context but tasks persist."
             )
-        else:
-            compact_desc = "auto-compaction is observed near ~60% of the window"
+        return base
 
-        age_note = f" (measured {int(age_seconds)}s ago)" if age_seconds is not None else ""
-
-        if occupancy_tokens >= critical_tokens and transcript_hash not in cp_state.get("critical_fired", []):
-            _mark_advisory_fired(cp_state, transcript_hash, critical=True)
-            _save_advisory_state(tmpdir, session_id, cp_state)
-
-            if autonomous_run:
-                return (
-                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block"
-                    f" (input + cache_creation + cache_read tokens)."
-                    f" Compaction is close — {compact_desc}. Autonomous run active —"
-                    f" continuing per PM instruction. Verify all progress is in TaskList and"
-                    f" committed to disk. Compaction will compress context but tasks persist."
-                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
-                )
-            else:
-                return (
-                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block"
-                    f" (input + cache_creation + cache_read tokens)."
-                    f" Note: {compact_desc}."
-                    f" If this estimate looks right for the work you've done, consider running"
-                    f" /handoff soon — the handoff itself consumes context, so leave headroom."
-                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
-                )
-
-        if occupancy_tokens >= advisory_tokens and transcript_hash not in cp_state.get("advisory_fired", []):
-            _mark_advisory_fired(cp_state, transcript_hash, critical=False)
-            _save_advisory_state(tmpdir, session_id, cp_state)
-
-            if autonomous_run:
-                return (
-                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block"
-                    f" (input + cache_creation + cache_read tokens)."
-                    f" Context usage is getting heavy. Autonomous run: checkpoint state"
-                    f" to disk at the next natural boundary so the run is resumable."
-                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
-                )
-            else:
-                return (
-                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block"
-                    f" (input + cache_creation + cache_read tokens)."
-                    f" Context usage is getting heavy. Consider completing the current"
-                    f" task unit, then running /handoff. This is informational — no action required"
-                    f" yet."
-                    f" (Sidecar-derived: {occupancy_tokens} tokens vs {context_window}-token window)"
-                )
-
+    if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
+        _mark_advisory_fired(cp_state, transcript_hash, critical=False)
         _save_advisory_state(tmpdir, session_id, cp_state)
-        return ""
+        base = (
+            f"CONTEXT PRESSURE — ADVISORY: ~{display_pct}% of window used{age_note},"
+            f" measured from the harness's own context_window block."
+            f" If the current work cannot close within about another 5% of window,"
+            f" start moving toward /handoff. If it can, carry on — the hard call"
+            f" comes at 47%."
+        )
+        if autonomous_run:
+            return (
+                base
+                + " Autonomous run: checkpoint state to disk at the next natural"
+                " boundary so the run is resumable."
+            )
+        return base
 
-    # --- AC13a: a usable percentage but no usable window size. The sub-1M
-    # percentage model (40%/50% of window) is what `used_percentage` already
-    # is, so it applies directly — no compact_desc (tier is unknown), no
-    # absolute-token parenthetical (no window to express it against).
-    if pct_usable:
-        cp_state["unmeasured_streak"] = 0
-
-        display_pct = int(used_percentage)
-        age_note = f" (measured {int(age_seconds)}s ago)" if age_seconds is not None else ""
-
-        if display_pct >= 50 and transcript_hash not in cp_state.get("critical_fired", []):
-            _mark_advisory_fired(cp_state, transcript_hash, critical=True)
-            _save_advisory_state(tmpdir, session_id, cp_state)
-
-            if autonomous_run:
-                return (
-                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block; no window"
-                    f" size was reported, so this is percentage-only. Autonomous run active —"
-                    f" continuing per PM instruction. Verify all progress is in TaskList and"
-                    f" committed to disk. Compaction will compress context but tasks persist."
-                )
-            else:
-                return (
-                    f"CONTEXT PRESSURE — HIGH: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block; no window"
-                    f" size was reported, so this is percentage-only."
-                    f" If this estimate looks right for the work you've done, consider running"
-                    f" /handoff soon — the handoff itself consumes context, so leave headroom."
-                )
-
-        if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
-            _mark_advisory_fired(cp_state, transcript_hash, critical=False)
-            _save_advisory_state(tmpdir, session_id, cp_state)
-
-            if autonomous_run:
-                return (
-                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block; no window"
-                    f" size was reported, so this is percentage-only. Context usage is getting"
-                    f" heavy. Autonomous run: checkpoint state to disk at the next natural"
-                    f" boundary so the run is resumable."
-                )
-            else:
-                return (
-                    f"CONTEXT PRESSURE — ADVISORY: est. ~{display_pct}% of window used{age_note}"
-                    f" — measured via the harness's own context_window usage block; no window"
-                    f" size was reported, so this is percentage-only. Context usage is getting"
-                    f" heavy. Consider completing the current task unit, then running /handoff."
-                    f" This is informational — no action required yet."
-                )
-
-        _save_advisory_state(tmpdir, session_id, cp_state)
-        return ""
-
-    # --- AC13b / AC5 / AC15: no sidecar, or a sidecar carrying neither figure
-    # usable. Never a guessed denominator, never a fabricated percentage.
-    # Escalates in urgency at the 1st/3rd/10th consecutive throttled miss,
-    # then holds silent — see the module docstring's Phase 2 note.
-    streak = cp_state.get("unmeasured_streak", 0) + 1
-    cp_state["unmeasured_streak"] = streak
     _save_advisory_state(tmpdir, session_id, cp_state)
-
-    if streak == 1:
-        return (
-            "CONTEXT PRESSURE — UNKNOWN: no measurable context-usage reading is"
-            " available for this session (no sidecar, or an unusable one)."
-            " Use your own judgment on session length, or /handoff if in doubt."
-        )
-    if streak == 3:
-        elapsed_min = (streak - 1) * throttle_seconds // 60
-        return (
-            f"CONTEXT PRESSURE — UNKNOWN: still no measurable context-usage reading"
-            f" after ~{elapsed_min} minutes of this session."
-            f" Use your own judgment on session length, or /handoff if in doubt."
-        )
-    if streak == 10:
-        elapsed_min = (streak - 1) * throttle_seconds // 60
-        return (
-            f"CONTEXT PRESSURE — UNKNOWN: still no measurable context-usage reading"
-            f" after ~{elapsed_min} minutes of this session. Treat this as a standing"
-            f" limitation for this session, not a transient blip."
-            f" Use your own judgment on session length, or /handoff if in doubt."
-        )
-
     return ""
 
 
-# ---------------------------------------------------------------------------
 # _check_runtime_tripwire_sync
 # (mirrors runtime-tripwire-advisory.sh check_runtime_tripwire)
 # ---------------------------------------------------------------------------
@@ -671,6 +578,26 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
         (AC5 grep targets from runtime-tripwire-advisory.sh).
     """
     if not session_id:
+        return ""
+
+    # --- Off by default (PM ruling, 2026-08-18) ---
+    # This tripwire measures WALL CLOCK, not context, and it emits wrap-shape
+    # text — "stop starting new work ... write a successor-handoff stub;
+    # return". On a machine where a dispatch spends most of its minutes in
+    # spawn tax rather than work, 25 elapsed minutes buys very little progress,
+    # so the wrap prescription lands while the window is barely touched. Agents
+    # received it on the same advisory channel as the context-pressure text and
+    # read it as context pressure — the observed symptom was subagents wrapping
+    # up at 15-20% of window "because the hook said to".
+    #
+    # The PM's floor is that nothing prescribes a checkpoint below 40% of
+    # context. A wall-clock trigger cannot honour a context floor, so it is
+    # opt-in rather than re-tuned: no minute value makes elapsed time a proxy
+    # for occupancy. Set COORDINATOR_RUNTIME_TRIPWIRE=1 to re-arm it (the
+    # RUNTIME_TRIPWIRE_*_MIN thresholds still apply when armed) — the
+    # compaction-decay effect it was built for is real, and the mechanism is
+    # kept whole for the day it is measured against context rather than time.
+    if os.environ.get("COORDINATOR_RUNTIME_TRIPWIRE", "") != "1":
         return ""
 
     # --- Git root ---

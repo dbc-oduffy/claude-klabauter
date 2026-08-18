@@ -138,10 +138,47 @@ def test_stale_by_dead_pid_is_reclaimed() -> None:
     assert suite_mutex.holder()["owner"] == "session-b"
 
 
-def test_stale_by_ttl_is_reclaimed_even_with_a_live_pid() -> None:
+def test_live_pid_past_the_live_holder_ceiling_is_reclaimed() -> None:
+    """A wedged-but-alive runner still cannot hold the fleet hostage forever.
+
+    Supersedes `test_stale_by_ttl_is_reclaimed_even_with_a_live_pid`, which
+    pinned `STALE_TTL_SECS` as the ceiling for a LIVE holder too. That contract
+    was wrong in practice, not merely tight: on 2026-08-18 a full-tier gate run
+    passed 45 minutes while still executing, its lock was reclaimed mid-suite,
+    and a second pytest started against the same tree — the exact concurrency
+    `with-suite-mutex` exists to prevent. The anti-hostage intent the old test
+    protected is preserved here at `LIVE_HOLDER_TTL_SECS`; only the ceiling for
+    a demonstrably-live holder moved.
+    """
     _write_meta(
         pid=os.getpid(),
         owner="wedged-session",
+        started_at=_iso_ago(suite_mutex.LIVE_HOLDER_TTL_SECS + 60),
+    )
+
+    assert suite_mutex.holder() is None
+    assert suite_mutex.acquire("session-b", "pytest") is True
+
+
+def test_live_pid_past_stale_ttl_but_within_live_ceiling_is_kept() -> None:
+    """The regression itself: an honest long suite must not be reclaimed."""
+    _write_meta(
+        pid=os.getpid(),
+        owner="slow-but-honest-suite",
+        started_at=_iso_ago(suite_mutex.STALE_TTL_SECS + 60),
+    )
+
+    current = suite_mutex.holder()
+    assert current is not None, "a live holder past STALE_TTL was reclaimed mid-run"
+    assert current["owner"] == "slow-but-honest-suite"
+
+
+def test_dead_pid_past_stale_ttl_still_expires_at_the_short_ceiling() -> None:
+    """A holder that cannot be shown alive keeps the short TTL, so a crash
+    never wedges the fleet for the live-holder ceiling's duration."""
+    _write_meta(
+        pid=_dead_pid(),
+        owner="crashed-session",
         started_at=_iso_ago(suite_mutex.STALE_TTL_SECS + 60),
     )
 

@@ -244,12 +244,26 @@ class TestExciseReachesTheDivergenceCheck:
 
         assert decision["artifact"]["lineage"]["deliverable_id"] == "dlv-beta-bbb222"
 
-    def test_ac2_divergence_still_fatal_without_excise(self, tmp_path, monkeypatch):
+    def test_ac2_divergence_without_a_disposition_never_auto_picks(
+        self, tmp_path, monkeypatch
+    ):
+        """Superseded shape (2026-08-14, multi-plan sessions cannot hand
+        off): this used to assert `DivergentDeliverableIdError` propagates
+        out of `brief` -- the dead end that left a multi-plan session with
+        no sanctioned route. `brief` now converts the raise into
+        `j-divergent-deliverable-id`. What this test pins is UNCHANGED and
+        is the load-bearing half: absent an operator disposition, no rung is
+        selected and no directive is emitted.
+        """
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-excise-still-fatal")
         _, predecessor = self._seed_divergent_rungs(tmp_path, "sid-excise-still-fatal")
 
-        with pytest.raises(DivergentDeliverableIdError):
-            ba.brief("handoff", str(predecessor), repo_root=tmp_path)
+        decision = ba.brief(
+            "handoff", str(predecessor), repo_root=tmp_path
+        ).decision_object
+
+        assert decision["directives"] == []
+        assert not decision["artifact"]["lineage"].get("deliverable_id")
 
     def test_ac4_surviving_id_is_the_operator_named_rung_and_note_carried(
         self, tmp_path, monkeypatch

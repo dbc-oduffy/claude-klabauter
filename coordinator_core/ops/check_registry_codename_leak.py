@@ -71,6 +71,12 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 # documents (e.g. coordinator_core/ops/percolate_run.py's own docstring,
 # coordinator_core/ops/coordinator_doe_root.py). Same sibling, same ruling,
 # same disclosure -- KEEPSET is the narrow, named fix; not a pattern loosen.
+# 'fleet_root' kept: `repos.fleet_root` is not a private repo codename -- it
+# names the CONTAINER directory the fleet's repos live under.
+# `git_hook_install.py`'s own `_CONTAINER_REGISTRY_KEYS` comment says these
+# "are not unclassifiable repos; they are not repos at all, and never reach a
+# verdict." Same generic/public-slug class as 'game_dev', 'web_dev',
+# 'data_science', 'coordinator', 'experiments' above.
 KEEPSET: Sequence[str] = (
     "example_retrieval_repo",
     "deep_research",
@@ -81,6 +87,7 @@ KEEPSET: Sequence[str] = (
     "experiments",
     "doe_claude",
     "example_doctrine_repo",
+    "fleet_root",
 )
 
 _EXCLUDE_DIRS = {".git"}

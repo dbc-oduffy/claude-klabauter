@@ -65,9 +65,35 @@ where a DoE EM session holding the `Workflow` tool naturally exists, with one
 full ceremony of slack. Named residual: the Workflow API has never been
 OBSERVED changing — exactly one capture exists, so the drift rate is
 unmeasured, not low. The defensible range is 7-21 days; 14 is the
-convention-consistent point in it. A SECOND capture is what closes this —
-once two exist, diffing them across a known harness-version delta is the
-first real datapoint, and this window should be revisited then.
+convention-consistent point in it.
+
+TWO-TIER WINDOW (`select_window_days`) — 14 days while ONE capture exists,
+90 days once TWO or more do. Both numbers are ratified, by different parties
+answering different questions, and the tier is what reconciles them rather
+than picking a winner:
+
+  - 14 is what DoE's EM accepted on 2026-08-13 against the shipped gate
+    (`cross-repo/inbox/2026-08-13-doe-claude-em-pcli-04-ceremony-step-landed.md`),
+    and it is correct while this gate's staleness leg is the ONLY leg that
+    runs.
+  - 90 is what DoE's PM ratified on 2026-08-14
+    (`coordinator/docs/wiki/workflow-emitter-contract.md` s10), correct in
+    the world that memo describes: an EM-side version-delta leg firing first
+    on every re-capture, with this leg demoted to a backstop behind it.
+
+The tier's discriminator is the same evidence both the debt-backlog entry
+and the landing memo independently named as the thing that closes the
+residual: a SECOND capture. One capture means no EM-side re-capture has ever
+been observed, so the wide backstop would be the only leg running and 14
+holds. Two or more means that leg demonstrably fires, which is exactly the
+precondition s10's 90 rests on. This is deliberately NOT a re-derivation of
+either value (see Negative-spec) — it is the branch between two already-
+ratified ones, keyed on an artifact rather than on anyone remembering to
+flip a constant.
+
+Fails safe in both directions: the wide window is never the default, and it
+cannot be reached by editing the capture (see the `max_age_days` rule below,
+which still only shortens whichever tier applies).
 
 Clock (leg 2): off the capture's own `captured_at` field, never file mtime
 or commit date — precedent
@@ -75,9 +101,10 @@ or commit date — precedent
 that a commit-date clock "would have read FRESH throughout" the regression
 it was built for; the same failure mode applies here (a capture's other
 fields can be hand-edited repeatedly while `captured_at` sits unrefreshed).
-Config: `_MAX_AGE_DAYS` in this module is the authority. An optional
-`max_age_days` field in the capture JSON may only SHORTEN the effective
-window: `effective = min(_MAX_AGE_DAYS, capture_value or inf)` — capture-only
+Config: this module is the authority — `select_window_days` picks the tier,
+and neither tier is settable from the capture. An optional `max_age_days`
+field in the capture JSON may only SHORTEN the effective window:
+`effective = min(<selected tier>, capture_value or inf)` — capture-only
 config would let the watched party set its own deadline, the same hole the
 capture's own `$comment` already warns against for hand-editing.
 
@@ -102,6 +129,15 @@ Negative-spec (deliberately NOT covered here):
       all three wire-for-wire.
     - Does NOT widen into auditing any other cross-repo contract. One gate,
       three FAIL conditions.
+    - Does NOT re-derive either window value. `select_window_days` branches
+      between two ratified numbers on observable evidence; it does not pick
+      a third. Challenge 14 or 90 with new evidence — an observed drift
+      event, a measured re-capture cadence — never with a fresh opinion, and
+      change them where they were ratified, not here.
+    - Does NOT verify that DoE's EM-side version-delta leg ran, only that a
+      re-capture happened. A second capture is evidence that leg fires, not
+      proof it fired this time; no static read can do better, which is why
+      this leg stays a hard FAIL rather than deferring to theirs.
 
 Exit codes (`main`), matching `coordinator/bin/schema-drift-gate`'s
 three-way contract — a gate that cannot run must never read as a gate that
@@ -129,6 +165,7 @@ from typing import Any, Optional
 from coordinator_core.ops.ensure_doe_clone import resolve_doe_clone
 
 _MAX_AGE_DAYS = 14
+_MAX_AGE_DAYS_WITH_EM_LEG = 90
 
 # contract dispatch_feed property -> capture opts_fields key
 _MIRRORED = {
@@ -214,11 +251,26 @@ def _parse_date(value: Any) -> Optional[date]:
         return None
 
 
+def select_window_days(capture_count: int) -> int:
+    """Pure predicate. Which staleness window this run is entitled to, decided
+    off the one piece of evidence both resolving records named as the closer:
+    whether a SECOND capture exists.
+
+    `_MAX_AGE_DAYS` (14) when `capture_count < 2`; `_MAX_AGE_DAYS_WITH_EM_LEG`
+    (90) once two or more exist. Rationale, and why this is a predicate rather
+    than a constant, in the module docstring's "Staleness window" section.
+    Fails safe: an unreadable/empty schemas dir cannot raise the window, and
+    the wide window is never the default.
+    """
+    return _MAX_AGE_DAYS_WITH_EM_LEG if capture_count >= 2 else _MAX_AGE_DAYS
+
+
 def compute_staleness(
     captured_at_str: Any,
     capture_filename: str,
     *,
     max_age_days_capture: Any = None,
+    base_max_age_days: int = _MAX_AGE_DAYS,
     today: Optional[date] = None,
 ) -> dict[str, Any]:
     """Pure predicate. Returns a dict with `reasons` (list[str], empty ==
@@ -248,10 +300,10 @@ def compute_staleness(
             "— tamper check failed"
         )
 
-    effective_max_age = _MAX_AGE_DAYS
+    effective_max_age = base_max_age_days
     if isinstance(max_age_days_capture, (int, float)) and not isinstance(max_age_days_capture, bool):
         if max_age_days_capture > 0:
-            effective_max_age = min(_MAX_AGE_DAYS, max_age_days_capture)
+            effective_max_age = min(base_max_age_days, max_age_days_capture)
 
     days_since = (today - captured_at).days
     if days_since < 0:
@@ -332,15 +384,19 @@ def _load_json(path: Path) -> Any:
         raise GateError(f"non-UTF-8 content in {path}: {exc}") from exc
 
 
-def _find_capture_file(schemas_dir: Path) -> Path:
-    """Most recent `workflow-tool-api-capture.<date>.json` under
-    *schemas_dir* — ISO dates sort lexicographically, so the
-    lexicographically-greatest match is the most recent capture. Raises
-    GateError if none exist."""
+def _find_captures(schemas_dir: Path) -> "list[Path]":
+    """Every `workflow-tool-api-capture.<date>.json` under *schemas_dir*, ISO-
+    date-sorted (dates sort lexicographically, so the last entry is the most
+    recent capture). Raises GateError if none exist.
+
+    The COUNT is load-bearing, not incidental: it is `select_window_days`'s
+    only input. Returning the full list rather than just the newest keeps that
+    evidence at one read of one directory.
+    """
     candidates = sorted(schemas_dir.glob("workflow-tool-api-capture.*.json"))
     if not candidates:
         raise GateError(f"no workflow-tool-api-capture.*.json found under {schemas_dir}")
-    return candidates[-1]
+    return candidates
 
 
 def _extract_dispatch_feed_properties(contract: Any, contract_path: Path) -> "set[str]":
@@ -383,7 +439,9 @@ def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[st
     if not resolution_path.is_file():
         raise GateError(f"C7 resolution file not found: {resolution_path}")
 
-    capture_path = _find_capture_file(schemas_dir)
+    capture_paths = _find_captures(schemas_dir)
+    capture_path = capture_paths[-1]
+    base_max_age_days = select_window_days(len(capture_paths))
 
     contract = _load_json(contract_path)
     capture = _load_json(capture_path)
@@ -408,10 +466,18 @@ def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[st
         capture.get("captured_at"),
         capture_path.name,
         max_age_days_capture=capture.get("max_age_days"),
+        base_max_age_days=base_max_age_days,
         today=today,
     )
     if staleness["reasons"]:
-        lines.append(f"LEG 2 (staleness, threshold_days={staleness['threshold_days']}):")
+        regime = (
+            f"{len(capture_paths)} captures on disk — EM-side re-capture leg observed live"
+            if len(capture_paths) >= 2
+            else "1 capture on disk — no EM-side re-capture observed, narrow window applies"
+        )
+        lines.append(
+            f"LEG 2 (staleness, threshold_days={staleness['threshold_days']}; {regime}):"
+        )
         lines.extend(f"  - {reason}" for reason in staleness["reasons"])
 
     source_hashes = resolution.get("source_hashes")

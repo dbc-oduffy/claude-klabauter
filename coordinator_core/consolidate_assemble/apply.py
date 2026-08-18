@@ -44,6 +44,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.contract import apply_base
 from coordinator_core.consolidate_assemble import brief
 
@@ -213,13 +217,21 @@ def apply(
 
 
 def _usage(prog: str) -> int:
-    print(f"usage: {prog} apply [--session-id <id>] [--decisions <json>]", file=sys.stderr)
+    print(
+        f"usage: {prog} apply [--session-id <id>] "
+        "[--decisions <json> | --decisions-file <path>]",
+        file=sys.stderr,
+    )
     return APPLY_EXIT_TRANSPORT_FAIL
 
 
 def main_apply(argv: list[str]) -> int:
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
+    conflict = detect_conflicting_payload_channels(argv)
+    if conflict is not None:
+        print(f"consolidate-assemble apply: {conflict}", file=sys.stderr)
+        return _usage("consolidate-assemble")
     i = 0
     while i < len(argv):
         tok = argv[i]
@@ -228,15 +240,12 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("consolidate-assemble")
             session_id = argv[i + 1]
             i += 2
-        elif tok == "--decisions":
-            if i + 1 >= len(argv):
+        elif (payload := resolve_json_payload_flag(argv, i)).consumed:
+            if payload.error is not None:
+                print(f"consolidate-assemble apply: {payload.error}", file=sys.stderr)
                 return _usage("consolidate-assemble")
-            try:
-                decisions = json.loads(argv[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"consolidate-assemble apply: malformed --decisions JSON: {exc}", file=sys.stderr)
-                return _usage("consolidate-assemble")
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         else:
             print(f"consolidate-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage("consolidate-assemble")

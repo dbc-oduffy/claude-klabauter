@@ -1358,6 +1358,15 @@ async def _handle_act_handoffs(
             except ValueError:
                 # Resolves outside worktree — must not match a live handoff.
                 lookup_key = cid
+        else:
+            # A relative candidate_id must match live_handoffs' rel_id() keys,
+            # which are ALWAYS forward-slash (wire_paths.rel_id docstring) —
+            # normalize a caller-supplied backslash-separated relative id
+            # (e.g. Windows os.sep slicing upstream of this op) to the same
+            # forward-slash wire convention BEFORE the live_handoffs.get()
+            # lookup below, so this op is robust to any caller's separator,
+            # not only ones that already emit forward slashes.
+            lookup_key = Path(cid).as_posix()
         handoff_path = live_handoffs.get(lookup_key)
 
         # Already-archived or source-gone: classify as skipped (idempotent replay / AC12).
@@ -1495,7 +1504,9 @@ async def _handle_act_handoffs(
 
 
 @register_op("fleet.archive_completed_handoffs")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+async def _handler(  # pyright: ignore[reportUnusedFunction] — registered as a callback via the register_op decorator immediately above, not called by name in this module
+    params: dict, repo_root: Optional[Path] = None
+) -> dict:
     """fleet.archive_completed_handoffs — git-mv consumed/childless/unclaimed handoffs.
 
     Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md
@@ -1542,6 +1553,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             mode, worktree, dag_index, common_dir, dag_incomplete=dag_incomplete
         )
     else:
+        # validate_params guarantees candidate_ids is non-empty on the act path
+        # (dry_run: false) — this is the enforcement point for that invariant,
+        # not merely an assumption carried two frames into _handle_act_handoffs,
+        # whose own param is typed List[str] (non-Optional).
+        if not candidate_ids:
+            return build_setup_error_result(mode, dry_run, "candidate_ids required for act mode")
         return await _handle_act_handoffs(
             mode, worktree, dag_index, candidate_ids, common_dir,
             dag_incomplete=dag_incomplete,

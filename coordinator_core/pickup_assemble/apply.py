@@ -161,6 +161,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.archive_stamp import (
     cs_action_memo,
     cs_claim_handoff,
@@ -1123,9 +1127,13 @@ def _resolve_repo_root_for_apply(start: Optional[Path] = None) -> Optional[Path]
 
 
 def _usage(prog: str) -> int:
-    print(f"usage: {prog} brief <artifact-path> [--decisions <json>]", file=sys.stderr)
     print(
-        f"       {prog} apply <artifact-path> [--session-id <id>] [--decisions <json>]",
+        f"usage: {prog} brief <artifact-path> [--decisions <json> | --decisions-file <path>]",
+        file=sys.stderr,
+    )
+    print(
+        f"       {prog} apply <artifact-path> [--session-id <id>] "
+        "[--decisions <json> | --decisions-file <path>]",
         file=sys.stderr,
     )
     print(f"       {prog} drop <artifact-path> [--session-id <id>]", file=sys.stderr)
@@ -1212,6 +1220,10 @@ def main_apply(argv: list[str]) -> int:
     tail = argv[1:]
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
+    conflict = detect_conflicting_payload_channels(tail)
+    if conflict is not None:
+        print(f"pickup-assemble apply: {conflict}", file=sys.stderr)
+        return _usage("pickup-assemble")
     i = 0
     while i < len(tail):
         tok = tail[i]
@@ -1220,19 +1232,16 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("pickup-assemble")
             session_id = tail[i + 1]
             i += 2
-        elif tok == "--decisions":
-            if i + 1 >= len(tail):
+        elif (payload := resolve_json_payload_flag(tail, i)).consumed:
+            if payload.error is not None:
+                print(f"pickup-assemble apply: {payload.error}", file=sys.stderr)
                 return _usage("pickup-assemble")
-            try:
-                decisions = json.loads(tail[i + 1])
-            except json.JSONDecodeError as exc:
-                print(f"pickup-assemble apply: malformed --decisions JSON: {exc}", file=sys.stderr)
-                return _usage("pickup-assemble")
+            decisions = payload.value
             shape_error = validate_decisions_shape(decisions)
             if shape_error is not None:
                 print(f"pickup-assemble apply: {shape_error}", file=sys.stderr)
                 return _usage("pickup-assemble")
-            i += 2
+            i += payload.consumed
         else:
             print(f"pickup-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage("pickup-assemble")

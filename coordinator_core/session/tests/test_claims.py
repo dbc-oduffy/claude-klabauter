@@ -971,6 +971,23 @@ class TestReleaseArtifact:
         with pytest.raises(ValueError):
             claims.release_artifact("memo", "")
 
+    def test_invalid_class_fails_loud(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        assert claims.release_artifact("bogus", "r0", cwd=str(repo)) is False
+        assert "invalid class 'bogus'" in capsys.readouterr().err
+
+    def test_directory_name_class_names_the_token(self, tmp_path, monkeypatch, capsys):
+        """`plan-claims` is the on-disk directory; the class token is `plan`."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        _make_claim(repo, "plan", "p-typo", session_id="me-sid")
+        assert claims.release_artifact("plan-claims", "p-typo", cwd=str(repo)) is False
+        err = capsys.readouterr().err
+        assert "the class token is 'plan'" in err
+        # A rejected release must not have touched the real claim.
+        assert _claim_dir(repo, "plan", "p-typo").is_dir()
+
     def test_holder_releases(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)

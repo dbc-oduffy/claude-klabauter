@@ -4873,29 +4873,35 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 29 — the site-packages pointer (2026-08-10-interpreter-
-        # surface-four-asks.md chunk C5): `ensure_coordinator_venv`
-        # publishes `<settings-home>/bin/hook-sitepackages.txt` (a single
-        # STATIC file, one line, the venv's resolved site-packages path) on
-        # every real success exit — a sibling repo's hook bootstrap reads
-        # this instead of globbing for it. Best-effort: skipped rather than
-        # written malformed if site-packages can't be resolved, never
-        # gates provisioning success. Registered here (not in
-        # `_static_bin_family_names()`, which is DERIVED from template
-        # sources and would KeyError `test_bin_family_freshness.py`'s
-        # `src_by_name` on a name with none) so a future rename is
-        # self-cleaning via `_prune_orphaned_static_bin_names` — see the
-        # Step 3e union above and `ensure_venv.SITEPACKAGES_POINTER_NAME`.
+        # Clause 29 — the site-packages pointer, RETIRED (docs/plans/
+        # 2026-08-18-retire-coordinator-venv.md chunk C2; originally
+        # 2026-08-10-interpreter-surface-four-asks.md chunk C5):
+        # `ensure_coordinator_venv` used to publish
+        # `<settings-home>/bin/hook-sitepackages.txt` on every real success
+        # exit for a sibling repo's hook bootstrap to read. That authorship
+        # is retired outright, not repointed — every rung of DoE's
+        # `_hook_venv_inject.py::_resolve_site_packages` ladder is
+        # unreachable for a machine interpreter (see ensure_venv.py's
+        # module docstring). Entry kept (not removed) as a STATIC clause,
+        # unchanged in shape, so `_prune_orphaned_static_bin_names` still
+        # recognizes and prunes a stale pointer left by a pre-migration box
+        # — see the Step 3e union above and
+        # `ensure_venv.SITEPACKAGES_POINTER_NAME`.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
                     kind="file-path",
                     path="<settings-home>/bin/hook-sitepackages.txt",
                     reason=(
-                        "written by _write_sitepackages_pointer on every "
-                        "real (non-dry-run) success exit of "
-                        "ensure_coordinator_venv; skipped (not written "
-                        "malformed) if site-packages cannot be resolved"
+                        "RETIRED 2026-08-18: no longer written by "
+                        "ensure_coordinator_venv (chunk C2 deleted "
+                        "_write_sitepackages_pointer outright, not "
+                        "repointed — every DoE ladder rung is unreachable "
+                        "for a machine interpreter). This entry stays "
+                        "declared, unwritten, so a stale pointer left by a "
+                        "pre-migration box remains a recognized prune "
+                        "candidate for _prune_orphaned_static_bin_names "
+                        "rather than an orphan outside that mechanism"
                     ),
                 ),
             ),

@@ -153,6 +153,10 @@ from coordinator_core.backlog_grind_assemble import CADENCES, brief
 from coordinator_core.backlog_grind_assemble import directives as bga_directives
 from coordinator_core.backlog_grind_assemble import readers_blitz as readers_bug_blitz
 from coordinator_core.backlog_grind_assemble.verifier import HAIKU_VERIFIER_CLI
+from coordinator_core.ceremony_common.json_payload_flag import (
+    detect_conflicting_payload_channels,
+    resolve_json_payload_flag,
+)
 from coordinator_core.contract import apply_base
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.session.grant import write_tier_u_grant
@@ -796,7 +800,9 @@ def apply(
 
         decision = brief_result.decision_object
         directives = list(decision.get("directives", [])) + list(extra_directives or [])
-        judgment_points = decision.get("judgment_points", [])
+        judgment_points = _wire_single_disposition_resolves(
+            decision.get("judgment_points", []), directives
+        )
 
         prepared = _prepare_directives_for_dispatch(directives)
 
@@ -813,7 +819,8 @@ def apply(
 def _usage(prog: str) -> int:
     cadence_list = "|".join(CADENCES)
     print(
-        f"usage: {prog} apply <{cadence_list}> [--session-id <id>] [--decisions <json>]\n"
+        f"usage: {prog} apply <{cadence_list}> [--session-id <id>] "
+        "[--decisions <json> | --decisions-file <path>]\n"
         "                    [--run-id <run-id>]\n"
         "                    [--wave-path <repo-relative-path>]...   (repeatable)\n"
         "                    [--granularity per-item|per-wave] [--message <commit message>]",
@@ -893,6 +900,59 @@ def _build_wave_path_directives(
     ]
 
 
+def _wire_single_disposition_resolves(
+    judgment_points: list[dict[str, Any]], directives: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Fills a SINGLE-disposition judgment point's empty `resolves` list with
+    the ids of the directives that `depends_on` it, so a boot-time gate can
+    still be satisfied by live directives whose ids did not exist when it was
+    built.
+
+    `apply_base.disposition_resolves_directive` fires a directive only when the
+    chosen disposition's own `resolves` names that directive's id. A reader
+    that runs at boot cannot honestly supply those ids for a directive built
+    later from live input — `readers_blitz._read_backlog_readiness` emits
+    `j-bug-blitz-commit-readiness` with `resolves=[]` for exactly that reason,
+    while `_build_wave_path_directives` wires every `--wave-path` commit
+    directive's `depends_on` to it. The two are individually correct and
+    jointly unsatisfiable: no `--decisions` payload could open that gate, so
+    the documented per-item commit path could not commit at all.
+
+    Restricted to judgment points carrying exactly ONE disposition. `resolves`
+    is what encodes terminal-vs-non-terminal ACROSS dispositions, so on a
+    multi-disposition gate an empty list is a real authored distinction (a
+    "defer" choice that resolves nothing) and is left untouched. With one
+    disposition there is no alternative to distinguish, so an empty `resolves`
+    can only mean unknown-at-build-time, never "this choice deliberately fires
+    nothing". Dispositions that already name ids are never widened.
+
+    Copies before mutating — `decision` belongs to the recomputed brief, and a
+    caller re-reading it must not observe ids this run happened to generate.
+    """
+    if not judgment_points:
+        return judgment_points
+
+    wired: list[dict[str, Any]] = []
+    for jp in judgment_points:
+        dispositions = jp.get("dispositions") or []
+        if len(dispositions) != 1 or (dispositions[0].get("resolves") or []):
+            wired.append(jp)
+            continue
+        jp_id = jp.get("id")
+        dependents = [
+            d["id"]
+            for d in directives
+            if d.get("id") and jp_id in apply_base.normalize_depends_on(d.get("depends_on"))
+        ]
+        if not dependents:
+            wired.append(jp)
+            continue
+        patched = dict(jp)
+        patched["dispositions"] = [{**dispositions[0], "resolves": dependents}]
+        wired.append(patched)
+    return wired
+
+
 def main_apply(argv: list[str]) -> int:
     if not argv:
         return _usage("backlog-grind-assemble")
@@ -905,6 +965,10 @@ def main_apply(argv: list[str]) -> int:
     granularity: Optional[str] = None
     message: Optional[str] = None
     run_id: Optional[str] = None
+    conflict = detect_conflicting_payload_channels(tail)
+    if conflict is not None:
+        print(f"backlog-grind-assemble apply: {conflict}", file=sys.stderr)
+        return _usage("backlog-grind-assemble")
     i = 0
     while i < len(tail):
         tok = tail[i]
@@ -924,18 +988,12 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("backlog-grind-assemble")
             run_id = tail[i + 1]
             i += 2
-        elif tok == "--decisions":
-            if i + 1 >= len(tail):
+        elif (payload := resolve_json_payload_flag(tail, i)).consumed:
+            if payload.error is not None:
+                print(f"backlog-grind-assemble apply: {payload.error}", file=sys.stderr)
                 return _usage("backlog-grind-assemble")
-            try:
-                decisions = json.loads(tail[i + 1])
-            except json.JSONDecodeError as exc:
-                print(
-                    f"backlog-grind-assemble apply: malformed --decisions JSON: {exc}",
-                    file=sys.stderr,
-                )
-                return _usage("backlog-grind-assemble")
-            i += 2
+            decisions = payload.value
+            i += payload.consumed
         elif tok == "--wave-path":
             if i + 1 >= len(tail):
                 return _usage("backlog-grind-assemble")

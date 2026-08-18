@@ -865,6 +865,63 @@ def _raise_on_review_truthy_unqualified(review: Any) -> None:
         )
 
 
+def _raise_on_review_enum_values(review: Any) -> None:
+    """Raises `ValueError` when any composed review entry carries an
+    out-of-vocabulary `reviewer`/`scope`/`verdict`/`scope_kind`.
+
+    Completes the assemble-time validator family (`validate_review_shape` for
+    shape, `_raise_on_review_truthy_unqualified` for completeness) with the
+    fourth axis — value legality. Without it, the four closed vocabularies were
+    reachable ONLY by being rejected by them: `wsc-close tail-args --help`
+    lists the `--review-*` flag names with no value constraints, and the review
+    block is a free-form map carrying no `dispositions[]` the way every other
+    `judgment_points[]` entry does. The discovery path was author-a-guess, run
+    apply, get rejected.
+
+    Firing here rather than at the writer is the whole point: `d-write-trail`
+    runs FIRST in apply order, so a wrong enum turned the pass into `EXIT: 4
+    PARTIAL_MUTATION` and forced a reconcile-before-retry. Assembly aborts
+    before any directive reaches `directives[]`, so the same mistake is now a
+    question asked before anything moved.
+
+    Messages come from `review_trail_write.review_enum_errors` — the writer's
+    own authority, not a copy — so the text is byte-identical to the
+    apply-time rejection and cannot drift from the vocabularies it names.
+    Imported lazily: this module is on the assemble hot path and
+    `review_trail_write` pulls the op-registry side effects with it.
+
+    Spec backlink: cross-repo/inbox/2026-08-18-doe-claude-em-review-trail-
+    write-enums-undiscoverable-until-apply.md § 1.
+    """
+    from coordinator_core.ops.review_trail_write import review_enum_errors
+
+    entries = review if isinstance(review, list) else [review]
+    errors: list[str] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not _review_fields_present(entry):
+            # A shape-invalid or incomplete entry is not this validator's
+            # class — `validate_review_shape` and `_raise_on_review_truthy_
+            # unqualified` own those, and an incomplete entry composes no
+            # token at all, so its enum values never reach the writer.
+            continue
+        entry_errors = review_enum_errors(
+            reviewer=str(entry["reviewer"]),
+            scope=str(entry["scope"]),
+            verdict=str(entry["verdict"]),
+            # scope_kind is optional in the dict and defaults at the writer;
+            # validate the value that will actually be written, not "".
+            scope_kind=str(entry["scope_kind"]) if entry.get("scope_kind") else "diff",
+        )
+        if entry_errors and isinstance(review, list):
+            entry_errors = [f"slice[{index}]: {e}" for e in entry_errors]
+        errors += entry_errors
+    if errors:
+        raise ValueError(
+            " | ".join(errors)
+            + " — rejected at assemble time; correcting it here costs no partial mutation."
+        )
+
+
 #: Derived from `_REVIEW_REQUIRED_FIELDS` (never hand-duplicated) — the flat
 #: `review_<field>` spellings a caller might plausibly place directly on
 #: `decisions` instead of nesting them under `decisions["review"]`. A caller
@@ -1053,6 +1110,7 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     # sequencing) gets the same loud-at-assemble-time failure rather than a
     # silently review-less `wsc-close tail-args` argv.
     _raise_on_review_truthy_unqualified(decisions.get(_KEY_REVIEW))
+    _raise_on_review_enum_values(decisions.get(_KEY_REVIEW) or {})
     args: list[str] = ["tail-args"]
     if decisions.get(_KEY_DELETED_PATHS):
         args += ["--deleted-paths", *[str(p) for p in decisions[_KEY_DELETED_PATHS]]]

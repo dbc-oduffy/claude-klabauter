@@ -34,6 +34,11 @@ if str(_REPO_ROOT) not in sys.path:
 
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
+# Every test here drives the statusline wrapper as a real spawned process --
+# the wrapper's whole contract is stdin/stdout fidelity across a process
+# boundary, which a faked process cannot exercise.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _SCRIPT = _BIN_DIR / "statusline.py"
 _SETTINGS_PATH = _REPO_ROOT / "coordinator" / "settings.json"
 
