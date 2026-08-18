@@ -345,6 +345,82 @@ def _resolve_plan_from_diff(
     }
 
 
+def _resolve_plan_from_governing_slug(
+    worktree_root: Path, governing_plan_slug: str
+) -> Optional[Dict[str, Optional[str]]]:
+    """Resolve Plan/Plan-Id/Deliverable-Id from the CALLER-SUPPLIED governing
+    plan slug, reading `docs/plans/<governing_plan_slug>.md` directly from the
+    WORKING TREE (not the staged diff / index) rather than `git show :path`.
+
+    Purpose: an explicit `governing_plan_slug` names the workstream this
+    commit closes independently of what happens to be staged in the shared
+    index at commit time — the plan file itself is very often NOT part of
+    this commit's own diff at all (already landed in an earlier commit this
+    session, or not yet staged), so `_resolve_plan_from_diff`'s staged-diff
+    scan cannot see it. Reading straight off disk is safe here specifically
+    because the caller already told us which plan this is: nothing is being
+    guessed from shared, foreign-session state. Residual risk: the read is
+    a single working-tree snapshot with no retry, so a concurrent in-place
+    edit to THIS SAME plan file (a frontmatter stamp mid-write, by this
+    session or a collaborating one, on a shared tree) can land as a torn
+    read. `_parse_frontmatter` never raises — a torn read parses to `{}`
+    or a partial dict, same shape as a plan stub mid-enrichment — so it
+    fails closed into the "resolved, no usable ids, logged loudly, no
+    staged-diff fallback" branch below, never into stamping a transitional
+    id.
+
+    Fixes `2026-08-18-wsc-tail-commit-trailers-name-a-foreign-deliverable-
+    3f7ac1d20e94.yaml`: `_resolve_plan_from_diff`'s staged-diff scan
+    (correctly scoped to THIS commit's own paths) found zero plan files
+    in-scope and returned `None`, so `_handler` fell through Plan/Plan-Id/
+    Deliverable-Id entirely -- except `_staged_files` still degrades to a
+    whole-shared-index read whenever its `scope` normalizes to `None` (see
+    that function's own incident history), at which point the single
+    `docs/plans/*.md` a concurrent peer happened to have staged wins by
+    default, however foreign. `governing_plan_slug`, when supplied, is
+    authoritative over that guess and never subject to it.
+
+    Returns `None` ONLY when the plan file does not exist or is unreadable
+    (nothing to be authoritative WITH — `_handler` falls back to the
+    staged-diff scan in this case, unchanged).
+
+    Returns a dict (never `None`) whenever the plan file exists and was
+    read, EVEN WHEN neither `plan_id` nor `deliverable_id` resolves to a
+    valid id (a plan stub mid-enrichment, or a torn read) — `plan_id`/
+    `deliverable_id` may then both be `None`. This is deliberate: a
+    caller-named governing plan that resolves but carries no usable ids
+    must not let `_handler` silently fall through to the staged-diff
+    guess, which is exactly the foreign-peer-plan class this function
+    exists to stop. `_handler` logs this case loudly and does not emit
+    Plan-Id:/Deliverable-Id: from any other source.
+    """
+    slug = governing_plan_slug.strip()
+    if not slug:
+        return None
+
+    plan_rel_path = f"docs/plans/{slug}.md"
+    plan_file = worktree_root / "docs" / "plans" / f"{slug}.md"
+    try:
+        text = plan_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    fm = _parse_frontmatter(text)
+    plan_id = fm.get("plan_id")
+    deliverable_id = fm.get("deliverable_id")
+
+    if not (isinstance(plan_id, str) and plan_id.startswith("pln-")):
+        plan_id = None
+    if not (isinstance(deliverable_id, str) and deliverable_id.startswith("dlv-")):
+        deliverable_id = None
+
+    return {
+        "path": plan_rel_path,
+        "plan_id": plan_id,
+        "deliverable_id": deliverable_id,
+    }
+
+
 #: Matches a staged completion-entry path written by
 #: `coordinator_core.ops.coordinator_complete_entry._write_entry`
 #: (`archive/completed/<yyyy-mm>/<slug>.md`) — the workstream-complete /
@@ -551,6 +627,21 @@ def _handler(
         nature      (str|null) — EM-supplied Nature override. When non-null and a valid
                                  _NATURE_ENUM member, used verbatim. When null, Nature is
                                  derived from the COMMIT_EDITMSG subject prefix taxonomy.
+        governing_plan_slug (str|null) — caller-supplied plan slug this commit closes
+                                 against (`docs/plans/<slug>.md`). AUTHORITATIVE over the
+                                 staged-diff Plan/Plan-Id/Deliverable-Id scan whenever its
+                                 own plan file exists at all (see
+                                 `_resolve_plan_from_governing_slug`) — the staged-diff scan
+                                 degrades to a whole-shared-index read on some scope shapes
+                                 and a peer's unrelated staged plan can otherwise win by
+                                 default. A staged-diff match whose PATH or deliverable_id
+                                 DISAGREES with the resolved governing plan is logged loudly
+                                 (never silently preferred) and then discarded in favor of
+                                 the governing slug's own values. When the governing plan
+                                 file exists but carries no valid plan_id/deliverable_id
+                                 (a stub mid-enrichment, or a torn read), that is ALSO
+                                 logged loudly and the staged-diff result is discarded
+                                 rather than substituted — only Plan: (no ids) is emitted.
 
     Returns:
         {"trailers": "<newline-joined Key: value lines, or '' when nothing resolvable>"}
@@ -575,6 +666,7 @@ def _handler(
         [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else None
     )
     nature_override: Optional[str] = params.get("nature")
+    governing_plan_slug: str = str(params.get("governing_plan_slug") or "")
 
     trailers: List[str] = []
 
@@ -618,6 +710,50 @@ def _handler(
         worktree_root = main_worktree_root(repo_root)
 
         plan_info = _resolve_plan_from_diff(worktree_root, scope_paths)
+        governing_info = (
+            _resolve_plan_from_governing_slug(worktree_root, governing_plan_slug)
+            if governing_plan_slug
+            else None
+        )
+        if governing_info is not None:
+            if governing_info.get("plan_id") is None and governing_info.get("deliverable_id") is None:
+                # The governing plan file resolved but carries no valid pln-/dlv-
+                # id (a plan stub mid-enrichment, or a torn read). The staged-diff
+                # result must NOT be allowed to supply Plan/Plan-Id/Deliverable-Id
+                # here -- that is precisely the foreign-peer-plan class this
+                # fix exists to stop. See `_resolve_plan_from_governing_slug`'s
+                # own docstring for the incident this guards against.
+                logger.warning(
+                    "commit.anchors: governing_plan_slug %r resolved to %s but "
+                    "carries no valid plan_id/deliverable_id -- staged-diff "
+                    "result (if any) discarded rather than substituted",
+                    governing_plan_slug, governing_info.get("path"),
+                )
+            elif (
+                plan_info is not None
+                and (
+                    plan_info.get("path") != governing_info.get("path")
+                    or (
+                        plan_info.get("deliverable_id")
+                        and plan_info.get("deliverable_id") != governing_info.get("deliverable_id")
+                    )
+                )
+            ):
+                # Never silently prefer the staged-diff guess -- see
+                # `_resolve_plan_from_governing_slug`'s own docstring for the
+                # incident this disagreement guards against. Widened beyond a
+                # deliverable_id mismatch: a staged-diff match on a DIFFERENT
+                # plan path whose deliverable_id is null or coincidentally
+                # equal still disagrees and must still be logged.
+                logger.warning(
+                    "commit.anchors: staged-diff plan scan resolved %s "
+                    "(deliverable_id=%s), which DISAGREES with the supplied "
+                    "governing_plan_slug %r (path=%s, deliverable_id=%s) -- the "
+                    "governing slug wins, staged-diff result discarded",
+                    plan_info.get("path"), plan_info.get("deliverable_id"),
+                    governing_plan_slug, governing_info.get("path"), governing_info.get("deliverable_id"),
+                )
+            plan_info = governing_info
         if plan_info is not None:
             trailers.append(f"Plan: {plan_info['path']}")
             if plan_info["plan_id"]:

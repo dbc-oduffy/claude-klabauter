@@ -1242,6 +1242,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         caller_paths=set(paths),
         deliverable_id=deliverable_id_raw,
         stage_patch=stage_patch,
+        # state/bug-backlog/2026-08-18-scoped-git-commit-stamps-a-foreign-
+        # session-id-8d21f0c4e7b9.yaml: `owner_session_id` (above) is this
+        # request's own params-aware resolution -- an explicit
+        # `params["session_id"]` override, falling back to `session_core.
+        # resolve_session_id`, never the private `scoped-git-commit-<uuid4>`
+        # nonce this call's own `session_id=` arg carries (that nonce is
+        # UNREAD by `run_commit_pipeline`'s body -- see its own docstring).
+        # Threading it here makes it authoritative for the `Session-Id:`
+        # trailer too, closing the gap where the trailer was previously
+        # resolved a SECOND, independent time deep in `git_native.py` via a
+        # blind `os.environ` read that had no visibility into this
+        # request's own override.
+        attributed_session_id=owner_session_id,
     )
 
     response: Dict[str, Any] = {

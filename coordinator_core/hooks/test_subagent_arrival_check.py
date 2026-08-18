@@ -83,9 +83,23 @@ def _subagent_path(parent_transcript_path: Path, agent_id: str) -> Path:
 
 class TestPathDerivation:
     def test_derives_path_from_parent_transcript_and_agent_id(self) -> None:
+        """The expectation is built with `os.path.join`, not spelled out with
+        forward slashes.
+
+        `_derive_subagent_transcript_path` joins with `os.path.join`, which is
+        correct -- this is the one place the path SHAPE lives and callers open
+        what it returns, so on Windows it must return a Windows path. A literal
+        POSIX expectation asserted the platform, not the derivation, and failed
+        on every Windows run of a repo whose CLAUDE.md calls Windows
+        first-class.
+        """
+        import os
+
         from coordinator_core.hooks.subagent_arrival_check import _derive_subagent_transcript_path
         derived = _derive_subagent_transcript_path("/home/u/.claude/projects/p/abc123.jsonl", "agent-7")
-        assert derived == "/home/u/.claude/projects/p/abc123/subagents/agent-agent-7.jsonl"
+        assert derived == os.path.join(
+            "/home/u/.claude/projects/p", "abc123", "subagents", "agent-agent-7.jsonl"
+        )
 
 
 class TestArrived:

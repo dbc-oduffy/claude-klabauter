@@ -33,9 +33,12 @@ Covers:
     `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`'s own
     frozen-inventory-subset shape (see that module's G2 note).
 
-A fifth writer this chunk does not fix (out of scope, human-run migration
-tool, reported not silently swallowed — see the AC11 inventory below):
-`coordinator_core/ops/fleet/migrate_handoff_vocabulary.py::_plan_one`.
+  - AC1 closure for the fifth writer (DR-324 "fifth writer" open item):
+    `coordinator_core/ops/fleet/migrate_handoff_vocabulary.py::_plan_one`
+    (the human-run, PM-authorized DR-084 one-shot corpus-vocabulary
+    migrator) now discharges its own archival too — see the AC11 inventory
+    entry below and coordinator_core/ops/fleet/tests/
+    test_migrate_vocabulary_discharges_archival.py for the behavioral tests.
 """
 
 from __future__ import annotations
@@ -390,15 +393,22 @@ _KNOWN_CONTINUED_WRITER_SITES: Set[Tuple[str, str]] = {
     # time" shape the dispatch brief said was EXPECTED. `_plan_one` is
     # `migrate_handoff_vocabulary.py`'s per-record decision function for the
     # DR-084 one-shot corpus-vocabulary migrator (fleet.migrate_handoff_
-    # vocabulary op) — it writes deployment_state:continued directly, on a
-    # record that may currently be resident in EITHER state/handoffs/** or
-    # archive/handoffs/** (it walks both), with no archival step of its own.
-    # Reported, not fixed: coordinator_core/ops/fleet/
-    # migrate_handoff_vocabulary.py is outside C3's writes:, and it is a
-    # deliberately human-operator-run, one-shot migration tool (not the
-    # steady-state production write path AC1 concerns) — whether it needs
-    # the same discharge-or-refuse treatment is a PM/EM call, not resolved
-    # here.
+    # vocabulary op) — it still WRITES deployment_state:continued directly
+    # here (this scan attributes the field-write to `_plan_one`'s own
+    # `replace_fm_field` call, unchanged), but it no longer leaves the
+    # resulting record resident with no archival step. FIXED (DR-324 "fifth
+    # writer" open item): `apply_migration` marks every record `_plan_one`
+    # re-expresses as `continued` WHILE RESIDENT under state/handoffs/
+    # (`_continued_resident`; an already-archived predecessor this migrator
+    # also rewrites is excluded — nothing to move), then
+    # `_discharge_continued_archival` runs the SAME guard-then-archive-or-
+    # retain shape as writers 1/2 (`edge_kinds={"forked_from"}`,
+    # `_commit_retained_supersede_flip` on retain) in the SAME
+    # `apply_migration` call — batched into ONE `archive_and_commit` call
+    # for the whole guard-safe set, so a bulk migration pass does not open a
+    # per-record git-mv/commit storm. Covered by
+    # test_migrate_vocabulary_discharges_archival.py
+    # (coordinator_core/ops/fleet/tests/).
     ("coordinator_core/ops/fleet/migrate_handoff_vocabulary.py", "_plan_one"),
 }
 

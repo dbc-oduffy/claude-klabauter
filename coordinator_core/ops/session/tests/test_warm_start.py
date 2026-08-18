@@ -83,7 +83,15 @@ def test_enabled_and_not_debounced_spawns_exactly_once():
 
         assert mod.warm_start() is True
         assert len(spawned) == 1
-        assert spawned[0][1] == mod.SERVER_ENTRY_SCRIPT
+        # Read from `warm.client`, the canonical home, NOT from `mod` -- this
+        # module imports the constant lazily inside `warm_start` to break an
+        # import cycle that otherwise unregisters the op entirely (see
+        # tests/test_warm_start_import_cycle.py). Asserting across the seam
+        # also pins the two ends together, which `mod.SERVER_ENTRY_SCRIPT`
+        # never did.
+        from coordinator_core.warm.client import SERVER_ENTRY_SCRIPT
+
+        assert spawned[0][1] == SERVER_ENTRY_SCRIPT
     finally:
         mod.is_warm_enabled = orig_enabled
         mod.should_spawn = orig_should_spawn

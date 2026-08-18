@@ -1434,6 +1434,7 @@ def commit(
     deliverable_id: Optional[str] = None,
     stage_patch: Optional[Union[str, Path]] = None,
     suppress_post_commit_auto_push: bool = False,
+    attributed_session_id: Optional[str] = None,
 ) -> CommitOutcome:
     """Commit exactly `commit_paths`, via `git_native.commit_scoped()` (C3/C4).
 
@@ -1542,6 +1543,14 @@ def commit(
     using `1` here would silently launder either refusal back into that
     benign no-op the moment the caller's worktree happened to already match
     HEAD.
+
+    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- optional, passed
+    straight through to `git_native.commit_scoped()`'s own parameter of the
+    same name: the CALLER's own already-resolved committing-session
+    identity, authoritative for the `Session-Id:` trailer over a blind
+    env-var read. `None` (the default) leaves every existing caller's
+    behaviour unchanged.
     """
     root = Path(worktree_root)
     # Mint a per-commit token (W1) and append it as a `Commit-Token:` trailer
@@ -1652,6 +1661,7 @@ def commit(
             deliverable_id=deliverable_id,
             supplied_blobs=supplied_blobs,
             suppress_post_commit_auto_push=suppress_post_commit_auto_push,
+            attributed_session_id=attributed_session_id,
         )
         if not result.ok:
             # Deliberately NOT `_reason_from_git_result()` here (2026-08-03
@@ -2750,6 +2760,7 @@ def run_commit_pipeline(
     protected_branch_override_reason: Optional[str] = None,
     deliverable_id: Optional[str] = None,
     stage_patch: Optional[str] = None,
+    attributed_session_id: Optional[str] = None,
 ) -> PipelineResult:
     """Run the full stage -> gate -> commit -> [push] critical section.
 
@@ -2779,6 +2790,20 @@ def run_commit_pipeline(
     (and from there to `git_native.commit_scoped()`); `None` by default,
     unchanged behaviour for every existing caller. Not sourced or validated
     here -- the caller must already hold a provenance-bearing id.
+
+    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- optional, passed
+    straight through to `commit()` (and from there to `git_native.
+    commit_scoped()`'s own parameter of the same name): the CALLER's own
+    already-resolved committing-session identity, authoritative for the
+    `Session-Id:` trailer. Deliberately its OWN parameter, never folded into
+    the required `session_id` above -- that one is UNREAD across this
+    function's entire body (W3, docs/plans/2026-08-08-a-landed-commit-
+    reported-as-failed.md, item 4; `scoped_git_commit.py` still mints it as
+    a private per-invocation nonce for a reason unrelated to attribution --
+    see that call site's own comment) and repurposing a dead parameter here
+    is out of this fix's scope. `None` (the default) leaves every existing
+    caller's `Session-Id:` resolution unchanged.
 
     `stage_patch` (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md)
     -- optional path to a patch file, passed straight through to `commit()`.
@@ -3221,6 +3246,7 @@ def run_commit_pipeline(
             common_dir=common_dir,
             deliverable_id=deliverable_id,
             stage_patch=stage_patch,
+            attributed_session_id=attributed_session_id,
             suppress_post_commit_auto_push=(push_mode == PUSH_MODE_SYNC),
         )
         if commit_outcome.exit_code != 0:

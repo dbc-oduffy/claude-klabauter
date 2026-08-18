@@ -57,9 +57,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from functools import lru_cache
+
 from coordinator_core import session_attribution
 from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.ipc import get_op_handler
+from coordinator_core.ops.session_commits import (
+    resolve_session_commits as _resolve_session_commits_primitive,
+)
 from coordinator_core.ops.ceremony.resolver import (
     detect_git_provenance_consumed,
     find_all_consumed_handoffs as _find_all_consumed_handoffs,
@@ -477,26 +482,72 @@ def _grep_disposition(worktree_root: Path, sid: str) -> tuple[str, list[str], li
 # ---------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=128)
+def _cached_session_commits(
+    worktree_root_str: str, sid: str
+) -> Optional[tuple]:
+    """Memoized wrapper over C4's ``session.commits`` primitive
+    (``ops.session_commits :: resolve_session_commits``) — the ONE
+    ``git log --numstat`` invocation ``_session_commit_log``,
+    ``_session_touched_paths``, ``session_commit_count_attributed`` and
+    ``_session_diff_loc`` now share, in place of four separate full-history
+    ``--grep`` walks over the identical commit set (Finding 1). Cached per
+    ``(worktree_root, sid)`` for the lifetime of this cold-spawn process only
+    — every invocation of this engine is a cold spawn (repo's own
+    ``machine-load-norm`` doctrine), so there is no cross-invocation
+    staleness to guard against.
+
+    Returns ``None`` on any primitive failure (never raises) — distinct from
+    ``()`` (a genuine zero-commit session), so callers preserve C4's own
+    computed/degraded distinction rather than collapsing a git failure into
+    a false zero. Callers below own translating ``None`` into their own
+    existing degraded/graceful-empty contract.
+
+    Anchoring: this primitive resolves the anchored/unanchored split C4's
+    module docstring documents (``^Session-Id: <sid>``, unanchored at the
+    end) — same form ``_session_commit_log`` / ``_session_touched_paths`` /
+    ``session_commit_count_attributed`` / ``_session_diff_loc`` already used
+    before C5, so migrating onto it changes zero observable matches for
+    those four sites.
+
+    Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5.
+    """
+    try:
+        return tuple(_resolve_session_commits_primitive(Path(worktree_root_str), sid))
+    except (ValueError, RuntimeError) as exc:
+        log.warning(
+            "branch_resolution: session.commits primitive failed for sid=%s: %s",
+            sid, exc,
+        )
+        return None
+
+
 def _session_commit_log(worktree_root: Path, sid: str) -> list[str]:
-    """Return one-line commit messages for commits tagged with Session-Id: sid."""
-    result = _git_run(
-        ["log", "--oneline", f"--grep=Session-Id: {sid}", "--format=%s"],
-        cwd=worktree_root,
-    )
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    """Return one-line commit messages for commits tagged with Session-Id: sid,
+    most-recent-first (matches this function's pre-C5 ``git log`` default
+    order; C4's primitive returns oldest-first via ``--reverse``, so the
+    result is reversed here).
+
+    C5: derived from C4's ``session.commits`` primitive — see
+    ``_cached_session_commits``.
+    """
+    commits = _cached_session_commits(str(worktree_root), sid) or ()
+    return [c["subject"] for c in reversed(commits)]
 
 
 def _session_touched_paths(worktree_root: Path, sid: str) -> list[str]:
-    """Return file paths touched by commits tagged with Session-Id: sid."""
-    result = _git_run(
-        ["log", "--name-only", "--format=", f"--grep=Session-Id: {sid}"],
-        cwd=worktree_root,
-    )
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    """Return file paths touched by commits tagged with Session-Id: sid,
+    most-recent-commit-first (matches this function's pre-C5 ``git log
+    --name-only`` default order); per-commit path order preserved.
+
+    C5: derived from C4's ``session.commits`` primitive — see
+    ``_cached_session_commits``.
+    """
+    commits = _cached_session_commits(str(worktree_root), sid) or ()
+    paths: list[str] = []
+    for c in reversed(commits):
+        paths.extend(c["touched_paths"])
+    return paths
 
 
 def _session_added_plans(
@@ -515,6 +566,15 @@ def _session_added_plans(
     so session-attributed and temporally-bounded adds are the signal.
 
     git pathspec note: ``docs/plans/*.md`` — git * crosses /; harmless (flat dir).
+
+    C5 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5) deliberately
+    does NOT migrate this site onto C4's ``session.commits`` primitive: C4's
+    shape is a per-commit numstat/subject walk with no ``--diff-filter=A``
+    equivalent, so it cannot answer "which plan docs were ADDED (not merely
+    touched) since started_at" — the question this function asks. Its
+    ``--grep=Session-Id: {sid}`` anchoring already matches C4's chosen
+    unanchored form, so the two sites are anchor-consistent even though they
+    remain two separate git invocations.
 
     Spec backlink:
       docs/plans/2026-07-06-wsc-resolve-consume-doe-signals-x-to-d.md § C1
@@ -572,48 +632,43 @@ def session_commit_count_attributed(worktree_root: Path, sid: str) -> dict:
     commits" from "commits, untagged" — a caller serving this fact declares that limit
     as part of the served fact rather than silently inheriting it.
 
-    `_session_diff_loc` (below) has the identical fail-open shape and is deliberately
-    NOT converted by this change — named-and-deferred, not lifted onto any fact this
-    plan serves.
+    `_session_diff_loc` (below) shares C4's primitive too (C5) — both are now
+    derived from the SAME cached ``session.commits`` call as
+    ``_session_commit_log`` / ``_session_touched_paths``, so the four sites
+    collapse onto one ``git log --numstat`` invocation, not four separate
+    walks.
+
+    C5: derived from C4's ``session.commits`` primitive — see
+    ``_cached_session_commits``. The computed/degraded distinction is
+    preserved: a primitive failure (``_cached_session_commits`` returning
+    ``None``) reports ``degraded: True`` here, never collapsed into
+    ``value: 0``.
     """
-    result = _git_run(
-        ["log", "--oneline", f"--grep=Session-Id: {sid}"],
-        cwd=worktree_root,
-    )
-    if result.returncode != 0:
+    commits = _cached_session_commits(str(worktree_root), sid)
+    if commits is None:
         return {
             "degraded": True,
             "evidence": (
-                f"git log --grep=Session-Id: {sid} failed: returncode="
-                f"{result.returncode!r} stderr={result.stderr.strip()!r}"
+                f"session.commits primitive failed for sid={sid!r} "
+                "(see log for underlying git error)"
             ),
         }
-    # Review: code-reviewer F12 — renamed l → line (PEP 8 E741: l is visually ambiguous)
-    count = len([line for line in result.stdout.splitlines() if line.strip()])
-    return {"degraded": False, "value": count}
+    return {"degraded": False, "value": len(commits)}
 
 
 def _session_diff_loc(worktree_root: Path, sid: str) -> int:
     """Approximate total lines-of-change for commits tagged with Session-Id: sid.
 
-    Uses git log --stat; sums insertions + deletions from summary lines.
-    Returns 0 on any failure (graceful-absent).
+    C5: derived from C4's ``session.commits`` primitive's per-commit
+    ``added``/``deleted`` numstat totals (see ``_cached_session_commits``),
+    in place of its own ``git log --stat`` walk. Binary rows are excluded
+    from both the old ``--stat``-summary form and the new ``--numstat``-
+    derived form (git's own ``--stat`` summary line never counts binary
+    changes either), so this migration changes no observable total. Returns
+    0 on any primitive failure (graceful-absent, unchanged contract).
     """
-    result = _git_run(
-        ["log", "--stat", "--format=", f"--grep=Session-Id: {sid}"],
-        cwd=worktree_root,
-    )
-    if result.returncode != 0:
-        return 0
-    total = 0
-    for line in result.stdout.splitlines():
-        # Summary lines look like: "2 files changed, 47 insertions(+), 12 deletions(-)"
-        if "changed" in line:
-            # Review: code-reviewer F3 — import re hoisted to module level
-            insertions = sum(int(m) for m in re.findall(r"(\d+) insertion", line))
-            deletions = sum(int(m) for m in re.findall(r"(\d+) deletion", line))
-            total += insertions + deletions
-    return total
+    commits = _cached_session_commits(str(worktree_root), sid) or ()
+    return sum(c["added"] + c["deleted"] for c in commits)
 
 
 def _session_surface_count(paths: list[str]) -> int:

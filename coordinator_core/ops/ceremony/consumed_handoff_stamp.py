@@ -1129,8 +1129,19 @@ def _commit_and_push_follow_up(
         # stages internally on the AGREE branch and never re-derives staged
         # content from the worktree on the DIVERGED branch, closing the same
         # 506748a0 hazard the main ceremony commit is already routed around.
+        # opro-01 C-01 (review finding, s1): this flow is the same
+        # commit-then-own-sync-push shape `run_commit_pipeline` has, so it had
+        # the same two-publisher race -- the post-commit hook detaches and
+        # pushes while this call's own `push_with_retry` below races it. Tied
+        # to `push_mode` for the same reason as the pipeline: on
+        # `deferred`/`none` this call does NOT push (the guard below returns
+        # early), so the hook's push is the only one and suppressing it would
+        # strand the commit.
         commit_result = git_native.commit_scoped(
-            stamped_paths, msg_path, worktree_root
+            stamped_paths,
+            msg_path,
+            worktree_root,
+            suppress_post_commit_auto_push=(push_mode == PUSH_MODE_SYNC),
         )
     finally:
         try:

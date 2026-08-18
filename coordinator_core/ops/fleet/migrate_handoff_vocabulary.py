@@ -748,6 +748,22 @@ def _plan_one(
     dropped_comments: List[str] = []
     closed_unverified = False
     is_repair = deployment_raw in _DEPLOYMENT_STATE_REPAIRABLE
+    is_continued = False
+
+    # AC1 (docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md,
+    # DR-324 "fifth writer" open item): a record this pass stamps
+    # deployment_state:continued must never be left resident in
+    # state/handoffs/ with no archival discharge. `is_resident` is read here
+    # (cheap containment check, no I/O) so the caller (`apply_migration`) can
+    # single out exactly the records needing that discharge — an
+    # already-archived record (this migrator also rewrites
+    # archive/handoffs/**, see module docstring) has nothing left to move and
+    # is deliberately excluded from that set.
+    try:
+        path.resolve().relative_to(state_dir.resolve())
+        is_resident = True
+    except ValueError:
+        is_resident = False
 
     if status_raw in _STATUS_OLD_TO_NEW:
         new_status = _STATUS_OLD_TO_NEW[status_raw]
@@ -803,6 +819,7 @@ def _plan_one(
         if dropped:
             dropped_comments.append(f"deployment_state: {dropped}")
         if successor is not None:
+            is_continued = True
             continued_into = _successor_ref(successor, repo_root)
             fm_text = replace_fm_field(fm_text, "deployment_state", "continued")
             fm_text = insert_fm_field(fm_text, "continued_into", continued_into, "deployment_state")
@@ -860,6 +877,10 @@ def _plan_one(
         "repair": is_repair,
         "closed_unverified": closed_unverified,
         "_rebuilt": rebuilt,
+        # AC1 discharge target set — see the `is_continued`/`is_resident`
+        # comment above. Internal (not in `_public_record`'s allowlist);
+        # `apply_migration` reads it to single out the archival-discharge pass.
+        "_continued_resident": is_continued and is_resident,
     }
 
 
@@ -915,13 +936,163 @@ def plan_migration(repo_root: str) -> Dict[str, Any]:
     }
 
 
-def apply_migration(plan: Dict[str, Any]) -> None:
-    """Write every planned record's rebuilt text. Never called for a record with
-    zero planned changes (``plan_migration`` excludes those) or for a failure
-    (``failures`` entries carry no ``_rebuilt`` payload to write)."""
+def _discharge_continued_archival(
+    plan: Dict[str, Any], repo_root: Path, worktree: Path
+) -> Dict[str, List[str]]:
+    """AC1 discharge (docs/plans/2026-08-18-supersede-stamps-and-archives-
+    atomically.md, DR-324's "fifth writer" open item): for every record
+    ``apply_migration`` just wrote ``deployment_state: continued`` onto WHILE
+    RESIDENT under ``state/handoffs/`` (``rec["_continued_resident"]``, see
+    ``_plan_one``), either archive it this same call or commit the flip in
+    place — never leave it loose on disk. Called from ``apply_migration``
+    AFTER every record's frontmatter is on disk, so this function's own
+    live-children guard call and archival/retain-commit see this pass's own
+    fresh writes (mirrors ``handoff_transition._supersede``'s "guard runs
+    after the write, in the same call" ordering).
+
+    Mechanism reused verbatim from writer 1
+    (``handoff_archive_transition``, mode="supersede") and writer 2
+    (``handoff_transition._supersede``) — no fifth spelling of the guard or
+    the archival call:
+      - ``handoff_children._handoff_has_live_children`` with
+        ``edge_kinds={"forked_from"}`` (DR-324's narrow succession-child
+        exemption — a live succession child, the successor this record was
+        just pointed at, never itself retains the predecessor; a live
+        `forked_from` spinoff still does).
+      - Guard-safe (exit_code==1) records are BATCHED into ONE
+        ``archive_and_commit`` call for the whole guard-safe set — this is
+        the batching that keeps a bulk migration pass off the amplification
+        gate for the archival git-mv/commit sequence (one commit for N
+        moves, not N).  ``restage_src=True`` on every Move: this function's
+        own caller just wrote each record's content directly to disk
+        (``apply_migration``'s plain ``open().write()``, not a git-visible
+        state), so the private index's HEAD-seeded blob for `src` is stale
+        without it — same "op-authored pre-move content" shape
+        ``handoff_transition._supersede`` documents for its own single-record
+        call.
+      - Guard-retain records are committed IN PLACE via
+        ``handoff_archive_transition._commit_retained_supersede_flip`` — one
+        commit per retained record, UNBATCHED. This is the one piece of this
+        discharge that is NOT batched into a single call: unlike the
+        archival git-mv (a homogeneous rename+commit `archive_and_commit`
+        already batches), a retained in-place commit has no multi-path
+        primitive in this codebase that does not reopen the FORWARD-B hazard
+        (`ceremony/scoped_git_commit.py`'s multi-path form reads WORKTREE
+        content for its pathspec, exactly the hazard
+        ``_commit_retained_supersede_flip``'s own docstring rejects it for;
+        ``commit_authored_content`` is explicitly single-path, DR-272 § 3.3
+        bound 1). Measured, not assumed, before accepting this: this op is a
+        one-shot, human/PM-authorized migration pass (module docstring),
+        never a per-request hot path, and its retain-branch only fires for a
+        record BOTH re-expressing old vocabulary AND naming a live
+        `forked_from` child — a narrow intersection empirically empty on
+        every corpus this op has run against to date (module docstring's
+        "zero abandoned/superseded records remain" on claude-klabauter's own tree).
+        The guard-safe batch above absorbs the common case; only this rare
+        residual is unbatched, and it is reported via `retained` below so a
+        receiving EM can see the count rather than infer it.
+
+    Returns ``{"archived": [path...], "retained": [path...]}`` (repo-relative
+    paths, report-only — additive keys on the handler's response, never a
+    replacement for `records`/`failures`/etc).
+
+    P9 WORKTREE DERIVATION: `repo_root` is the git COMMON dir (`<worktree>/.git`)
+    — `_handoff_has_live_children` (like every other op in this family) derives
+    the worktree from it internally via `main_worktree_root`. `worktree` is
+    passed separately (already derived by this function's own caller) for the
+    archival/commit calls, which take the worktree root directly.
+    """
+    from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
+    from coordinator_core.ops.handoff_archive_transition import _commit_retained_supersede_flip
+    from coordinator_core.ops.handoff_children import _handoff_has_live_children
+    from coordinator_core.wire_paths import rel_id as _wire_rel_id
+
+    targets = [rec for rec in plan["records"] if rec.get("_continued_resident")]
+    archived: List[str] = []
+    retained: List[str] = []
+    warnings: List[str] = []
+    if not targets:
+        return {"archived": archived, "retained": retained, "warnings": warnings}
+
+    to_move: List[Move] = []
+    move_recs: List[Dict[str, Any]] = []
+    for rec in targets:
+        path = Path(rec["_abs_path"])
+        guard = asyncio.run(_handoff_has_live_children(
+            {"candidate": str(path), "edge_kinds": {"forked_from"}}, repo_root
+        ))
+        rel = _wire_rel_id(path, worktree)
+        if guard.get("exit_code") == 1:
+            dest = handoff_archive_dest(worktree, path)
+            to_move.append(Move(src=path, dst=dest, candidate_id=rel, restage_src=True))
+            move_recs.append(rec)
+        else:
+            _commit_retained_supersede_flip(worktree, rel, rec["_rebuilt"], warnings)
+            retained.append(rec["path"])
+
+    if to_move:
+        subject = (
+            "fleet.migrate_handoff_vocabulary: archive continued record(s)\n\n"
+            "AC1 discharge — DR-084 vocabulary migration re-expressed these as "
+            "deployment_state:continued; archived in the same operation per "
+            "docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md."
+        )
+        acted, failed = asyncio.run(archive_and_commit(worktree, to_move, subject))
+        acted_ids = {item["id"] for item in acted}
+        failed_by_id = {item["id"]: item.get("reason") for item in failed}
+        for rec, mv in zip(move_recs, to_move):
+            if mv.candidate_id in acted_ids:
+                archived.append(rec["path"])
+            else:
+                reason = failed_by_id.get(mv.candidate_id) or "git mv failed, no reason reported"
+                warnings.append(f"not archived: {rec['path']}: {reason}")
+
+    return {"archived": archived, "retained": retained, "warnings": warnings}
+
+
+def apply_migration(
+    plan: Dict[str, Any], *, repo_root: Optional[Path] = None
+) -> Dict[str, List[str]]:
+    """Write every planned record's rebuilt text, then discharge AC1 for every
+    ``continued``-resident record (see ``_discharge_continued_archival``).
+    Never called for a record with zero planned changes (``plan_migration``
+    excludes those) or for a failure (``failures`` entries carry no
+    ``_rebuilt`` payload to write).
+
+    ``repo_root`` (the git COMMON dir — see `_discharge_continued_archival`'s
+    P9 note) is optional ONLY for a caller that has no archival concern (e.g.
+    a test exercising the plain vocabulary rewrite in isolation) — every real
+    caller (the CLI, the registered op) supplies it. Omitting it skips the
+    AC1 discharge pass entirely rather than guessing a worktree root; the
+    returned report is ``{"archived": [], "retained": [], "warnings": []}`` in
+    that case.
+    """
+    undischarged = [
+        rec["path"] for rec in plan["records"] if rec.get("_continued_resident")
+    ]
+    if repo_root is None and undischarged:
+        # AC1 is "one operation, or the writer REFUSES" — and the refusal has to
+        # land BEFORE any byte is written. Refusing after the write loop would
+        # leave exactly the stamped-but-unarchived resident record this plan
+        # exists to eliminate, with an exception on top. A plan with nothing
+        # resident to discharge needs no git at all, which preserves this CLI's
+        # "runs against an arbitrary directory tree" contract.
+        raise ValueError(
+            "apply_migration: refusing to write "
+            f"{len(undischarged)} record(s) stamped deployment_state:continued while "
+            "resident under state/handoffs/ without a repo_root to discharge their "
+            "archival against — pass repo_root (the git common dir). "
+            f"Records: {sorted(undischarged)}"
+        )
+
     for rec in plan["records"]:
         with open(rec["_abs_path"], "w", encoding="utf-8", newline="") as fh:
             fh.write(rec["_rebuilt"])
+
+    if repo_root is None:
+        return {"archived": [], "retained": [], "warnings": []}
+    worktree = main_worktree_root(repo_root)
+    return _discharge_continued_archival(plan, repo_root, worktree)
 
 
 def _public_record(rec: Dict[str, Any]) -> Dict[str, Any]:
@@ -1011,7 +1182,36 @@ def main(argv: List[str]) -> int:
     plan = plan_migration(root)
     _print_report(plan, apply=apply)
     if apply:
-        apply_migration(plan)
+        # Only resolve a git common dir when the plan actually needs the AC1
+        # discharge pass — this CLI also runs against a plain (non-git)
+        # directory tree (this op's own contract: repo_root is an arbitrary
+        # tree, not necessarily a git worktree), and a plan with zero
+        # continued-resident records has nothing for `apply_migration`'s
+        # discharge pass to do, so it must not fail loud just because
+        # `--root` happens not to be a git repo.
+        needs_discharge = any(
+            rec.get("_continued_resident") for rec in plan["records"]
+        )
+        discharge_repo_root: Optional[Path] = None
+        if needs_discharge:
+            from coordinator_core.lifecycle import git_common_dir
+
+            try:
+                discharge_repo_root = git_common_dir(Path(root).resolve())
+            except RuntimeError as exc:
+                sys.stderr.write(
+                    "WARN: AC1 archival discharge skipped — --root does not "
+                    f"resolve to a git repository ({exc}); continued-resident "
+                    "record(s) were written but NOT archived/committed\n"
+                )
+        archival = apply_migration(plan, repo_root=discharge_repo_root)
+        if archival["archived"] or archival["retained"]:
+            sys.stdout.write(
+                f"\nAC1 discharge: {len(archival['archived'])} record(s) archived, "
+                f"{len(archival['retained'])} retained (flip committed in place).\n"
+            )
+        for w in archival["warnings"]:
+            sys.stderr.write(f"WARN {w}\n")
     return 1 if plan["failures"] else 0
 
 
@@ -1027,12 +1227,20 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         response {"exit_code": 0|1, "applied": bool, "records": [{path,
                    changes[], collisions[], dropped_comments[], repair,
                    closed_unverified}], "failures": [{path, reason}],
-                   "repairs": [path], "closed_unverified": [path]}
+                   "repairs": [path], "closed_unverified": [path],
+                   "archived": [path], "retained": [path],
+                   "archival_warnings": [str]}
         exit_code 1 iff failures is non-empty, independent of apply.
         closed_unverified: paths closed+stale on a working-tree-walk negative
             result only — see plan_migration's docstring; not a positive
             death claim (a successor deleted without archival is invisible
             to this walk and survives only as a git blob).
+        archived/retained/archival_warnings (additive; empty when apply is
+            false): AC1 discharge report for every record this call stamped
+            deployment_state:continued while resident under state/handoffs/
+            — see _discharge_continued_archival. archived: git-mv'd into
+            archive/handoffs/YYYY-MM/ (one batched commit). retained: a live
+            forked_from child kept it resident, flip committed in place.
 
     repo_root (handler arg) is the engine-supplied git common dir
     (_OP_KEY_SCOPE="common_dir", registered in op_scopes.py) — the main worktree
@@ -1058,8 +1266,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree = main_worktree_root(common_dir)
     plan = await asyncio.to_thread(plan_migration, str(worktree))
+    archival: Dict[str, List[str]] = {"archived": [], "retained": [], "warnings": []}
     if apply:
-        await asyncio.to_thread(apply_migration, plan)
+        archival = await asyncio.to_thread(apply_migration, plan, repo_root=common_dir)
 
     return {
         "exit_code": 1 if plan["failures"] else 0,
@@ -1068,6 +1277,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "failures": plan["failures"],
         "repairs": plan["repairs"],
         "closed_unverified": plan["closed_unverified"],
+        # AC1 discharge report (additive keys — see _discharge_continued_archival).
+        "archived": archival["archived"],
+        "retained": archival["retained"],
+        "archival_warnings": archival["warnings"],
     }
 
 

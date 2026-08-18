@@ -929,3 +929,61 @@ def test_env_var_tiers_win_regardless_of_sentinel(tmp_path, monkeypatch):
 
     joined = " ".join(args)
     assert f"Session-Id: {_SID}" in joined
+
+
+# ---------------------------------------------------------------------------
+# `session_id_override` -- state/bug-backlog/2026-08-18-scoped-git-commit-
+# stamps-a-foreign-session-id-8d21f0c4e7b9.yaml. The caller's own
+# already-resolved committing-session identity must win over the blind
+# `$CLAUDE_SESSION_ID`/`$CLAUDE_CODE_SESSION_ID` env read -- the two can
+# legitimately disagree on a shared, many-concurrent-session process
+# (`scoped_git_commit.py::_resolve_committing_session_id` honors an
+# explicit `params["session_id"]` override this module's blind env read has
+# no way to see).
+# ---------------------------------------------------------------------------
+
+_OTHER_LIVE_SID = "e77424be-b452-43bd-a995-e12d60168cb6"
+
+
+def test_session_id_override_wins_over_ambient_env(tmp_path, monkeypatch):
+    """The invoking session's OWN resolved id, passed explicitly, must be
+    stamped -- never the ambient env value a concurrently-live peer session
+    happens to have set in this process."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _OTHER_LIVE_SID)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, session_id_override=_SID)
+
+    joined = " ".join(args)
+    assert f"Session-Id: {_SID}" in joined
+    assert _OTHER_LIVE_SID not in joined
+
+
+def test_session_id_override_falls_back_to_env_when_not_uuid_shaped(tmp_path, monkeypatch):
+    """A garbage/non-UUID override is treated as no override at all --
+    same fail-safe direction the blind env read already applies to itself,
+    never silently stamped."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, session_id_override="scoped-git-commit-not-a-real-session"
+    )
+
+    joined = " ".join(args)
+    assert f"Session-Id: {_SID}" in joined
+
+
+def test_session_id_override_none_reproduces_prior_behaviour(tmp_path, monkeypatch):
+    """`session_id_override=None` (the default) must be byte-identical to
+    every pre-existing caller's resolution -- the blind env read."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert f"Session-Id: {_SID}" in joined

@@ -331,6 +331,149 @@ class TestStagedDiffPlanExtraction:
         )
         assert "Deliverable-Id" in trailers
 
+    _GOVERNING_PLAN_FRONTMATTER = textwrap.dedent("""\
+        ---
+        title: "Governing Plan"
+        created: 2026-08-18
+        author: test
+        status: approved
+        plan_id: "pln-governing-plan-real"
+        deliverable_id: "dlv-governing-real"
+        ---
+
+        # Governing Plan
+        """)
+
+    def test_governing_plan_slug_wins_over_foreign_staged_plan(self, tmp_repo) -> None:
+        """A supplied `governing_plan_slug` is authoritative over the staged-diff
+        scan, even when a PEER's unrelated plan is the only `docs/plans/*.md`
+        staged in the (shared) index.
+
+        Regression: 2026-08-18-wsc-tail-commit-trailers-name-a-foreign-
+        deliverable-3f7ac1d20e94.yaml — a wsc-tail commit invoked with
+        `--governing-plan-slug 2026-08-18-sat-07-tier-a-wiring` landed
+        `Deliverable-Id: dlv-fl-core-03` (a concurrent peer's plan) instead of
+        `dlv-sat-07`, because the staged-diff scan found the peer's plan as the
+        sole `docs/plans/*.md` candidate and nothing cross-checked it against
+        the explicitly supplied slug. This pins the fix: the governing slug's
+        own plan file (read straight off disk, not the staged diff) wins.
+        """
+        from coordinator_core.ops.commit_anchors import _handler
+
+        plan_dir = tmp_repo / "docs" / "plans"
+        plan_dir.mkdir(parents=True)
+
+        # The peer's plan -- present in the shared index (staged), unrelated
+        # to this commit, and NOT the governing plan.
+        peer_plan = plan_dir / "2026-08-18-peer-plan.md"
+        peer_plan.write_text(self._PLAN_FRONTMATTER)
+        _git(["add", str(peer_plan)], tmp_repo)
+
+        # The governing plan -- on disk (this session's own workstream), but
+        # NOT staged as part of this commit's own diff at all.
+        governing_slug = "2026-08-18-sat-07-tier-a-wiring"
+        governing_plan = plan_dir / f"{governing_slug}.md"
+        governing_plan.write_text(self._GOVERNING_PLAN_FRONTMATTER)
+
+        common = _common_dir(tmp_repo)
+        result = _run(_handler(
+            {
+                "session_id": "",
+                "nature": None,
+                "governing_plan_slug": governing_slug,
+                # No "paths" scope -- reproduces the whole-shared-index read
+                # that let the peer's plan win before this fix.
+            },
+            repo_root=common,
+        ))
+        trailers = _parse_trailers(result["trailers"])
+
+        assert trailers.get("Plan") == f"docs/plans/{governing_slug}.md"
+        assert trailers.get("Plan-Id") == "pln-governing-plan-real"
+        assert trailers.get("Deliverable-Id") == "dlv-governing-real"
+
+    _GOVERNING_PLAN_NO_IDS_FRONTMATTER = textwrap.dedent("""\
+        ---
+        title: "Governing Plan Stub"
+        created: 2026-08-18
+        author: test
+        status: draft
+        ---
+
+        # Governing Plan Stub (mid-enrichment, no ids yet)
+        """)
+
+    def test_governing_plan_slug_resolves_but_no_valid_ids_blocks_foreign_fallback(
+        self, tmp_repo
+    ) -> None:
+        """Regression (finding 1, trailer-fix-review.md): the governing plan
+        file EXISTS but carries neither a valid `pln-` plan_id nor `dlv-`
+        deliverable_id (e.g. a plan stub mid-enrichment). A conflicting plan
+        is visible to the staged-diff scan. The staged-diff result must NOT
+        win by default -- that is exactly the foreign-peer-plan class this
+        fix exists to stop. No foreign Plan/Plan-Id/Deliverable-Id trailer
+        is emitted; at most `Plan:` (the governing path, no ids) is."""
+        from coordinator_core.ops.commit_anchors import _handler
+
+        plan_dir = tmp_repo / "docs" / "plans"
+        plan_dir.mkdir(parents=True)
+
+        # A conflicting plan, staged and visible to the staged-diff scan --
+        # NOT the governing plan.
+        conflicting_plan = plan_dir / "2026-08-18-conflicting-plan.md"
+        conflicting_plan.write_text(self._PLAN_FRONTMATTER)
+        _git(["add", str(conflicting_plan)], tmp_repo)
+
+        # The governing plan -- exists on disk, but frontmatter carries no
+        # valid ids yet (mid-enrichment stub).
+        governing_slug = "2026-08-18-governing-plan-stub"
+        governing_plan = plan_dir / f"{governing_slug}.md"
+        governing_plan.write_text(self._GOVERNING_PLAN_NO_IDS_FRONTMATTER)
+
+        common = _common_dir(tmp_repo)
+        result = _run(_handler(
+            {
+                "session_id": "",
+                "nature": None,
+                "governing_plan_slug": governing_slug,
+            },
+            repo_root=common,
+        ))
+        trailers = _parse_trailers(result["trailers"])
+
+        assert trailers.get("Plan") != "docs/plans/2026-08-18-conflicting-plan.md"
+        assert trailers.get("Plan-Id") != "pln-test-plan-abc123"
+        assert trailers.get("Deliverable-Id") != "dlv-test-plan-abc456"
+        assert "Plan-Id" not in trailers
+        assert "Deliverable-Id" not in trailers
+
+    def test_governing_plan_slug_unresolvable_falls_back_to_staged_diff(self, tmp_repo) -> None:
+        """`governing_plan_slug` naming a plan file that does not exist on disk
+        (nothing to be authoritative WITH) falls back to the existing
+        staged-diff scan rather than omitting Plan/Plan-Id/Deliverable-Id
+        outright."""
+        from coordinator_core.ops.commit_anchors import _handler
+
+        plan_dir = tmp_repo / "docs" / "plans"
+        plan_dir.mkdir(parents=True)
+        plan_file = plan_dir / "2026-07-04-test-plan.md"
+        plan_file.write_text(self._PLAN_FRONTMATTER)
+        _git(["add", str(plan_file)], tmp_repo)
+
+        common = _common_dir(tmp_repo)
+        result = _run(_handler(
+            {
+                "session_id": "",
+                "nature": None,
+                "governing_plan_slug": "2026-08-18-does-not-exist",
+            },
+            repo_root=common,
+        ))
+        trailers = _parse_trailers(result["trailers"])
+
+        assert trailers.get("Plan") == "docs/plans/2026-07-04-test-plan.md"
+        assert trailers.get("Deliverable-Id") == "dlv-test-plan-abc456"
+
     def test_staged_plan_without_deliverable_omits_deliverable_key(self, tmp_repo) -> None:
         """Plan file with no deliverable_id → Plan and Plan-Id emitted, Deliverable-Id omitted."""
         plan_dir = tmp_repo / "docs" / "plans"

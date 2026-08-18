@@ -746,6 +746,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # caller's own git history, not an explicit caller-supplied repo path.
     # Spec: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C4
     "session.commits":                       "common_dir",
+    # session_baton.mint / session_baton.promote -- "none", mirroring
+    # session.record_pickup: both take an explicit session_id and resolve
+    # their own store path under the git common dir themselves rather than
+    # reading a caller-supplied repo. Spec:
+    # docs/plans/2026-08-18-a-session-always-has-a-baton.md C2/C3.
+    "session_baton.mint":                    "none",
+    "session_baton.promote":                 "none",
     "session.reap":                          "common_dir",
     "session.boot_sweep":                    "common_dir",
     # session.sweep_consumed_handoffs — same scope as session.boot_sweep, and for the same

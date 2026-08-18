@@ -832,6 +832,8 @@ def compute_missing_trailer_args(
     commit_msg_file: Union[str, Path],
     cwd: Union[str, Path],
     paths: Optional[Sequence[str]] = None,
+    *,
+    session_id_override: Optional[str] = None,
 ) -> List[str]:
     """Compute the `git interpret-trailers --trailer ...` argument list for
     whichever of Session-Id / Deliverable-Id are resolvable AND not already
@@ -873,9 +875,35 @@ def compute_missing_trailer_args(
     behind those checks would silence it on precisely the commits that
     need it. See `_compute_absorbed_from_trailer_args`'s own docstring for
     the derivation and its own independent exception containment.
+
+    `session_id_override` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml): the invoking session's
+    OWN already-resolved identity, when a caller has one, takes precedence
+    over the blind `_resolve_session_id(git_dir)` env-var read below --
+    same authority `deliverable_id`/`--governing-plan-slug` already hold
+    over their own session-keyed tiers (see `commit_anchors.py::
+    _resolve_plan_from_governing_slug`, same disease and cure). Every
+    production caller of this module reaches git through a shared-tree,
+    many-concurrent-session Python process (this repo's own load norm):
+    `os.environ` inside that process is not guaranteed to still equal the
+    identity a caller resolved earlier in the SAME request via its own
+    params-aware ladder (e.g. `scoped_git_commit.py::_resolve_committing_
+    session_id`, which honors an explicit `params["session_id"]` override
+    the blind env read has no way to see) -- stamping whichever the two
+    disagree on is exactly the "foreign Session-Id" defect filed above.
+    `None` (the default) reproduces the prior behaviour byte-for-byte for
+    every caller not yet updated to pass one. A non-`None`, non-UUID-shaped
+    override is treated as "no override" and falls through to the blind
+    read, same fail-safe direction the UUID check below already applies to
+    that read -- a caller-supplied override is not exempt from the
+    invariant that a non-UUID id must never reach `Session-Id:`.
     """
     git_dir = _resolve_git_dir(cwd)
-    session_id = _resolve_session_id(git_dir)
+    session_id = (
+        session_id_override
+        if session_id_override and _UUID_RE.fullmatch(session_id_override)
+        else _resolve_session_id(git_dir)
+    )
 
     trailer_args: List[str] = []
 

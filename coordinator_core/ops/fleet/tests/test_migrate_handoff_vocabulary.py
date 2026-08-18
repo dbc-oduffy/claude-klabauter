@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pathlib
 import pytest
 
 from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
@@ -794,7 +795,28 @@ def test_idempotent_second_run_over_migrated_corpus_with_all_new_edges_is_a_no_o
 
     first = mig.plan_migration(str(root))
     assert not first["failures"]
-    mig.apply_migration(first)
+
+    # AC1 (plan 2026-08-18-supersede-stamps-and-archives-atomically): this
+    # fixture's abandoned records live under state/handoffs/, so migrating them
+    # to `continued` stamps a terminal deployment_state on a RESIDENT record.
+    # apply_migration refuses that without a repo_root to discharge the archival
+    # against, rather than silently leaving the record loose on disk — the
+    # refusal half of "the stamp and the archival are one operation, or the
+    # writer refuses". Asserted here because this fixture is a plain directory
+    # tree, not a git repo; the discharge path itself is covered against real
+    # git in test_migrate_vocabulary_discharges_archival.py.
+    with pytest.raises(ValueError, match="refusing to write"):
+        mig.apply_migration(first)
+
+    # Idempotency of the PLAN is what this test exists to pin, and it holds
+    # independently of the write: re-planning the untouched corpus reports the
+    # same work, and re-planning after the frontmatter is on disk reports none.
+    replanned = mig.plan_migration(str(root))
+    assert [r["path"] for r in replanned["records"]] == [r["path"] for r in first["records"]]
+    assert replanned["failures"] == []
+
+    for rec in first["records"]:
+        pathlib.Path(rec["_abs_path"]).write_text(rec["_rebuilt"], encoding="utf-8", newline="")
 
     second = mig.plan_migration(str(root))
     assert second["records"] == []

@@ -78,7 +78,9 @@ from coordinator_core import engine_version, lifecycle
 
 __all__ = [
     "ENGINE_SKEW",
+    "ENGINE_STAMP_FILENAME",
     "compute_client_token",
+    "write_engine_stamp",
     "ServerVersionState",
     "build_skew_response",
     "evict_on_skew",
@@ -127,18 +129,82 @@ def _resolve_ref_path(git_dir: Path) -> Optional[Path]:
     return git_dir / ref_rel
 
 
-def compute_client_token(repo_root: Optional[Path] = None) -> str:
-    """Primary version-skew token: a stat-only fingerprint of the engine
-    clone's current git ref, no subprocess.
+#: Filename of the engine build stamp, written into a PUBLISHED engine tree
+#: by the publish round (see `coordinator/bin/publish.py`). Its presence is
+#: what distinguishes "this is a published/installed engine, whose code only
+#: changes at publish time" from "this is a live working tree".
+#:
+#: NOT dot-prefixed, and that is load-bearing: the publish sync skips dotfiles
+#: at a synced directory's top level by design
+#: (`publish_sync._sync_mirror_top_level_files`), so a `.engine-stamp` was
+#: built into the restricted tree and then silently never shipped -- the round
+#: reported 9/9 success with no stamp in the mirror (observed 2026-08-18).
+ENGINE_STAMP_FILENAME = "_engine_stamp"
 
-    Fingerprints `(st_mtime_ns, st_size)` of `.git/HEAD` and of the ref
-    file it points at (or `(0, 0)` for the ref half on a detached HEAD).
-    Called by the client on every dispatch (`warm.client.engine_token`)
-    and by the server on every request (`ServerVersionState.is_skewed`) --
-    both sides read the same files at effectively the same moment, so this
-    needs no caching or timer on either side; see module docstring axis 1.
+
+def _engine_stamp_path(repo_root: Path) -> Path:
+    return Path(repo_root) / "coordinator_core" / ENGINE_STAMP_FILENAME
+
+
+def compute_client_token(repo_root: Optional[Path] = None) -> str:
+    """Primary version-skew token: a stat-only fingerprint of this engine's
+    identity, no subprocess.
+
+    TWO SOURCES, and which one applies is a property of the tree, not a
+    setting:
+
+      1. A PUBLISHED engine tree carries a build stamp
+         (`coordinator_core/_engine_stamp`). The token fingerprints the
+         stamp's bytes, so it changes exactly when a publish round ships new
+         engine code and at no other time.
+      2. A LIVE WORKING TREE has no stamp. The token falls back to the
+         original git-ref fingerprint -- `(st_mtime_ns, st_size)` of
+         `.git/HEAD` and the ref it points at (or `(0, 0)` on a detached
+         HEAD).
+
+    WHY THE STAMP EXISTS -- measured, 2026-08-18. The token is embedded in
+    the pipe name (`election.pipe_name`), so rotating it strands the running
+    server and makes the next client spawn a successor. Keyed on the git
+    ref, the token rotated **every ~32 seconds** on this box's shared branch,
+    because ANY of the 50-70 concurrent sessions committing ANYTHING -- a
+    doc, a `state/` artifact, a peer's unrelated code -- moves the ref. A
+    server takes ~1s to boot and was stale before a client could reach it:
+    warm served 0/6 with the feature fully enabled and correctly wired.
+    Engine code had not changed once in that window.
+
+    That is the defect this fixes: the token was COARSER than engine-source
+    change in the one direction that matters, firing on commits that touch
+    no engine code. The fleet runs the PUBLISHED mirror, where the stamp
+    makes the generation stable between publishes -- which is precisely
+    when the engine's code actually differs.
+
+    NEGATIVE SPEC -- a stale or absent stamp cannot serve stale code, and
+    this is why keying on it is safe rather than merely cheap. Staleness
+    detection does not rest on this token at all: axis 2
+    (`ServerVersionState`, server-side, source-level) hashes the engine
+    package itself and catches any real code change including an
+    uncommitted editor save, on a tree with a stamp or without one. Axis 1's
+    job is GENERATION BINDING -- letting a successor bind a fresh pipe while
+    a predecessor drains -- not staleness. Making axis 1 track engine
+    identity therefore removes false rotations without removing a safety
+    check; the check lives elsewhere and still runs.
+
+    Deliberately NOT a per-call source hash or `git rev-parse`: the client
+    pays this on every dispatch, and paying a subprocess (or a ~200-file
+    walk) per call to avoid a process spawn per call is self-defeating --
+    the same reasoning the module docstring already applies to
+    `resolve_engine_sha()`. One stat is the budget.
     """
     root = Path(repo_root) if repo_root is not None else _default_engine_clone()
+
+    stamp = _engine_stamp_path(root)
+    try:
+        stamp_bytes = stamp.read_bytes()
+    except OSError:
+        stamp_bytes = None
+    if stamp_bytes is not None:
+        return hashlib.sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
+
     git_dir = root / ".git"
     ref_path = _resolve_ref_path(git_dir)
     signal = (
@@ -146,6 +212,29 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
         _stat_pair(ref_path) if ref_path is not None else (0, 0),
     )
     return hashlib.sha1(repr(signal).encode("utf-8")).hexdigest()[:16]
+
+
+def write_engine_stamp(repo_root: Path, identity: str) -> Path:
+    """Write the engine build stamp into a PUBLISHED/INSTALLED engine tree,
+    making `compute_client_token` stable between publishes for that tree.
+
+    `identity` is whatever uniquely names this shipped engine build -- the
+    publish round's pinned source sha is the intended value. It is recorded
+    verbatim so the stamp is human-readable when debugging which build a
+    resident server is serving; only its BYTES matter to the token.
+
+    Callers: the install/publish seam. A live working tree must NOT have one
+    (see `compute_client_token`'s two sources) -- writing a stamp into a tree
+    whose engine code then changes underneath it would pin the generation
+    while the code moved. That is not a staleness hole (axis 2 still hashes
+    the package and evicts on any real change) but it is a pointless
+    generation pin, so the seam is publish/install-time only, never a
+    development convenience.
+    """
+    stamp = _engine_stamp_path(repo_root)
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(identity.strip() + "\n", encoding="utf-8")
+    return stamp
 
 
 def _source_pkg_dir() -> Path:

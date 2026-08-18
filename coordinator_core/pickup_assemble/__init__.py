@@ -146,6 +146,7 @@ from coordinator_core.ops.parse_completeness_item import (
 )
 from coordinator_core.reconcile.commit_reality import evaluate_commit_reality
 from coordinator_core.reconcile.policy_loader import load_policy
+from coordinator_core.session_baton.store import merge_baton
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import harness_registry as _harness_registry
@@ -3934,6 +3935,36 @@ def compute_claim_grant(
             "unclean_prior_holder": False,
         }
     )
+
+
+def _adopt_into_baton(repo_root: Path, artifact_path: str) -> None:
+    """C3 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C3,
+    "a pickup adopts the session baton as a fan-in edge"): record the
+    artifact this pickup just claimed into THIS session's baton record's
+    ``adopted_artifacts[]`` (``session_baton.store.merge_baton`` —
+    dedup-extends, never replaces, so a second `brief` of the same artifact
+    within the same session is a no-op here).
+
+    Called only from the `claim_at_brief` branches immediately after
+    :func:`acquire_brief_claim` — i.e. only when this `brief()` is actually
+    the one taking the pickup lock (contract § two-phase-stateless
+    protocol's single-shot CLI shape), never from a survey brief.
+
+    Fail-open, mirroring `quick_wrap_assemble._print_commits_into_baton`
+    and `session_baton.store`'s own posture throughout: any failure to
+    resolve this session's id, or to read/write the baton store, is
+    swallowed here — an advisory fan-in edge must never block a pickup.
+    """
+    try:
+        sid = _session_core.resolve_session_id(str(repo_root))
+    except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
+        return
+    if not sid:
+        return
+    try:
+        merge_baton(sid, cwd=str(repo_root), adopted_artifacts=[artifact_path])
+    except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
+        pass
 
 
 def acquire_brief_claim(
@@ -8311,6 +8342,7 @@ def brief(
             took_from = acquire_brief_claim(root, "handoff", basename)
             if took_from:
                 reclaimed.append(took_from)
+            _adopt_into_baton(root, artifact["path"])
         claim = compute_claim_gate(root, "handoff", basename)
         claim_grant = compute_claim_grant(root, "handoff", basename, artifact["path"], cwd=str(root), fm=fm)
         # Self-claim idempotence (2026-07-29): `d2` (archive-stamp-cli's
@@ -8770,6 +8802,7 @@ def brief(
         took_from = acquire_brief_claim(root, "memo", basename)
         if took_from:
             reclaimed.append(took_from)
+        _adopt_into_baton(root, artifact["path"])
 
     # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-memo-
     # claim-fires-after-the-em-can-already-act.md) — the handoff branch above

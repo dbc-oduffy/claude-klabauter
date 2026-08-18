@@ -4846,22 +4846,39 @@ _TESTS_FIXTURE_SEGMENT_RE = re.compile(r"(^|/)tests/fixtures/")
 _SETTINGS_JSON_RE = re.compile(r"(^|/)settings\.json$")
 
 
-def _is_live_settings_json(rel_path: str) -> bool:
-    """Is ``rel_path`` a real settings surface Check 11 (machine-path-leak)
-    should scan, as opposed to test data that merely shares the filename?
+def _is_settings_json(rel_path: str) -> bool:
+    """Does ``rel_path`` name a settings.json Check 11 (machine-path-leak) scans?
 
-    Negative spec: a ``settings.json`` under a ``tests/fixtures/`` tree is a
-    fixture, never a live settings file. ``coordinator/tests/fixtures/
-    stranded-claude/F-truncated-json/settings.json`` is deliberately malformed
-    (``coordinator/bin/tests/test_break_glass.py``), and
-    ``commit_tripwires.check_machine_path_leak``'s JSONDecodeError branch
-    reports unparseable JSON as a hard violation -- so without this exclusion,
-    merely staging that fixture hard-blocks every commit in the repo.
+    Every one of them, fixtures included. Which findings a fixture is allowed
+    to suppress is `_fixture_suppressible_detail`'s question, not this one --
+    see there for why the two were split.
     """
-    return bool(
-        _SETTINGS_JSON_RE.search(rel_path)
-        and not _TESTS_FIXTURE_SEGMENT_RE.search(rel_path)
-    )
+    return bool(_SETTINGS_JSON_RE.search(rel_path))
+
+
+def _fixture_suppressible_detail(rel_path: str, detail: str) -> bool:
+    """Is ``detail`` the one finding a fixture path is allowed to suppress?
+
+    Only the unparseable-JSON finding, and only under a ``tests/fixtures/``
+    tree. ``coordinator/tests/fixtures/stranded-claude/F-truncated-json/
+    settings.json`` is deliberately malformed
+    (``coordinator/bin/tests/test_break_glass.py``) and
+    ``commit_tripwires.check_machine_path_leak``'s JSONDecodeError branch
+    reports unparseable JSON as a hard violation, so staging that fixture used
+    to hard-block every commit in the repo, whoever's pathspec it was.
+
+    Review (code-reviewer, chain review of `abbbac67d`): the original fix
+    excluded fixture settings.json from the scan ENTIRELY, which is a wider
+    grant than its own justification -- a genuine machine-path leak in a file
+    that happens to sit under a fixtures path would silently skip the scan.
+    Pathname decides only whether the PARSE failure is tolerable; a real leak
+    still blocks wherever it lives. Confirmed against the tracked corpus at the
+    time of this change: four tracked settings.json files, one finding, and it
+    is this fixture's parse error.
+    """
+    if not _TESTS_FIXTURE_SEGMENT_RE.search(rel_path):
+        return False
+    return detail.startswith("ERROR")
 
 
 def check_validate_commit(
@@ -5493,15 +5510,16 @@ def check_validate_commit(
 
     # Check 11 (machine-path-leak) -- hard-block sink for settings.json.
     # Negative spec: a settings.json under a tests/fixtures/ tree is test data,
-    # not a live settings surface. F-truncated-json/settings.json is deliberately
-    # malformed (coordinator/bin/tests/test_break_glass.py), and the checker's
-    # JSONDecodeError branch flags unparseable JSON as a hard violation -- so
-    # without this exclusion, staging that fixture hard-blocks every commit in
-    # the repo.
-    settings_staged = [f for f in staged if _is_live_settings_json(f)]
+    # scanned, fixtures included: a fixture path suppresses only the
+    # unparseable-JSON finding (F-truncated-json/settings.json is deliberately
+    # malformed, and the checker's JSONDecodeError branch flags that as a hard
+    # violation, so staging it used to hard-block every commit in the repo).
+    # A genuine machine-path leak still blocks wherever the file sits --
+    # see `_fixture_suppressible_detail`.
+    settings_staged = [f for f in staged if _is_settings_json(f)]
     for sf in settings_staged:
         detail = commit_tripwires.check_machine_path_leak(sf, _cwd)
-        if detail:
+        if detail and not _fixture_suppressible_detail(sf, detail):
             reason = (
                 "BLOCKED: %s contains machine-specific absolute "
                 "path(s) that must not be committed.\n\n"

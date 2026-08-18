@@ -129,6 +129,25 @@ def test_marker_name_matches_the_hook_that_reads_it():
     assert git_native._AUTO_PUSH_SUPPRESS_ENV == auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH
 
 
+def _init_repo(tmp_path):
+    """A minimal real git repo with one commit -- `run_commit_pipeline` reads
+    live index/worktree state and cannot be driven against a bare tmp dir."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@t.example"],
+                 ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=str(repo), check=True,
+                       capture_output=True, text=True)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+    return repo
+
+
 # ---------------------------------------------------------------------------
 # Wiring: sync and nothing else
 # ---------------------------------------------------------------------------
@@ -142,10 +161,42 @@ def test_marker_name_matches_the_hook_that_reads_it():
         (commit_pipeline.PUSH_MODE_NONE, False),
     ],
 )
-def test_suppression_is_wired_to_sync_mode_only(push_mode, expected):
+def test_suppression_is_wired_to_sync_mode_only(monkeypatch, tmp_path, push_mode, expected):
     """A deferred/none commit must leave the hook's push alone: it is the only
-    publisher on those modes, and suppressing it strands the commit."""
-    assert (push_mode == commit_pipeline.PUSH_MODE_SYNC) is expected
+    publisher on those modes, and suppressing it strands the commit.
+
+    Review (code-reviewer, s4): this test previously compared
+    `push_mode == PUSH_MODE_SYNC` to its own parametrize value and never called
+    into `commit_pipeline` at all -- a tautology that would have stayed green if
+    `run_commit_pipeline`'s call site were rewritten to suppress
+    unconditionally, which is precisely the regression it names. It now drives
+    the real pipeline and reads the flag off the `commit()` call it actually
+    makes.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
+
+    seen: dict = {}
+    orig_commit = commit_pipeline.commit
+
+    def _spy_commit(*a, **kw):
+        seen["suppress"] = kw.get("suppress_post_commit_auto_push")
+        return orig_commit(*a, **kw)
+
+    monkeypatch.setattr(commit_pipeline, "commit", _spy_commit)
+    commit_pipeline.run_commit_pipeline(
+        str(repo),
+        session_id="sess-suppression",
+        subject="test commit",
+        stage_paths=["a.txt"],
+        push_mode=push_mode,
+    )
+
+    assert "suppress" in seen, (
+        "run_commit_pipeline never reached its commit step -- this test is "
+        "measuring nothing"
+    )
+    assert seen["suppress"] is expected
 
 
 def test_commit_forwards_suppression_to_commit_scoped(monkeypatch, tmp_path):
@@ -160,14 +211,7 @@ def test_commit_forwards_suppression_to_commit_scoped(monkeypatch, tmp_path):
         seen.update(kw)
         return git_native.GitResult(returncode=0, stdout="", stderr="")
 
-    import subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    for args in (["init", "-q"], ["config", "user.email", "t@t.example"],
-                 ["config", "user.name", "t"]):
-        subprocess.run(["git", *args], cwd=str(repo), check=True,
-                       capture_output=True, text=True)
+    repo = _init_repo(tmp_path)
     (repo / "a.txt").write_text("v1\n", encoding="utf-8")
 
     monkeypatch.setattr(git_native, "commit_scoped", _fake_commit_scoped)

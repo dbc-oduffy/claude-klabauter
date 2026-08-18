@@ -5213,6 +5213,14 @@ class TestTrackerReconciliation:
         round-trips byte-identical through the reconciler."""
         repo_root = _REPO_ROOT
         tracker_path = repo_root / "docs" / "project-tracker.md"
+        if not tracker_path.exists():
+            # `e4467eb6c chore: delete docs/project-tracker.md (sweep
+            # completion)` retired the file this test pins a property of.
+            # Skipped rather than deleted: the assertion is still the one
+            # wanted if a tracker is ever reintroduced, and a hard failure
+            # here breaks the suite for every session over an artifact the
+            # repo deliberately no longer has.
+            pytest.skip("docs/project-tracker.md was retired by e4467eb6c")
         text = tracker_path.read_text(encoding="utf-8")
         new_text, edits = coas.reconcile_tracker_shipped_counts(text, repo_root)
         assert edits == []

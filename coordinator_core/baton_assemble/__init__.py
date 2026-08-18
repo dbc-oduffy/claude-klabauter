@@ -205,6 +205,8 @@ from coordinator_core.ops.deliverable_carry import (
 from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_id
+from coordinator_core.ops.session_commits import resolve_session_commits
+from coordinator_core.session_baton.store import merge_baton
 from coordinator_core.ops.read_frontmatter_field import (
     read_frontmatter_field as _read_frontmatter_field,
 )
@@ -4628,7 +4630,44 @@ def brief(
             pass
         else:
             result.decision_object["segments"] = selected_segments
+        _print_commits_into_baton(root)
     return result
+
+
+def _print_commits_into_baton(root: Path) -> None:
+    """C5 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C5, part
+    b): resolve this session's attributed commit shas via C4's
+    ``session.commits`` primitive and merge them into the session's baton
+    record (``session_baton.store.merge_baton`` — dedup-extends, never
+    replaces). Fired at the handoff-kind brief's tail only, mirroring
+    quick_wrap_assemble's own call site.
+
+    Compatible with this function's own READ-ONLY contract (see `brief`'s
+    docstring): that guarantee is about NOT mutating tracked-tree state
+    (handoffs, plans — the Tier-B stateless-computation contract); the
+    session baton is the ephemeral, ``.git/coordinator-sessions/<sid>/``
+    -scoped advisory record C1 establishes, already written unconditionally
+    on every session's first prompt (``session_baton_mint``) — this call
+    adds no new mutation SURFACE, only more complete data on an existing one.
+
+    Fail-open throughout: session-id resolution, primitive resolution, and
+    the baton write are all best-effort — an advisory record must never
+    block a handoff brief's own computation.
+    """
+    sid = _resolve_current_session_id()
+    if not sid:
+        return
+    try:
+        commits = resolve_session_commits(root, sid)
+    except (ValueError, RuntimeError):
+        return
+    shas = [c["sha"] for c in commits]
+    if not shas:
+        return
+    try:
+        merge_baton(sid, cwd=str(root), commits=shas)
+    except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
+        pass
 
 
 # ---------------------------------------------------------------------------

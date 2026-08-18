@@ -1,0 +1,298 @@
+"""percolate-mirror.py — one entry point owns a whole mirror's publish.
+
+Covers the two properties that make it worth existing over N `percolate-round`
+invocations: it resolves a mirror's FULL row set from any of three selector
+forms, and it publishes them in ONE `publish.py` invocation held under ONE dest
+lock, with the lock taken before anything mutates the dest.
+
+Spec backlink: state/sizings/2026-08-18-one-entry-point-owns-the-mirror-publish.yaml
+"""
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+from typing import List
+
+import pytest
+
+_BIN_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location(
+        "percolate_mirror", _BIN_DIR / "percolate-mirror.py"
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+_mod = _load_module()
+
+
+# ---------------------------------------------------------------------------
+# Selector resolution. `load_targets` returns RESOLVED rows (field 3 is an
+# absolute dest), so the grouping key is the dest's git worktree root, not the
+# portable file's `publish-mirror:*` sigil -- which is already gone by then.
+# ---------------------------------------------------------------------------
+
+_GROUPS = {
+    "X:/claude-klabauter": [
+        "claude-klabauter-publish-repo-toplevel",
+        "claude-klabauter-bin",
+        "claude-klabauter",
+    ],
+    "X:/other-mirror": ["other-thing"],
+}
+
+
+def test_selector_accepts_worktree_root_verbatim():
+    assert _mod._select_mirror("X:/claude-klabauter", _GROUPS) == "X:/claude-klabauter"
+
+
+def test_selector_accepts_bare_mirror_name():
+    assert _mod._select_mirror("claude-klabauter", _GROUPS) == "X:/claude-klabauter"
+
+
+def test_selector_accepts_underscore_separator_form():
+    assert _mod._select_mirror("claude_klabauter", _GROUPS) == "X:/claude-klabauter"
+
+
+def test_selector_accepts_any_member_target_name():
+    """A caller who knows only a row name must not have to learn the path."""
+    assert _mod._select_mirror("claude-klabauter-bin", _GROUPS) == "X:/claude-klabauter"
+
+
+def test_selector_unknown_returns_none():
+    assert _mod._select_mirror("no-such-mirror", _GROUPS) is None
+
+
+def test_selector_resolves_whole_row_set_not_just_the_named_row():
+    """The bug this entry point exists to remove: naming one row must select
+    every row landing in that mirror, so they publish in one invocation."""
+    root = _mod._select_mirror("claude-klabauter-bin", _GROUPS)
+    assert _GROUPS[root] == [
+        "claude-klabauter-publish-repo-toplevel",
+        "claude-klabauter-bin",
+        "claude-klabauter",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# One invocation, one lock, lock before mutation.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLockCtx:
+    def __init__(self, order: List[str], *a, **kw):
+        self._order = order
+
+    def __enter__(self):
+        self._order.append("lock-acquired")
+        return self
+
+    def __exit__(self, *a):
+        self._order.append("lock-released")
+        return False
+
+
+def _wire(monkeypatch, order, *, dirty=False, scan_rc=0):
+    targets = [
+        "claude-klabauter-publish-repo-toplevel",
+        "claude-klabauter-bin",
+        "claude-klabauter",
+    ]
+    monkeypatch.setattr(
+        _mod, "_mirror_groups", lambda root: {"X:/claude-klabauter": targets}
+    )
+    monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "X:/claude-klabauter")
+    monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "X:/claude-klabauter")
+    monkeypatch.setattr(
+        _mod._round,
+        "_round_held_lock",
+        lambda target, **kw: _RecordingLockCtx(order, target, **kw),
+    )
+    monkeypatch.setattr(_mod._round, "_split_stdout_by_row_dest", lambda s, d: [(d, s)])
+    monkeypatch.setattr(_mod._round, "_extract_change_lines", lambda s: ([("NEW", "a.py")], []))
+    monkeypatch.setattr(
+        _mod._round, "_build_commit_pathspec", lambda *a, **kw: ["a.py"]
+    )
+    monkeypatch.setattr(
+        _mod._round, "_push_dest", lambda d: subprocess.CompletedProcess([], 0, "", "")
+    )
+
+    monkeypatch.setattr(_mod._round, "_branch0_gate", lambda t, r: "X:/src")
+    monkeypatch.setattr(_mod._round, "_resolve_central_state", lambda: None)
+
+    publish_calls = []
+
+    def _fake_run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if "publish.py" in joined:
+            order.append("publish")
+            publish_calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "Rows succeeded: 3/3", "")
+        if "parse-dryrun" in joined:
+            return subprocess.CompletedProcess(
+                cmd, 0, '{"preflight": {"step2c_scan_file_list": ["a.py"]}}', ""
+            )
+        if "scan-secrets" in joined:
+            order.append("scan")
+            return subprocess.CompletedProcess(cmd, scan_rc, "", "")
+        if "inverse-drift" in joined:
+            order.append("drift")
+            return subprocess.CompletedProcess(cmd, 0, "anchor_mode: marker", "")
+        if "scoped-git-commit" in joined:
+            order.append("commit")
+            return subprocess.CompletedProcess(cmd, 0, '{"committed": true}', "")
+        if cmd and str(cmd[0]) == "git":
+            # Pre-flight's own dirty probe. Clean tree unless the test asked
+            # for residue, so the reconcile path stays out of the ordering
+            # assertions that are not about it.
+            return subprocess.CompletedProcess(
+                cmd, 0, " M stranded.py\n" if dirty else "", ""
+            )
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod._round, "_run", _fake_run)
+    return targets, publish_calls
+
+
+def test_all_rows_go_through_a_single_publish_invocation(tmp_path, monkeypatch):
+    """The whole point: N rows, ONE publish.py process. `--delta` skips a row's
+    work but never its verification, so N invocations re-scan the full dest N
+    times."""
+    order: List[str] = []
+    targets, publish_calls = _wire(monkeypatch, order)
+
+    rc = _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    assert rc == _mod._round._EXIT_OK
+    assert order.count("publish") == 1, order
+    assert publish_calls[0][-1] == ",".join(targets)
+
+
+def test_lock_spans_publish_and_commit(tmp_path, monkeypatch):
+    order: List[str] = []
+    _wire(monkeypatch, order)
+
+    _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    # scan/drift run once per row (both gates are target-scoped), so assert the
+    # SHAPE: lock first, publish, then every gate leg, then commit, then release.
+    assert order[0] == "lock-acquired", order
+    assert order[-1] == "lock-released", order
+    assert order[1] == "publish", order
+    assert order[-2] == "commit", order
+    assert order.count("scan") == 3, order
+    assert order.count("drift") == 3, order
+    assert order.index("commit") > max(
+        i for i, m in enumerate(order) if m in ("scan", "drift")
+    ), order
+
+
+def test_high_tier_leak_aborts_before_commit(tmp_path, monkeypatch):
+    """scan-secrets exit 2 is a HIGH-tier credential shape. This entry point
+    publishes to a PUBLIC mirror, so it must refuse to commit or push — the
+    bytes are already synced to dest, but nothing is published until commit."""
+    order: List[str] = []
+    _wire(monkeypatch, order, scan_rc=2)
+
+    rc = _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    assert rc == _mod._round._EXIT_FAIL
+    assert "commit" not in order, order
+
+
+def test_gate_legs_run_for_every_row_not_just_the_first(tmp_path, monkeypatch):
+    """scan-secrets' peer-repo pattern and registry_codenames guard are both
+    target-scoped, so one pass over the first row would leave the other rows
+    unscanned."""
+    order: List[str] = []
+    targets, _ = _wire(monkeypatch, order)
+
+    _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    assert order.count("scan") == len(targets), order
+
+
+def test_preflight_discard_runs_inside_the_lock(tmp_path, monkeypatch):
+    """Same invariant `percolate-round` was fixed for in 7ba2aa100: the discard
+    resets the dest tree, so it must never run before the lock is held."""
+    order: List[str] = []
+    _wire(monkeypatch, order)
+
+    def _recording_preflight(args, dest):
+        order.append("preflight")
+        return None
+
+    monkeypatch.setattr(_mod._round, "_preflight_dest_reconcile", _recording_preflight)
+
+    _mod.main(
+        [
+            "claude-klabauter",
+            "--percolate-root",
+            str(tmp_path),
+            "--invocation-authorized",
+            "--reconcile-dest=discard",
+        ]
+    )
+
+    assert order.index("lock-acquired") < order.index("preflight"), order
+    assert order.index("preflight") < order.index("publish"), order
+
+
+def test_no_publish_commits_but_does_not_push(tmp_path, monkeypatch):
+    order: List[str] = []
+    _wire(monkeypatch, order)
+    pushed = []
+    monkeypatch.setattr(
+        _mod._round,
+        "_push_dest",
+        lambda d: pushed.append(d) or subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    rc = _mod.main(
+        [
+            "claude-klabauter",
+            "--percolate-root",
+            str(tmp_path),
+            "--invocation-authorized",
+            "--no-publish",
+        ]
+    )
+
+    assert rc == _mod._round._EXIT_OK
+    assert "commit" in order
+    assert pushed == []
+
+
+def test_non_tty_without_authorization_refuses_before_commit(tmp_path, monkeypatch):
+    order: List[str] = []
+    _wire(monkeypatch, order)
+    monkeypatch.setattr(_mod.sys.stdin, "isatty", lambda: False)
+
+    rc = _mod.main(["claude-klabauter", "--percolate-root", str(tmp_path)])
+
+    assert rc == _mod._round._EXIT_CONFIRM_REQUIRED
+    assert "commit" not in order
+
+
+def test_list_prints_row_set_and_publishes_nothing(tmp_path, monkeypatch, capsys):
+    order: List[str] = []
+    _wire(monkeypatch, order)
+
+    rc = _mod.main(["claude-klabauter", "--percolate-root", str(tmp_path), "--list"])
+
+    assert rc == _mod._round._EXIT_OK
+    assert order == []
+    out = capsys.readouterr().out
+    assert "claude-klabauter-bin" in out

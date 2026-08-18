@@ -851,6 +851,23 @@ def _sole_publisher_env(suppress_post_commit_auto_push: bool) -> Optional[Dict[s
     it against the remote. The commit is still published -- synchronously, by
     the caller, in the same invocation.
 
+    Accepted delta, named because it is a real one (review, s2): on a
+    suppressed commit whose synchronous push then FAILS, no pending-push record
+    is written by anyone -- the hook that would have written one stood down, and
+    the caller's re-hosted drain only runs after a push that succeeded. This is
+    not silent (`integrity_breach` fires on exactly that path) and the commit is
+    not orphaned (it rides the branch tip on the next successful push), so the
+    "delay, never lose" contract degrades to "delay" rather than breaking. The
+    alternative -- writing a record from the failure path -- would hand the
+    next drain a push this caller already owns, which is the two-publisher
+    problem this seam exists to remove.
+
+    The invariant "whoever sets this WILL push, synchronously, in this same
+    invocation" is not enforceable here: this function cannot see the caller's
+    later control flow. It is held at each call site by tying the flag to
+    `push_mode == PUSH_MODE_SYNC`, and pinned by
+    `test_suppression_is_wired_to_sync_mode_only`.
+
     Returns None when suppression is off, so the caller passes `env=None` and
     `_git` inherits the parent environment unchanged (never a rebuilt copy of
     `os.environ`, which would be a behaviour change wearing a no-op's
@@ -1998,6 +2015,7 @@ def _commit_scoped_private_index(
     deliverable_id: Optional[str] = None,
     *,
     supplied_blobs: Optional[Dict[str, str]] = None,
+    attributed_session_id: Optional[str] = None,
 ) -> GitResult:
     """The PRIVATE-INDEX branch of `commit_scoped()` -- see that function's
     docstring for when this runs and why. Builds a commit tree under a
@@ -2021,6 +2039,13 @@ def _commit_scoped_private_index(
     below consumes that resolution rather than re-deriving the same
     precedence from `diverged`/`non_diverged` set membership at each site
     that needs it.
+
+    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, passed
+    straight through to `compute_missing_trailer_args`'s own
+    `session_id_override`. `None` (the default) reproduces the prior blind
+    env-var resolution exactly. See `commit_scoped`'s own docstring for the
+    caller-identity split this closes.
     """
     root = Path(cwd)
     supplied_blobs = supplied_blobs or {}
@@ -2126,7 +2151,8 @@ def _commit_scoped_private_index(
         # read for `-F` below, exactly mirroring what the hook would have
         # done to the same file had `git commit` fired normally.
         trailer_args = compute_missing_trailer_args(
-            msg_file, root, paths=[*diverged, *non_diverged]
+            msg_file, root, paths=[*diverged, *non_diverged],
+            session_id_override=attributed_session_id,
         )
         # C7a: an explicit caller `deliverable_id` folds into the SAME
         # `interpret-trailers` call above, mirroring `commit_authored_
@@ -2251,12 +2277,28 @@ def commit_scoped(
     deliverable_id: Optional[str] = None,
     supplied_blobs: Optional[Dict[str, str]] = None,
     suppress_post_commit_auto_push: bool = False,
+    attributed_session_id: Optional[str] = None,
 ) -> GitResult:
     """Commit exactly `paths`, choosing the safe mechanism from OBSERVED
     index/worktree state -- the computed replacement for hand-picking
     between `git commit -- <paths>` and a bare `git commit` on a shared
     working tree (see the module-section docstring above `commit_scoped`
     for the two incidents this closes).
+
+    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, the
+    CALLER's own already-resolved committing-session identity (e.g.
+    `scoped_git_commit.py`'s `_resolve_committing_session_id`, params-aware,
+    not a bare env-var read), threaded straight through to both branches'
+    `compute_missing_trailer_args` call as `session_id_override`. `None`
+    (the default) leaves every existing caller's `Session-Id:` resolution
+    exactly as it was -- a blind `session_core.resolve_session_id()` read of
+    THIS PROCESS's own env, which the module-section comment above already
+    names as able to "legitimately differ" from a caller's own resolved
+    identity. This does not, by itself, close the note above about
+    claim-release classification (a different mechanism) -- it only makes
+    the `Session-Id:` trailer track the caller's identity rather than a
+    second, independent guess at it.
 
     Behaviour:
       1. `paths` empty -> FAILS LOUD (`GitResult.ok is False`). Never falls
@@ -2583,7 +2625,10 @@ def commit_scoped(
         # than-guess -- see that function's own docstring), so this is a
         # pure addition when the hook already ran (or will run) and the
         # sole source of the trailer when it does not.
-        trailer_args = compute_missing_trailer_args(msg_file, root, paths=path_list)
+        trailer_args = compute_missing_trailer_args(
+            msg_file, root, paths=path_list,
+            session_id_override=attributed_session_id,
+        )
 
         # NOT `git interpret-trailers --if-exists replaceAll` as originally
         # proposed: a live probe against this repo's own git (this chunk's
@@ -2641,7 +2686,9 @@ def commit_scoped(
     diverged_set = set(diverged)
     non_diverged = [p for p in path_list if p not in diverged_set]
     return _commit_scoped_private_index(
-        diverged, non_diverged, msg_file, root, deliverable_id, supplied_blobs=supplied_blobs
+        diverged, non_diverged, msg_file, root, deliverable_id,
+        supplied_blobs=supplied_blobs,
+        attributed_session_id=attributed_session_id,
     )
 
 

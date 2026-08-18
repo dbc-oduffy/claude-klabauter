@@ -1167,3 +1167,99 @@ def test_large_batch_genuine_divergence_failure_still_fails_loud(tmp_path, monke
     assert "indeterminate" in result.stderr.lower()
     head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
     assert head_after == head_before
+
+
+# ---------------------------------------------------------------------------
+# `attributed_session_id` -- state/bug-backlog/2026-08-18-scoped-git-commit-
+# stamps-a-foreign-session-id-8d21f0c4e7b9.yaml. Real-shape repro: two
+# sessions with overlapping dirty paths, each committing its own explicit
+# pathspec, each commit carrying its OWN invoker's Session-Id -- never a
+# concurrently-live peer's, and never the bare env-var read this parameter
+# exists to override.
+# ---------------------------------------------------------------------------
+
+_SESSION_A = "903044ef-72b9-4549-a3df-6300e10b6b84"
+_SESSION_B = "e77424be-b452-43bd-a995-e12d60168cb6"
+
+
+def test_agree_branch_attributed_session_id_wins_over_ambient_env(tmp_path, monkeypatch):
+    """The AGREE branch's Python-side trailer computation (2026-08-14 fix)
+    must stamp the CALLER's own resolved identity, not whatever this
+    process's ambient env happens to hold -- the exact split a shared,
+    many-concurrent-session process makes possible."""
+    repo = real_git_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SESSION_B)
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(
+        ["file.txt"], msg_file, repo, attributed_session_id=_SESSION_A
+    )
+
+    assert result.ok, result.stderr
+    sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert _trailer_lines(repo, sha, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]
+
+
+def test_diverged_branch_attributed_session_id_wins_over_ambient_env(tmp_path, monkeypatch):
+    """Same claim, private-index (diverged) branch -- the branch that never
+    trusts git hooks and instead replays `compute_missing_trailer_args`
+    itself, where this defect actually landed (5300b76a9)."""
+    repo = real_git_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SESSION_B)
+    make_diverged_path(repo, "file.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(
+        ["file.txt"], msg_file, repo, attributed_session_id=_SESSION_A
+    )
+
+    assert result.ok, result.stderr
+    sha = result.stdout.strip()
+    assert _trailer_lines(repo, sha, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]
+
+
+def test_two_sessions_overlapping_paths_each_commit_carries_its_own_invoker(tmp_path):
+    """Pinned shape (dispatch brief): two sessions with overlapping dirty
+    paths, each committing its own explicit pathspec, each landed commit
+    carrying its OWN invoker's Session-Id -- session A's commit never
+    carries session B's id, and vice versa, regardless of invocation
+    order or of what a shared process's ambient env happens to hold at
+    either call."""
+    repo = real_git_repo(tmp_path)
+    make_agree_path(repo, "a.txt", "from A\n")
+    make_agree_path(repo, "b.txt", "from B\n")
+    msg_a = _write_msg(tmp_path, "commit from session A\n")
+    msg_b = tmp_path / "msg_b.txt"
+    msg_b.write_text("commit from session B\n", encoding="utf-8")
+
+    result_a = git_native.commit_scoped(
+        ["a.txt"], msg_a, repo, attributed_session_id=_SESSION_A
+    )
+    assert result_a.ok, result_a.stderr
+    sha_a = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    result_b = git_native.commit_scoped(
+        ["b.txt"], msg_b, repo, attributed_session_id=_SESSION_B
+    )
+    assert result_b.ok, result_b.stderr
+    sha_b = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    assert _trailer_lines(repo, sha_a, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]
+    assert _trailer_lines(repo, sha_b, "Session-Id:") == [f"Session-Id: {_SESSION_B}"]
+
+
+def test_attributed_session_id_none_is_byte_identical_to_default(tmp_path, monkeypatch):
+    """`attributed_session_id=None` (the default) must reproduce the prior
+    blind env-var resolution exactly -- every pre-existing call in this
+    file omits the kwarg and is left unmodified by this change."""
+    repo = real_git_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SESSION_A)
+    make_agree_path(repo, "file.txt", "content\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["file.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert _trailer_lines(repo, sha, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]

@@ -612,13 +612,20 @@ def _derive_trailers(
     stage_paths: list[str],
     nature: Optional[str],
     explicit_trailers: str,
+    governing_plan_slug: Optional[str] = None,
 ) -> str:
     """Resolve the trailer block for the composed commit message.
 
     Caller-supplied `explicit_trailers` wins verbatim. Otherwise best-effort
     `commit.anchors` (COMPUTE_ONLY) -- its `Plan:` trailer reads the STAGED
     diff, so the SAFE subset of `stage_paths` is pre-staged here (see
-    `diverging_paths()` split below).
+    `diverging_paths()` split below). `governing_plan_slug`, when supplied,
+    is forwarded to `commit.anchors` as its own authoritative override for
+    Plan/Plan-Id/Deliverable-Id (see that op's own docstring) -- fixes
+    `2026-08-18-wsc-tail-commit-trailers-name-a-foreign-deliverable-
+    3f7ac1d20e94.yaml`, where the staged-diff scan (this commit's own paths
+    carried no `docs/plans/*.md`) fell through to a foreign concurrent
+    peer's staged plan.
 
     `stage_paths` is ALSO passed to `commit.anchors` as its `paths` scope, and
     that is load-bearing on a shared worktree: without it the op reads the
@@ -677,7 +684,12 @@ def _derive_trailers(
         return ""
     try:
         result = handler(
-            {"session_id": sid, "nature": nature, "paths": list(stage_paths or [])},
+            {
+                "session_id": sid,
+                "nature": nature,
+                "paths": list(stage_paths or []),
+                "governing_plan_slug": governing_plan_slug or "",
+            },
             common_dir,
         )
         return str(result.get("trailers", ""))
@@ -1371,6 +1383,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             trailers = await asyncio.to_thread(
                 _derive_trailers,
                 common_dir, sid, full_stage_paths, nature or None, str(params.get("trailers") or ""),
+                governing_plan_slug or None,
             )
 
         swept_srcs, swept_dsts = _swept_srcs_dsts(swept_renames_raw)
