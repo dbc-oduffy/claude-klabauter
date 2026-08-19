@@ -9,13 +9,14 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.pathspec import (
+    DirectoryShapedWriteError,
     NoTestTargetError,
     NoWritesDeclaredError,
     commit_pathspec,
     is_concrete_surface,
     terminal_test_scope,
 )
-from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
+from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 
@@ -141,6 +142,37 @@ def test_commit_pathspec_warns_but_returns_surface_fallback_when_empty_writes_ro
     with caplog.at_level("WARNING"):
         assert commit_pathspec(wave) == ["coordinator_core/ops/dispatch_emit/pathspec.py"]
     assert "'C2'" in caplog.text
+
+
+def test_commit_pathspec_refuses_directory_shaped_write_naming_row_and_path():
+    # A spine row's declared writes: is uncommittable if it names a
+    # directory -- scoped-git-commit refuses directory pathspecs by
+    # design. Left uncaught this surfaces only at runtime, after a
+    # dispatched committer refuses and strands the wave's work; the row id
+    # and offending path must both be named so the EM can see which row is
+    # at fault, not just that the wave's union failed.
+    wave = [_wave_row("C4", ["state/memo-outbox/sent/"])]
+    with pytest.raises(DirectoryShapedWriteError) as excinfo:
+        commit_pathspec(wave)
+    assert "C4" in str(excinfo.value)
+    assert "state/memo-outbox/sent/" in str(excinfo.value)
+
+
+def test_commit_pathspec_normal_file_writes_are_unaffected():
+    # Regression guard: a normal, non-directory-shaped writes: list is not
+    # touched by the new directory-shape check.
+    wave = [_wave_row("C1", ["a.py", "sub/b.py"])]
+    assert commit_pathspec(wave) == ["a.py", "sub/b.py"]
+
+
+def test_declared_paths_surface_fallback_still_behaves_as_before():
+    # The surface:-fallback path (UNDECLARED writes) is untouched by the
+    # new writes:-primary-path check -- is_concrete_surface's own
+    # trailing-slash check already governed this path before this fix and
+    # continues to.
+    wave = [_wave_row("C1", UNDECLARED, surface="coordinator_core/ops/dispatch_emit/")]
+    with pytest.raises(NoWritesDeclaredError, match="C1"):
+        commit_pathspec(wave)
 
 
 def test_commit_pathspec_ac4_refusal_still_fires_when_no_row_declares_writes_at_all():

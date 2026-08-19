@@ -1655,6 +1655,7 @@ def _scaffold_handoff(
     summary: str | None = None,
     gated_open: str | None = None,
     gate_note: str | None = None,
+    gated_predicate: str | None = None,
 ) -> str:
     """Generate validator-clean handoff frontmatter + canonical section skeleton.
 
@@ -1886,9 +1887,31 @@ def _scaffold_handoff(
             file=sys.stderr,
         )
         sys.exit(1)
+    # --gated-predicate is DR-173's arm: a MECHANICAL gate with no graph node.
+    # The condition (a required field sitting empty) is checked by the caller
+    # and is as derivable as an unresolved blocked_by -- it simply has no
+    # deliverable id to name, so it must NOT be forced into blocked_by. Doing
+    # that mints an entry nothing can ever resolve, which parks the baton
+    # permanently even after the fields are filled: the plan's § Anti-scope
+    # "do not force a fake stub id into blocked_by", and the exact break-class
+    # outcome this whole surface exists to prevent. The reason text rides in
+    # blocking_notes, where it is advisory and does no gating -- deleting it
+    # would not unpark the baton, because the predicate is what parks it.
+    if gated_predicate is not None and not gated_predicate.strip():
+        print(
+            "coordinator-doc-new: --gated-predicate was supplied an empty or "
+            "whitespace-only value. It must name the mechanical condition that "
+            "parks this baton; omit it entirely to scaffold ready_to_fire instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     _summary_value = summary if summary else placeholder_summary
     _blocked_by = [gated_open] if gated_open else []
-    if gated_open:
+    if gated_predicate:
+        # Parked by the predicate, with or without an accompanying blocked_by.
+        _deployment_state = "awaiting_gate"
+        _pickup_ready = "false"
+    elif gated_open:
         if _derive_readiness is None:
             print(
                 "coordinator-doc-new: --gated-open needs the readiness derivation "
@@ -1929,8 +1952,12 @@ def _scaffold_handoff(
     if _blocked_by:
         lines.append("blocked_by:")
         lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in _blocked_by)
-    if gate_note:
-        lines.append(f"blocking_notes: {_yaml_quote(gate_note)}")
+    # DR-173's ratified trio ships unchanged: awaiting_gate + pickup_ready:
+    # false + the blocking_notes reason text. The reason is OUTPUT the gating
+    # decision writes, never an input anything reads.
+    _note = gate_note or gated_predicate
+    if _note:
+        lines.append(f"blocking_notes: {_yaml_quote(_note)}")
     lines += [
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
@@ -4615,6 +4642,24 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--gated-predicate",
+        dest="gated_predicate",
+        default=None,
+        metavar="REASON",
+        help=(
+            "(handoff) Park this baton on a MECHANICAL condition that has no "
+            "graph node to name -- DR-173's unfilled category/summary is the "
+            "one caller. Emits awaiting_gate + pickup_ready: false + "
+            "blocking_notes: <REASON>, and deliberately NO blocked_by: forcing "
+            "a prose reason into blocked_by mints an entry nothing can ever "
+            "resolve, parking the baton permanently even once the condition "
+            "clears. The predicate parks it; the note only explains why, and "
+            "deleting the note would not unpark it. Refused fail-loud when "
+            "blank, and handoff-scoped like the other two. "
+            "Spec: docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md § C9"
+        ),
+    )
+    parser.add_argument(
         "--recovers-session",
         dest="recovers_session",
         default=None,
@@ -5422,7 +5467,9 @@ def main() -> None:
     # 2026-08-18-example-retrieval-repo-em-doc-new-silently-drops-type-inapplicable-flags.md
     # offered warn-or-refuse; refuse matches the existing
     # --additional-predecessor precedent, so no third posture is invented).
-    if (args.summary or args.gated_open or args.gate_note) and doc_type != "handoff":
+    if (
+        args.summary or args.gated_open or args.gate_note or args.gated_predicate
+    ) and doc_type != "handoff":
         if args.summary:
             _bad_flag = "--summary"
         elif args.gated_open:
@@ -5452,6 +5499,7 @@ def main() -> None:
             summary=args.summary,
             gated_open=args.gated_open,
             gate_note=args.gate_note,
+            gated_predicate=args.gated_predicate,
         )
     elif doc_type == "recovery":
         content = _scaffold_recovery(

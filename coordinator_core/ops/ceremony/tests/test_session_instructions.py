@@ -199,8 +199,12 @@ def test_chain_terminal_includes_chain_terminal_steps(repo):
 
     rendered_ids = {entry["id"] for entry in result["instructions"]}
     assert STEP_2_7 in rendered_ids
-    assert STEP_2_75 in rendered_ids
     assert STEP_2_9C in rendered_ids
+    # Negative-spec: STEP_2_75 is deliberately NOT here. Reviewer finding 690dd6f9
+    # dropped it from `branch_resolution._CHAIN_TERMINAL_ONLY_STEPS` because the
+    # handoff-tracker retirement removed its only `ctx.add_node` call site, so the
+    # id can never reach the ledger. Re-asserting it pins a step that cannot render.
+    assert STEP_2_75 not in rendered_ids
 
 
 # ---------------------------------------------------------------------------

@@ -123,7 +123,7 @@ def _scaffold_via_doc_new(
     cwd: str,
     category: Optional[str] = None,
     summary: Optional[str] = None,
-    gated_open: Optional[str] = None,
+    gated_predicate: Optional[str] = None,
 ) -> str:
     """Invoke ``coordinator-doc-new --type handoff`` — same subprocess
     pattern as ``coordinator_core.baton_assemble.apply.
@@ -131,11 +131,16 @@ def _scaffold_via_doc_new(
     exactly as printed to stdout (coordinator-doc-new's own output
     contract).
 
-    ``category``/``summary`` and ``gated_open`` are C1's flags
-    (``--category``/``--summary``/``--gated-open``) — this function is a
+    ``category``/``summary`` and ``gated_predicate`` are C3's flags
+    (``--category``/``--summary``/``--gated-predicate``) — this function is a
     pure pass-through, never resolving or gating any of them itself; see
     ``_handler``'s own docstring for the gating decision that produces
-    ``gated_open``."""
+    ``gated_predicate``.
+
+    Deliberately NOT ``--gated-open``: that flag names a ``blocked_by`` id,
+    and DR-173's gate has none to name. Routing this reason text there would
+    mint a ``blocked_by`` entry that never resolves, parking the baton
+    permanently even after its fields are filled."""
     from coordinator_core.resolution.facade import resolve_operator_config
 
     claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
@@ -147,8 +152,14 @@ def _scaffold_via_doc_new(
         args += ["--category", category]
     if summary:
         args += ["--summary", summary]
-    if gated_open:
-        args += ["--gated-open", gated_open]
+    if gated_predicate:
+        # NOT --gated-open. That flag names a blocked_by id, and DR-173's gate
+        # has no id to name: passing this prose reason there would mint a
+        # blocked_by entry nothing can ever resolve, parking the baton forever
+        # even once category/summary are filled. --gated-predicate emits the
+        # ratified trio (awaiting_gate + pickup_ready: false + blocking_notes)
+        # with no fabricated graph edge.
+        args += ["--gated-predicate", gated_predicate]
     proc = subprocess.run(
         [sys.executable, cli, *args],
         cwd=cwd,
@@ -275,18 +286,18 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     #
     # This decision is a predicate over category/summary, not a carrier of
     # blocking_notes text: the branch taken here is what parks the baton
-    # (awaiting_gate + pickup_ready: false). gated_open below is written
+    # (awaiting_gate + pickup_ready: false). gate_reason below is written
     # AFTER the decision, as the human-readable reason for it -- deleting
     # or blanking that text would not unpark the baton, because the empty
     # fields are what park it, not the note describing why.
     if category and summary:
-        gated_open = None
+        gate_reason = None
     elif not category and not summary:
-        gated_open = "category and summary are unfilled placeholders"
+        gate_reason = "category and summary are unfilled placeholders"
     elif not category:
-        gated_open = "category is an unfilled placeholder"
+        gate_reason = "category is an unfilled placeholder"
     else:
-        gated_open = "summary is an unfilled placeholder"
+        gate_reason = "summary is an unfilled placeholder"
 
     try:
         handoff_path_str = _scaffold_via_doc_new(
@@ -295,7 +306,7 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
             resolved_cwd,
             category=category,
             summary=summary,
-            gated_open=gated_open,
+            gated_predicate=gate_reason,
         )
     except Exception as exc:  # noqa: BLE001 -- surfaced to the caller, never raised
         return _err(f"session_baton.promote: scaffold failed: {exc}")

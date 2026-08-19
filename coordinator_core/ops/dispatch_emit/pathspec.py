@@ -150,6 +150,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
@@ -199,6 +200,26 @@ class NoTestTargetError(ValueError):
     """
 
 
+class DirectoryShapedWriteError(ValueError):
+    """Raised when a row's declared ``writes:`` entry is directory-shaped
+    (a trailing ``/``, e.g. ``state/memo-outbox/sent/``) rather than a
+    single committable file.
+
+    ``scoped-git-commit`` refuses a directory pathspec by design — it has
+    no unscoped mode by construction. ``is_concrete_surface`` already
+    applies this exact trailing-slash check to the ``surface:`` fallback
+    (AC3), but the ``writes:`` primary path skipped it entirely whenever a
+    row declared ``writes:`` at all — the fallback path was guarded, the
+    primary path was not. Left uncaught, a directory-shaped ``writes:``
+    entry survives spine-derivation and schema validation alike and is only
+    discovered when a dispatched committer refuses it at runtime, by which
+    point the whole wave's work is stranded uncommitted. This check moves
+    that refusal to spine-derivation time, where the offending row is still
+    identifiable — named in the message, unlike the runtime refusal, which
+    fires against the whole wave's union with no row attribution.
+    """
+
+
 def is_concrete_surface(surface: str, *, repo_root: Path | None = None) -> bool:
     """True if ``surface`` is a concrete path the pathspec fallback may use.
 
@@ -245,9 +266,26 @@ def _declared_paths(row: WaveRow) -> list[str]:
     neither (UNDECLARED writes and a non-concrete surface) contributes
     nothing — it does not, by itself, trigger the wave/spine-level refusal;
     see ``NoWritesDeclaredError``'s docstring for that boundary.
+
+    Every declared ``writes:`` entry is checked for directory shape (a
+    trailing ``/``) before being returned — the same check
+    ``is_concrete_surface`` already applies to the ``surface:`` fallback
+    below, closing the hole where that check ran on the fallback path but
+    not the primary one (see ``DirectoryShapedWriteError``).
     """
     if row.writes is not UNDECLARED:
-        return list(row.writes)
+        # `WaveRow.writes` is typed `object` so one field can carry either a
+        # real list or the UNDECLARED sentinel. Identity against the sentinel
+        # is the documented gate (never truthiness — `writes: []` is a
+        # POSITIVE declaration), but it does not narrow for a type checker,
+        # and the sentinel is that field's only non-list inhabitant.
+        declared = cast("list[str]", row.writes)
+        for path in declared:
+            if path.endswith("/"):
+                raise DirectoryShapedWriteError(
+                    f"{row.id}'s `writes:` entry {path!r} is directory-shaped"
+                )
+        return list(declared)
     if is_concrete_surface(row.surface):
         return [row.surface]
     return []
