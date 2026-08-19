@@ -64,12 +64,35 @@ FALSE_POSITIVES = {
     "quoted_string_arg": (
         "python -c 'print(\"docs say " + BT + HAZARD + BT + " is the hazard\")'"
     ),
+    # Stresses the across-newlines pair matching specifically: two SEPARATE
+    # code spans on different lines, whose stray halves a newline-crossing
+    # scan could falsely pair with each other. The upstream strippers must
+    # remove this body before the pair scan ever sees it.
+    "multiline_prose_two_code_spans": (
+        "python - <<'PY'\n"
+        'a = "' + BT + HAZARD + BT + ' is the hazard"\n'
+        'b = "never write ' + BT + "rm -rf /" + BT + ' either"\n'
+        "PY"
+    ),
+    "multiline_comments_two_code_spans": (
+        'python -c "print(1)"  # ' + BT + HAZARD + BT + " is the hazard\n"
+        'python -c "print(2)"  # and ' + BT + "rm -rf /" + BT + " likewise"
+    ),
 }
 
 REAL_INVOCATIONS = {
     "command_substitution_parens": HAZARD + " " + SUBST_OPEN + "git rev-parse origin/main)",
     "command_substitution_backticks": HAZARD + " " + BT + "git rev-parse origin/main" + BT,
     "nested_in_compound": "cd /tmp && " + HAZARD + " " + SUBST_OPEN + "echo HEAD~5)",
+    # Ordinary shell, and the shape a single-line-only matched-pair rule drops
+    # out of CHECK 1 entirely: it survived only via the dirty-tree arm, which
+    # does not fire on a clean tree, so the deny looked present and was not.
+    "multiline_command_substitution_parens": (
+        HAZARD + " " + SUBST_OPEN + "\n  git rev-parse origin/main\n)"
+    ),
+    "multiline_command_substitution_backticks": (
+        HAZARD + " " + BT + "\n  git rev-parse origin/main\n" + BT
+    ),
 }
 
 

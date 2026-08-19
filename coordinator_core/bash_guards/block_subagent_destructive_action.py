@@ -383,6 +383,7 @@ from coordinator_core.bash_guards._dialect import (
     dialect_from_tool_name,
     resolve_segments_for_dialect,
 )
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._helpers import (
     resolve_git_root,
@@ -410,16 +411,22 @@ CLASS = "hard-deny"
 # settings_home()/state/destructive-guard-fail-open.log -- settings-home
 # rooted, outside the tracked repo tree.
 GENERATES = []
-# Held Bash-only deliberately, not an oversight: this guard is one of the
-# four-file cohort docs/reference/guard-tool-name-membership.md section 3 names as
-# held on its `_evaluate_legacy` free-text fallback (`if tokens is None:
-# return _evaluate_legacy(cmd)`) failing closed only for the shapes that
-# fallback was written against -- widening MATCHERS to admit PowerShell
-# payloads here, ahead of that fallback being re-verified against
-# PowerShell's here-string/backtick-escape shapes (which defeat the shlex
-# tokenizer feeding it), risks a spurious-deny path. See that doc's section 3 for
-# the ruling of record.
-MATCHERS = ("Bash",)
+# Widened 2026-08-19 (C7, docs/plans/2026-08-19-the-held-guard-cohort-
+# becomes-dialect-safe.md AC2/AC12) -- LAST of this cohort's flips,
+# deliberately ordered after C3 (this module's own `_evaluate_powershell_
+# destructive`, AC10) landed and its classifier tests + the AC5 anchored
+# differential were re-run green immediately before this change. A
+# dispatched subagent choosing the PowerShell tool instead of Bash
+# previously bypassed this guard entirely (see
+# docs/reference/guard-tool-name-membership.md section 3, now superseded by
+# this flip). The prior held-Bash-only rationale was that the `_evaluate_
+# legacy` free-text fallback (`if tokens is None: return _evaluate_legacy
+# (cmd)`) was only verified closed for POSIX shapes, not PowerShell's
+# here-string/backtick-escape shapes -- `_evaluate_powershell_destructive`
+# (C3) is the dedicated PowerShell-dialect classifier that resolves that gap
+# ahead of this widen, so `tokens is None` no longer routes a PowerShell
+# payload through the POSIX-only legacy fallback.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
 # ---------------------------------------------------------------------------
@@ -3176,21 +3183,132 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# POWERSHELL GIT-DESTRUCTIVE PARITY PORT (2026-08-19, C3 of docs/plans/
+# 2026-08-19-the-held-guard-cohort-becomes-dialect-safe.md). Prior to this
+# change, `_evaluate_powershell_destructive` above covered only
+# `_PS_REMOVE_VERBS`/`_PS_ICACLS_VERBS`/`_PS_STOP_PROCESS_VERBS` -- the Bash
+# leg's git deny ladder (`_evaluate_git_segment_anchored`, hard reset, force
+# push, checkout/switch discarding worktree state, branch -D, clean -fdx,
+# unscoped stash, filter-branch/filter-repo, worktree/remote/reflog mutation,
+# pull/merge not --ff-only, config not --get, etc. -- the full enumerated
+# ladder at lines ~1735-1948) sits on a `shlex`-tokenized path PowerShell
+# text never reaches (`check()` routes `Dialect.POWERSHELL` to
+# `_check_powershell`, never through the Bash-leg `_evaluate_git_surface`
+# call at the bottom of `check()`), so a real `tool_name == "PowerShell"`
+# dispatch carrying `git push --force` / `git reset --hard` / `git clean
+# -fdx` / ... saw NEITHER classifier and allowed silently.
+#
+# THIS IS A PORT, NOT A REIMPLEMENTATION: `git` is an external executable on
+# both dialects -- PowerShell passes its own argv through to `git.exe`
+# UNINTERPRETED (no cmdlet-style parameter-name prefix-matching applies to
+# an external command's own flags, unlike `_PS_REMOVE_VERBS`'s cmdlet-prefix
+# concern above), so git's subcommand/flag GRAMMAR is byte-identical
+# regardless of which shell invoked it. The existing anchored deny ladder
+# (`_evaluate_git_segment_anchored`) and its subcommand resolver
+# (`_real_git_subcommand`, itself already dialect-agnostic -- it operates on
+# a `List[str]`, never on shell-shaped text) are therefore REUSED VERBATIM
+# here, not duplicated: this function's only job is to get from
+# tree-sitter-pwsh's token stream to the same `(seg_text, subcmd,
+# remaining)` shape the Bash leg already builds via `shlex`, then hand off
+# to the identical classifier -- true byte-for-byte parity, not a
+# lookalike second implementation that could drift.
+#
+# MATCHERS IS NOT WIDENED HERE (AC12, deliberately deferred to a later
+# chunk in the same plan): this function is reachable ONLY via
+# `_check_powershell`, itself reachable only when `dialect_from_tool_name`
+# already resolved `Dialect.POWERSHELL` -- i.e. only when `MATCHERS`
+# already admits the calling tool name for SOME other reason. This chunk
+# makes the guard correct once reached; it does not change reachability.
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_powershell_git_destructive(cmd_norm: str) -> Optional[str]:
+    """Return a deny_kind label for the first destructive git invocation
+    found in ``cmd_norm``, tokenized via the PowerShell dialect resolver,
+    or ``None`` if none is found (clean, or the tokenizer declined to rule
+    -- SILENT already recorded by `resolve_segments_for_dialect` in that
+    case).
+
+    Per-segment: each token is quote/backtick-stripped
+    (`_ps_normalize_verb_token`, the SAME normalization
+    `_evaluate_powershell_destructive` already applies to its own head
+    token -- PowerShell's tokenizer emits a quoted leaf's source span
+    VERBATIM, unlike `shlex`) before the segment's head token is checked
+    against `git`/`git.exe`/... via `_normalize_executable_basename` (the
+    same basename normalizer the Bash leg uses, already case/suffix
+    tolerant). A non-git segment is skipped, not denied -- this function
+    only classifies segments that actually invoke git, exactly like the
+    Bash leg's own `_GIT_SURFACE_RE` gate.
+
+    A resolved git invocation is handed to `_real_git_subcommand` (already
+    dialect-agnostic -- see module comment above) to resolve the real
+    subcommand past git's own global options, then to
+    `_evaluate_git_segment_anchored` -- the IDENTICAL function the Bash leg
+    calls -- against a space-joined reconstruction of the cleaned tokens
+    (used only for that function's own flag-regex text searches, e.g.
+    `_HARD_FLAG_RE`/`_PUSH_FORCE_RE`; exact-token checks like
+    `"--ff-only" in remaining` are unaffected by reconstruction since they
+    compare against the already-tokenized ``remaining`` list, not the
+    joined text).
+
+    An AMBIGUOUS unrecognized-global-option resolution (`_real_git_
+    subcommand`'s own load-bearing "never guess, never allow" contract)
+    denies outright here rather than falling back to a legacy free-text
+    classifier: the Bash leg's `_evaluate_git_segment_legacy` fallback is a
+    Bash-shaped free-text scanner with no PowerShell-dialect counterpart in
+    this chunk's scope, and the Bash leg's own posture for this case is
+    "ambiguity never resolves to allow" -- denying preserves that posture
+    without inventing a second legacy classifier this chunk was not asked
+    to build.
+    """
+    segments = resolve_segments_for_dialect(
+        cmd_norm, Dialect.POWERSHELL, guard_name="block_subagent_destructive_action"
+    )
+    if segments is None:
+        return None
+
+    for tokens, _pipe_before in segments:
+        if not tokens:
+            continue
+        clean = [_ps_normalize_verb_token(tok) for tok in tokens]
+        if _normalize_executable_basename(clean[0]) != "git":
+            continue
+        subcmd, ambiguous, remaining = _real_git_subcommand(clean[1:])
+        if ambiguous:
+            return (
+                "git (unrecognized global option -- ambiguous resolution, "
+                "denied per _real_git_subcommand's never-guess contract)"
+            )
+        seg_text = " ".join(clean)
+        verdict = _evaluate_git_segment_anchored(seg_text, subcmd, remaining)
+        if verdict is not None:
+            return verdict
+
+    return None
+
+
 def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg of `check()` -- identity resolution mirrors the
     Bash leg's DUAL OR-resolver (module docstring "IDENTITY AXIS") exactly,
-    reusing the same helpers; only the SURFACE classification
-    (`_evaluate_powershell_destructive`) differs from the Bash leg's ~25
-    raw-text regexes. Kept as a fully separate function (not interleaved
-    into the Bash body) so the Bash leg's own AC4 behavior-preservation
-    requirement carries zero risk from this addition.
+    reusing the same helpers. SURFACE classification is split across two
+    functions: `_evaluate_powershell_git_destructive` (git deny ladder,
+    ported at parity from the Bash leg's `_evaluate_git_segment_anchored`
+    -- see that function's own module comment) and
+    `_evaluate_powershell_destructive` (the non-git
+    Remove-Item/icacls/Stop-Process verb classifier). Kept as a fully
+    separate function (not interleaved into the Bash body) so the Bash
+    leg's own AC4 behavior-preservation requirement carries zero risk from
+    this addition.
     """
     cmd = _extract_command(payload)
     if not cmd:
         return None
     cmd_norm = cmd.replace("\r", "")
 
-    deny_kind = _evaluate_powershell_destructive(cmd_norm)
+    deny_kind = _evaluate_powershell_git_destructive(cmd_norm)
+    if deny_kind is None:
+        deny_kind = _evaluate_powershell_destructive(cmd_norm)
     if deny_kind is None:
         return None
 

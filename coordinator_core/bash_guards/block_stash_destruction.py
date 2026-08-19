@@ -126,6 +126,7 @@ from typing import Any, Dict, Optional
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _BUNDLED_C_FLAG_RE,
     _normalize_executable_basename,
+    _ps_normalize_verb_token,
     _real_git_subcommand,
     _segments_from_tokens,
     _strip_heredoc_bodies,
@@ -135,18 +136,27 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+    strip_powershell_prose_noise,
+)
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-# Held Bash-only deliberately (2026-08-19 subagent-boundary MATCHERS pass):
-# this guard's `if tokens is None: return _evaluate_legacy(cmd)` free-text
-# fallback fails CLOSED on unparseable input, and PowerShell's here-string/
-# backtick-escape shapes defeat the `shlex`-based tokenizer feeding it.
-# Widening MATCHERS before that fallback fails open (or is replaced) ships
-# a live spurious-deny path: a legitimate command that merely mentions
-# `stash` in a quoted string or commit message would deny for a reason
-# unrelated to what it does. Documented cohort, EM-ruled:
-# docs/reference/guard-tool-name-membership.md § 3.
+# WIDENED 2026-08-19 (C6, docs/plans/2026-08-19-the-held-guard-cohort-
+# becomes-dialect-safe.md): the prior `("Bash",)` hold existed because the
+# `tokens is None -> _evaluate_legacy(cmd)` free-text fallback is bash-
+# shaped and fails CLOSED on unparseable input, and PowerShell's here-
+# string/backtick-escape shapes defeat the `shlex`-based tokenizer feeding
+# it. The PowerShell leg below (`_evaluate_powershell`) never reaches that
+# bash-shaped fallback -- its own `tokens is None` route goes to
+# `_evaluate_legacy_powershell`, which strips here-string bodies and quoted
+# spans via `_dialect.strip_powershell_prose_noise` (C2) before scanning,
+# per Conventions (a). Same cohort, same plan: `block_worktree_creation.py`,
+# `block_subagent_stash_creation.py`, `block_subagent_destructive_action.py`.
 CLASS = "hard-deny"
-MATCHERS = ("Bash",)
+MATCHERS = COMMAND_TOOL_NAMES
 #: `dispatch.py` hardcodes chain ordering explicitly, so this value governs
 #: nothing at runtime; it matches the sibling non-identity-gated guards
 #: (`block_worktree_creation`, the two sentinel guards) it is registered
@@ -303,6 +313,100 @@ def _evaluate(cmd: str) -> Optional[str]:
     return None
 
 
+def _evaluate_legacy_powershell(text: str) -> Optional[str]:
+    """PowerShell-shaped free-text fallback for the `tokens is None` route
+    (AC3 / Conventions (a)) -- NEVER routes to `_evaluate_legacy` above
+    (bash-shaped free text, the exact spurious-deny source this plan exists
+    to kill). Strips here-string bodies (`@'...'@`/`@"..."@`) and quoted
+    spans via `_dialect.strip_powershell_prose_noise` (C2) before scanning,
+    so a hazard-documenting prose string quoting `git stash drop` -- the
+    doe-claude shape this plan's Problem section names -- does not read as
+    an issued command. Still DENIES on a hit, per PM ruling: fail-closed
+    posture preserved, no widening of exposure. A dropped deny here is peer
+    stash data loss (module docstring, 2026-07-30 incident) -- the reason
+    this route strips rather than allows outright.
+    """
+    stripped = strip_powershell_prose_noise(text)
+    for m in _STASH_WORD_RE.finditer(stripped):
+        nxt = _NEXT_WORD_AFTER_RE.match(stripped, m.end())
+        second = nxt.group(1).rstrip(";&|") if nxt else None
+        verdict = _classify_stash_subcommand(second)
+        if verdict is not None:
+            return verdict
+    return None
+
+
+def _evaluate_powershell(cmd: str) -> Optional[str]:
+    """PowerShell-dialect leg of classification, parallel in shape to
+    `_evaluate` above but sourcing tokens from `_dialect.resolve_
+    segments_for_dialect` (tree-sitter-pwsh) instead of `shlex`.
+
+    Quote-normalization (Conventions (b)): PowerShell tokens retain their
+    surrounding quotes as emitted by the tokenizer, so every token is run
+    through `_ps_normalize_verb_token` (quote-strip via `_dialect._strip_ps_
+    quotes`, then backtick-escape removal -- imported directly from
+    `block_subagent_destructive_action`, which already applies this exact
+    normalization for its own PowerShell classifiers) BEFORE any literal
+    comparison -- an unstripped `"drop"` would silently fail to match
+    `_DENY_SUBCOMMANDS` and drop a real deny (fail-OPEN).
+
+    `sh -c` recursion (Conventions (c) / Anti-scope): the payload of an
+    `sh -c '...'`/`bash -c '...'`/etc. invocation is POSIX shell text even
+    when the outer call arrives via the PowerShell tool -- the recursive
+    call below is `_evaluate` (the BASH-dialect evaluator, tokenizing via
+    `shlex`), never `_evaluate_powershell`, so the payload dialect is never
+    inherited from the outer call. `powershell -Command "..."` is not in
+    `_C_FLAG_SHELL_INTERPRETERS` at all, so it does not trigger this path.
+    """
+    segments = resolve_segments_for_dialect(
+        cmd, Dialect.POWERSHELL, guard_name="block_stash_destruction"
+    )
+    if segments is None:
+        return _evaluate_legacy_powershell(cmd)
+
+    for tokens, _pipe_before in segments:
+        if not tokens:
+            continue
+        clean = [_ps_normalize_verb_token(tok) for tok in tokens]
+
+        head_base = _normalize_executable_basename(clean[0])
+        if head_base in _C_FLAG_SHELL_INTERPRETERS:
+            c_flag_positions = [
+                i for i in range(1, len(clean)) if _BUNDLED_C_FLAG_RE.match(clean[i])
+            ]
+            if c_flag_positions:
+                idx = c_flag_positions[0]
+                if idx + 1 < len(clean):
+                    # Recurse into the BASH evaluator on the `-c` payload --
+                    # never `_evaluate_powershell` (Conventions (c)).
+                    verdict = _evaluate(clean[idx + 1])
+                    if verdict is not None:
+                        return verdict
+                    continue
+
+        if head_base != "git":
+            continue
+
+        subcmd, ambiguous, remaining = _real_git_subcommand(clean[1:])
+        if ambiguous:
+            seg_text = " ".join(clean)
+            verdict = _evaluate_legacy_powershell(seg_text)
+            if verdict is not None:
+                return verdict
+            continue
+
+        if subcmd != "stash":
+            continue
+
+        # `remaining[0]` is already quote-normalized (part of `clean`).
+        second = remaining[0] if remaining else None
+        verdict = _classify_stash_subcommand(second)
+        if verdict is not None:
+            return verdict
+
+    return None
+
+
 def _deny_reason(cmd: str, deny_kind: str) -> str:
     cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
     return (
@@ -330,7 +434,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # dispatcher's job for hard-deny guards (its `guard_chain` fail_closed=True
     # entries route an uncaught exception through the crash-deny wrapper).
     # Swallowing an unexpected error into a silent allow here defeats that.
-    if (payload.get("tool_name") or "") not in MATCHERS:
+    tool_name = payload.get("tool_name") or ""
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is None:
         return None
 
     tool_input = payload.get("tool_input") or {}
@@ -341,13 +447,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Heredoc bodies are stdin DATA, not shell command text. The deny-reason
     # display below still uses the ORIGINAL `cmd` so the operator sees what
-    # they actually ran.
+    # they actually ran. `_strip_heredoc_bodies` matches bash `<<`-shaped
+    # syntax only -- a no-op on PowerShell text carrying no such marker.
     cmd_for_classification = _strip_heredoc_bodies(cmd)
 
     if not _STASH_WORD_RE.search(cmd_for_classification):
         return None
 
-    deny_kind = _evaluate(cmd_for_classification)
+    if dialect is Dialect.POWERSHELL:
+        deny_kind = _evaluate_powershell(cmd_for_classification)
+    else:
+        deny_kind = _evaluate(cmd_for_classification)
     if deny_kind is None:
         return None
 

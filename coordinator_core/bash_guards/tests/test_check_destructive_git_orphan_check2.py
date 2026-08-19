@@ -546,21 +546,18 @@ class TestCheck2ConfirmedNonGitLeafCommand:
         assert not _seg_confirmed_not_git_invocation("env FOO=1 git push")
         assert not _seg_confirmed_not_git_invocation("xargs git push")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "PRE-EXISTING bypass, verified present at HEAD before the "
-            "allowlist fix and NOT introduced by it: a forcing push wrapped in "
-            "a single-quoted `bash -c '...'` span is stripped by "
-            "`_strip_ws_quoted_spans` before CHECK 2 sees it, so nothing "
-            "remains to match. Left xfail rather than silently omitted so the "
-            "hole is visible in the suite. Fixing it means touching the "
-            "quoted-span stripper that three prior false-positive fixes in "
-            "this file depend on, so it is its own change with its own blast "
-            "radius, not a rider on this one."
-        ),
-    )
     def test_shell_wrapped_forcing_push_is_denied(self):
+        """Was a strict xfail: `_strip_ws_quoted_spans` eats the whole
+        single-quoted `bash -c '...'` span (it still does -- the stripper was
+        never touched), so the segment loop had nothing left to match.
+
+        The hole is closed, but one layer further on than the xfail reason
+        anticipated: `check_destructive_git_orphan` re-scans each
+        `_shell_c_unwrap_payloads` payload AFTER its segment loop, and the
+        unwrapped `git push origin main --force` matches there. Kept as a live
+        regression pin rather than deleted -- the marker was left strict
+        precisely so this would surface the moment it started passing.
+        """
         cmd = "bash -c 'git " + "push" + " origin main --" + "force" + "'"
         assert check_destructive_git_orphan(cmd) is not None
 

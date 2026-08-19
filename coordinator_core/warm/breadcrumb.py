@@ -236,14 +236,58 @@ def read_breadcrumb(engine_root: Optional[Path] = None) -> Optional[dict]:
     return record
 
 
-def unlink_breadcrumb(engine_root: Optional[Path] = None) -> None:
+def unlink_breadcrumb(
+    engine_root: Optional[Path] = None,
+    *,
+    owner_pid: Optional[int] = None,
+) -> None:
     """Best-effort remove the breadcrumb file. Never raises -- mirrors
     every other best-effort cleanup in this package (`detached_spawn`'s
     log writers, `warm.lifecycle`'s ctx-shutdown contract this function
     is meant to eventually back, per that module's own "unlinking the
     breadcrumb" step-3 language -- not yet wired, see module docstring's
-    WIRING NOTE)."""
+    WIRING NOTE).
+
+    `owner_pid` makes the unlink OWNERSHIP-CHECKED: the file is removed
+    only if the breadcrumb on disk still names that pid. There is exactly
+    ONE breadcrumb per clone and every winning server overwrites it at
+    boot, so a departing server is NOT necessarily the server the current
+    breadcrumb describes -- a superseded generation exiting would
+    otherwise delete its LIVE SUCCESSOR's breadcrumb:
+
+        A boots (pid 1111)          -> breadcrumb names 1111
+        publish; B boots (pid 2222) -> breadcrumb names 2222, A's clobbered
+        A exits, unconditional unlink -> breadcrumb GONE while B still serves
+
+    The consequences are not cosmetic: `should_spawn` reads a missing
+    breadcrumb as "no spawn in flight" and returns True, so the debounce
+    this file exists to provide silently stops debouncing, and
+    `coordinator/bin/warm-engine-stop.py` -- which identifies its target
+    solely from this file -- reports "nothing to stop" for a server that
+    is in fact still running.
+
+    This is why the check is keyed on the RECORDED pid rather than on the
+    caller merely believing it owns the file. `warm.skew`'s token
+    rotation makes generational overlap ordinary rather than exceptional,
+    and `warm.idle`'s superseded-generation arm retires a predecessor
+    within one watchdog poll of its successor binding -- i.e. exactly
+    when the successor's breadcrumb is freshest.
+
+    Omitted (the default), the unlink is unconditional: correct for a
+    caller that has ALREADY established ownership by other means, which
+    is `warm-engine-stop.py`'s case -- it stops the pid this same file
+    named and then clears it.
+    """
     path = breadcrumb_path(engine_root)
+    if owner_pid is not None:
+        current = read_breadcrumb(engine_root)
+        # An absent/corrupt breadcrumb (None) leaves nothing to remove; a
+        # breadcrumb naming a DIFFERENT pid belongs to another generation
+        # and is not this caller's to delete. Both are no-ops rather than
+        # a forced unlink -- an ownership check that falls back to
+        # deleting on doubt is not a check.
+        if current is None or current.get("pid") != owner_pid:
+            return
     try:
         path.unlink()
     except OSError:

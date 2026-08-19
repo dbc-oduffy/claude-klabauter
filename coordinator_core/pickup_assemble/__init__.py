@@ -4556,6 +4556,279 @@ def _scopes_intersect(scope_a: list[str], scope_b: list[str]) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-19-batons-unify-into-one-successor.md § C4): the
+# held-set + four-arm refusal DECISION for baton unification. Split from the
+# routing (C5) at the decision/action seam — this section computes a verdict
+# and writes NOTHING, so it is testable in isolation and cannot half-mutate
+# anything. See `compute_baton_unification_verdict`'s own docstring for the
+# full contract; this banner exists only to mark the boundary for a reader
+# scanning the file.
+# ---------------------------------------------------------------------------
+
+
+def _role_axis_is_unknown(role_raw: Any) -> bool:
+    """Is `baton_role` UNKNOWN on this record — i.e. absent, or present
+    carrying a null-ish placeholder?
+
+    Exists because this repo's frontmatter reader is a lightweight string
+    parser, not a YAML loader: `baton_role: null` comes back as the literal
+    STRING `'null'`, never Python `None`. A plain `is None` check therefore
+    misses every explicitly-nulled record, and since `'null'` is also not
+    `'work'`, such a record would fall between the two arms and be neither
+    inherited nor COUNTED — the silent gap the unstamped count exists to
+    close.
+
+    DoE's ruling is `absence ≡ unknown, and unknown is NOT inheritable`
+    (`handoff.schema.json :: baton_role`). A null-ish value asserts nothing,
+    so it is unknown for that rule's purposes — it is emphatically NOT a
+    stamped `record`, which is a deliberate not-work decision somebody made.
+    Never widen this to treat an UNRECOGNISED value as unknown: a future
+    third enum member must surface as unhandled, not read as legacy.
+    """
+    if role_raw is None:
+        return True
+    return str(role_raw).strip().lower() in ("", "null", "none", "~")
+
+
+def _primary_held_disposition(
+    root: Path,
+    primary_held_path: str,
+    target_fm: dict[str, Any],
+) -> str:
+    """One-candidate slice of `compute_competing_claim`'s classification
+    (ledger-first holder resolution, `session.liveness` verdicts,
+    `_lineage_related_sessions`, `_scopes_intersect`), scoped to D-F's
+    PRIMARY held baton evaluated against the frontmatter of the artifact
+    newly being picked up — `target_fm`, whose `scope` and lineage fields
+    are the whole of what this consults. The target's PATH is deliberately
+    NOT a parameter: nothing here reads it, and a signature advertising an
+    input it ignores is the same doc/behaviour divergence D-H exists to end.
+
+    Deliberately NOT a call to `compute_competing_claim` itself, for one
+    reason: that function's `related_sessions` (`_lineage_related_sessions`
+    alone) never includes the CALLING session's own id — correct for its
+    own verdict, which is informational-only and never gates anything
+    (PM ruling 2026-07-24), so omitting self-inclusion there is harmless.
+    It is not harmless here: this disposition gates a REFUSAL, and the
+    ordinary case is a session's own already-held baton, which must read as
+    a handover, not a live foreign peer. This function applies the SAME
+    self-inclusion `compute_liveness_signal` already does (2026-07-29
+    self-claim fix) before classifying.
+
+    Returns one of `stale-claim` / `handover` / `live-unrelated` /
+    `live-peer` — never a fifth value. A primary held baton with no
+    resolvable holder at all (should not occur for a ledger-sourced held
+    claim, but this function does not assume the ledger and the frontmatter
+    mirror never diverge — D-F's own rationale for reading the ledger in
+    the first place) reads as `stale-claim`: nothing live to refuse
+    against.
+    """
+    resolved = _resolve_lineage_artifact_path(root, primary_held_path)
+    primary_fm = _read_lineage_artifact_fm(resolved) if resolved is not None else None
+    primary_fm = primary_fm or {}
+
+    holder_sid = _resolve_ledger_first_holder(root, resolved, primary_fm) if resolved is not None else None
+    if not holder_sid:
+        return "stale-claim"
+
+    verdicts = _liveness.live_session_verdicts(str(root))
+    entry = verdicts.get(holder_sid)
+    holder_live = entry[0] if entry is not None else False
+    if not holder_live:
+        return "stale-claim"
+
+    related_sessions = set(_lineage_related_sessions(root, target_fm))
+    try:
+        self_sid = _session_core.resolve_session_id(str(root))
+    except (OSError, ValueError):
+        self_sid = ""
+    if self_sid:
+        related_sessions.add(str(self_sid))
+
+    if holder_sid in related_sessions:
+        return "handover"
+
+    target_scope = target_fm.get("scope", []) or []
+    primary_scope = primary_fm.get("scope", []) or []
+    if not _scopes_intersect(target_scope, primary_scope):
+        return "live-unrelated"
+    return "live-peer"
+
+
+def compute_baton_unification_verdict(
+    root: Path, fm: dict[str, Any], artifact_path: str
+) -> dict[str, Any]:
+    """C4: the held-set + four-arm refusal DECISION for a second pickup
+    while this session already holds a baton. Computes a verdict; writes
+    NOTHING — C5 (not this function) is the only thing allowed to act on
+    it, and only behind C5's own default-off predicate (D-I).
+
+    THIS IS A PRE-CONDITION CHECK, NOT A RESUME ORACLE. Re-deriving this
+    verdict after a partial unification action does NOT reproduce the
+    original held set: stamping a parent `continued` (terminal, D-F's own
+    disposed-not-held rule) or releasing its claim both shrink what a
+    fresh call to this function would return. C5's crash-recovery path
+    must resume by following a minted successor's `continued_into`
+    back-edge, never by calling this function again — nothing here is
+    shaped for that reuse, deliberately.
+
+    (a) Held set (D-F): `baton_assemble._resolve_held_handoff_for_session`
+    off the DURABLE CLAIM LEDGER — never re-derived from the `claimed_by`
+    frontmatter mirror, which goes stale the instant a shipped baton is
+    swept to `archive/handoffs/` (exactly the shipped-but-unarchived
+    window this must survive). Imported locally (not at module scope):
+    `baton_assemble` imports `compute_repo_identity_gate` from THIS module
+    at ITS module scope, so a module-level import here would be circular —
+    deferring it to call time is what makes the two-way reference safe.
+
+    Called with `allow_standalone=True`: a session holding ZERO handoff
+    claims (most commonly one that picked up via a cross-repo memo) reads
+    as "nothing held", not a raised `ValueError` — the resolver's own
+    documented distinction between a legitimate zero-claims shape and a
+    genuine environment failure (no session id resolvable at all, which
+    this function does NOT catch and lets propagate: that is a real
+    failure, not a decision this function should paper over).
+
+    A `degraded` set (the ORDERING contains a position decided by the
+    arbitrary basename tiebreak — e.g. `/pickup x y`, two batons claimed
+    in the same instant) still PROCEEDS. `degraded` is a set-level
+    ordering signal, per the resolver's own docstring it "does NOT change
+    which claim is picked" — it is never consulted as an input to this
+    verdict.
+
+    Each held baton is then filtered twice, in order:
+      - DISPOSED exclusion: a baton whose `deployment_state` is one of
+        `lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT` (most commonly
+        `shipped`, in the window before the boot sweep archives it) is
+        disposed, not held, and drops out of the inheritable set.
+      - Role-axis exclusion (`baton_role`, DoE-ratified `work | record`,
+        C7 not yet landed): POSITIVE match only — `fm.get("baton_role")
+        == "work"`, never a defaulted `.get`. Every on-disk record is
+        absent the field today, so a naive positive-match filter alone
+        would make the held set permanently, silently empty. A candidate
+        skipped because the field is ABSENT (as opposed to present and
+        `"record"`) is counted in `unstamped_skipped`, so the verdict can
+        say whether "no unification" means nothing was held at all, or
+        held batons existed but none were role-stamped yet — the same
+        silent-zero shape AC10 names for the `/mise-en-place` fallback,
+        one level down. No backfill and no default is invented here to
+        dodge the count.
+
+    (b) Four-arm refusal (`_primary_held_disposition`), evaluated against
+    D-F's PRIMARY held baton — "the extant baton", the primary input to
+    every unification — relative to the artifact now being picked up:
+
+      live-peer      -> REFUSE (a live, non-lineage, scope-overlapping
+                         holder — genuine contention)
+      live-unrelated -> REFUSE (a genuinely live foreign holder is the one
+                         thing the predecessor handoff's anti-scope
+                         forbids absorbing outright, scope-overlap or not)
+      handover       -> PROCEED (this session's own claim, or a lineage
+                         handover — the common, expected case)
+      stale-claim    -> PROCEED (no live holder; nothing to refuse
+                         against)
+
+    Read-only (mirrors the rest of this module's AC2b/AC3 contract): reads
+    disk/ledger state only, never mutates, never raises for a business
+    outcome (only a genuine environment failure propagates).
+    """
+    from coordinator_core.baton_assemble import _resolve_held_handoff_for_session
+    from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+
+    primary, additional, degraded = _resolve_held_handoff_for_session(
+        root, allow_standalone=True
+    )
+
+    if primary is None:
+        return {
+            "target": artifact_path,
+            "verdict": "no-unification",
+            "reason": "nothing-held",
+            "held": {"primary": None, "additional": [], "degraded": degraded},
+            "inheritable": [],
+            "disposed_skipped": [],
+            "unstamped_skipped": 0,
+            "disposition": None,
+            "message": "No held handoff claim on this session — nothing to unify.",
+        }
+
+    held_paths = [primary, *additional]
+    inheritable: list[str] = []
+    disposed_skipped: list[str] = []
+    unstamped_skipped = 0
+
+    for held_path in held_paths:
+        resolved = _resolve_lineage_artifact_path(root, held_path)
+        held_fm = _read_lineage_artifact_fm(resolved) if resolved is not None else None
+        if held_fm is None:
+            # Unreadable held claim — neither disposed nor role-matched;
+            # excluded from inheritance but NOT counted as an unstamped
+            # skip (that bucket is specifically the absent-axis case, not
+            # "couldn't read the file at all").
+            continue
+        if held_fm.get("deployment_state") in HANDOFF_TERMINAL_DEPLOYMENT:
+            disposed_skipped.append(held_path)
+            continue
+        role_raw = held_fm.get("baton_role")
+        if role_raw == "work":
+            inheritable.append(held_path)
+        elif _role_axis_is_unknown(role_raw):
+            unstamped_skipped += 1
+
+    if not inheritable:
+        if unstamped_skipped:
+            no_unify_reason = "unstamped-role-skipped"
+        elif disposed_skipped:
+            no_unify_reason = "all-held-disposed"
+        else:
+            no_unify_reason = "nothing-inheritable"
+        return {
+            "target": artifact_path,
+            "verdict": "no-unification",
+            "reason": no_unify_reason,
+            "held": {"primary": primary, "additional": additional, "degraded": degraded},
+            "inheritable": [],
+            "disposed_skipped": disposed_skipped,
+            "unstamped_skipped": unstamped_skipped,
+            "disposition": None,
+            "message": (
+                f"{unstamped_skipped} held baton(s) skipped — role axis absent, "
+                "not yet stamped (C7 pending)."
+                if unstamped_skipped
+                else (
+                    f"{len(disposed_skipped)} held baton(s) already disposed — "
+                    "nothing left to unify."
+                    if disposed_skipped
+                    else "No inheritable held baton — nothing to unify."
+                )
+            ),
+        }
+
+    disposition = _primary_held_disposition(root, primary, fm)
+    proceed = disposition in ("handover", "stale-claim")
+
+    return {
+        "target": artifact_path,
+        "verdict": "proceed" if proceed else "refuse",
+        "reason": disposition,
+        "held": {"primary": primary, "additional": additional, "degraded": degraded},
+        "inheritable": inheritable,
+        "disposed_skipped": disposed_skipped,
+        "unstamped_skipped": unstamped_skipped,
+        "disposition": disposition,
+        "message": (
+            f"Held baton {primary!r} unifies cleanly ({disposition})."
+            if proceed
+            else (
+                f"Held baton {primary!r} is held by a live, unrelated peer "
+                f"({disposition}) — refusing to absorb it. Ask the holder to "
+                "release or stand down first."
+            )
+        ),
+    }
+
+
 def _scan_bounded_archive_handoff_dir(archive_dir: Path) -> list[dict[str, Any]]:
     """A BOUNDED counterpart to `_scan_handoff_dir`, over `archive/handoffs/`
     instead of `state/handoffs/`: flat `archive/handoffs/*.md` (pre-month-

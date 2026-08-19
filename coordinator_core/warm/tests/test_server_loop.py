@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 import threading
 import time
@@ -517,10 +518,19 @@ def test_breadcrumb_exists_while_serving_and_gone_after_shutdown(tmp_path):
     `engine_root` -- the operator stop hatch (`warm-engine-stop.py`)
     otherwise reports "nothing to stop" for a server that is, in fact,
     still running (or, symmetrically, never learns a server has already
-    exited)."""
+    exited).
+
+    The breadcrumb is written under THIS process's pid because the unlink is
+    ownership-checked (`breadcrumb.unlink_breadcrumb`'s `owner_pid`): a
+    departing server clears only a breadcrumb that still names it, so that a
+    superseded generation's exit cannot delete its live successor's entry. A
+    synthetic pid here would exercise the refusal path, not the one this test
+    is about -- `test_ctx_shutdown_does_not_clear_a_successors_breadcrumb`
+    below covers the other side.
+    """
     breadcrumb.write_breadcrumb(
         pipe="pipe-x",
-        pid=12345,
+        pid=os.getpid(),
         stable_pid_start_epoch=1,
         engine_sha="deadbeef",
         engine_root=tmp_path,
@@ -533,6 +543,30 @@ def test_breadcrumb_exists_while_serving_and_gone_after_shutdown(tmp_path):
     ctx._ctx_shutdown()
 
     assert breadcrumb.read_breadcrumb(tmp_path) is None
+
+
+def test_ctx_shutdown_does_not_clear_a_successors_breadcrumb(tmp_path):
+    """The other side of the same contract, at the wiring level rather than
+    the primitive's: a SUPERSEDED generation running `_ctx_shutdown` must
+    leave the live successor's breadcrumb alone. Before the ownership check
+    this deleted it, and `warm.idle`'s superseded arm made that fire within
+    one watchdog poll of the successor binding."""
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-T2",
+        pid=os.getpid() + 1,  # the SUCCESSOR owns the clone's one breadcrumb
+        stable_pid_start_epoch=2,
+        engine_sha="successor",
+        engine_root=tmp_path,
+    )
+
+    ctx = server._ServerContext(
+        name="pipe-T1", sid="sid-x", version_state=_FakeVersionState(), engine_root=tmp_path
+    )
+    ctx._ctx_shutdown()
+
+    surviving = breadcrumb.read_breadcrumb(tmp_path)
+    assert surviving is not None, "a superseded generation deleted the successor's breadcrumb"
+    assert surviving["engine_sha"] == "successor"
 
 
 def _write_git_fixture(git_dir) -> None:

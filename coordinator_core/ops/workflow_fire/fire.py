@@ -49,12 +49,18 @@ this module does not attempt one.
 Reporting hazard: a fired child that exits 0 with ``terminal_reason:
 completed`` and an empty ``permission_denials`` array is NOT proof any
 phase did work — a per-phase tool refusal is invisible at the driver's own
-summary (live finding, same measurement that surfaced the
-``--allowedTools`` defect above). ``fire_status`` cannot detect this
-without an expensive log parse, which is deliberately out of scope here;
-see its docstring for the cheap, honest, non-authoritative signal it does
-surface instead. The log at ``log_path`` is the only real evidence of what
-a fired workflow actually did.
+summary. Read that warning as a CLASS, on a corrected basis: the original
+measurement was taken while ``_SESSION_ALLOWED_TOOLS`` was still the bare
+``Workflow`` grant, and widening it fixed that cause — a 2026-08-19 sweep
+of 4,736 transcripts found not one outer-grant refusal across ten fires
+and seventy agents. What keeps the class live is coordinator's own inner
+guard layer, which does still refuse individual tool calls inside a fired
+run. ``fire_status`` does not detect refusals; the per-phase truth is the
+harness's workflow journal, reachable via the ``driver_session_id`` this
+module records (see ``fire_status``'s docstring for the reader move, and
+docs/research/2026-08-19-what-a-fired-runs-driver-summary-cannot-tell-you.md
+for the measurements and for why the engine records the pointer rather
+than reading that store itself).
 
 Spec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md
 § C4
@@ -95,6 +101,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -315,6 +322,7 @@ def _record_path(registry_dir: Path, fire_id: str) -> Path:
 
 
 def _write_record(path: Path, record: dict) -> None:
+    record = _annotate_record(record)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
     tmp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
@@ -458,6 +466,168 @@ def _log_size_bytes(log_path: str) -> Optional[int]:
         return None
 
 
+#: Substring of the harness's own banner when it terminates still-running
+#: background work at its wait ceiling. That banner is the ONLY
+#: discriminator for this flavour of truncation: a run cut short this way
+#: still prints a terminal result envelope carrying ``is_error: false``
+#: (measured 2026-08-19 on fires 5df351a6 and 1eb8711b -- both truncated,
+#: both reporting a clean driver result).
+_TRUNCATION_BANNER = "Background tasks still running after"
+
+#: Bounded head+tail window read from a child's log when classifying its
+#: outcome -- the truncation banner lands at the head (stderr, ahead of the
+#: driver's stdout) and the terminal envelope at the tail, so neither end
+#: alone suffices. Never a whole-file read: a log is unbounded in principle
+#: and this runs inside every registry sweep.
+_LOG_SCAN_WINDOW_BYTES = 64 * 1024
+
+#: Bumped whenever the derived annotation set changes shape. A record
+#: stamped with an older version is re-classified ONCE on its next refresh
+#: and re-stamped -- which is how a record settled by an earlier version
+#: picks up a field that version never wrote, without a migration pass and
+#: without re-reading its log on every subsequent sweep.
+_ANNOTATION_VERSION = 2
+
+_STALENESS_NOTE = (
+    "`state`, `exit_code` and `outcome` are only valid as of `status_checked_at` -- "
+    "this file is not written when the child exits. Refresh with workflow.fire_status(<fire_id>)."
+)
+
+_EXIT_CODE_NOTE = (
+    "unrecoverable: the child is spawned detached with no retained handle, so no parent "
+    "survives to read its exit status. Read `outcome` instead."
+)
+
+
+def _iso(epoch_seconds) -> Optional[str]:
+    """UTC ISO-8601 rendering of an epoch float, for a human reading the raw
+    record. Returns ``None`` for a missing or unparseable value."""
+    try:
+        return datetime.fromtimestamp(float(epoch_seconds), tz=timezone.utc).isoformat(
+            timespec="seconds"
+        )
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _read_log_window(log_path: str) -> Optional[str]:
+    """Head + tail of a child's log, each capped at
+    ``_LOG_SCAN_WINDOW_BYTES``. Returns ``None`` if the log cannot be read.
+
+    Negative-spec: NOT the permission-denial log parser ``fire_status``'s
+    docstring rules out of scope -- this reads two bounded windows and looks
+    only for the driver's own terminal envelope and truncation banner, never
+    for per-phase tool refusals.
+    """
+    try:
+        with open(log_path, "rb") as handle:
+            window = handle.read(_LOG_SCAN_WINDOW_BYTES)
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            if size > _LOG_SCAN_WINDOW_BYTES:
+                handle.seek(max(size - _LOG_SCAN_WINDOW_BYTES, len(window)))
+                window += b"\n" + handle.read()
+    except OSError:
+        return None
+    return window.decode("utf-8", errors="replace")
+
+
+def _terminal_envelope(text: str) -> Optional[dict]:
+    """The child's own ``--output-format json`` result envelope, or ``None``.
+
+    Its presence is the child's last act, and the only in-band evidence that
+    the driver reached its own end rather than being killed mid-run. Its
+    ``session_id`` is the one field lifted onto the record (see
+    ``_annotate_record``) -- every other field in it describes the DRIVER,
+    which is exactly the thing a reader must not mistake for the workflow.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed.get("type") == "result":
+            return parsed
+    return None
+
+
+def _classify_outcome(record: dict) -> tuple:
+    """Classify a fire as ``clean`` / ``truncated`` / ``unknown`` from the
+    child's own log, returning ``(outcome, basis)``.
+
+    This answers the question the exit code cannot answer here: the spawn is
+    detached (``DETACHED_PROCESS`` / ``start_new_session``) and no ``Popen``
+    handle survives across process boundaries, so a real exit status is
+    unrecoverable once the child is reaped -- ``_refresh_record_state`` can
+    only infer death from a dead pid. The reachable signals are the two the
+    child itself writes: the harness's background-work truncation banner,
+    and the driver's terminal result envelope.
+
+    ``clean`` means the DRIVER finished, never that the workflow's phases did
+    work -- a fully-refused run exits 0 with a clean envelope too (see
+    ``fire_status``'s docstring for that separate, still-live hazard).
+
+    Returns ``(outcome, basis, driver_session_id)``; the session id is
+    ``None`` whenever no envelope was recovered.
+    """
+    if record.get("state") != "exited":
+        return "unknown", "the run has not been observed to end", None
+    text = _read_log_window(record.get("log_path", ""))
+    if text is None:
+        return "unknown", "the child's log could not be read", None
+    envelope = _terminal_envelope(text)
+    session_id = (envelope or {}).get("session_id")
+    if _TRUNCATION_BANNER in text:
+        return (
+            "truncated",
+            "the driver terminated still-running background work at its wait ceiling",
+            session_id,
+        )
+    if envelope is not None:
+        return "clean", "the driver wrote its own terminal result envelope", session_id
+    return "truncated", "the child is dead and never wrote a terminal result envelope", None
+
+
+def _annotate_record(record: dict) -> dict:
+    """Make a raw record self-describing: staleness, outcome, and why
+    ``exit_code`` is null.
+
+    Applied on every write and every refresh, so a reader who opens
+    ``<git-common-dir>/coordinator-sessions/workflow-fires/<id>.json``
+    directly -- the obvious move when checking your own run, and the one
+    that misled three sessions on 2026-08-19 -- sees from the record alone
+    that ``state`` is a timestamped observation, not a current fact.
+    Returns an annotated copy, ``==``-equal to its input when nothing
+    changed, so callers keying on identity do not churn writes.
+
+    A terminal ``outcome`` is computed once, at the transition, and reused
+    thereafter -- the log read never repeats on later sweeps, except for the
+    single re-classification a ``_ANNOTATION_VERSION`` bump forces.
+    """
+    annotated = dict(record)
+    annotated["_readme"] = _STALENESS_NOTE
+    annotated["status_checked_at_iso"] = _iso(
+        record.get("status_checked_at", record.get("reserved_at"))
+    )
+    settled = annotated.get("outcome") in ("clean", "truncated")
+    current = annotated.get("_annotation_version") == _ANNOTATION_VERSION
+    if not (settled and current):
+        outcome, basis, driver_session_id = _classify_outcome(annotated)
+        annotated["outcome"] = outcome
+        annotated["outcome_basis"] = basis
+        if driver_session_id:
+            annotated["driver_session_id"] = driver_session_id
+    annotated["_annotation_version"] = _ANNOTATION_VERSION
+    if annotated.get("state") == "exited" and annotated.get("exit_code") is None:
+        annotated["exit_code_note"] = _EXIT_CODE_NOTE
+    else:
+        annotated.pop("exit_code_note", None)
+    return annotated
+
+
 def _refresh_record_state(record: dict) -> dict:
     """Reclaim stale state before counting/reporting it.
 
@@ -475,7 +645,8 @@ def _refresh_record_state(record: dict) -> dict:
             record = dict(record)
             record["state"] = "exited"
             record["status_checked_at"] = time.time()
-        return record
+        annotated = _annotate_record(record)
+        return annotated if annotated != record else record
     current_log_size = _log_size_bytes(record.get("log_path", ""))
     needs_update = current_log_size != record.get("log_size_bytes")
     died = record.get("state") == "running" and not _pid_alive(record["pid"])
@@ -486,7 +657,8 @@ def _refresh_record_state(record: dict) -> dict:
             record["state"] = "exited"
             record["exit_code"] = None
         record["status_checked_at"] = time.time()
-    return record
+    annotated = _annotate_record(record)
+    return annotated if annotated != record else record
 
 
 def count_live_fires(cwd: Optional[str] = None) -> int:
@@ -637,6 +809,7 @@ def fire_workflow(
         "status_checked_at": started_at,
         "log_size_bytes": _log_size_bytes(str(log_path)),
     }
+    record = _annotate_record(record)
     _write_record(record_path, record)
     return record
 
@@ -649,22 +822,33 @@ def fire_status(fire_id: str, cwd: Optional[str] = None) -> Optional[dict]:
     reports "exited" with ``exit_code: None`` (unknown), never a recovered
     real exit code, once the child has already been reaped.
 
-    IMPORTANT -- ``state: "exited"`` with ``exit_code: 0`` does NOT mean
-    the fired workflow's phases did any work. A live measurement showed a
-    child that exits 0 with the harness's own ``terminal_reason:
-    completed`` and an EMPTY ``permission_denials`` array while every
-    phase inside it had actually been refused (see module docstring's
-    "Reporting hazard" section) -- a per-phase tool refusal is invisible
-    at the driver's own summary. This function does not (and deliberately
-    does not attempt to) parse the child's log for permission denials --
-    that is an expensive, out-of-scope log parser this chunk does not
-    build. The one cheap signal it does surface is ``log_size_bytes``
-    (see ``_log_size_bytes``): a genuinely useful red flag at ``0``
-    ("nothing was ever captured"), but NOT proof of success at any
+    IMPORTANT -- neither ``state: "exited"`` nor ``outcome: "clean"`` means
+    the fired workflow's phases did any work. Both describe the DRIVER. A
+    live measurement showed a child exiting 0 with the harness's own
+    ``terminal_reason: completed`` and an EMPTY ``permission_denials``
+    array while every phase inside it had been refused (see module
+    docstring's "Reporting hazard" section for that finding's corrected
+    basis). A per-phase tool refusal is invisible at the driver's own
+    summary, and this function does not attempt to detect one -- that is a
+    content parse of the per-agent transcripts, deliberately out of scope
+    (docs/research/2026-08-19-what-a-fired-runs-driver-summary-cannot-tell-you.md
+    § Ruling).
+
+    The reader move, in order: take ``outcome`` for whether the run
+    FINISHED; treat the driver's own ``is_error`` / ``permission_denials``
+    as driver-scope only; and when the question is whether the PHASES did
+    the work, open the harness's workflow journal for
+    ``driver_session_id`` -- one ``started`` and one ``result`` entry per
+    agent, carrying each agent's actual return value. That journal is the
+    authoritative per-phase record; on the ten fires measured 2026-08-19
+    its started-vs-returned counts agreed with ``outcome`` on every row.
+    The engine records the id and does not read that store: it lives under
+    the harness's private, unversioned transcript layout, which is not a
+    dependency this op will take (same § Ruling).
+
+    ``log_size_bytes`` (see ``_log_size_bytes``) remains a cheap red flag
+    at ``0`` ("nothing was ever captured"), and NOT proof of success at any
     non-zero value -- a fully-refused run still prints its JSON summary.
-    The log at the returned record's ``log_path`` is the only real
-    evidence of what a fired workflow did; a caller that needs to know
-    reads it.
     """
     registry_dir = _registry_dir(cwd)
     path = _record_path(registry_dir, fire_id)

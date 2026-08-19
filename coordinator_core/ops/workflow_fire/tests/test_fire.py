@@ -472,3 +472,209 @@ def test_posix_spawn_uses_start_new_session(repo, script, monkeypatch):
 
     assert captured.get("start_new_session") is True
     assert "creationflags" not in captured
+
+
+# ---------------------------------------------------------------------------
+# Record self-description -- staleness, outcome, exit-code honesty
+#
+# Spec backlink: state/handoffs/2026-08-19-fire-run-observability.md.
+# The defect pinned here is reader-side: a raw read of a fire record reported
+# a dead run as running, three times in one afternoon, because the record
+# carried nothing marking `state` as a timestamped observation.
+# ---------------------------------------------------------------------------
+
+_CLEAN_ENVELOPE = '{"is_error":false,"stop_reason":"end_turn","type":"result","duration_ms":10}\n'
+_TRUNCATION_LOG = (
+    "Background tasks still running after 600s; terminating. Set "
+    "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.\n" + _CLEAN_ENVELOPE
+)
+
+
+def _exited_record(repo, log_text="", **overrides):
+    """A registry record in the shape `_refresh_record_state` produces for a
+    child whose pid is gone, with a log on disk to classify."""
+    log_path = Path(repo) / "fire.log"
+    log_path.write_text(log_text, encoding="utf-8")
+    record = {
+        "fire_id": "f" * 32,
+        "pid": 999999,
+        "state": "exited",
+        "exit_code": None,
+        "log_path": str(log_path),
+        "log_size_bytes": len(log_text),
+        "started_at": 1_000_000.0,
+        "status_checked_at": 1_000_060.0,
+    }
+    record.update(overrides)
+    return record
+
+
+def test_raw_record_on_disk_states_that_state_is_only_valid_as_of_a_timestamp(
+    repo, script, monkeypatch
+):
+    """The stale-read case. Fails against pre-2026-08-19 code, which wrote a
+    bare `state` with nothing marking it as an observation."""
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+    registry_path = fire._record_path(fire._registry_dir(str(repo)), record["fire_id"])
+    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+
+    assert "status_checked_at" in raw["_readme"]
+    assert "fire_status" in raw["_readme"]
+    assert raw["status_checked_at_iso"].endswith("+00:00")
+
+
+def test_refresh_annotates_a_record_written_before_the_annotation_existed(repo):
+    """Self-healing migration -- a legacy record picks up its annotations on
+    the next refresh, with no migration pass."""
+    legacy = _exited_record(repo, log_text=_CLEAN_ENVELOPE)
+
+    refreshed = fire._refresh_record_state(legacy)
+
+    assert refreshed is not legacy
+    assert "_readme" in refreshed
+
+
+def test_exited_record_says_why_exit_code_is_null(repo):
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text=_CLEAN_ENVELOPE))
+
+    assert refreshed["exit_code"] is None
+    assert "detached" in refreshed["exit_code_note"]
+
+
+def test_clean_finish_is_distinguishable_from_a_truncated_run(repo):
+    """The exit code cannot separate these -- both are `None` -- so the
+    classification comes off the child's own log."""
+    clean = fire._refresh_record_state(_exited_record(repo, log_text=_CLEAN_ENVELOPE))
+    assert clean["outcome"] == "clean"
+
+    truncated = fire._refresh_record_state(_exited_record(repo, log_text=_TRUNCATION_LOG))
+    assert truncated["outcome"] == "truncated"
+
+
+def test_a_truncated_run_reporting_is_error_false_is_still_classified_truncated(repo):
+    """Measured 2026-08-19 on fires 5df351a6 and 1eb8711b: a truncated run's
+    envelope reads exactly like a clean one."""
+    truncated = fire._refresh_record_state(_exited_record(repo, log_text=_TRUNCATION_LOG))
+
+    assert '"is_error":false' in _TRUNCATION_LOG
+    assert truncated["outcome"] == "truncated"
+    assert "wait ceiling" in truncated["outcome_basis"]
+
+
+def test_a_dead_child_that_never_wrote_an_envelope_is_truncated(repo):
+    killed = fire._refresh_record_state(
+        _exited_record(repo, log_text="partial output, no envelope\n")
+    )
+
+    assert killed["outcome"] == "truncated"
+
+
+def test_a_running_record_carries_no_terminal_outcome(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert record["state"] == "running"
+    assert record["outcome"] == "unknown"
+
+
+def test_a_settled_outcome_is_not_recomputed_from_the_log_on_later_sweeps(repo, monkeypatch):
+    """The log read happens once, at the transition -- registry sweeps run on
+    every fire under a 50-70 concurrent-LLM load norm."""
+    settled = fire._refresh_record_state(_exited_record(repo, log_text=_CLEAN_ENVELOPE))
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("outcome recomputed: the log was re-read on a later sweep")
+
+    monkeypatch.setattr(fire, "_read_log_window", _fail)
+    again = fire._refresh_record_state(settled)
+
+    assert again["outcome"] == "clean"
+
+
+def test_refresh_of_an_already_annotated_unchanged_record_does_not_churn_a_write(repo):
+    """Identity is the callers' no-write signal (`count_live_fires`,
+    `fire_status`) -- annotation must not break it."""
+    settled = fire._refresh_record_state(_exited_record(repo, log_text=_CLEAN_ENVELOPE))
+
+    assert fire._refresh_record_state(settled) is settled
+
+
+def test_log_window_read_is_bounded_on_a_large_log(repo):
+    """Head and tail both reach the classifier without a whole-file read."""
+    log_path = Path(repo) / "big.log"
+    filler = "x" * (fire._LOG_SCAN_WINDOW_BYTES * 3)
+    log_path.write_text("HEAD-MARKER\n" + filler + "\nTAIL-MARKER\n", encoding="utf-8")
+
+    window = fire._read_log_window(str(log_path))
+
+    assert "HEAD-MARKER" in window
+    assert "TAIL-MARKER" in window
+    assert len(window) < len(filler)
+
+
+def test_driver_session_id_is_lifted_from_the_terminal_envelope(repo):
+    """The one hop to the per-phase truth. The envelope already carries it;
+    a reader should not have to know that to find the workflow journal."""
+    envelope = (
+        '{"is_error":false,"type":"result","session_id":"6a9d7a24-1a9f-48ce-8879-c15d5258849c"}\n'
+    )
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text=envelope))
+
+    assert refreshed["driver_session_id"] == "6a9d7a24-1a9f-48ce-8879-c15d5258849c"
+
+
+def test_a_child_with_no_envelope_carries_no_driver_session_id(repo):
+    """Absent, never guessed -- a truncated child that died before writing
+    its envelope has no session id to report."""
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text="no envelope here\n"))
+
+    assert refreshed["outcome"] == "truncated"
+    assert "driver_session_id" not in refreshed
+
+
+def test_a_truncated_run_still_reports_its_driver_session_id(repo):
+    """Truncation is exactly when a reader most needs the journal."""
+    log = _TRUNCATION_LOG.replace(
+        '"type":"result"', '"type":"result","session_id":"1ffc4db6-faf7-415b-a559-bc983abcd642"'
+    )
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text=log))
+
+    assert refreshed["outcome"] == "truncated"
+    assert refreshed["driver_session_id"] == "1ffc4db6-faf7-415b-a559-bc983abcd642"
+
+
+def test_terminal_envelope_returns_the_parsed_envelope_not_a_bare_flag(repo):
+    assert fire._terminal_envelope(_CLEAN_ENVELOPE)["stop_reason"] == "end_turn"
+    assert fire._terminal_envelope("nothing json here") is None
+    assert fire._terminal_envelope('{"type":"assistant"}') is None
+
+
+def test_a_record_settled_by_an_older_annotation_version_is_reclassified_once(repo):
+    """A record settled before `driver_session_id` existed picks it up on its
+    next refresh -- and then stops re-reading its log."""
+    envelope = '{"is_error":false,"type":"result","session_id":"e090f8be-c4a9-4fe9-99f5-000000000000"}\n'
+    stale = _exited_record(repo, log_text=envelope)
+    stale["outcome"] = "clean"
+    stale["outcome_basis"] = "the driver wrote its own terminal result envelope"
+    stale["_annotation_version"] = 1
+
+    migrated = fire._refresh_record_state(stale)
+    assert migrated["driver_session_id"] == "e090f8be-c4a9-4fe9-99f5-000000000000"
+    assert migrated["_annotation_version"] == fire._ANNOTATION_VERSION
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("log re-read after the version migration already ran")
+
+    monkeypatched = fire._read_log_window
+    fire._read_log_window = _fail
+    try:
+        assert fire._refresh_record_state(migrated) is migrated
+    finally:
+        fire._read_log_window = monkeypatched

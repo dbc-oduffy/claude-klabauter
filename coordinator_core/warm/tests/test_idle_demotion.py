@@ -401,3 +401,24 @@ def test_idle_module_still_does_not_import_skew():
             imported.add(node.module or "")
             imported.update(f"{node.module}.{a.name}" for a in node.names)
     assert not any("skew" in name for name in imported), sorted(imported)
+
+    # A dynamic `importlib.import_module("...skew")` or `__import__("...skew")`
+    # is an ast.Call, not an ast.Import/ImportFrom node, and would silently
+    # bypass the walk above -- check for it separately.
+    dynamic_imports = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_import_module = (
+            isinstance(func, ast.Attribute)
+            and func.attr == "import_module"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "importlib"
+        )
+        is_dunder_import = isinstance(func, ast.Name) and func.id == "__import__"
+        if not (is_import_module or is_dunder_import):
+            continue
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            dynamic_imports.append(node.args[0].value)
+    assert not any("skew" in name for name in dynamic_imports), dynamic_imports

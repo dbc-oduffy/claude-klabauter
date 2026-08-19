@@ -105,6 +105,39 @@ add` invocation outside the heredoc body still denies exactly as before.
 Spec: fleet-wide structural git-worktree ban, main-loop leg (DoE-claude
 dispatch, 2026-07-28) -- companion to `block_subagent_destructive_action.py`'s
 pre-existing identity-gated `git worktree add` denial.
+
+DIALECT CONVERSION (2026-08-19, C4 of
+`docs/plans/2026-08-19-the-held-guard-cohort-becomes-dialect-safe.md`). The
+prior hold (Bash-only `MATCHERS`) is discharged. This is the HIGHEST
+spurious-deny blast radius of the four held guards: `_classify_worktree_
+subcommand` default-denies ANY unrecognized second word, so an unparseable
+PowerShell string that merely contains the word `worktree` would deny
+whatever plain word follows it, for a reason unrelated to what it does.
+
+- Dialect resolved from `payload["tool_name"]` via `_dialect.
+  dialect_from_tool_name` -- never inferred from command text (see
+  `_dialect.py`'s own Anti-scope).
+- BASH leg is UNCHANGED (AC6): `_evaluate`/`_evaluate_legacy` still run over
+  `_command_tokenizer`/`block_subagent_destructive_action` helpers exactly
+  as before this conversion.
+- POWERSHELL leg tokenizes via `_dialect.resolve_segments_for_dialect`. When
+  it cannot parse (`None`), this guard routes to C2's PowerShell-shaped
+  scanner (`_dialect.strip_powershell_prose_noise`) -- NEVER to the
+  bash-shaped `_evaluate_legacy` (PM ruling, Convention (a) of the cohort
+  plan) -- and still DENIES on a hit: fail-closed posture preserved, no
+  widening of exposure.
+- Every PowerShell literal-token comparison strips quotes via
+  `_dialect._strip_ps_quotes` FIRST (Convention (b)): `_flatten_powershell_
+  tokens` emits raw source spans, so a token like `"add"` arrives quoted, not
+  `add`. Skipping this strip would make an unrecognized-but-quoted second
+  word default-deny even when the real word is a recognized allow-listed
+  form -- this guard's own fail-CLOSED risk direction per Convention (b).
+- `sh -c '...'`/`bash -c '...'` payload text is always Bash, even when the
+  OUTER call is PowerShell (Convention (c)) -- the recursive unwrap below
+  always calls the Bash-shaped `_evaluate`, never a PowerShell-dialect
+  re-entry, so it never inherits the outer dialect.
+
+Spec backlink: `pln-the-held-guard-cohort-becomes-a94c56` § C4
 """
 
 from __future__ import annotations
@@ -125,18 +158,17 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+    strip_powershell_prose_noise,
+)
+from coordinator_core.bash_guards._dialect import _strip_ps_quotes
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-# Held Bash-only deliberately (2026-08-19 subagent-boundary MATCHERS pass):
-# this guard's `if tokens is None: return _evaluate_legacy(cmd)` free-text
-# fallback fails CLOSED on unparseable input, and PowerShell's here-string/
-# backtick-escape shapes defeat the `shlex`-based tokenizer feeding it.
-# Widening MATCHERS before that fallback fails open (or is replaced) ships
-# a live spurious-deny path: a legitimate command that merely mentions
-# `worktree` in a quoted string or commit message would deny for a reason
-# unrelated to what it does. Documented cohort, EM-ruled:
-# docs/reference/guard-tool-name-membership.md § 3.
 CLASS = "hard-deny"
-MATCHERS = ("Bash",)
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
 #: Cheap pre-filter (mirrors the sibling module's Layer-1 posture): a
@@ -338,6 +370,104 @@ def _evaluate(cmd: str) -> Optional[str]:
     return None
 
 
+def _ps_normalize_token(tok: str) -> str:
+    """Normalize a single PowerShell token to its plain comparison spelling:
+    strip a surrounding quote first (`_dialect._strip_ps_quotes`'s own
+    "verbatim quoted span" contract -- see Convention (b) cited in this
+    module's docstring), THEN remove a no-op backtick escape, matching
+    `block_subagent_destructive_action._ps_normalize_verb_token`'s own
+    order.
+    """
+    return _strip_ps_quotes(tok).replace("`", "")
+
+
+def _evaluate_powershell_legacy(text: str) -> Optional[str]:
+    """PowerShell-shaped free-text fallback for the `tokens is None` route
+    (C2's scanner, Convention (a) -- NEVER the bash-shaped `_evaluate_legacy`
+    above). `text` is stripped of here-string bodies and quoted spans via
+    `_dialect.strip_powershell_prose_noise` before the same
+    `_WORKTREE_WORD_RE` + "next plain word" scan the bash leg's own
+    `_evaluate_legacy` uses -- still DENIES on a hit (PM ruling: fail-closed
+    posture preserved, no widening of exposure)."""
+    scannable = strip_powershell_prose_noise(text)
+    m = _WORKTREE_WORD_RE.search(scannable)
+    if not m:
+        return None
+    nxt = _NEXT_WORD_AFTER_RE.match(scannable, m.end())
+    second = nxt.group(1).rstrip(";&|") if nxt else None
+    if second is not None:
+        second = _ps_normalize_token(second)
+    return _classify_worktree_subcommand(second)
+
+
+def _evaluate_powershell(cmd: str) -> Optional[str]:
+    """PowerShell-dialect leg of classification: tokenize AND segment via
+    `_dialect.resolve_segments_for_dialect` (quote-aware, `;`/`&`-segmented
+    -- see `_dialect.py`'s own "Output shape"), and for each segment resolve
+    the REAL git subcommand from argv position exactly like the bash leg
+    (`_real_git_subcommand`, dialect-agnostic -- it operates on a
+    `List[str]`, never on shell-shaped text). Falls back to
+    `_evaluate_powershell_legacy` on an unparseable segment/command or an
+    unrecognized-global-option ambiguity, per Convention (a).
+    """
+    segments = resolve_segments_for_dialect(
+        cmd, Dialect.POWERSHELL, guard_name="block_worktree_creation"
+    )
+    if segments is None:
+        return _evaluate_powershell_legacy(cmd)
+
+    for seg_tokens, _pipe_before in segments:
+        if not seg_tokens:
+            continue
+
+        # Command-position discipline (same reasoning as the bash leg's own
+        # comment above `_evaluate`): normalize every token's quoting BEFORE
+        # any comparison, per Convention (b).
+        clean = [_ps_normalize_token(t) for t in seg_tokens]
+        working = _skip_leading_env_assignments(clean)
+        if not working:
+            continue
+
+        # `sh -c '...'`/`bash -c '...'` typed from a PowerShell call --
+        # Convention (c): the payload is Bash even under a PowerShell outer
+        # call, so the recursive call below is the Bash-shaped `_evaluate`,
+        # never a PowerShell re-entry. `powershell -Command "..."` is NOT in
+        # `_C_FLAG_SHELL_INTERPRETERS` at all, so it never reaches here.
+        head_base = _normalize_executable_basename(working[0])
+        if head_base in _C_FLAG_SHELL_INTERPRETERS:
+            c_flag_positions = [
+                i for i in range(1, len(working)) if _BUNDLED_C_FLAG_RE.match(working[i])
+            ]
+            if c_flag_positions:
+                idx = c_flag_positions[0]
+                if idx + 1 < len(working):
+                    verdict = _evaluate(working[idx + 1])
+                    if verdict is not None:
+                        return verdict
+                    continue
+
+        if head_base != "git":
+            continue
+
+        subcmd, ambiguous, remaining = _real_git_subcommand(working[1:])
+        if ambiguous:
+            seg_text = " ".join(shlex.quote(t) for t in seg_tokens)
+            verdict = _evaluate_powershell_legacy(seg_text)
+            if verdict is not None:
+                return verdict
+            continue
+
+        if subcmd != "worktree":
+            continue
+
+        second = remaining[0] if remaining else None
+        verdict = _classify_worktree_subcommand(second)
+        if verdict is not None:
+            return verdict
+
+    return None
+
+
 def _deny_reason(deny_kind: str) -> str:
     return (
         "BLOCKED: %s banned fleet-wide -- breaks on Windows, does not "
@@ -368,6 +498,30 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = cmd.replace("\r", "")
+
+    dialect = dialect_from_tool_name(payload.get("tool_name") or "")
+
+    if dialect is Dialect.POWERSHELL:
+        # PowerShell has no POSIX heredoc syntax -- the bash leg's
+        # `_strip_heredoc_bodies` does not apply here. A quoted/here-string
+        # `worktree` mention is inherently safe against this cheap
+        # pre-filter too: when the tokenizer parses cleanly, a quoted span
+        # is ONE atomic token (`_ATOMIC_ARGUMENT_NODE_TYPES`), never split
+        # into separate `git`/`worktree`/`add` words a segment's head could
+        # resolve to, so the real classification below never misreads
+        # prose as an invocation on the parses-cleanly route.
+        if not _WORKTREE_WORD_RE.search(cmd):
+            return None
+        deny_kind = _evaluate_powershell(cmd)
+        if deny_kind is None:
+            return None
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": _deny_reason(deny_kind),
+            }
+        }
 
     # Heredoc bodies are stdin DATA, not shell command text -- strip them
     # before classification (same fix already applied by the sibling

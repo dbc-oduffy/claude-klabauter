@@ -363,3 +363,114 @@ def test_terminate_pid_reports_failure_if_kill_does_not_stick(monkeypatch: pytes
     proc = _FakeProcess(alive_after_terminate=True, alive_after_kill=True)
     fake_psutil = _FakePsutilModule(proc)
     assert stop_mod._terminate_pid(1234, psutil_module=fake_psutil) is False
+
+
+# ---------------------------------------------------------------------------
+# Ownership-checked unlink
+#
+# There is ONE breadcrumb per clone and every winning server overwrites it at
+# boot, so a departing server is not necessarily the one the current breadcrumb
+# describes. `warm.idle`'s superseded-generation arm retires a predecessor
+# within one watchdog poll of its successor binding -- i.e. exactly when the
+# successor's breadcrumb is freshest -- so this is the ordinary case, not a
+# corner one.
+# ---------------------------------------------------------------------------
+
+
+def test_unlink_does_not_delete_a_successors_breadcrumb(tmp_path: Path) -> None:
+    """THE DEFECT: generation A exits after generation B has already bound and
+    written its own breadcrumb. A must not delete B's entry."""
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-T1", pid=1111, stable_pid_start_epoch=1, engine_sha="aaa",
+        engine_root=tmp_path,
+    )
+    # Publish rotates the token; B wins the new pipe and overwrites the file.
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-T2", pid=2222, stable_pid_start_epoch=2, engine_sha="bbb",
+        engine_root=tmp_path,
+    )
+
+    breadcrumb.unlink_breadcrumb(tmp_path, owner_pid=1111)
+
+    current = breadcrumb.read_breadcrumb(tmp_path)
+    assert current is not None, "A deleted the live successor's breadcrumb"
+    assert current["pid"] == 2222
+
+
+def test_successors_debounce_survives_a_predecessor_exit(tmp_path: Path, monkeypatch) -> None:
+    """The consequence that makes it more than cosmetic: a deleted breadcrumb
+    reads as 'no spawn in flight', so the debounce silently stops debouncing
+    while a server is in fact running.
+
+    `stable_pid_alive` is stubbed True because the successor's liveness is a
+    SEPARATE precondition of `should_spawn` and not what this test pins -- the
+    fixture pids are synthetic, so without the stub the debounce would read
+    True for the honest reason "that pid is not running", masking whether the
+    breadcrumb survived at all.
+    """
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, **kw: True)
+
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-T1", pid=1111, stable_pid_start_epoch=1, engine_sha="aaa",
+        engine_root=tmp_path,
+    )
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-T2", pid=2222, stable_pid_start_epoch=2, engine_sha="bbb",
+        engine_root=tmp_path,
+    )
+    assert breadcrumb.should_spawn(tmp_path) is False  # debounce armed by B
+
+    breadcrumb.unlink_breadcrumb(tmp_path, owner_pid=1111)
+
+    assert breadcrumb.should_spawn(tmp_path) is False, (
+        "A's exit disarmed the debounce while B is still serving"
+    )
+
+
+def test_unlink_removes_the_file_when_the_owner_matches(tmp_path: Path) -> None:
+    """The ownership check must not become a leak: the server that DOES own the
+    breadcrumb still clears it on the way out."""
+    breadcrumb.write_breadcrumb(
+        pipe="p", pid=4242, stable_pid_start_epoch=1, engine_sha=None,
+        engine_root=tmp_path,
+    )
+    breadcrumb.unlink_breadcrumb(tmp_path, owner_pid=4242)
+    assert not breadcrumb.breadcrumb_path(tmp_path).exists()
+
+
+def test_owner_checked_unlink_on_a_corrupt_breadcrumb_is_a_noop(tmp_path: Path) -> None:
+    """An unreadable breadcrumb names no owner, so no caller can establish
+    ownership of it -- refuse to delete rather than force it. A check that
+    falls back to deleting on doubt is not a check."""
+    path = breadcrumb.breadcrumb_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    breadcrumb.unlink_breadcrumb(tmp_path, owner_pid=1111)
+
+    assert path.exists()
+
+
+def test_unlink_without_owner_pid_stays_unconditional(tmp_path: Path) -> None:
+    """`warm-engine-stop.py` establishes ownership by stopping the pid this
+    same file named, then clears it -- the default must stay unconditional so
+    that caller is unchanged."""
+    breadcrumb.write_breadcrumb(
+        pipe="p", pid=9999, stable_pid_start_epoch=1, engine_sha=None,
+        engine_root=tmp_path,
+    )
+    breadcrumb.unlink_breadcrumb(tmp_path)
+    assert not breadcrumb.breadcrumb_path(tmp_path).exists()
+
+
+def test_ctx_shutdown_passes_its_own_pid_as_the_owner() -> None:
+    """Pins the wiring, not just the primitive: `_ctx_shutdown` must supply an
+    owner so a superseded generation's exit cannot clear a live successor."""
+    import inspect
+    import os as _os
+
+    from coordinator_core.warm import server as _server
+
+    source = inspect.getsource(_server._ServerContext._ctx_shutdown)
+    assert "owner_pid=os.getpid()" in source
+    assert _os.getpid  # the symbol the wiring depends on exists

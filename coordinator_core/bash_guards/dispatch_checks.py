@@ -2055,7 +2055,18 @@ def check_destructive_git_orphan(
             # its pair sits before `reset`, outside `after` entirely. A real
             # target opens AND closes its subshell inside `after`, so require
             # the matched pair rather than bare presence (DR-144).
-            if re.search(r"\$\(.*\)|`.*`", after):
+            #
+            # The pair is matched across NEWLINES, not just within one line:
+            # `git reset --hard $(\n  git rev-parse origin/main\n)` is ordinary
+            # shell, and a single-line-only rule dropped it from CHECK 1
+            # entirely (it survived only via the dirty-tree arm, which does not
+            # fire on a clean tree). Prose cannot exploit the widening because
+            # the two strippers upstream of here remove the shapes that carry
+            # it -- `_strip_shell_comments_for_prose_scan` for comments, and
+            # `_heredoc_body_has_spawn_indicator`'s interpreter-gated backtick
+            # arm for Python/Node bodies -- so what reaches `after` with
+            # delimiters still in it is shell, where they mean what they say.
+            if re.search(r"\$\(.*\)|`.*`", after, re.DOTALL):
                 return _deny(
                     "BLOCKED: 'git reset --hard' with a subshell-resolved "
                     "target ($(...) or backticks) cannot be verified safe — "

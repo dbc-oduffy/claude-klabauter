@@ -34,7 +34,23 @@ Reply fields -- workflow.fire:
     the fire registry record (see ``fire.fire_workflow`` docstring): {
       "fire_id", "pid", "script_path", "plugin_dir", "claude_bin", "model",
       "max_turns", "command", "started_at", "log_path", "state",
-      "exit_code", "status_checked_at", "log_size_bytes" }
+      "exit_code", "exit_code_note", "outcome", "outcome_basis",
+      "driver_session_id", "status_checked_at", "status_checked_at_iso",
+      "log_size_bytes", "_readme" }
+      ``state``, ``exit_code`` and ``outcome`` are valid only as of
+      ``status_checked_at`` -- the record is NOT written when the child
+      exits, so a raw file read can report a dead run as running.
+      ``_readme`` carries that fact for a reader who has only the file;
+      ``workflow.fire_status`` is the refreshing read.
+      ``exit_code`` is permanently ``None`` for a reaped child (detached
+      spawn, no surviving parent -- ``exit_code_note`` says so in-band);
+      ``outcome`` (``clean`` / ``truncated`` / ``unknown``, with
+      ``outcome_basis`` naming the evidence) is what separates a clean
+      finish from a truncation, classified from the child's own log.
+      ``outcome: "clean"`` means the DRIVER finished, NOT that any phase
+      did work -- for that, open the harness's workflow journal under
+      ``driver_session_id`` (absent when no result envelope was recovered).
+      See ``fire.fire_status``'s docstring for the reader move.
       ``log_size_bytes`` is a cheap, non-authoritative signal only -- see
       ``fire.fire_status`` docstring: a ``0`` flags "nothing captured yet",
       a non-zero value is NOT proof any phase succeeded.

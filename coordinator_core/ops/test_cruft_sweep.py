@@ -302,7 +302,7 @@ def test_sweep_scratch_apply_batches_multiple_auto_prune_dirs(tmp_path):
     disk in a single apply run -- a single-item fixture would pass
     identically whether the deletion were batched or per-item, which is
     exactly the gap that shipped a wrong batched `_own_frozen_diff_shas`
-    elsewhere in this codebase (see amp-cfinal-exemption-ledger-draft.md)."""
+    elsewhere in this codebase (see amp-cfinal-exemption-ledger.md)."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)

@@ -172,6 +172,7 @@ Spec backlink: pln-guards-reach-a-verdict-on-powe-0e4bc3 § C2
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime, timezone
 from enum import Enum
@@ -194,6 +195,7 @@ __all__ = [
     "tokenize_command",
     "resolve_segments_for_dialect",
     "expand_start_process_invocations",
+    "strip_powershell_prose_noise",
 ]
 
 
@@ -866,3 +868,103 @@ def resolve_segments_for_dialect(
     if dialect is Dialect.POWERSHELL:
         tokens = expand_start_process_invocations(tokens)
     return _command_tokenizer.segments_from_tokens_with_pipe_flag(tokens)
+
+
+#: Here-string openers -- `@'` (literal, no expansion) and `@"` (expandable)
+#: -- matched non-greedily up to their own closer (`'@` / `"@`) across the
+#: WHOLE remaining text, `re.DOTALL` so a multi-line body (a here-string's
+#: entire reason for existing) is one match, not cut off at the first
+#: newline. This module does not itself require PowerShell's own
+#: line-anchored closer rule (`'@`/`"@` must start a line) -- a caller
+#: reaching `strip_powershell_prose_noise` already has text that FAILED to
+#: tokenize (AC3's own "tokens-is-None route"), so the goal here is
+#: stripping a plausible here-string body for a free-text scan, not
+#: re-validating PowerShell's own grammar.
+_HERE_STRING_RE = re.compile(r"@'.*?'@|@\".*?\"@", re.DOTALL)
+
+
+def strip_powershell_prose_noise(raw_text: str) -> str:
+    """Strip PowerShell here-string bodies (`@'...'@`, `@"..."@`) and
+    quoted spans (`'...'`, `"..."`) out of `raw_text`, returning the
+    residue for a CALLER's own free-text pattern scan.
+
+    THE SHARED HELPER FOR C2's "tokens-is-None route" (AC3): when
+    `_powershell_tokens` above cannot produce a token stream at all
+    (`has_error=True`, ImportError, or any other parse failure --
+    `tokenize_command`/`resolve_segments_for_dialect` return `None`), a
+    caller that still wants to apply its own free-text hazard patterns to
+    the raw command text needs the SAME quote/here-string-blind spot this
+    function closes: a hazard-documenting prose string quoting a
+    destructive git command (the real-world shape this chunk's own
+    dispatch brief names -- doe-claude hit it live) must not read as an
+    issued command merely because the destructive words appear inside a
+    quoted or here-string span. This function does NOT itself decide
+    deny/allow -- it only returns the residual text with those spans
+    removed; the calling guard applies its own patterns to the result and
+    denies on a hit per the PM ruling this chunk's brief cites. See that
+    brief's own required test set (here-string body containing `git stash
+    drop`, double-quoted span containing `worktree add`, the doe-claude
+    hazard-prose shape, and the inverse -- a real command that merely
+    RESEMBLES quoted prose must still deny, i.e. must NOT be stripped).
+
+    THREE-PASS shape, here-strings first: `@'...'@`/`@"..."@` are
+    stripped via `_HERE_STRING_RE` BEFORE the character walk below, because
+    a here-string's own opening `'`/`"` (immediately following `@`) would
+    otherwise be mis-read by the character walk as an ordinary quote
+    opener, truncating the strip at the FIRST embedded quote/newline
+    inside the body rather than consuming the whole here-string span.
+
+    Quoted-span walk mirrors `_strip_ps_quotes`'s own escaping rules
+    (module-internal reuse of the SAME semantics, not a re-derivation):
+    inside a double-quoted span, a backtick escapes the following
+    character (an escaped quote is not a terminator); inside a
+    single-quoted span, a doubled single-quote (`''`) is one literal quote,
+    also not a terminator. An UNTERMINATED quote (no real closing quote
+    found before the text ends) consumes to the end of `raw_text` -- the
+    same fail-closed-for-a-scanner direction as leaving prose text
+    unscanned past that point, rather than guessing a boundary and risking
+    a false split that exposes a fragment of prose as if it were bare
+    command text.
+
+    Each stripped span is replaced with a single space (never deleted
+    outright), so a caller's own `\\b...\\b` word-boundary pattern never
+    sees two previously-quote-separated words glued into one accidental
+    match across the seam.
+    """
+    text = _HERE_STRING_RE.sub(" ", raw_text)
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if c == "`" and j + 1 < n:
+                    j += 2
+                    continue
+                if c == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append(" ")
+            i = j
+            continue
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if c == "'":
+                    if j + 1 < n and text[j + 1] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(" ")
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)

@@ -172,6 +172,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -520,6 +521,65 @@ def _suppress_pool_worker_consoles() -> None:
         multiprocessing.set_executable(str(candidate))
 
 
+def _wait_for_parent_exit(parent_pid: int) -> None:
+    """Block until the process `parent_pid` is gone. Returns, never raises.
+
+    Windows has no POSIX parent-death signal and no process-group teardown,
+    so this waits on a handle to the parent instead: `OpenProcess(SYNCHRONIZE)`
+    plus an infinite `WaitForSingleObject`, which costs one blocked thread and
+    zero polling. A handle that cannot be opened means the parent is already
+    gone (or unreachable, which we treat the same way) and returns at once.
+    Off Windows, `os.getppid()` re-parenting is the equivalent signal and is
+    polled, since there is no handle to wait on.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        INFINITE = 0xFFFFFFFF
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
+        if not handle:
+            return
+        try:
+            kernel32.WaitForSingleObject(handle, INFINITE)
+        finally:
+            kernel32.CloseHandle(handle)
+        return
+    while os.getppid() == parent_pid:
+        time.sleep(1.0)
+
+
+def _exit_with_parent(parent_pid: int) -> None:
+    """Daemon-thread body: outlive nothing. When the server dies, so does this
+    worker.
+
+    THE LEAK THIS CLOSES. `_ctx_shutdown` tears the pool down properly, but it
+    runs only on the four sanctioned exit triggers that reach `begin_shutdown`
+    / `drain_and_exit`. A server that dies any OTHER way -- crash, `taskkill`,
+    OOM, a killed console -- never sends the pool its sentinel, and a worker
+    blocked on its call-queue `get()` waits for a parent that will never speak
+    again. Observed live 2026-08-19: two orphaned workers (PIDs 70016, 11844)
+    whose parents had no `Win32_Process` row at all, each still holding the
+    console window Windows had allocated it, unreachable except by `taskkill`.
+
+    WHY NOT A JOB OBJECT, which is the textbook Windows answer: a job with
+    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on the SERVER would take down every
+    descendant, and `ops/app_session.py`'s `launch` op deliberately spawns
+    processes meant to outlive the op that started them -- it persists their
+    handles precisely so a later `teardown` can signal them. Killing a
+    developer's running app because the engine idled out is a far worse bug
+    than the leak being fixed. This watchdog binds ONLY the dispatch pool's
+    own workers to the server's lifetime, which is the actual invariant.
+
+    `os._exit`, not `sys.exit`: this runs on a non-main thread, where
+    `SystemExit` would be swallowed, and a worker whose parent is gone has
+    nothing left to flush.
+    """
+    _wait_for_parent_exit(parent_pid)
+    os._exit(1)
+
+
 def _worker_process_init() -> None:
     """`ProcessPoolExecutor`'s `initializer=` -- runs once per worker
     process, before that process ever dispatches a request, so the
@@ -530,6 +590,12 @@ def _worker_process_init() -> None:
     `_ServerContext.serve_forever`) for the SAME reason, on the process that
     now actually does the dispatching.
     """
+    threading.Thread(
+        target=_exit_with_parent,
+        args=(os.getppid(),),
+        name="warm-pool-parent-watchdog",
+        daemon=True,
+    ).start()
     _preload_op_registry()
 
 
@@ -895,7 +961,11 @@ class _ServerContext:
         """
         self._idle_watchdog_stop.set()
         self.telemetry.flush(engine_root=self.engine_root)
-        breadcrumb.unlink_breadcrumb(self.engine_root)
+        # Ownership-checked: a superseded generation reaching this point
+        # is exiting while its SUCCESSOR owns the clone's single
+        # breadcrumb, and an unconditional unlink would delete the live
+        # successor's entry. See `breadcrumb.unlink_breadcrumb`.
+        breadcrumb.unlink_breadcrumb(self.engine_root, owner_pid=os.getpid())
         if self._dispatch_pool is not None:
             # Best-effort, mirroring every other step in this method's own
             # "never raises" contract -- `os._exit(0)` (lifecycle's next
@@ -926,6 +996,26 @@ class _ServerContext:
         stale, so the failure mode is "waits out the ordinary idle
         deadline," which is exactly today's behaviour -- never a false
         retirement of a healthy server.
+
+        NEGATIVE SPEC -- unstamped (live working tree) `engine_root` is
+        deliberately IN SCOPE, not a bug: `skew.compute_client_token`
+        falls back to a `.git/HEAD` fingerprint there, which rotates on
+        this box's shared-branch cadence (~30-40s) independent of whether
+        engine code changed, so this predicate flips True that often and
+        the server retires within one watchdog poll. That is not a false
+        retirement in the sense that matters: the same token rotation
+        that trips this predicate already changed the pipe name every
+        client dials, so the old server is ALREADY unreachable by the
+        time it retires -- its residency was useless residency, and early
+        retirement costs zero warm hits. Gating `token_stale` on stamp
+        presence (i.e. only binding it when a stamp exists) was
+        considered and rejected: the unstamped population left unfixed by
+        that gate is the live/dev-clone shape, whose steady-state stranded
+        count is WORSE than the published-mirror case this predicate was
+        written for -- a ~30-40s rotation cadence against a 15-minute idle
+        deadline implies on the order of 25-30 resident generations, where
+        a publish cadence implies a handful. That arithmetic is derived
+        from the measured rotation cadence, not itself an observed count.
         """
         if self.boot_token is None:
             return False
@@ -937,30 +1027,37 @@ class _ServerContext:
     def _idle_tick(self) -> None:
         """One watchdog poll: record why (if this poll is the one that
         demotes) before handing off to `idle.demote_if_idle`, which owns
-        the actual predicate and the `begin_shutdown` call. Re-evaluating
-        `should_demote` here is a second, side-effect-free read of the same
-        pure predicate `demote_if_idle` itself checks -- cheap at a 5s poll
-        interval and the only way to know, ahead of the call, whether THIS
-        poll is the one that will actually demote.
+        the actual predicate and the `begin_shutdown` call.
+
+        `_token_is_stale()` is read ONCE here and threaded through to both
+        `should_demote` and `demote_if_idle` as a captured constant, rather
+        than each call re-reading live state: `_token_is_stale` swallows
+        stat failures as False, so a transient failure (e.g. a stamp file
+        mid-rewrite) landing between separate reads could make one read
+        True and another False, misattributing the recorded exit reason
+        (EXIT_REASON_SUPERSEDED vs EXIT_REASON_IDLE_DEMOTION) for a server
+        that only actually saw one verdict. One tick must observe one
+        consistent verdict.
         """
+        token_stale = self._token_is_stale()
         if idle.should_demote(
             served_count=self.telemetry.served_count,
-            token_stale=self._token_is_stale,
+            token_stale=lambda: token_stale,
         ):
             # Which arm fired decides the recorded reason, and the two are
             # not interchangeable in the telemetry record -- see
-            # `warm.telemetry`'s EXIT_REASON_SUPERSEDED note. Read the
-            # predicate directly rather than inferring from `should_demote`:
+            # `warm.telemetry`'s EXIT_REASON_SUPERSEDED note. Use the
+            # captured verdict rather than inferring from `should_demote`:
             # a superseded server is usually ALSO past some deadline, so
             # the arms overlap and only the specific read distinguishes them.
             self.record_exit(
                 telemetry.EXIT_REASON_SUPERSEDED
-                if self._token_is_stale()
+                if token_stale
                 else telemetry.EXIT_REASON_IDLE_DEMOTION
             )
         idle.demote_if_idle(
             served_count=self.telemetry.served_count,
-            token_stale=self._token_is_stale,
+            token_stale=lambda: token_stale,
             close_listener=self.close_listener,
             in_flight_count=self.in_flight,
             ctx_shutdown=self._ctx_shutdown,
