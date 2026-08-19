@@ -635,6 +635,20 @@ def _review_phase_calls(reviewers: list[str], phase_title: str) -> str:
     ``_wave_agent_calls`` already uses for an executor wave. Composed on
     the SAME phase mechanism as every other phase in this module (no new
     firing mechanism) — see module docstring § Review phases.
+
+    NEGATIVE SPEC — reviewer calls carry NO ``model:`` key, unlike every
+    other call this module composes. The roster fragment supplies reviewer
+    ``agentType``s, and an agent definition pins its own tier in its
+    frontmatter (the persona agents are ``model: opus`` by charter). The
+    Workflow tool's ``opts.model`` takes PRECEDENCE over that frontmatter,
+    so stamping ``model: 'sonnet'`` here would silently run a persona below
+    the tier its own definition declares and produce a Sonnet review
+    wearing an Opus reviewer's name — cheaper, and invalid. Tier for an
+    ``agentType`` call site is the definition's to state, never this
+    emitter's to override. Every non-reviewer call in an emitted script
+    still carries ``_MODEL_OPT``, so a script composed this way retains
+    modeled call sites and reads as partial coverage, not zero, to the
+    Workflow model guard.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prompt = "Review this plan's completed work."
@@ -647,8 +661,7 @@ def _review_phase_calls(reviewers: list[str], phase_title: str) -> str:
             "{ "
             f"label: {_js_string_literal(f'review:{reviewer}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(reviewer)}, "
-            f"{_MODEL_OPT} "
+            f"agentType: {_js_string_literal(reviewer)} "
             "});"
         )
         return f"{phase_call}\n{call}"
@@ -659,8 +672,7 @@ def _review_phase_calls(reviewers: list[str], phase_title: str) -> str:
         "{ "
         f"label: {_js_string_literal(f'review:{reviewer}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(reviewer)}, "
-        f"{_MODEL_OPT} "
+        f"agentType: {_js_string_literal(reviewer)} "
         "})"
         for reviewer in reviewers
     )

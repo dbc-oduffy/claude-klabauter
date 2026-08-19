@@ -643,6 +643,50 @@ def test_compose_script_composes_a_parallel_review_phase_for_multiple_reviewers(
     assert script.count("agentType: 'coordinator:staff-reviewer'") == 1
 
 
+def test_review_calls_carry_no_model_key_so_the_agent_definition_pins_the_tier():
+    """A reviewer call site declares its tier via ``agentType``, and the agent
+    definition it names pins the model (the personas are ``model: opus`` by
+    charter). ``opts.model`` OVERRIDES that frontmatter, so emitting
+    ``model: 'sonnet'`` alongside ``agentType`` would silently run a persona
+    below its own charter — a Sonnet review wearing an Opus reviewer's name.
+    Negative spec for `_review_phase_calls`."""
+    waves = _two_wave_fixture()
+    script = compose_script(
+        waves,
+        name="wf",
+        description="full review",
+        review_tier="full",
+        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+    )
+
+    review_segment = script.split("phase('Review');")[-1].split("phase(")[0]
+    assert "agentType:" in review_segment, "fixture must actually compose reviewer calls"
+    assert "model:" not in review_segment, (
+        "reviewer calls must not carry model: — it overrides the agent "
+        "definition's own pinned tier"
+    )
+
+
+def test_non_reviewer_calls_still_carry_model_so_coverage_is_partial_not_zero():
+    """Dropping ``model:`` from reviewer calls must not push an emitted script
+    to ZERO modeled call sites: the Workflow model guard DENIES at zero and only
+    advises on partial coverage. Every executor/commit/test call still carries
+    it."""
+    waves = _two_wave_fixture()
+    script = compose_script(
+        waves,
+        name="wf",
+        description="full review",
+        review_tier="full",
+        review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
+    )
+
+    assert "model: 'sonnet'" in script, (
+        "an emitted script with zero modeled call sites would be DENIED by the "
+        "Workflow model guard"
+    )
+
+
 def test_compose_script_review_phase_precedes_terminal_test_phase():
     waves = _two_wave_fixture()
     script = compose_script(

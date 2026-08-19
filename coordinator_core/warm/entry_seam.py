@@ -34,8 +34,10 @@ Four engine entry paths, verified at HEAD (2026-08-15/16):
      CLI-trampoline concern, not theirs) or hand-rolling `collecting()`
      itself. Migration is per-site and tracked as a residual of this chunk;
      this module only authors the primitive.
-  4. `ipc.dispatch_from_hook` — wraps `asyncio.run(dispatch_message(...))`,
-     so it inherits path 1's convergence transitively. Converged.
+  4. `ipc.dispatch_from_hook` and `ipc.dispatch_ops_from_hook` — both wrap
+     `asyncio.run(dispatch_message(...))` (the multi-op sibling awaits each op
+     sequentially under one loop), so they inherit path 1's convergence
+     transitively. Converged.
 
 Negative-spec (RAG-bait):
     This module does not decide WHICH declared-write list an op sees, does

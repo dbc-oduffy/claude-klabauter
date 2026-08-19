@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session.work_state import build_work_state
 
 
@@ -47,9 +48,21 @@ def _session_work_state(params: dict, repo_root: Optional[Path] = None) -> dict:
     Params: none consumed -- `repo_root` arrives ONLY as the engine-injected
         kwarg below (scope "common_dir"), never read off `params`.
 
+    Scope is "common_dir", so the engine injects the resolved GIT COMMON DIR
+    (`<worktree>/.git`), not the worktree root -- `build_work_state` scans
+    `<root>/state/handoffs`, so handing it the injected value directly makes
+    this op return an empty readout for every repo on earth. `handoff.columns`
+    is the landed precedent for exactly this pairing and converts back the same
+    way (`handoff_columns_query.py::_handler`); mirror it rather than inventing
+    a second resolution.
+
     Returns:
         {"held": [...], "unclaimed": [...], "review_due": [...]} -- verbatim
-        `build_work_state(repo_root)` output; see that function's own
-        docstring for the full row-shape and four-bucket readiness contract.
+        `build_work_state(...)` output; see that function's own docstring for
+        the full row-shape and four-bucket readiness contract.
     """
-    return build_work_state(repo_root)
+    if repo_root is None:
+        # Mirrors handoff.columns / records.query: an absent repo_root is a
+        # well-formed empty answer, never a raise.
+        return {"held": [], "unclaimed": [], "review_due": []}
+    return build_work_state(main_worktree_root(repo_root))

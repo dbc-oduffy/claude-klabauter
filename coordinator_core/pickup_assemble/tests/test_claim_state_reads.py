@@ -632,9 +632,17 @@ def test_resolve_ledger_first_holder_logs_on_resolve_claim_state_failure(
     def _boom(*a, **k):
         raise RuntimeError("simulated resolve_claim_state failure")
 
-    monkeypatch.setattr(pa, "resolve_claim_state", _boom)
+    # `_resolve_ledger_first_holder` relocated to `coordinator_core.session.
+    # work_state` (chunk C1a of the fleet-work-state plan); `pa` re-exports it
+    # by name. Both the patch target and the logger have to follow it there:
+    # patching `pa.resolve_claim_state` rebinds a name in the WRONG module's
+    # globals, so the relocated function never sees it, and the warning is now
+    # emitted on that module's own logger.
+    from coordinator_core.session import work_state as ws
 
-    with caplog.at_level(logging.WARNING, logger="coordinator_core.pickup_assemble"):
+    monkeypatch.setattr(ws, "resolve_claim_state", _boom)
+
+    with caplog.at_level(logging.WARNING, logger="coordinator_core.session.work_state"):
         holder = pa._resolve_ledger_first_holder(repo, "state/handoffs/h1.md", {})
 
     assert holder is None

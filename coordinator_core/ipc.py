@@ -409,7 +409,7 @@ import importlib
 import os
 import types as _types
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from coordinator_core.lifecycle import (
     git_common_dir,
@@ -1955,6 +1955,23 @@ def dispatch_from_hook(
     # import-cost reason documented in dispatch_message's own deferred import above.
     import asyncio
 
+    response = asyncio.run(
+        dispatch_message(_hook_envelope(op_name, params, origin_worktree))
+    )
+    return _unwrap_hook_response(op_name, response)
+
+
+def _hook_envelope(
+    op_name: str,
+    params: dict,
+    origin_worktree: Optional[str],
+) -> dict:
+    """Build the JSON-RPC 2.0 envelope both hook entry points dispatch.
+
+    Shared by dispatch_from_hook and dispatch_ops_from_hook so the two cannot
+    drift on envelope shape or on the omit-empty _origin_worktree rule
+    documented in dispatch_from_hook's Args section.
+    """
     msg: dict = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -1963,9 +1980,11 @@ def dispatch_from_hook(
     }
     if origin_worktree:
         msg[_ORIGIN_WORKTREE_FIELD] = origin_worktree
+    return msg
 
-    response = asyncio.run(dispatch_message(msg))
 
+def _unwrap_hook_response(op_name: str, response: dict) -> dict:
+    """Return the "result" value, or raise HookDispatchError for an error envelope."""
     error = response.get("error")
     if error is not None:
         raise HookDispatchError(
@@ -1973,8 +1992,73 @@ def dispatch_from_hook(
             error.get("code", INTERNAL_ERROR),
             error.get("message", ""),
         )
-
     return response.get("result", {})
+
+
+def dispatch_ops_from_hook(
+    ops: Sequence[tuple],
+    *,
+    origin_worktree: Optional[str] = None,
+) -> list:
+    """Dispatch several ops from one hook, sequentially, under a single event loop.
+
+    The multi-op sibling of dispatch_from_hook, for a hook shim that carries more
+    than one independent concern in a single invocation (DoE's
+    postuse-advisory-dispatch.py: an advisory dispatch plus a bookkeeping
+    dispatch, where a failure in either must not suppress the other).
+
+    Spec backlink: cross-repo/inbox/2026-08-19-doe-claude-em-widen-the-seam-dispatch-ops-from-hook.md
+
+    Ops run in the order given, each awaited to completion before the next
+    starts. Sequential is the contract, not an implementation detail:
+    dispatch_message's safety under two in-flight calls in one loop is
+    unverified, and concurrent scheduling has already been tried and rejected
+    on the DoE side for breaking the nudge-firing tests.
+
+    Args:
+        ops:             (op_name, params) pairs, dispatched in sequence.
+        origin_worktree: stamped into every envelope under the same omit-empty
+                         rule dispatch_from_hook documents.
+
+    Returns:
+        One entry per input op, positionally aligned: the handler's "result"
+        value on success, or a HookDispatchError instance (RETURNED, not raised)
+        on an error envelope. Callers discriminate with isinstance. An empty
+        ``ops`` returns [] without opening an event loop.
+
+    Negative spec:
+        - Does NOT raise HookDispatchError. Raising would let the first failing
+          concern suppress every later one, which is the exact isolation this
+          entry point exists to provide.
+        - Does NOT catch ImportError, retry, gate on environment, or speak to
+          the harness — identical to dispatch_from_hook's negative spec, and for
+          the same reason: this code lives inside the module that may itself be
+          unimportable, so the fail-open guard stays with the calling shim.
+        - Does NOT add a broad except around dispatch_message. Handler
+          exceptions and timeouts already arrive as JSON-RPC error envelopes and
+          become returned HookDispatchError entries; anything escaping that
+          contract is an engine-level fault, not a per-op concern to swallow.
+        - Does NOT schedule concurrently. See above.
+    """
+    import asyncio
+
+    op_list = list(ops)
+    if not op_list:
+        return []
+
+    async def _run_all() -> list:
+        results: list = []
+        for op_name, params in op_list:
+            response = await dispatch_message(
+                _hook_envelope(op_name, params, origin_worktree)
+            )
+            try:
+                results.append(_unwrap_hook_response(op_name, response))
+            except HookDispatchError as exc:
+                results.append(exc)
+        return results
+
+    return asyncio.run(_run_all())
 
 
 # _handle_connection removed by C5 (DR-215): UDS server transport retired.
