@@ -1319,6 +1319,32 @@ def test_unreadable_remote_reports_unconfirmed_never_failure(tmp_path, monkeypat
     assert "integrity_breach" not in result
 
 
+def test_push_subprocess_timeout_renders_unconfirmed_end_to_end(tmp_path, monkeypatch):
+    """FIX-I (2026-08-19): a push subprocess TIMEOUT is a fourth, DISTINCT
+    reason `push_status` can be the unknown rung -- the pipeline's own
+    `PUSH_STATUS_UNCONFIRMED` (not the `NOT_ATTEMPTED` fallback the sibling
+    test above exercises). Proves the whole chain end to end: the op maps
+    it to `PUSH_STATE_UNCONFIRMED` here, and the CLI's `_render` (see
+    `coordinator/bin/tests/test_scoped_git_commit_cli.py::
+    test_unconfirmed_does_not_read_as_a_failure`) renders that value as
+    prose that never reads as a failure -- never `PUSH_STATE_FAILED`,
+    which is what this exact shape rendered as before this fix.
+    """
+    repo, _sha = _commit_and_fake_pipeline(
+        tmp_path, monkeypatch, with_remote=True,
+        push_status=scoped_git_commit.PUSH_STATUS_UNCONFIRMED,
+    )
+
+    result = _call(
+        {"worktree_root": str(repo), "paths": ["notes/alpha.md"], "message": "add notes"}
+    )
+
+    assert result["committed"] is True
+    assert result["pushed"] is None
+    assert result["push_state"] == scoped_git_commit.PUSH_STATE_UNCONFIRMED
+    assert "integrity_breach" not in result
+
+
 def test_unstaged_deletion_named_in_pathspec_is_committed(tmp_path):
     """2026-08-04 fix, defect A -- THE primary live break: with a deletion
     NAMED in the pathspec (a plain `rm`, never staged), the op previously

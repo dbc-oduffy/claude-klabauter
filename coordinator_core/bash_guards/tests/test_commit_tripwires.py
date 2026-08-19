@@ -736,8 +736,22 @@ class TestCheckStagedPathspecDivergence:
         _git(root, "add", "shared.txt")
         (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
+        # The override-keys pointer is AUDIENCE-GATED: `operator_override_note`
+        # emits it only when `session.identity.resolves_em_audience` is
+        # satisfied, and under the PM's 2026-08-13 ruling the default is
+        # inverted -- an absent envelope, or any resolution failure, degrades
+        # to NOT-EM and renders no pointer at all. This test called with no
+        # payload and asserted the pointer anyway, so it went red when that
+        # inversion landed rather than when anything broke. Pass an EM-shaped
+        # envelope (a real payload carrying neither `agent_id` nor
+        # `subagent_type`) so the assertion pins the property it exists for.
+        em_payload = {
+            "tool_name": "Bash",
+            "session_id": "11111111-2222-3333-4444-555555555555",
+            "tool_input": {"command": 'git commit -m "test" -- shared.txt'},
+        }
         result = commit_tripwires.check_staged_pathspec_divergence(
-            'git commit -m "test" -- shared.txt', root
+            'git commit -m "test" -- shared.txt', root, payload=em_payload
         )
         assert result is not None
         assert result.startswith("OFFER:")
@@ -747,6 +761,27 @@ class TestCheckStagedPathspecDivergence:
         # itself -- register rule B6 (BYPASS-KEY IN THE DENIAL). Asserting the
         # literal key back would re-pin the shape that rule exists to forbid.
         assert "guard-override-keys.md" in result
+        assert "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE" not in result
+
+    def test_offer_to_a_non_em_audience_carries_no_override_pointer(self, tmp_path):
+        """The other half of the audience gate, so the inversion above cannot
+        silently flip back: with no envelope to resolve, the offer still fires
+        (it is the load-bearing warning) but carries no override pointer."""
+        root = _init_repo(tmp_path)
+        (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed shared.txt")
+
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
+
+        result = commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "test" -- shared.txt', root
+        )
+        assert result is not None
+        assert result.startswith("OFFER:")
+        assert "guard-override-keys.md" not in result
 
     def test_index_matches_worktree_silent_pass(self, tmp_path):
         root = _init_repo(tmp_path)
@@ -788,6 +823,15 @@ class TestCheckStagedPathspecDivergence:
         _git(root, "add", "shared.txt")
         (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
+        # A real session's hub dir is created by `core.init`. The override
+        # logger no longer creates one itself -- it used to `os.makedirs` the
+        # `<sid>/` path, which let an audit write MINT a phantom session that
+        # `liveness.live_session_ids` then enumerated as real. Stand the dir up
+        # here so this test exercises the production shape; the
+        # no-such-session fallback is covered by
+        # `bash_guards/tests/test_override_log_path.py`.
+        (Path(root) / ".git" / "coordinator-sessions" / "test-session").mkdir(parents=True)
+
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", "1")
         result = commit_tripwires.check_staged_pathspec_divergence(
             'git commit -m "test" -- shared.txt', root, session_id="test-session"
@@ -799,6 +843,34 @@ class TestCheckStagedPathspecDivergence:
         contents = log_path.read_text(encoding="utf-8")
         assert "OVERRIDE-PATHSPEC-DIVERGENCE" in contents
         assert "test-session" in contents
+
+    def test_override_of_an_unknown_session_still_records_the_audit_line(
+        self, tmp_path, monkeypatch
+    ):
+        """The override audit trail must survive even when the session has no
+        hub directory -- it records a deliberately-bypassed safety check, so
+        dropping the line to avoid minting a phantom session would trade a
+        bookkeeping defect for a security-visibility one. It lands in the
+        `no-session` bucket, which `liveness` already denylists."""
+        root = _init_repo(tmp_path)
+        (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed shared.txt")
+
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
+
+        monkeypatch.setenv("COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", "1")
+        commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "test" -- shared.txt', root, session_id="sess-no-such-dir"
+        )
+
+        sessions = Path(root) / ".git" / "coordinator-sessions"
+        assert not (sessions / "sess-no-such-dir").exists()
+        contents = (sessions / "no-session" / "overrides.log").read_text(encoding="utf-8")
+        assert "OVERRIDE-PATHSPEC-DIVERGENCE" in contents
+        assert "sess-no-such-dir" in contents
 
     def test_multi_segment_command_line_parsed(self, tmp_path):
         root = _init_repo(tmp_path)

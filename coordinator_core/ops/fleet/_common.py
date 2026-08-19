@@ -1135,9 +1135,24 @@ async def _resync_main_index_for_moves(
     entries at src paths.  git status --porcelain would therefore report orphaned
     staged residue (AC4/AC10 clean-index requirement).
 
-    Path-scoped index-from-HEAD restore (2026-08-11, C2) — ONE call per moved file:
+    Path-scoped index-from-HEAD restore (2026-08-11, C2; batched 2026-08-19,
+    amplification burn-down C4) — ONE call for the ENTIRE batch of moved files,
+    not one call per move:
 
-        git restore --staged -- <src> <dst>
+        git restore --staged -- <src1> <dst1> <src2> <dst2> ...
+
+    `git restore --staged` accepts an arbitrary pathspec list in one
+    invocation, so every relevant move's src/dst pair is folded into a single
+    argv rather than spawning once per move — the (items × repos) fan-out this
+    fleet-wide helper multiplies is exactly why a per-item spawn here is the
+    most expensive shape in the tier. A batch failure is reported against
+    every item in the batch (see the failure branch below) rather than
+    isolated per move: unlike archive_and_commit's git-mv loop, this resync
+    runs strictly AFTER the archival commit has already landed — it is
+    best-effort post-commit index hygiene, not a per-item success/failure
+    gate, so collapsing per-item retry independence into one batched call
+    (still exponential-backoff retried as a unit via `run_git`) does not
+    change what the archival op itself committed.
 
     Both paths converge to what HEAD records: src (which the archival commit
     removed from HEAD) loses its index entry, dst (which HEAD now holds) is
@@ -1198,48 +1213,51 @@ async def _resync_main_index_for_moves(
     Mutates each acted_by_id[move.candidate_id] item in place, adding
     `index_resync_failed` only on persistent failure. Does not return a value.
     """
-    for move in moves:
-        if move.candidate_id not in acted_by_id:
-            continue
-        reasons: List[str] = []
+    relevant_moves = [m for m in moves if m.candidate_id in acted_by_id]
+    if not relevant_moves:
+        return
 
-        # Review: code-reviewer F1 — see this function's docstring
-        # ("Path-scoped index-from-HEAD restore") for the full rationale on
-        # why a single `git restore --staged` over both paths preserves the
-        # unconditional-on-lookup guarantee atomically.
-        #
-        # `--staged` keeps this index-only: it must NOT touch the
-        # worktree. `boot_sweep._commit_consumed_metadata` makes a second,
-        # explicit-pathspec commit that reads worktree content for dst;
-        # a worktree-touching restore would destroy the stamps that
-        # commit is about to read. `git restore --staged -- <path>`
-        # resolves its pathspec against cwd like any other `-- <path>`
-        # form here, so (unlike `--cacheinfo`'s legacy 3-arg path slot)
-        # no relativization is needed.
-        restore_err = await run_git(
-            ["git", "restore", "--staged", "--", str(move.src), str(move.dst)],
-            cwd=worktree_root, env=env,
+    # Review: code-reviewer F1 — see this function's docstring
+    # ("Path-scoped index-from-HEAD restore") for the full rationale on
+    # why a single `git restore --staged` over both paths preserves the
+    # unconditional-on-lookup guarantee atomically. Batched 2026-08-19
+    # (amplification burn-down C4): every relevant move's src/dst pair is
+    # folded into ONE argv covering the whole batch, not one call per move.
+    #
+    # `--staged` keeps this index-only: it must NOT touch the
+    # worktree. `boot_sweep._commit_consumed_metadata` makes a second,
+    # explicit-pathspec commit that reads worktree content for dst;
+    # a worktree-touching restore would destroy the stamps that
+    # commit is about to read. `git restore --staged -- <path>`
+    # resolves its pathspec against cwd like any other `-- <path>`
+    # form here, so (unlike `--cacheinfo`'s legacy 3-arg path slot)
+    # no relativization is needed.
+    argv = ["git", "restore", "--staged", "--"]
+    for move in relevant_moves:
+        argv.append(str(move.src))
+        argv.append(str(move.dst))
+
+    restore_err = await run_git(argv, cwd=worktree_root, env=env)
+    if restore_err is None:
+        return
+
+    reason = f"restore-staged-failed: {restore_err}"
+    _LOG.error(
+        "archive_and_commit: main-index resync FAILED after %d attempts"
+        " for batch of %d move(s): %s (main index may be dirty — AC10)",
+        _INDEX_RETRY_MAX_ATTEMPTS, len(relevant_moves), reason,
+    )
+    for move in relevant_moves:
+        item = acted_by_id.get(move.candidate_id)
+        if item is not None:
+            item["index_resync_failed"] = reason
+        await asyncio.to_thread(
+            _persist_index_resync_failure,
+            worktree_root=worktree_root,
+            candidate_id=move.candidate_id,
+            reason=reason,
+            op_label="archive_and_commit",
         )
-        if restore_err is not None:
-            reasons.append(f"restore-staged-failed: {restore_err}")
-
-        if reasons:
-            reason = "; ".join(reasons)
-            _LOG.error(
-                "archive_and_commit: main-index resync FAILED after %d attempts"
-                " for %s -> %s: %s (main index may be dirty — AC10)",
-                _INDEX_RETRY_MAX_ATTEMPTS, move.src, move.dst, reason,
-            )
-            item = acted_by_id.get(move.candidate_id)
-            if item is not None:
-                item["index_resync_failed"] = reason
-            await asyncio.to_thread(
-                _persist_index_resync_failure,
-                worktree_root=worktree_root,
-                candidate_id=move.candidate_id,
-                reason=reason,
-                op_label="archive_and_commit",
-            )
 
 
 async def _resync_main_index_for_reaps(
@@ -1272,7 +1290,17 @@ async def _resync_main_index_for_reaps(
 
     Mutates each reaped_by_id[candidate_id] item in place, adding
     `index_resync_failed` only on persistent failure. Does not return a value.
+
+    Batched 2026-08-19 (amplification burn-down C4): every relevant path is
+    folded into ONE `git update-index --remove -- <path1> <path2> ...` call
+    covering the whole batch, not one call per path — `update-index` accepts
+    an arbitrary pathspec list in a single invocation.  A batch failure is
+    reported against every relevant item (same reason string) rather than
+    isolated per path: like the moves resync above, this runs strictly AFTER
+    the reap commit has already landed, so it is best-effort post-commit
+    index hygiene, not a per-item success/failure gate.
     """
+    relevant: List[Tuple[Path, str]] = []
     for path in paths:
         # rel_id raises ValueError for a path outside worktree_root. For
         # rm_and_commit (the only current caller), this can't actually fire:
@@ -1293,26 +1321,33 @@ async def _resync_main_index_for_reaps(
             continue
         if candidate_id not in reaped_by_id:
             continue
-        remove_err = await run_git(
-            ["git", "update-index", "--remove", "--", str(path)],
-            cwd=worktree_root, env=env,
+        relevant.append((path, candidate_id))
+
+    if not relevant:
+        return
+
+    argv = ["git", "update-index", "--remove", "--"] + [str(p) for p, _cid in relevant]
+    remove_err = await run_git(argv, cwd=worktree_root, env=env)
+    if remove_err is None:
+        return
+
+    reason = f"remove-failed: {remove_err}"
+    _LOG.error(
+        "rm_and_commit: main-index resync remove FAILED after %d attempts"
+        " for batch of %d path(s): %s (main index may be dirty — AC10)",
+        _INDEX_RETRY_MAX_ATTEMPTS, len(relevant), reason,
+    )
+    for path, candidate_id in relevant:
+        item = reaped_by_id.get(candidate_id)
+        if item is not None:
+            item["index_resync_failed"] = reason
+        await asyncio.to_thread(
+            _persist_index_resync_failure,
+            worktree_root=worktree_root,
+            candidate_id=candidate_id,
+            reason=reason,
+            op_label="rm_and_commit",
         )
-        if remove_err is not None:
-            _LOG.error(
-                "rm_and_commit: main-index resync remove FAILED after %d attempts"
-                " for %s: %s (main index may be dirty — AC10)",
-                _INDEX_RETRY_MAX_ATTEMPTS, path, remove_err,
-            )
-            item = reaped_by_id.get(candidate_id)
-            if item is not None:
-                item["index_resync_failed"] = f"remove-failed: {remove_err}"
-            await asyncio.to_thread(
-                _persist_index_resync_failure,
-                worktree_root=worktree_root,
-                candidate_id=candidate_id,
-                reason=f"remove-failed: {remove_err}",
-                op_label="rm_and_commit",
-            )
 
 
 async def archive_and_commit(

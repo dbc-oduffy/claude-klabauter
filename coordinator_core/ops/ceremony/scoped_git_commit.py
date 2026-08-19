@@ -138,6 +138,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_NO_REMOTE,
     PUSH_STATUS_NOT_ATTEMPTED,
     PUSH_STATUS_PUSHED,
+    PUSH_STATUS_UNCONFIRMED,
     PipelineResult,
     run_commit_pipeline,
 )
@@ -1833,6 +1834,15 @@ def _resolve_push_report(
     land) is genuinely unknown, and rendering unknown as failure is how a
     report starts lying. That rung is the one thing the probe got right and it
     outlives it.
+
+    FIX-I (2026-08-19): `PUSH_STATUS_UNCONFIRMED` -- the push subprocess
+    itself timed out, so `push_with_retry` never observed whether it landed
+    -- is handled by the same wildcard branch as `PUSH_STATUS_NOT_ATTEMPTED`
+    below, and is called out explicitly here rather than left to fall
+    through silently: both are genuinely unknown and both render identically,
+    but they are not the same fact (a push WAS attempted in the timeout
+    case), and a reader diffing this function against `derive_push_status`'s
+    own mapping table should find this state named, not just implied.
     """
     if push_status == PUSH_STATUS_DECLINED:
         return None, PUSH_STATE_DECLINED
@@ -1842,4 +1852,7 @@ def _resolve_push_report(
         return None, PUSH_STATE_NO_REMOTE
     if push_status == PUSH_STATUS_FAILED:
         return False, PUSH_STATE_FAILED
+    if push_status == PUSH_STATUS_UNCONFIRMED:
+        return None, PUSH_STATE_UNCONFIRMED
+    # `PUSH_STATUS_NOT_ATTEMPTED` and any other unrecognized value fall here.
     return None, PUSH_STATE_UNCONFIRMED

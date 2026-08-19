@@ -16,15 +16,43 @@ that behaviour unchanged: `disposition="skip-and-surface"` (the default) reprodu
 percolate's existing behaviour exactly; `disposition="fail-loud"` is additive, for AC9's
 caller (chunk C10), and does not alter percolate's own call sites.
 
-NEGATIVE-SPEC -- THIS PRIMITIVE IS BUILT AND UNARMED. As of 2026-08-18 there is NO
-production caller anywhere in the tree that passes a real budget: every reachable call
-site into the wired seams (`contract/apply_base.py :: execute_directives`, and
-`ceremony_common/apply_halt.py`'s `budget_check_pre_mutation` /
-`budget_check_post_mutation` / `budget_advisory_mid_directive`) leaves
-`composition_budget` at its `None` default, which is a no-op. A grep for a non-`None`
-`composition_budget=` outside `coordinator_core/tests/` returns nothing. Arming it is
-roadmap `fact-layer-core` stub `fl-core-03`, gated on a PM ruling about which disposition
-the fleet runs. Do not read the wiring above as evidence that a budget is being enforced.
+NEGATIVE-SPEC -- THIS PRIMITIVE IS ARMED, AND A BREACH IS AN OBSERVATION, NOT A FAILURE.
+Superseded 2026-08-19 (fl-core-03 C6). The previous text here said the primitive was built
+and unarmed, with no production caller passing a real budget; C2, C3 and C5 falsified every
+clause of it. What is true now:
+
+  - ARMED IN BOTH LINEAGES, at one posture, via one factory. All five `apply_base` callers
+    (`backlog_grind`/`baton`/`consolidate`/`merge`/`pickup` `_assemble`) pass a real budget
+    into `contract/apply_base.py :: execute_directives`, and all three `apply_halt`
+    ceremonies (`workday`/`workstream`/`workweek` `_complete`) call
+    `budget_check_pre_mutation` / `budget_check_post_mutation` /
+    `budget_advisory_mid_directive`. Every one constructs through
+    `telemetry/composition_record.py :: make_fleet_budget`, the sole reader of
+    `FLEET_AGGREGATE_ELAPSED_BUDGET` / `FLEET_MAX_INVOCATIONS`, so the two lineages cannot
+    drift to different postures by accident.
+  - VALUES: 1200.0s elapsed / 110 invocations, under `SKIP_AND_SURFACE`. Derived, never
+    chosen -- `docs/research/2026-08-18-composition-budget-armed-values.md` (the arithmetic
+    and the 3.7x headroom) and `docs/decisions/DR-arm-the-composition-budget.md` (the
+    decision, the posture ruling, and why R-04 is met here rather than deferred).
+  - WHAT A LATER READER MUST NOT MISREAD, which is no longer "this is not enforcement":
+    these are RUNAWAY GUARDS DERIVED FROM AN n-BOUNDED SOAK (360 substantive compositions
+    over ~1 day), not performance budgets -- the distinction
+    `docs/wiki/machine-load-norm.md` draws for `ipc.py :: _timeout_for`. A breach record is
+    an OBSERVATION, not a failure: under `SKIP_AND_SURFACE` all three boundaries are
+    observational (plan Finding 3), and all 541 recorded compositions replay against these
+    ceilings with zero breaches and ~3.76x headroom. Do not tighten either dial to "make the
+    guard useful"; a ceiling that fires on the healthy steady state gets reverted and takes
+    the instrument with it. Amend the derivation record first, then the constant.
+  - THE SINK STILL CANNOT SEE percolate. `percolate/engine.py :: run_entrypoint_gate` runs
+    its own `_budget_ok()` closure and was never converted to this primitive (see the
+    paragraph above -- percolate is the precedent this was extracted FROM, not a caller).
+    Its compositions therefore appear in no composition row, and the fleet's cost picture
+    has a NAMED blind spot rather than an unnoticed one. Tracker row filed by chunk C10.
+  - FOUR COMPOSITIONS WERE UNOBSERVED when these values were derived --
+    `consolidate_assemble`, `merge_assemble`, `workday_complete`, `workweek_complete` --
+    because they run on a cadence longer than the measurement window. `workweek_complete` is
+    the heaviest ceremony on the box and the likeliest source of a first breach. Re-derive
+    once it has fired; that is a prompt, not an incident.
 
 WHY ELAPSED TIME IS NOT OPTIONAL (docs/research/2026-08-15-wsc-close-cost-attribution.md,
 chunk C1, gates this chunk): on a real PARTITION-MANDATORY `/workstream-complete` close,
@@ -149,17 +177,54 @@ _VALID_DISPOSITIONS = frozenset({SKIP_AND_SURFACE, FAIL_LOUD})
 #: below is an opt-in helper, never invoked implicitly).
 DEFAULT_COMPOSITION_ID_ENV = "COORDINATOR_COMPOSITION_ID"
 
-#: Fleet ceiling constants (chunk C1, docs/plans/2026-08-18-arm-the-composition-budget.md).
-#: Both start at `None` -- "no ceiling", matching this module's own
-#: `aggregate_elapsed_budget`/`max_invocations` "either, both, or neither" contract --
-#: so `coordinator_core.telemetry.composition_record.make_fleet_budget()` (the sole
-#: reader of these two names) constructs a PURE RECORDER: it observes every composition
-#: via `on_count` and cannot alter any outcome even in principle. C5 arms these from this
-#: recorder's own data; nothing in this chunk reads C5's numbers early. Constants only --
+#: Fleet ceiling constants (chunk C1, armed at chunk C5,
+#: docs/plans/2026-08-18-arm-the-composition-budget.md).
+#: `coordinator_core.telemetry.composition_record.make_fleet_budget()` is the sole reader
+#: of these two names, so this single pair arms all eight compositions across both
+#: lineages at one posture -- the property C1 built the factory for. Constants only --
 #: no import here reaches `telemetry/`, preserving this module's DEPENDENCY-FREE LEAF
 #: property (see module docstring).
-FLEET_AGGREGATE_ELAPSED_BUDGET: "float | None" = None
-FLEET_MAX_INVOCATIONS: "int | None" = None
+#:
+#: DERIVED, NEVER CHOSEN (COORDINATOR-RESOLUTIONS.md R-04). Both values come from
+#: `docs/research/2026-08-18-composition-budget-armed-values.md`, which measured 360
+#: substantive compositions over 2026-08-18T20:53 -> 2026-08-19T12:25 and derived from
+#: ALL outcomes, not the success-only subset (the slow tail is disproportionately
+#: partial/failed, and that tail is what a ceiling bounds):
+#:     aggregate_elapsed_budget = 319.53s worst-observed x 3.7 = 1182.3 -> 1200.0
+#:     max_invocations          =     29  worst-observed x 3.7 =   107.3 ->    110
+#: The 3.7x headroom copies `ipc.py`'s `ceremony.scoped_git_commit = 150.0`, sized at
+#: ~3.7x its own worst sample against the load norm. Do NOT re-tune either value from
+#: memory or intuition -- amend the record first, then the constant; a constant that has
+#: drifted from its derivation reads as measured while being guessed.
+#:
+#: RUNAWAY GUARDS, NOT PERFORMANCE BUDGETS -- the distinction
+#: `docs/wiki/machine-load-norm.md` draws for `ipc.py :: _timeout_for`. p95 elapsed is
+#: 22.12s against a 1200s ceiling; these are deliberately not sized to fire on the
+#: healthy steady state, because a first arming that does gets reverted and takes the
+#: instrument with it.
+#:
+#: NEGATIVE-SPEC, both dials: `max_invocations` must be >= 1 and
+#: `aggregate_elapsed_budget` must be > 0. `_within_budget` compares the count dial with
+#: `>=` against a counter still at 0 at the pre-mutation boundary, so a ceiling of 0
+#: breaches at entry -- the one boundary that CAN change an outcome. Symmetrically
+#: `elapsed_secs() > 0.0` is false at construction, so an elapsed ceiling of exactly 0.0
+#: passes pre-mutation and then breaches everywhere after. Same failure mode, both dials.
+#: The assertion below is the guard; C7 pins the construction site it depends on.
+FLEET_AGGREGATE_ELAPSED_BUDGET: "float | None" = 1200.0
+FLEET_MAX_INVOCATIONS: "int | None" = 110
+
+if FLEET_AGGREGATE_ELAPSED_BUDGET is not None and FLEET_AGGREGATE_ELAPSED_BUDGET <= 0:
+    raise ValueError(
+        "FLEET_AGGREGATE_ELAPSED_BUDGET must be > 0 or None; "
+        f"got {FLEET_AGGREGATE_ELAPSED_BUDGET!r}. A ceiling of 0.0 passes the pre-mutation "
+        "check (elapsed_secs() > 0.0 is false at construction) and then breaches everywhere after."
+    )
+if FLEET_MAX_INVOCATIONS is not None and FLEET_MAX_INVOCATIONS < 1:
+    raise ValueError(
+        "FLEET_MAX_INVOCATIONS must be >= 1 or None; "
+        f"got {FLEET_MAX_INVOCATIONS!r}. A ceiling of 0 breaches at the pre-mutation boundary, "
+        "the one boundary that can change a ceremony's outcome."
+    )
 
 
 class BudgetBreach(Exception):

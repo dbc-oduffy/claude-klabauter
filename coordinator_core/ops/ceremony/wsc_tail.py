@@ -177,9 +177,9 @@ background push spawned after step 5d (see step 5e). Setting
 synchronous, byte-for-byte behavior (all three pushes happen in-op, `pushed`/
 `follow_up_pushed` are real booleans) -- for tests and any caller that
 genuinely needs a synchronous confirmation. `push_status` result matrix
-(6 values, mutually exclusive -- C6b, docs/plans/2026-08-08-the-push-leg-
+(7 values, mutually exclusive -- C6b, docs/plans/2026-08-08-the-push-leg-
 that-never-asked-which-branch.md, reconciles this module's vocabulary
-against `commit_pipeline.PUSH_STATUS_*`'s canonical five; see
+against `commit_pipeline.PUSH_STATUS_*`'s canonical set; see
 `_CANONICAL_PUSH_STATUS_TO_LOCAL` for the literal mapping):
   - `"deferred"`   -- `push_mode="deferred"` (the default), NOT a resumed
                       pass. ALWAYS this value at result-return time, whether
@@ -205,6 +205,13 @@ against `commit_pipeline.PUSH_STATUS_*`'s canonical five; see
                       distinct from `"pushed"`'s not-attempted case above.
   - `"no-remote"`  -- `push_mode="sync"`, NOT resumed, and no remote is
                       configured (canonical `push_status="no-remote"`).
+  - `"unconfirmed"` -- `push_mode="sync"`, NOT resumed, and the push
+                      subprocess itself timed out (canonical
+                      `push_status="unconfirmed"`, FIX-I 2026-08-19) -- its
+                      true outcome was never observed, so this is NOT
+                      `"failed"`: the commit may already be on the remote.
+                      `integrity_breach` stays `False` for this value, same
+                      as `"pushed"`/`"declined"`/`"no-remote"`.
   - `"unknown_resumed"` -- ANY resumed pass (crash-recovered via the AC18
                       sentinel), regardless of `push_mode` -- the ORIGINAL
                       pre-crash push outcome was never persisted anywhere
@@ -420,6 +427,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_NO_REMOTE,
     PUSH_STATUS_NOT_ATTEMPTED,
     PUSH_STATUS_PUSHED,
+    PUSH_STATUS_UNCONFIRMED,
     run_commit_pipeline,
 )
 from coordinator_core.ops.ceremony.git_native import add_paths
@@ -471,12 +479,21 @@ _ENV_SYNC_PUSH = "COORDINATOR_WSC_SYNC_PUSH"
 #: behavior for that case -- it is a DIFFERENT "no push happened" reason than
 #: a policy `"declined"` refusal, and must stay distinct from it, never
 #: collapsed together.
+#: `PUSH_STATUS_UNCONFIRMED` (FIX-I, 2026-08-19): the push subprocess timed
+#: out and its true outcome was never observed. Added as its own local
+#: member rather than folded into `"pushed"` (would silently swallow the
+#: uncertainty) or `"failed"` (would reintroduce exactly the false-certainty
+#: bug this fix removes from `scoped-git-commit`'s own report) -- a lookup
+#: is used here, not a `.get(..., "failed")` default, precisely so a future
+#: canonical member added upstream fails loud here (`KeyError`) instead of
+#: silently landing on whatever the default happens to be.
 _CANONICAL_PUSH_STATUS_TO_LOCAL = {
     PUSH_STATUS_PUSHED: "pushed",
     PUSH_STATUS_FAILED: "failed",
     PUSH_STATUS_DECLINED: "declined",
     PUSH_STATUS_NO_REMOTE: "no-remote",
     PUSH_STATUS_NOT_ATTEMPTED: "pushed",
+    PUSH_STATUS_UNCONFIRMED: "unconfirmed",
 }
 
 #: Non-tail-step D-node id/resolving_op carrying this pass's per-step wall-clock

@@ -192,6 +192,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_NO_REMOTE,
     PUSH_STATUS_NOT_ATTEMPTED,
     PUSH_STATUS_PUSHED,
+    PUSH_STATUS_UNCONFIRMED,
     derive_push_status,
     push_with_retry,
     resolve_post_push_sha,
@@ -443,9 +444,12 @@ def _commit_and_push_origin_stub_close(
         reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
         return follow_up_sha, False, push_status, f"git push failed: {reason}"
     # PUSH_STATUS_DECLINED / PUSH_STATUS_NO_REMOTE / PUSH_STATUS_NOT_ATTEMPTED
-    # -- no push landed, but this is NOT an error (see docstring above): a
-    # policy decline or a missing remote is `push_with_retry`'s own honest
-    # "did not push, on purpose/by environment" outcome.
+    # / PUSH_STATUS_UNCONFIRMED -- no push landed, but this is NOT an error
+    # (see docstring above): a policy decline, a missing remote, or a
+    # subprocess timeout whose outcome was never observed (FIX-I,
+    # 2026-08-19 -- distinct from PUSH_STATUS_FAILED above, which is a
+    # genuine, git-reported reject) is `push_with_retry`'s own honest
+    # "did not push, on purpose/by environment/unconfirmed" outcome.
     return follow_up_sha, None, push_status, None
 
 
@@ -628,11 +632,27 @@ async def _run_origin_stub_close(
         # Should be unreachable (commit_result.ok implies a resolvable HEAD),
         # but never silently drop a genuine no-sha outcome as a clean success.
         failed.append("follow-up: commit landed but HEAD sha unresolved")
-    elif follow_up_push_status in (PUSH_STATUS_DECLINED, PUSH_STATUS_NO_REMOTE):
-        # A policy decline (or missing remote) is NOT an error -- see
-        # `_commit_and_push_origin_stub_close`'s docstring. Named here
+    elif follow_up_push_status in (
+        PUSH_STATUS_DECLINED,
+        PUSH_STATUS_NO_REMOTE,
+        PUSH_STATUS_UNCONFIRMED,
+    ):
+        # A policy decline, a missing remote, or a subprocess timeout whose
+        # outcome was never observed (FIX-I, 2026-08-19) is NOT an error --
+        # see `_commit_and_push_origin_stub_close`'s docstring. Named here
         # (skipped, never failed) purely for observability: the commit
-        # itself landed, the push was deliberately withheld.
+        # itself landed, and the push status is withheld or unknown rather
+        # than bad.
+        #
+        # These THREE states are reported. The ladder is not exhaustive and
+        # this comment does not claim it is: `PUSH_STATUS_PUSHED` falls
+        # through deliberately (a silent success needs no entry), and
+        # `PUSH_STATUS_NOT_ATTEMPTED` -- which is the DEFAULT
+        # `push_mode="deferred"` case, not a rare one -- also falls through
+        # and contributes nothing to `skipped`. That predates this change and
+        # is not fixed here, because adding it changes observable ceremony
+        # output on a path this roadmap does not own. Named rather than left
+        # for the next reader to discover, and filed.
         skipped.append(f"follow-up:push:{follow_up_push_status}")
 
     return {"acted": closed_paths, "skipped": skipped, "failed": failed}

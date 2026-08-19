@@ -27,12 +27,18 @@ the measurement side; gate.py for verdict computation.
 from __future__ import annotations
 
 import json
+import platform
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """Pinned schema version stamped onto every emitted record. Bump only in
-lockstep with a coordinated qsub-03 contract change."""
+lockstep with a coordinated qsub-03 contract change.
+
+v1 -> v2 (this bump): added `machine` (machine identity, Optional[str]) and
+the ambient-context trio `ambient_before`/`ambient_after`/`ambient_delta`
+(Optional[dict]). `from_json` accepts a v1 payload (none of these keys
+present) by defaulting every one of them to None -- see from_json()."""
 
 # Review: code-reviewer (Slice B F5, nit) — named constants for floor_scope's
 # documented "run"|"per_op" enum, mirroring gate.py's VERDICT_* constant pattern,
@@ -152,6 +158,37 @@ class ConformanceRecord:
     'shared' = ran on a shared/live working tree, as opposed to an isolated
     CI runner). Default 'shared' reflects wave-1's ad-hoc dev-loop harness."""
 
+    machine: Optional[str] = None
+    """Machine identity this record was measured on, composed via
+    compose_machine_id() (platform.system() + platform.node(), lowercased,
+    joined). Optional rather than bare `str` so from_json() can construct a
+    migrated v1 record (no `machine` key present) without raising -- v1
+    records carry no machine identity and are None here, never a comparable
+    baseline (see baseline_store's machine partition, C3). Timings are
+    per-machine, full stop: a None-machine record names no box its timings
+    are valid under."""
+
+    ambient_before: Optional[dict] = None
+    """Ambient-load snapshot (coordinator_core.benchmarks.ambient_sampler.
+    take_sample() shape: {t, live_sessions, claude_procs, cpu_pct,
+    ram_free_mb, ram_total_mb}) taken in-process at run start. Every field
+    inside degrades to null independently on sampler failure -- never
+    raises. Distinct from a post-hoc join against ambient_sampler's
+    standalone ambient-load.jsonl daemon (which nothing guarantees is
+    running, and which can be stale by up to DEFAULT_INTERVAL_SECONDS):
+    this is measured for THIS run, at write time."""
+
+    ambient_after: Optional[dict] = None
+    """Ambient-load snapshot (same shape as ambient_before) taken in-process
+    at run end, outside the timed measurement window."""
+
+    ambient_delta: Optional[dict] = None
+    """Per-field (ambient_after - ambient_before) delta for every numeric
+    field ambient_before/ambient_after share (live_sessions, claude_procs,
+    cpu_pct, ram_free_mb, ram_total_mb) -- see compute_ambient_delta(). A
+    field degrades to null in the delta if either side is null or either
+    snapshot itself is None; never raises."""
+
     schema_version: int = SCHEMA_VERSION
     """Pinned contract version for this record shape. See module-level
     SCHEMA_VERSION."""
@@ -170,8 +207,43 @@ class ConformanceRecord:
     @staticmethod
     def from_json(payload: str) -> "ConformanceRecord":
         """Deserialize a JSON string produced by to_json() back into a
-        ConformanceRecord. Round-trip pair: to_json()."""
+        ConformanceRecord. Round-trip pair: to_json().
+
+        Accepts a v1 payload (no `machine`/`ambient_before`/`ambient_after`/
+        `ambient_delta` keys) without raising: every one of those fields
+        defaults to None on the dataclass, so simply omitting an absent key
+        from the ConformanceRecord(**data) call below reconstructs a v1
+        record with those fields set to None -- the real migration path a
+        future schema bump reuses."""
         data = json.loads(payload)
         data = dict(data)
         data["tolerance"] = Tolerance.from_dict(data["tolerance"])
         return ConformanceRecord(**data)
+
+
+def compose_machine_id() -> str:
+    """Compose this box's machine identity: platform.system() and
+    platform.node(), lowercased and joined, stable across runs on one box
+    and distinct across boxes. Used to populate ConformanceRecord.machine
+    at measurement time."""
+    return f"{platform.system()}-{platform.node()}".lower()
+
+
+def compute_ambient_delta(before: Optional[dict], after: Optional[dict]) -> Optional[dict]:
+    """Per-field (after - before) delta over the numeric fields
+    ambient_sampler.take_sample() produces (live_sessions, claude_procs,
+    cpu_pct, ram_free_mb, ram_total_mb). Never raises: returns None if
+    either snapshot itself is None, and degrades an individual field to
+    null in the result if either side of that field is null -- same
+    degrade-to-null discipline take_sample() itself follows."""
+    if before is None or after is None:
+        return None
+    delta: dict[str, Optional[float]] = {}
+    for key in ("live_sessions", "claude_procs", "cpu_pct", "ram_free_mb", "ram_total_mb"):
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if before_value is None or after_value is None:
+            delta[key] = None
+        else:
+            delta[key] = after_value - before_value
+    return delta

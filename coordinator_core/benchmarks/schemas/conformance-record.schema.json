@@ -27,6 +27,10 @@
     "code_sha",
     "timestamp",
     "runner_isolation_mode",
+    "machine",
+    "ambient_before",
+    "ambient_after",
+    "ambient_delta",
     "schema_version"
   ],
   "properties": {
@@ -126,9 +130,25 @@
       "default": "shared",
       "description": "Execution environment isolation descriptor for this run."
     },
+    "machine": {
+      "type": ["string", "null"],
+      "description": "Machine identity this record was measured on (platform.system() + platform.node(), lowercased, joined). Null on a migrated v1 record, which names no machine and is never a comparable baseline."
+    },
+    "ambient_before": {
+      "type": ["object", "null"],
+      "description": "Ambient-load snapshot (ambient_sampler.take_sample() shape) taken in-process at run start. Every inner field is independently nullable."
+    },
+    "ambient_after": {
+      "type": ["object", "null"],
+      "description": "Ambient-load snapshot (same shape as ambient_before) taken in-process at run end, outside the timed measurement window."
+    },
+    "ambient_delta": {
+      "type": ["object", "null"],
+      "description": "Per-field (ambient_after - ambient_before) numeric delta. Null if either snapshot is null; an individual field within it degrades to null if either side is null."
+    },
     "schema_version": {
       "type": "integer",
-      "const": 1,
+      "const": 2,
       "description": "Pinned contract version for this record shape."
     }
   }

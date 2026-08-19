@@ -110,7 +110,6 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.warm import election
 from coordinator_core.warm.settings import is_warm_enabled
 
@@ -187,6 +186,49 @@ def _caller_session_id() -> str:
         return resolve_session_id()
     except Exception:
         return ""
+
+
+def spawn_detached(repo_root: str, script_path: str, args: Optional[Any] = None) -> bool:
+    """Lazy delegate to `ops.ceremony.detached_spawn.spawn_detached`.
+
+    THE IMPORT IS INSIDE THE FUNCTION ON PURPOSE — it is the single most
+    expensive thing this module could do, and it was being done on every
+    invocation of the engine. `detached_spawn` lives under
+    `coordinator_core.ops`, so importing it executes `ops/__init__.py` and
+    registers the ENTIRE op surface: measured on this box, importing this
+    module pulled 527 `coordinator_core` modules (316 of them
+    `coordinator_core.ops.*`) and cost ~330 ms over a 40 ms interpreter
+    floor, against 4 modules and ~53 ms for `invoke.__main__` by itself.
+    `detached_spawn`'s own imports are all stdlib; the whole cost is the
+    registration chain reached through the package `__init__`.
+
+    `invoke/__main__.py` imports this module unconditionally, ahead of its
+    warm/cold branch, so that cost was paid by every call — warm hit and
+    cold fallback alike, and even with `COORDINATOR_WARM=0`. The warm
+    preamble was therefore paying, up front, the exact engine-import cost
+    warmth exists to avoid, which is why a confirmed warm hit measured no
+    faster than cold (221 ms vs 224 ms for CLI `ping`, 2026-08-19). It also
+    silently undid `__main__`'s own "No eager `import coordinator_core.ops`"
+    property, through a package-`__init__` side door rather than a direct
+    import. Found by claude-klabauter-44.
+
+    The only caller is `_spawn_once`, on the `FileNotFoundError` "no pipe,
+    nobody home" branch — never on a warm hit, a disabled read, or any
+    other cold-fallback outcome. So the registry now loads only when this
+    process is actually about to start a server.
+
+    NEGATIVE-SPEC: this wrapper is a MODULE-LEVEL NAME by design, not an
+    inlined function-local import at the call site. `warm/tests/
+    test_client_fallback.py` substitutes the spawn seam with
+    `monkeypatch.setattr(client, "spawn_detached", ...)` at five sites; a
+    function-local import at `_spawn_once` would bypass every one of them
+    and quietly spawn real detached processes during the suite.
+    """
+    from coordinator_core.ops.ceremony.detached_spawn import (
+        spawn_detached as _spawn_detached_impl,
+    )
+
+    return _spawn_detached_impl(repo_root, script_path, args)
 
 
 def _spawn_once() -> None:

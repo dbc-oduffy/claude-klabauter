@@ -3,8 +3,9 @@ Tests for coordinator_core.telemetry.composition_record (chunk C1,
 docs/plans/2026-08-18-arm-the-composition-budget.md).
 
 Covers: `make_fleet_budget` returns a distinct instance per call with
-`disposition=SKIP_AND_SURFACE`; the fleet ceilings (both `None` today) never
-breach no matter how many invocations are recorded; `on_count` fires once per
+`disposition=SKIP_AND_SURFACE`; the factory propagates the fleet ceilings
+(armed at C5) unchanged, a realistic composition stays within the count dial
+and a runaway one breaches it; `on_count` fires once per
 `record_invocation` and the running count is readable at flush time;
 `flush_composition_record` writes exactly one `kind="composition"` row per
 call, carrying a non-empty composition name, invocation count, elapsed, and
@@ -68,16 +69,43 @@ class TestFactory:
         budget = make_fleet_budget("merge_assemble")
         assert budget.disposition == SKIP_AND_SURFACE
 
-    def test_fleet_ceilings_default_to_none(self):
-        assert composition_budget.FLEET_AGGREGATE_ELAPSED_BUDGET is None
-        assert composition_budget.FLEET_MAX_INVOCATIONS is None
+    def test_factory_propagates_the_armed_fleet_ceilings(self):
+        """The factory hands the module constants through unchanged, which is
+        what makes one edit arm all eight compositions at one posture.
 
-    def test_never_breaches_with_constants_at_none(self):
+        Replaced C1's `test_fleet_ceilings_default_to_none` at C5: that test
+        pinned the PURE RECORDER state (both constants `None`), which C5 ended
+        on purpose. Pinning the exact values is deliberately NOT done here --
+        `test_composition_budget_arming_is_outcome_neutral.py` owns the
+        positive-value assertions, and duplicating the literals in a second
+        file would mean a future re-derivation has two places to update and
+        one of them will be missed."""
         budget = make_fleet_budget("workday_complete")
-        for _ in range(500):
+        assert budget.aggregate_elapsed_budget is composition_budget.FLEET_AGGREGATE_ELAPSED_BUDGET
+        assert budget.max_invocations is composition_budget.FLEET_MAX_INVOCATIONS
+
+    def test_a_realistic_composition_stays_within_the_armed_count_dial(self):
+        """The worst composition observed while deriving the ceilings ran 29
+        directives (docs/research/2026-08-18-composition-budget-armed-values.md).
+        A budget at that count must not breach -- the guard is sized for
+        runaway, not for the healthy tail."""
+        budget = make_fleet_budget("workstream_complete")
+        for _ in range(29):
             budget.record_invocation()
         assert budget.check() is True
         assert budget.breached_units == ()
+
+    def test_the_armed_count_dial_actually_fires_on_runaway(self):
+        """Replaces C1's `test_never_breaches_with_constants_at_none`, whose
+        whole claim (500 invocations, no breach) was a property of the ceilings
+        being `None`. Now that they are armed the interesting assertion is the
+        opposite one: the dial fires, under SKIP_AND_SURFACE, by returning
+        False rather than raising."""
+        budget = make_fleet_budget("workday_complete")
+        for _ in range(500):
+            budget.record_invocation()
+        assert budget.check() is False
+        assert budget.breached_units != ()
 
 
 class TestOnCountAccumulation:

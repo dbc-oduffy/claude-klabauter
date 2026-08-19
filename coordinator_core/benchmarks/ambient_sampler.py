@@ -10,7 +10,7 @@ records facts only, remediates nothing.
 
 Sink: <git_common_dir>/coordinator-sessions/logs/ambient-load.jsonl, one JSON line
 per sample:
-    {"t": float epoch, "live_sessions": int, "claude_procs": int,
+    {"t": float epoch, "live_sessions": int|null, "claude_procs": int|null,
      "cpu_pct": float|null, "ram_free_mb": float|null, "ram_total_mb": float|null}
 
 Windows is first-class here (per repo doctrine: naked Python, no new .sh, no bash) —
@@ -58,20 +58,26 @@ def _sink_path(git_common_dir_path: Path) -> Path:
     return Path(git_common_dir_path) / "coordinator-sessions" / "logs" / "ambient-load.jsonl"
 
 
-def _resolve_live_sessions_count() -> int:
+def _resolve_live_sessions_count() -> Optional[int]:
     """Live coordinator-session count via the existing native liveness resolver.
 
     Never hand-rolls liveness — delegates to
     coordinator_core.session.liveness.resolve_live_session_ids(), the TTL-cached
-    resolver already used for this purpose elsewhere in the engine. Returns 0 on
-    any resolution failure (e.g. not inside a git repo) rather than raising.
+    resolver already used for this purpose elsewhere in the engine. Returns
+    None on any resolution failure (e.g. not inside a git repo) rather than
+    raising -- matching the degrade-to-null discipline every other field in
+    this module's take_sample() already follows. A prior version returned
+    plain 0 on failure, which read as "measured at genuinely low load" (the
+    quietest, most-trusted band) rather than "unknown" -- disguising a
+    sampler failure as ideal conditions and silently defeating any
+    unknown-band downgrade a consumer applies to a null live_sessions read.
     """
     try:
         from coordinator_core.session.liveness import resolve_live_session_ids
 
         return len(resolve_live_session_ids())
     except Exception:
-        return 0
+        return None
 
 
 def _windows_process_and_memory_sample() -> "tuple[Optional[int], Optional[float], Optional[float], Optional[float]]":

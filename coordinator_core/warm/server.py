@@ -714,9 +714,54 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
         print(f"[warm-server] failed to write breadcrumb: {exc!r}", file=sys.stderr)
 
+    _preload_op_registry()
+
     ctx = _ServerContext(name=name, sid=sid, version_state=version_state, engine_root=repo_root)
     ctx.serve_forever(first_handle)
     return 0
+
+
+def _preload_op_registry() -> None:
+    """Import the op registry at BOOT, so the first caller does not pay for it.
+
+    `_run_dispatch` imports `coordinator_core.ipc.dispatch_message`
+    function-locally, and the registry populates through it on first
+    dispatch — inside the server, cached in `sys.modules` thereafter. That
+    is ~316 `coordinator_core.ops.*` modules landing on the critical path of
+    whichever caller happens to arrive first. Measured on the published
+    mirror, 2026-08-19: **first dispatch 703 ms, every subsequent dispatch
+    ~3 ms**.
+
+    A one-time cost per server GENERATION, not per server lifetime — and
+    generations are not rare. `skew.compute_client_token` keys on
+    `(.git/HEAD, its ref)`, so on a live working tree the token rotates at
+    the tree's commit cadence (measured ~2.6 min median on this box), and
+    each new generation re-presents that 703 ms to its first caller. A
+    server that is evicted early can spend most of its life having served
+    warm-up.
+
+    Moving it here puts it on a process nobody is waiting for, which is the
+    entire point of having a resident server. The pipe is already bound by
+    `election.elect` above, so a client arriving mid-preload waits exactly
+    what it would have waited inside the dispatch — no caller is made worse
+    off, and every caller after the first is made better.
+
+    NEGATIVE-SPEC:
+      - Runs AFTER the election, never before: a process that lost has
+        nothing to serve and must not pay 700 ms to discover that.
+      - Best-effort. A failed preload is a slow first dispatch, not a dead
+        server, so this never raises past the caller — the registry will
+        simply populate on first dispatch exactly as it did before.
+      - Does NOT dispatch anything. Importing is what populates the
+        registry (registration is an import side effect); a synthetic
+        warm-up request would also mutate telemetry's served counts and
+        make `served_count` lie about real traffic.
+    """
+    try:
+        import coordinator_core.ops  # noqa: F401 -- registration is the side effect
+        from coordinator_core.ipc import dispatch_message  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 -- a slow first call beats no server
+        print(f"[warm-server] op-registry preload failed: {exc!r}", file=sys.stderr)
 
 
 if __name__ == "__main__":

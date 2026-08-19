@@ -311,6 +311,13 @@ _NON_SESSION_DIR_NAMES = frozenset(
         # per `test_every_non_uuid_real_child_is_denylisted_or_a_file`'s own
         # instruction not to quiet a stray dir with a passlist entry.
         "hook-observations",
+        # `ops/workflow_fire/fire.py`'s run-handle sink -- a fixed directory
+        # name that module owns outright (`fire.py:288`), holding one JSON
+        # record per fire plus its own `logs/`. Same class as
+        # `hook-observations`: a named cross-session data directory, never a
+        # session id. Missed on the 2026-08-19 pass because the sink happened
+        # to be empty at that moment and reappeared mid-run.
+        "workflow-fires",
     }
 )
 

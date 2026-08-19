@@ -237,12 +237,46 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
 }
 
-#: Sites PROVEN legitimately counted -- see module docstring's "EXEMPTION MODEL". Empty on
-#: purpose: C6 (a later chunk) is what earns an entry here, by routing a site through its op's
-#: real counter or by explicitly wiring a carve-out's count. Do NOT add an entry here because a
-#: companion test's global `subprocess.run` patch happens to also see the call -- that is not
-#: this gate's definition of counted (module docstring, "THIS GATE'S OPERATIONAL DEFINITION").
-_LEGITIMIZED_SITES: set[tuple[str, str, str, int]] = set()
+#: Sites PROVEN legitimately counted -- see module docstring's "EXEMPTION MODEL". C6's worklist
+#: (opro-03, `docs/plans/2026-08-19-every-budgeted-op-counts-its-own-spawns.md`) drains this set
+#: one entry at a time, each earning its place by ROUTING evidence, not by a companion test's
+#: incidental visibility. Do NOT add an entry here because a companion test's global
+#: `subprocess.run` patch happens to also see the call -- that is not this gate's definition of
+#: counted (module docstring, "THIS GATE'S OPERATIONAL DEFINITION"); the two entries below were
+#: each checked against that bar and hold up. 13 of 15 distinct sites remain unlegitimized (16 of
+#: 18 (op, site) pairs) -- see `state/subagent-share/7a4959ac-9247-439f-b7e2-d462e0608725/
+#: coordinatorexecutor-3400b29c.md` for the full per-site drain evidence, run 2026-08-19.
+_LEGITIMIZED_SITES: set[tuple[str, str, str, int]] = {
+    (
+        "coordinator_core/ops/ceremony/git_native.py",
+        "_git._invoke",
+        "<dynamic>",
+        0,
+    ),
+    # `ceremony.scoped_git_commit`'s counting seam itself. `test_commit_e2e_spawn_budget.py::
+    # _count_op_git_calls` substitutes the FUNCTION OBJECT `git_native._git` (`git_native._git =
+    # _wrapper`, not a `subprocess.run` module-attribute patch) before invoking the op -- every
+    # call to `git_native._git(...)`, whatever `_invoke`'s own body does internally, routes
+    # through the substituted name first. This is not a call INTO the seam that the seam then
+    # hides from the counter; it IS the seam, so it is counted by construction. Budget shape:
+    # `overrides["ceremony.scoped_git_commit"].spawn_count_budget.green_path` (and siblings) in
+    # `budget-manifest.json`.
+    (
+        "coordinator/bin/reap-integrated-review-findings.py",
+        "_git",
+        "git",
+        0,
+    ),
+    # `bin.reap_integrated_review_findings.tracked_untracked_split`'s sole spawn seam.
+    # `coordinator/tests/test_reap_integrated_review_findings_spawn_budget.py` substitutes the
+    # module's own FUNCTION OBJECT (`mod._git = _counting_git`, wrapping `orig_git = mod._git`),
+    # narrow by construction like the seam above -- not a `subprocess.run` module-attribute
+    # patch. `spawn_policy.sites_in_source` finds exactly one spawn site in this whole file
+    # (`_git`), and every git operation the module makes (`ls-files`, `rm`, `commit`) routes
+    # through it, so wrapping the name wraps the site. Budget shape:
+    # `overrides["bin.reap_integrated_review_findings.tracked_untracked_split"].spawn_count_budget.
+    # per_reap_call` in `budget-manifest.json`.
+}
 
 
 def _module_dotted_name(relpath: str) -> str | None:
