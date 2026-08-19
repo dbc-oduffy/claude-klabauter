@@ -679,10 +679,23 @@ def _resolve_addresses_bulk_from_snapshot(session_ids: list[str], snapshot: dict
     return result
 
 
-def resolve_addresses_bulk_with_availability(session_ids: list[str]) -> tuple[dict[str, str], bool]:
+def resolve_addresses_bulk_with_availability(
+    session_ids: list[str], snapshot: dict | None = None
+) -> tuple[dict[str, str], bool]:
     """`resolve_addresses_bulk`'s address dict, paired with `messaging_
     available(snapshot)` off the SAME snapshot read -- one scan answers both
     "what is each id's address" and "is there any address to be had at all".
+
+    `snapshot`, when given, is ONE ALREADY-TAKEN `harness_registry.snapshot()`
+    read the caller hoisted above its own loop, and both halves of the pair
+    are computed off it rather than off a fresh scan. This is the PUBLIC
+    entry point for that case: `coordinator_core.session.work_state.
+    _resolve_send_message_addresses` previously reached
+    `_resolve_addresses_bulk_from_snapshot` (private) directly and paired it
+    with its own `messaging_available` call, so a rename or re-sign of that
+    private helper would have degraded every held row's
+    `send_message_address` across the fleet rather than surfacing (Review:
+    staff-eng, Finding 6). One public overload, one call site, one snapshot.
 
     Built for a caller that renders `""` (this specific peer has no
     address) and box-wide messaging-unavailable (no peer on this box can
@@ -703,7 +716,8 @@ def resolve_addresses_bulk_with_availability(session_ids: list[str]) -> tuple[di
     render `send_message_address` as `None` + a named reason instead of the
     ambiguous `""`.
     """
-    snapshot = harness_registry.snapshot()
+    if snapshot is None:
+        snapshot = harness_registry.snapshot()
     addresses = _resolve_addresses_bulk_from_snapshot(session_ids, snapshot)
     return addresses, messaging_available(snapshot)
 

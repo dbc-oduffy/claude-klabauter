@@ -31,7 +31,32 @@ passes `matchers=("Bash",)` directly. Comparing a live Bash-only
 registration against a constant it never references would make this
 ratchet permanently red for a guard nobody is narrowing or widening --
 excluded below, not silently (see `_EXCLUDED_INAPPLICABLE_DECLARATION`).
-The real tracked population is 18 full-universe + 5 Bash-only = 23.
+
+Re-censused 2026-08-19: the `held-pending-tokenizer-fix` cohort
+(`block_stash_destruction`, `block_subagent_destructive_action`,
+`block_subagent_stash_creation`, `block_worktree_creation`) now declares
+`MATCHERS = COMMAND_TOOL_NAMES` on disk and registers full-universe in
+`guard_roster()` -- the tokenizer fallback blocking their widening was
+fixed upstream of this chunk. The `held-pending-tokenizer-fix` kind is
+now empty; `bash-only-by-construction` (`guard_powershell_via_bash`,
+correct by construction, not a conversion candidate) is retained and the
+two kinds are kept distinct rather than collapsed, since the ratchet
+records kinds, not a single allow-list. The real tracked population is
+22 full-universe + 1 Bash-only = 23.
+
+Declaring the full universe is not the same as reading it: six of the
+22 full-universe guards (`block_noncanonical_branch_creation`,
+`block_subagent_commit`, `block_subagent_grant_acquisition`,
+`block_subagent_guard_grant`, `guard_branch_set_precedence`,
+`guard_longlived_branch_naming`) have zero `_dialect` references in their
+own module source. `MATCHERS = COMMAND_TOOL_NAMES` only governs whether
+`fn()` is called at all (§ 6 of the reference doc) -- it says nothing
+about whether that `fn()` branches on which dialect it was called with.
+A reader who checks `MATCHERS` alone will read these six as PowerShell-
+aware; they are chain-eligible for a PowerShell payload but detect with
+whatever Bash-shaped logic they already had. This is the documented gap
+this ratchet's population note records, not something this test can
+close by widening a mapping.
 """
 from __future__ import annotations
 
@@ -72,16 +97,20 @@ class _Expected:
 #: Bash-only entry below carries a machine-distinguishable `kind` plus
 #: prose (AC5, AC7).
 EXPECTED: Dict[str, _Expected] = {
-    # -- full-universe (18) --
+    # -- full-universe (22) --
     "block-approval-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-disarm-marker-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-illegal-filename": _Expected(("Bash", "PowerShell")),
     "block-noncanonical-branch-creation": _Expected(("Bash", "PowerShell")),
     "block-reviewer-bash-outside-allowlist": _Expected(("Bash", "PowerShell")),
+    "block-stash-destruction": _Expected(("Bash", "PowerShell")),
     "block-subagent-commit": _Expected(("Bash", "PowerShell")),
+    "block-subagent-destructive-action": _Expected(("Bash", "PowerShell")),
     "block-subagent-grant-acquisition": _Expected(("Bash", "PowerShell")),
     "block-subagent-guard-grant": _Expected(("Bash", "PowerShell")),
     "block-subagent-plan-body-bash-write": _Expected(("Bash", "PowerShell")),
+    "block-subagent-stash-creation": _Expected(("Bash", "PowerShell")),
+    "block-worktree-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "check-raw-pid-liveness": _Expected(("Bash", "PowerShell")),
     "check-test-suite-invocation": _Expected(("Bash", "PowerShell")),
@@ -91,30 +120,6 @@ EXPECTED: Dict[str, _Expected] = {
     "longlived-branch-naming": _Expected(("Bash", "PowerShell")),
     "multiprobe-banner": _Expected(("Bash", "PowerShell")),
     "plumbing-and-loops": _Expected(("Bash", "PowerShell")),
-    # -- held, pending the shlex-tokenizer fallback fix (4) --
-    "block-stash-destruction": _Expected(
-        ("Bash",),
-        HELD_PENDING_TOKENIZER_FIX,
-        "if tokens is None: return _evaluate_legacy(cmd) fails CLOSED on "
-        "unparseable input; PowerShell here-strings/backtick escapes defeat "
-        "the shlex tokenizer feeding it, so widening ships a live "
-        "spurious-deny path.",
-    ),
-    "block-subagent-destructive-action": _Expected(
-        ("Bash",),
-        HELD_PENDING_TOKENIZER_FIX,
-        "Same fail-closed shlex fallback as block-stash-destruction.",
-    ),
-    "block-subagent-stash-creation": _Expected(
-        ("Bash",),
-        HELD_PENDING_TOKENIZER_FIX,
-        "Same fail-closed shlex fallback as block-stash-destruction.",
-    ),
-    "block-worktree-creation": _Expected(
-        ("Bash",),
-        HELD_PENDING_TOKENIZER_FIX,
-        "Same fail-closed shlex fallback as block-stash-destruction.",
-    ),
     # -- Bash-only by construction, never a conversion candidate (1) --
     "powershell-via-bash-guard": _Expected(
         ("Bash",),
@@ -236,24 +241,24 @@ def test_powershell_via_bash_kind_is_pinned_and_carries_no_remediation(
 
 
 def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
-    """AC5: the two kinds are machine-distinguishable and do not collapse
-    into one "allowed Bash-only" set."""
+    """AC5, AC11: the two kinds are machine-distinguishable and do not
+    collapse into one "allowed Bash-only" set -- even now that the
+    `held-pending-tokenizer-fix` cohort has been discharged and the kind
+    is empty. The kind constant and its distinctness from
+    `bash-only-by-construction` are still pinned; a future held guard
+    lands in a non-empty set again without re-deriving the discipline."""
     held = [
         gid
         for gid, exp in EXPECTED.items()
         if exp.kind == HELD_PENDING_TOKENIZER_FIX
     ]
-    assert sorted(held) == [
-        "block-stash-destruction",
-        "block-subagent-destructive-action",
-        "block-subagent-stash-creation",
-        "block-worktree-creation",
-    ]
+    assert held == []
     by_construction = [
         gid for gid, exp in EXPECTED.items() if exp.kind == BASH_ONLY_BY_CONSTRUCTION
     ]
     assert by_construction == ["powershell-via-bash-guard"]
     assert set(held).isdisjoint(by_construction)
+    assert HELD_PENDING_TOKENIZER_FIX != BASH_ONLY_BY_CONSTRUCTION
 
 
 def test_narrowing_a_full_universe_guard_is_detected():
@@ -269,10 +274,12 @@ def test_narrowing_a_full_universe_guard_is_detected():
 
 
 def test_widening_a_held_guard_is_detected():
-    """AC3, proven able to fail: widening a held guard must fail too --
-    the ratchet is two-directional, not a floor."""
+    """AC3, proven able to fail: widening a Bash-only entry must fail too
+    -- the ratchet is two-directional, not a floor. Uses
+    `powershell-via-bash-guard`, the sole remaining Bash-only entry now
+    that `held-pending-tokenizer-fix` is empty (AC11)."""
     actual = dict(_scoped_actual_matchers())
-    victim = "block-stash-destruction"
+    victim = "powershell-via-bash-guard"
     assert actual[victim] == ("Bash",)
     actual[victim] = ("Bash", "PowerShell")
     failures = _compare(actual, EXPECTED)

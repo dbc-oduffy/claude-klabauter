@@ -1867,6 +1867,92 @@ class TestDeliverableSpineFields:
 
 
 # ---------------------------------------------------------------------------
+# plan_ids / deliverable_ids / baton_role — the 8.1.0 -> 8.2.0 nested-field-
+# additive bump (DoE commit 3fb4a1053, re-vendored via
+# bin/claude-klabauter-revendor-handoff-schema.py). plan_ids/deliverable_ids are the
+# plural fan-in siblings of origin_plan_id/deliverable_id -- additive,
+# singular forms unchanged in meaning and still the single-plan/single-
+# deliverable case's field. baton_role is the inheritability axis
+# (`work | record`), DoE-ratified in
+# cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md.
+# Spec backlink: docs/plans/2026-08-19-batons-unify-into-one-successor.md
+# AC2/AC3, chunk C3.
+# ---------------------------------------------------------------------------
+
+class TestBatonUnificationSchemaBump:
+    def test_singular_only_still_validates(self):
+        """The pre-bump shape -- deliverable_id/origin_plan_id, no plural
+        siblings -- is the AC2 back-compat proof for the schema itself
+        (the on-disk-corpus proof is a separate test below)."""
+        fm = _valid_handoff(
+            deliverable_id='dlv-foo-abc123',
+            origin_plan_id='pln-foo-abc123',
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert errors == []
+
+    def test_plural_only_validates(self):
+        fm = _valid_handoff(
+            plan_ids=['pln-foo-abc123', 'pln-bar-def456'],
+            deliverable_ids=['dlv-foo-abc123', 'dlv-bar-def456'],
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert errors == []
+
+    def test_singular_and_plural_both_present_validates(self):
+        """No cross-field allOf coupling is imposed -- a record may carry
+        either, both, or neither."""
+        fm = _valid_handoff(
+            deliverable_id='dlv-foo-abc123',
+            origin_plan_id='pln-foo-abc123',
+            plan_ids=['pln-foo-abc123', 'pln-bar-def456'],
+            deliverable_ids=['dlv-foo-abc123', 'dlv-bar-def456'],
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert errors == []
+
+    def test_on_disk_corpus_record_with_singular_fields_still_passes(self):
+        """AC2's back-compat proof: a real corpus record authored before
+        the bump, carrying only the singular deliverable_id/origin_plan_id,
+        still validates unchanged against the bumped schema."""
+        repo_root = Path(__file__).resolve().parents[3]
+        path = (
+            repo_root / 'state' / 'handoffs'
+            / '2026-07-22_162946_wsc-rebuild-port-regression-audit.md'
+        )
+        assert path.exists(), f'corpus fixture missing: {path}'
+        content = path.read_text(encoding='utf-8')
+        fm = parse_frontmatter(content)['frontmatter']
+        assert fm.get('deliverable_id') == 'dlv-wsc-pure-python-rebuild-dd4482'
+        assert fm.get('origin_plan_id') == 'pln-rebuild-the-wsc-commit-ceremon-f7c2a0'
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert errors == [], errors
+
+    def test_baton_role_work_validates(self):
+        fm = _valid_handoff(baton_role='work')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'baton_role' for e in errors)
+
+    def test_baton_role_record_validates(self):
+        fm = _valid_handoff(baton_role='record')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'baton_role' for e in errors)
+
+    def test_baton_role_absent_ok(self):
+        """Absence means unknown, never a defaulted 'work' -- see the field
+        description's positive-match rule."""
+        errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'baton_role' for e in errors)
+
+    def test_baton_role_invalid_value_rejected(self):
+        """'execution' is handoff_phase's value, not baton_role's -- the two
+        axes must not be conflated (field description, D-C)."""
+        fm = _valid_handoff(baton_role='execution')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'] == 'baton_role' for e in errors)
+
+
+# ---------------------------------------------------------------------------
 # sizing_object — FK to the sizing-object that routed a plan through
 # coordinator:sizing. Optional/nullable; string arm constrained to
 # state/sizings/<id>.yaml. Spec backlink:

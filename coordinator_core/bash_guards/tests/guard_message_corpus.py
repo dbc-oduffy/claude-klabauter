@@ -1037,6 +1037,22 @@ def _longlived_branch_naming_hazard_setup(
     return {_CWD_OVERRIDE_KEY: "/repo"}
 
 
+def _heredoc_repo_write_advise_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """`heredoc-repo-write-advise` needs a `cwd` (threaded to the guard as
+    `git_root`, see dispatch.py's registration comment) that is NOT under
+    the real `$TEMP`/`$TMP` -- `fire_row`'s own default `cwd` is a fresh
+    `tempfile.TemporaryDirectory()`, which the guard's own scratch-root
+    exclusion would correctly (but unhelpfully, for a firing-row fixture)
+    classify as scratch and stay silent on. The fake, non-existent `/repo`
+    is the SAME convention several rows above already use for an
+    unrelated reason (a `resolve_git_root` stub target) -- reused here
+    purely because it is a real absolute path outside any temp root, not
+    because this guard resolves git roots itself (it never spawns git)."""
+    return {_CWD_OVERRIDE_KEY: "/repo"}
+
+
 def _noncanonical_branch_creation_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1325,6 +1341,23 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "cat-heredoc-write-advise",
         "cat-heredoc-write-advise-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "heredoc-repo-write-advise",
+        "heredoc-repo-write-advise-fire",
+        "python3 - <<'PY'\nimport pathlib\npathlib.Path(\"coordinator_core/x.py\").write_text(\"hi\")\nPY",
+        True,
+        _REWRITE,
+        False,
+        setup=_heredoc_repo_write_advise_setup,
+    ),
+    CorpusRow(
+        "heredoc-repo-write-advise",
+        "heredoc-repo-write-advise-control",
         "echo hi",
         False,
         _REWRITE,

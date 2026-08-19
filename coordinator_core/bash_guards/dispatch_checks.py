@@ -6590,6 +6590,232 @@ def check_cat_heredoc_write_advise(
     )
 
 
+#: A literal-string open()/Path(...).write_text()/write_bytes() call inside a
+#: scriptable-interpreter heredoc body (the same "scriptable" classification
+#: `check_cat_heredoc_write_advise`'s neighbours use -- see
+#: `_HEREDOC_SCRIPTABLE_INTERPRETERS`). Three shapes, each captured with the
+#: (quote, path, quote) group at a fixed position so a caller can reject any
+#: match whose path group contains an f-string/format placeholder:
+#:   1. ``open(<path>, <mode>)`` where mode starts with w/a/x (not a bare 'r').
+#:   2. ``pathlib.Path(<path>).write_text(``/``.write_bytes(``
+#:   3. ``Path(<path>).write_text(``/``.write_bytes(`` (the un-prefixed import
+#:      shape, e.g. ``from pathlib import Path``).
+#: A quote prefixed by an f/F/rb/br/etc. string-prefix letter is excluded at
+#: the call site (checked via the character immediately before the opening
+#: quote), not in the regex itself -- Python's string-prefix alphabet is
+#: small but not fixed-width, and a lookbehind can't express "zero or more
+#: prefix letters, but not zero-plus-anything-else" cleanly. Same for a path
+#: containing ``{`` (an f-string placeholder that slipped through because the
+#: opening quote itself wasn't prefixed, e.g. a `.format()`-style literal
+#: reused as an f-string body) -- rejected post-match, not in-regex.
+_HEREDOC_WRITE_TARGET_RE = re.compile(
+    r"""
+    (?:
+        \bopen\s*\(\s*
+        (?P<q1>['"])(?P<path1>[^'"]*)(?P=q1)
+        \s*,\s*
+        (?P<q1m>['"])(?P<mode1>[a-zA-Z+]+)(?P=q1m)
+    )
+    |
+    (?:
+        (?:pathlib\.)?Path\s*\(\s*
+        (?P<q2>['"])(?P<path2>[^'"]*)(?P=q2)
+        \s*\)\s*\.\s*write_(?:text|bytes)\s*\(
+    )
+    """,
+    re.VERBOSE,
+)
+
+#: Scratch/temp roots a heredoc write into is the CORRECT use of a heredoc
+#: (ephemeral working files, never repo content) -- never advised. Mirrors
+#: the scratchpad shape this session's own harness uses
+#: (``…/AppData/Local/Temp/claude/…``), plus the bare OS temp dirs.
+_HEREDOC_SCRATCH_ROOT_MARKERS = ("/appdata/local/temp/claude/",)
+
+
+def _heredoc_write_target_is_scratch(abs_path: str) -> bool:
+    """True if `abs_path` (already absolute, forward-slash-normalized by the
+    caller) resolves under a scratch/temp root: the coordinator scratchpad
+    shape, a bare ``/tmp``, or the live ``$TEMP``/``$TMP``/``%TEMP%``/
+    ``%TMP%`` env var's own directory. Env vars are read fresh per call
+    (never cached at module scope) for the same reason `_override` reads
+    fresh -- a test that monkeypatches ``os.environ`` must see it take
+    effect on the very next call, not a stale import-time snapshot."""
+    norm = abs_path.replace("\\", "/").lower()
+    if any(marker in norm for marker in _HEREDOC_SCRATCH_ROOT_MARKERS):
+        return True
+    if norm == "/tmp" or norm.startswith("/tmp/"):
+        return True
+    for env_var in ("TEMP", "TMP"):
+        val = os.environ.get(env_var)
+        if not val:
+            continue
+        val_norm = os.path.normcase(os.path.normpath(val))
+        if _paths_match_prefix(val_norm, abs_path):
+            return True
+    return False
+
+
+def _paths_match_prefix(root: str, target: str) -> bool:
+    """True if normalized `target` is `root` itself or lives underneath it --
+    pure `os.path` string arithmetic, no `stat`/`samefile` (the target of a
+    write-in-progress heredoc usually does not exist on disk yet, so
+    `os.path.samefile` would raise for the common case). Case-insensitive
+    (`os.path.normcase`) so this behaves identically on Windows, where the
+    guard's own repo (`claude-klabauter`, "Windows is first-class" per this
+    repo's CLAUDE.md) actually runs."""
+    root_n = os.path.normcase(os.path.normpath(root))
+    target_n = os.path.normcase(os.path.normpath(target))
+    return target_n == root_n or target_n.startswith(root_n + os.sep)
+
+
+def _heredoc_scriptable_bodies(cmd: str) -> List[List[str]]:
+    """Yield the RAW body-line lists of every heredoc in `cmd` whose intro
+    classifies as `"scriptable"` (`_classify_heredoc_intro`) -- the identical
+    classification walk `_strip_heredoc_bodies_for_prose_scan` performs, but
+    collecting bodies for a write-pattern content scan instead of a
+    strip/keep decision. Does not itself decide spawn-indicator visibility
+    (`_heredoc_body_has_spawn_indicator` is a DIFFERENT question -- whether
+    the body might shell out -- orthogonal to whether it writes a file).
+    Fails closed by yielding nothing on an unterminated heredoc, matching
+    every sibling heredoc walker in this module."""
+    lines = cmd.split("\n")
+    out: List[List[str]] = []
+    in_hd = False
+    hd_word = ""
+    hd_strip = False
+    hd_class = "unknown"
+    pending: List[str] = []
+    for line in lines:
+        if not in_hd:
+            m = _HEREDOC_INTRO_RE.search(line)
+            if m:
+                seg = m.group(0)
+                hd_strip = len(seg) > 2 and seg[2] == "-"
+                w = seg[3:] if hd_strip else seg[2:]
+                if w and w[0] in ("'", '"'):
+                    w = w[1:-1]
+                hd_word = w
+                in_hd = True
+                hd_class = _classify_heredoc_intro(line[: m.start()], line)
+                pending = []
+        else:
+            check = line
+            if hd_strip:
+                check = re.sub(r"^\t+", "", check)
+            if check == hd_word:
+                in_hd = False
+                if hd_class == "scriptable" and pending:
+                    out.append(pending)
+                pending = []
+            elif hd_class == "scriptable":
+                pending.append(line)
+    return out
+
+
+def check_heredoc_repo_write_advise(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """BX-16-family sibling of `check_cat_heredoc_write_advise`, for the
+    DIFFERENT hazard a scriptable-interpreter heredoc creates (`python3 -
+    <<'PY' ... PY`, a generator, a formatter): its write is invisible to
+    `coordinator_core/hooks/track_touched_files.py::_handler` (matcher is
+    `Write|Edit|MultiEdit|NotebookEdit` ONLY -- a ratified permanent limit,
+    DR-258, NOT touched or widened by this guard), so `safe-commit-offer`
+    silently drops the file from the session's commit pathspec. Advisory
+    only, and silence-biased: this can only ever SUGGEST the Write tool, and
+    stays silent on anything it cannot resolve to a literal repo-relative
+    path rather than risk a false positive on every python heredoc.
+
+    Detection is pure path arithmetic on `git_root` (handed in by the
+    caller, never derived here) -- NO subprocess, NO `git status`/`git
+    ls-files`. **What production actually hands in is the payload's `cwd`**,
+    not a resolved git root: this module never resolves one (F0 -- see
+    `dispatch`'s module docstring), so the containment test is "under the
+    invoking cwd," and a repo-relative write from a subdirectory resolves
+    against that subdirectory. That is narrower than "inside the repo" and
+    the difference is a SILENCE, never a false advisory, which is the bias
+    this guard is built around. `git_root` empty/None means "cannot classify," which fails
+    CLOSED to silence (the mirror image of every hard-deny in this module
+    failing closed to DENY): a false silence here costs nothing but a missed
+    advisory; a false advisory would be noise on every unrelated heredoc.
+
+    Known-uncovered sibling case, NOT this guard's job: a PowerShell
+    here-string (`@'...'@`) has the identical invisibility to the touch
+    tracker, but `matchers=("Bash",)` (deliberate, see this function's
+    `GuardEntry` registration) makes a Bash-matched guard inert under the
+    PowerShell tool. PowerShell here-string syntax is different enough
+    (`@'`/`'@` delimiters, no interpreter-intro line to classify) that
+    covering it is separate work, not a gap in this guard's own logic.
+    """
+    if not cmd:
+        return None
+    cmd = _crlf_strip(cmd)
+    if _override("COORDINATOR_ALLOW_HEREDOC_REPO_WRITE"):
+        return None
+    if not git_root:
+        return None
+    if "<<" not in cmd:
+        return None
+    bodies = _heredoc_scriptable_bodies(cmd)
+    if not bodies:
+        return None
+    git_root_abs = os.path.normpath(git_root)
+    for body_lines in bodies:
+        body = "\n".join(body_lines)
+        for m in _HEREDOC_WRITE_TARGET_RE.finditer(body):
+            if m.group("path1") is not None:
+                path = m.group("path1")
+                mode = m.group("mode1")
+                if not any(c in mode for c in ("w", "a", "x")):
+                    continue  # read-only mode ('r', 'rb') -- not a write
+                q_idx = m.start("q1")
+            else:
+                path = m.group("path2")
+                q_idx = m.start("q2")
+            if not path:
+                continue
+            if "{" in path or "%" in path:
+                continue  # likely an interpolation placeholder, not a literal
+            # Reject an f-string/raw/byte-prefixed quote -- the character(s)
+            # immediately before the opening quote, if they look like a
+            # Python string-prefix letter run, mean `path` is a template,
+            # not the literal text it appears to be.
+            pre = body[:q_idx]
+            pre_word = re.search(r"([A-Za-z]{1,2})$", pre)
+            if pre_word and set(pre_word.group(1).lower()) <= set("frbu"):
+                continue
+            target = path.replace("\\", "/")
+            if os.path.isabs(target) or re.match(r"^[A-Za-z]:/", target):
+                candidate = os.path.normpath(target)
+            else:
+                candidate = os.path.normpath(os.path.join(git_root_abs, target))
+            if not _paths_match_prefix(git_root_abs, candidate):
+                continue  # outside git_root -- stay silent
+            rel = os.path.relpath(candidate, git_root_abs).replace("\\", "/")
+            if rel == ".git" or rel.startswith(".git/"):
+                continue
+            if _heredoc_write_target_is_scratch(candidate):
+                continue
+            _hd_note = operator_override_note(
+                "COORDINATOR_ALLOW_HEREDOC_REPO_WRITE", payload=payload, git_root=git_root
+            )
+            return _advisory(
+                (
+                    "Advisory: this heredoc writes `%s`, a path inside this repo. "
+                    "Writes through Bash aren't recorded as touched (DR-258), "
+                    "so safe-commit-offer will drop it from this session's commit. "
+                    "Use the Write tool."
+                    % rel
+                )
+                + (" %s" % _hd_note if _hd_note else "")
+            )
+    return None
+
+
 #: BX-13 peel, reused token-wise rather than re-derived (C1a Fix 3): mirrors
 #: `_GC_CLEAN_CMD_RE`'s wrapper-prefix vocabulary (`sudo`/`command`/`time`/
 #: `exec`/`nice`/`nohup`/`ionice`/`timeout`/`stdbuf`/`which`/`type`, an `env`

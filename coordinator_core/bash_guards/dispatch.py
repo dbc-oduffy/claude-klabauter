@@ -178,11 +178,14 @@ the original bash comment explicitly guards against).
 F0 (per-target git resolution) is NOT this module concern -- it lives
 entirely inside ``check_destructive_rm``/``check_destructive_git_orphan``/
 ``check_destructive_git_revert`` (each does its own per-target/per-segment
-``git -C <dir>`` resolution). This dispatcher passes ``cwd`` to exactly TWO
-checks (``check_offer_git_c`` and, since 2026-07-16 per code-reviewer Finding
+``git -C <dir>`` resolution). This dispatcher passes ``cwd`` to exactly THREE
+checks (``check_offer_git_c``; since 2026-07-16 per code-reviewer Finding
 2, ``check_validate_commit`` -- its Check 5/7/8 git calls are cwd-sensitive
 and were previously silently resolving against this process's own
-``os.getcwd()`` instead) and must never widen that further to a shared
+``os.getcwd()`` instead; and, since 2026-08-19,
+``check_heredoc_repo_write_advise``, which takes it as its containment root
+and RESOLVES NOTHING -- pure path arithmetic, no git call of any kind, so it
+adds no per-check git resolution to this hot path) and must never widen that further to a shared
 dispatcher-level ``resolve_git_root()`` reused across checks (recipe Sec(e)
 F0 hazard -- "a single resolve_git_root() call accidentally reused as a
 shared, dispatcher-level git root passed into EVERY check function" is the
@@ -1995,6 +1998,17 @@ def _build_guard_chain(
         GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        # `git_root` is threaded here (unlike this row's cat-heredoc sibling
+        # above, which needs only `cmd`) because this check's own detection
+        # -- "does the write target resolve INSIDE the repo" -- is pure path
+        # arithmetic against a repo root, and `cwd` is this dispatcher's
+        # existing, no-git-spawn stand-in for that root (see validate-commit/
+        # offer-git-c/bump-foreign-repo-write above, all `cwd`-threaded for
+        # the identical cwd-sensitive-resolution reason). Passing `None`
+        # here would make the guard permanently silent in production (its
+        # own fail-closed contract on an empty/None `git_root`), never
+        # firing outside a direct unit-test call.
+        GuardEntry("heredoc-repo-write-advise", lambda: _dc.check_heredoc_repo_write_advise(cmd, session_id, payload, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash", "PowerShell")),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
         # dispatch was sent to close (DoE docs/plans/2026-07-29-windows-

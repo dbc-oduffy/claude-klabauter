@@ -71,12 +71,15 @@ repo's own tree at all -- it reaches across every registered sibling, and
 `repo_root` (engine-injected, always `None` for scope `"none"`) is unused.
 
 Self-registration: importing this module calls
-register_op("fleet.work_state", ...) as a side-effect. Registered across the
-same five surfaces as C3's `session.work_state`:
-`coordinator_core/ops/__init__.py` (`_EAGER_OP_MODULES`),
-`coordinator_core/ops/_registry_map.py` (`OP_MODULE_MAP`),
-`coordinator_core/op_scopes.py` (scope `"none"`), and
-`coordinator_core/authz/classification.py` (`OpClass.COMPUTE_ONLY`).
+register_op("fleet.work_state", ...) as a side-effect (Review: staff-eng,
+Finding 15 -- corrected "five surfaces" arithmetic below: the fifth surface
+IS this live `@register_op` call itself, alongside the four listed
+registry/classification files). Registered across the same five surfaces as
+C3's `session.work_state`: `coordinator_core/ops/__init__.py`
+(`_EAGER_OP_MODULES`), `coordinator_core/ops/_registry_map.py`
+(`OP_MODULE_MAP`), `coordinator_core/op_scopes.py` (scope `"none"`),
+`coordinator_core/authz/classification.py` (`OpClass.COMPUTE_ONLY`), and
+this module's own `@register_op("fleet.work_state")` decorator.
 
 Spec backlink: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md,
 chunk C5.
@@ -96,6 +99,17 @@ Negative-spec:
       uncaught, same as `capability_index.build_fleet_index`'s own
       contract. Only "registry absent" (`read_registry_repos()` returning
       `{}`) is the empty-degrade case.
+
+AGENT-FIRST (Review: staff-eng, Finding 16): unlike `session.work_state`
+and the `query-work-state.py` CLI, this op does not itself clear a Q1
+cross-language-consumer case -- it composes `build_work_state` ONCE per
+registered sibling with no transactional coupling and no operator
+judgement applied across the fan-out. Its justification is narrower and
+should be read as such: an in-process caller wanting the whole fleet in one
+call, plus the ONE hoisted `harness_registry.snapshot()` read this module's
+own per-repo loop would otherwise re-take per sibling. Stated honestly
+rather than assumed, so a future reader does not read the prose above as a
+stronger capability claim than it is.
 """
 
 from __future__ import annotations
@@ -106,6 +120,7 @@ from typing import Any, Optional
 
 from coordinator_core.git.repo_root import git_common_dir as _walk_git_common_dir
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.fleet._memo_resolver import read_registry_repos, same_repo_path
 from coordinator_core.session.work_state import build_work_state
 
@@ -174,14 +189,31 @@ def build_fleet_work_state(
         # Walk-only pre-check (never spawns) -- routes a non-git sibling
         # straight into the degrade path before touching build_work_state
         # (AC7, AC9b, AC10).
-        if _walk_git_common_dir(str(repo_path)) is None:
+        common = _walk_git_common_dir(str(repo_path))
+        if common is None:
             errors.append({"target_root": key, "reason": "not a git repository"})
             continue
+        # Review: staff-eng (Finding 0) -- a registered `repos.*` entry
+        # pointing at a subdirectory of a repo (or a linked worktree) passes
+        # the walk-only pre-check above (which WALKS UP) but is not itself
+        # the main worktree root; without normalizing through
+        # `main_worktree_root`, `build_work_state` would silently scan an
+        # empty `<subdir>/state/handoffs` and report a confident, well-formed
+        # all-empty repo instead of degrading into `errors[]` -- the same
+        # defect class as fdc07bb2, now fixed here the same way C3 fixed it
+        # for `session.work_state`.
         try:
-            repos[key] = build_work_state(repo_path, messaging_snapshot=snapshot)
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("fleet.work_state: build_work_state failed for %s -- %s", key, exc)
+            target = main_worktree_root(Path(common))
+        except ValueError as exc:
+            _LOG.warning("fleet.work_state: main_worktree_root failed for %s -- %s", key, exc)
             errors.append({"target_root": key, "reason": str(exc)})
+            continue
+        target_key = str(target)
+        try:
+            repos[target_key] = build_work_state(target, messaging_snapshot=snapshot)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("fleet.work_state: build_work_state failed for %s -- %s", target_key, exc)
+            errors.append({"target_root": target_key, "reason": str(exc)})
 
     return {"repos": repos, "errors": errors}
 

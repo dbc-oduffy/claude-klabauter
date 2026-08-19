@@ -261,6 +261,7 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
 EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     "check_sed_range_read_advise": 2,  # "the Read tool" + Read(...) -- both harness capability, no structured oracle
     "check_cat_heredoc_write_advise": 1,  # "the Write tool" -- same reason
+    "check_heredoc_repo_write_advise": 1,  # "the Write tool" -- same reason
     # H11's narrowed `guard_grep_via_bash` (2026-07-30, docs/plans/2026-07-30-
     # os-aware-guard-advisory-defaults.md) names "dispatching an Explore or
     # general-purpose subagent" as its fallback -- a real, dispatchable
@@ -336,6 +337,7 @@ EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     # executor, `dispatch_checks.py` is out of C3's write scope).
     "check_blanket_git_add": 1,
     "check_cat_heredoc_write_advise": 1,
+    "check_heredoc_repo_write_advise": 1,
     "check_destructive_git_clean": 1,
     "check_find_exec_rewrite": 2,
     # Re-pinned 1 -> 2, 2026-08-15 (example-retrieval-repo-em cross-repo memo,
@@ -783,6 +785,7 @@ EXPECTED_OURS = frozenset(
         "check_grep_via_bash_rewrite",
         "check_sed_range_read_advise",
         "check_cat_heredoc_write_advise",
+        "check_heredoc_repo_write_advise",
         "check_git_commit_safe_commit_advise",
         "check_multiprobe_banner_rewrite",
         "check_head_tail_plumbing_rewrite",

@@ -93,6 +93,7 @@ ADVISORY_REWRITE_NAMES = [
     "grep-via-bash-rewrite",
     "sed-range-read-advise",
     "cat-heredoc-write-advise",
+    "heredoc-repo-write-advise",
     "git-commit-safe-commit-advise",
     "multiprobe-banner-rewrite",
     "head-tail-plumbing-rewrite",

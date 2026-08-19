@@ -53,7 +53,7 @@ def test_veneer_ignores_params_repo_root(monkeypatch, tmp_path):
 
     def _fake_build_work_state(repo_root):
         captured["repo_root"] = repo_root
-        return {"held": [], "unclaimed": []}
+        return {"held": [], "unclaimed": [], "review_due": []}
 
     monkeypatch.setattr(sws_op, "build_work_state", _fake_build_work_state)
 

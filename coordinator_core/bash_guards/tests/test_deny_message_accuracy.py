@@ -27,8 +27,8 @@ Full-depth message-accuracy coverage:
   - The seven BX-16 rewrite/advisory functions in `dispatch_checks.py`:
     `check_find_exec_rewrite`, `check_grep_via_bash_rewrite`,
     `check_sed_range_read_advise`, `check_cat_heredoc_write_advise`,
-    `check_git_commit_safe_commit_advise`, `check_multiprobe_banner_rewrite`,
-    `check_head_tail_plumbing_rewrite`.
+    `check_heredoc_repo_write_advise`, `check_git_commit_safe_commit_advise`,
+    `check_multiprobe_banner_rewrite`, `check_head_tail_plumbing_rewrite`.
   - `_shape_classifier`'s shape-overlap precedence rule, exercised through
     the three shape guards above (two- and three-shape overlapping
     commands) -- the leg this row calls out by name.
@@ -638,6 +638,40 @@ class TestCatHeredocWriteAdviseMessageAccuracy:
         )
         assert "Write tool" in advisory
         assert "out.txt" in advisory
+
+
+class TestHeredocRepoWriteAdviseMessageAccuracy:
+    def test_advisory_names_the_write_tool_and_the_exact_target(self, tmp_path, monkeypatch):
+        # `tmp_path` lives under the real $TEMP/$TMP -- clear both so this
+        # stand-in `git_root` isn't itself misclassified as a scratch root
+        # by the guard's own env-var scratch check (see the dedicated test
+        # file's `_isolate_temp_env` fixture for the full explanation).
+        monkeypatch.delenv("TEMP", raising=False)
+        monkeypatch.delenv("TMP", raising=False)
+        cmd = (
+            "python3 - <<'PY'\n"
+            "import pathlib\n"
+            'pathlib.Path("coordinator_core/x.py").write_text("hi")\n'
+            "PY"
+        )
+        advisory = _advisory_text(
+            _hso(
+                dispatch_checks.check_heredoc_repo_write_advise(
+                    cmd, "sess-bx12", None, str(tmp_path)
+                )
+            )
+        )
+        assert "Write tool" in advisory
+        assert "coordinator_core/x.py" in advisory
+
+    def test_no_git_root_returns_none(self):
+        cmd = (
+            "python3 - <<'PY'\n"
+            "import pathlib\n"
+            'pathlib.Path("coordinator_core/x.py").write_text("hi")\n'
+            "PY"
+        )
+        assert dispatch_checks.check_heredoc_repo_write_advise(cmd, "sess") is None
 
 
 class TestGitCommitSafeCommitAdviseMessageAccuracy:

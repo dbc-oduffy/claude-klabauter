@@ -309,6 +309,37 @@ _RUNNER_KWARG_NAMES: frozenset[str] = frozenset(
 )
 _RUNNER_NAME_PREFIXES: tuple[str, ...] = ("run", "git", "spawn")
 
+#: 2026-08-19 -- ADVERSARIAL RE-VERIFICATION, and what it cost this register. The PM rejected
+#: wave 4's shape ("I don't like having blanket exemptions, that's how we got into a situation
+#: where we had a windows-poison system in claude-klabauter"). All 75 entries were then re-read AT THE
+#: CALL SITE by eight independent readers instructed to REFUTE each exemption and default to
+#: NOT PROVEN. Result: 53 upheld, 14 REFUTED with a named batch primitive, 8 NOT PROVEN. All 22
+#: were returned to `_KNOWN_SITES` (see its OVERTURNED block for the per-key reason); this
+#: constant went 75 -> 53. Evidence:
+#: `state/subagent-share/f74c1de4-c0f3-4db0-9282-313c8f0c91ad/refute-{a..h}.md`.
+#:
+#: WHY THE FAILURE RATE WAS 29% AND CONCENTRATED WHERE IT WAS. It tracks block size almost
+#: exactly: the 40-key `structural-floor` run lost 13 of 40, the 12-key run lost 2, the 6-key
+#: `retained-fallback` run lost 4 of 6, and the SINGLETON-BLOCK rows lost 1 of 13. A rationale
+#: written for one site and read against that site holds up; the same rationale stretched over
+#: forty does not, because entries 2..N were never checked against it -- they were checked
+#: against the CLASS. That is the mechanism `CLAUDE.md`'s shell-out rule already names:
+#: satisfying a carve-out's rationale is not membership in it.
+#:
+#: TWO DEFECTS THIS REGISTER STILL HAS, both found only by reading source:
+#:   - THE KEY SHAPE IS ITSELF BLANKET. `(relpath, enclosing, callee)` carries no call anchor,
+#:     so one entry silences EVERY qualifying call to that callee in that function.
+#:     `orphan_branch_sweep.main` and `register_discovered_repos.main` each hold one call the
+#:     governing rationale describes and one it does not; one key covered both. A lineno pin is
+#:     the wrong fix (see the stale-by-default argument below) -- an anchor that survives edits
+#:     is owed.
+#:   - AC8 IS BLOCK-SCOPED, so this register still grows by category.
+#:     `_exempt_entry_comment_blocks` walks UP past sibling entries to a shared block, so a new
+#:     key appended into an existing run inherits that block's date and class tag and passes
+#:     `test_every_exemption_carries_a_dated_rationale` silently. That test's own docstring
+#:     claims it makes a wrong exemption "visible to the next reader instead of anonymous";
+#:     for an inherited block it does not. Entry-scoped rationales are owed.
+#:
 #: Known, LIVE, outstanding exemptions -- what remains AFTER the varying-argv0 discriminator
 #: (see module docstring, discriminator 4). G1's comment here reserved this register for G2
 #: ("where a real exemption register, if any, would live"); G2 landed it, and this pass retired
@@ -350,7 +381,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # would report one shell's resolution N times. NOT decided by the varying-argv0 discriminator
     # -- `shell` (argv0) is loop-invariant here; only the script text varies, which the four
     # measured argv0 shapes do not reach.
-    ('coordinator_core/install/path_resolution_report.py', '_check_posix', 'run'),
     # 2026-08-19 -- # class: measurement-is-the-loop. THE SAMPLING LOOP IS THE MEASUREMENT. Each of the five below draws N
     # independent timing samples (`for _ in range(n)`, target discarded) and reduces them to a
     # statistic: `min` for a cold-start floor, a coefficient of variation for its stability.
@@ -420,11 +450,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # `ForeignSessionRangeRefused` names the specific offending `reviewed_range` entry; a
     # batched resolve destroys the per-entry attributability AC1c depends on, and this seam's
     # whole job is refusing a range with a named reason rather than failing opaquely.
-    (
-        'coordinator_core/ops/review_trail_write.py',
-        '_resolve_reviewer_attestation',
-        '_resolve_range_shas',
-    ),
     # 2026-08-19 (wave 4) -- # class: retained-fallback. Each of the six below is the per-item
     # leg BEHIND an already-batched hot path: the batch is the primary call, and the loop the
     # collector counts fires only when that batch's own spawn fails, recovering per-item
@@ -440,10 +465,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
         '_validate_pathspec',
     ),
     ('coordinator_core/ops/cutover_gate.py', '_reverify_test_node_ids_batch', '_run_pytest_batch'),
-    ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git'),
-    ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run'),
-    ('coordinator_core/ops/setup_chain_walker.py', '_sibling_fallback', '_functional_probe_ok'),
-    ('coordinator_core/ops/setup_chain_walker.py', 'command_succeeds_native', '_run_probe_argv'),
     # 2026-08-19 (wave 4) -- # class: measurement-is-the-loop. The loop body IS the subject,
     # so collapsing it measures a different thing or destroys the property it exists for.
     # `_interactive_gate` spawns only when the OPERATOR types `d` for one file's diff --
@@ -470,7 +491,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # hypothetical batch form would need per-item demultiplexing rather than a collapse.
     # Every row checked against the walking seams first: none is a `--show-toplevel`/`--git-dir`
     # shape, so none converts to a zero-spawn removal.
-    ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits'),
     ('coordinator_core/coverage.py', '_reviewed_via_graph_walk', '_run'),
     (
         'coordinator_core/ops/plan_suggest_completion_steps.py',
@@ -483,16 +503,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
         'coordinator_core/ops/review_trail_readjudication_report.py',
         'compute_readjudication_report',
         '_full_range_shas',
-    ),
-    (
-        'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
-        '_reviewed_range_offer',
-        '_resolve_ref_to_sha',
-    ),
-    (
-        'coordinator_core/plan_assemble/predicates/composition_graph.py',
-        'path_rename_or_move',
-        '_run_git',
     ),
     (
         'coordinator/bin/workday-complete-reconcile.py',
@@ -547,14 +557,7 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
         'cmd_backfill_dispatch_rows',
         '_dispatch_step9_row',
     ),
-    ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'tip_author'),
     ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'worktree_is_dirty'),
-    (
-        'coordinator_core/distill/curation_status.py',
-        'compute_curation_status',
-        'active_reference_guard',
-    ),
-    ('coordinator_core/distill/sidecar_sweep.py', 'sweep_sidecars', 'active_reference_guard'),
     ('coordinator_core/install/first_run.py', '_seed_machine_local_registry', '_run'),
     ('coordinator_core/install/maximalist.py', '_run_body', '_run_compileall'),
     ('coordinator_core/install/prereq_probe.py', 'probe_clone_auth', '_run'),
@@ -563,39 +566,21 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
         'uninstall_reverse_git_config_group',
         'config_unset',
     ),
-    ('coordinator_core/ops/agent_worktree_sweep.py', '_sweep_one', '_cherry_pick_with_env'),
     ('coordinator_core/ops/backfill_initiative_fk.py', '_process_pairs', 'run'),
     ('coordinator_core/ops/bootstrap_orchestrate.py', 'main', '_git'),
     ('coordinator_core/ops/bootstrap_orchestrate.py', 'main', 'run'),
-    ('coordinator_core/ops/central_run_due.py', 'main', '_count_universals'),
     (
         'coordinator_core/ops/ceremony/tail_ops.py',
         'fire_archive_sweeps_detached',
         'spawn_detached',
     ),
-    (
-        'coordinator_core/ops/ceremony/tail_ops.py',
-        'fire_tracker_and_roadmap_detached',
-        'spawn_detached',
-    ),
     ('coordinator_core/ops/check_atlas_watch_drift.py', 'run', '_watch_line'),
-    ('coordinator_core/ops/configure_git.py', 'main', '_git_config_get'),
     ('coordinator_core/ops/configure_git.py', 'main', '_git_config_set'),
-    (
-        'coordinator_core/ops/distill_apply_disposal.py',
-        '_delete_tracked_and_append_log',
-        '_run_git',
-    ),
     ('coordinator_core/ops/fleet/_common.py', 'archive_and_commit', 'create_subprocess_exec'),
     ('coordinator_core/ops/fleet/_common.py', 'rm_and_commit', 'create_subprocess_exec'),
     ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
-    ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git'),
-    ('coordinator_core/ops/migrate_completion_log_legacy.py', 'main', '_git_mv'),
-    ('coordinator_core/ops/migrate_cross_repo_layout.py', 'main', '_move_one'),
-    ('coordinator_core/ops/normalize_claimed_frontmatter.py', 'main', 'get_tracked_files'),
     ('coordinator_core/ops/render_template_tree.py', 'main', 'run'),
     ('coordinator_core/ops/run_pre_ci_hooks.py', '_run_pre_ci_hooks', 'run'),
-    ('coordinator_core/ops/run_shellcheck_sweep.py', 'run_shellcheck_sweep', '_lint_one_file'),
     ('coordinator_core/ops/setup_chain_walker.py', 'dep_probe_all', 'dep_probe'),
     ('coordinator_core/ops/updatedocs_gates.py', '_gate_queue_prune_sweep', '_run'),
     ('coordinator_core/ops/workweek_reverse_drift_gate.py', 'run_gate', 'run'),
@@ -2088,7 +2073,15 @@ class _EnclosingTracker(ast.NodeVisitor):
 #:                    size (N->1, N->ceil(N/budget), N->0); "the key no longer fires" was not
 #:                    accepted as evidence, because hoisting a spawn up a frame or renaming the
 #:                    callee clears a key and changes nothing.
-#:     61  EXEMPT   -- moved to `_EXEMPT_SITES` with a dated, class-tagged rationale. A
+#:     61  EXEMPT   -- SUPERSEDED 2026-08-19 by the adversarial re-verification recorded on
+#:                    `_EXEMPT_SITES`: 22 of the 75 entries this left standing did not survive
+#:                    being read at the call site, and returned here (OVERTURNED block below),
+#:                    taking the remainder 14 -> 36. The wave-4 numbers are kept as written
+#:                    rather than silently restated, because the gap between them and the
+#:                    re-verified ones IS the finding -- a prose-only second read over shared
+#:                    rationale blocks reported 61 sound exemptions where reading source found
+#:                    53. As originally recorded --
+#:                    moved to `_EXEMPT_SITES` with a dated, class-tagged rationale. A
 #:                    transfer between registers, never a reduction in debt, which is why AC7
 #:                    reports the split rather than a fix RATIO: a target ratio would just
 #:                    pressure the next wave into false exemptions.
@@ -2136,6 +2129,156 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ),
         ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git'),
         ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run'),
+        # OVERTURNED (22) -- returned here from `_EXEMPT_SITES` by the 2026-08-19 ADVERSARIAL
+        # RE-VERIFICATION, after the PM rejected wave 4's blanket-exemption shape. Wave 4's own
+        # C-review re-argued the twelve disposition sidecars' PROSE; it did not re-derive the
+        # sites from source, so it could only catch rows that incriminated themselves in their
+        # own text. This pass read all 75 register entries at the CALL SITE with instructions to
+        # REFUTE each exemption and default to NOT PROVEN: 53 upheld, 14 refuted with a named
+        # batch primitive, 8 not proven. Per-key evidence:
+        # `state/subagent-share/f74c1de4-c0f3-4db0-9282-313c8f0c91ad/refute-{a..h}.md`.
+        #
+        # This is NOT the forbidden "grow the inventory to silence a violation" move the
+        # constant's own docstring bans -- these keys were ON this list, were moved off it on a
+        # claim that did not survive reading, and are returning to the worklist they never
+        # should have left. An exemption asserts batching is WRONG at that site; a row that
+        # cannot show that at its own call site is debt, and debt belongs here.
+        #
+        # The single most-cited failure was the one doctrine already names: a row joined its
+        # class by SATISFYING A RATIONALE rather than by being unbatchable, and the shared
+        # comment block was never re-read against the code beneath it.
+        #
+        #   REFUTED (14) -- a working batch primitive exists at this call site:
+        #   `__init__.py::brief` -> `tip_author`: git for-each-ref --format='%(refname:short)
+        #   %(authoremail)' returns every ref's tip author in one call; the callee's own
+        #   docstring asserts no such form exists
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'tip_author'),
+        #   `sidecar_sweep.py::sweep_sidecars` -> `active_reference_guard`: rg -f
+        #   <patternfile> unions all needles in one call; needle->file attribution moves into
+        #   the per-file read this guard already does
+        ('coordinator_core/distill/sidecar_sweep.py', 'sweep_sidecars', 'active_reference_guard'),
+        #   `agent_worktree_sweep.py::_sweep_one` -> `_cherry_pick_with_env`: commits IS
+        #   rev-list --reverse active_branch..HEAD; cherry-pick -x active_branch..HEAD applies
+        #   the same commits in order in one call and still stops on first conflict
+        ('coordinator_core/ops/agent_worktree_sweep.py', '_sweep_one', '_cherry_pick_with_env'),
+        #   `tail_ops.py::fire_tracker_and_roadmap_detached` -> `spawn_detached`: the spawned
+        #   script delegates to refresh_queries.main, which natively takes a comma-list of
+        #   files; single-item-callee was asserted from the class
+        (
+            'coordinator_core/ops/ceremony/tail_ops.py',
+            'fire_tracker_and_roadmap_detached',
+            'spawn_detached',
+        ),
+        #   `configure_git.py::main` -> `_git_config_get`: git config --global --get-regexp
+        #   reads all global keys in one call; the block conflated the unbatchable SET side
+        #   with the batchable GET side
+        ('coordinator_core/ops/configure_git.py', 'main', '_git_config_get'),
+        #   `distill_apply_disposal.py::_delete_tracked_and_append_log` -> `_run_git`: git
+        #   rm/add/checkout HEAD -- all accept N pathspecs; nothing here needs per-item
+        #   isolation, unlike the rm_and_commit sibling
+        (
+            'coordinator_core/ops/distill_apply_disposal.py',
+            '_delete_tracked_and_append_log',
+            '_run_git',
+        ),
+        #   `migrate_branch_canonical_case.py::_migrate` -> `_git`: the per-ref show-ref
+        #   --verify is redundant: _enumerate_work_refs already fetched the full
+        #   refs/heads/work/* listing in one for-each-ref earlier in the same function
+        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git'),
+        #   `migrate_completion_log_legacy.py::main` -> `_git_mv`: git mv takes N sources into
+        #   one destination DIRECTORY; every call in this loop targets the same legacy_dir
+        ('coordinator_core/ops/migrate_completion_log_legacy.py', 'main', '_git_mv'),
+        #   `migrate_cross_repo_layout.py::main` -> `_move_one`: both legs (ls-files
+        #   trackedness, git mv/add) accept multiple pathspecs and the per-phase destination
+        #   is constant
+        ('coordinator_core/ops/migrate_cross_repo_layout.py', 'main', '_move_one'),
+        #   `normalize_claimed_frontmatter.py::main` -> `get_tracked_files`: git ls-files
+        #   accepts multiple directory pathspecs; the per-directory calls collapse to one,
+        #   partitioned client-side by prefix
+        ('coordinator_core/ops/normalize_claimed_frontmatter.py', 'main', 'get_tracked_files'),
+        #   `run_shellcheck_sweep.py::run_shellcheck_sweep` -> `_lint_one_file`: shellcheck -f
+        #   json f1 f2 ... is standard multi-file usage and its JSON already carries the
+        #   per-finding `file` field this code rewrites
+        (
+            'coordinator_core/ops/run_shellcheck_sweep.py',
+            'run_shellcheck_sweep',
+            '_lint_one_file',
+        ),
+        #   `validate_frontmatter_schema_advisory.py::_reviewed_range_offer` ->
+        #   `_resolve_ref_to_sha`: git cat-file --batch-check takes N ref tokens on stdin and
+        #   emits per-token sha/missing -- a DIFFERENT primitive from the rev-parse --verify
+        #   form the register tested and rejected
+        (
+            'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
+            '_reviewed_range_offer',
+            '_resolve_ref_to_sha',
+        ),
+        #   `composition_graph.py::path_rename_or_move` -> `_run_git`: not a range union at
+        #   all; --follow forbids >1 pathspec but is not required by the predicate's stated
+        #   contract, so one git log --diff-filter=R --name-status -- <all paths> serves it
+        (
+            'coordinator_core/plan_assemble/predicates/composition_graph.py',
+            'path_rename_or_move',
+            '_run_git',
+        ),
+        #   `path_resolution_report.py::_check_posix` -> `run`: PATH is built once at
+        #   login-shell startup, not per name looked up inside it, so one -lc script looping
+        #   the entrypoints keeps the fresh-shell property and drops N spawns to 1
+        ('coordinator_core/install/path_resolution_report.py', '_check_posix', 'run'),
+        #
+        #   NOT PROVEN (8) -- the block's stated reason is not evidenced at this call site. Two
+        #   are the OVER-BROAD KEY defect, which no prose review could have caught: an
+        #   `(relpath, function, callee)` key carries no call anchor, so ONE key silences EVERY
+        #   qualifying call to that callee in that function -- including calls the governing
+        #   rationale does not describe:
+        #   `curation_status.py::compute_curation_status` -> `active_reference_guard`: ripgrep
+        #   has a native multi-pattern mode, unlike the git/npm CLIs the block cites as
+        #   precedent; the block never measured this call site
+        (
+            'coordinator_core/distill/curation_status.py',
+            'compute_curation_status',
+            'active_reference_guard',
+        ),
+        #   `central_run_due.py::main` -> `_count_universals`: shells to a DoE-resident
+        #   extract-lessons.py whose argv surface is out of tree and could not be verified;
+        #   shape matches none of the block's three named classes
+        ('coordinator_core/ops/central_run_due.py', 'main', '_count_universals'),
+        #   `orphan_branch_sweep.py::main` -> `_git`: OVER-BROAD KEY: main contains one _git
+        #   loop-call matching the block's claim and one that does not; a single key silences
+        #   both
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git'),
+        #   `register_discovered_repos.py::main` -> `run`: OVER-BROAD KEY: same defect -- one
+        #   matching call, one non-matching call, one key
+        ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run'),
+        #   `setup_chain_walker.py::_sibling_fallback` -> `_functional_probe_ok`: no batch
+        #   primary exists anywhere in this function, so the block's retained-fallback shape
+        #   does not describe this call site at all
+        (
+            'coordinator_core/ops/setup_chain_walker.py',
+            '_sibling_fallback',
+            '_functional_probe_ok',
+        ),
+        #   `setup_chain_walker.py::command_succeeds_native` -> `_run_probe_argv`: same: no
+        #   antecedent batch call; this is a ||-chain short-circuit search over heterogeneous
+        #   commands
+        (
+            'coordinator_core/ops/setup_chain_walker.py',
+            'command_succeeds_native',
+            '_run_probe_argv',
+        ),
+        #   `__init__.py::brief` -> `unique_commits`: the exclusion base (`current`) is
+        #   IDENTICAL across every range here, so the block's differing-base-narrows defect
+        #   does not apply; the real blocker (per-branch attribution) is unstated and untested
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits'),
+        #   `review_trail_write.py::_resolve_reviewer_attestation` -> `_resolve_range_shas`:
+        #   stated reason (per-entry attributability) is not what blocks batching here; the
+        #   actual blocker is the rev-list global-exclusion narrowing pinned by a test for the
+        #   SIBLING _own_frozen_diff_shas, and nothing measures it at this site
+        (
+            'coordinator_core/ops/review_trail_write.py',
+            '_resolve_reviewer_attestation',
+            '_resolve_range_shas',
+        ),
         # MISCLASSIFIED (10) -- COLLECTOR FALSE POSITIVES, parked here deliberately rather than
         # routed to `_EXEMPT_SITES`. An exemption asserts the SITE is unbatchable; these sites
         # have nothing to batch at all, so exempting them would file a collector defect under a

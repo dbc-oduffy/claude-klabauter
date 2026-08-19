@@ -2806,12 +2806,32 @@ _READINESS_OFF_AXIS_STATES: frozenset = frozenset(
     {"in_flight", "shipped", "continued", "closed"}
 )
 
-#: The one NAMED predicate branch this function evaluates (module docstring
-#: C1 brief: "required_fields_empty" is deliberately NOT evaluated here — it
-#: moves to the C9 promote call site, where DR-173 actually scopes it). Named
-#: so a caller can tell an EM WHICH mechanical condition fired, per the C1
+#: The `basis` vocabulary `derive_readiness` emits — the CROSS-MODULE
+#: contract a consumer branches on, so it is public rather than a private
+#: literal each consumer re-spells. `coordinator_core.session.work_state.
+#: build_work_state` partitions its `review_due`/`unclaimed` buckets on
+#: exactly these values; duplicated bare string literals on both sides let
+#: this producer's vocabulary drift while every test on both sides stays
+#: green and the `review_due` bucket goes silently, permanently empty
+#: (Review: staff-eng, Finding 9 — the same green-but-wrong class as the
+#: three defects that shipped past this plan's own passing suite).
+#:
+#: `BASIS_BLOCKED_BY_UNRESOLVED` is the one NAMED predicate branch
+#: `derive_readiness` evaluates (module docstring C1 brief:
+#: "required_fields_empty" is deliberately NOT evaluated here — it moves to
+#: the C9 promote call site, where DR-173 actually scopes it). Named so a
+#: caller can tell an EM WHICH mechanical condition fired, per the C1
 #: brief's basis-naming requirement.
-_BASIS_BLOCKED_BY_UNRESOLVED = "blocked_by_unresolved"
+BASIS_BLOCKED_BY_UNRESOLVED = "blocked_by_unresolved"
+
+#: `derive_readiness` takes NO position: `evaluate_gate_triage` reported a
+#: gate whose evidence deadline elapsed and wants a human recheck. Never
+#: readiness, never blocked — its own bucket at the consumer.
+BASIS_REVIEW_DUE = "review-due"
+
+#: The record's `deployment_state` is a lifecycle POSITION, not readiness
+#: (`_READINESS_OFF_AXIS_STATES` above); the readiness axis is never reached.
+BASIS_OFF_GATE_AXIS = "off-gate-axis"
 
 
 def derive_readiness(
@@ -2899,7 +2919,7 @@ def derive_readiness(
         return {
             "deployment_state": None,
             "pickup_ready": None,
-            "basis": "off-gate-axis",
+            "basis": BASIS_OFF_GATE_AXIS,
         }
 
     triage = evaluate_gate_triage(
@@ -2914,17 +2934,17 @@ def derive_readiness(
         return {
             "deployment_state": "awaiting_gate",
             "pickup_ready": False,
-            "basis": _BASIS_BLOCKED_BY_UNRESOLVED,
+            "basis": BASIS_BLOCKED_BY_UNRESOLVED,
         }
     if status == "freed":
         return {
             "deployment_state": "ready_to_fire",
             "pickup_ready": True,
-            "basis": _BASIS_BLOCKED_BY_UNRESOLVED,
+            "basis": BASIS_BLOCKED_BY_UNRESOLVED,
         }
     # status == "review-due": a prompt for a human recheck, never auto-
     # promoted — see rule above.
-    return {"deployment_state": None, "pickup_ready": None, "basis": "review-due"}
+    return {"deployment_state": None, "pickup_ready": None, "basis": BASIS_REVIEW_DUE}
 
 
 def derive_readiness_batch(

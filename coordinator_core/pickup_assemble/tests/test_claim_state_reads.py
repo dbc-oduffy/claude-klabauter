@@ -246,7 +246,7 @@ def test_compute_competing_claim_send_message_address_resolves(tmp_path, monkeyp
     )
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
-        lambda sids: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
+        lambda sids, snapshot=None: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -276,7 +276,7 @@ def test_compute_competing_claim_send_message_address_empty_when_unresolvable(
     )
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
-        lambda sids: ({}, True),
+        lambda sids, snapshot=None: ({}, True),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -311,7 +311,7 @@ def test_compute_competing_claim_send_message_address_none_when_messaging_unavai
     )
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
-        lambda sids: ({}, False),
+        lambda sids, snapshot=None: ({}, False),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -344,7 +344,7 @@ def test_compute_competing_claim_address_resolution_failure_leaves_brief_unchang
         lambda root: {"sibling-sid": (True, "meta")},
     )
 
-    def _raise(sids):
+    def _raise(sids, snapshot=None):
         raise RuntimeError("simulated resolution failure")
 
     monkeypatch.setattr(
@@ -355,7 +355,7 @@ def test_compute_competing_claim_address_resolution_failure_leaves_brief_unchang
     baseline_fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
-        lambda sids: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
+        lambda sids, snapshot=None: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
     )
     baseline = pa.compute_competing_claim(repo, baseline_fm, "state/handoffs/self.md")
     monkeypatch.setattr(
@@ -398,7 +398,7 @@ def test_compute_competing_claim_send_message_address_resolved_at_is_stamped(
     )
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
-        lambda sids: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
+        lambda sids, snapshot=None: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -456,7 +456,7 @@ def test_compute_successor_handoffs_send_message_address_resolves(tmp_path, monk
     monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "successor-sid")
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
-        lambda sids: ({"successor-sid": "claude-klabauter-11 [aaaaaa]"}, True),
+        lambda sids, snapshot=None: ({"successor-sid": "claude-klabauter-11 [aaaaaa]"}, True),
     )
 
     result = pa.compute_successor_handoffs(repo, "state/handoffs/self.md")
@@ -486,7 +486,7 @@ def test_compute_successor_handoffs_address_resolution_failure_leaves_kind_uncha
 
     monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "successor-sid")
 
-    def _raise(sids):
+    def _raise(sids, snapshot=None):
         raise RuntimeError("simulated resolution failure")
 
     monkeypatch.setattr(

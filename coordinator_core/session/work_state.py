@@ -48,7 +48,11 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.lifecycle import git_common_dir
-from coordinator_core.reconcile.gate_eval import derive_readiness_batch
+from coordinator_core.reconcile.gate_eval import (
+    BASIS_OFF_GATE_AXIS,
+    BASIS_REVIEW_DUE,
+    derive_readiness_batch,
+)
 from coordinator_core.session.holder_evidence import holder_evidence as _holder_evidence
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.wire_paths import rel_id
@@ -258,9 +262,12 @@ def _resolve_send_message_addresses(
     `coordinator_core.ops.fleet.work_state` -- the peer registry is
     machine-global, the same fact for every sibling repo in a fleet-wide
     aggregation, not a per-repo fact re-earned by a fresh scan each time).
-    When `None` (every existing single-repo caller), this function takes
-    its own fresh snapshot via `resolve_addresses_bulk_with_availability`,
-    unchanged from its pre-C5 behaviour.
+    When `None` (every existing single-repo caller), that same public
+    entry point takes its own fresh snapshot, unchanged from its pre-C5
+    behaviour. Both arms go through
+    `resolve_addresses_bulk_with_availability`'s optional-`snapshot`
+    overload — one public call site, never the module's private
+    snapshot-scoped core (Review: staff-eng, Finding 6).
     `send_message_address_resolved_at` (one UTC ISO-8601 stamp per call,
     shared by every candidate in this batch) exists so a reader of a
     PERSISTED copy of this dict (e.g. `pickup_assemble.apply`'s
@@ -278,14 +285,25 @@ def _resolve_send_message_addresses(
     try:
         from coordinator_core.session import reachability
 
-        if snapshot is None:
-            address_by_sid, messaging_available = reachability.resolve_addresses_bulk_with_availability(
-                holder_sids
-            )
-        else:
-            address_by_sid = reachability._resolve_addresses_bulk_from_snapshot(holder_sids, snapshot)
-            messaging_available = reachability.messaging_available(snapshot)
-    except Exception:
+        address_by_sid, messaging_available = reachability.resolve_addresses_bulk_with_availability(
+            holder_sids, snapshot
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Review: staff-eng (Finding 6) named the risk as SILENCE, not the
+        # degrade itself: a bare swallow around a PRIVATE cross-module call
+        # let a rename there blank every held row's `send_message_address`
+        # fleet-wide with a green suite. The private reach is what got fixed
+        # -- both arms now go through one public overload. The breadth stays,
+        # because degrading rather than raising is a deliberate CONTRACT of
+        # this function's own consumers, not an accident:
+        # `pickup_assemble.compute_competing_claim`/`compute_successor_
+        # handoffs` pin it by name (a brief must not die because the harness
+        # registry misbehaved). What was missing is the log line, so a
+        # degrade is now observable instead of indistinguishable from a
+        # genuinely address-less roster.
+        _LOG.warning(
+            "work_state: peer address resolution failed, degrading to no addresses -- %s", exc
+        )
         address_by_sid = {}
         messaging_available = True  # unknown on failure -- never claim box-wide unavailability we didn't observe
     for candidate in candidates:
@@ -320,8 +338,8 @@ def _gate_notes(fm: dict[str, Any]) -> dict[str, Any]:
 def build_work_state(
     repo_root: Path, *, messaging_snapshot: Optional[dict] = None
 ) -> dict[str, Any]:
-    """`{"held": [...], "unclaimed": [...]}` over this repo's
-    `state/handoffs/` corpus (AC1) — the corpus-keyed entry point over the
+    """`{"held": [...], "unclaimed": [...], "review_due": [...]}` over this
+    repo's `state/handoffs/` corpus (AC1) — the corpus-keyed entry point over the
     relocated C1a primitives, plus `derive_readiness_batch` (C1 of the
     sibling plan `docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-
     derives-readiness.md`) for readiness. See module docstring for the
@@ -362,8 +380,13 @@ def build_work_state(
     frontmatter is read nowhere in this function — only
     `derive_readiness_batch`'s OWN computed `pickup_ready` key (a verdict,
     not a stamp) decides `unclaimed` eligibility. `derive_readiness_batch`
-    is called exactly ONCE per repo, never per record, closing the
-    N-rebuilds defect its own docstring names.
+    is called exactly ONCE per repo, never per record: `all_handoffs` is
+    built once here and passed once into that single call. This hoist does
+    NOT close the N-rebuilds defect `derive_readiness_batch`'s own docstring
+    names — `evaluate_gate_triage`, which it calls per record, still rebuilds
+    `_index_by_id` on every record; that per-record rebuild is unaffected by
+    this function's own single call and is out of this chunk's scope
+    (Review: staff-eng, Finding 3).
 
     FOUR BUCKETS OVER `basis` (never collapsed — see the sibling plan's own
     C1b brief):
@@ -373,11 +396,11 @@ def build_work_state(
         (still-blocked) -> never `unclaimed`.
       - `basis="review-due"` -> the engine takes NO position; never emitted
         into `unclaimed` (an EM must not be handed "free" for a record the
-        engine declined to judge) and never treated as blocked — simply
-        absent from both lists (AC3a: "review_due is its own bucket — never
-        `unclaimed`, never blocked" is satisfied by omission, since AC1
-        pins this function's return shape to exactly `{"held", "unclaimed"}`
-        with no third top-level key).
+        engine declined to judge) and never treated as blocked. It IS
+        emitted — into the third top-level `review_due` bucket this function
+        returns (AC3a: "review_due is its own bucket — never `unclaimed`,
+        never blocked" is satisfied by a dedicated bucket, not by omission;
+        Review: staff-eng, Finding 1).
       - `basis="off-gate-axis"` -> a lifecycle POSITION
         (`in_flight`/`shipped`/`continued`/`closed`), not readiness; never
         reaches the readiness axis at all — same omission treatment.
@@ -408,11 +431,16 @@ def build_work_state(
         _collect_all_handoffs_for_gate_index,
     )
 
-    try:
-        live_paths = collect_live_handoff_paths(repo_root)
-    except OSError:
-        live_paths = []
-
+    # Review: staff-eng (Finding 5) -- `_collect_all_handoffs_for_gate_index`
+    # calls `collect_live_handoff_paths(repo_root)` internally to build its
+    # own live half; a standalone first call to the same function here (that
+    # was wrapped in its own `except OSError`) was dead-guard duplicated I/O
+    # -- the SECOND, unguarded call inside `_collect_all_handoffs_for_gate_
+    # index` raised first-and-always on the exact permission-denied scenario
+    # the guard existed for. Both calls now sit inside ONE OSError degrade,
+    # so a permission-denied `state/handoffs` fails closed (empty corpus,
+    # `scan_incomplete=True` below) rather than propagating.
+    #
     # Real YAML-typed frontmatter (`dag._read_meta`, reached transitively via
     # `_collect_all_handoffs_for_gate_index`'s own live-half helper below) —
     # NOT this module's own flat `_parse_fm_dict`: `blocked_by`/
@@ -421,7 +449,13 @@ def build_work_state(
     # unparsed scalar text `_parse_fm_dict` would hand back for a key
     # outside its own `_LIST_FIELD_KEYS` table (the `bool("false") is True`
     # class of defect this chunk's mandatory string-coercion test guards).
-    all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(repo_root)
+    try:
+        live_paths = collect_live_handoff_paths(repo_root)
+        all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(repo_root)
+    except OSError:
+        live_paths = []
+        all_handoffs, scan_errors = [], ["state/handoffs scan failed"]
+
     live_path_strs = {str(p) for p in live_paths}
     live_handoffs = [h for h in all_handoffs if h.get("_path") in live_path_strs]
 
@@ -438,6 +472,12 @@ def build_work_state(
     held: list[dict[str, Any]] = []
     unclaimed: list[dict[str, Any]] = []
     review_due: list[dict[str, Any]] = []
+    #: Review: staff-eng (Finding 8) -- `_holder_evidence` was called per
+    #: HELD ROW while every other cross-row fact on this loop (`verdicts`,
+    #: `common_dir`, the messaging snapshot, `derive_readiness_batch`) is
+    #: hoisted; there are far fewer distinct holders than held rows, so
+    #: memoize per distinct `holder_sid` within this call.
+    evidence_by_holder: dict[str, dict[str, Any]] = {}
 
     for handoff, ready in zip(live_handoffs, readiness):
         raw_path = handoff.get("_path")
@@ -456,7 +496,10 @@ def build_work_state(
         if holder_sid:
             entry = verdicts.get(holder_sid)
             holder_live = entry[0] if entry is not None else False
-            evidence = _holder_evidence(holder_sid, repo_root)
+            evidence = evidence_by_holder.get(holder_sid)
+            if evidence is None:
+                evidence = _holder_evidence(holder_sid, repo_root)
+                evidence_by_holder[holder_sid] = evidence
             held.append(
                 {
                     "path": display_path,
@@ -472,13 +515,13 @@ def build_work_state(
             continue
 
         basis = ready.get("basis")
-        if basis == "off-gate-axis":
+        if basis == BASIS_OFF_GATE_AXIS:
             # A lifecycle POSITION (in_flight/shipped/continued/closed), not a
             # readiness verdict -- these never reach the readiness axis at all
             # (AC3a), so omission is the correct handling and there is nothing
             # to emit.
             continue
-        if basis == "review-due":
+        if basis == BASIS_REVIEW_DUE:
             # NOT the same disposition as off-gate-axis, and must not share its
             # branch: here the engine deliberately declines to judge, returning
             # a null verdict on both axes, and the row IS the prompt for a

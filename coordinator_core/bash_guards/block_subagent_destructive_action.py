@@ -382,6 +382,7 @@ from coordinator_core.bash_guards._dialect import (
     _strip_ps_quotes,
     dialect_from_tool_name,
     resolve_segments_for_dialect,
+    strip_powershell_prose_noise,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
@@ -3223,6 +3224,51 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+_PS_LEGACY_SEPARATOR_RE = re.compile(r"[;\n]|&&|\|\||\|")
+
+
+def _evaluate_legacy_powershell_git(text):
+    """PowerShell-shaped free-text fallback for the `tokens is None` route
+    (AC3 / Conventions (a)), parallel in shape and posture to
+    `block_stash_destruction._evaluate_legacy_powershell`.
+
+    NEVER routes to `_evaluate_git_segment_legacy` (bash-shaped free text,
+    the spurious-deny source this plan exists to kill). It strips
+    here-string bodies and quoted spans via
+    `_dialect.strip_powershell_prose_noise` (C2), then re-runs the SAME
+    anchored ladder the parsed path uses (`_real_git_subcommand` +
+    `_evaluate_git_segment_anchored`) over the residue, so a
+    hazard-documenting prose string quoting `git reset --hard` does not
+    read as an issued command while a real invocation still denies.
+
+    Load-bearing, not defensive: `--` is not valid PowerShell, so every
+    `git checkout -- <path>` form fails to tokenize and arrives here.
+    Returning ``None`` on this route -- the state this function replaces --
+    let those forms ALLOW under PowerShell while denying under Bash, the
+    exact covered-but-permissive guard AC12's ordering exists to prevent.
+    """
+    stripped = strip_powershell_prose_noise(text)
+    for raw_segment in _PS_LEGACY_SEPARATOR_RE.split(stripped):
+        seg = raw_segment.strip()
+        if not seg:
+            continue
+        tokens = [_ps_normalize_verb_token(tok) for tok in seg.split()]
+        if not tokens:
+            continue
+        if _normalize_executable_basename(tokens[0]) != "git":
+            continue
+        subcmd, ambiguous, remaining = _real_git_subcommand(tokens[1:])
+        if ambiguous:
+            return (
+                "git (unrecognized global option -- ambiguous resolution, "
+                "denied per _real_git_subcommand's never-guess contract)"
+            )
+        verdict = _evaluate_git_segment_anchored(" ".join(tokens), subcmd, remaining)
+        if verdict is not None:
+            return verdict
+    return None
+
+
 def _evaluate_powershell_git_destructive(cmd_norm: str) -> Optional[str]:
     """Return a deny_kind label for the first destructive git invocation
     found in ``cmd_norm``, tokenized via the PowerShell dialect resolver,
@@ -3266,7 +3312,7 @@ def _evaluate_powershell_git_destructive(cmd_norm: str) -> Optional[str]:
         cmd_norm, Dialect.POWERSHELL, guard_name="block_subagent_destructive_action"
     )
     if segments is None:
-        return None
+        return _evaluate_legacy_powershell_git(cmd_norm)
 
     for tokens, _pipe_before in segments:
         if not tokens:

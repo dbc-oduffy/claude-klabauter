@@ -200,6 +200,7 @@ _OURS_DISPATCH_CHECKS = frozenset(
         "check_grep_via_bash_rewrite",
         "check_sed_range_read_advise",
         "check_cat_heredoc_write_advise",
+        "check_heredoc_repo_write_advise",
         "check_git_commit_safe_commit_advise",
         "check_multiprobe_banner_rewrite",
         "check_head_tail_plumbing_rewrite",
@@ -644,6 +645,15 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "check_cat_heredoc_write_advise": lambda: _dc.check_cat_heredoc_write_advise(
         "cat > out.txt <<'ALTLIVE_EOF'\nhello\nALTLIVE_EOF", "altlive-probe"
+    ),
+    "check_heredoc_repo_write_advise": lambda: _dc.check_heredoc_repo_write_advise(
+        "python3 - <<'ALTLIVE_EOF'\n"
+        "import pathlib\n"
+        'pathlib.Path("altlive_probe_target.txt").write_text("hi")\n'
+        "ALTLIVE_EOF",
+        "altlive-probe",
+        None,
+        os.path.dirname(_pkg.__file__),
     ),
     "check_git_commit_safe_commit_advise": lambda: _dc.check_git_commit_safe_commit_advise(
         'git commit -m "fix the thing"', "altlive-probe"

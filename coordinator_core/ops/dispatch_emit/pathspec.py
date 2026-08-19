@@ -268,10 +268,16 @@ def _declared_paths(row: WaveRow) -> list[str]:
     see ``NoWritesDeclaredError``'s docstring for that boundary.
 
     Every declared ``writes:`` entry is checked for directory shape (a
-    trailing ``/``) before being returned — the same check
+    trailing ``/`` or, since a Windows-authored spine is first-class here,
+    ``\\``) before being returned — the same trailing-separator-SHAPE check
     ``is_concrete_surface`` already applies to the ``surface:`` fallback
     below, closing the hole where that check ran on the fallback path but
-    not the primary one (see ``DirectoryShapedWriteError``).
+    not the primary one (see ``DirectoryShapedWriteError``). Deliberately
+    NOT an on-disk ``is_dir()`` test (Review: staff-eng, Finding 13): a bare
+    ``state/memo-outbox/sent`` (no trailing separator) naming a real
+    directory is not caught here — spine derivation must not depend on
+    worktree state, so parity with ``is_concrete_surface`` is trailing-
+    separator-shape only, not full on-disk discrimination.
     """
     if row.writes is not UNDECLARED:
         # `WaveRow.writes` is typed `object` so one field can carry either a
@@ -281,7 +287,7 @@ def _declared_paths(row: WaveRow) -> list[str]:
         # and the sentinel is that field's only non-list inhabitant.
         declared = cast("list[str]", row.writes)
         for path in declared:
-            if path.endswith("/"):
+            if path.endswith("/") or path.endswith("\\"):
                 raise DirectoryShapedWriteError(
                     f"{row.id}'s `writes:` entry {path!r} is directory-shaped"
                 )

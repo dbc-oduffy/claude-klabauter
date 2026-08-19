@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.authz.registration_quad import check_registration_quad
 from coordinator_core.ops.fleet import work_state as fws
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError
 
@@ -191,10 +192,15 @@ class TestZeroSpawnOverNonGitFixture:
     def test_no_git_subprocess_spawned_with_a_non_git_sibling_present(
         self, tmp_path, monkeypatch,
     ) -> None:
-        """AC9b: the runtime proof `test_no_unbatched_per_item_git_spawn.py`'s
-        static AST gate cannot provide — a sibling set that includes a
-        registered-but-not-a-git-repo entry must still resolve the whole loop
-        with zero `subprocess.run`/`Popen`/etc calls anywhere in the chain."""
+        """AC9b: patches `subprocess.run`/`Popen`/`check_output`/`check_call`
+        on the `subprocess` module object for a sibling set that includes a
+        registered-but-not-a-git-repo entry, and asserts the whole loop
+        resolves with none of them called. (Review: staff-eng, Finding 7)
+        NOT a proof against every spawn shape: a module in the call chain
+        that did `from subprocess import run` at import time would bind the
+        original, invisible to this patch, and `os.system`/`os.popen` are
+        not covered either — narrower than "the runtime proof the static
+        AST gate cannot provide" this docstring previously claimed."""
         sib_git = tmp_path / "sib-git"
         sib_non_git = tmp_path / "sib-non-git"
         _make_git_repo(sib_git)
@@ -219,6 +225,64 @@ class TestZeroSpawnOverNonGitFixture:
             e["target_root"] == str(sib_non_git.resolve()) and "git" in e["reason"].lower()
             for e in result["errors"]
         )
+
+
+class TestRootNormalization:
+    """Review: staff-eng, Finding 0 — `build_fleet_work_state` previously
+    handed the registry path to `build_work_state` with NO root
+    normalization, unlike `session.work_state`'s `main_worktree_root` fix.
+    The walk-only pre-check WALKS UP, so a registered path that is a
+    subdirectory of a repo passed the pre-check and then silently scanned an
+    empty `<subdir>/state/handoffs` — reported as a confident, well-formed
+    empty repo, with no `errors[]` entry."""
+
+    def test_subdirectory_of_a_standard_repo_normalizes_to_the_real_root(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        repo_root = tmp_path / "sib-repo"
+        subdir = repo_root / "some" / "nested" / "dir"
+        _make_git_repo(repo_root)
+        _write_handoff(repo_root, "a.md", _unclaimed_handoff("hnd-fleet-subdir-000008"))
+        subdir.mkdir(parents=True)
+        _make_registry(tmp_path, monkeypatch, {"sub": subdir})
+
+        result = fws.build_fleet_work_state()
+
+        assert result["errors"] == []
+        assert str(repo_root.resolve()) in result["repos"]
+        assert len(result["repos"][str(repo_root.resolve())]["unclaimed"]) == 1
+
+    def test_non_standard_layout_degrades_to_errors_not_a_silent_empty_repo(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        """A registered path that IS a bare-repo-shaped directory (`HEAD`,
+        `objects/`, `refs/` markers) resolves via the walk-only pre-check to
+        itself (`kind == "bare"`), which is neither named `.git` nor
+        contains a `.git` entry — `main_worktree_root` refuses to guess and
+        raises `ValueError`, degraded here into the same `errors[]` shape as
+        any other per-repo failure, rather than a silently-empty repo."""
+        bare = tmp_path / "sib-bare"
+        bare.mkdir(parents=True)
+        (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (bare / "objects").mkdir()
+        (bare / "refs").mkdir()
+        _make_registry(tmp_path, monkeypatch, {"bare": bare})
+
+        result = fws.build_fleet_work_state()
+
+        assert result["repos"] == {}
+        error_roots = {e["target_root"] for e in result["errors"]}
+        assert str(bare.resolve()) in error_roots
+
+
+def test_registration_quad_clean_for_fleet_work_state():
+    """Review: staff-eng (Finding 15) -- unpinned invariant: `session.
+    work_state` (its sibling C3 op) carries this same one-line assertion;
+    `fleet.work_state` did not, though its own module docstring makes the
+    five-surface claim explicitly."""
+    violations = check_registration_quad()
+    op_keys_with_violations = {v.op_key for v in violations}
+    assert "fleet.work_state" not in op_keys_with_violations
 
 
 class TestOpHandlerWiring:

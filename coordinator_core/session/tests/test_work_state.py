@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.session.work_state as ws
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -137,6 +138,77 @@ Body.
         assert forbidden not in row
 
 
+def test_ledger_first_holder_wins_over_frontmatter_mirror(tmp_path, monkeypatch):
+    """SWEEP RESULT (Review: staff-eng, Finding 2) — every fixture in this
+    file previously ran against a non-git `tmp_path`, so `git_common_dir`
+    raised, `common_dir` stayed `None`, and `_resolve_ledger_first_holder`'s
+    LEDGER branch (`resolve_claim_state` only consults the ledger dir when
+    `resolved_common_dir is not None`) was never reached — every held row
+    in the suite was produced by the frontmatter mirror fallback, which is
+    NOT the ledger-first precedence this module is named for. Stubs
+    `git_common_dir` to a fake-but-real `.git` dir (no real git init/spawn
+    needed — `resolve_claim_state` only ever reads plain files under it)
+    and seeds a ledger claim for a DIFFERENT holder than the frontmatter
+    mirror's `claimed_by`, asserting the ledger holder wins."""
+    fake_common_dir = tmp_path / ".git"
+    fake_common_dir.mkdir()
+    monkeypatch.setattr(ws, "git_common_dir", lambda root: fake_common_dir)
+    monkeypatch.setattr(claim_state_mod, "cs_claim_holder_live", lambda *a, **k: True)
+
+    _write_handoff(
+        tmp_path,
+        "held.md",
+        """---
+id: hnd-ledger-first-000020
+kind: session-handoff
+deployment_state: awaiting_gate
+blocked_by: []
+claimed_by: mirror-sid
+---
+Body.
+""",
+    )
+    claim_dir = fake_common_dir / "coordinator-sessions" / "handoff-claims" / "held.md"
+    claim_dir.mkdir(parents=True)
+    (claim_dir / "session_id").write_text("ledger-sid\n", encoding="utf-8")
+    (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+
+    result = ws.build_work_state(tmp_path)
+
+    assert len(result["held"]) == 1
+    assert result["held"][0]["claimed_by"] == "ledger-sid"
+
+
+def test_holder_live_true_off_stubbed_live_session_verdicts(tmp_path, monkeypatch):
+    """SWEEP RESULT (Review: staff-eng, Finding 2) — `holder_live` was
+    pinned at its degenerate `False` in every held-row test in this file
+    because none stubbed `live_session_verdicts` to answer truthy for the
+    held row's holder. Proves the field is not permanently pinned."""
+    _write_handoff(
+        tmp_path,
+        "held.md",
+        """---
+id: hnd-holder-live-000021
+kind: session-handoff
+deployment_state: awaiting_gate
+blocked_by: []
+claimed_by: sess-fake-holder-live
+---
+Body.
+""",
+    )
+    monkeypatch.setattr(
+        ws._liveness,
+        "live_session_verdicts",
+        lambda root: {"sess-fake-holder-live": (True, "meta")},
+    )
+
+    result = ws.build_work_state(tmp_path)
+
+    assert len(result["held"]) == 1
+    assert result["held"][0]["holder_live"] is True
+
+
 # ---------------------------------------------------------------------------
 # AC3 — archival expressed by scan root, not a filter
 # ---------------------------------------------------------------------------
@@ -160,15 +232,14 @@ Body.
     assert result == {"held": [], "unclaimed": [], "review_due": []}
 
 
-def test_build_work_state_scan_root_is_single_glob_no_second_filter():
-    """Source-level corroboration of AC3's one-condition shape: the only
-    place this module's row-emission set is built is off
-    `collect_live_handoff_paths` (state/handoffs/ only) — never a second
-    'skip if under archive/' predicate applied after the fact."""
-    lines = _code_lines(ws.build_work_state)
-    joined = "\n".join(lines)
-    assert "collect_live_handoff_paths" in joined
-    assert "archive" not in joined.lower()
+# Review: staff-eng (Finding 4) -- the removed
+# `test_build_work_state_scan_root_is_single_glob_no_second_filter` asserted
+# `"archive" not in source text`, a spelling assertion (red on a pure rename
+# of the archive-index helper; green against a real archive filter spelled
+# any other way, and there is no "glob" in this function at all -- it uses
+# `collect_live_handoff_paths`, `iterdir()`-based, deliberately not `glob()`).
+# `test_archived_record_is_invisible_never_scanned` already covers the real
+# behavioural claim (an archived record is never emitted) end-to-end.
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +427,14 @@ def test_pickup_ready_never_drives_eligibility_only_stamp_comparison():
     the PRODUCER's own computed verdict key, never a second frontmatter
     read standing in for it (the second-gate-evaluator shape this module's
     docstring forbids)."""
+    # Review: staff-eng (Finding 14) -- the removed third arm
+    # (`"stamped_pickup_ready" in stripped`) subsumed the second exact-
+    # expression arm entirely, so it constrained the local variable's NAME
+    # rather than the expression: it would happily admit a future
+    # `stamped_pickup_ready = ready.get("pickup_ready")` (the exact
+    # forbidden-frontmatter-drives-eligibility shape this test exists to
+    # forbid), and renaming the variable with no behaviour change would
+    # break it. Two exact-expression arms only.
     lines = [l for l in _code_lines(ws.build_work_state) if "pickup_ready" in l]
     assert lines, "expected at least the producer-key + stamp-comparison lines"
     for line in lines:
@@ -363,7 +442,7 @@ def test_pickup_ready_never_drives_eligibility_only_stamp_comparison():
         allowed = (
             'ready.get("pickup_ready")' in stripped
             or 'stamped_pickup_ready = handoff.get("pickup_ready")' in stripped
-            or "stamped_pickup_ready" in stripped
+            or stripped == "if stamped_pickup_ready is not None and stamped_pickup_ready is not True:"
         )
         assert allowed, f"unexpected pickup_ready read/use: {stripped!r}"
 
@@ -425,7 +504,7 @@ Body.
 """,
     )
 
-    def _fake_resolve(sids):
+    def _fake_resolve(sids, snapshot=None):
         return {}, False  # messaging box-wide unavailable
 
     monkeypatch.setattr(
@@ -457,7 +536,7 @@ Body.
 """,
     )
 
-    def _fake_resolve(sids):
+    def _fake_resolve(sids, snapshot=None):
         return {}, True  # messaging available box-wide, this peer just unresolved
 
     monkeypatch.setattr(

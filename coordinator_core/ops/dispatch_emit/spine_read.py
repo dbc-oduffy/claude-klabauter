@@ -316,6 +316,13 @@ def read_spine(plan_path) -> list[EmitterRow]:
     reasons (closed disposition AND its own uncleared gate) resolves as
     satisfied: its work shipped, so the stale gate is bookkeeping, not a
     live blocker.
+
+    (Review: staff-eng, Finding 12) The same stop-at-satisfied rule also
+    governs the PASS-THROUGH case: a satisfied row's own predecessor may
+    itself be gated (excluded, not satisfied), but propagation deliberately
+    stops at the satisfied row rather than laundering that block onto the
+    satisfied row's own dependents — its work has demonstrably already run,
+    so a stale upstream gate is not their blocker either.
     """
     with open(plan_path, encoding="utf-8") as handle:
         source = handle.read()
