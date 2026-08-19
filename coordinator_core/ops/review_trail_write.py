@@ -1423,6 +1423,13 @@ def _own_frozen_diff_shas(own_session_id: str, caller_worktree: Path) -> FrozenS
         sha_range = data.get("sha_range")
         if isinstance(sha_range, str) and sha_range:
             ranges.append(sha_range)
+    # ONE SPAWN PER RANGE, and this is not an unbatched loop awaiting a fix: `git rev-list`
+    # cannot express a union of ranges. Its exclusions are GLOBAL, not per-argument --
+    # `rev-list A..B C..D` means `B D ^A ^C`, so batching two adjacent frozen ranges makes
+    # `^C` cancel the `C` that `A..B` was contributing and silently NARROWS the frozen set.
+    # Measured, not reasoned: `TestOwnFrozenDiffShas::test_ranges_resolve_independently`
+    # pins the adjacent-range case that a batched form gets wrong. Narrowing this set is a
+    # silent under-admission in an anti-forgery gate, which is why it is worth a spawn each.
     shas: set[str] = set()
     for rng in ranges:
         rc, out, _err = _git_runner(["git", "rev-list", rng], str(caller_worktree))

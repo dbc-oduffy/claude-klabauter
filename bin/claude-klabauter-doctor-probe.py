@@ -2890,7 +2890,11 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
                 f"published engine is {distance} commit(s) behind claude-klabauter's HEAD — row "
                 f"{published_row!r} published @ {published_sha}."
             ),
-            remediation="Run a percolate round to publish claude-klabauter's current HEAD.",
+            remediation=(
+                "An engine edit in claude-klabauter takes effect only when a publish round lands it — "
+                "editing coordinator_core/ does not change what runs. Publish with: "
+                "python coordinator/bin/percolate-round.py claude-klabauter"
+            ),
             required=False,
             data={
                 "record_path": str(record_path),

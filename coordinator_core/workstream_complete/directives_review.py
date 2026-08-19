@@ -33,10 +33,8 @@ the convention).
 Consumes (orchestrates, reimplements none):
     coordinator/bin/review-brightline-gate.py
         -> d-run-review-brightline-gate's directives[].cli (mid-chain).
-    coordinator/bin/wsc-coverage-gate-runner.py
-        (brightline-gate --from-handoff / coverage-gate --from-handoff /
-        d-run-chain-coverage-gate's, and d-write-review-trail's
-        directives[].cli.
+    coordinator/bin/wsc-coverage-gate-runner.py (write-trail)
+        -> d-write-review-trail's directives[].cli.
     coordinator/bin/freeze-review-diff.py
         -> d-freeze-and-dispatch-review-partition's per-slice
         directives[].cli.
@@ -192,27 +190,6 @@ _BRIGHTLINE_LOC = 500
 _BRIGHTLINE_COMMITS = 5
 _BRIGHTLINE_SURFACES = 4
 _SMALL_FIX_LOC_CEILING = 50
-
-#: The two literal `verdict=` values `review_brightline_gate.py::_from_handoff_main`
-#: (removed 2026-08-19, state/kill-ledger.md K-007)
-#: prints on its `BRIGHTLINE ...` stdout line (see that function's tail,
-#: `verdict = "PARTITION-MANDATORY" if reviewers_required >= 2 else
-#: "single-reviewer-ok"`). `chain_partition_verdict` below is that string,
-#: consumed verbatim — never re-derived from raw chain metrics here (see
-#: `decide_review_scale`'s docstring).
-_CHAIN_VERDICT_PARTITION_MANDATORY = "PARTITION-MANDATORY"
-_CHAIN_VERDICT_SINGLE_REVIEWER_OK = "single-reviewer-ok"
-
-#: Public alias of `_CHAIN_VERDICT_PARTITION_MANDATORY` (review-integrator
-#: finding, P3, 2026-08-06) — `wsc-coverage-gate-runner.py` duplicated this
-#: literal as its own `_CHAIN_VERDICT_PARTITION_MANDATORY` because this
-#: module's copy was private; now that `chain_partition_verdict_discharged`
-#: is itself a public export of this module, the verdict string it gates on
-#: is exported alongside it so a future rename only has one string to catch,
-#: not two. The private name above is untouched — this is an additive alias,
-#: not a rename.
-CHAIN_VERDICT_PARTITION_MANDATORY = _CHAIN_VERDICT_PARTITION_MANDATORY
-
 
 def _unresolved(reason: str) -> ReviewScaleDecision:
     return ReviewScaleDecision(

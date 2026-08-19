@@ -383,6 +383,55 @@ def test_fire_status_leaves_live_pid_running(repo, script, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Background-task wait ceiling -- the driver must not kill its own workflow
+# ---------------------------------------------------------------------------
+
+
+def test_build_fire_env_uncaps_background_wait():
+    env = fire.build_fire_env({"PATH": "/usr/bin"})
+    assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_build_fire_env_respects_an_explicit_operator_ceiling():
+    env = fire.build_fire_env({"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "900000"})
+    assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "900000"
+
+
+def test_fire_workflow_spawns_child_with_uncapped_background_wait(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        captured.update(kwargs)
+        return _FakePopen(command, **{})
+
+    monkeypatch.setattr(fire.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert captured["env"]["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
+
+
+def test_fire_workflow_child_env_is_not_narrowed(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setenv("COORDINATOR_FIRE_ENV_PROBE", "inherited")
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        captured.update(kwargs)
+        return _FakePopen(command, **{})
+
+    monkeypatch.setattr(fire.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert captured["env"]["COORDINATOR_FIRE_ENV_PROBE"] == "inherited"
+
+
+# ---------------------------------------------------------------------------
 # Windows detachment flags -- explicit, not incidental
 # ---------------------------------------------------------------------------
 

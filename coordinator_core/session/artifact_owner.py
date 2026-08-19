@@ -158,6 +158,15 @@ _SCALAR_OWNER_FIELDS = ("authoring_session", "created_by_session")
 #: artifact's own directory (module docstring, convention 2).
 _CLAIM_DIR_CLASSES = ("handoff", "memo", "plan")
 
+#: Claim classes whose dir is keyed on the artifact's STEM, not its full
+#: basename. `claims.claim_plan` REFUSES a `.md`-suffixed slug outright
+#: (`cs_claim_plan: expected a bare plan slug`), so every plan claim dir on
+#: disk is stem-keyed while handoff/memo dirs keep the extension. Probing
+#: all three with one spelling silently misses the whole plan class -- the
+#: "who owns this plan?" read returned no owners for plans that were in
+#: fact claimed. Keyed off the writer's own contract, not a guess.
+_STEM_KEYED_CLAIM_CLASSES = frozenset({"plan"})
+
 _AGENT_SESSIONS_ENTRY_RE = re.compile(r'^\s*-\s*["\']?([^"\'|]+)')
 
 _SUBAGENT_SHARE_DIR_RE = re.compile(r'(?:^|[/\\])state[/\\]subagent-share[/\\]([^/\\]+)(?:[/\\]|$)')
@@ -290,8 +299,10 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
     base = claims._claim_base(_CLAIM_DIR_CLASSES[0], "", cwd)
     if not base:
         return owners
+    stem = basename[:-3] if basename.endswith(".md") else basename
     for class_ in _CLAIM_DIR_CLASSES:
-        claim_dir = Path(base) / f"{class_}-claims" / basename
+        key = stem if class_ in _STEM_KEYED_CLAIM_CLASSES else basename
+        claim_dir = Path(base) / f"{class_}-claims" / key
         if not claim_dir.is_dir():
             continue
         sid = claims._read_claim_field(claim_dir, "session_id")

@@ -303,8 +303,19 @@ def read_spine(plan_path) -> list[EmitterRow]:
     ``blocks: ac-closure`` does NOT exclude its row — that row executes
     normally; only a named acceptance criterion stays open. depends_on
     referent resolution runs against the full row-id set before this
-    exclusion, so an edge onto an excluded row is satisfied, not dangling;
-    that edge is then stripped from the surviving row's ``depends_on``.
+    exclusion, so an edge onto an excluded row never dangles.
+
+    The two exclusion reasons are NOT interchangeable past that point. A
+    closed disposition or ``deferred: true`` row's work is done, so a live
+    row's edge onto it is satisfied — that edge is stripped from the
+    surviving row's ``depends_on`` and the surviving row is otherwise
+    unaffected. An uncleared execution-blocking gate is the opposite: the
+    gated row's work has NOT run, so a live row's edge onto it is not
+    satisfied — that row, and every row transitively depending on it, is
+    itself excluded rather than edge-stripped. A row excluded for both
+    reasons (closed disposition AND its own uncleared gate) resolves as
+    satisfied: its work shipped, so the stale gate is bookkeeping, not a
+    live blocker.
     """
     with open(plan_path, encoding="utf-8") as handle:
         source = handle.read()
@@ -408,27 +419,60 @@ def read_spine(plan_path) -> list[EmitterRow]:
             )
         )
 
-    # Non-dispatchable exclusion: closed disposition, deferred: true, or an
-    # uncleared execution-blocking external_gate. Computed after depends_on
-    # referent resolution against the full row-id set above, so a live
-    # row's edge onto a shipped/deferred/gated row is already
-    # known-satisfied rather than dangling.
-    excluded_ids: set[str] = set()
+    # Non-dispatchable exclusion, split into two sets by whether the
+    # exclusion reason means the row's work is DONE (satisfied) or NOT YET
+    # RUN (blocked) -- see the docstring for why those are not
+    # interchangeable. Computed after depends_on referent resolution
+    # against the full row-id set above, so an edge onto either set never
+    # dangles.
+    satisfied_ids: set[str] = set()
+    blocked_ids: set[str] = set()
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
-        if (
-            disposition in NON_DISPATCHABLE_DISPOSITIONS
-            or deferred is True
-            or _has_uncleared_execution_gate(raw)
-        ):
-            # raw.get("id") cannot be None here: the id presence/uniqueness
-            # loop above already required every raw["id"] to be a non-empty
-            # string before this loop runs. Keep the two loops in that
-            # order -- reordering them reintroduces a possible None into
-            # excluded_ids with no signal.
-            excluded_ids.add(raw.get("id"))
+        # raw.get("id") cannot be None here: the id presence/uniqueness
+        # loop above already required every raw["id"] to be a non-empty
+        # string before this loop runs. Keep the two loops in that
+        # order -- reordering them reintroduces a possible None into
+        # these sets with no signal.
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True:
+            # Checked ahead of the gate below by construction (elif): a row
+            # excluded for both reasons resolves as satisfied, not blocked
+            # (docstring point above) -- its work shipped, so a stale gate
+            # on a done row is bookkeeping, not a live blocker.
+            satisfied_ids.add(raw.get("id"))
+        elif _has_uncleared_execution_gate(raw):
+            blocked_ids.add(raw.get("id"))
 
+    # Transitive closure over depends_on: a row depending, directly or
+    # through any chain, on a blocked row has not had its own predecessor
+    # run either, so it is equally blocked -- promoting it into a wave
+    # would dispatch it against work that does not exist yet. Propagation
+    # stops at a satisfied row: that row's edge onto the blocked row is
+    # stripped below exactly like any other satisfied edge, so nothing
+    # blocked leaks through a row whose own work already shipped.
+    dependents: dict[str, list[str]] = {}
+    for row in rows:
+        for edge in row.depends_on:
+            if not isinstance(edge, dict):
+                continue
+            chunk = edge.get("chunk")
+            # A malformed edge with no `chunk` cannot name a predecessor, so
+            # it can neither carry nor block propagation -- skip rather than
+            # bucketing every such edge under a single None key.
+            if isinstance(chunk, str) and chunk:
+                dependents.setdefault(chunk, []).append(row.id)
+
+    frontier = list(blocked_ids)
+    while frontier:
+        current = frontier.pop()
+        for dependent_id in dependents.get(current, ()):
+            if dependent_id in satisfied_ids or dependent_id in blocked_ids:
+                continue
+            blocked_ids.add(dependent_id)
+            frontier.append(dependent_id)
+
+    excluded_ids = satisfied_ids | blocked_ids
     dispatchable_rows = [row for row in rows if row.id not in excluded_ids]
     for i, row in enumerate(dispatchable_rows):
         if not row.depends_on:
@@ -436,7 +480,7 @@ def read_spine(plan_path) -> list[EmitterRow]:
         stripped = [
             edge
             for edge in row.depends_on
-            if not (isinstance(edge, dict) and edge.get("chunk") in excluded_ids)
+            if not (isinstance(edge, dict) and edge.get("chunk") in satisfied_ids)
         ]
         if len(stripped) != len(row.depends_on):
             dispatchable_rows[i] = row._replace(depends_on=stripped)

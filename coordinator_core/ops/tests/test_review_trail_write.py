@@ -3046,7 +3046,9 @@ def _write_sidecar(
     return rel
 
 
-def _write_pending_frozen_record(repo: Path, session_id: str, sha_range: str) -> None:
+def _write_pending_frozen_record(
+    repo: Path, session_id: str, sha_range: str, slug: str = "pending"
+) -> None:
     """Write a `verdict: pending`, `scope_kind: diff` review-trail record for
     *session_id* directly to disk — the AC1c evidence source
     (`_own_frozen_diff_shas`) scans exactly this shape."""
@@ -3062,7 +3064,7 @@ def _write_pending_frozen_record(repo: Path, session_id: str, sha_range: str) ->
         "session_id": session_id,
         "workstream": None,
     }
-    (trail_dir / f"2026-08-18-000000-{session_id[:8]}-pending.json").write_text(
+    (trail_dir / f"2026-08-18-000000-{session_id[:8]}-{slug}.json").write_text(
         json.dumps(record), encoding="utf-8",
     )
 
@@ -3674,6 +3676,45 @@ class TestOwnFrozenDiffShas:
             "verdict": "pending", "scope_kind": "plan",
         }), encoding="utf-8")
         assert _own_frozen_diff_shas("own-sess", repo) == frozenset()
+
+    def test_ranges_resolve_independently(self, tmp_path, monkeypatch):
+        """MULTI-RECORD coverage, and the evidence for why this site spawns per range. Every
+        other test in this class has exactly ONE pending record, and a single-range test passes
+        identically whether the implementation batches or loops -- the systemic finding six of
+        nine reviewers reported against this chain's batched sites.
+
+        Two ADJACENT ranges (`base..mid`, `mid..tip`) must yield both `mid` and `tip`. A
+        batched `git rev-list base..mid mid..tip` does NOT: rev-list exclusions are global, so
+        that argv means `mid tip ^base ^mid` and the `^mid` cancels the `mid` the first range
+        contributed, silently narrowing the frozen set. This test fails against exactly that
+        batching, which is why `_own_frozen_diff_shas` keeps one spawn per range and carries a
+        dated `_EXEMPT_SITES` entry in the amplification gate rather than a burn-down row."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        mid_sha = _make_commit(repo, "mid")
+        tip_sha = _make_commit(repo, "tip")
+        _write_pending_frozen_record(repo, "own-sess", f"{base_sha}..{mid_sha}", slug="r1")
+        _write_pending_frozen_record(repo, "own-sess", f"{mid_sha}..{tip_sha}", slug="r2")
+
+        assert _own_frozen_diff_shas("own-sess", repo) == frozenset({mid_sha, tip_sha})
+
+    def test_unresolvable_range_is_skipped_not_fatal(self, tmp_path):
+        """A stale pending record naming a since-gc'd sha must not blank the whole frozen set:
+        the failing range is skipped and the resolvable ones still bound the attestation. The
+        per-range shape is what preserves this -- a single batched invocation fails whole."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        tip_sha = _make_commit(repo, "tip")
+        _write_pending_frozen_record(repo, "own-sess", f"{base_sha}..{tip_sha}", slug="good")
+        _write_pending_frozen_record(
+            repo, "own-sess", "0" * 40 + ".." + "1" * 40, slug="stale"
+        )
+
+        assert _own_frozen_diff_shas("own-sess", repo) == frozenset({tip_sha})
 
 
 # ---------------------------------------------------------------------------

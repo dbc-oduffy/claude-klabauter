@@ -1056,6 +1056,46 @@ def _cf_ready_to_fire_no_gate_evidence(fm: dict) -> ErrorDict | None:
     return None
 
 
+def _cf_ready_to_fire_no_unresolved_blocked_by(fm: dict) -> ErrorDict | None:
+    """A ``ready_to_fire`` handoff must not carry an unresolved ``blocked_by``
+    entry. This is the schema-side backstop for the syntactic contradiction
+    reproduced in ``docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-
+    derives-readiness.md`` § Problem (AC6): ``validate_frontmatter`` returned
+    zero errors for ``deployment_state: ready_to_fire`` + ``blocked_by:
+    [stb-...]`` because only the deprecated ``gate_dependency`` axis was
+    guarded (``_cf_ready_to_fire_no_dependency``,
+    ``_cf_ready_to_fire_no_gate_evidence``) — ``blocked_by`` had no
+    equivalent.
+
+    Cross-field rules receive only the frontmatter dict, with no resolution
+    index against the corpus, so this rule CANNOT resolve ``blocked_by`` and
+    must not try — that is `reconcile/gate_eval.py :: evaluate_gate_triage`'s
+    job, wired in at write time (C1). It fires on the syntactic contradiction
+    only: a ``blocked_by`` entry with no corresponding
+    ``no_longer_blocked_by``/``gate_cleared_by`` entry clearing it. This is
+    the schema-side backstop for records this engine never wrote directly.
+    """
+    if fm.get('deployment_state') == 'ready_to_fire':
+        blocked_by = fm.get('blocked_by')
+        if blocked_by:
+            cleared = set(fm.get('no_longer_blocked_by') or []) | set(
+                fm.get('gate_cleared_by') or []
+            )
+            unresolved = [b for b in blocked_by if b not in cleared]
+            if unresolved:
+                return {
+                    'field': 'blocked_by',
+                    'error': 'must be empty or fully cleared when deployment_state=ready_to_fire',
+                    'hint': (
+                        'A handoff cannot be ready_to_fire while blocked_by names an '
+                        'unresolved blocker. Either clear the blocker (moving it into '
+                        'no_longer_blocked_by / gate_cleared_by) or set '
+                        'deployment_state=awaiting_gate.'
+                    ),
+                }
+    return None
+
+
 def _cf_awaiting_gate_not_pickup_ready(fm: dict) -> ErrorDict | None:
     """A ``deployment_state: awaiting_gate`` baton must not also carry
     ``pickup_ready: true`` — a gated baton advertising pickup-readiness is a
@@ -3218,6 +3258,7 @@ _HANDOFF_CROSS_FIELD_RULES = [
     _cf_awaiting_gate_not_pickup_ready,
     _cf_ready_to_fire_no_dependency,
     _cf_ready_to_fire_no_gate_evidence,
+    _cf_ready_to_fire_no_unresolved_blocked_by,
     _cf_gate_dependency_not_path_shaped,
     _cf_execution_stamp_required,
     _cf_handoff_phase_kind_gate,

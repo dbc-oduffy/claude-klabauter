@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import fnmatch
 import pathlib
+import re
 import subprocess
 
 SKIP_DIR_NAMES = {
@@ -41,6 +42,29 @@ SKIP_DIR_NAMES = {
 }
 
 SKIP_SUFFIXES = {".pyc", ".pyo"}
+
+#: Directories that are publish-STAGING leftovers, not shipped payload --
+#: `coordinator/bin/publish.py::_create_publish_staging_dir` mints these
+#: destination-adjacent as `.{dest_dir.name}.publish-staging-<random>`
+#: (`tempfile.mkdtemp(prefix=..., dir=dest_dir.parent)`), untracked and NOT
+#: covered by any `.gitignore` entry in this repo, so `_git_files`'s
+#: `--others --exclude-standard` genuinely returns them. A checker that
+#: scans them fails the round on bytes that never ship.
+#:
+#: Same exclusion, same over-match trap, as the engine's own two copies --
+#: `coordinator_core/percolate/store.py::_PUBLISH_STAGING_DIR_RE` (matched via
+#: `.search()` against a directory NAME, unanchored -- correct here because the
+#: mint prefix embeds `dest_dir.name` before the literal substring, e.g.
+#: `.bin.publish-staging-gr7j6dpy`, so an anchored `^\.?publish-staging-` would
+#: silently fail to match) and `coordinator_core/percolate/engine.py`'s
+#: `_PARSE_SWEEP_STAGING_DIR_RE`. Mirrored as an unanchored substring pattern
+#: to match `store.py`'s semantics, not `engine.py`'s anchored one.
+#:
+#: Matched against a DIRECTORY COMPONENT only, never a file's own basename --
+#: `SKIP_DIR_NAMES` filtering below already slices `p.split("/")[:-1])` for
+#: exactly this reason, so a genuine shipped payload file whose basename
+#: happens to contain `publish-staging-` is still scanned.
+PUBLISH_STAGING_DIR_RE = re.compile(r"publish-staging-")
 
 # Portable console suppression for every git subprocess this harness spawns.
 # Resolves to CREATE_NO_WINDOW on Windows and to 0 (a no-op) on POSIX; the bare
@@ -151,6 +175,7 @@ def repo_files(root: pathlib.Path | None = None) -> list[str]:
         p for p in paths
         if not p.startswith(".git/")
         and not any(part in SKIP_DIR_NAMES for part in p.split("/")[:-1])
+        and not any(PUBLISH_STAGING_DIR_RE.search(part) for part in p.split("/")[:-1])
         and not p.endswith(tuple(SKIP_SUFFIXES))
     }
     return sorted(cleaned)

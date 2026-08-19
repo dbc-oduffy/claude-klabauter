@@ -2794,3 +2794,167 @@ def evaluate_gate_triage(
         "reason": "every blocked_by id resolves to deployment_state=shipped",
         "evidence": evidence,
     }
+
+
+#: `deployment_state` values that are lifecycle POSITIONS, not readiness (PM
+#: ruling 2026-08-19, § Anti-scope) — `derive_readiness` has no opinion on any
+#: of these and returns (None, None), basis="off-gate-axis". Distinct from
+#: `HANDOFF_TERMINAL_DEPLOYMENT` (the blocked_by-classification terminal set):
+#: `in_flight` is NOT terminal there but IS off the readiness axis here, and
+#: `awaiting_gate`/`ready_to_fire` are ON the readiness axis but not terminal.
+_READINESS_OFF_AXIS_STATES: frozenset = frozenset(
+    {"in_flight", "shipped", "continued", "closed"}
+)
+
+#: The one NAMED predicate branch this function evaluates (module docstring
+#: C1 brief: "required_fields_empty" is deliberately NOT evaluated here — it
+#: moves to the C9 promote call site, where DR-173 actually scopes it). Named
+#: so a caller can tell an EM WHICH mechanical condition fired, per the C1
+#: brief's basis-naming requirement.
+_BASIS_BLOCKED_BY_UNRESOLVED = "blocked_by_unresolved"
+
+
+def derive_readiness(
+    handoff: Dict[str, Any],
+    all_handoffs: Sequence[Dict[str, Any]],
+    *,
+    scan_incomplete: bool = False,
+) -> Dict[str, Any]:
+    """Home the readiness derivation ONCE, on the existing gate resolver (C1,
+    docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md § C1).
+
+    Pure function: given one handoff's frontmatter dict plus the resolution
+    index `evaluate_gate_triage` already takes (the live+archived handoff
+    set), derives `deployment_state`/`pickup_ready` from MECHANICALLY-
+    CHECKABLE conditions only, of which an unresolved `blocked_by` is the
+    first (and, in this function, the only one evaluated — see
+    "required_fields_empty" below).
+
+    Delegates the graph verdict to `evaluate_gate_triage(..., consult_prose_
+    gates=False)` — this function does NOT reimplement `blocked_by`
+    resolution itself; that duplication is the AC7 failure mode this module's
+    own docstring exists to prevent ("a second file that reads handoff
+    frontmatter and independently decides gate status would be the shape to
+    avoid"). `derive_readiness` is the ONLY caller in the repo entitled to
+    pass `consult_prose_gates=False` — see `evaluate_gate_triage`'s own
+    docstring for why (every other caller keeps the default `True`,
+    unaffected).
+
+    Rules (exactly, per the C1 dispatch brief):
+        - `evaluate_gate_triage` status `still-blocked`/`indeterminate` ->
+          `("awaiting_gate", False)`, basis="blocked_by_unresolved".
+        - status `freed` -> `("ready_to_fire", True)`,
+          basis="blocked_by_unresolved" (this covers BOTH a satisfied
+          structured graph AND the vacuous empty-`blocked_by` case — an empty
+          graph does not skip the predicate set, it is simply the trivial
+          for-all-over-the-empty-set case the SAME predicate already handles;
+          see `evaluate_gate_triage`'s own "vacuously freed" branch).
+        - status `review-due` -> NO opinion, `(None, None)`,
+          basis="review-due". The verdict is a prompt for a human recheck;
+          auto-promoting it is the auto-promotion `classify_gate`'s own
+          negative-spec already forbids.
+
+    THE PREDICATES — the generalisation the PM's ruling asks for. Readiness
+    derives from mechanically-checkable conditions, of which an unresolved
+    `blocked_by` is merely the first:
+        - `blocked_by_unresolved` — the graph verdict above (evaluated here).
+        - `required_fields_empty` — DR-173's `category`/`summary`-unfilled
+          check on a PROMOTED baton. NOT evaluated here (C9's promote call
+          site owns it): this function sees only pure frontmatter and cannot
+          tell a promoted baton from any other record — `kind: session-
+          handoff` alone does not mean "promoted", so folding this predicate
+          in here would either silently widen DR-173's promote-only gate to
+          every call site (C3 scaffold, C5 brief, C6 transition) or need a
+          caller-scoping parameter this function's pure-frontmatter contract
+          forbids.
+
+    NEGATIVE-SPEC (the durable half of the PM's ruling):
+        - `deployment_state` already in {in_flight, shipped, continued,
+          closed} -> `(None, None)`, basis="off-gate-axis". Those four are
+          lifecycle POSITIONS, not readiness.
+        - `blocking_notes` is READ BY NOTHING HERE — enforced by
+          `consult_prose_gates=False` at the call into `evaluate_gate_triage`
+          above, not merely by this function never mentioning the field. Not
+          an input, not a tiebreak, not a predicate, and not eligible to
+          become one. Prose is not mechanically derivable, so it cannot gate
+          (PM ruling 2026-08-19, verbatim: "blocking_notes shouldn't give a
+          mechanical block because it's not mechanically derivable, it's a
+          query thing, because it can be anything in prose"). DR-173 and
+          DR-259 do NOT license reading it here — both are reconciled at
+          their own call sites (DR-173 -> C9's promote-time predicate;
+          DR-259 -> the vacuous-clear-prevention leg `evaluate_gate_triage`
+          already scopes off derived readiness via `consult_prose_gates=
+          False`), neither reopens this function's own contract.
+
+    A `(None, None)` return means "derivation has no opinion — leave what the
+    author wrote". That is what makes every call site safe to wire
+    unconditionally.
+
+    Returns:
+        {"deployment_state": <str|None>, "pickup_ready": <bool|None>,
+         "basis": <str>}
+    """
+    deployment_state = handoff.get("deployment_state")
+    if deployment_state in _READINESS_OFF_AXIS_STATES:
+        return {
+            "deployment_state": None,
+            "pickup_ready": None,
+            "basis": "off-gate-axis",
+        }
+
+    triage = evaluate_gate_triage(
+        handoff,
+        all_handoffs,
+        scan_incomplete=scan_incomplete,
+        consult_prose_gates=False,
+    )
+    status = triage["status"]
+
+    if status in ("still-blocked", "indeterminate"):
+        return {
+            "deployment_state": "awaiting_gate",
+            "pickup_ready": False,
+            "basis": _BASIS_BLOCKED_BY_UNRESOLVED,
+        }
+    if status == "freed":
+        return {
+            "deployment_state": "ready_to_fire",
+            "pickup_ready": True,
+            "basis": _BASIS_BLOCKED_BY_UNRESOLVED,
+        }
+    # status == "review-due": a prompt for a human recheck, never auto-
+    # promoted — see rule above.
+    return {"deployment_state": None, "pickup_ready": None, "basis": "review-due"}
+
+
+def derive_readiness_batch(
+    handoffs: Sequence[Dict[str, Any]],
+    all_handoffs: Sequence[Dict[str, Any]],
+    *,
+    scan_incomplete: bool = False,
+) -> List[Dict[str, Any]]:
+    """Batched `derive_readiness` — builds the resolution index ONCE and
+    projects it over `handoffs`, rather than a corpus-keyed caller rebuilding
+    it N times by calling `derive_readiness` per record in a loop (C1
+    dispatch brief, "TWO CORRECTIONS FROM claude-klabauter-d3": their readout
+    is ~148 live handoffs per repo and fleet-wide across siblings).
+
+    `evaluate_gate_triage` itself takes the prewalked `all_handoffs` sequence
+    per call and re-derives its own index internally (`_index_by_id`) each
+    time — this function does not attempt to hoist THAT index construction
+    out from under `evaluate_gate_triage`, since doing so would require
+    reaching into its private `_index_by_id` call, i.e. a second place
+    deciding how the index is built (the exact sibling-evaluator shape this
+    module exists to avoid). What this function DOES hoist is `all_handoffs`
+    itself: callers building a corpus-keyed batch pass the SAME sequence
+    once, in the SAME order, for every record in `handoffs` — the cheap half
+    of "build once, project over the set" available without touching
+    `evaluate_gate_triage`'s own internals.
+
+    Returns one `derive_readiness`-shaped dict per handoff in `handoffs`, in
+    the same order.
+    """
+    return [
+        derive_readiness(handoff, all_handoffs, scan_incomplete=scan_incomplete)
+        for handoff in handoffs
+    ]

@@ -1395,10 +1395,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 # `gates.review_scale.commit_slices`.
                 if partition_mandatory and not b_adjudication_present:
                     breach = (
+                        # Review: staff-eng (the Staff Engineer) -- gates.review_scale.chain_slices is a key
+                        # brief() can no longer emit; the chain-scoped slate was deleted with K-007.
                         f"{OP_NAME}: partition_mandatory with no complete review_trail record "
-                        f"-- required fields: {fields_str}. gates.review_scale.chain_slices is the "
-                        "chain-scoped review obligation (uncapped); gates.review_scale.commit_slices "
-                        "is the narrower record-write population -- different sets by design. "
+                        f"-- required fields: {fields_str}. "
                         "The engine's own workstream-complete brief already computed a "
                         "per-commit slice list for this close at gates.review_scale.commit_slices "
                         "-- fill in reviewer/scope/verdict per entry and supply the list as "

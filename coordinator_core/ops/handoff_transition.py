@@ -275,7 +275,7 @@ from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.reconcile.gate_eval import reduce_gate_evidence
+from coordinator_core.reconcile.gate_eval import derive_readiness, reduce_gate_evidence
 from coordinator_core.sibling_fact import resolve_leg
 
 # ---------------------------------------------------------------------------
@@ -507,6 +507,61 @@ def _normalize_claim_summary(fm_text: str, path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# C1 readiness-derivation wiring (C6, AC3, docs/plans/2026-08-19-gate-notes-
+# are-advisory-blocked-by-derives-readiness.md § C6)
+# ---------------------------------------------------------------------------
+
+
+def _apply_derived_readiness(fm: str, worktree: Path) -> str:
+    """Recompute deployment_state/pickup_ready from the POST-MUTATION
+    frontmatter via C1's `derive_readiness` and apply its verdict when it
+    has one.
+
+    AC3: clearing a gate must flip readiness back without a hand edit.
+    Authoring alone cannot deliver that — the gate clears LATER, on a
+    mutating path, not at birth — so this is that mutating-path call site.
+    `derive_readiness` returns `(None, None)` for every off-gate-axis
+    `deployment_state` (in_flight/shipped/continued/closed) and for a
+    `review-due` verdict (a prompt for a human, never auto-promoted); both
+    are no-ops here by construction, so calling this unconditionally after
+    every verb's own `deployment_state` stamp carries zero enum-narrowing
+    risk (C6 dispatch brief).
+
+    Reads the full live+archived handoff corpus via `handoff_reconcile.
+    _collect_all_handoffs_for_gate_index` — the ONE shared walker for that
+    corpus (see that function's own docstring) — imported function-locally
+    to avoid the import cycle `handoff_reconcile` already has with this
+    module (it imports `_handoff_transition_handler` from here at its own
+    top level; see `_read_gate_evidence_resolved`'s docstring for the same
+    cycle already documented at this file's other `handoff_reconcile` seam).
+
+    Overrides `deployment_state` (replace — every caller of this helper has
+    already stamped one) and `pickup_ready` (replace-if-present, insert-if-
+    absent after `deployment_state` — mirrors `build_ship_mutate`'s own
+    insert-if-absent precedent for this field) ONLY when the verdict is
+    non-None. Returns `fm` unchanged on a `(None, None)` verdict.
+    """
+    from coordinator_core.ops.handoff_reconcile import (
+        _collect_all_handoffs_for_gate_index,
+    )
+
+    fm_dict = yaml.safe_load(fm) or {}
+    all_handoffs, _scan_errors = _collect_all_handoffs_for_gate_index(worktree)
+    verdict = derive_readiness(fm_dict, all_handoffs)
+    derived_deployment = verdict["deployment_state"]
+    if derived_deployment is None:
+        return fm
+
+    fm = replace_fm_field(fm, "deployment_state", derived_deployment)
+    pickup_ready_value = "true" if verdict["pickup_ready"] else "false"
+    if read_fm_field(fm, "pickup_ready") is not None:
+        fm = replace_fm_field(fm, "pickup_ready", pickup_ready_value)
+    else:
+        fm = insert_fm_field(fm, "pickup_ready", pickup_ready_value, "deployment_state")
+    return fm
+
+
+# ---------------------------------------------------------------------------
 # claim
 # ---------------------------------------------------------------------------
 
@@ -635,6 +690,12 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         # the advisory field into the same noise AC9 is trying to remove.
         # Plain strip is correct.
         fm = _strip_gate_evidence(fm)
+
+        # C6 (AC3): readiness re-derivation on the post-mutation frontmatter —
+        # see _apply_derived_readiness's docstring. No-op here in practice
+        # (deployment_state is in_flight, off the readiness axis) but wired
+        # unconditionally per the C6 dispatch brief.
+        fm = _apply_derived_readiness(fm, worktree)
 
         # Summary-cap normalization ahead of the gate — see _normalize_claim_summary.
         fm = _normalize_claim_summary(fm, path)

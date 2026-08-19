@@ -102,6 +102,57 @@ def test_gitless_walk_still_enumerates_a_non_ignored_leak_path(tmp_path):
     )
 
 
+def test_git_aware_walk_excludes_publish_staging_dir(tmp_path):
+    """`_create_publish_staging_dir` mints `.{dest_dir.name}.publish-staging-
+    <random>` destination-ADJACENT (`coordinator/bin/publish.py`) -- untracked,
+    and NOT covered by any `.gitignore` entry, so `_git_files`'s own
+    `--others --exclude-standard` genuinely returns its contents. A checker
+    that scans them fails the round on bytes that never ship (§ this repo's
+    dispatch notes, `state/audits/` staging-identity-check incident).
+
+    Uses a real `git init` tree (not the gitless-walk fixture above) because
+    the actual incident hit `_git_files`, not `_walk_files` -- the target
+    repo has a `.git` and no matching `.gitignore` entry, so the git-aware
+    path is exercised here, matching production."""
+    module = _load_repo_module()
+    root = tmp_path
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(root), "init", "-q"], check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    (root / "README.md").write_text("hello\n", encoding="utf-8")
+    # Random-suffixed staging dir, mirroring the real mint shape exactly.
+    staging_dir = root / "coordinator" / ".bin.publish-staging-gr7j6dpy"
+    staging_dir.mkdir(parents=True)
+    codename_dirname = "mak" + "ima"
+    (staging_dir / f"{codename_dirname}-notes.txt").write_text("scratch\n", encoding="utf-8")
+    paths = module.repo_files(root)
+    assert not any("publish-staging-" in p for p in paths), (
+        f"publish-staging scratch dir leaked into repo_files(): {paths}"
+    )
+    assert "README.md" in paths
+
+
+def test_basename_containing_publish_staging_is_still_included(tmp_path):
+    """Negative spec (§ module docstring's `SKIP_DIR_NAMES` discipline): a
+    genuinely shipped FILE whose own basename contains `publish-staging-`
+    must not be dropped -- only a directory COMPONENT is staging scratch."""
+    module = _load_repo_module()
+    root = tmp_path
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    payload = root / "coordinator" / "x-publish-staging-y.py"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("pass\n", encoding="utf-8")
+    paths = module.repo_files(root)
+    assert "coordinator/x-publish-staging-y.py" in paths, (
+        f"a shipped file whose basename merely contains publish-staging- was wrongly excluded: {paths}"
+    )
+
+
 def test_unrecognized_gitignore_shapes_are_not_filtered(tmp_path):
     """Negative spec: anchored/nested/negation patterns are out of scope for
     this minimal matcher and must fail toward MORE scanning, not silently

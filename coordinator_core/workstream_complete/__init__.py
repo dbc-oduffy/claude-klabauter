@@ -1383,10 +1383,10 @@ def build_review_scale_judgment_point(
     presence-keyed branches were deleted rather than left to test a fact
     nothing can produce.
 
-    `chain_terminal` is retained and still defaults to `False`: it no longer
-    selects a branch here, but it stays on the signature because the
-    replacement coverage the PM is specifying for the chain-wide question
-    will need it, and callers already pass it.
+    `chain_terminal` is retained and still defaults to `False`: it is INERT
+    TODAY -- no branch in this function reads it -- but it stays on the
+    signature because the replacement coverage the PM is specifying for the
+    chain-wide question will need it, and callers already pass it.
     """
     if decision.resolved and decision.row in (1, 2):
         return None
@@ -1415,9 +1415,9 @@ def build_review_scale_judgment_point(
             # the shape `_emit`'s backstop refuses when unclassified. Without
             # this marker the envelope raises the moment an EM discharges the
             # review gate, i.e. complying with PARTITION-MANDATORY is what
-            # breaks the ceremony. The three unresolved branches below build
-            # untrusted-gate points whose dispositions the EM must still act
-            # on, and are correctly left unmarked.
+            # breaks the ceremony. The unresolved branch below builds an
+            # untrusted-gate point whose dispositions the EM must still act
+            # on, and is correctly left unmarked.
             reportable=True,
         )
     return build_untrusted_gate_judgment_point(

@@ -128,7 +128,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from coordinator_core._settings_home import normalize_native_path
-from coordinator_core.git import commit_trailers
 from coordinator_core.git import divergence as git_divergence
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
@@ -146,7 +145,6 @@ from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
-from coordinator_core.session import shape as session_shape
 
 _LOG = logging.getLogger(__name__)
 
@@ -241,135 +239,6 @@ def _warn_recent_edits(
             "ceremony.scoped_git_commit: recency-of-edit warn check failed, ignoring",
             exc_info=True,
         )
-
-
-def _resolve_peer_deliverable_id(session_id: str, worktree_root: str) -> str:
-    """Best-effort `pickup.deliverable_id` read for *session_id*, via
-    `session_shape.session_shape_read` -- the same substrate
-    `commit_trailers._resolve_deliverable_id_at` reads for its own
-    session-keyed tier, reached here through the shared, public
-    `coordinator_core.session.shape` seam rather than duplicating that
-    module's private git-dir resolution.
-
-    Never raises (mirrors `session_shape_read`'s own fail-open contract,
-    plus a `json.loads` guard around its raw-text return): a missing,
-    unreadable, or malformed `session-shape.json` -- or one belonging to a
-    session that never carried a `pickup.deliverable_id` -- resolves to
-    `""` rather than raising, so a disclosure entry with an unresolvable
-    deliverable id still names the session id, never drops the whole entry
-    (`_disclose_peer_claims`'s own contract).
-    """
-    try:
-        raw = session_shape.session_shape_read(session_id, cwd=worktree_root)
-        data = json.loads(raw)
-    except Exception:
-        return ""
-    if not isinstance(data, dict):
-        return ""
-    pickup = data.get("pickup")
-    if not isinstance(pickup, dict):
-        return ""
-    deliverable_id = pickup.get("deliverable_id")
-    if isinstance(deliverable_id, str) and deliverable_id.strip():
-        return deliverable_id.strip()
-    return ""
-
-
-def _fold_caller_to_owner_session(worktree_root: str, caller_session_id: str) -> str:
-    """Fold `caller_session_id` to its OWNING session id when it names a
-    DISPATCHED AGENT rather than an EM session (AC2b, PM ruling
-    2026-08-16, docs/plans/2026-08-16-authorship-survives-the-sweep.md).
-
-    Reuses `commit_trailers._fold_to_owner_session` -- C1's own AC2b fix,
-    itself built on `claim_index._agent_owner_sid` -- rather than a second
-    copy of that identity ladder: two disagreeing copies is the exact
-    break-class incident that function's own docstring names (KS-6's
-    2-tier/3-tier env-ladder split). `claim_index` already folds every
-    CLAIMANT to its owner via the same `.agents/<id>/em-session-id.txt`
-    back-pointer; leaving the CALLER side unfolded compares an agent id
-    against an owner sid, which never matches, and discloses the EM's own
-    team's claim back to it as though a peer held it -- noise on exactly
-    the commits this mechanism exists to describe correctly.
-
-    Never raises (mirrors `_fold_to_owner_session`'s own never-raises
-    contract, plus a belt-and-braces `try` around the `sessions_dir`
-    resolution this wrapper adds): any failure folds to `caller_session_id`
-    unchanged, same fail-safe direction `_disclose_peer_claims` uses
-    throughout -- an unfolded caller id degrades to "compare unfolded",
-    never to a raised exception reaching the commit.
-    """
-    try:
-        sessions_dir = session_core.sessions_dir(worktree_root)
-        return commit_trailers._fold_to_owner_session(
-            sessions_dir, caller_session_id, claim_index
-        )
-    except Exception:  # noqa: BLE001 -- advisory-only, must never gate the commit
-        return caller_session_id
-
-
-def _disclose_peer_claims(
-    worktree_root: str,
-    paths: List[str],
-    caller_session_id: str,
-) -> List[Dict[str, str]]:
-    """Return the peer-claim disclosure entries for *paths*: one entry per
-    (path, peer session id) where a path in the caller's own pathspec is
-    currently claimed, per `claim_index.lookup()`, by a LIVE session other
-    than `caller_session_id`'s OWNER-SESSION-FOLDED identity (AC2b -- see
-    `_fold_caller_to_owner_session`) -- "the committer is told before, not
-    after" (AC3, docs/plans/2026-08-16-authorship-survives-the-sweep.md).
-
-    Keys on CLAIM PRESENCE (`claim_index.lookup()`'s `claimants` mapping),
-    deliberately NOT edit recency -- independent of `_warn_recent_edits`'s
-    `edit_ts` + `_RECENT_EDIT_WARN_WINDOW_SECS` window, which is left
-    exactly as it is (see that function's own docstring and this module's
-    docstring, "the new disclosure keys on claim presence rather than edit
-    recency, so it does not inherit the window"). A peer's claim older than
-    the 30s window -- exactly the swept-hunk shape `_warn_recent_edits`
-    goes silent on by design -- still discloses here.
-
-    An `UNANSWERABLE` path (the index could not answer -- see
-    `claim_index.UNANSWERABLE`'s own docstring) is skipped outright, never
-    conflated with "unclaimed" -- the same positive/negative asymmetry
-    every other `claim_index` consumer in this module observes.
-
-    Advisory-reporting only, by construction (AC4): every failure mode here
-    (an index that could not answer, a liveness check that raises, a
-    deliverable-id lookup that raises) is swallowed and degrades to
-    omitting that one entry (or the whole call, on a `claim_index.lookup()`
-    failure) -- this must never fail, gate, pause, or prompt the commit it
-    accompanies. `_handler` calls this unconditionally and folds a non-empty
-    result straight into `response`, with no branch that can turn its
-    presence into a refusal.
-    """
-    disclosures: List[Dict[str, str]] = []
-    folded_caller_session_id = _fold_caller_to_owner_session(worktree_root, caller_session_id)
-    try:
-        result = claim_index.lookup(paths, cwd=worktree_root)
-    except Exception:  # noqa: BLE001 -- advisory-only, must never gate the commit
-        _LOG.debug(
-            "ceremony.scoped_git_commit: peer-claim disclosure lookup failed, ignoring",
-            exc_info=True,
-        )
-        return []
-    for path in paths:
-        claimants = result.get(path)
-        if not isinstance(claimants, list) or claim_index.UNANSWERABLE in claimants:
-            continue
-        for sid in claimants:
-            if sid == folded_caller_session_id:
-                continue
-            try:
-                if not session_liveness.session_live(sid, cwd=worktree_root):
-                    continue
-            except Exception:  # noqa: BLE001 -- advisory-only, must never gate the commit
-                continue
-            disclosures.append({
-                "path": path,
-                "session_id": sid,
-                "deliverable_id": _resolve_peer_deliverable_id(sid, worktree_root),
-            })
-    return disclosures
 
 
 def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[str]:
@@ -1009,20 +878,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         instead, unprovenanced:
           "unprovenanced_paths": [str, ...]
 
-        Conditionally present (AC3, docs/plans/2026-08-16-authorship-
-        survives-the-sweep.md; advisory ONLY, never a gate -- see
-        `_disclose_peer_claims`'s own docstring): a path in the caller's own
-        `paths` currently claimed, per `claim_index`, by a LIVE session
-        other than the resolved committing session -- "the committer is
-        told before, not after". Present whenever non-empty, regardless of
-        `committed` (a caller's next call may retry the same overlapping
-        pathspec). Deliberately its OWN key, never folded into
-        `diagnostics` -- see the response-construction comment at this
-        key's assignment site for why:
-          "peer_claim_disclosure": [
-            {"path": str, "session_id": str, "deliverable_id": str}, ...
-          ]
-
     On a validation error (missing/empty required param):
         {"committed": False, "sha": None, "pushed": None, "error": str}
 
@@ -1221,15 +1076,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # `_warn_recent_edits` (C1d, AC1d) is advisory-only -- a log line, never
     # control flow -- and runs unconditionally below.
     _warn_recent_edits(worktree_root, paths, owner_session_id)
-
-    # C2 (docs/plans/2026-08-16-authorship-survives-the-sweep.md): the fact
-    # `_warn_recent_edits` computes above reaches `_LOG.warning` only, which
-    # no committing agent ever reads. `_disclose_peer_claims` re-derives the
-    # SAME "a live peer's hands are on this path" condition off claim
-    # presence rather than edit recency (see its own docstring), and its
-    # result is folded into `response["peer_claim_disclosure"]` below --
-    # advisory-only, never gating, same as the warn it stands beside.
-    peer_claim_disclosure = _disclose_peer_claims(worktree_root, paths, owner_session_id)
 
     # W3 dead-wire finding (docs/plans/2026-08-08-a-landed-commit-reported-
     # as-failed.md, item 4 -- verified on disk 2026-08-08): `session_id` is
@@ -1561,8 +1407,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # to fail for an unrelated cause, which is exactly the removed claim
     # gate wearing a new hat (AC4). A dedicated key has no renderer that
     # branches on its presence, in this CLI or any other consumer.
-    if peer_claim_disclosure:
-        response["peer_claim_disclosure"] = peer_claim_disclosure
 
     return response
 

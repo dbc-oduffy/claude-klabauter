@@ -70,6 +70,8 @@ from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
 from coordinator_core.reconcile.gate_eval import (
     consumes_gate_evidence,
+    derive_readiness,
+    derive_readiness_batch,
     evaluate_gate,
     evaluate_gate_triage,
 )
@@ -2988,3 +2990,252 @@ class TestC6PairedArrayInvariantMatrix:
         result = evaluate_gate(lvv06, [lvv06, lvv05, terminus])
 
         assert len(result["cleared_blocker_ids"]) == len(result["cleared_by_shas"])
+
+
+# =============================================================================
+# C1 (docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-
+# readiness.md § C1): `derive_readiness`/`derive_readiness_batch`.
+# =============================================================================
+
+
+def _readiness_handoff(deployment_state, blocked_by=None, blocking_notes=None, **extra) -> dict:
+    d = {
+        "id": extra.pop("id", "hnd-under-test-000001"),
+        "handoff_id": extra.pop("handoff_id", "hnd-under-test-000001"),
+        "kind": "spinoff-roadmap",
+        "deployment_state": deployment_state,
+        "blocked_by": blocked_by or [],
+    }
+    if blocking_notes is not None:
+        d["blocking_notes"] = blocking_notes
+    d.update(extra)
+    return d
+
+
+class TestDeriveReadinessStillBlockedAwaitingGate:
+    def test_unresolved_blocked_by_derives_awaiting_gate_not_ready(self) -> None:
+        handoff = _readiness_handoff("awaiting_gate", blocked_by=["hnd-open-000001"])
+        open_blocker = _blocker("hnd-open-000001", "awaiting_gate")
+
+        result = derive_readiness(handoff, [handoff, open_blocker])
+
+        assert result == {
+            "deployment_state": "awaiting_gate",
+            "pickup_ready": False,
+            "basis": "blocked_by_unresolved",
+        }
+
+
+class TestDeriveReadinessIndeterminateAwaitingGate:
+    def test_unresolvable_blocked_by_id_derives_awaiting_gate_not_ready(self) -> None:
+        handoff = _readiness_handoff("awaiting_gate", blocked_by=["hnd-dangling-000001"])
+
+        result = derive_readiness(handoff, [handoff])
+
+        assert result["deployment_state"] == "awaiting_gate"
+        assert result["pickup_ready"] is False
+        assert result["basis"] == "blocked_by_unresolved"
+
+
+class TestDeriveReadinessFreedReadyToFire:
+    def test_all_blocked_by_shipped_derives_ready_to_fire(self) -> None:
+        handoff = _readiness_handoff("awaiting_gate", blocked_by=["hnd-tc1-000001"])
+        tc1 = _blocker(
+            "hnd-tc1-000001", "shipped", shipped_in="a" * 40, blocks=["hnd-under-test-000001"]
+        )
+
+        result = derive_readiness(handoff, [handoff, tc1])
+
+        assert result == {
+            "deployment_state": "ready_to_fire",
+            "pickup_ready": True,
+            "basis": "blocked_by_unresolved",
+        }
+
+
+class TestDeriveReadinessEmptyBlockedByVacuouslyFreed:
+    """Empty `blocked_by` falls through to the predicate set (not a shortcut
+    straight to ready_to_fire) — the SAME predicate handles the vacuous
+    for-all-over-the-empty-set case, per the C1 brief."""
+
+    def test_empty_blocked_by_no_notes_derives_ready_to_fire(self) -> None:
+        handoff = _readiness_handoff("awaiting_gate", blocked_by=[])
+
+        result = derive_readiness(handoff, [handoff])
+
+        assert result["deployment_state"] == "ready_to_fire"
+        assert result["pickup_ready"] is True
+
+
+class TestDeriveReadinessReviewDueNoOpinion:
+    def test_review_due_status_derives_no_opinion(self) -> None:
+        # Prose gate_dependency alongside an all-shipped blocked_by graph is
+        # `evaluate_gate_triage`'s review-due re-route (contradiction
+        # carve-out) — reproduced here to drive derive_readiness's own
+        # review-due branch, not re-derived independently.
+        handoff = _readiness_handoff(
+            "awaiting_gate", blocked_by=["hnd-tc1-000001"], gate_dependency="some prose gate"
+        )
+        tc1 = _blocker(
+            "hnd-tc1-000001", "shipped", shipped_in="a" * 40, blocks=["hnd-under-test-000001"]
+        )
+
+        result = derive_readiness(handoff, [handoff, tc1])
+
+        assert result == {
+            "deployment_state": None,
+            "pickup_ready": None,
+            "basis": "review-due",
+        }
+
+
+class TestDeriveReadinessOffGateAxisLifecyclePositions:
+    @pytest.mark.parametrize("state", ["in_flight", "shipped", "continued", "closed"])
+    def test_lifecycle_position_states_derive_no_opinion(self, state) -> None:
+        handoff = _readiness_handoff(state, blocked_by=["hnd-open-000001"])
+
+        result = derive_readiness(handoff, [handoff])
+
+        assert result == {
+            "deployment_state": None,
+            "pickup_ready": None,
+            "basis": "off-gate-axis",
+        }
+
+
+class TestDeriveReadinessBlockingNotesNeverReadAtAll:
+    """The negative-spec's load-bearing case: `blocking_notes` present, non-
+    prose-dominance-shaped, must not itself change the derivation — enforced
+    via `consult_prose_gates=False` at the delegation, not by this function
+    ever mentioning the field.
+    """
+
+    def test_gate_notes_only_no_blocked_by_stays_ready_to_fire(self) -> None:
+        # AC4: a baton carrying only gate notes (no blocked_by) stays
+        # pickup-ready. Pinned against the two live ready_to_fire+notes
+        # records named in the plan's § Problem, BY FIXTURE COPY (not read
+        # off state/ at test time).
+        strang_03 = _readiness_handoff(
+            "ready_to_fire",
+            blocked_by=[],
+            blocking_notes=(
+                "pattern proven (strang-01+strang-02 shipped); claude-klabauter action "
+                "layer live — command-type entrypoint present"
+            ),
+            id="hnd-cross-repo-memo-authoritative--fa7394",
+            handoff_id="hnd-cross-repo-memo-authoritative--fa7394",
+        )
+        opro_03 = _readiness_handoff(
+            "ready_to_fire",
+            blocked_by=[],
+            blocking_notes="CLEARED 2026-08-18 by PM ruling",
+            id="hnd-opro-03-cleared--000000",
+            handoff_id="hnd-opro-03-cleared--000000",
+        )
+
+        for record in (strang_03, opro_03):
+            result = derive_readiness(record, [record])
+            assert result["deployment_state"] == "ready_to_fire"
+            assert result["pickup_ready"] is True
+            assert result["basis"] == "blocked_by_unresolved"
+
+    def test_unresolved_blocked_by_alongside_blocking_notes_still_blocks_on_the_graph(self) -> None:
+        # Confirms blocking_notes is inert in BOTH directions: it doesn't
+        # free (above) and it doesn't ADD a block either — the structured
+        # graph's own verdict is the only thing that matters.
+        handoff = _readiness_handoff(
+            "awaiting_gate",
+            blocked_by=["hnd-open-000001"],
+            blocking_notes="unrelated advisory prose",
+        )
+        open_blocker = _blocker("hnd-open-000001", "awaiting_gate")
+
+        result = derive_readiness(handoff, [handoff, open_blocker])
+
+        assert result["deployment_state"] == "awaiting_gate"
+        assert result["pickup_ready"] is False
+
+    def test_empty_blocked_by_with_blocking_notes_still_freed_unlike_triage_default(self) -> None:
+        # The DR-259 vacuous-clear-dominance branch that `evaluate_gate_triage`
+        # applies by DEFAULT (consult_prose_gates=True) must NOT leak into
+        # derive_readiness (consult_prose_gates=False) — this is exactly the
+        # AC4-breaking regression Finding 1 fixed. Contrast directly against
+        # the triage default below.
+        handoff = _readiness_handoff(
+            "awaiting_gate", blocked_by=[], blocking_notes="advisory only, nothing structural"
+        )
+
+        readiness = derive_readiness(handoff, [handoff])
+        triage_default = evaluate_gate_triage(handoff, [handoff])
+
+        assert readiness["deployment_state"] == "ready_to_fire"
+        assert readiness["pickup_ready"] is True
+        assert triage_default["status"] == "indeterminate"
+
+
+class TestDeriveReadinessScaffoldSentinelNeverConsulted:
+    def test_unfilled_scaffold_placeholder_does_not_park_readiness(self) -> None:
+        # consult_prose_gates=False also suppresses the C2 scaffold-sentinel
+        # branch (checked ahead of everything else in evaluate_gate_triage's
+        # default path) — an unfilled `PLACEHOLDER` in blocking_notes must
+        # not park derive_readiness's verdict the way it parks the default
+        # triage projection.
+        handoff = _readiness_handoff(
+            "awaiting_gate",
+            blocked_by=[],
+            blocking_notes="PLACEHOLDER — name the condition...",
+        )
+
+        readiness = derive_readiness(handoff, [handoff])
+        triage_default = evaluate_gate_triage(handoff, [handoff])
+
+        assert readiness["deployment_state"] == "ready_to_fire"
+        assert readiness["pickup_ready"] is True
+        assert triage_default["status"] == "indeterminate"
+
+
+class TestDeriveReadinessDelegatesNeverReimplementsFreedStrictness:
+    """The claude-klabauter-d3 correction: FREED requires every blocked_by id
+    resolve to shipped SPECIFICALLY — continued/closed are terminal-but-NOT-
+    done. Delegation to evaluate_gate_triage inherits this for free."""
+
+    @pytest.mark.parametrize("state", ["continued", "closed", "abandoned"])
+    def test_terminal_but_not_shipped_blocker_never_derives_ready_to_fire(self, state) -> None:
+        handoff = _readiness_handoff("awaiting_gate", blocked_by=["hnd-dead-000001"])
+        dead = _blocker("hnd-dead-000001", state)
+
+        result = derive_readiness(handoff, [handoff, dead])
+
+        assert result["deployment_state"] == "awaiting_gate"
+        assert result["pickup_ready"] is False
+
+
+class TestDeriveReadinessBatch:
+    def test_projects_derive_readiness_over_every_record_in_order(self) -> None:
+        freed = _readiness_handoff(
+            "awaiting_gate",
+            blocked_by=["hnd-tc1-000001"],
+            id="hnd-freed-000001",
+            handoff_id="hnd-freed-000001",
+        )
+        tc1 = _blocker(
+            "hnd-tc1-000001", "shipped", shipped_in="a" * 40, blocks=["hnd-freed-000001"]
+        )
+        blocked = _readiness_handoff(
+            "awaiting_gate",
+            blocked_by=["hnd-open-000001"],
+            id="hnd-blocked-000001",
+            handoff_id="hnd-blocked-000001",
+        )
+        open_blocker = _blocker("hnd-open-000001", "awaiting_gate")
+        off_axis = _readiness_handoff(
+            "shipped", id="hnd-shipped-000001", handoff_id="hnd-shipped-000001"
+        )
+
+        all_handoffs = [freed, tc1, blocked, open_blocker, off_axis]
+        results = derive_readiness_batch([freed, blocked, off_axis], all_handoffs)
+
+        assert len(results) == 3
+        assert results[0] == derive_readiness(freed, all_handoffs)
+        assert results[1] == derive_readiness(blocked, all_handoffs)
+        assert results[2] == derive_readiness(off_axis, all_handoffs)

@@ -603,10 +603,9 @@ def _report_claim_neighbours(class_: str, basename: str, cwd: Optional[str]) -> 
     module hasn't been taught), a ``find_neighbours`` call that itself
     raises (it shouldn't, per its own never-raises contract, but this
     function does not trust that contract with the caller's successful
-    claim), or a formatting/print failure. Mirrors ``ceremony.scoped_git_
-    commit._disclose_peer_claims``'s own advisory-reporting shape one file
-    over (see this module's docstring) — a broad ``except Exception`` here
-    is deliberate, not a lint violation to narrow later.
+    claim), or a formatting/print failure. The broad ``except Exception``
+    here is deliberate, not a lint violation to narrow later — an advisory
+    report must never fail the claim it accompanies.
     """
     try:
         path_fmt = _CLAIM_REPORT_PATH_FMT.get(class_)

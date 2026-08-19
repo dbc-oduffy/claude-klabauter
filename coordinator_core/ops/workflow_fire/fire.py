@@ -139,6 +139,28 @@ _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
 _CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
+#: The fired driver runs the Workflow tool as a background task and, by
+#: default, terminates any still-running background work after 600s --
+#: which kills the workflow itself, mid-wave, leaving earlier waves
+#: committed and later ones silently undone. Observed live: fire
+#: 5df351a6 lost four of five wave-1 chunks this way. ``0`` means wait
+#: indefinitely; the turn cap and the workflow's own budget remain the
+#: real bounds.
+_BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def build_fire_env(base: Optional[dict] = None) -> dict:
+    """Child environment for a fired driver: inherited, plus an uncapped
+    background-task wait.
+
+    Negative spec: never narrows the inherited environment -- the child
+    needs the operator's PATH, plugin roster, and coordinator settings
+    root. An explicit operator-set ceiling is respected, not overridden.
+    """
+    env = dict(os.environ if base is None else base)
+    env.setdefault(_BG_WAIT_CEILING_ENV, "0")
+    return env
+
 
 class PluginDirResolutionError(RuntimeError):
     """Raised when ``--print-plugin-dir`` cannot be resolved.
@@ -562,6 +584,7 @@ def fire_workflow(
     popen_kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "close_fds": True,
+        "env": build_fire_env(),
     }
     if sys.platform == "win32":
         popen_kwargs["creationflags"] = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP

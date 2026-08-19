@@ -8197,3 +8197,61 @@ class TestApplyFailsLoudOnTerminalArtifactWithDroppedDecisions:
         assert exit_code == apply_mod.APPLY_EXIT_OK
         assert "error" not in report
         assert report["landed"] == []
+
+
+class TestGateNotesAdvisoryAtPickupBrief:
+    """C5, 2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness —
+    `gates.gate_notes` must be queryable from the pickup brief WITHOUT
+    entering any pickup-blocking verdict (AC8)."""
+
+    def test_absent_blocking_notes_reports_not_present_and_null_passed(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+
+        gate_notes = result.decision_object["gates"]["gate_notes"]
+        assert gate_notes == {"present": False, "text": None, "passed": None}
+
+    def test_present_blocking_notes_surfaces_verbatim_with_passed_always_null(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff_with_fields(
+            repo, "h1.md", 'blocking_notes: "waiting on a sibling repo ruling"\n'
+        )
+
+        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+
+        gate_notes = result.decision_object["gates"]["gate_notes"]
+        assert gate_notes == {
+            "present": True,
+            "text": "waiting on a sibling repo ruling",
+            "passed": None,
+        }
+
+    def test_gate_notes_never_enters_coast_claim_or_aging_verdict(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff_with_fields(
+            repo, "h1.md", 'blocking_notes: "advisory prose only"\n'
+        )
+
+        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+
+        gates = result.decision_object["gates"]
+        assert "gate_notes" not in gates["coast"]
+        assert "gate_notes" not in gates.get("claim", {})
+        assert gates["aging_verdict"] != "gate_notes"
+        # Advisory prose alone must not flip the pickup outcome.
+        assert result.exit_code == pa.EXIT_OK
+
+    def test_memo_branch_also_carries_gate_notes(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "m1.md", extra='blocking_notes: "held for review"\n')
+
+        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+
+        gate_notes = result.decision_object["gates"]["gate_notes"]
+        assert gate_notes == {"present": True, "text": "held for review", "passed": None}

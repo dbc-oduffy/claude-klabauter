@@ -7,9 +7,10 @@
 
 Spec backlink: pln-chain-end-review-scale-wire-de-23a81a,
 chunk C1(b). Pins the tri-state-input contract that chunk introduces: every
-row-4/5/6 input (`gross_loc`, `code_loc`, `commit_count`, `surface_count`,
-`executor_dispatched`, `shared_schema_touched`, `chain_partition_verdict`)
-is independently representable as "not yet resolved" (`None`), distinct
+row-4/5 input (`gross_loc`, `code_loc`, `commit_count`, `surface_count`,
+`executor_dispatched`, `shared_schema_touched` -- `chain_partition_verdict`
+and row 6 are gone, state/kill-ledger.md K-007, 2026-08-19) is
+independently representable as "not yet resolved" (`None`), distinct
 from a resolved falsy value — and an unresolved input that could still
 change the selected row must yield the explicit unresolved outcome
 (`resolved=False`, `row=None`, `partition_mandatory=False`), never a
@@ -48,8 +49,6 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
 )
 from coordinator_core.workstream_complete import directives_review, judgments
 from coordinator_core.workstream_complete.directives_review import (
-    _CHAIN_VERDICT_PARTITION_MANDATORY,
-    _CHAIN_VERDICT_SINGLE_REVIEWER_OK,
     CHAIN_SLICES_CAVEAT,
     build_chain_slices,
     decide_review_scale,
@@ -175,17 +174,18 @@ def test_row4_outranks_row3_even_when_row3_would_also_fire():
 
 
 # ---------------------------------------------------------------------------
-# Row 5/6 — chain-terminal rows, keyed on the already-emitted chain
-# brightline-gate verdict (chain_partition_verdict), not raw chain metrics.
+# Row 5 — the chain-terminal row, keyed on the session-scoped brightline
+# alone. Row 6 (keyed on the removed chain-scoped verdict) is gone
+# (state/kill-ledger.md K-007, 2026-08-19).
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# Row 4 must be evaluable on a chain terminal whose chain_partition_verdict
-# is None/unrecognized — the fix for the defect where such a close silently
-# under-reported to unresolved/partition_mandatory=False even when the
-# session's own diff emphatically hit the row-4 brightline. Precedence
-# stays 6 > 4 > (chain-terminal-unresolved) > 5 > 3 > 1 > 2.
+# Row 4 must be evaluable on a chain terminal — the fix for the defect
+# where such a close silently under-reported to unresolved/
+# partition_mandatory=False even when the session's own diff emphatically
+# hit the row-4 brightline. Precedence is now 4 > (chain-terminal-
+# unresolved) > 5 > 3 > 1 > 2 (state/kill-ledger.md K-007, 2026-08-19).
 # ---------------------------------------------------------------------------
 
 

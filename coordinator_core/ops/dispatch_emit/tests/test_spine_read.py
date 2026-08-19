@@ -458,7 +458,10 @@ def test_external_gate_with_closure_evidence_does_not_exclude_row(tmp_path):
     assert ids == {"C1"}
 
 
-def test_live_row_depends_on_gated_row_does_not_raise_and_edge_is_stripped(tmp_path):
+def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):
+    # A gated predecessor's work has not run -- unlike a satisfied
+    # (shipped/deferred) predecessor, its dependent is NOT known-satisfied
+    # and must not be promoted into a wave with the edge merely stripped.
     body = """\
 - id: C1
   title: blocked predecessor
@@ -474,10 +477,113 @@ def test_live_row_depends_on_gated_row_does_not_raise_and_edge_is_stripped(tmp_p
       gate_kind: output-consumption-runtime
 """
     plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == set()
+
+
+def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path):
+    # C1b gated -> C3 depends on C1b -> C7 depends on C3. C7 never
+    # references C1b directly; the exclusion must propagate through C3.
+    body = """\
+- id: C1b
+  title: gated predecessor
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+- id: C3
+  title: depends directly on the gated row
+  surface: some/surface
+  depends_on:
+    - chunk: C1b
+      gate_kind: output-consumption-runtime
+- id: C7
+  title: depends on C3, two hops from the gate
+  surface: some/surface
+  depends_on:
+    - chunk: C3
+      gate_kind: output-consumption-runtime
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == set()
+
+
+def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
+    # Must not regress: a satisfied (shipped) exclusion still only strips
+    # the edge -- the dependent stays dispatchable.
+    body = """\
+- id: C1
+  title: shipped predecessor
+  surface: some/surface
+  disposition: coded
+- id: C2
+  title: live successor depending on the shipped row
+  surface: some/surface
+  depends_on:
+    - chunk: C1
+      gate_kind: output-consumption-runtime
+"""
+    plan_path = _write_plan(tmp_path, body)
     rows = {row.id: row for row in read_spine(plan_path)}
 
     assert set(rows) == {"C2"}
     assert rows["C2"].depends_on == []
+
+
+def test_row_both_coded_and_gated_resolves_as_satisfied_not_blocked(tmp_path):
+    # A row that is both closed-disposition AND carries an uncleared gate
+    # resolves as satisfied: its work shipped, so the stale gate is
+    # bookkeeping, not a live blocker -- its dependent is edge-stripped and
+    # kept, not excluded.
+    body = """\
+- id: C1
+  title: shipped but with a stale uncleared gate
+  surface: some/surface
+  disposition: coded
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: stale, never cleared
+- id: C2
+  title: live successor
+  surface: some/surface
+  depends_on:
+    - chunk: C1
+      gate_kind: output-consumption-runtime
+"""
+    plan_path = _write_plan(tmp_path, body)
+    rows = {row.id: row for row in read_spine(plan_path)}
+
+    assert set(rows) == {"C2"}
+    assert rows["C2"].depends_on == []
+
+
+def test_row_gated_with_blocks_ac_closure_is_still_scheduled(tmp_path):
+    # `blocks: ac-closure` never counts as an execution-blocking gate (see
+    # _has_uncleared_execution_gate) -- a dependent on such a row is
+    # neither excluded nor edge-stripped.
+    body = """\
+- id: C1
+  title: only an acceptance criterion is gated
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship before the AC can close
+      blocks: ac-closure
+- id: C2
+  title: live successor depending on the ac-closure-gated row
+  surface: some/surface
+  depends_on:
+    - chunk: C1
+      gate_kind: output-consumption-runtime
+"""
+    plan_path = _write_plan(tmp_path, body)
+    rows = {row.id: row for row in read_spine(plan_path)}
+
+    assert set(rows) == {"C1", "C2"}
+    assert rows["C2"].depends_on == [{"chunk": "C1", "gate_kind": "output-consumption-runtime"}]
 
 
 def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_path):

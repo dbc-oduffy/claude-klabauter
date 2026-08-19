@@ -3407,6 +3407,24 @@ def compute_handoff_preflight(
 # gates.* (deterministic facts only — contract § gates)
 # ---------------------------------------------------------------------------
 
+def compute_gate_notes(fm: dict[str, Any]) -> dict[str, Any]:
+    """`gates.gate_notes` — the PM's third pickup-brief requirement: an EM
+    must be able to answer "have we passed this gate?" from the brief alone,
+    without opening the file (AC8, 2026-08-19-gate-notes-are-advisory-
+    blocked-by-derives-readiness).
+
+    Reads ONLY this record's own `blocking_notes` frontmatter field (no
+    corpus walk, no graph read) and reports it verbatim. `passed` is
+    deliberately always `null` — nothing on the graph can clear a gate note,
+    so this function must not pretend to adjudicate one; it is a prompt to
+    the reading EM, not a verdict. This shape MUST NOT enter any
+    pickup-blocking computation (`coast`, `claim`, `aging_verdict`) —
+    advisory means advisory.
+    """
+    text = fm.get("blocking_notes")
+    return {"present": bool(text), "text": text if text else None, "passed": None}
+
+
 def compute_branch_gate(
     repo_root: Path, *, classification: Optional[str] = None
 ) -> dict[str, Any]:
@@ -8299,6 +8317,7 @@ def brief(
                         "claim": claim,
                         "claim_grant": claim_grant,
                         "branch": branch_gate,
+                        "gate_notes": compute_gate_notes(fm),
                         "aging_verdict": aging_verdict,
                         "liveness_signal": liveness_fired,
                         "competing_claim": competing_claim,
@@ -8472,6 +8491,7 @@ def brief(
             "claim": claim,
             "claim_grant": claim_grant,
             "branch": branch_gate,
+            "gate_notes": compute_gate_notes(fm),
             "aging_verdict": aging_verdict,
             "liveness_signal": liveness_fired,
             "competing_claim": competing_claim,
@@ -8543,6 +8563,7 @@ def brief(
                 "gates": {
                     "addressee": {},
                     "branch": branch_gate,
+                    "gate_notes": compute_gate_notes(fm),
                     "aging_verdict": "not_applicable",
                     "liveness_signal": liveness_fired,
                     "competing_claim": competing_claim,
@@ -8573,6 +8594,7 @@ def brief(
                             "cross_seat_override": "COORDINATOR_OVERRIDE_MEMO_ADDRESSEE",
                         },
                         "branch": branch_gate,
+                        "gate_notes": compute_gate_notes(fm),
                         "aging_verdict": "not_applicable",
                         "liveness_signal": liveness_fired,
                         "competing_claim": competing_claim,
@@ -8652,6 +8674,7 @@ def brief(
                     "claim_grant": claim_grant,
                     "addressee": addressee,
                     "branch": branch_gate,
+                    "gate_notes": compute_gate_notes(fm),
                     "aging_verdict": "not_applicable",
                     "liveness_signal": liveness_fired,
                     "competing_claim": competing_claim,
@@ -8733,6 +8756,7 @@ def brief(
                 "claim_grant": claim_grant,
                 "addressee": addressee,
                 "branch": branch_gate,
+                "gate_notes": compute_gate_notes(fm),
                 "aging_verdict": "not_applicable",
                 "liveness_signal": liveness_fired,
                 "competing_claim": competing_claim,

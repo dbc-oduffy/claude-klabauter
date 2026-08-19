@@ -6520,6 +6520,82 @@ class TestCfAwaitingGateNotPickupReady:
         assert not any(e['field'] == 'pickup_ready' for e in errors)
 
 
+class TestCfReadyToFireNoUnresolvedBlockedBy:
+    """A ``deployment_state: ready_to_fire`` baton must not carry an
+    unresolved ``blocked_by`` entry -- the syntactic-contradiction backstop
+    for AC6 (docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-
+    derives-readiness.md § Problem).
+    """
+
+    def test_ready_to_fire_with_unresolved_blocked_by_rejected(self):
+        fm = _valid_handoff(deployment_state='ready_to_fire', blocked_by=['stub-1'])
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'] == 'blocked_by' for e in errors)
+
+    def test_ready_to_fire_no_blocked_by_ok(self):
+        fm = _valid_handoff(deployment_state='ready_to_fire')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'blocked_by' for e in errors)
+
+    def test_ready_to_fire_blocked_by_cleared_via_no_longer_blocked_by_ok(self):
+        fm = _valid_handoff(
+            deployment_state='ready_to_fire',
+            blocked_by=['stub-1'],
+            no_longer_blocked_by=['stub-1'],
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'blocked_by' for e in errors)
+
+    def test_ready_to_fire_blocked_by_cleared_via_gate_cleared_by_ok(self):
+        fm = _valid_handoff(
+            deployment_state='ready_to_fire',
+            blocked_by=['stub-1'],
+            gate_cleared_by=['stub-1'],
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'blocked_by' for e in errors)
+
+    def test_awaiting_gate_with_blocked_by_still_ok(self):
+        """This rule only guards ready_to_fire -- awaiting_gate keeps
+        blocked_by as its own valid gate-naming field (C3)."""
+        fm = _valid_handoff(deployment_state='awaiting_gate', blocked_by=['stub-1'])
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'blocked_by' for e in errors)
+
+
+class TestCfAwaitingGateNotPickupReadyBackstop:
+    """AC5 (docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-
+    readiness.md): the pre-existing ``_cf_awaiting_gate_not_pickup_ready``
+    backstop must still FIRE when fed an inconsistent state directly.
+
+    NEGATIVE-SPEC: do not delete this rule as "now unreachable" because
+    `derive_readiness` makes ordinary authoring paths produce consistent
+    records. It backstops direct frontmatter writes and any authoring path
+    not yet routed through the derivation, which is precisely why the plan's
+    § Anti-scope names deleting it as a forbidden move. Before this class the
+    requirement was documented but unverified -- no test anywhere pinned the
+    rule firing, so a deletion would have gone green.
+    """
+
+    def test_awaiting_gate_with_pickup_ready_true_is_refused(self):
+        fm = _valid_handoff(deployment_state='awaiting_gate', pickup_ready=True)
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'] == 'pickup_ready' for e in errors), (
+            'the awaiting_gate/pickup_ready backstop did not fire on a direct '
+            'inconsistent write -- AC5 regression'
+        )
+
+    def test_awaiting_gate_with_pickup_ready_false_is_accepted(self):
+        fm = _valid_handoff(deployment_state='awaiting_gate', pickup_ready=False)
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'pickup_ready' for e in errors)
+
+    def test_ready_to_fire_with_pickup_ready_true_is_accepted(self):
+        fm = _valid_handoff(deployment_state='ready_to_fire', pickup_ready=True)
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'pickup_ready' for e in errors)
+
+
 class TestReconcileDispositionFields:
     """`reconcile_disposition` / `reconcile_disposition_reason` are read by
     coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1

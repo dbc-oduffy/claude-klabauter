@@ -110,7 +110,7 @@ triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_publish_provenance"
 required = false
 severity_if_fail = "degraded"
-remediation = "Run a percolate round to publish claude-klabauter's current HEAD; publish.py's round-end write refreshes the provenance record this probe reads"
+remediation = "An engine edit in claude-klabauter takes effect only when a publish round lands it — editing coordinator_core/ does not change what runs. Publish with: python coordinator/bin/percolate-round.py claude-klabauter; that round-end write also refreshes the provenance record this probe reads"
 
 [[probe]]
 id = "claude-klabauter.registry.key"

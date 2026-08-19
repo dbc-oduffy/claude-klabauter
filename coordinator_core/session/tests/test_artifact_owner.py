@@ -277,13 +277,21 @@ def test_claim_dir_stale_claim_is_recorded_owner_not_empty(tmp_path, monkeypatch
 
 
 def test_claim_dir_covers_all_three_classes(tmp_path):
+    """Each class is probed with the key its OWN writer uses.
+
+    `claims.claim_plan` refuses a `.md`-suffixed slug outright, so a plan
+    claim dir on disk is stem-keyed while handoff/memo dirs keep the
+    extension. The fixture mirrors the writers rather than assuming one
+    shared spelling -- an earlier revision wrote all three with `.md` and so
+    could not observe that the reader missed every real plan claim.
+    """
     repo = _make_repo(tmp_path)
-    for class_, sid, basename in (
+    for class_, sid, key in (
         ("handoff", "sid-h", "same-basename.md"),
         ("memo", "sid-m", "same-basename.md"),
-        ("plan", "sid-p", "same-basename.md"),
+        ("plan", "sid-p", "same-basename"),
     ):
-        _write_claim_dir(repo, class_, basename, sid)
+        _write_claim_dir(repo, class_, key, sid)
 
     owners = artifact_owner._extract_claim_dir_owners(
         "state/handoffs/same-basename.md", cwd=str(repo)
@@ -291,6 +299,26 @@ def test_claim_dir_covers_all_three_classes(tmp_path):
 
     assert [o.session_id for o in owners] == ["sid-h", "sid-m", "sid-p"]
     assert all(o.source_field == "claim_dir" for o in owners)
+
+
+def test_plan_claim_dir_is_stem_keyed_not_basename_keyed(tmp_path):
+    """A plan claimed through `claims.claim_plan`'s own convention resolves.
+
+    Regression pin: the reader probed all three classes with the artifact's
+    full `.md` basename, so no plan claim dir ever matched and the "who owns
+    this plan?" read returned zero owners for a plan that was demonstrably
+    claimed. A `.md`-keyed plan dir is NOT probed -- `claim_plan` cannot
+    create one.
+    """
+    repo = _make_repo(tmp_path)
+    _write_claim_dir(repo, "plan", "2026-08-19-some-plan", "sid-plan")
+
+    owners = artifact_owner._extract_claim_dir_owners(
+        "docs/plans/2026-08-19-some-plan.md", cwd=str(repo)
+    )
+
+    assert [o.session_id for o in owners] == ["sid-plan"]
+    assert owners[0].source_field == "claim_dir"
 
 
 def test_claim_dir_no_claim_leaves_owners_unchanged(tmp_path):

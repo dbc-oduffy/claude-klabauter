@@ -236,7 +236,6 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "session/grant.py", "write_tier_u_grant", "os.replace", "os.replace(tmp_name, grant_file)", 1): "atomic tmp->final rename; temp never claimed, destination under .git/",
     ("coordinator_core", "session/scope.py", "archive", "shutil.move", "shutil.move(sdir, archive_dir)", 1): "archive(): source lives under the .git/ subtree, categorically outside claimable space",
     ("coordinator_core", "session/shape.py", "session_shape_set", "os.replace", "os.replace(tmp_name, shape_file)", 1): "atomic tmp->final rename; temp never claimed, destination under .git/",
-    ("coordinator_core", "workstream_complete/chain_partition_verdict_store.py", "_atomic_write_json", "os.replace", "os.replace(tmp_str, str(path))", 1): "atomic tmp->final rename; temp source is a fresh mkstemp name never touched/claimed before the replace",
     ("coordinator_core", "testing/suite_mutex.py", "_write_meta", "os.replace", "os.replace(str(tmp_path), str(path / _META_FILENAME))", 1): "atomic tmp->final rename; temp never claimed, both paths sit outside the worktree entirely",
     ("coordinator_core", "orientation/regenerate_cache.py", "_atomic_replace", "os.replace", "os.replace(tmp, cache_file)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "percolate/rewrite_basename.py", "write_rename_ledger", "os.replace", "os.replace(tmp, path)", 1): "write_rename_ledger: atomic tmp->final; temp source never claimed",
@@ -320,6 +319,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(prior, dest_entry)", 1): "recovery rename of the aside-copy, same external-destination reasoning",
     ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(staging_entry, dest_entry)", 1): "directory entry moved into the external publish destination; staging source is this round's own copy, never claimed",
     ("bin", "publish.py", "_swap_publish_staging_entry", "os.replace", "os.replace(staging_entry, dest_entry)", 1): "file entry replaced in the external publish destination; staging source is this round's own copy, never claimed",
+    ("bin", "publish.py", "write_publish_provenance_record", "os.replace", "os.replace(tmp_path, record_path)", 1): "atomic tmp->final rename of the publish provenance record; the temp source is a fresh pid-suffixed sibling written moments earlier by this call and never claimed by any session",
 
     # --- Category 4: sites the plan's C3 table does not cover, found by  ---
     # --- this guard's own scan and classified here against the same      ---

@@ -7,18 +7,24 @@ five small, dependency-light helpers (frontmatter dict parse, a handoff-dir
 scan, ledger-first claim-holder resolution, bulk advisory address
 resolution) that have no pickup-specific content of their own — every one
 of them is a generic "read handoff/claim state off disk" primitive a
-lighter caller (a future `build_work_state` readout, C1b) needs without
-paying `pickup_assemble`'s full cold-invocation import weight. This module
-is that lighter home.
+lighter caller needs without paying `pickup_assemble`'s full cold-invocation
+import weight. This module is that lighter home, and (C1b) also the
+corpus-keyed entry point (`build_work_state`) built over those primitives.
 
-RELOCATION ONLY (2026-08-19, docs/plans/2026-08-19-fleet-work-state-who-
+RELOCATION (2026-08-19, docs/plans/2026-08-19-fleet-work-state-who-
 holds-which-baton.md, chunk C1a): moved unchanged in behaviour from
 `coordinator_core.pickup_assemble.__init__` — `_scan_handoff_dir`,
 `_resolve_ledger_first_holder`, `_parse_fm_dict` (plus its `_LIST_FIELD_KEYS`
 list-field table), and `_resolve_send_message_addresses`. `pickup_assemble/
-__init__.py` now imports these by name rather than defining them. This
-chunk adds no new behaviour and does not build `build_work_state` or any
-readout row shape — that is C1b's job.
+__init__.py` now imports these by name rather than defining them.
+
+CORPUS-KEYED ENTRY POINT (chunk C1b): `build_work_state(repo_root)` — see
+its own docstring for the full held/unclaimed/readiness contract. Readiness
+is consumed via `coordinator_core.reconcile.gate_eval.derive_readiness_batch`
+(the sibling plan `docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-
+derives-readiness.md`'s C1 producer), never re-derived here — see
+`build_work_state`'s own docstring for why a second gate evaluator in this
+module would be the exact shape the PM's ruling forbids.
 
 Direction of the dependency is load-bearing: `session/` is light and sits
 on no eager-import path; `pickup_assemble` is heavy and held to the
@@ -27,7 +33,7 @@ may import `pickup_assemble` — the dependency runs the other way, from
 `pickup_assemble` onto this module, never back.
 
 Spec backlink: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md,
-chunk C1a
+chunk C1b
 """
 from __future__ import annotations
 
@@ -41,6 +47,11 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.reconcile.gate_eval import derive_readiness_batch
+from coordinator_core.session.holder_evidence import holder_evidence as _holder_evidence
+from coordinator_core.session import liveness as _liveness
+from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
 
@@ -271,3 +282,180 @@ def _resolve_send_message_addresses(candidates: list[dict[str, Any]]) -> None:
             candidate["send_message_address"] = address
             candidate["send_message_address_unavailable_reason"] = None
         candidate["send_message_address_resolved_at"] = resolved_at
+
+
+def _gate_notes(fm: dict[str, Any]) -> dict[str, Any]:
+    """`gate_notes: {present, text, passed}` — the producer's shape (PM
+    ruling 2026-08-19, `docs/plans/2026-08-19-gate-notes-are-advisory-
+    blocked-by-derives-readiness.md`), ADOPTED VERBATIM rather than imported:
+    `pickup_assemble.compute_gate_notes` computes the identical shape off the
+    identical `blocking_notes` frontmatter field, but this module may not
+    import `pickup_assemble` (the dependency direction is one-way, see module
+    docstring) — a second small function computing the SAME shape from the
+    SAME single field is not a second gate evaluator (nothing here reads
+    `blocked_by` or decides readiness), it is the one place `session/`
+    itself is entitled to read `blocking_notes` for display only. `passed`
+    is always `None` — nothing on the graph can clear a gate note, so this
+    function must never pretend to adjudicate one.
+    """
+    text = fm.get("blocking_notes")
+    return {"present": bool(text), "text": text if text else None, "passed": None}
+
+
+def build_work_state(repo_root: Path) -> dict[str, Any]:
+    """`{"held": [...], "unclaimed": [...]}` over this repo's
+    `state/handoffs/` corpus (AC1) — the corpus-keyed entry point over the
+    relocated C1a primitives, plus `derive_readiness_batch` (C1 of the
+    sibling plan `docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-
+    derives-readiness.md`) for readiness. See module docstring for the
+    dependency-direction and import-cycle discipline this function's own
+    deferred `coordinator_core.ops.*` imports exist to preserve (AC13).
+
+    HELD rows carry exactly: `path`, `claimed_by`, `holder_live`,
+    `liveness_basis`, `last_activity_age_sec`, `send_message_address`,
+    `send_message_address_unavailable_reason`,
+    `send_message_address_resolved_at`. NO `verdict`, NO `disposition`, NO
+    `scope_overlap`, NO `recent_paths` — those are the THIS-ARTIFACT frame
+    (`compute_competing_claim`'s own job) and their absence here is the
+    point (AC1), not an oversight.
+
+    UNCLAIMED rows carry `path`, `deliverable_id` when present,
+    `gate_notes` (verbatim producer shape, AC3b), and `stamp_disagrees:
+    true` when the on-disk `pickup_ready` stamp contradicts the producer's
+    computed verdict (AC3c) — a marker on an emitted row, never a dropped
+    row, never an error.
+
+    READINESS IS CONSUMED, NEVER DERIVED HERE (AC3): `pickup_ready`
+    frontmatter is read nowhere in this function — only
+    `derive_readiness_batch`'s OWN computed `pickup_ready` key (a verdict,
+    not a stamp) decides `unclaimed` eligibility. `derive_readiness_batch`
+    is called exactly ONCE per repo, never per record, closing the
+    N-rebuilds defect its own docstring names.
+
+    FOUR BUCKETS OVER `basis` (never collapsed — see the sibling plan's own
+    C1b brief):
+      - `basis="blocked_by_unresolved"`, `pickup_ready=True` (freed/
+        not-blocked) -> eligible for `unclaimed`, subject to the holder test.
+      - `basis="blocked_by_unresolved"`, `pickup_ready=False`
+        (still-blocked) -> never `unclaimed`.
+      - `basis="review-due"` -> the engine takes NO position; never emitted
+        into `unclaimed` (an EM must not be handed "free" for a record the
+        engine declined to judge) and never treated as blocked — simply
+        absent from both lists (AC3a: "review_due is its own bucket — never
+        `unclaimed`, never blocked" is satisfied by omission, since AC1
+        pins this function's return shape to exactly `{"held", "unclaimed"}`
+        with no third top-level key).
+      - `basis="off-gate-axis"` -> a lifecycle POSITION
+        (`in_flight`/`shipped`/`continued`/`closed`), not readiness; never
+        reaches the readiness axis at all — same omission treatment.
+
+    ARCHIVAL IS EXPRESSED BY THE SCAN ROOT, NOT BY A FILTER (AC3, preserving
+    the PM's one-condition shape): the row-emission set is built from
+    `collect_live_handoff_paths(repo_root)` alone (`state/handoffs/*.md`,
+    never `archive/handoffs/`) — an archived record is invisible because it
+    was never scanned into the output set, not because a second condition
+    filtered it back out. The FULL live+archived union
+    (`_collect_all_handoffs_for_gate_index`) is used ONLY as the resolution
+    index `derive_readiness_batch` needs to resolve a `blocked_by` id whose
+    target has already shipped-and-archived — that index is never itself
+    the row-emission source.
+
+    Liveness: `live_session_verdicts` and `git_common_dir` are each resolved
+    ONCE per call, never per candidate (mirrors `compute_competing_claim`'s
+    existing hot-path discipline).
+    """
+    # Function-local (not module-scope): both imports below sit under
+    # `coordinator_core.ops` — a module-level import here would re-trigger
+    # `ops.__init__._eager_import_all()`, which (once C3 registers
+    # `ops/session_work_state.py`) imports `session.work_state` right back.
+    # See AC13 / this module's own `_parse_fm_dict` docstring for the
+    # identical discipline applied to `_extract_scope_paths`.
+    from coordinator_core.ops.fleet._common import collect_live_handoff_paths
+    from coordinator_core.ops.handoff_reconcile import (
+        _collect_all_handoffs_for_gate_index,
+    )
+
+    try:
+        live_paths = collect_live_handoff_paths(repo_root)
+    except OSError:
+        live_paths = []
+
+    # Real YAML-typed frontmatter (`dag._read_meta`, reached transitively via
+    # `_collect_all_handoffs_for_gate_index`'s own live-half helper below) —
+    # NOT this module's own flat `_parse_fm_dict`: `blocked_by`/
+    # `pickup_ready` must resolve to actual list/bool VALUES for
+    # `derive_readiness_batch` to classify correctly, never to the raw
+    # unparsed scalar text `_parse_fm_dict` would hand back for a key
+    # outside its own `_LIST_FIELD_KEYS` table (the `bool("false") is True`
+    # class of defect this chunk's mandatory string-coercion test guards).
+    all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(repo_root)
+    live_path_strs = {str(p) for p in live_paths}
+    live_handoffs = [h for h in all_handoffs if h.get("_path") in live_path_strs]
+
+    readiness = derive_readiness_batch(
+        live_handoffs, all_handoffs, scan_incomplete=bool(scan_errors)
+    )
+
+    try:
+        common_dir = git_common_dir(repo_root)
+    except Exception:
+        common_dir = None
+    verdicts = _liveness.live_session_verdicts(str(repo_root))
+
+    held: list[dict[str, Any]] = []
+    unclaimed: list[dict[str, Any]] = []
+
+    for handoff, ready in zip(live_handoffs, readiness):
+        raw_path = handoff.get("_path")
+        path = Path(raw_path) if raw_path else None
+        try:
+            display_path = rel_id(path, repo_root) if path is not None else str(raw_path)
+        except ValueError:
+            display_path = str(raw_path)
+
+        holder_sid = (
+            _resolve_ledger_first_holder(repo_root, path, handoff, common_dir=common_dir)
+            if path is not None
+            else None
+        )
+
+        if holder_sid:
+            entry = verdicts.get(holder_sid)
+            holder_live = entry[0] if entry is not None else False
+            evidence = _holder_evidence(holder_sid, repo_root)
+            held.append(
+                {
+                    "path": display_path,
+                    "claimed_by": holder_sid,
+                    "holder_live": holder_live,
+                    "liveness_basis": evidence["liveness_basis"],
+                    "last_activity_age_sec": evidence["last_activity_age_sec"],
+                    "send_message_address": None,
+                    "send_message_address_unavailable_reason": None,
+                    "send_message_address_resolved_at": None,
+                }
+            )
+            continue
+
+        basis = ready.get("basis")
+        if basis in ("review-due", "off-gate-axis"):
+            # Own bucket by omission — never unclaimed, never blocked (see
+            # docstring FOUR BUCKETS above).
+            continue
+        if ready.get("pickup_ready") is not True:
+            # still-blocked -> not unclaimed.
+            continue
+
+        row: dict[str, Any] = {"path": display_path}
+        deliverable_id = handoff.get("deliverable_id")
+        if deliverable_id:
+            row["deliverable_id"] = deliverable_id
+        row["gate_notes"] = _gate_notes(handoff)
+        stamped_pickup_ready = handoff.get("pickup_ready")
+        if stamped_pickup_ready is not None and stamped_pickup_ready is not True:
+            row["stamp_disagrees"] = True
+        unclaimed.append(row)
+
+    _resolve_send_message_addresses(held)
+
+    return {"held": held, "unclaimed": unclaimed}

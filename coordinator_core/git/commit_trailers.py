@@ -62,15 +62,12 @@ artifact carries none. The hook script has no `paths` argument to receive
 `git diff --cached --name-only` leg instead -- tracked as a known residual
 of the existing hand-mirroring gap, not silently reintroduced as a NEW one.
 
-`Absorbed-From` (C1, docs/plans/2026-08-16-authorship-survives-the-sweep.md)
-is this module's own addition, not mirrored into the hook script for the
-same `paths`-argument reason as tier 0 above. `Session-Id` names the
-COMMITTER; `Absorbed-From: <peer-session-id> <peer-deliverable-id> <path>`
-is the authorship qualifier for a path a sweep landed under that
-committer's name but a different, live peer session actually authored --
-see `compute_missing_trailer_args`'s and `_compute_absorbed_from_trailer_
-args`'s own docstrings, and `docs/reference/commit-trailer-contract.md`
-for the field contract.
+`Session-Id` names the COMMITTER, and that is all it claims. The
+`Absorbed-From` authorship qualifier that once ran beside it was killed
+2026-08-19 (kill-ledger K-008): it had no reader, and the PM's ruling is
+that commit attribution serves review enforcement and plan-unit
+legibility only -- catching a swept stray is explicitly not a goal. See
+`docs/reference/commit-trailer-contract.md` for the surviving fields.
 """
 
 from __future__ import annotations
@@ -665,169 +662,6 @@ def _has_trailer_line(commit_msg_file: Union[str, Path], prefix: str) -> bool:
     return False
 
 
-def _resolve_deliverable_id_for_peer(git_dir: str, peer_session_id: str) -> str:
-    """Peer-safe subset of `_resolve_deliverable_id`'s tier ladder (C1,
-    docs/plans/2026-08-16-authorship-survives-the-sweep.md), reused for
-    `Absorbed-From`'s peer-deliverable-id lookup.
-
-    Only tiers 1/1a (`_resolve_deliverable_id_at` against `git_dir`, then
-    against DoE-claude's own git-dir) are reachable here -- NOT the full
-    `_resolve_deliverable_id` ladder. Tier 0 (`_resolve_deliverable_id_from_
-    paths`) answers from the COMMITTED artifact's own frontmatter, which is
-    session-agnostic and already covers the committing session via the
-    caller's own `_resolve_deliverable_id` call; re-running it here would
-    not name the PEER's deliverable, so it is not repeated. The scope-match
-    tier, the ambiguity gate, and the claimed-plan tier
-    (`_resolve_deliverable_id_from_claimed_plan`) all resolve via
-    `core.resolve_session_id()` / `list_held_plan_claims(cwd)` internally --
-    i.e. THIS PROCESS's own session, not a `session_id` parameter -- so
-    calling them here would silently answer for the COMMITTER, not the
-    peer named by `peer_session_id`, and (per this plan's Anti-scope) this
-    derivation must not resolve authorship through plan `scope:` lists at
-    all. `_resolve_deliverable_id_at` is the one tier that takes a session
-    id as data rather than reading it from the environment, which is why it
-    is the whole peer-safe surface.
-
-    Never raises -- both legs it calls through are already
-    omit-rather-than-guess; returns `""` when neither resolves.
-    """
-    deliverable_id = _resolve_deliverable_id_at(git_dir, peer_session_id)
-    if deliverable_id:
-        return deliverable_id
-    doe_root = _resolve_doe_root()
-    if doe_root:
-        doe_git_dir = os.path.join(doe_root, ".git")
-        if os.path.normpath(doe_git_dir) != os.path.normpath(git_dir):
-            deliverable_id = _resolve_deliverable_id_at(doe_git_dir, peer_session_id)
-            if deliverable_id:
-                return deliverable_id
-    return ""
-
-
-def _fold_to_owner_session(sessions_dir: str, session_id: str, claim_index_module) -> str:
-    """Fold `session_id` to its OWNING session id when it names a
-    DISPATCHED AGENT, via the exact same `.agents/<agent-id>/em-session-
-    id.txt` back-pointer `claim_index._agent_owner_sid` already reads for
-    the claimant side (AC2b, PM ruling 2026-08-16,
-    docs/plans/2026-08-16-authorship-survives-the-sweep.md).
-
-    Reuses `claim_index._agent_owner_sid` and `claim_index._AGENTS_SUBDIR`
-    rather than a second copy of that resolution -- two disagreeing copies
-    of an identity ladder is the exact break-class incident this module's
-    own `_resolve_session_id` docstring already names (the 2-tier/3-tier
-    env-ladder split, KS-6). `claim_index_module` is passed in by the one
-    caller that already imported it (this module's own lazy-import
-    convention -- see `_compute_absorbed_from_trailer_args`), so this
-    function does not perform a second import of its own.
-
-    `session_id` folds to ITSELF (including when it is `""`) whenever
-    `sessions_dir` is falsy, `session_id` is falsy, or `<sessions_dir>/
-    .agents/<session_id>/em-session-id.txt` does not exist or is
-    unreadable -- an EM's own session id has no such back-pointer and is
-    already the owner. Never raises: `_agent_owner_sid`'s own contract is
-    never-raises, and its `(sid, complete)` pair collapses to `session_id`
-    unchanged (via `owner_sid or session_id`) whenever `sid` comes back
-    empty, whether the back-pointer is genuinely absent (`complete=True`)
-    or unreadable (`complete=False`) -- both fold safely to "not an agent
-    directory this call can resolve," never a guessed owner.
-    """
-    if not sessions_dir or not session_id:
-        return session_id
-    agent_dir = os.path.join(sessions_dir, claim_index_module._AGENTS_SUBDIR, session_id)
-    owner_sid, _complete = claim_index_module._agent_owner_sid(agent_dir)
-    return owner_sid or session_id
-
-
-def _compute_absorbed_from_trailer_args(
-    git_dir: str,
-    committer_session_id: str,
-    cwd: Union[str, Path],
-    paths: Optional[Sequence[str]],
-) -> List[str]:
-    """`Absorbed-From: <peer-session-id> <peer-deliverable-id> <path>`
-    derivation (C1, docs/plans/2026-08-16-authorship-survives-the-sweep.md)
-    -- the incident this closes: a swept hunk lands under the COMMITTER's
-    `Session-Id`, crediting a different session's authorship to whoever
-    happened to run the commit (`e7360c2c5`, committer `4a5e1a5b`, true
-    author `672db634`).
-
-    Deliberately NOT gated behind `compute_missing_trailer_args`'s own
-    session-id / UUID / idempotency early returns -- see that function's
-    call site. A message that already carries a `Session-Id` trailer is
-    exactly the swept-hunk case this exists to disclose.
-
-    For each path in `paths`, reads `claim_index.lookup()` and emits one
-    trailer per claimant that is (a) not the OWNER-SESSION-FOLDED
-    `committer_session_id` (AC2b -- both sides of this comparison are
-    folded to owner-session granularity via `_fold_to_owner_session`,
-    since `claim_index` already folds every claimant to its owner and
-    leaving the committer side unfolded would compare an agent id against
-    an owner sid, never match, and false-positive `Absorbed-From` onto the
-    EM's own team's work), (b) live per `session_liveness.session_live` --
-    the same liveness reader `scoped_git_commit._warn_recent_edits` uses,
-    read but not imported from there to avoid a `coordinator_core.ops`
-    import (see this module's existing lazy-import convention) -- and (c)
-    resolvable to a deliverable id via `_resolve_deliverable_id_for_peer`.
-    A claimant that fails any of (a)/(b)/(c) is silently omitted, never
-    guessed at.
-
-    `claim_index.UNANSWERABLE` is handled explicitly: a path the index
-    could not answer for is skipped, never treated as "no claimant" --
-    those are different facts and this derivation never conflates them.
-
-    The whole body is wrapped in `try`/`except Exception` -- ANY failure
-    here (a raising `claim_index.lookup()`, a raising liveness check,
-    anything else) degrades to `[]`, never to a raised exception reaching
-    the caller. This derivation must never fail the commit it accompanies
-    -- the same contract `_warn_recent_edits` documents for its own advisory
-    check, verbatim.
-
-    Returns `[]` immediately when `paths` is empty/`None` -- there is
-    nothing to look up.
-    """
-    if not paths:
-        return []
-    try:
-        from coordinator_core.session import claim_index as _claim_index
-        from coordinator_core.session import liveness as _session_liveness
-
-        sessions_dir = _session_core.sessions_dir(str(cwd))
-        folded_committer_session_id = _fold_to_owner_session(
-            sessions_dir, committer_session_id, _claim_index
-        )
-
-        result = _claim_index.lookup(list(paths), cwd=str(cwd))
-
-        trailer_args: List[str] = []
-        seen: set = set()
-        for path in paths:
-            claimants = result.get(path)
-            if not claimants:
-                continue
-            if _claim_index.UNANSWERABLE in claimants:
-                continue
-            normalized_path = _normalize_committed_path(str(path), cwd)
-            for sid in claimants:
-                if sid == folded_committer_session_id:
-                    continue
-                if not _session_liveness.session_live(sid, cwd=str(cwd)):
-                    continue
-                peer_deliverable_id = _resolve_deliverable_id_for_peer(git_dir, sid)
-                if not peer_deliverable_id:
-                    continue
-                key = (sid, peer_deliverable_id, normalized_path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                trailer_args += [
-                    "--trailer",
-                    f"Absorbed-From: {sid} {peer_deliverable_id} {normalized_path}",
-                ]
-        return trailer_args
-    except Exception:
-        return []
-
-
 def compute_missing_trailer_args(
     commit_msg_file: Union[str, Path],
     cwd: Union[str, Path],
@@ -865,17 +699,6 @@ def compute_missing_trailer_args(
     uncaught -- a caller that wants to catch and downgrade it to a
     non-raising failure must do so itself).
 
-    `Absorbed-From` (C1, docs/plans/2026-08-16-authorship-survives-the-
-    sweep.md) is a THIRD, independent trailer computed unconditionally
-    below -- deliberately NOT gated behind the Session-Id/Deliverable-Id
-    early returns (unresolvable session id, non-UUID fail-safe,
-    `_has_trailer_line` raising) or their idempotency checks. A message
-    that already carries `Session-Id`/`Deliverable-Id` trailers is exactly
-    the swept-hunk case `Absorbed-From` exists to disclose -- gating it
-    behind those checks would silence it on precisely the commits that
-    need it. See `_compute_absorbed_from_trailer_args`'s own docstring for
-    the derivation and its own independent exception containment.
-
     `session_id_override` (state/bug-backlog/2026-08-18-scoped-git-commit-
     stamps-a-foreign-session-id-8d21f0c4e7b9.yaml): the invoking session's
     OWN already-resolved identity, when a caller has one, takes precedence
@@ -909,7 +732,7 @@ def compute_missing_trailer_args(
 
     # Fail-safe: a non-UUID resolved id must OMIT both Session-Id and
     # Deliverable-Id, never stamp a wrong Session-Id (or a Deliverable-Id
-    # keyed off it). `Absorbed-From` is unaffected -- see below.
+    # keyed off it).
     if session_id and _UUID_RE.fullmatch(session_id):
         try:
             need_session_id = not _has_trailer_line(commit_msg_file, "Session-Id:")
@@ -924,12 +747,5 @@ def compute_missing_trailer_args(
             deliverable_id = _resolve_deliverable_id(git_dir, session_id, cwd, paths)
             if deliverable_id:
                 trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
-
-    trailer_args += _compute_absorbed_from_trailer_args(
-        git_dir=git_dir,
-        committer_session_id=session_id,
-        cwd=cwd,
-        paths=paths,
-    )
 
     return trailer_args

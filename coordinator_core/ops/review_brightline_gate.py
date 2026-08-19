@@ -102,8 +102,6 @@ import subprocess
 import sys
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-import yaml
-
 from coordinator_core.coverage import (
     _is_planning_artifact_path,
     _resolve_numstat_row_path,

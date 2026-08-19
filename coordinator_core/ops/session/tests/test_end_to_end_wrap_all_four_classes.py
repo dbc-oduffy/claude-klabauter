@@ -237,7 +237,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     c4_rel = c4_out_path.relative_to(repo).as_posix()  # git status emits POSIX separators on Windows too
 
     # -----------------------------------------------------------------
-    # Pre-wrap sanity: every one of the five newly-written files (four
+    # Pre-wrap sanity: every one of the four newly-written files (three
     # classes + the peer's) is genuinely dirty in the working tree.
     # -----------------------------------------------------------------
     before = _dirty_status(repo)

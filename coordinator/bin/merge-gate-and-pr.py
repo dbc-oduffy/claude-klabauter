@@ -11,7 +11,8 @@ nothing. `coordinator_core/ops/coverage_gate.py` (which defined
 `run_coverage_gate`) was deleted by the same kill; `wsc-coverage-gate-
 runner.py`'s `brightline-gate` subcommand is a distinct caller and is
 unaffected by this removal, but it no longer goes through `run_coverage_gate`
-— that function no longer exists anywhere in the tree.
+— that function no longer exists anywhere in the tree. (That subcommand was
+itself removed 2026-08-19, state/kill-ledger.md K-007.)
 
 Subcommands (argv[1] selects):
 

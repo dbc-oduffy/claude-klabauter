@@ -57,7 +57,7 @@ measured the transitive deep tail at 32% TP with no static discriminator separat
 false positives at any depth -- deliberately excluded here, tracked instead as G2's named
 residual.
 
-STRUCTURAL DISCRIMINATORS -- SIX TOTAL, not the three this heading historically named (measured:
+STRUCTURAL DISCRIMINATORS -- SEVEN TOTAL, not the three this heading historically named (measured:
 32.4% naive FP -> 4.2% with discriminators 1-3 applied, zero true positives lost). Those rates
 were measured in 2026-08-08 against the GIT-ONLY collector and have NOT been re-measured for the
 widened one -- the discriminators are argv0-independent, so there is no reason to expect them to
@@ -69,10 +69,17 @@ sharing a spawn's line) was closed in route a rather than frozen into the invent
 Discriminators 1-3 are listed below; 4 (chunking-stride iterables) and 5 (verb-gated dispatch
 chokepoints) are documented at their definition sites further down rather than repeated here --
 a pre-existing drift between this heading's enumeration and the module's actual count that this
-change does not take on fixing. Discriminator 6 (varying argv0, added 2026-08-17) is listed here
-in full because it belongs to the same "does this loop even qualify" family as 1-3: it is NOT
-covered by the 32.4%/4.2% figures above (those predate it by nine days) and its own FP rate has
-never been measured -- state plainly rather than let it inherit a number it did not earn.
+change does not take on fixing. Discriminators 6 (varying argv0, added 2026-08-17) and 7
+(argv-splicing loop target, added 2026-08-19) are listed here in full because they belong to the
+same "does this loop even qualify" family as 1-3. Neither is covered by the 32.4%/4.2% figures
+above (those predate them) and neither has had its own FP rate measured -- state plainly rather
+than let them inherit a number they did not earn.
+
+BOTH 6 AND 7 SUPPRESS, which inverts the safety direction every other discriminator here runs
+in: an over-broad match silences a real amplification site and nothing downstream notices. Any
+future discriminator whose action is EXCLUDE inherits that inversion -- see
+`_tainted_names_for_loop`'s docstring, where a version of this reasoning shipped backwards and
+caused a real false suppression.
 
   1. Loop-ITERABLE-expression exclusion. A `for`/comprehension's `iter` expression is evaluated
      ONCE, before the first iteration -- a call appearing there is not a per-item spawn. This
@@ -95,6 +102,15 @@ never been measured -- state plainly rather than let it inherit a number it did 
      added 2026-08-17, retiring two `_EXEMPT_SITES` entries this pass mechanically decides
      (`path_resolution_report._check_windows`, `cruft_sweep.sweep_toolchain_caches`); see that
      constant's own comment for what still requires human judgment.
+  7. Argv-splicing-loop-target exclusion. A loop whose target is concatenated into argv as a
+     SEQUENCE (`base + chunk`, `[*base, *chunk]`) rather than placed in it as one element
+     carries the whole group in ONE call, so its spawn count is O(total_argv_bytes / ceiling),
+     never O(items). This is the byte-budget chunking idiom -- a chunk list built at runtime
+     against Windows' 32767 `CreateProcess` cap, which discriminator 4 cannot see because it
+     reads only a literal `range(start, stop, stride)`. Added 2026-08-19 for the two measured
+     sites (`publish._git_status_porcelain`, `percolate-round._dest_paths_exist`), both of which
+     hit a git subcommand with no `--pathspec-from-file` form; keyed on the loop's OWN target
+     names, never discriminator 6's grown taint set. See `_argv_splices_loop_target`.
 
 SEVEN DETECTION ROUTES (six per gate-substrate.md Task C, plus g added out-of-band -- see its
 own entry below), restricted to the high-precision stratum:
@@ -330,6 +346,77 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # -- `shell` (argv0) is loop-invariant here; only the script text varies, which the four
     # measured argv0 shapes do not reach.
     ('coordinator_core/install/path_resolution_report.py', '_check_posix', 'run'),
+    # 2026-08-19 -- THE SAMPLING LOOP IS THE MEASUREMENT. Each of the five below draws N
+    # independent timing samples (`for _ in range(n)`, target discarded) and reduces them to a
+    # statistic: `min` for a cold-start floor, a coefficient of variation for its stability.
+    # Collapsing N draws into one invocation does not measure the same quantity faster -- it
+    # measures a DIFFERENT quantity, a single draw, and destroys the variance the statistic is
+    # computed over. Deliberately exempted rather than decided by a discriminator: the shape
+    # here (a spawn whose arguments are entirely loop-invariant) is indistinguishable to a
+    # static pass from genuinely redundant repeated work, which IS amplification. Only a human
+    # can say which one a given repetition is, which is what this register is for.
+    ('coordinator_core/benchmarks/floor.py', 'measure_floor', 'time_invocation'),
+    ('coordinator_core/benchmarks/harness.py', '_collect_samples', 'time_invocation'),
+    ('coordinator_core/benchmarks/measure_read_events.py', 'measure', '_time_probe'),
+    ('coordinator_core/benchmarks/measure_render_status.py', 'measure', '_time_probe'),
+    (
+        'coordinator_core/benchmarks/measure_render_status.py',
+        'measure_bare_import',
+        '_time_bare_import',
+    ),
+    # 2026-08-19 -- RETAINED PER-ITEM FALLBACK behind a batched hot path. The batch is the
+    # primary call; the per-item loop the collector counts fires only when that batch spawn
+    # fails, and it replaces mapping the whole set to a single degraded verdict. The collector
+    # cannot distinguish a primary path from a fallback, so it counts the fallback. Deleting
+    # the fallback to clear the key would trade a degrade-on-failure posture for a metric --
+    # forbidden by name in `state/ledgers/amp-cfinal-exemption-ledger-draft.md`. Precedent:
+    # `orphan_branch_sweep.py::main`, frozen in `_KNOWN_SITES` on the same argument.
+    (
+        'coordinator/bin/publish.py',
+        '_argv_parity_pairing_origin_batch',
+        '_argv_parity_pairing_origin',
+    ),
+    # 2026-08-19 -- NO BATCH PRIMITIVE, and this one was MEASURED after a batched version of it
+    # was written and found wrong. `git rev-list` cannot express a union of ranges: its
+    # exclusions are GLOBAL, so `rev-list A..B C..D` means `B D ^A ^C`, and for two adjacent
+    # frozen ranges the `^C` cancels the `C` that `A..B` contributed. The batch silently
+    # NARROWS the frozen sha set -- an under-admission in an anti-forgery gate, invisible at
+    # the call site. Pinned by `TestOwnFrozenDiffShas::test_ranges_resolve_independently`,
+    # which fails against the batched form. Checked against the walking seams per the ledger's
+    # primitive-absence doctrine correction: inapplicable, this needs commit history.
+    (
+        'coordinator_core/ops/review_trail_write.py',
+        '_own_frozen_diff_shas',
+        '_git_runner',
+    ),
+    # 2026-08-19 -- N ROOTS, N SPAWNS: a structural floor, not an unbatched loop. No git
+    # invocation spans multiple `-C` roots, so one spawn per DISTINCT destination worktree is
+    # the minimum however the loop is arranged; relocating it only moves the flag. Checked
+    # against the walking seams per the ledger's primitive-absence doctrine correction and they
+    # do not apply -- this needs `git status`, which no filesystem walk can serve. Precedent,
+    # architecturally identical and already frozen: `publish.py::_publish_relevant_allowlist_
+    # leg` -> `_git_ls_tree_entries_files`.
+    (
+        'coordinator/bin/publish.py',
+        '_argv_parity_pairing_origin_batch_by_root',
+        '_argv_parity_pairing_origin_batch',
+    ),
+    # 2026-08-19 -- ISOLATION IS THE CONTRACT, evidenced by a live failure. `scan-secrets` is
+    # target-scoped (peer-repo pattern, `registry_codenames` guard), so each row must be handed
+    # ITS OWN file list. An earlier revision fed every row the whole run's list on an
+    # "over-inclusive is safe" reading and raised HIGH-tier findings against other rows'
+    # sources under the wrong ruleset (observed 2026-08-18, recorded at the call site).
+    # Batching reintroduces exactly that defect.
+    ('coordinator/bin/percolate-mirror.py', '_run_gate_legs', '_run'),
+    # 2026-08-19 -- ISOLATION IS THE CONTRACT (anti-forgery gate). Each
+    # `ForeignSessionRangeRefused` names the specific offending `reviewed_range` entry; a
+    # batched resolve destroys the per-entry attributability AC1c depends on, and this seam's
+    # whole job is refusing a range with a named reason rather than failing opaquely.
+    (
+        'coordinator_core/ops/review_trail_write.py',
+        '_resolve_reviewer_attestation',
+        '_resolve_range_shas',
+    ),
 }
 
 
@@ -670,6 +757,93 @@ def _argv0_varies_with_loop_target(
     if head is None:
         return False
     return bool(_names_in(head) & tainted)
+
+
+# --------------------------------------------------------------------------
+# Discriminator 7: argv-splicing loop target (byte-budget chunking). A loop whose target is
+# concatenated into argv as a SEQUENCE, rather than placed in it as one element, spawns once
+# per GROUP by construction -- its spawn count is O(total_argv_bytes / ceiling), never
+# O(items).
+#
+# Why a seventh discriminator and not two more `_EXEMPT_SITES` entries: discriminator 4 already
+# recognises chunking, but only through a literal `range(start, stop, stride)` with a non-unit
+# stride. Both real byte-budget chunkers in this tree build their chunk list at RUNTIME, bounded
+# by accumulated argv bytes against Windows' 32767 `CreateProcess` cap, so no `range` appears
+# and discriminator 4 is blind to them:
+#
+#   - `coordinator/bin/percolate-round.py::_dest_paths_exist` -- `for chunk in
+#     _chunk_paths_by_argv_bytes(to_probe, cap=_LS_FILES_ARGV_BYTE_CAP)`, then
+#     `_run([... , "--"] + chunk)`. `git ls-files` has no `--pathspec-from-file`, so a deletion
+#     set over the cap cannot be one spawn.
+#   - `coordinator/bin/publish.py::_git_status_porcelain` -- an in-function accumulator loop
+#     builds `batches`, then `subprocess.run(base + batch)`. `git status` does not accept
+#     `--pathspec-from-file` either (only the commit/add family does).
+#
+# Exempting the two by name would freeze a register entry per byte-budget chunker written from
+# here on; the shape is what is decidable, so the shape is what this reads.
+#
+# THIS DISCRIMINATOR SUPPRESSES, so it inherits the inversion `_tainted_names_for_loop`'s
+# docstring states: an over-broad match silences a real amplification site and nothing
+# downstream notices. Kept narrow accordingly -- the spliced name must be the loop's OWN target
+# (never the one-hop taint set discriminator 6 grows, which would reach locals derived from it),
+# and it must appear as a bare `Name`, `list(<Name>)`/`tuple(<Name>)`, or `*<Name>`. An
+# `ast.Attribute` (`item.args`), a call result, or a subscript all decline.
+#
+# Unlike discriminator 6 this is NOT restricted to a direct spawn call, because it reads a
+# different property: not "which program does argv0 name" -- which is meaningless at a wrapper,
+# the false suppression `_argv0_varies_with_loop_target` guards against -- but "how many items
+# does ONE call carry". A wrapper handed N items in one argument spawns once for those N
+# whatever it does with them, so the argument holds at every route.
+# --------------------------------------------------------------------------
+
+
+def _splices_name_from(node: ast.expr, target_names: set[str]) -> bool:
+    """True when `node` contributes a whole SEQUENCE bound to one of `target_names` to the argv
+    it sits in -- a bare `Name`, or that name wrapped in `list(...)`/`tuple(...)`. Anything
+    else, including an attribute or subscript off the target, declines: only a name the loop
+    itself binds is known to be the group the iterable yielded."""
+    if isinstance(node, ast.Name):
+        return node.id in target_names
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("list", "tuple")
+        and len(node.args) == 1
+    ):
+        return _splices_name_from(node.args[0], target_names)
+    return False
+
+
+def _argv_splices_loop_target(call: ast.Call, target_names: set[str]) -> bool:
+    """True when `call`'s first positional argument is an argv-shaped expression that splices a
+    loop-target name into itself as a sequence -- `<List> + chunk`, `chunk + <List>`, a chain of
+    either, or `[*base, *chunk]`.
+
+    The argument must itself be argv-shaped (a `List` or an `Add` `BinOp`); a bare `Name` argv
+    declines, because a call passing the loop target ALONE says nothing about whether that
+    target is one item or a group -- `for path in paths: _run(argv_for(path))` and `for chunk in
+    chunks: _run(chunk)` are indistinguishable at this seam, and declining is the safe direction
+    for a suppressor."""
+    if not target_names or not call.args:
+        return False
+    return _argv_expr_splices(call.args[0], target_names)
+
+
+def _argv_expr_splices(argv: ast.expr, target_names: set[str]) -> bool:
+    """`_argv_splices_loop_target`'s recursion, over the argv expression itself -- separated so
+    a nested concatenation chain (`base + mid + chunk`, which parses as
+    `BinOp(BinOp(base, mid), chunk)`) recurses on operands directly."""
+    if isinstance(argv, ast.BinOp) and isinstance(argv.op, ast.Add):
+        return any(
+            _splices_name_from(operand, target_names) or _argv_expr_splices(operand, target_names)
+            for operand in (argv.left, argv.right)
+        )
+    if isinstance(argv, ast.List):
+        return any(
+            isinstance(elt, ast.Starred) and _splices_name_from(elt.value, target_names)
+            for elt in argv.elts
+        )
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -1181,8 +1355,14 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         #: (lineno, col_offset) -> the same loop's one-hop argv0 bindings (`_loop_argv0_
         #: bindings`), for the intermediate-variable idiom `_argv0_expr` resolves through.
         self.call_argv0_bindings: dict[tuple[int, int], dict[str, ast.expr]] = {}
+        #: (lineno, col_offset) -> the names the NEAREST enclosing qualifying loop's target
+        #: itself binds, for discriminator 7 (argv-splicing loop target). Deliberately the raw
+        #: target names, NOT `call_loop_taint`'s one-hop growth: this discriminator suppresses,
+        #: so it takes the narrower of the two sets. See `_argv_splices_loop_target`.
+        self.call_loop_targets: dict[tuple[int, int], set[str]] = {}
         self._loop_taint_stack: list[frozenset[str]] = []
         self._loop_argv0_bindings_stack: list[dict[str, ast.expr]] = []
+        self._loop_target_stack: list[set[str]] = []
 
     def _scope_boundary(self, node: ast.AST) -> None:
         saved = self._in_qualifying_loop_depth
@@ -1221,8 +1401,10 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
             _tainted_names_for_loop(node, _loop_target_names(node.target))
         )
         self._loop_argv0_bindings_stack.append(_loop_argv0_bindings(node))
+        self._loop_target_stack.append(_loop_target_names(node.target))
         for stmt in node.body:
             self.visit(stmt)
+        self._loop_target_stack.pop()
         self._loop_argv0_bindings_stack.pop()
         self._loop_taint_stack.pop()
         self._in_qualifying_loop_depth -= 1
@@ -1262,6 +1444,7 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         # only (matching discriminator 2's stated blind spot above).
         self._loop_taint_stack.append(frozenset(_loop_target_names(generators[0].target)))
         self._loop_argv0_bindings_stack.append({})
+        self._loop_target_stack.append(_loop_target_names(generators[0].target))
         for gen in generators[1:]:
             self.visit(gen.iter)
             for if_clause in gen.ifs:
@@ -1269,6 +1452,7 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         for if_clause in generators[0].ifs:
             self.visit(if_clause)
         self._visit_comp_elt(node)
+        self._loop_target_stack.pop()
         self._loop_argv0_bindings_stack.pop()
         self._loop_taint_stack.pop()
         self._in_qualifying_loop_depth -= 1
@@ -1299,6 +1483,7 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
             if self._loop_taint_stack:
                 self.call_loop_taint[key] = self._loop_taint_stack[-1]
                 self.call_argv0_bindings[key] = self._loop_argv0_bindings_stack[-1]
+                self.call_loop_targets[key] = self._loop_target_stack[-1]
         self.generic_visit(node)
 
 
@@ -1417,6 +1602,15 @@ def find_unbatched_per_item_spawns(
                 loop_visitor.call_loop_taint.get(key, frozenset()),
                 loop_visitor.call_argv0_bindings.get(key),
             ):
+                continue
+            # Discriminator 7: this call's argv splices its enclosing loop's target in as a
+            # SEQUENCE, so one call carries the whole group -- the byte-budget chunking shape
+            # discriminator 4's literal-`range` stride test cannot see. Same suppression point
+            # as `_EXEMPT_SITES` and discriminator 6 above, so it applies to both the standing
+            # gate and the `designed_red` worklist. NOT gated on `is_direct_spawn_call`: it
+            # reads how many items one call carries, not what program argv0 names, and that
+            # holds at a wrapper route too -- see `_argv_splices_loop_target`'s docstring.
+            if _argv_splices_loop_target(node, loop_visitor.call_loop_targets.get(key, set())):
                 continue
             route: str | None = None
 
@@ -1647,6 +1841,43 @@ class _EnclosingTracker(ast.NodeVisitor):
 #:   worklist carrying a site that cannot be burned down overstates the debt; removing it is a
 #:   correction to the ledger, never a graduation.
 #:
+#: 2026-08-19, RE-FROZEN 149 -> 94 keys: 55 retired, 0 added (`docs/plans/2026-08-19-burn-down-
+#:   the-amplification-hitlist.md`, chunk C-final; per-key attribution in `state/ledgers/
+#:   amp-cfinal-exemption-ledger-draft.md`). The shrink reconciles in BOTH directions and is not
+#:   a pure subtraction -- the inventory was simultaneously stale (keys no longer matching
+#:   reality) and short (sites observed that it never held, which had the standing G2 assertion
+#:   RED at 7 keys). It is now exactly the collector's observed key set, so G2 is green by
+#:   construction. The 55 retired keys break down by DISPOSITION, and the classes are NOT
+#:   interchangeable -- a burn-down count that folds them together overstates the work done:
+#:
+#:     43  FIXED -- genuinely batched by this plan's chunks and the T1/T2/T3 waves.
+#:      5  REMOVED CODE -- the five `migrate-*.py` one-shot scripts were deleted outright. Their
+#:          sites are gone, not batched; counting them as burn-down would overstate it.
+#:      5  MOVED TO `_EXEMPT_SITES` (chunk C6) -- the benchmark sampling loops, where drawing N
+#:          samples IS the measurement. A transfer between registers, not a reduction in debt.
+#:      1  REMOVED CODE (K-007) -- `review_brightline_gate._compute_chain_oracle`, whose
+#:          `--from-handoff` mode a concurrent session deleted under a PM kill-ledger ruling.
+#:      1  MISCLASSIFIED -- `reap-stale-subagent-sidecars.main` -> `_is_tracked`: the callee no
+#:          longer exists under that name, the site having been re-shaped to scope by directory.
+#:
+#:   One of the 43 is worth naming because the ledger's prediction about it was wrong:
+#:   `subagent_fabrication_check._targets_changed` was expected to need RE-KEYING to
+#:   `_git_porcelain_for_paths` (plural, renamed in `894d0754b`). That commit also HOISTED the
+#:   call out of its loop, so the site is fixed and retires outright; no re-key is owed. Checked
+#:   at the call site rather than inferred from the rename.
+#:
+#:   The 7 keys that had G2 red were resolved WITHOUT growing this constant, which stays
+#:   shrink-only: 2 decided structurally by discriminator 7 (added here -- `publish.
+#:   _git_status_porcelain` and `percolate-round._dest_paths_exist` chunk against the Windows
+#:   argv ceiling, so their spawn count is O(argv_bytes / cap), never O(items); neither was ever
+#:   amplification, the collector simply could not see the shape), and 5 routed to
+#:   `_EXEMPT_SITES` with dated reasons. See that constant's own entries.
+#:
+#:   NOT retired, and deliberately so: `ac27_differential_oracle._git_show_blob` is dead code
+#:   whose only remaining reference was this constant. Its entry retires here with the rest, but
+#:   DELETING the function is a separate change in another file and gets its own disposition --
+#:   it is not folded into an inventory shrink.
+#:
 #: The prior freeze (2026-08-08, 85 keys) and its published inventory --
 #: `state/audits/2026-08-08-git-amplification-gate-known-sites.md` -- describe the GIT-ONLY
 #: collector. That audit is still an accurate record of that run; it is not a description of
@@ -1662,48 +1893,29 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
     {
         ('coordinator/bin/age-sweep-lessons.py', 'main', 'run'),
         ('coordinator/bin/check-mcp-versions.py', 'main', '_npm_latest'),
-        ('coordinator/bin/coordinator-doc-new.py', '_resolve_from_repo', '_machine_local_get'),
         ('coordinator/bin/coordinator-harvest-deferrals.py', '_harvest', '_run_lesson_promote'),
         ('coordinator/bin/coordinator-harvest-deferrals.py', '_harvest', '_run_queue_append'),
-        ('coordinator/bin/coordinator-safe-commit.py', 'do_blanket', '_git_reset_unstage'),
         ('coordinator/bin/coordinator-safe-commit.py', 'do_scope_from', '_validate_pathspec'),
         ('coordinator/bin/coordinator-safe-commit.py', 'do_scoped', '_validate_pathspec'),
         ('coordinator/bin/cross-repo-memo.py', '_verify_delivery_landed', 'run'),
         ('coordinator/bin/emit-goal-from-artifact.py', 'main', 'run'),
-        ('coordinator/bin/lib/cli_shared.py', 'resolve_from_repo', 'machine_local_get'),
-        ('coordinator/bin/merge-release-notes-derive.py', '_contains_all', '_git'),
         (
             'coordinator/bin/merge-release-notes-derive.py',
             'cmd_reconcile_sweep',
             '_run_sibling_cli',
         ),
-        ('coordinator/bin/migrate-archive-week-changelogs.py', 'run', 'git_mv'),
-        ('coordinator/bin/migrate-bug-backlog.py', 'run_apply', 'run'),
-        ('coordinator/bin/migrate-debt-backlog.py', 'run_apply', 'run'),
-        ('coordinator/bin/migrate-improvement-queue-project.py', 'run_apply', 'run'),
-        ('coordinator/bin/migrate-improvement-queue-universals.py', 'run_apply', 'run'),
         ('coordinator/bin/percolate-gate.py', '_git_log_batched', 'run'),
-        ('coordinator/bin/percolate-round.py', '_filter_commit_pathspec', '_dest_path_exists'),
-        ('coordinator/bin/publish.py', '_materialize_inject_srcs', '_git_materialize_ref'),
         (
             'coordinator/bin/publish.py',
             '_publish_relevant_allowlist_leg',
             '_git_ls_tree_entries_files',
         ),
         (
-            'coordinator/bin/publish.py',
-            'dispatch_end_of_run_argv_parity_gate',
-            '_argv_parity_pairing_origin',
-        ),
-        ('coordinator/bin/publish.py', 'main', '_git_head'),
-        ('coordinator/bin/publish.py', 'main', '_is_git_repo'),
-        (
             'coordinator/bin/reap-orphaned-in-flight-handoffs.py',
             'main',
             '_has_live_children_exit_code',
         ),
         ('coordinator/bin/reap-orphaned-in-flight-handoffs.py', 'main', '_run_archive_stamp_cli'),
-        ('coordinator/bin/reap-stale-subagent-sidecars.py', 'main', '_is_tracked'),
         ('coordinator/bin/refresh-plugin-live-install.py', '_handle_default', '_git'),
         ('coordinator/bin/refresh-plugin-live-install.py', '_interactive_gate', '_git'),
         (
@@ -1711,13 +1923,11 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'cmd_backfill_dispatch_rows',
             '_dispatch_step9_row',
         ),
-        ('coordinator/bin/workday-complete-reconcile.py', 'run_completion_reconcile', '_git_add'),
         (
             'coordinator/bin/workday-complete-reconcile.py',
             'run_completion_reconcile',
             '_run_reconcile_append',
         ),
-        ('coordinator/bin/workday-complete-step9-append-changelog.py', 'main', 'run'),
         ('coordinator/bin/workday-start-reconcile-sweep.py', 'run_sweep', '_run_reconcile_helper'),
         (
             'coordinator/bin/workweek-complete-close.py',
@@ -1730,41 +1940,9 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'int',
         ),
         (
-            'coordinator_core/bash_guards/block_subagent_commit.py',
-            '_git_commit_agent_may_commit',
-            '_pathspec_element_is_sweeping',
-        ),
-        ('coordinator_core/bash_guards/commit_tripwires.py', 'check_bin_sh_polyglot', 'join'),
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            '_check_destructive_git_revert_full',
-            '_check_destructive_git_revert_full',
-        ),
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            '_check_destructive_git_revert_full',
-            '_run_git',
-        ),
-        ('coordinator_core/bash_guards/dispatch_checks.py', '_is_hazard_repo', '_paths_match'),
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            '_no_verify_rescan_shell_c_and_heredoc',
-            'check_no_verify',
-        ),
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            'check_blanket_git_add',
-            '_paths_match',
-        ),
-        (
             'coordinator_core/bash_guards/dispatch_checks.py',
             'check_destructive_git_clean',
             '_run_git',
-        ),
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            'check_destructive_git_clean',
-            'operator_override_note',
         ),
         (
             'coordinator_core/bash_guards/dispatch_checks.py',
@@ -1772,37 +1950,11 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             '_run_git',
         ),
         ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git'),
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            'check_git_commit_safe_commit_advise',
-            'operator_override_note',
-        ),
-        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_validate_commit', '_run_git'),
-        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_validate_commit', 'join'),
-        ('coordinator_core/benchmarks/floor.py', 'measure_floor', 'time_invocation'),
-        ('coordinator_core/benchmarks/harness.py', '_collect_samples', 'time_invocation'),
-        ('coordinator_core/benchmarks/measure_read_events.py', 'measure', '_time_probe'),
-        ('coordinator_core/benchmarks/measure_render_status.py', 'measure', '_time_probe'),
-        (
-            'coordinator_core/benchmarks/measure_render_status.py',
-            'measure_bare_import',
-            '_time_bare_import',
-        ),
         ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'branch_reachable'),
-        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'inspect_commits'),
         ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'tip_author'),
         ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits'),
         ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'worktree_is_dirty'),
-        (
-            'coordinator_core/consolidate_assemble/apply.py',
-            '_dispatch_cherry_pick_and_delete',
-            '_run_git',
-        ),
-        (
-            'coordinator_core/coverage.py',
-            '_derive_dag_chain_set',
-            '_add_commit_touched_file_count',
-        ),
+        ('coordinator_core/coverage.py', '_derive_dag_chain_set', '_add_commit_touched_file_count'),
         ('coordinator_core/coverage.py', '_reviewed_via_graph_walk', '_run'),
         (
             'coordinator_core/distill/curation_status.py',
@@ -1820,13 +1972,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             '_scan',
             'check_schema_drift_advisory',
         ),
-        (
-            'coordinator_core/hooks/subagent_fabrication_check.py',
-            '_targets_changed',
-            '_git_porcelain_for_path',
-        ),
         ('coordinator_core/install/first_run.py', '_seed_machine_local_registry', '_run'),
-        ('coordinator_core/install/maximalist.py', '_defender_offer', '_run'),
         ('coordinator_core/install/maximalist.py', '_run_body', '_run_compileall'),
         ('coordinator_core/install/prereq_probe.py', 'probe_clone_auth', '_run'),
         (
@@ -1863,11 +2009,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ),
         ('coordinator_core/ops/configure_git.py', 'main', '_git_config_get'),
         ('coordinator_core/ops/configure_git.py', 'main', '_git_config_set'),
-        ('coordinator_core/ops/cruft_sweep.py', 'sweep_empty_toplevel_dirs', '_delete_path'),
-        ('coordinator_core/ops/cruft_sweep.py', 'sweep_harness', '_delete_path'),
-        ('coordinator_core/ops/cruft_sweep.py', 'sweep_orphans', '_delete_path'),
         ('coordinator_core/ops/cruft_sweep.py', 'sweep_scratch', '_delete_path'),
-        ('coordinator_core/ops/cruft_sweep.py', 'sweep_subagent_sandbox_files', '_delete_path'),
         (
             'coordinator_core/ops/cutover_gate.py',
             '_reverify_test_node_ids_batch',
@@ -1880,11 +2022,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ),
         (
             'coordinator_core/ops/distill_apply_disposal.py',
-            '_write_denormalizations',
-            '_is_tracked',
-        ),
-        (
-            'coordinator_core/ops/distill_apply_disposal.py',
             'apply_disposal_manifest',
             '_is_tracked',
         ),
@@ -1892,20 +2029,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ('coordinator_core/ops/emit/envelope.py', 'main', 'resolve_ref'),
         ('coordinator_core/ops/find_polluter.py', 'main', '_existence_detail'),
         ('coordinator_core/ops/find_polluter.py', 'main', 'run'),
-        # DELIBERATE, and not to be "fixed" by batching (docs/plans/
-        # 2026-08-11-resync-leaves-a-bare-staged-deletion-whe.md, AC6): the resync annotates
-        # `index_resync_failed` onto the individual acted[] / reaped[] item that failed. One
-        # batched call cannot say WHICH path failed, which would trade a visible defect for an
-        # invisible one. Re-keyed 2026-08-11 when the two post-commit main-index resyncs moved
-        # out of archive_and_commit / rm_and_commit into their own module-level functions;
-        # `run_git` is the extracted injectable seam, defaulting to _update_index_with_retry.
-        #
-        # Found by route f since 2026-08-16 (AC11). Until then these two rows were reported
-        # only because `run_git` collided by name with an unrelated single-parameter function
-        # in another module -- a true site standing on a false route, which is why widening
-        # the collector had to add route f rather than simply drop them.
-        ('coordinator_core/ops/fleet/_common.py', '_resync_main_index_for_moves', 'run_git'),
-        ('coordinator_core/ops/fleet/_common.py', '_resync_main_index_for_reaps', 'run_git'),
         (
             'coordinator_core/ops/fleet/_common.py',
             '_update_index_with_retry',
@@ -1918,7 +2041,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ('coordinator_core/ops/fleet/archive_plans.py', '_handle_preview', '_plan_worktree_dirty'),
         ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
         ('coordinator_core/ops/learn_lessons_config_update.py', 'main', '_machine_local_get'),
-        ('coordinator_core/ops/learn_lessons_roots.py', '_registry_roots', '_machine_local_run'),
         ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git'),
         ('coordinator_core/ops/migrate_completion_log_legacy.py', 'main', '_git_mv'),
         ('coordinator_core/ops/migrate_cross_repo_layout.py', 'main', '_move_one'),
@@ -1940,18 +2062,8 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'suggest_completion_steps',
             '_plan_touching_shas',
         ),
-        (
-            'coordinator_core/ops/promote_shipped_in_flight_stubs.py',
-            '_run_promotions',
-            '_git_common_dir',
-        ),
         ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run'),
         ('coordinator_core/ops/render_template_tree.py', 'main', 'run'),
-        (
-            'coordinator_core/ops/review_brightline_gate.py',
-            '_compute_chain_oracle',
-            '_derive_dag_chain_set',
-        ),
         ('coordinator_core/ops/review_coverage_core.py', 'build_reviewed_set', '_run'),
         ('coordinator_core/ops/review_coverage_core.py', 'build_segments', '_run'),
         (
@@ -1961,16 +2073,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ),
         ('coordinator_core/ops/run_pre_ci_hooks.py', '_run_pre_ci_hooks', 'run'),
         ('coordinator_core/ops/run_shellcheck_sweep.py', 'run_shellcheck_sweep', '_lint_one_file'),
-        (
-            'coordinator_core/ops/session/boot_sweep.py',
-            '_sweep_consumed_handoffs',
-            '_shipped_in_resolvable',
-        ),
-        (
-            'coordinator_core/ops/setup_chain_walker.py',
-            '_sibling_fallback',
-            '_functional_probe_ok',
-        ),
+        ('coordinator_core/ops/setup_chain_walker.py', '_sibling_fallback', '_functional_probe_ok'),
         (
             'coordinator_core/ops/setup_chain_walker.py',
             'command_succeeds_native',
@@ -1992,34 +2095,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             '_run_git',
         ),
         ('coordinator_core/plugin_health/drift.py', '_check_copy_install', '_run_git'),
-        (
-            'coordinator_core/reconcile/ac27_differential_oracle.py',
-            '_check_transitive_import_isolation',
-            '_git_show_blob',
-        ),
         ('coordinator_core/session_attribution.py', 'detect_foreign_commits', '_git_run'),
-        ('coordinator_core/snippet_sync/registry.py', 'list_for', '_ml_get'),
-        ('coordinator_core/snippet_sync/registry.py', 'resolve_conditional_consumers', '_ml_get'),
-        (
-            'coordinator_core/write_guards/block_consumed_handoff_edit.py',
-            'check',
-            '_normalize_and_gate',
-        ),
-        (
-            'coordinator_core/write_guards/block_cutover_phase_hand_edit.py',
-            'check',
-            '_normalize_and_gate',
-        ),
-        (
-            'coordinator_core/write_guards/block_memo_status_hand_edit.py',
-            'check',
-            '_normalize_and_gate',
-        ),
-        (
-            'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
-            '_reviewed_range_offer',
-            'Path',
-        ),
         (
             'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
             '_reviewed_range_offer',
@@ -2548,6 +2624,101 @@ def test_discriminator_unit_stride_range_still_flagged(tmp_path):
     assert [site.enclosing for site in violations] == ["check"]
 
 
+def test_discriminator_argv_spliced_chunk_not_flagged(tmp_path):
+    """Discriminator 7, direct-spawn arm: a runtime-built chunk list bounded by argv BYTES has
+    no `range` for discriminator 4 to read, but splices its loop target into argv as a
+    sequence -- one spawn per chunk. The real shape at `publish.py::_git_status_porcelain`."""
+    fixture = tmp_path / "disc_splice.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(batches):\n"
+        "    base = ['git', 'status', '--porcelain', '--']\n"
+        "    for batch in batches:\n"
+        "        subprocess.run(base + batch, cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_argv_spliced_chunk_not_flagged_through_wrapper(tmp_path):
+    """Discriminator 7, wrapper arm: the same shape reached through a local runner. Unlike
+    discriminator 6 this is NOT restricted to a direct spawn call -- a wrapper handed a whole
+    chunk in one argument spawns once for that chunk whatever it does with it. The real shape
+    at `percolate-round.py::_dest_paths_exist`."""
+    fixture = tmp_path / "disc_splice_wrapper.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run(argv):\n"
+        "    return subprocess.run(argv, capture_output=True)\n"
+        "\n"
+        "def check(paths):\n"
+        "    for chunk in _chunk_by_bytes(paths):\n"
+        "        _run(['git', 'ls-files', '--error-unmatch', '--'] + chunk)\n"
+        "\n"
+        "def _chunk_by_bytes(paths):\n"
+        "    return [paths]\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_argv_element_loop_target_still_flagged(tmp_path):
+    """Negative control for discriminator 7, and the whole point of it: a loop target placed in
+    argv as ONE ELEMENT is the per-item shape this gate exists to report. Only splicing it as a
+    SEQUENCE (`+ chunk`, `*chunk`) says one call carries the group."""
+    fixture = tmp_path / "disc_splice_negative.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    base = ['git', 'add', '--']\n"
+        "    for path in paths:\n"
+        "        subprocess.run(base + [path], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_argv_splice_declines_bare_name_argv(tmp_path):
+    """Discriminator 7 declines a bare `Name` argv: `_run(argv_for(item))` and `_run(chunk)`
+    are indistinguishable at this seam, so the site stays REPORTED. Declining rather than
+    guessing is the safe direction for a discriminator that suppresses -- the same discipline
+    `_argv0_expr` applies to its own extraction."""
+    fixture = tmp_path / "disc_splice_bare.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(groups):\n"
+        "    for group in groups:\n"
+        "        subprocess.run(group, cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_argv_splice_declines_attribute_off_loop_target(tmp_path):
+    """Discriminator 7 matches only a name the LOOP ITSELF binds. `item.argv` is an attribute
+    off the target, not the group the iterable yielded -- a per-item spawn whose argv happens to
+    be assembled from the item, which must stay reported."""
+    fixture = tmp_path / "disc_splice_attr.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(items):\n"
+        "    for item in items:\n"
+        "        subprocess.run(['git'] + item.argv, cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
 _VERB_GATED_CHOKEPOINT = (
     "import subprocess\n"
     "\n"
@@ -2883,26 +3054,24 @@ def test_route_g_negative_constant_literal_loop_not_flagged(tmp_path):
 
 
 def test_route_g_pin_against_live_repo():
-    """Pin (measured by the validated prototype route g was ported from): route g must find
-    EXACTLY these two keys against the live repo -- `_collect_discharging_range_shas` and its
-    sibling `chain_partition_execution_basis_report`, both forwarding `_record_membership_shas`
-    a runner routes d/f cannot see. Half 1 (a separate wave) fixes `directives_review.py` and
-    graduates these off this pin -- that graduation must be a visible, deliberate edit to this
-    test, not silent drift."""
+    """GRADUATED 2026-08-19, the visible deliberate edit the prior revision of this docstring
+    demanded rather than silent drift. This pinned exactly two keys --
+    `directives_review._collect_discharging_range_shas` and its sibling
+    `chain_partition_execution_basis_report`, both forwarding a `_record_membership_shas`
+    runner routes d/f cannot see. Both are now FIXED, not suppressed and not exempted:
+    `97783e5d3` taught `_CARET_RANGE_RE` that `<A>~1..<B>` denotes the same commit as
+    `<A>^..<B>`, so the 2 `~1`-spelled records in a 3785-record corpus resolve statically like
+    the other 3783 and the last per-record `git rev-list` on the close path is gone.
+
+    The assertion INVERTS rather than being deleted: route g must now find NOTHING repo-wide,
+    which makes this a regrowth guard on a class that is currently at zero. Route g's own
+    behaviour stays covered by the five planted-fixture tests above (two positive, three
+    negative) -- an empty live pin proves the repo is clean, never that the route works, and
+    those two claims must not be confused. A NEW key appearing here is a real two-hop forwarded
+    runner and must be read as one, not absorbed by re-pinning it."""
     violations = find_unbatched_per_item_spawns(_gate_scope_paths())
     route_g_keys = {site.key for site in violations if site.route == "g-forwarded-runner"}
-    assert route_g_keys == {
-        (
-            "coordinator_core/workstream_complete/directives_review.py",
-            "_collect_discharging_range_shas",
-            "_record_membership_shas",
-        ),
-        (
-            "coordinator_core/workstream_complete/directives_review.py",
-            "chain_partition_execution_basis_report",
-            "_record_membership_shas",
-        ),
-    }
+    assert route_g_keys == set()
 
 
 if __name__ == "__main__":

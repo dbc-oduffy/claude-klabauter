@@ -497,7 +497,7 @@ _CHAIN_END_ROW_IDS = frozenset({5})
 
 
 def _review_scale_decisions(**overrides: Any) -> dict:
-    """Row-5/6 fixture base. `chain_partition_verdict` is GONE from this
+    """Row-5 fixture base. `chain_partition_verdict` is GONE from this
     dict (state/kill-ledger.md K-007, 2026-08-19): the chain-scoped gate
     that produced it is removed, so a chain-terminal close resolves on the
     session-scoped brightline alone and row 6 is unreachable."""
@@ -514,8 +514,9 @@ def _review_scale_decisions(**overrides: Any) -> dict:
 
 
 def test_chain_terminal_non_trivial_chain_diff_below_brightline_selects_row_5(monkeypatch, tmp_path):
-    """(a) chain-terminal + a resolved, non-mandatory chain-scoped verdict
-    -> row 5 (code-reviewer), reachable end-to-end through brief()."""
+    """(a) chain-terminal + the session-scoped brightline resolved and not
+    tripped -> row 5 (code-reviewer), reachable end-to-end through
+    brief()."""
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
     review_scale = decision_object["gates"]["review_scale"]
@@ -524,6 +525,71 @@ def test_chain_terminal_non_trivial_chain_diff_below_brightline_selects_row_5(mo
     assert review_scale["row"] == 5
     assert review_scale["scale"] == "code-reviewer"
     assert review_scale["partition_mandatory"] is False
+
+
+def test_review_scale_judgment_point_is_advisory_no_dependency_edge_on_commit_tail(monkeypatch, tmp_path):
+    """(d) the ADVISORY posture (C0's implemented default) actually holds:
+    `d-run-wsc-tail` carries NO dependency edge on `jp-review-scale`, on
+    either a chain-terminal or a single-session close, so a future reader
+    cannot mistake the edge's absence for an oversight.
+
+    <!-- Review: staff-eng (the Staff Engineer), Finding 1/2 -- restored after K-007
+    (state/kill-ledger.md) deleted this test's `chain_partition_verdict`
+    fixture along with the chain-scoped gate; the subject (DR-068's
+    advisory posture) survives verbatim. Fixture swapped to reach row 4
+    (big-diff brightline) via `_review_scale_decisions(code_loc=600,
+    gross_loc=600, commit_count=9, surface_count=5)` instead of the removed
+    `chain_partition_verdict="PARTITION-MANDATORY"` -- both resolve the
+    decision so the recommendation-carrying branch fires. -->
+
+    As of `docs/plans/2026-08-15-judgment-points-that-gate-
+    nothing-stop-being-questions.md` C2, the resolved branch always sets
+    `reportable=True` with `resolves=[]`, so `contract/decision_object/
+    judgment.py::partition_reportable` demotes it out of
+    `decision_object["judgment_points"]` into `narration` on every
+    resolved row — `"jp-review-scale" in ids` is no longer a valid
+    precondition for this test's actual subject (see test 3 below for the
+    narration-facing assertion on that recommendation). This test's real
+    subject, DR-068's advisory posture, is asserted two independent ways:
+
+    1. No directive's `depends_on` names `jp-review-scale` directly — the
+       DR-068 property itself, checked on both legs below.
+    2. On the chain-terminal leg (the fixture that RESOLVES the decision,
+       so the recommendation-carrying branch actually fires),
+       `jp-review-scale` is absent from `judgment_points` (observed
+       demotion). `partition_reportable`'s own contract says a point named
+       in ANY directive's `depends_on` is NEVER classified `reported`, even
+       when marked `reportable=True` — so the observed demotion is itself
+       independent evidence that no dependency edge exists. Two
+       mechanisms, one property, not a duplicate check. The single-session
+       leg's `decisions={}` fixture leaves the decision UNRESOLVED, which
+       builds one of the untrusted-gate branches instead (no
+       `recommendation`, so `partition_reportable` does not demote it) —
+       (1) alone is the right check there; asserting (2) on that leg would
+       pin an accident of an unrelated, unresolved-only code path rather
+       than this test's actual subject.
+    """
+    for gate, decisions, expect_resolved in (
+        (
+            _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
+            _review_scale_decisions(code_loc=600, gross_loc=600, commit_count=9, surface_count=5),
+            True,
+        ),
+        (_gate("single-session", consumed_handoff_paths=()), {}, False),
+    ):
+        _patch_gate(monkeypatch, gate)
+        decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+        assert decision_object["gates"]["review_scale"]["resolved"] is expect_resolved
+        for directive in decision_object["directives"]:
+            assert "jp-review-scale" not in (directive.get("depends_on") or ())
+        ids = {jp["id"] for jp in decision_object["judgment_points"]}
+        if expect_resolved:
+            assert "jp-review-scale" not in ids
+        wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
+        depends_on = wsc_tail["depends_on"]
+        depends_on_list = [depends_on] if isinstance(depends_on, str) else list(depends_on)
+        assert "d-close-tail-args" in depends_on_list
+        assert "jp-review-scale" not in depends_on_list
 
 
 def test_review_scale_judgment_point_does_not_fire_on_a_fully_resolved_row_1_or_2_close(monkeypatch, tmp_path):
@@ -664,6 +730,82 @@ def test_brief_omits_commit_slices_key_when_measurement_unresolvable(monkeypatch
 
     assert "commit_slices" not in review_scale
     assert "uncommitted_code_loc" not in review_scale
+
+
+def test_review_scale_judgment_point_unresolved_carries_no_recommendation(monkeypatch, tmp_path):
+    """(e) example-retrieval-repo-em memo (cross-repo/inbox/2026-08-04-example-retrieval-repo-em-
+    brightline-partition-mandatory-does-not-halt.md, "mechanism 3"): an
+    unresolved chain-terminal review-scale decision must NOT come with a
+    `proceed-unresolved` recommendation -- that recommendation is what let
+    an EM route around a brightline gate's own PARTITION-MANDATORY verdict
+    when it wasn't carried forward. `jp-review-scale` must still fire (the
+    unresolved state is real and must be surfaced), just with
+    `recommendation is None` (the untrusted-gate shape).
+
+    <!-- Review: staff-eng (the Staff Engineer), Finding 1 -- restored after K-007
+    (state/kill-ledger.md) deleted this test's `chain_partition_verdict=None`
+    fixture along with the chain-scoped gate; the subject (an unresolved
+    decision must never recommend proceeding) survives verbatim through the
+    row-4-inputs-unresolved path, reached today via
+    `_review_scale_decisions(code_loc=None)`. -->"""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(code_loc=None),
+        repo_root=tmp_path,
+    )
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
+    assert jp["recommendation"] is None
+
+
+def test_review_scale_judgment_point_unresolved_enum_is_never_a_singleton(monkeypatch, tmp_path):
+    """(e2) example-retrieval-repo-em memo (cross-repo/inbox/2026-08-10-example-retrieval-repo-em-
+    jp-review-scale-null-is-blocked-computation.md, defect 2): dropping the
+    recommendation in (e) left `proceed-unresolved` as the enum's SOLE
+    value, so the only recordable answer was the one this point's own
+    `reason` calls routing around a missing verdict -- an EM who correctly
+    determined the close IS partition-mandatory could not say so. The
+    unresolved enum must therefore offer a settling exit alongside the
+    route-around, and must never regress to a singleton.
+
+    <!-- Review: staff-eng (the Staff Engineer), Finding 1 -- restored after K-007
+    (state/kill-ledger.md) deleted this test's `chain_partition_verdict=None`
+    fixture along with the chain-scoped gate; the subject survives verbatim
+    through the row-4-inputs-unresolved path, reached today via
+    `_review_scale_decisions(code_loc=None)`. The known-settling-disposition
+    allow-list is trimmed to `resolve-input-and-recompute` -- the only
+    settling exit `build_untrusted_gate_judgment_point` still offers
+    alongside `partition-review-by-hand` and `proceed-unresolved`; the two
+    chain-verdict-store-specific causes (`run-the-pending-gate-and-recompute`,
+    `rerun-gate-then-report-if-still-unreadable`) are gone with that store. -->
+
+    The absent `single-reviewer-ok` counterpart is asserted deliberately:
+    a hand-declared permissive verdict is what the removed chain-scoped
+    gate's fail-closed contract used to make impossible, and the enum must
+    not reopen it here."""
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions=_review_scale_decisions(code_loc=None),
+        repo_root=tmp_path,
+    )
+    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
+    values = [d["value"] for d in jp["dispositions"]]
+
+    # Asserted as an INVARIANT over the unresolved cause, not as a literal:
+    # kept here rather than duplicated elsewhere, same rationale as before
+    # K-007 -- the enum must never regress to a `proceed-unresolved`
+    # singleton.
+    _KNOWN_SETTLING_DISPOSITIONS = frozenset({
+        "resolve-input-and-recompute",
+    })
+    assert "partition-review-by-hand" in values
+    assert any(
+        (value.endswith("-recompute") or "report" in value) and value in _KNOWN_SETTLING_DISPOSITIONS
+        for value in values
+    )
+    assert "proceed-unresolved" in values
+    assert values != ["proceed-unresolved"]
+    assert not any("single-reviewer-ok" in value for value in values)
+    assert jp["recommendation"] is None
 
 
 def test_review_scale_judgment_point_resolved_non_trivial_row_keeps_acknowledge_scale(monkeypatch, tmp_path):
