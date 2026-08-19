@@ -76,6 +76,11 @@ Negative-spec (hard-won):
     and no staged completion entry never emits Resolves:.
   - Does NOT widen or touch `rollup_derive.py` / `parse_resolves_trailer.py` — this op
     is the producer; the oracle's existing exact-key `Resolves:` join is untouched.
+  - Does NOT limit the divergence check to staged docs/plans/*.md files — a routine
+    pathspec (one plan file plus the handoffs it spawned) checks `deliverable_id`
+    across the WHOLE staged set (`_staged_deliverable_ids_diverge`); two or more
+    distinct canonicalized values omits Plan-Id/Deliverable-Id/Resolves together
+    (staff-eng review finding 1, C7B — the confident-wrong-edge gap).
 """
 
 from __future__ import annotations
@@ -343,6 +348,51 @@ def _resolve_plan_from_diff(
         "plan_id": plan_id,
         "deliverable_id": deliverable_id,
     }
+
+
+def _staged_deliverable_ids_diverge(
+    worktree_root: Path, scope_paths: Optional[Sequence[str]] = None
+) -> bool:
+    """True when the staged set (this commit's own pathspec) carries TWO OR
+    MORE distinct (canonicalized) `deliverable_id` values across ALL staged
+    artifacts, not just staged docs/plans/*.md files.
+
+    Staff-eng review finding 1 (critical): `_resolve_plan_from_diff` only
+    detects ambiguity among staged docs/plans/*.md files -- blind to
+    divergence among the OTHER staged artifacts (the PM's headline case:
+    eleven staged handoffs), so a routine pathspec (one plan file plus the
+    handoffs it spawned) let commit_anchors stamp that single plan's
+    `Deliverable-Id:` onto a commit whose contents actually belong to
+    several deliverables -- a CONFIDENT WRONG edge, the precision-cost side
+    of this module's own stated asymmetry (module docstring, Negative-spec).
+    `Resolves:` rides the same resolver and is gated on the same check.
+
+    Reuses `commit_trailers._read_deliverable_id_from_frontmatter` for
+    extraction and `deliverable_equivalence.canonicalize` for the ambiguity
+    check -- the SAME leaf-read and equivalence join
+    `commit_trailers._resolve_deliverable_id_from_paths` (the sibling
+    producer already brought to this posture) uses for exactly this class
+    of check, not a second copy of the resolution logic.
+
+    Returns False (never ambiguous) when the staged set is empty/unreadable
+    or carries zero/one distinct deliverable_id -- omit-rather-than-guess
+    only fires on a genuine two-or-more-value collision.
+    """
+    from coordinator_core.git.commit_trailers import _read_deliverable_id_from_frontmatter
+
+    staged = _staged_files(worktree_root, scope_paths)
+    if not staged:
+        return False
+
+    equivalence_map = load_equivalence_map(worktree_root)
+    found: Dict[str, str] = {}
+    for rel_path in staged:
+        deliverable_id = _read_deliverable_id_from_frontmatter(worktree_root / rel_path)
+        if deliverable_id:
+            found[rel_path] = deliverable_id
+
+    canonical_values = {canonicalize(v, equivalence_map) for v in found.values()}
+    return len(canonical_values) > 1
 
 
 def _resolve_plan_from_governing_slug(
@@ -756,9 +806,26 @@ def _handler(
             plan_info = governing_info
         if plan_info is not None:
             trailers.append(f"Plan: {plan_info['path']}")
-            if plan_info["plan_id"]:
+
+            # Confident-wrong-edge guard (staff-eng review finding 1): the
+            # staged set may carry more than one deliverable across the
+            # OTHER staged artifacts (handoffs, etc.), not just staged
+            # docs/plans/*.md files -- see `_staged_deliverable_ids_diverge`.
+            # Plan-Id/Deliverable-Id/Resolves all ride the SAME resolved
+            # deliverable_id and are omitted together on divergence; Plan:
+            # (the path, not a join key) is unaffected.
+            staged_ids_diverge = _staged_deliverable_ids_diverge(worktree_root, scope_paths)
+            if staged_ids_diverge:
+                logger.warning(
+                    "commit.anchors: staged set carries divergent deliverable_id "
+                    "values across staged artifacts -- omitting Plan-Id/"
+                    "Deliverable-Id/Resolves rather than guessing (plan=%s)",
+                    plan_info.get("path"),
+                )
+
+            if plan_info["plan_id"] and not staged_ids_diverge:
                 trailers.append(f"Plan-Id: {plan_info['plan_id']}")
-            if plan_info["deliverable_id"]:
+            if plan_info["deliverable_id"] and not staged_ids_diverge:
                 trailers.append(f"Deliverable-Id: {plan_info['deliverable_id']}")
 
                 # --------------------------------------------------------

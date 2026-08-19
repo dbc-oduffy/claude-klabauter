@@ -258,6 +258,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # test-only ops, and dispatch.emit is neither. Both its siblings above are
     # explicit for the same reason.
     "dispatch.emit":                         "none",
+    # review.mint_workflow — fleet-generic, MUTATING op: reads a caller-
+    # supplied plan path plus the DoE-owned review-roster fragment (resolved
+    # via read_doe_root_pointer(), not repo_root/_origin_worktree) and writes
+    # an emitted review Workflow script, with containment resolved from the
+    # `output_path`/`target_root` wire params -- the same target-resolution
+    # model dispatch.emit above uses. Listed explicitly for the same reason
+    # dispatch.emit is: the absent-entry default is documented for
+    # unclassified and test-only ops, and this is neither.
+    "review.mint_workflow":                  "none",
     # strategic.generate — fleet-generic, MUTATING op (mirrors the cartography/
     # workflow target-resolution model): explicit REQUIRED `target_root` wire
     # param, any repo, NOT the caller's own dispatching tree. No repo-specific

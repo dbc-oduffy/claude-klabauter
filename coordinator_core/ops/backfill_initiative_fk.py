@@ -101,10 +101,20 @@ path):
       than the earlier bash-resolution approach's Windows-portability workaround (no
       shebang interpretation on Windows was the old bash-resolution rationale; this
       approach sidesteps the shebang question entirely on every platform).
+    - Batches ALL pairs surviving the per-line `_already_attached` idempotency
+      filter into ONE `coordinator-initiative attach --pairs-file` subprocess call
+      (`_attach_batch`) instead of spawning one subprocess per pair (the oracle's
+      shape, faithfully carried by this port until now). Per-pair success/failure
+      is still individually attributed via the batch call's JSON-lines stdout,
+      matched back to each pair positionally — see `_attach_batch`'s docstring for
+      the one traded-off property (a batch-wide timeout now fails every pair still
+      in flight, not just the one that hung).
 """
 
 from __future__ import annotations
 
+import itertools
+import json
 import os
 import re
 import subprocess
@@ -255,20 +265,141 @@ def _already_attached(artifact_path: str, initiative_id: str) -> bool:
     return False
 
 
+def _attach_batch(
+    pairs: List[Tuple[int, str, str]],
+    coordinator_initiative_path: str,
+    err: IO[str],
+) -> Tuple[int, int]:
+    """Attach every `(line_no, artifact_path, initiative_id)` in `pairs` via ONE
+    `coordinator-initiative attach --pairs-file` subprocess call — N pairs, one
+    spawn, not N (the amplification-gate fix this function exists for; see
+    `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`'s exemption
+    register entry for `_process_pairs::run`, now refuted and discharged).
+
+    Writes `pairs` to a temp TSV pairs-file (same format `coordinator-initiative
+    attach --pairs-file` documents), invokes the CLI once, then matches its
+    JSON-lines stdout back to the ORIGINAL pairs POSITIONALLY — the CLI emits
+    exactly one JSON line per non-blank/non-comment pairs-file line, in the same
+    order it read them, and this function writes no blank/comment lines into the
+    pairs-file, so a 1:1 zip is exact absent a subprocess crash mid-batch.
+
+    Returns `(attached, errors)`. `skipped` is never produced here — the caller
+    filters already-attached pairs out via `_already_attached` before batching, so
+    every pair reaching this function is a genuine attach attempt.
+
+    A batch-wide timeout (or a crash that exits before emitting a pair's JSON
+    line) is attributed to EVERY pair still unmatched, not silently dropped —
+    preserves the "collect all failures, name every failed pair" contract at the
+    cost of the single-pair path's per-pair timeout isolation: one hung pair in a
+    batch degrades the whole batch's timeout budget, where the old per-pair-spawn
+    loop only lost the one hung pair. Documented tradeoff of collapsing N spawns
+    into one, not an oversight.
+    """
+    tmp_fd, pairs_file = tempfile.mkstemp(suffix=".tsv", prefix="backfill-initiative-fk-pairs-")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            for _, artifact_path, initiative_id in pairs:
+                fh.write(f"{artifact_path}\t{initiative_id}\n")
+
+        batch_timeout = _ATTACH_TIMEOUT_SECS * max(len(pairs), 1)
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    coordinator_initiative_path,
+                    "attach",
+                    "--pairs-file",
+                    pairs_file,
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=batch_timeout,
+                **_CREATIONFLAGS,
+            )
+            stdout_text = result.stdout or ""
+        except subprocess.TimeoutExpired:
+            stdout_text = ""
+    finally:
+        try:
+            os.remove(pairs_file)
+        except OSError:
+            pass
+
+    result_lines = [ln for ln in stdout_text.splitlines() if ln.strip()]
+    parsed_records: List[Optional[dict]] = []
+    for result_line in result_lines:
+        try:
+            parsed_records.append(json.loads(result_line))
+        except ValueError:
+            parsed_records.append(None)
+
+    attached = 0
+    errors = 0
+    for (line_no, artifact_path, initiative_id), record in itertools.zip_longest(
+        pairs, parsed_records, fillvalue=None
+    ):
+        if line_no is None:
+            # More JSON lines than pairs we submitted -- ignore defensively rather
+            # than crash on a malformed/foreign batch response.
+            break
+        if record is None:
+            print(
+                f"{_PROG}: FAILED pair (no batch result reported): "
+                f"{artifact_path} -> {initiative_id}",
+                file=err,
+            )
+            errors += 1
+            continue
+        if record.get("ok"):
+            attached += 1
+            continue
+        print(
+            f"{_PROG}: FAILED pair: {artifact_path} -> {initiative_id} "
+            f"({record.get('error', 'unknown error')})",
+            file=err,
+        )
+        errors += 1
+
+    return attached, errors
+
+
 def _process_pairs(
     lines: Iterable[str],
     coordinator_initiative_path: str,
-    out: IO[str] = sys.stdout,
-    err: IO[str] = sys.stderr,
+    out: Optional[IO[str]] = None,
+    err: Optional[IO[str]] = None,
 ) -> Tuple[int, int, int]:
     """Process TSV `(artifact_path, initiative_id)` pairs. Returns
     `(attached, skipped, errors)`. Collects ALL failures rather than stopping at the
     first (matches oracle: "Continue processing remaining pairs; collect all
-    failures before exiting.")."""
+    failures before exiting.").
+
+    Idempotency filtering (`_already_attached`) stays a per-line, in-process check
+    — no subprocess involved — so it is not a batching concern. Every pair that
+    survives that filter is queued and attached via ONE `_attach_batch` call at the
+    end, rather than one `coordinator-initiative attach` subprocess per pair.
+
+    `out`/`err` default to `None`, resolved to the CURRENT `sys.stdout`/`sys.stderr`
+    at call time rather than bound as `sys.stdout`/`sys.stderr` at function-DEFINITION
+    time (module import). A definition-time default captures whatever stream object
+    was live at import — which, under a test harness that swaps `sys.stdout`/
+    `sys.stderr` for capture (pytest's capsys/capfd), is a stale reference: writes
+    through it land nowhere the test can observe, even though `print(x)` (no `file=`)
+    resolves `sys.stdout` fresh on every call and is unaffected. Caught by the
+    `--pairs-file` batch path, whose per-pair failure text now flows exclusively
+    through this parameter (the pre-batching per-pair loop's failure text mostly came
+    from the CHILD process's own inherited-fd stderr, which never touched this stale
+    reference at all).
+    """
+    out = out if out is not None else sys.stdout
+    err = err if err is not None else sys.stderr
+
     attached = 0
     skipped = 0
     errors = 0
     line_no = 0
+    to_attach: List[Tuple[int, str, str]] = []
 
     for raw_line in lines:
         line_no += 1
@@ -307,29 +438,12 @@ def _process_pairs(
             skipped += 1
             continue
 
-        try:
-            result = subprocess.run(
-                [sys.executable, coordinator_initiative_path, "attach", artifact_path, initiative_id],
-                stdin=subprocess.DEVNULL,
-                timeout=_ATTACH_TIMEOUT_SECS,
-                **_CREATIONFLAGS,
-            )
-            rc = result.returncode
-        except subprocess.TimeoutExpired:
-            print(
-                f"{_PROG}: FAILED pair (timeout after {_ATTACH_TIMEOUT_SECS}s): "
-                f"{artifact_path} -> {initiative_id}",
-                file=err,
-            )
-            errors += 1
-            continue
+        to_attach.append((line_no, artifact_path, initiative_id))
 
-        if rc != 0:
-            print(f"{_PROG}: FAILED pair: {artifact_path} -> {initiative_id}", file=err)
-            errors += 1
-            continue
-
-        attached += 1
+    if to_attach:
+        batch_attached, batch_errors = _attach_batch(to_attach, coordinator_initiative_path, err)
+        attached += batch_attached
+        errors += batch_errors
 
     return attached, skipped, errors
 

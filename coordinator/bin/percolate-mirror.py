@@ -406,7 +406,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
 
-    percolate_root = args.percolate_root or _round._resolve_percolate_root()
+    # `_resolve_percolate_root` owns the override precedence itself (it returns
+    # `override` unchanged when truthy), so the override is passed IN rather than
+    # short-circuited around with `or` — the latter called it with no argument on
+    # the no-override path, which is a TypeError, not a fallback.
+    percolate_root = _round._resolve_percolate_root(args.percolate_root)
     if not percolate_root:
         print("percolate-mirror: could not resolve PERCOLATE_ROOT.", file=sys.stderr)
         return _round._EXIT_USAGE

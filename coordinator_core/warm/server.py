@@ -179,7 +179,18 @@ from typing import Any, Callable, Optional
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.telemetry import op_latency
 from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
+from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.entry_seam import per_request_state
+# Reached into directly, not duplicated, despite this module's own
+# negative-spec preferring a local copy for a one-line peer computation
+# (see `_engine_clone_root`'s docstring): `_op_may_mutate`'s fail-closed
+# classification and `WARM_DISPATCH_INDETERMINATE`'s error code are
+# safety-critical to keep byte-identical between client and server -- a
+# drifted copy here could let the two sides disagree about which ops are
+# safe to re-run, which is exactly the double-execution hazard this
+# import exists to prevent. `client.py` does not import this module (see
+# its own module docstring), so this edge is acyclic.
+from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _op_may_mutate
 
 __all__ = [
     "InFlightCounter",
@@ -322,13 +333,10 @@ class _FrameError(Exception):
 
 
 def _engine_clone_root() -> Path:
-    """This server process's own resolved engine-clone root -- the same
-    computation `election._default_engine_clone` / `warm.client.
-    _engine_clone_root` / `skew._default_engine_clone` each make for their
-    own default, kept as a local copy per this package's convention of not
-    reaching into a peer module's private name for a one-line computation.
-    """
-    return Path(__file__).resolve().parents[2]
+    """This server process's own resolved engine-clone root -- collapsed
+    onto the single shared definition, `engine_root.current_engine_clone()`
+    (plan 2026-08-19-an-engine-root-is-a-stamped-build § C3)."""
+    return current_engine_clone()
 
 
 def _encode(response: dict) -> bytes:
@@ -449,6 +457,42 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     return response
 
 
+_POOL_BROKEN_INDETERMINATE_MESSAGE = (
+    "warm dispatch indeterminate: this MUTATING op was submitted to the warm "
+    "engine's dispatch process pool, and the worker executing it died "
+    "(BrokenProcessPool) before a result came back. The op may have "
+    "COMPLETED -- a dead worker is not proof the work was not performed. "
+    "Reconcile against real state (e.g. `git log`) before re-running; "
+    "re-running blind is how a duplicate commit happens. Deliberately NOT "
+    "re-run in-process here: re-executing a delivered mutation whose "
+    "outcome is unknown is exactly the double-execution this refusal "
+    "prevents."
+)
+
+
+def _pool_broken_indeterminate_envelope(msg: dict) -> dict:
+    """A JSON-RPC error envelope for a MUTATING op whose pool worker died
+    with the request's outcome unknown -- the server-side sibling of
+    `warm.client._indeterminate_envelope`, same `WARM_DISPATCH_INDETERMINATE`
+    code so the client's existing pass-through (any well-formed envelope
+    that is not ENGINE_SKEW is returned to the caller verbatim) surfaces
+    this exactly as it would surface a client-detected indeterminate case.
+
+    Returned, never raised: `_pool_dispatch`'s caller (`_serve_line`) treats
+    a raised exception as a generic INTERNAL_ERROR, which would erase the
+    distinction this envelope exists to carry (the op may have SUCCEEDED,
+    not merely failed).
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {
+            "code": WARM_DISPATCH_INDETERMINATE,
+            "message": _POOL_BROKEN_INDETERMINATE_MESSAGE,
+        },
+    }
+
+
 def _declare_execution_route() -> None:
     """Stamp this process's op-latency rows as the `warm_server` route (AC6c).
 
@@ -538,6 +582,20 @@ def _wait_for_parent_exit(parent_pid: int) -> None:
         SYNCHRONIZE = 0x00100000
         INFINITE = 0xFFFFFFFF
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # Declared, not left to ctypes' default int marshalling: a HANDLE is
+        # pointer-width, and only Windows' documented "handle values are
+        # 32-bit-significant" guarantee makes the undeclared form work by
+        # accident. Saying so costs three lines and removes the accident.
+        kernel32.OpenProcess.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.c_uint32,
+        ]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
         handle = kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
         if not handle:
             return
@@ -934,12 +992,7 @@ class _ServerContext:
             # it. That silently violated this module's own NEVER FAIL A CALLER
             # contract, which the pool was never exempt from.
             #
-            # Drop the corpse so the next request rebuilds a fresh pool, and
-            # serve THIS request in-process rather than failing it: degrading
-            # to the pre-C6 GIL-bound path costs latency under concurrency and
-            # nothing else, which is strictly better than an error. C1's
-            # measurement is why the pool exists, not a reason to prefer a
-            # failed dispatch over a slow one.
+            # Drop the corpse so the next request rebuilds a fresh pool.
             with self._dispatch_pool_lock:
                 broken = self._dispatch_pool
                 self._dispatch_pool = None
@@ -948,6 +1001,25 @@ class _ServerContext:
                     broken.shutdown(wait=False)
                 except Exception:
                     pass
+
+            # A dead worker's `future.result()` raises BrokenProcessPool for
+            # its OWN future too, not only for later submissions -- a worker
+            # that crashed mid-dispatch may have already PERFORMED the op
+            # (mutation included) before dying with the result unsent. For a
+            # COMPUTE_ONLY op that ambiguity is free to resolve by re-running:
+            # degrading to the pre-C6 GIL-bound path costs latency under
+            # concurrency and nothing else (C1's measurement is why the pool
+            # exists, not a reason to prefer a failed dispatch over a slow
+            # one). For a MUTATING op it is not free -- re-running here would
+            # be the server unilaterally re-executing a possibly-already-done
+            # mutation, the exact double-execution class this module's own
+            # per-request-state docstring and `warm.client`'s delivered-then-
+            # ambiguous ladder both exist to prevent (a `git commit` that ran
+            # twice under two Commit-Tokens, 2026-08-19). Return the honest
+            # refusal instead; `warm.client`'s pass-through surfaces it to the
+            # caller unchanged, same as a client-detected indeterminate case.
+            if _op_may_mutate(msg.get("method")):
+                return _pool_broken_indeterminate_envelope(msg)
             return _run_dispatch(msg, session_id=session_id)
 
     def _ctx_shutdown(self) -> None:

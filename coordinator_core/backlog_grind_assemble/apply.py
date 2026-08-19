@@ -303,7 +303,13 @@ def _commit_one(
             f"{commit_proc.stderr.strip() or '<no stderr>'}"
         )
     sha_proc = _run_git(["rev-parse", "HEAD"], repo_root)
-    return sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
+    landed_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
+    # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-the-
+    # siblings-unswept-7c3e1f9a4d22.yaml): this is one of the raw `git
+    # commit` producers C5 left unwired -- last step, after the commit has
+    # already landed, per `apply_base.record_ledger_entry`'s own contract.
+    apply_base.record_ledger_entry(repo_root, paths, landed_sha)
+    return landed_sha
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +668,44 @@ def _dispatch_haiku_verifier(args: list[str], repo_root: Path) -> dict[str, Any]
     }
 
 
+_UNIFY_BATONS_CLI = "unify-batons"
+
+
+def _dispatch_unify_batons(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """`unify-batons` — the run's ONE unification verb (AC10's mutation
+    half). Delegates to `pickup_assemble.unify_run_batons`, which is
+    C5's routed path; this handler implements NO unification of its own
+    and must never grow one (the plan's anti-scope: unification has
+    exactly one implementation, and a second dispatch verb that
+    re-implements it is the failure being avoided).
+
+    `args[0]` JSON (packed by `_prepare_directives_for_dispatch`):
+    `{"legs": [<repo-relative path>, ...], "role_axis_fallback_count":
+    <int>, "inventory_record": <path>}`. `legs` is the READER's resolved
+    inheritable set, forwarded for the report only — the routed path
+    resolves the batons it stamps off the durable claim ledger, never off
+    this list (see `unify_run_batons`' own docstring for why that
+    authority does not move).
+
+    Imported at call time, not module scope: `pickup_assemble` is a heavy
+    module this assembler's other verbs never need, and every one of its
+    handlers is paid for on a boot-path apply run.
+
+    Never swallows: a raise out of `unify_run_batons` means a mint or a
+    parent stamp failed with the tree half-moved, which the run must see.
+    """
+    from coordinator_core.pickup_assemble import unify_run_batons
+
+    spec = _parse_json_object_arg(args)
+    report = unify_run_batons(repo_root, spec.get("legs") or [])
+    return {
+        "cli": _UNIFY_BATONS_CLI,
+        "role_axis_fallback_count": spec.get("role_axis_fallback_count"),
+        "inventory_record": spec.get("inventory_record"),
+        **report,
+    }
+
+
 #: THE closed dispatch table (AC3). Every key is a literal string written
 #: here by hand — this dict is never mutated at runtime and never
 #: consulted via anything but a plain `dict.get`/`in` on a
@@ -675,6 +719,7 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     _SPINOFF_HANDOFF_TEMPLATE_CLI: _dispatch_spinoff_handoff_template,
     _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI: _dispatch_executor_dispatch_prompt_template,
     HAIKU_VERIFIER_CLI: _dispatch_haiku_verifier,
+    _UNIFY_BATONS_CLI: _dispatch_unify_batons,
 }
 
 
@@ -710,6 +755,19 @@ def _prepare_directives_for_dispatch(directives: list[dict[str, Any]]) -> list[d
         elif cli in (_SPINOFF_HANDOFF_TEMPLATE_CLI, _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI):
             directive = dict(directive)
             directive["args"] = [json.dumps(directive.get("fields", {}))]
+        elif cli == _UNIFY_BATONS_CLI:
+            directive = dict(directive)
+            directive["args"] = [
+                json.dumps(
+                    {
+                        "legs": list(directive.get("args") or []),
+                        "role_axis_fallback_count": directive.get(
+                            "role_axis_fallback_count"
+                        ),
+                        "inventory_record": directive.get("inventory_record"),
+                    }
+                )
+            ]
         elif cli == HAIKU_VERIFIER_CLI:
             directive = dict(directive)
             directive["args"] = [

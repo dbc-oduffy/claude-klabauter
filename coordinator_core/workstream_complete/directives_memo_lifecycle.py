@@ -125,6 +125,7 @@ import subprocess
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
@@ -250,7 +251,30 @@ def build_memo_disposition_directives(dispositions: list[dict[str, Any]]) -> lis
     fixed singleton id, this pair is not.
     """
     directives: list[dict[str, Any]] = []
-    for disposition in dispositions:
+    for idx, disposition in enumerate(dispositions):
+        if not isinstance(disposition, Mapping):
+            # A {path: decision} MAPPING, or a bare list of memo paths, is the
+            # natural first guess at this shape and used to reach `["path"]` and
+            # die on `TypeError: string indices must be integers` — a traceback
+            # that names neither the key nor the entry. Mirrors the identical
+            # refusal `directives_lessons_plan.build_lesson_capture_directives`
+            # already gives for its own bare-string case: same rejection, same
+            # nothing-written guarantee, just legible.
+            raise ValueError(
+                f"decisions['memo_dispositions'][{idx}] is a "
+                f"{type(disposition).__name__}, not a mapping (required key: "
+                "'path'; optional: 'decision'). Supply a list of "
+                "{'path': <inbox memo path>, 'decision': <one-line text>} "
+                "mappings and re-run apply — this is a malformed decisions map, "
+                "not a ceremony failure, and nothing has been written."
+            )
+        if not str(disposition.get("path") or "").strip():
+            raise ValueError(
+                f"decisions['memo_dispositions'][{idx}] is missing required key "
+                "'path'. Supply it and re-run apply — this is a malformed "
+                "decisions map, not a ceremony failure, and nothing has been "
+                "written."
+            )
         path = str(disposition["path"])
         basename = Path(path).name
         claim_id = f"d-claim-memo-stamp:{basename}"

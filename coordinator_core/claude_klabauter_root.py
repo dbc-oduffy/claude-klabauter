@@ -278,6 +278,19 @@ _RESOLUTION_LIVE_WORKING_TREE_LITERAL = "live-working-tree"
 #: so this wrapper takes the short-circuit while the shim runs its own full
 #: ladder, and both are asserted to still agree. A future step-order change
 #: that breaks that agreement fails there, not only in prose.
+#:
+#: C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md) changed
+#: the step-1 precondition again: `_resolve_published_engine` now ALSO
+#: requires a valid engine build stamp ("an engine root is a stamped build.
+#: No stamp, no engine.") before treating `repos.claude_klabauter` as
+#: usable. This short-circuit's own precondition — `repos.claude_klabauter`
+#: is REGISTERED AT ALL (a bare `_registry_value` read, never
+#: `_resolve_published_engine`) — is unaffected: it decides only whether the
+#: gate's published-engine branches can fire, not whether they succeed, so
+#: a registered-but-unstamped root still takes the full-gate path at step 3
+#: below and correctly fails to resolve there rather than short-circuiting
+#: past the stamp check. Recorded here per the obligation above rather than
+#: left implicit.
 
 _shim_module: Optional[types.ModuleType] = None
 

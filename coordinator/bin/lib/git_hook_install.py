@@ -344,7 +344,13 @@ def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional
 #
 # Starts at 2, not 1: generation 1 is the implicit pre-stamp era above, never
 # itself stamped, so no `_HOOK_GEN_STAMP = 1` exists in history to find.
-_HOOK_GEN_STAMP = 2
+#
+# Bumped to 3 (2026-08-19, C7 of docs/plans/2026-08-16-one-engine-for-the-whole-box.md):
+# the shell fallback chain's rung ORDER changed (settings-home forwarder now
+# resolves before the baked absolute path, not after it — see `_shim_body`'s
+# docstring), so a body generated under the old order must be recognized as
+# stale and regenerated, not certified current by substring match alone.
+_HOOK_GEN_STAMP = 4
 
 
 def _hook_gen_stamp_line() -> str:
@@ -358,11 +364,19 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
     both hooks now `exec` synchronously at the shell level; any async self-detach
     (post-commit's coordinator-auto-push) is owned by the invoked Python, not the shim.
 
-    The shell fallback chain (baked SCRIPT → .doe-root pointer →
-    settings-home forwarder → engine-repo-bin candidate → marketplace) means
+    The shell fallback chain (settings-home forwarder → baked SCRIPT →
+    .doe-root pointer → engine-repo-bin candidate → marketplace) means
     an already-installed hook can recover a dead baked path WITHOUT waiting
     for the next `_resolve_coord_bin` regeneration — self-healing at
-    hook-run time, not only at install time.
+    hook-run time, not only at install time. The settings-home rung is
+    checked FIRST, ahead of the baked absolute path: a baked literal
+    absolute path is only ever correct on the box it was generated on,
+    while the settings-home forwarder resolves via
+    `$COORDINATOR_SETTINGS_HOME` (or its `$HOME` default) on any machine —
+    strictly more correct wherever a checkout has moved, and no worse where
+    it hasn't. Reordered 2026-08-19 (gen 3): the baked-first order left
+    rungs 2+ dead code on any box where the bake-time path still happened to
+    exist, masking their own staleness.
 
     Carries `_hook_gen_stamp_line()` immediately after the header comment
     block — see that function's own comment for why currency is decided by
@@ -374,12 +388,14 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
     # is a generated forwarder that calls `_resolve_claude_klabauter.exec_cli("<name>")`,
     # and `exec_cli` itself probes `<target>.py` when the bare name is absent —
     # so one rung here resolves correctly across a bin/ rename without a
-    # second `.py`-suffixed probe line. Placed after the .doe-root pointer
-    # (an explicit, durable, install-scoped signal) and before the
-    # machine-local-registry-dependent engine-repo-bin candidate: the
-    # forwarder is a plain generated file present on any machine with
-    # coordinator-claude installed, so it does not depend on `machine-local`
-    # being resolvable at hook-run time the way the next rung does.
+    # second `.py`-suffixed probe line. Placed FIRST, ahead of the baked
+    # absolute path: the forwarder is a plain generated file present on any
+    # machine with coordinator-claude installed and resolves via
+    # `$COORDINATOR_SETTINGS_HOME` (or its `$HOME` default), so it is
+    # correct on every machine a checkout might move to — unlike the baked
+    # SCRIPT literal below it, which is only ever correct on the box it was
+    # generated on. Reordered 2026-08-19 (gen 3) — see `_shim_body`'s own
+    # docstring for why the prior baked-first order left this rung dead.
     settings_home_script = (
         '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
         f'{script_name}'
@@ -406,7 +422,8 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
         '[ -n "$_PY" ] || { echo "[coordinator] WARNING: hook installed but no '
         'python3/python/py interpreter found on PATH — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
-        f'SCRIPT="{coord_bin_sh}/{script_name}"\n'
+        f'SCRIPT="{settings_home_script}"\n'
+        f'[ -f "$SCRIPT" ] || SCRIPT="{coord_bin_sh}/{script_name}"\n'
         f'[ -f "$SCRIPT" ] || SCRIPT="{coord_bin_sh}/{script_name}.py"\n'
         '[ -f "$SCRIPT" ] || { _dr="$(cat "' + _DOE_ROOT_DURABLE_SH + '" 2>/dev/null || '
         'cat "' + _DOE_ROOT_LEGACY_SH + '" 2>/dev/null)"; '
@@ -414,13 +431,12 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
         f'SCRIPT="$_dr/coordinator/bin/{script_name}"; '
         f'[ -n "$_dr" ] && [ ! -f "$SCRIPT" ] && [ -f "$_dr/coordinator/bin/{script_name}.py" ] && '
         f'SCRIPT="$_dr/coordinator/bin/{script_name}.py"; }}\n'
-        f'[ -f "$SCRIPT" ] || SCRIPT="{settings_home_script}"\n'
         f"{claude_klabauter_probe}"
         f'[ -f "$SCRIPT" ] || SCRIPT="{fallback}"\n'
         f'[ -f "$SCRIPT" ] || SCRIPT="{fallback}.py"\n'
         '[ -f "$SCRIPT" ] || { echo "[coordinator] WARNING: hook installed but '
-        f'{script_name} not found (looked in baked path, .doe-root, settings-home '
-        'forwarder, machine-local repos.claude_klabauter, and marketplace) — commits '
+        f'{script_name} not found (looked in settings-home forwarder, baked path, '
+        '.doe-root, machine-local repos.claude_klabauter, and marketplace) — commits '
         'are NOT being auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
         f"{invoke_line}\n"
     )
@@ -453,10 +469,11 @@ def _append_block(
     """
     fallback = _sh_path(os.path.join("$HOME", _MARKETPLACE_SUFFIX, script_name))
     coord_bin_sh = _sh_path(coord_bin)
-    # Settings-home forwarder rung — matches _shim_body's chain (see that
-    # function's docstring for why this rung is placed here: after the
-    # .doe-root pointer, before the machine-local-registry-dependent
-    # engine-repo-bin candidate).
+    # Settings-home forwarder rung — matches `_shim_body`'s chain (see that
+    # function's docstring): placed FIRST, ahead of the baked absolute path,
+    # since it resolves via `$COORDINATOR_SETTINGS_HOME` and is therefore
+    # correct on any machine a checkout has moved to. Reordered 2026-08-19
+    # (gen 3).
     settings_home_script = (
         '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
         f'{script_name}'
@@ -471,7 +488,8 @@ def _append_block(
     return (
         f"\n{start_marker}\n"
         "{ " + python_probe_lines("_PY") + "\n"
-        f'_T="{coord_bin_sh}/{script_name}"; '
+        f'_T="{settings_home_script}"; '
+        f'[ -f "$_T" ] || _T="{coord_bin_sh}/{script_name}"; '
         f'[ -f "$_T" ] || _T="{coord_bin_sh}/{script_name}.py"; '
         '[ -f "$_T" ] || { _dr="$(cat "' + _DOE_ROOT_DURABLE_SH + '" 2>/dev/null || '
         'cat "' + _DOE_ROOT_LEGACY_SH + '" 2>/dev/null)"; '
@@ -479,12 +497,11 @@ def _append_block(
         f'_T="$_dr/coordinator/bin/{script_name}"; '
         f'[ -n "$_dr" ] && [ ! -f "$_T" ] && [ -f "$_dr/coordinator/bin/{script_name}.py" ] && '
         f'_T="$_dr/coordinator/bin/{script_name}.py"; }}; '
-        f'[ -f "$_T" ] || _T="{settings_home_script}"; '
         f"{claude_klabauter_probe}"
         f'[ -f "$_T" ] || _T="{fallback}"; '
         f'[ -f "$_T" ] || _T="{fallback}.py"; '
         f'[ -f "$_T" ] || echo "[coordinator] WARNING: hook installed but {script_name} '
-        'not found (looked in baked path, .doe-root, settings-home forwarder, '
+        'not found (looked in settings-home forwarder, baked path, .doe-root, '
         'machine-local repos.claude_klabauter, and marketplace) — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; '
         '[ -n "$_PY" ] || echo "[coordinator] WARNING: hook installed but no '

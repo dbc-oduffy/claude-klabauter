@@ -327,6 +327,33 @@ def test_malformed_frame_does_not_kill_the_loop():
         assert io_obj.closed
 
 
+def test_ordinary_dispatch_exception_still_surfaces_as_internal_error():
+    """An op-level bug (any exception `dispatch` raises other than the
+    `BrokenProcessPool` recovery `_pool_dispatch` already handles) must keep
+    reaching the caller as an ordinary INTERNAL_ERROR envelope, unchanged --
+    the negative-spec for the pool-death indeterminate branch: narrowing the
+    dead-pool signal to `_pool_dispatch`'s own except clause must not widen
+    what counts as 'engine unhealthy' at this generic seam."""
+    in_flight = server.InFlightCounter()
+    io_obj = _FakeIO([_frame(id_=1)])
+
+    def _raising_dispatch(msg, session_id=None):
+        raise ValueError("some ordinary op bug")
+
+    server._handle_connection(
+        io_obj,
+        version_state=_FakeVersionState(),
+        server_sha="x",
+        close_listener=lambda: None,
+        drain=lambda: None,
+        in_flight=in_flight,
+        dispatch=_raising_dispatch,
+    )
+    response = _written_responses(io_obj)[0]
+    assert response["error"]["code"] == server.INTERNAL_ERROR
+    assert "some ordinary op bug" in response["error"]["message"]
+
+
 def test_run_dispatch_opens_per_request_state(monkeypatch):
     """`_run_dispatch` must open `entry_seam.per_request_state()` around
     every call into `coordinator_core.ipc.dispatch_message` -- a fresh,
@@ -569,33 +596,11 @@ def test_ctx_shutdown_does_not_clear_a_successors_breadcrumb(tmp_path):
     assert surviving["engine_sha"] == "successor"
 
 
-def _write_git_fixture(git_dir) -> None:
-    git_dir.mkdir(parents=True, exist_ok=True)
-    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
-    (git_dir / "refs" / "heads").mkdir(parents=True, exist_ok=True)
-    (git_dir / "refs" / "heads" / "main").write_text("a" * 40, encoding="utf-8")
-
-
-def _rotate_git_fixture(git_dir) -> None:
-    # A real commit rewrites the ref file's content (new sha, same or
-    # different length) -- rewriting it here with different content changes
-    # both its mtime and (usually) its size, either of which is enough to
-    # change `skew.compute_client_token`'s `_stat_pair` fingerprint.
-    (git_dir / "refs" / "heads" / "main").write_text("b" * 40, encoding="utf-8")
-    # Guard against a filesystem whose mtime resolution is too coarse to
-    # register two writes within one test as distinct -- force it forward.
-    import os as _os
-    import time as _time
-
-    st = (git_dir / "refs" / "heads" / "main").stat()
-    _os.utime(git_dir / "refs" / "heads" / "main", ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
-
-
 def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     """Composed regression for the leak's actual field shape (EM's
     addendum, example-retrieval-repo-f7's finding): rotation MINTS an orphan (a new
-    `.git/HEAD`/ref fingerprint -> a new `compute_client_token` -> a new
-    pipe name, binding a successor without contesting the predecessor's
+    engine-stamp fingerprint -> a new `compute_client_token` -> a new pipe
+    name, binding a successor without contesting the predecessor's
     still-listening pipe -- `election.py`'s own docstring), and dead
     demotion is what makes that orphan immortal. A predecessor that DID
     serve a request before being stranded (so its idle clock was marked,
@@ -604,6 +609,14 @@ def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     zero-served short-circuit, which a demotion fix could satisfy while
     leaving this exact real-world orphan alive.
 
+    Rotation is a publish rewriting the engine stamp
+    (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C4 --
+    `compute_client_token` no longer reads `.git/HEAD`/ref state at all, so
+    the git-ref rewrite this test used to rotate on is no longer a live
+    signal; `skew.write_engine_stamp` is what a publish round actually
+    calls, per `test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp`
+    above).
+
     Runs the predecessor in a REAL subprocess (idle.py's clock is
     process-global -- module docstring -- so two servers' idle state
     cannot be faithfully modelled in one process) with a short
@@ -611,11 +624,9 @@ def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     override, marks one invocation, then asserts the process exits on its
     own within the deadline with NO further activity.
     """
-    git_dir = tmp_path / ".git"
-    _write_git_fixture(git_dir)
-
+    skew.write_engine_stamp(tmp_path, "sha-before-rotation")
     token_before = skew.compute_client_token(tmp_path)
-    _rotate_git_fixture(git_dir)
+    skew.write_engine_stamp(tmp_path, "sha-after-rotation")
     token_after = skew.compute_client_token(tmp_path)
     assert token_before != token_after  # rotation mints a new generation token
 

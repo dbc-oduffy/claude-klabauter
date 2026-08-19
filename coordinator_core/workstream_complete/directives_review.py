@@ -130,6 +130,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core import chain_attribution
+from coordinator_core.commit_ledger.oracle import OracleReport
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 from coordinator_core.coverage import (
     SAFE_RANGE as _SAFE_RANGE,
@@ -194,6 +195,17 @@ _BRIGHTLINE_COMMITS = 5
 _BRIGHTLINE_SURFACES = 4
 _SMALL_FIX_LOC_CEILING = 50
 
+#: Chain-wide arm ceiling (C7, restoring what K-007's row-6 removal lost).
+#: Mirrors row 4's `_BRIGHTLINE_COMMITS` on the same unit -- an
+#: `OracleReport` figure's `weight` accumulates at `_DEFAULT_BASELINE_
+#: WEIGHT` (1.0, `commit_ledger/classify.py`) per non-noise commit absent
+#: repo-specific elevation, so this ceiling reads as "the chain-wide
+#: equivalent of row 4's 5-commit brightline" rather than an unrelated
+#: figure. Scoped to this module only -- not exported, not reused by the
+#: oracle itself (`oracle.py`'s own docstring: NO threshold comparison
+#: there, that stays here).
+_CHAIN_WEIGHT_CEILING = float(_BRIGHTLINE_COMMITS)
+
 def _unresolved(reason: str) -> ReviewScaleDecision:
     return ReviewScaleDecision(
         row=None, scale="unresolved", partition_mandatory=False,
@@ -201,7 +213,7 @@ def _unresolved(reason: str) -> ReviewScaleDecision:
     )
 
 
-def decide_review_scale(
+def _decide_review_scale_core(
     *,
     gross_loc: Optional[int],
     code_loc: Optional[int],
@@ -446,6 +458,99 @@ def decide_review_scale(
             ),
         )
     return no_review_decision
+
+
+def _apply_chain_wide_arm(
+    decision: ReviewScaleDecision, oracle_report: Optional[OracleReport]
+) -> ReviewScaleDecision:
+    """The chain-wide arm (C7): folds `oracle_report` into `decision`'s
+    `scale`/`reason` ONLY -- restores what K-007's row-6 removal lost, on
+    the ledger substrate that makes it cheap (`commit_ledger/oracle.py`).
+
+    HARD REQUIREMENT (AC11, B4): NEVER sets `partition_mandatory`. Row 4's
+    own `partition_mandatory=True` (`_row4_decision`) is a SESSION-scoped
+    verdict this arm must not touch either way -- `ops/ceremony/tail_ops.py`
+    turns `partition_mandatory=True` plus incomplete review-trail metadata
+    into `failed_critical[]`, the exact hard stop K-007 removed, and any
+    path letting this arm influence that field rebuilds K-007 one call
+    frame away. `decision.row` and `decision.partition_mandatory` are
+    therefore always returned byte-identical to what `_decide_review_scale_
+    core` computed.
+
+    No-ops (returns `decision` unchanged) when:
+      - `oracle_report` is `None` -- no caller has wired the oracle in yet,
+        byte-identical to pre-C7 behaviour.
+      - `oracle_report.resolved` is `False` -- "pending, no ledger yet"
+        (`oracle.py`'s own docstring) carries no disposition to offer here
+        either; this arm inherits the oracle's own no-verdict-on-pending
+        stance rather than manufacturing one.
+      - `decision.scale != "none"` -- row 3/4/5 already selected a
+        reviewer or partition; the chain-wide arm only ever RAISES a
+        no-review outcome, never re-scopes one that already has a
+        reviewer, and never downgrades `"unresolved"`.
+      - the oracle's `with_docs` weight is below `_CHAIN_WEIGHT_CEILING`
+        (or unresolved/`None`) -- nothing to raise on.
+
+    Otherwise, upgrades a `scale="none"` outcome to `"code-reviewer"`
+    (never `"partitioned"` -- that stays row 4's call alone) and appends
+    the chain-wide basis to `reason`, so the accumulated-small-sessions
+    case row 6 used to catch is visible again without resurrecting its
+    exit-code/hard-halt shape.
+    """
+    if oracle_report is None or not oracle_report.resolved:
+        return decision
+    if decision.scale != "none":
+        return decision
+
+    weight = oracle_report.with_docs.weight
+    if weight is None or weight < _CHAIN_WEIGHT_CEILING:
+        return decision
+
+    return decision._replace(
+        scale="code-reviewer",
+        reason=(
+            f"{decision.reason}; chain-wide arm raised to code-reviewer "
+            f"(with_docs weight {weight:g} >= ceiling {_CHAIN_WEIGHT_CEILING:g}: "
+            f"{oracle_report.with_docs.basis})"
+        ),
+    )
+
+
+def decide_review_scale(
+    *,
+    gross_loc: Optional[int],
+    code_loc: Optional[int],
+    commit_count: Optional[int],
+    surface_count: Optional[int],
+    executor_dispatched: Optional[bool],
+    shared_schema_touched: Optional[bool],
+    chain_disposition: str,
+    baton_count: Optional[int] = None,
+    commit_count_scope: Optional[str] = None,
+    oracle_report: Optional[OracleReport] = None,
+) -> ReviewScaleDecision:
+    """Wraps `_decide_review_scale_core` (the row-selection table, docstring
+    there) with the chain-wide oracle arm (`_apply_chain_wide_arm`, C7).
+
+    `oracle_report` is the only new input: an `Optional[commit_ledger.
+    oracle.OracleReport]`, `None` by every existing caller until they wire
+    C7's oracle in. `None` leaves this function byte-identical to the
+    pre-C7 `_decide_review_scale_core` on every input combination -- the
+    arm is purely additive and cannot change row selection, precedence, or
+    `partition_mandatory` for a caller that has not adopted it yet.
+    """
+    decision = _decide_review_scale_core(
+        gross_loc=gross_loc,
+        code_loc=code_loc,
+        commit_count=commit_count,
+        surface_count=surface_count,
+        executor_dispatched=executor_dispatched,
+        shared_schema_touched=shared_schema_touched,
+        chain_disposition=chain_disposition,
+        baton_count=baton_count,
+        commit_count_scope=commit_count_scope,
+    )
+    return _apply_chain_wide_arm(decision, oracle_report)
 
 
 # ---------------------------------------------------------------------------

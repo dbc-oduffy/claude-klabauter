@@ -567,26 +567,53 @@ _YAML_QUEUE_FAMILIES = (
 
 def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
     bin_dir = settings_home / "bin"
-    prune_cli = Path(overrides["prune_cli"]) if overrides.get("prune_cli") else bin_dir / "prune-resolved-queue-entries.py"
+    override_cli = overrides.get("prune_cli")
+    prune_cli = Path(override_cli) if override_cli else bin_dir / "prune-resolved-queue-entries.py"
     queues = overrides.get("queues") or list(_DEFAULT_QUEUES)
 
     overall_fail = False
     any_legacy_present = False
     total_pruned = 0
     lines: list[str] = []
-    for queue in queues:
+
+    existing_queues = [q for q in queues if (repo_root / q).is_file()]
+    any_legacy_present = bool(existing_queues)
+    before_counts = {
+        q: sum(1 for _ in (repo_root / q).open("r", encoding="utf-8", errors="replace"))
+        for q in existing_queues
+    }
+
+    if existing_queues:
+        if override_cli:
+            # A caller-substituted CLI (overrides["prune_cli"]) is not
+            # guaranteed to accept multiple positionals the way our own
+            # prune-resolved-queue-entries.py now does — keep the original
+            # one-spawn-per-queue contract for this seam rather than
+            # assuming multi-arg support it may not have.
+            for queue in existing_queues:
+                proc = _run(prune_cli, [str(repo_root / queue)])
+                if proc is None or proc.returncode != 0:
+                    overall_fail = True
+                    lines.append(f"prune FAILED for {queue}")
+        else:
+            # Our own CLI's single-subject arity was self-imposed
+            # (prune_resolved_queue_entries.main took exactly one
+            # positional); it now prunes N queue-files independently in one
+            # process, still emitting a per-file stderr line on failure —
+            # so the whole default-callee sweep collapses to one spawn.
+            proc = _run(prune_cli, [str(repo_root / q) for q in existing_queues])
+            if proc is None:
+                overall_fail = True
+                lines.append("prune FAILED for all queues (CLI could not be spawned)")
+            elif proc.returncode != 0:
+                overall_fail = True
+                stderr_lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
+                lines.extend(stderr_lines or ["prune FAILED (nonzero exit, no stderr detail)"])
+
+    for queue in existing_queues:
         queue_path = repo_root / queue
-        if not queue_path.is_file():
-            continue
-        any_legacy_present = True
-        before = sum(1 for _ in queue_path.open("r", encoding="utf-8", errors="replace"))
-        proc = _run(prune_cli, [str(queue_path)])
-        if proc is None or proc.returncode != 0:
-            overall_fail = True
-            lines.append(f"prune FAILED for {queue}")
-            continue
         after = sum(1 for _ in queue_path.open("r", encoding="utf-8", errors="replace"))
-        pruned = before - after
+        pruned = before_counts[queue] - after
         total_pruned += pruned
         if pruned:
             lines.append(f"pruned {pruned} lines from {queue}")

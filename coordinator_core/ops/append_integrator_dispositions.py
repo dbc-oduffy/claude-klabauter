@@ -37,19 +37,22 @@ Concretely, `append_dispositions` refuses (raises `DispositionsError`) unless:
     the sibling guard's own single-literal `_REVIEWER_AGENT_TYPE`, which gates
     a different question (which sidecars block an EM hand-edit); see that
     constant's own comment below for why the two must not be reconciled,
-  - the target actually carries filled-in findings — the `## Findings`
-    section body (everything between that heading and whichever comes
-    first of the `## Exit interview` heading, the `## Integrator
-    Dispositions` heading, or end of document — NOT the whole document,
-    and NOT truncated at the next `## `/`### ` sub-heading, since the
-    reviewer's own layout nests `## Summary` and `### Finding N` INSIDE
-    the findings body) is not still the unfilled-scaffold placeholder —
-    there is nothing to disposition against an empty scaffold. Scoped to
-    the section on purpose: the placeholder sentinel surviving elsewhere
-    in the document (a quoted finding, an unrelated template remnant)
-    must never trip this check. This check does not parse or count
-    individual findings — it only distinguishes the pristine unfilled
-    scaffold from a body that carries any real content.
+  - the target actually carries filled-in findings, checked under whichever
+    of two named shapes it matches (`_detect_findings_shape`): the
+    `review-findings` shape (`## Findings` section body — everything
+    between that heading and whichever comes first of the `## Exit
+    interview` heading, the `## Integrator Dispositions` heading, or end
+    of document — NOT the whole document, and NOT truncated at the next
+    `## `/`### ` sub-heading, since the reviewer's own layout nests
+    `## Summary` and `### Finding N` INSIDE the findings body) is not still
+    the unfilled-scaffold placeholder; or the `staff-eng-review` shape (a
+    fenced ```json code block with a non-empty top-level `findings` array —
+    the shape every Opus reviewer persona actually emits, distinct from the
+    heading-scaffold above). A target matching NEITHER shape is refused,
+    naming both. Scoped to the section/block on purpose: the placeholder
+    sentinel or a quoted mention surviving elsewhere in the document must
+    never trip either check. Neither check parses or counts individual
+    findings beyond emptiness.
   - at least one finding id was supplied across the five disposition buckets,
   - the target does not already carry the heading (idempotent no-op instead —
     see `append_dispositions`'s return value).
@@ -87,10 +90,11 @@ Sibling doctrine: DoE-claude coordinator/agents/review-integrator.md
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.declared_writes import declare_write
@@ -178,6 +182,28 @@ _REVIEWER_AGENT_TYPES = frozenset(
 _DISPOSITIONS_HEADING = "## Integrator Dispositions"
 _FINDINGS_HEADING = "## Findings"
 _EXIT_INTERVIEW_HEADING = "## Exit interview"
+
+#: Named findings-bearing shapes this module can extract from. Two, not one:
+#: `review-findings` (the `## Findings` heading scaffold, DR-091) and
+#: `staff-eng-review` -- what every Opus reviewer persona
+#: (`_REVIEWER_AGENT_TYPES`'s six-persona subset) ACTUALLY writes when
+#: dispatched, which is NOT the `## Findings`-headed scaffold
+#: `provision_report._build_staff_eng_review_doc_text` provisions at spawn
+#: time. Personas write their own free-form document over that scaffold, and
+#: the one constant across observed real sidecars (H1 wording varies:
+#: "# Staff review", "# Staff-eng review", "# Review", "# Re-review", ...)
+#: is a fenced ```json code block carrying a top-level `findings` array. See
+#: `_find_json_findings_block` for why detection is content-addressed
+#: (the JSON payload) rather than heading-anchored (the H1 text).
+_SHAPE_REVIEW_FINDINGS = "review-findings"
+_SHAPE_STAFF_ENG_REVIEW = "staff-eng-review"
+
+#: Matches a single fence DELIMITER LINE (an opening ```<lang> or a bare
+#: closing ```), anchored to line start (mirrors `_find_heading`'s own
+#: line-anchoring discipline, for the same reason -- a ``` mentioned
+#: mid-line in prose must never be read as a fence). Deliberately NOT a
+#: whole-block matcher -- see `_iter_fenced_blocks` for why.
+_FENCE_DELIM_RE = re.compile(r"(?m)^```[A-Za-z0-9_-]*[ \t]*\r?$")
 _FINDINGS_SENTINEL = (
     "<!-- One entry per finding: `- [severity] <finding> "
     "— disposition: accepted | rejected | deferred — rationale: ...` -->"
@@ -265,6 +291,106 @@ def _findings_section_is_empty(section: str) -> bool:
     elsewhere in the document (a template remnant, a quoted finding) never
     factors in."""
     return section.replace(_FINDINGS_SENTINEL, "").strip() == ""
+
+
+def _iter_fenced_blocks(text: str):
+    """Yield the body of every CONSECUTIVE pair of fence-delimiter lines, in
+    document order.
+
+    Deliberately delimiter-based, not block-based. The prior implementation
+    matched a whole ```lang\\n...\\n``` block in one DOTALL regex with no
+    pairing awareness: `.*?` happily spans across an intervening ``` line,
+    so an EARLIER, unterminated fence (a narrative section's formatting
+    slip, no matching close) greedily expanded past it looking for the next
+    line anywhere later in the document that looked like a closing fence --
+    which could be the closing fence of a real, well-formed block. That
+    steals the real block's closing delimiter: the real block's own opening
+    line is consumed as body text of the bogus match (never seen as an
+    opening at all), the bogus match's body -- garbage spanning both blocks
+    -- fails `json.loads`, and the genuinely populated findings block
+    becomes invisible to detection. See the 2026-08-19 review finding this
+    fixes for a worked repro.
+
+    Pairing every fence-delimiter line with its immediate successor (rather
+    than trying to track nesting/well-formedness) means a bad pairing just
+    fails to parse as JSON and the scan moves on to the next pair, instead
+    of consuming a good block whole. Line-anchored like `_find_heading`,
+    for the same reason: a ``` mentioned mid-line in prose must never read
+    as a fence.
+    """
+    delimiters = list(_FENCE_DELIM_RE.finditer(text))
+    for opening, closing in zip(delimiters, delimiters[1:]):
+        body_start = opening.end()
+        if body_start < len(text) and text[body_start] == "\n":
+            body_start += 1
+        body = text[body_start:closing.start()]
+        if body.endswith("\n"):
+            body = body[:-1]
+        if body.endswith("\r"):
+            body = body[:-1]
+        yield body
+
+
+def _find_json_findings_block(text: str) -> Optional[List[Any]]:
+    """Return the `findings` list off the first fenced code block whose body
+    parses as a JSON object carrying a top-level `findings` array, or
+    ``None`` if no such block exists.
+
+    Deliberately content-addressed, not heading-anchored: real persona
+    sidecars observed on disk use inconsistent H1 wording (see
+    `_SHAPE_STAFF_ENG_REVIEW`'s comment), so pinning a literal heading
+    string here would only re-create the review-findings extractor's own
+    former fragility under a different label. A fenced block is only ever
+    treated as a match if `json.loads` succeeds AND the parsed value is a
+    dict with a list-typed `findings` key -- prose that quotes the shape
+    (a finding's own text describing the JSON mechanism, a fenced snippet
+    that isn't itself valid JSON) fails one of those two conditions and is
+    correctly not detected, which is this function's share of the same
+    prose-quoting negative-spec `_find_heading` documents. See
+    `_iter_fenced_blocks` for why candidate bodies come from consecutive
+    delimiter pairs rather than a single whole-block regex.
+    """
+    for body in _iter_fenced_blocks(text):
+        try:
+            parsed = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
+            return parsed["findings"]
+    return None
+
+
+def _detect_findings_shape(text: str) -> "tuple[Optional[str], bool]":
+    """Dispatch to whichever of the two named shapes `text` matches.
+
+    Returns ``(shape, is_empty)``. ``shape`` is ``None`` when neither
+    extractor matches -- the caller refuses, naming both shapes.
+
+    The two shapes are NOT mutually exclusive, and assuming they were is how
+    this dispatcher would quietly reproduce the very defect it fixes. Measured
+    against the live corpus (307 persona sidecars under state/subagent-share/):
+    142 carry a JSON findings block only, 76 a `## Findings` heading only, and
+    19 carry BOTH -- `provision_report._build_staff_eng_review_doc_text`
+    scaffolds the heading at spawn time, and a persona that writes its JSON
+    without clearing that scaffold leaves both on disk.
+
+    So `review-findings` is tried first, but a review-findings match whose
+    section is still the UNFILLED SCAFFOLD does not end the search: an empty
+    scaffold attests nothing, and refusing on it while a populated JSON block
+    sits in the same file is the original bug wearing a new label. All 19
+    current both-shape files happen to carry a filled section, so this
+    fall-through fires zero times today -- it is here so the outcome does not
+    depend on that continuing to be true.
+    """
+    section = _extract_findings_section(text)
+    findings_list = _find_json_findings_block(text)
+    if section is not None and not _findings_section_is_empty(section):
+        return _SHAPE_REVIEW_FINDINGS, False
+    if findings_list is not None:
+        return _SHAPE_STAFF_ENG_REVIEW, len(findings_list) == 0
+    if section is not None:
+        return _SHAPE_REVIEW_FINDINGS, True
+    return None, False
 
 
 def _extract_frontmatter_agent_type(text: str) -> str:
@@ -398,23 +524,30 @@ def append_dispositions(
             "assessment, or your OWN sidecar."
         )
 
-    findings_section = _extract_findings_section(text)
-    if findings_section is None:
+    shape, is_empty = _detect_findings_shape(text)
+    if shape is None:
         raise DispositionsError(
-            f"target has no {_FINDINGS_HEADING!r} heading — this is not a "
-            "review-findings sidecar."
+            f"target matches neither supported shape — no {_FINDINGS_HEADING!r} "
+            "heading (review-findings) and no fenced ```json block carrying a "
+            "`findings` list (staff-eng-review) — this is not a dispositionable "
+            "reviewer sidecar."
         )
 
     if _has_heading(text, _DISPOSITIONS_HEADING):
         return {"path": str(sidecar_path), "already_dispositioned": True}
 
-    if _findings_section_is_empty(findings_section):
+    if is_empty:
+        if shape == _SHAPE_REVIEW_FINDINGS:
+            raise DispositionsError(
+                f"have the reviewer replace the {_FINDINGS_HEADING!r} scaffold "
+                "with its actual findings body before dispositioning — the "
+                f"section between {_FINDINGS_HEADING!r} and the terminal "
+                "boundary is still the unfilled scaffold (only the placeholder "
+                "comment or nothing at all), so there is nothing to disposition."
+            )
         raise DispositionsError(
-            f"have the reviewer replace the {_FINDINGS_HEADING!r} scaffold "
-            "with its actual findings body before dispositioning — the "
-            f"section between {_FINDINGS_HEADING!r} and the terminal "
-            "boundary is still the unfilled scaffold (only the placeholder "
-            "comment or nothing at all), so there is nothing to disposition."
+            "the fenced ```json block's `findings` array is empty — there is "
+            "nothing to disposition."
         )
 
     total_ids = sum(len(buckets.get(bucket) or []) for bucket in BUCKET_ORDER)

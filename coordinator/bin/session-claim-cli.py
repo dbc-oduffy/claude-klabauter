@@ -316,11 +316,12 @@ def _bool_to_exit(result: bool) -> int:
 _CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan")
 
 
-def _clear_claim_lookup_dir(class_: str, basename: str, baton_repo_root: str):
+def _claim_lookup_dir(class_: str, basename: str, baton_repo_root: str):
     """Best-effort resolution of the SAME claim directory
-    ``claims.clear_claim_if_dead`` will inspect, so the CLI can tell a caller
-    what was looked up and under which key BEFORE the call, when that
-    directory turns out not to exist (AC5). Mirrors ``clear_claim_if_dead``'s
+    ``claims.clear_claim_if_dead`` / ``claims.release_artifact`` will inspect,
+    so the CLI can tell a caller what was looked up and under which key BEFORE
+    the call, when that directory turns out not to exist (AC5). Mirrors
+    ``clear_claim_if_dead``'s
     own base resolution byte for byte — ``core.sessions_dir`` is the SAME
     public path-arithmetic function that module already calls, so this is
     not a second parser of anything liveness-shaped, just the identical
@@ -346,7 +347,9 @@ def _clear_claim_lookup_dir(class_: str, basename: str, baton_repo_root: str):
         return None
 
 
-def _emit_clear_claim_not_found_note(class_: str, basename: str, claim_dir) -> None:
+def _emit_claim_not_found_note(
+    subcmd: str, class_: str, basename: str, claim_dir
+) -> None:
     """AC5: the basename convention is part of the trap — the claim key
     carries no ``.md`` while a caller naturally holds a path that does. Name
     what was looked up and under which key, so a wrong basename is
@@ -354,9 +357,14 @@ def _emit_clear_claim_not_found_note(class_: str, basename: str, claim_dir) -> N
     already carried by exit 0 vs exit 1 and by the refusal's own distinct
     message; asserting it in prose is a message-register violation (Review:
     staff-eng-review, docs/wiki/guard-messaging.md B1/B2) and is not
-    repeated here."""
+    repeated here.
+
+    Serves ``release-artifact`` on the same terms: ``release_artifact``'s
+    not-the-holder / claim-absent legs are documented NO-OP SUCCESS, so a
+    wrong key there is exit 0 with nothing written and nothing said — the
+    same silence this note exists to remove, reached by a different door."""
     note = (
-        f"session-claim-cli: clear-claim-if-dead: no claim at {claim_dir} "
+        f"session-claim-cli: {subcmd}: no claim at {claim_dir} "
         f"(class {class_!r} basename {basename!r})"
     )
     if basename.endswith(".md"):
@@ -459,6 +467,10 @@ def _dispatch(argv: list[str]) -> int:
             return _usage("session-claim-cli release-artifact <class> <basename> [baton_repo_root]")
         class_, basename = rest[0], rest[1]
         baton_repo_root = rest[2] if len(rest) > 2 else ""
+        if class_ in _CLASSED_CLAIM_CLASSES:
+            claim_dir = _claim_lookup_dir(class_, basename, baton_repo_root)
+            if claim_dir is not None and not claim_dir.is_dir():
+                _emit_claim_not_found_note("release-artifact", class_, basename, claim_dir)
         return _call_claim_bool("release-artifact", mod.release_artifact, class_, basename, baton_repo_root)
 
     if subcmd == "clear-claim-if-dead":
@@ -467,9 +479,9 @@ def _dispatch(argv: list[str]) -> int:
         class_, basename = rest[0], rest[1]
         baton_repo_root = rest[2] if len(rest) > 2 else ""
         if class_ in _CLASSED_CLAIM_CLASSES:
-            claim_dir = _clear_claim_lookup_dir(class_, basename, baton_repo_root)
+            claim_dir = _claim_lookup_dir(class_, basename, baton_repo_root)
             if claim_dir is not None and not claim_dir.is_dir():
-                _emit_clear_claim_not_found_note(class_, basename, claim_dir)
+                _emit_claim_not_found_note("clear-claim-if-dead", class_, basename, claim_dir)
         return _call_claim_bool("clear-claim-if-dead", mod.clear_claim_if_dead, class_, basename, baton_repo_root)
 
     if subcmd == "claim-plan":

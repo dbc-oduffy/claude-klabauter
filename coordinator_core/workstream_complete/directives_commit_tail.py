@@ -128,6 +128,8 @@ from typing import Any, Dict, Iterable, NamedTuple, Optional, Set, Union
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
+from coordinator_core.warm import skew as _skew
+from coordinator_core.warm.engine_root import current_engine_clone as _current_engine_clone
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_memo_lifecycle as _memo_lifecycle
 
@@ -1406,6 +1408,35 @@ def compute_push_landed_gate(
 
 
 # ---------------------------------------------------------------------------
+# DR-335 — close-out publish-lag advisory (read-only)
+# ---------------------------------------------------------------------------
+
+
+def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
+    """DR-335, call site (b): "reported as done while inert" — at close-out,
+    if this session's own work left engine-touching commits unpublished,
+    say so. Reuses `coordinator_core.warm.skew.publish_lag` /
+    `publish_lag_message` verbatim (same threshold, same two-git-call
+    bound, same register) rather than re-deriving the computation — this
+    function is placement only, matching `compute_push_landed_gate`'s own
+    read-only, git-log-only shape immediately above.
+
+    Returns `None` whenever the lag helper cannot establish a signal (no
+    stamp, unresolvable sha, below `PUBLISH_LAG_THRESHOLD_MINUTES`, or an
+    unexpected exception anywhere in the chain) — never raises, per
+    DR-335's negative spec that an ordinary between-rounds gap is expected
+    behaviour, not a defect this gate reports on.
+    """
+    try:
+        lag = _skew.publish_lag(_current_engine_clone(), Path(repo_root))
+    except Exception:
+        return None
+    if lag is None:
+        return None
+    return _skew.publish_lag_message(lag)
+
+
+# ---------------------------------------------------------------------------
 # Step 3.5 — d-release-plan-claim
 # ---------------------------------------------------------------------------
 # (Session archival — formerly `d-archive-session-claim` here — moved to
@@ -1533,6 +1564,7 @@ _EXCEPTION_LABELS: tuple[tuple[str, str], ...] = (
     ("auto_memory_drain", "Auto-memory drain"),
     ("deferral_harvest", "Deferral harvest"),
     ("post_summary_reconcile", "Post-summary reconcile"),
+    ("publish_lag", "Publish lag"),
     ("flag_to_pm", "Flag to PM"),
 )
 
@@ -1544,6 +1576,7 @@ def render_final_summary(
     auto_memory_drain: str = "",
     deferral_harvest: str = "",
     post_summary_reconcile: str = "",
+    publish_lag: str = "",
     flag_to_pm: str = "",
 ) -> str:
     """Step 4's report-by-exception summary: two always-printed fields plus
@@ -1563,13 +1596,20 @@ def render_final_summary(
     spends the EM->PM word budget that `hooks/em_report_altitude.py` then
     measures as a verbosity violation. Do not restore them; do not convert
     an empty exception value into an explicit "none"/"clean" line, which
-    rebuilds the same fixed block one default at a time."""
+    rebuilds the same fixed block one default at a time.
+
+    `publish_lag` is DR-335's close-out advisory: pass
+    `compute_publish_lag_advisory(repo_root)`'s return value straight
+    through — `None`/empty stays silent (the ordinary case), a non-empty
+    string is `compute_publish_lag_advisory`'s already-formatted,
+    already-threshold-gated message, never re-derived here."""
     lines = [_SUMMARY_HEAD.format(work_done=work_done, pushed=pushed)]
     values = {
         "completeness_checklist": completeness_checklist,
         "auto_memory_drain": auto_memory_drain,
         "deferral_harvest": deferral_harvest,
         "post_summary_reconcile": post_summary_reconcile,
+        "publish_lag": publish_lag,
         "flag_to_pm": flag_to_pm,
     }
     for key, label in _EXCEPTION_LABELS:

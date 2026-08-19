@@ -92,7 +92,7 @@ import sys
 import zlib
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, NamedTuple, Optional, Union
+from typing import Any, NamedTuple, Optional, Sequence, Union
 
 from coordinator_core.artifact_basename import md_fallback_candidates
 from coordinator_core.ceremony_common.json_payload_flag import (
@@ -4662,7 +4662,7 @@ def compute_baton_unification_verdict(
     """C4: the held-set + four-arm refusal DECISION for a second pickup
     while this session already holds a baton. Computes a verdict; writes
     NOTHING — C5 (not this function) is the only thing allowed to act on
-    it, and only behind C5's own default-off predicate (D-I).
+    it, behind C5's own predicate (D-I), which is ON as of `c09345b56`.
 
     THIS IS A PRE-CONDITION CHECK, NOT A RESUME ORACLE. Re-deriving this
     verdict after a partial unification action does NOT reproduce the
@@ -4827,6 +4827,380 @@ def compute_baton_unification_verdict(
             )
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# C5 (docs/plans/2026-08-19-batons-unify-into-one-successor.md § C5): THE
+# ACTION HALF. Routes a second pickup into `baton_assemble`'s EXISTING
+# multi-leg mint (kind="handoff", self-resolved held set -> d1 scaffolds the
+# successor with `additional_predecessors`, d6/d6* stamps every parent leg
+# `continued` + `continued_into` in the SAME `apply()` call) instead of
+# `_adopt_into_baton`'s plain append. Consumes `compute_baton_unification_
+# verdict` (C4) — this section makes exactly ONE decision of its own (the
+# routing predicate immediately below, ON as of `c09345b56`) and re-derives
+# nothing else.
+# ---------------------------------------------------------------------------
+
+
+def _baton_unification_routing_enabled() -> bool:
+    """D-I: the SINGLE named predicate gating C5's routing. NOW ON.
+
+    It shipped OFF so no window opened where this engine's behaviour
+    contradicted DoE's still-live pickup doctrine
+    (`skills/pickup/SKILL.md`'s N-independent-dispositions contract). Their
+    reply (`cross-repo/inbox/2026-08-19-doe-claude-em-baton-schema-8-2-0-
+    landed-role-axis-named-doctrine-held.md`) set the release condition
+    exactly: schema 8.2.0 landed at `3fb4a1053` carrying `baton_role`, the
+    two doctrine files are held as ONE commit on their side, and "signal us
+    at the flip-on commit and our side lands same-session". This commit is
+    that signal.
+
+    This function stays the ONLY place the decision is made — nothing else
+    in this module tests an env var, config flag, or other proxy for it. A
+    reader wanting the behaviour off does not add one: they flip this
+    literal, in this function, reviewed as such.
+
+    What changes for an operator, in one line: a pickup taken while this
+    session already holds an inheritable baton no longer appends to a list
+    — the held batons and the new one become ONE successor carrying them as
+    fan-in legs. `_reassemble_bullet_lines`' docstring carries the reversed
+    contract text.
+    """
+    return True
+
+
+def _unification_parents(held: dict[str, Any]) -> list[str]:
+    """`held["primary"]` + `held["additional"]`, `None`/empty entries
+    dropped — the exact set C4's verdict already resolved via
+    `_resolve_held_handoff_for_session`, reused verbatim rather than
+    re-derived."""
+    primary = held.get("primary")
+    additional = held.get("additional") or []
+    return [p for p in ([primary] + list(additional)) if p]
+
+
+def _continued_into_target(root: Path, held_path: str) -> Optional[str]:
+    """Reads `held_path`'s OWN `continued_into` field, archive-aware (the
+    predecessor may already have been git-mv'd to `archive/handoffs/` by
+    the mint this function is checking the result of). `None` when the
+    artifact is unreadable or carries no `continued_into` yet — i.e. this
+    leg was never (or not yet) superseded into a successor."""
+    resolved = _resolve_lineage_artifact_path(root, held_path)
+    fm = _read_lineage_artifact_fm(resolved) if resolved is not None else None
+    if not fm:
+        return None
+    return fm.get("continued_into") or None
+
+
+def _finish_unification_claims(root: Path, parents: list[str], successor_path: str) -> None:
+    """Step 3 — the non-atomic half of unification, deliberately split from
+    the mint+stamp transaction (step 2, `baton_assemble.apply`): claim the
+    successor, THEN release every parent's DURABLE claim-ledger entry.
+
+    ORDER IS LOAD-BEARING, not incidental. `_resume_pending_unification`'s
+    only signal for "a mint already landed, finish the bookkeeping" is a
+    parent STILL on this session's held-claims ledger, stamped `continued`
+    with `continued_into` set. Releasing a parent BEFORE the successor is
+    claimed would, on a crash after the LAST parent's release, erase that
+    signal entirely — the ledger would show nothing held at all, and a
+    retry would fall through to a FRESH (nothing-held) verdict rather than
+    resuming, leaving the successor permanently unclaimed. Claiming first
+    means every reachable crash point still has at least one parent claim
+    on the ledger to resume from, right up to the point where cleanup is
+    genuinely complete.
+
+    Both halves are individually idempotent, so a retry after a crash
+    anywhere in this function converges rather than double-acting:
+    `claims.release_artifact` no-ops on an already-released or
+    not-self-held claim (its own docstring: "Returns True on every no-op
+    path"). The successor claim is guarded by hand: this session's own
+    claim-ledger listing is checked FIRST and the claim call skipped when
+    it already shows the successor held — handoff/memo claims REJECT a
+    same-session re-claim by design (`claims.claim_artifact`'s own
+    docstring), so a bare retry of `claim_handoff` on a resume would
+    misread as a failure on the second pass without this guard.
+
+    Deliberately NOT wrapped in a blanket `except` — see
+    `_unify_into_successor`'s docstring for why unification failure must
+    surface rather than being swallowed the way `_adopt_into_baton`'s
+    advisory append is.
+    """
+    successor_basename = Path(successor_path).name
+    if successor_basename:
+        try:
+            sid = _session_core.resolve_session_id(str(root))
+        except (OSError, ValueError):
+            sid = None
+        already_held = False
+        if sid:
+            held_claims = _claims.list_claims_by_session(sid, cwd=str(root))
+            already_held = ("handoff", successor_basename) in held_claims
+        if not already_held:
+            _claims.claim_handoff(successor_basename, cwd=str(root))
+
+    for parent_path in parents:
+        basename = Path(parent_path).name
+        if basename:
+            _claims.release_artifact("handoff", basename, cwd=str(root))
+
+
+def _resume_pending_unification(root: Path) -> bool:
+    """Crash-resume detection, run BEFORE any fresh C4 verdict is consulted
+    — THE RESUME RULE. `compute_baton_unification_verdict`'s own docstring
+    names why re-deriving it after a partial unification is unsound:
+    stamping a parent `continued` (terminal) excludes it as disposed on
+    any FRESH verdict, and releasing its claim shrinks the ledger-derived
+    held set too — the exact seam that would unify a SUBSET and mint a
+    SECOND, orphaned successor on a retried run.
+
+    Reads this session's OWN still-held claims off the ledger
+    (`_resolve_held_handoff_for_session`, `allow_standalone=True`) — a
+    mechanical fact ("what does this session's claim ledger currently
+    show"), never a re-derivation of C4's inheritable-set DECISION. A held
+    leg already stamped `continued` with a `continued_into` set is proof
+    step 2 (the mint+stamp transaction) already landed for it in a PRIOR
+    run — step 3 (release + claim) is what crashed. Resumes by finishing
+    step 3 against that SAME `continued_into` target, following the
+    existing `_supersede_continued` up-edge, never by re-minting.
+
+    Returns True when a resume ran (whether or not anything was actually
+    left to do — `_finish_unification_claims` is itself idempotent), False
+    when nothing here was pending and the caller should fall through to a
+    fresh C4 verdict.
+
+    REFUSES A DANGLING `continued_into` rather than acting on it. The stamp
+    loop is one directive PER PARENT (`d6`, `d6-2`, …), so a failure part
+    way through stamps some parents and not others; that run exits
+    `APPLY_EXIT_PARTIAL_MUTATION`, and d1's compensator then deletes the
+    successor scaffold it minted — correctly, since the scaffold is
+    pristine. What survives is a parent stamped terminal pointing at a
+    successor that no longer exists. Acting on that signal is worse than
+    ignoring it: `_finish_unification_claims` would claim the phantom
+    basename and then RELEASE every real parent claim, costing the session
+    both batons and leaving a claim on a path nothing can resolve. So the
+    successor is resolved on disk first and a dangling edge raises, named,
+    with the parents' claims untouched — a loud stop an operator can act
+    on, never a silent claim swap."""
+    from coordinator_core.baton_assemble import _resolve_held_handoff_for_session
+    from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+
+    primary, additional, _degraded = _resolve_held_handoff_for_session(
+        root, allow_standalone=True
+    )
+    held_paths = [p for p in ([primary] + list(additional)) if p]
+    if not held_paths:
+        return False
+
+    successor: Optional[str] = None
+    stamped_parents: list[str] = []
+    for held_path in held_paths:
+        resolved = _resolve_lineage_artifact_path(root, held_path)
+        held_fm = _read_lineage_artifact_fm(resolved) if resolved is not None else None
+        if not held_fm:
+            continue
+        if held_fm.get("deployment_state") in HANDOFF_TERMINAL_DEPLOYMENT:
+            continued_into = held_fm.get("continued_into")
+            if continued_into:
+                stamped_parents.append(held_path)
+                successor = successor or continued_into
+
+    if not successor:
+        return False
+
+    if _resolve_lineage_artifact_path(root, successor) is None:
+        raise RuntimeError(
+            "baton unification resume: parent leg(s) "
+            f"{stamped_parents} are stamped continued_into {successor!r}, "
+            "but that successor does not resolve on disk — a prior run's "
+            "parent-stamp loop failed part way and its scaffold was "
+            "compensated away. Claims are untouched. Re-stamp or clear the "
+            "parents' continued_into before picking up again."
+        )
+
+    _finish_unification_claims(root, stamped_parents, successor)
+    return True
+
+
+def _unify_into_successor(root: Path, verdict: dict[str, Any]) -> str:
+    """The mint half of C5's action — reaches `baton_assemble.apply`'s
+    kind="handoff", self-resolving self-brief (no `artifact_path`
+    supplied), which mints the multi-parent successor (d1,
+    `additional_predecessors`) and stamps every held parent leg `continued`
+    + `continued_into` in the SAME call (d6/d6*).
+
+    Deliberately NOT wrapped in a blanket `except` — unlike
+    `_adopt_into_baton`'s advisory `adopted_artifacts` append (which must
+    never block a pickup), unification mints a handoff, stamps parents
+    terminal, and moves claims: a failed mint/stamp swallowed here would
+    tell the operator nothing while the tree sits half-moved, the worst
+    available outcome. Let it raise.
+
+    Imports `baton_assemble.apply` at call time, matching
+    `compute_baton_unification_verdict`'s own precedent: `baton_assemble.
+    apply` imports `compute_repo_identity_gate` from THIS module at ITS
+    module scope, so a module-level import here would be circular.
+
+    RETURNS the successor path it resolved. It has to derive that value
+    anyway (it is what proves the mint actually landed, and raises when no
+    parent leg shows `continued_into`), so handing it back spares every
+    caller a second archive-aware walk over the same parents to recompute a
+    value already known here."""
+    from coordinator_core.baton_assemble.apply import apply as _baton_assemble_apply
+    from coordinator_core.contract import apply_base as _apply_base
+
+    exit_code, report = _baton_assemble_apply(
+        "handoff", "", session_id=None, repo_root=root, decisions=None, title=None
+    )
+    if exit_code != _apply_base.APPLY_EXIT_OK:
+        raise RuntimeError(
+            "baton unification mint failed "
+            f"(exit_code={exit_code}, held={verdict.get('held')}): {report!r}"
+        )
+
+    parents = _unification_parents(verdict.get("held") or {})
+    successor: Optional[str] = None
+    for parent_path in parents:
+        successor = _continued_into_target(root, parent_path)
+        if successor:
+            break
+    if not successor:
+        raise RuntimeError(
+            "baton unification: mint reported success but no parent leg "
+            f"shows continued_into (parents={parents})"
+        )
+
+    _finish_unification_claims(root, parents, successor)
+    return successor
+
+
+def route_baton_adoption(
+    root: Path, artifact_path: str, fm: Optional[dict[str, Any]]
+) -> None:
+    """The C5 routing seam — called from BOTH `claim_at_brief` call sites
+    in place of a bare `_adopt_into_baton`.
+
+    Predicate OFF (default, D-I) is a TRUE no-op: falls straight through to
+    `_adopt_into_baton`, byte-identical to pre-C5 behaviour — no verdict
+    computed, no mint, no claim move, no parent stamped.
+
+    Predicate ON:
+      - a pending unification from a prior crashed run resumes FIRST
+        (`_resume_pending_unification`) — never re-derived from a fresh
+        verdict, see that function's docstring;
+      - otherwise a fresh `compute_baton_unification_verdict` (C4) decides:
+        `"proceed"` mints/unifies (`_unify_into_successor`); `"refuse"`
+        writes NOTHING at all — not even the advisory append, since a live
+        foreign holder must not gain an `adopted_artifacts` entry either;
+        `"no-unification"` (nothing held, or nothing inheritable) falls
+        through to the ordinary `_adopt_into_baton` append, unchanged from
+        today.
+    """
+    if not _baton_unification_routing_enabled():
+        _adopt_into_baton(root, artifact_path, fm)
+        return
+
+    if _resume_pending_unification(root):
+        return
+
+    verdict = compute_baton_unification_verdict(root, fm or {}, artifact_path)
+    outcome = verdict.get("verdict")
+    if outcome == "proceed":
+        _unify_into_successor(root, verdict)
+        return
+    if outcome == "refuse":
+        return
+    _adopt_into_baton(root, artifact_path, fm)
+
+
+# ---------------------------------------------------------------------------
+# AC10's mutation half (docs/plans/2026-08-19-batons-unify-into-one-successor.md
+# § C10 remainder): the ONE entry point `/mise-en-place` reaches unification
+# through. It adds no unification implementation of its own — the anti-scope's
+# "do not rebuild what exists" — it composes the SAME three pieces
+# `route_baton_adoption` composes, in the same order, and differs from it only
+# in having no artifact being picked up.
+# ---------------------------------------------------------------------------
+
+
+def unify_run_batons(root: Path, run_legs: Optional[Sequence[str]] = None) -> dict[str, Any]:
+    """Unify this session's held batons into ONE successor, for a caller
+    that is not picking an artifact up — `/mise-en-place`'s per-RUN
+    unification (`backlog_grind_assemble.apply :: _dispatch_unify_batons`),
+    called at most once per run by construction of its directive.
+
+    Returns a report; raises only what `_unify_into_successor` raises (a
+    genuine half-moved tree, never a business outcome). `unified` is the
+    single field a caller should branch on.
+
+    `run_legs` IS NOT AN INPUT TO THE MUTATION — it is the caller's own
+    resolved inheritable set, carried into the report verbatim so the
+    operator can see what the run believed it held next to what actually
+    unified. The held set stays `_resolve_held_handoff_for_session` off the
+    durable claim ledger (AC7), never a caller-supplied path list: a
+    caller-supplied set would let a run's inventory table decide which
+    batons get stamped terminal, which is precisely the authority the
+    ledger exists to hold. A leg named by the run but absent from the
+    ledger therefore does not unify, and reads that way in `run_legs` vs
+    `parents`.
+
+    A live peer's baton is out of reach here for a STRUCTURAL reason, not
+    because the four-arm refusal catches it: the held set resolves through
+    `list_claims_by_session(self_sid)`, so a foreign-held claim never
+    enters it and the verdict reads `nothing-held`. The refusal arms stay
+    the backstop (and would fire if that resolver ever widened); do not
+    read them as what protects this path today.
+
+    The verdict is computed with an EMPTY target frontmatter, which is the
+    safe direction rather than an omission — but NOT for the reason it
+    first looks like. `_scopes_intersect` is conservative by construction:
+    an empty list on either side cannot prove non-overlap, so it counts as
+    intersecting. An empty target therefore always intersects, and a live
+    holder reaching `_primary_held_disposition` classifies `live-peer`, not
+    `live-unrelated`. Both are refusal arms (`proceed` is only `handover`
+    or `stale-claim`), so the safety property holds either way and no
+    scope-overlap coin-flip occurs — the empty target buys a guaranteed
+    refusal rather than a computed one.
+    """
+    legs = [str(leg) for leg in (run_legs or [])]
+    base: dict[str, Any] = {"unified": False, "run_legs": legs, "parents": []}
+
+    if not _baton_unification_routing_enabled():
+        return {
+            **base,
+            "reason": "routing-disabled",
+            "message": (
+                "Baton unification routing is disabled (D-I) — "
+                "resolved this run's inheritable set, mutated nothing."
+            ),
+        }
+
+    if _resume_pending_unification(root):
+        return {
+            **base,
+            "unified": True,
+            "reason": "resumed-pending",
+            "message": (
+                "A prior run's unification was already mid-flight — resumed it "
+                "to its own successor rather than minting a second one."
+            ),
+        }
+
+    verdict = compute_baton_unification_verdict(root, {}, "")
+    outcome = verdict.get("verdict")
+    parents = _unification_parents(verdict.get("held") or {})
+    report = {
+        **base,
+        "parents": parents,
+        "reason": verdict.get("reason"),
+        "message": verdict.get("message"),
+        "verdict": verdict,
+    }
+    if outcome != "proceed":
+        return report
+
+    report["successor"] = _unify_into_successor(root, verdict)
+    report["unified"] = True
+    return report
 
 
 def _scan_bounded_archive_handoff_dir(archive_dir: Path) -> list[dict[str, Any]]:
@@ -8484,7 +8858,11 @@ def brief(
             took_from = acquire_brief_claim(root, "handoff", basename)
             if took_from:
                 reclaimed.append(took_from)
-            _adopt_into_baton(root, artifact["path"], fm)
+            # C5: routes into baton_assemble's multi-leg unification when
+            # C4's verdict says proceed and the predicate is on; a plain
+            # advisory append (`_adopt_into_baton`) otherwise. See
+            # `route_baton_adoption`'s own docstring.
+            route_baton_adoption(root, artifact["path"], fm)
         claim = compute_claim_gate(root, "handoff", basename)
         claim_grant = compute_claim_grant(root, "handoff", basename, artifact["path"], cwd=str(root), fm=fm)
         # Self-claim idempotence (2026-07-29): `d2` (archive-stamp-cli's
@@ -8948,7 +9326,8 @@ def brief(
         took_from = acquire_brief_claim(root, "memo", basename)
         if took_from:
             reclaimed.append(took_from)
-        _adopt_into_baton(root, artifact["path"], fm)
+        # C5: same routing seam as the handoff branch above.
+        route_baton_adoption(root, artifact["path"], fm)
 
     # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-memo-
     # claim-fires-after-the-em-can-already-act.md) — the handoff branch above
@@ -9135,8 +9514,20 @@ def _reassemble_bullet_lines(artifact_arg: str) -> str:
     line, each optionally prefixed with `- `/`* ` and leading indentation —
     into the ` AND `-joined form `split_artifact_args` already knows how to
     split, so a newline-separated grab and an ` AND `-joined grab dispose
-    through the identical downstream path (contract: "N independent
-    dispositions", one decision object per artifact).
+    through the identical downstream path.
+
+    CONTRACT REVERSAL (`_baton_unification_routing_enabled` is now True).
+    The rule this function was written under — "N independent dispositions,
+    one decision object per artifact" — described the pre-unification
+    world. One decision object per artifact still holds, and this function
+    is unchanged by the flip: the splitting is what makes the paths
+    separable at all. What no longer holds is the INDEPENDENCE of the
+    dispositions downstream. A multi-artifact grab whose members are
+    inheritable batons now converges: each is claimed, and the held set
+    unifies into ONE successor carrying them as fan-in legs, rather than N
+    batons standing separately. Do not restore the old sentence from a
+    reading of this function alone — the reversal lives one layer down, in
+    the routing, not in the parsing.
 
     Only fires when the input contains a REAL newline AND at least one
     resulting line is bullet-prefixed. An unmarked multi-line paste (no

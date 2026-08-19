@@ -79,6 +79,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.warm.engine_root import current_engine_clone
+
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
 from coordinator_core.warm import breadcrumb, election, lifecycle, skew
@@ -128,11 +130,10 @@ ENTRY_SCRIPT = "coordinator_core/warm/supervisor.py"
 
 
 def _default_engine_clone() -> Path:
-    """This module's own resolved clone root -- kept as a local copy per
-    this package's convention (`election._default_engine_clone`, `warm.
-    breadcrumb._default_engine_clone`, `warm.client._engine_clone_root`,
-    `warm.skew._default_engine_clone`)."""
-    return Path(__file__).resolve().parents[2]
+    """This module's own resolved clone root -- collapsed onto the single
+    shared definition, `engine_root.current_engine_clone()` (plan
+    2026-08-19-an-engine-root-is-a-stamped-build § C3)."""
+    return current_engine_clone()
 
 
 def discovery_path(engine_root: Optional[Path] = None) -> Path:

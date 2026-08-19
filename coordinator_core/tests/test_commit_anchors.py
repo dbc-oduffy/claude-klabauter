@@ -1166,3 +1166,101 @@ class TestSharedIndexScoping:
         self._setup(tmp_path)
         trailers = self._call(tmp_path, paths=[])
         assert trailers.get("Deliverable-Id") == "dlv-peer-deliverable"
+
+
+# ---------------------------------------------------------------------------
+# (f) Confident-wrong-edge guard — divergence across ALL staged artifacts,
+# not just staged docs/plans/*.md files (staff-eng review finding 1, C7B).
+# ---------------------------------------------------------------------------
+
+class TestStagedArtifactDivergenceOmitsIds:
+    """AC14 — a routine pathspec (one plan file plus the handoffs it spawned)
+    must not stamp a single plan's `Deliverable-Id:` onto a commit whose
+    contents actually belong to several deliverables. Distinct from AC11's
+    `compute_missing_trailer_args`-only pin — this exercises `commit.anchors`
+    end-to-end via `_handler` against a real staged mise-shaped fixture.
+    """
+
+    def _handoff(self, idx: int, deliverable_id: str) -> str:
+        return textwrap.dedent(f"""\
+            ---
+            title: "Handoff {idx}"
+            deliverable_id: "{deliverable_id}"
+            ---
+            handoff body {idx}
+            """)
+
+    def test_ten_foreign_handoffs_plus_one_plan_omits_deliverable_id(self, tmp_repo) -> None:
+        """One staged plan file plus ten staged handoffs carrying FOREIGN
+        `deliverable_id`s (the PM's headline case) → ZERO `Deliverable-Id:`
+        lines on the resulting commit — Plan-Id: and Resolves: omitted too,
+        since all three ride the same resolver."""
+        _reset_equivalence_map_cache()
+        plan_dir = tmp_repo / "docs" / "plans"
+        plan_dir.mkdir(parents=True)
+        plan_file = plan_dir / "2026-07-04-test-plan.md"
+        plan_file.write_text(
+            textwrap.dedent("""\
+                ---
+                title: "Test Plan"
+                plan_id: "pln-test-plan-abc123"
+                deliverable_id: "dlv-test-plan-abc456"
+                ---
+
+                # Test Plan
+                """)
+        )
+
+        handoff_dir = tmp_repo / "state" / "handoffs"
+        handoff_dir.mkdir(parents=True)
+        handoff_paths = []
+        for i in range(10):
+            hpath = handoff_dir / f"handoff-{i}.md"
+            hpath.write_text(self._handoff(i, f"dlv-foreign-{i}"))
+            handoff_paths.append(str(hpath))
+
+        _git(["add", str(plan_file)] + handoff_paths, tmp_repo)
+
+        from coordinator_core.ops.commit_anchors import _handler
+        common = _common_dir(tmp_repo)
+        result = _run(_handler({"session_id": "", "nature": None}, repo_root=common))
+        trailers = _parse_trailers(result["trailers"])
+
+        assert "Deliverable-Id" not in trailers, trailers
+        assert "Plan-Id" not in trailers, trailers
+        assert "Resolves" not in trailers, trailers
+        # Plan: (the path, not a join key) is unaffected by the divergence guard.
+        assert trailers.get("Plan") == "docs/plans/2026-07-04-test-plan.md"
+
+    def test_staged_handoffs_agreeing_with_plan_still_emit_deliverable_id(self, tmp_repo) -> None:
+        """The guard must not over-fire: staged handoffs that all agree with
+        the plan's own `deliverable_id` (the ordinary case) still stamp."""
+        _reset_equivalence_map_cache()
+        plan_dir = tmp_repo / "docs" / "plans"
+        plan_dir.mkdir(parents=True)
+        plan_file = plan_dir / "2026-07-04-test-plan.md"
+        plan_file.write_text(
+            textwrap.dedent("""\
+                ---
+                title: "Test Plan"
+                plan_id: "pln-test-plan-abc123"
+                deliverable_id: "dlv-test-plan-abc456"
+                ---
+
+                # Test Plan
+                """)
+        )
+
+        handoff_dir = tmp_repo / "state" / "handoffs"
+        handoff_dir.mkdir(parents=True)
+        hpath = handoff_dir / "handoff-0.md"
+        hpath.write_text(self._handoff(0, "dlv-test-plan-abc456"))
+
+        _git(["add", str(plan_file), str(hpath)], tmp_repo)
+
+        from coordinator_core.ops.commit_anchors import _handler
+        common = _common_dir(tmp_repo)
+        result = _run(_handler({"session_id": "", "nature": None}, repo_root=common))
+        trailers = _parse_trailers(result["trailers"])
+
+        assert trailers.get("Deliverable-Id") == "dlv-test-plan-abc456"

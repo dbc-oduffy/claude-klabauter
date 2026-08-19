@@ -349,6 +349,85 @@ def test_queue_prune_sweep_yaml_leg_clean_exit_is_not_blocking(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# (l2) 11i-queue-prune-sweep — the default-callee legacy-markdown leg batches
+# every existing queue into ONE spawn of prune-resolved-queue-entries.py
+# (amplification-gate fix: the callee's old one-positional arity was
+# self-imposed, not a real per-item constraint).
+# ---------------------------------------------------------------------------
+
+
+def test_queue_prune_sweep_batches_default_cli_into_one_spawn(tmp_path, monkeypatch):
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
+    (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real_cli = Path(__file__).resolve().parents[1] / "prune_resolved_queue_entries.py"
+    (bin_dir / "prune-resolved-queue-entries.py").write_text(
+        real_cli.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    calls: list[list[str]] = []
+    orig_run = udg._run
+
+    def _spy_run(cli_path, args, **kwargs):
+        calls.append(args)
+        return orig_run(cli_path, args, **kwargs)
+
+    monkeypatch.setattr(udg, "_run", _spy_run)
+
+    # No overrides["prune_cli"] — this exercises the DEFAULT-callee branch,
+    # which is the one that must collapse to a single spawn.
+    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+    assert result.verdict in (udg.GateVerdict.CLEAN, udg.GateVerdict.FINDING)
+
+
+def test_queue_prune_sweep_override_cli_keeps_one_spawn_per_queue(tmp_path):
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
+    (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "single-arg-prune.py"
+    fake_cli.write_text(
+        "import sys\n"
+        "assert len(sys.argv) == 2, sys.argv\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+
+    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {"prune_cli": str(fake_cli)})
+
+    assert result.verdict == udg.GateVerdict.CLEAN
+
+
+def test_queue_prune_sweep_default_cli_reports_which_queue_failed(tmp_path):
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
+    (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "prune-resolved-queue-entries.py"
+    fake_cli.write_text(
+        "import sys\n"
+        "for p in sys.argv[1:]:\n"
+        "    if p.endswith('bug-backlog.md'):\n"
+        "        sys.stderr.write(f'ERROR: file not found: {p}\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+
+    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
+
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.severity == udg.Severity.BLOCKING
+    assert any("bug-backlog.md" in line for line in result.detail["lines"])
+
+
+# ---------------------------------------------------------------------------
 # (m) regex-canary — a parse-shape drift on the sole CONTRADICTION-detection
 # mechanism must surface as UNAVAILABLE, never silently default to CLEAN.
 # ---------------------------------------------------------------------------

@@ -99,7 +99,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # _EXPECTED_BODY_SHAPE_CHECKSUM here to match.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "8a0054ffd368be34748c80233ff8db65ee9e040ea17670144844a76522387e34"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "ecf573666bb45bd5fe465b60a5a9b991e00adcff1e7dfc274e466bf8ba9ad669"
 
 
 def test_hook_gen_stamp_bump_is_required_for_shape_changes():

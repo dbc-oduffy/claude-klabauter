@@ -27,6 +27,18 @@
 > breaking change.
 >
 > **Changelog:**
+> - **2026-08-19 (commit-scoping key retired):** § 1.2 records that `deliverable_id` divergence
+>   is retired as a commit-scoping identity per `docs/decisions/DR-328-commit-scoping-keys-on-
+>   the-baton.md` — the handoff baton is the scoping key now, not `deliverable_id`. None of the
+>   three producers gates on divergence; the correct behaviour on a divergent pathspec is to omit
+>   `Deliverable-Id:` (§ 3), never raise, never emit two lines. Prose-only; no key, grain, enum,
+>   cardinality, or extraction pattern changed, so this is outside the § 5.2 bump protocol and
+>   does not reopen the FROZEN v1.0 gate. Same task's C7B chunk widens `commit_anchors.py`'s own
+>   divergence check to the whole staged set (see the superseding note on § 1.2's
+>   `commit_anchors.py` paragraph below) — a behaviour change, but to *which staged artifacts feed
+>   an existing omit-on-ambiguity check*, not to the trailer's key/grain/enum/cardinality/
+>   extraction pattern, so it does not change this entry's § 5.2 conclusion. Source:
+>   `docs/plans/2026-08-19-commit-scoping-keys-on-the-baton.md`, tasks C6, C7B.
 > - **2026-08-10 (producer-count correction):** § 1.2's "claude-klabauter has TWO independent producers of
 >   this one FK" corrected to THREE: `commit.anchors`, `coordinator-prepare-commit-msg`, and the
 >   previously-unnamed `coordinator_core/git/commit_trailers.py::compute_missing_trailer_args`,
@@ -203,14 +215,31 @@ Example-retrieval-repo's `workstate_store` ingest), it is 84-commits-to-4 in liv
 `-Id`-suffix convention the sibling id-valued keys follow (`Plan-Id:`, `Session-Id:` — bare
 `Plan:` is the path, not an id).
 
+**None of the three producers gates commit-scoping on `deliverable_id` divergence.**
+`docs/decisions/DR-328-commit-scoping-keys-on-the-baton.md` (2026-08-19) retires
+`deliverable_id` divergence as a commit-scoping identity — the handoff baton is the scoping
+key — while leaving `Deliverable-Id:`'s spelling, value space, and commit→deliverable edge
+unchanged (DR-239 is amended in spirit, not superseded: only gate-hood is retired). On a
+pathspec spanning artifacts with more than one distinct `deliverable_id`, the correct producer
+behaviour is to omit `Deliverable-Id:` per § 3's omit-on-ambiguity rule, never to raise, and
+never to emit two trailer lines (cardinality stays `0..1`, § 1.1).
+
 **`commit_anchors.py` is deliberately separate, not a convergence backlog.** Of the three
 producers, `commit_anchors.py` already omits `Deliverable-Id:` when it cannot verify unambiguously
-(resolving strictly from staged plan frontmatter) — the § 3 precision posture the other two
-producers acquire only via this plan's C2 (an ambiguous multi-claim commit now omits
-`Deliverable-Id:` rather than guessing; see § 3). This is not drift to be converged away: each
-producer resolves the FK from a different input (staged plan frontmatter vs. session-claim state)
-for a different call site, and `commit_anchors.py` already carries the precision guarantee the
-plan brings to the other two.
+— the § 3 precision posture the other two producers acquire only via the 2026-08-10 plan's C2 (an
+ambiguous multi-claim commit now omits `Deliverable-Id:` rather than guessing; see § 3). This is
+not drift to be converged away: each producer resolves the FK from a different input for a
+different call site, and `commit_anchors.py` already carries the precision guarantee the other two
+producers needed a plan to acquire.
+>
+> **Superseded 2026-08-19 (C7B):** the parenthetical above previously read "resolving strictly
+> from staged plan frontmatter" — that was `commit_anchors.py`'s divergence check before C7B
+> (`docs/plans/2026-08-19-commit-scoping-keys-on-the-baton.md`). `_staged_deliverable_ids_diverge`
+> now checks `deliverable_id` across the WHOLE staged set (every staged artifact, not just staged
+> `docs/plans/*.md` files) — the same staff-eng-flagged confident-wrong-edge gap the 2026-08-10 C2
+> guard has never had, since `commit_trailers.py::_resolve_deliverable_id_from_paths` already
+> resolves from the full staged pathspec. The omit-on-ambiguity *posture* this paragraph describes
+> is unchanged; only the *scope of staged inputs it is computed over* widened.
 
 Because `%(trailers:key=X)` is an **exact** key match and not a prefix match, the bare spelling
 was not a cosmetic inconsistency: it read as empty for every consumer in the fleet and errored

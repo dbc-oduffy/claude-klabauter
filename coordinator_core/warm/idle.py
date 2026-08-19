@@ -58,6 +58,22 @@ caller binds it (`warm.server._ServerContext._token_is_stale`); this
 module never computes a token and never imports `warm.skew`, which is
 what keeps THE INVARIANT below literally true in both directions.
 
+RESTATED 2026-08-19 (plan 2026-08-19-an-engine-root-is-a-stamped-build §
+C3): the unstamped/live-working-tree rotation described above was
+recorded as *deliberately in scope* under the old rule, and gating the
+binding on stamp presence was "considered and rejected -- it would leave
+the live-tree population unfixed, and that population is the larger
+one." That reasoning is CORRECT under the old rule and VOID under the
+new one: once no ambient resolution path can return an unstamped tree as
+the engine (this plan's C4, gated on C1), no server can be running from
+an unstamped clone in the first place, so the population this predicate
+was protecting stops existing. This paragraph does not change this
+module's behaviour -- C3 is a pure collapse, and `TokenStaleFn`'s
+fallback semantics are `compute_client_token`'s to change, not this
+module's -- it corrects the reasoning so a future reader does not find
+this docstring still defending a population the shipped rule no longer
+has.
+
 NOT FIXED BY SHORTENING THE IDLE DEADLINE, deliberately: that trades
 stranding window against warm-hit rate for every HEALTHY server while
 leaving the unreachable-eviction defect in place. It hides the symptom.

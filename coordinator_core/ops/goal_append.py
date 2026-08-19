@@ -411,6 +411,57 @@ def append_goal(
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
 
+def _goal_append_batch(
+    events: list,
+    *,
+    repo: Optional[str],
+    coordinator_root_path: str,
+    central_state_root,
+) -> dict:
+    """Append N goal events in one call — the batch half of `events` support.
+
+    Each entry of ``events`` carries the SAME per-event fields a single-event
+    call's params dict would (period/period_value/text plus the optional
+    key_results_status/weekly_perceptible/parent_goal_id/status/goal_id);
+    ``repo``/``coordinator_root_path`` are shared across the whole batch,
+    already resolved/normalized by the caller (`_goal_append`) exactly as
+    they are for a single-event call.
+
+    A per-event failure (ValueError from `append_goal()`, or a malformed
+    non-dict entry) does NOT abort the batch — every OTHER event still gets
+    its append attempt, matching the caller's (append-goal-event.py's
+    `--events-file` batch) actual need: an unrelated goal file's bad
+    frontmatter should not block every other goal in the same run. Returns
+    ``{"events": [{"ok": bool, "result"|"error": ...}, ...]}`` in input
+    order — never raises for a per-event failure, only for a malformed
+    ``events`` value itself (see `_goal_append`).
+    """
+    outcomes: list[dict] = []
+    for i, event in enumerate(events):
+        if not isinstance(event, dict):
+            outcomes.append({"ok": False, "error": f"events[{i}] is not an object"})
+            continue
+        try:
+            result = append_goal(
+                period=event.get("period", ""),
+                period_value=event.get("period_value", ""),
+                text=event.get("text", ""),
+                repo=repo,
+                coordinator_root_path=coordinator_root_path,
+                central_state_root=central_state_root,
+                key_results_status=event.get("key_results_status"),
+                weekly_perceptible=event.get("weekly_perceptible"),
+                parent_goal_id=event.get("parent_goal_id"),
+                status=event.get("status"),
+                goal_id=event.get("goal_id"),
+            )
+        except ValueError as exc:
+            outcomes.append({"ok": False, "error": str(exc)})
+            continue
+        outcomes.append({"ok": True, "result": result})
+    return {"events": outcomes}
+
+
 @register_op("goal.append")
 def _goal_append(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'goal.append' handler — append a goal event to the per-machine JSONL log.
@@ -449,12 +500,35 @@ def _goal_append(params: dict, repo_root=None) -> dict:
                                        Must match 12-lowercase-hex-char shape or append_goal()
                                        raises. See append_goal()'s docstring for the full
                                        precedence rule and rationale.
+        events                 (list) — BATCH FORM (2026-08-19 amplification-gate fix): when
+                                       present, this call appends EVERY entry in `events`
+                                       instead of the single event described by the fields
+                                       above (period/text/etc. at the top level are ignored
+                                       when `events` is present). Each entry is shaped like a
+                                       single-event params dict (period/period_value/text plus
+                                       the optional key_results_status/weekly_perceptible/
+                                       parent_goal_id/status/goal_id). `repo`/
+                                       `coordinator_root_path` stay TOP-LEVEL and apply to
+                                       every event in the batch — the same values a caller
+                                       making N separate single-event calls with the same
+                                       repo/root would have supplied N times. Returns
+                                       {"events": [{"ok": bool, "result"|"error": ...}, ...]}
+                                       in input order instead of the single-event return
+                                       shape below; a per-event ValueError is caught and
+                                       reported in that event's outcome rather than aborting
+                                       the batch (see `_goal_append_batch()`). This exists so
+                                       ONE coordinator_core.invoke spawn can carry N goal
+                                       writes — collapsing the per-item subprocess fan-out
+                                       that used to live in append-goal-event.py's caller
+                                       (emit-goal-from-artifact.py) down to a single process,
+                                       not just moving it into this op's own dispatcher.
 
-    Returns the append summary: {log_file, machine, goal_id, row: {<appended row>}}.
+    Returns the append summary: {log_file, machine, goal_id, row: {<appended row>}} — or,
+    when `events` was supplied, {"events": [...]} (see above).
 
     Raises:
         ValueError (propagated as JSON-RPC error) for missing or invalid required params,
-        or an invalid status value.
+        an invalid status value, or (batch form) a non-list `events`.
 
     Amendment: docs/plans/2026-07-07-per-repo-emission-cutover.md § C4a
     """
@@ -466,14 +540,28 @@ def _goal_append(params: dict, repo_root=None) -> dict:
         )
     derived_root = main_worktree_root(repo_root)
     ctx = resolve_context(derived_root)
+    repo = params.get("repo") or ctx.repo_name  # explicit override; internal fallback not reached
+    coordinator_root_path = _normalize_coordinator_root_path(
+        params.get("coordinator_root_path", "."), derived_root
+    )
+
+    events = params.get("events")
+    if events is not None:
+        if not isinstance(events, list):
+            raise ValueError(f"events must be a list of event objects (got: {type(events).__name__})")
+        return _goal_append_batch(
+            events,
+            repo=repo,
+            coordinator_root_path=coordinator_root_path,
+            central_state_root=ctx.central_state_root,
+        )
+
     return append_goal(
         period=params.get("period", ""),
         period_value=params.get("period_value", ""),
         text=params.get("text", ""),
-        repo=params.get("repo") or ctx.repo_name,  # explicit override; internal fallback not reached
-        coordinator_root_path=_normalize_coordinator_root_path(
-            params.get("coordinator_root_path", "."), derived_root
-        ),
+        repo=repo,
+        coordinator_root_path=coordinator_root_path,
         central_state_root=ctx.central_state_root,  # explicit override; internal fallback not reached
         key_results_status=params.get("key_results_status"),
         weekly_perceptible=params.get("weekly_perceptible"),

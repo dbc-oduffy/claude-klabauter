@@ -134,7 +134,13 @@ Negative-spec (hard-won, preserved from the bash originals):
     carried forward.
   - `tracked_at_head` (the Kept-claim existence check) is intentionally left
     UNSCOPED to `gate_paths` -- it is a HEAD snapshot, not staged state, and
-    the bash original scopes only the staged reads.
+    the bash original scopes only the staged reads. Because it cannot be
+    narrowed, it is instead SKIPPED: the `ls-tree` walk and the staged
+    `--name-only` read that feed Assertion-2 are issued only when the parsed
+    message actually carries a Kept-claim, since no other assertion reads
+    either set. This is a spawn-count reduction, never a widening -- a
+    skipped read is only ever skipped when its consumer would have iterated
+    an empty claim list.
 """
 
 from __future__ import annotations
@@ -411,13 +417,24 @@ def deletion_block_gate(
     )
     staged_or_renamed_away_set = staged_deletions_set | set(rename_sources)
 
-    name_only_result: GitResult = diff_cached_name_only(cwd)
-    all_staged = [p for p in name_only_result.stdout.splitlines() if p]
-    staged_all = [p for p in all_staged if p in gate_scope] if gate_scope else all_staged
-    staged_all_set = set(staged_all)
+    # Assertion-2's two reads answer ONE question -- does a Kept-claimed path
+    # still exist -- and nothing else in this function consumes either set, so
+    # a message with no Kept-claims skips both spawns outright rather than
+    # computing and discarding them. The `ls-tree` leg is the expensive one: an
+    # unscopeable full HEAD-tree walk (~27k paths / ~2MB of stdout on this
+    # repo) that `tracked_at_head`'s own negative-spec entry below forbids
+    # narrowing. Kept-claims are the rare shape on this commit path; the empty
+    # case is the hot one.
+    staged_all_set: Set[str] = set()
+    tracked_at_head: Set[str] = set()
+    if parsed.kept_claimed:
+        name_only_result: GitResult = diff_cached_name_only(cwd)
+        all_staged = [p for p in name_only_result.stdout.splitlines() if p]
+        staged_all = [p for p in all_staged if p in gate_scope] if gate_scope else all_staged
+        staged_all_set = set(staged_all)
 
-    ls_tree_result = _git(["ls-tree", "-r", "HEAD", "--name-only"], cwd=cwd)
-    tracked_at_head: Set[str] = {p for p in ls_tree_result.stdout.splitlines() if p}
+        ls_tree_result = _git(["ls-tree", "-r", "HEAD", "--name-only"], cwd=cwd)
+        tracked_at_head = {p for p in ls_tree_result.stdout.splitlines() if p}
 
     diagnostics: List[str] = []
 

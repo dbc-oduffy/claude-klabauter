@@ -451,7 +451,13 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
 
         subcmd, ambiguous, remaining = _real_git_subcommand(working[1:])
         if ambiguous:
-            seg_text = " ".join(shlex.quote(t) for t in seg_tokens)
+            # Built from the QUOTE-NORMALIZED tokens, never `shlex.quote` over
+            # the raw PowerShell spans: `shlex.quote('"worktree"')` yields
+            # `'"worktree"'`, which `strip_powershell_prose_noise` then strips
+            # entirely as a quoted span -- deleting the word the scanner is
+            # looking for and dropping a real deny (slice-B review P1b,
+            # reproduced). `block_stash_destruction` already does it this way.
+            seg_text = " ".join(working)
             verdict = _evaluate_powershell_legacy(seg_text)
             if verdict is not None:
                 return verdict

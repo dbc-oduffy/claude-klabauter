@@ -338,6 +338,54 @@ def test_pairing_summary_missing_sink_is_empty_not_raising(tmp_path):
     assert summary["unpaired_rate"] == 0.0
 
 
+def test_pairing_summary_repo_root_spans_rotated_generations(tmp_path, monkeypatch):
+    # C3, plan 2026-08-19-warm-engine-gets-an-honest-instrument: a `started`
+    # row in an older rotated generation whose `complete` partner landed in
+    # the live sink must still pair when resolved via `repo_root` -- a
+    # single-file read of the live sink alone sees the `complete` row with no
+    # matching `started` row (harmless) but, more importantly, would show the
+    # wrong "total" if the started row were in the newer file instead. This
+    # fixture puts `started` in the OLDER generation and `complete` in the
+    # LIVE sink, so a single-file (live-sink-only) read counts total=0,
+    # paired=0 -- the wrong answer this task exists to fix.
+    fake_common_dir = tmp_path / "common"
+    monkeypatch.setattr(
+        "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
+    )
+
+    logs_dir = fake_common_dir / "coordinator-sessions" / "logs"
+    logs_dir.mkdir(parents=True)
+    live_sink = logs_dir / "op-latency.jsonl"
+    rotated_sink = logs_dir / "op-latency.1.jsonl"
+
+    corr_id = "1-99"
+    rotated_sink.write_text(
+        json.dumps({"kind": "started", "corr_id": corr_id, "t_start": 0.0, "op": "e"}) + "\n",
+        encoding="utf-8",
+    )
+    live_sink.write_text(
+        json.dumps({"kind": "complete", "corr_id": corr_id, "t_start": 0.0, "op": "e"}) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = pairing_summary(
+        repo_root=tmp_path, staleness_cutoff_secs=40.0, now=1000.0
+    )
+    assert summary["total"] == 1
+    assert summary["paired"] == 1
+    assert summary["unpaired_started"] == 0
+
+    # The bug this task fixes: reading only the live (single) file loses the
+    # `started` row entirely, so pairing reports zero total/paired -- the
+    # wrong answer that would previously have been returned by a single-file
+    # read routed to `repo_root`.
+    single_file_summary = pairing_summary(
+        sink_path=live_sink, staleness_cutoff_secs=40.0, now=1000.0
+    )
+    assert single_file_summary["total"] == 0
+    assert single_file_summary["paired"] == 0
+
+
 # Review: code-reviewer (Finding 1, P2) — the rest of this module exercises
 # op_latency.py in isolation, which would pass unmodified even if ipc.py's
 # dispatch_message never called record_op_started and never threaded corr_id

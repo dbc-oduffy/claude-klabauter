@@ -114,6 +114,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -158,6 +159,28 @@ from coordinator_core.ops.ceremony.commit_message import (
 from coordinator_core.session.core import session_dir as _session_core_session_dir
 from coordinator_core.session.core import sessions_dir as session_hub_dir
 from coordinator_core.session.liveness import live_session_ids
+from coordinator_core.telemetry.op_latency import record_composition_span
+
+#: `run_commit_pipeline()` composition-span names (C2, docs/plans/2026-08-19-
+#: the-engine-stops-paying-a-network-push-on-every-commit.md § C2). Two rows
+#: per sync-mode invocation that reaches `commit()`, sharing one
+#: `composition_id` -- "pre_push" covers stage -> gates -> commit (everything
+#: BEFORE `push_with_retry()` is called), "push" covers exactly the
+#: `push_with_retry()` call itself. This is the direct measurement AC2 asks
+#: for: the prior "8.9s p50 is the push" claim was attributed by shape only
+#: (`run_commit_pipeline` step 2 short-circuits on empty `commit_paths`
+#: *before either gate runs*, so the 4ms floor sample bounds nothing about
+#: the pre-push leg specifically -- staff-eng F8), and `ipc.py`'s
+#: `_OP_TIMEOUT_OVERRIDES` comment block records 53 `git` spawns and
+#: 25.7/36.6/40.9s wall for a 2,100-path commit with no network claim
+#: attached -- direct in-tree evidence the non-push leg can itself be
+#: seconds at fleet path counts. Reusing `record_composition_span` (the
+#: existing span writer, no new sink, no new field) rather than inventing a
+#: parallel mechanism -- see that function's own docstring for the record
+#: shape and its fail-open contract (never raises, honours
+#: `COORDINATOR_OP_LATENCY_DISABLE`).
+_COMPOSITION_SPAN_PRE_PUSH = "commit_pipeline.pre_push"
+_COMPOSITION_SPAN_PUSH = "commit_pipeline.push"
 
 #: `push_mode` values for `run_commit_pipeline()` (wsc-tail-sub-2s-invoke-
 #: budget DEC-1/F1). "sync" (default) is `scoped_git_commit.py`'s wire
@@ -3374,6 +3397,14 @@ def run_commit_pipeline(
     """
     root = Path(worktree_root)
     diagnostics: List[str] = []
+    # C2 span bookkeeping (see `_COMPOSITION_SPAN_PRE_PUSH`/`_COMPOSITION_SPAN_
+    # PUSH` above): one `composition_id` shared by both legs of THIS call, so
+    # a reader can join the pre-push and push rows for the same invocation.
+    # `_pipeline_t_start` is this call's own wall-clock start -- the pre-push
+    # span's `t_start` and the base its elapsed_secs is measured from.
+    _pipeline_t_start = time.time()
+    _composition_id = uuid.uuid4().hex
+    _span_sid = attributed_session_id if attributed_session_id is not None else session_id
     _preflight_reap_stale_lock(str(root))
     common_dir = _resolve_pass_common_dir(str(root))
 
@@ -3801,10 +3832,32 @@ def run_commit_pipeline(
             # unresolvable, is the worse failure. `on_committed` is
             # deliberately NOT invoked below (see the guard immediately
             # after this block for why that is correct, not incidental).
+            _pre_push_elapsed = time.time() - _pipeline_t_start
+            record_composition_span(
+                composition_id=_composition_id,
+                name=_COMPOSITION_SPAN_PRE_PUSH,
+                invocation_count=1,
+                elapsed_secs=_pre_push_elapsed,
+                outcome="success",
+                t_start=_pipeline_t_start,
+                repo_root=root,
+                sid=_span_sid,
+            )
+            _push_t_start = time.time()
             push_outcome = push_with_retry(
                 root,
                 allow_protected_branch=allow_protected_branch,
                 protected_branch_override_reason=protected_branch_override_reason,
+            )
+            record_composition_span(
+                composition_id=_composition_id,
+                name=_COMPOSITION_SPAN_PUSH,
+                invocation_count=1,
+                elapsed_secs=time.time() - _push_t_start,
+                outcome="directive_failed" if push_outcome.failed else "success",
+                t_start=_push_t_start,
+                repo_root=root,
+                sid=_span_sid,
             )
             if push_outcome.failed:
                 diagnostics.extend(push_outcome.failed)
@@ -3897,7 +3950,29 @@ def run_commit_pipeline(
                 unprovenanced_paths=commit_outcome.unprovenanced_paths,
             )
 
+        _pre_push_elapsed = time.time() - _pipeline_t_start
+        record_composition_span(
+            composition_id=_composition_id,
+            name=_COMPOSITION_SPAN_PRE_PUSH,
+            invocation_count=1,
+            elapsed_secs=_pre_push_elapsed,
+            outcome="success",
+            t_start=_pipeline_t_start,
+            repo_root=root,
+            sid=_span_sid,
+        )
+        _push_t_start = time.time()
         push_outcome = push_with_retry(root)
+        record_composition_span(
+            composition_id=_composition_id,
+            name=_COMPOSITION_SPAN_PUSH,
+            invocation_count=1,
+            elapsed_secs=time.time() - _push_t_start,
+            outcome="directive_failed" if push_outcome.failed else "success",
+            t_start=_push_t_start,
+            repo_root=root,
+            sid=_span_sid,
+        )
         if push_outcome.failed:
             diagnostics.extend(push_outcome.failed)
         pushed = derive_pushed_tristate(push_outcome)

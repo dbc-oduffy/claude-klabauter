@@ -448,6 +448,176 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, tuple(registered))
 
 
+# ---------------------------------------------------------------------------
+# Stamped-engine provisioning (docs/plans/2026-08-19-an-engine-root-is-a-
+# stamped-build.md chunk C1) -- PREREQUISITE FOR that plan's C4 (fail-closed
+# on an unstamped engine root). Without this, a fresh box would have no
+# mirror and no way to get one once C4 lands: `_resolve_published_engine`
+# would return None forever and the ladder would have nothing left to fall
+# back to.
+#
+# SHAPE CHOSEN: (b) from C1's plan body -- a stamped LOCAL BUILD OUTPUT
+# DIRECTORY, never the live working tree (`write_engine_stamp`'s own
+# docstring forbids that: "never a development convenience", because it
+# pins the generation while the code moves underneath it). (b) is admissible
+# ONLY if it runs the SAME `_resolve_claude_klabauter_root` -> `_resolve_claude_klabauter_root`
+# identifier transform a human publish round runs (see C11) -- this
+# provisioning step satisfies that by invoking the REAL `coordinator/bin/
+# publish.py` machinery (never reimplemented -- Hard constraint 6), targeting
+# the `publish-mirror:claude_klabauter` row set, exactly as a human publish
+# round does. Because the destination is a freshly `git init`'d local
+# directory rather than a network clone of the published repo, (b) needs NO
+# NETWORK AT ALL: a fresh clone with no connectivity still reaches a
+# stamped, registered engine via this path -- this is (a) minus the network
+# clone, per the plan body's own framing ("(b) is (a) minus the network
+# clone -- a legitimate lighter-weight shape").
+#
+# Advisory, never fail-closed: this step WARNS and continues on any failure
+# (git unavailable, dirty claude-klabauter tree failing publish's own dirty-tree gate,
+# publish.py exiting non-zero) -- C1 ships and is verified BEFORE C4 removes
+# the unstamped fallback (Hard constraint 3), so a failure here must not
+# brick the rest of first-run/setup.py.
+_PUBLISH_TIMEOUT = 900  # a real percolate round over ~40 rows is not fast.
+_ENGINE_BUILD_SUBDIR = ("engine-build", "claude-klabauter")
+_KLABAUTER_MIRROR_REGISTRY_KEY = "repos.claude_klabauter"
+_KLABAUTER_MIRROR_PATH_REGISTRY_KEY = "publish.mirrors.claude_klabauter.path"
+# One row from `setup/publish-targets.portable` whose dest sigil is
+# `publish-mirror:claude_klabauter` and who has siblings sharing that sigil
+# -- naming ANY one such row causes `publish.py`'s own `main()` to auto-
+# expand the request to the row's WHOLE mirror (see that file's
+# "Mirror-name/row-name collision resolution" block) -- so this single name
+# publishes every row of the mirror, not just this one.
+_KLABAUTER_MIRROR_ROW_NAME = "claude-klabauter-bin"
+
+
+def _resolve_machine_local_argv(claude_klabauter_root: Path) -> Optional[List[str]]:
+    """Same resolution `_seed_machine_local_registry` uses: `machine-local`
+    now lives in claude-klabauter's own `coordinator/bin/`, never `plugin_root` (see
+    that function's docstring)."""
+    machine_local_bin = claude_klabauter_root / "coordinator" / "bin" / "machine-local"
+    if not is_executable(machine_local_bin):
+        return None
+    return resolve_launchable(str(machine_local_bin))
+
+
+def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLISH_TIMEOUT) -> bool:
+    """Ensure a registered, STAMPED engine root exists. Returns True iff one
+    exists (already did, or was provisioned this call) — False is always
+    advisory (a printed WARNING with a runnable remediation), never raised.
+
+    Idempotent: a already-stamped destination is a no-op past the registry
+    write. Safe to call from both `first_run.py`'s own post-toolchain
+    sequence (the coordinator-claude bootstrap, which may run before
+    claude-klabauter is even cloned -- see the claude-klabauter-root resolution guard
+    below) and `scripts/setup.py`'s `register_claude_klabauter_root` (claude-klabauter's
+    own AUTHORITATIVE registration surface, which is where this reliably has
+    a resolved `claude_klabauter_root` to work with).
+    """
+    from coordinator_core.machine_resolver import registry_get
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.warm import skew
+
+    machine_local_argv = _resolve_machine_local_argv(claude_klabauter_root)
+    if machine_local_argv is None:
+        print(
+            "[first-run] WARNING: machine-local CLI not found — cannot provision or "
+            "register a stamped engine root.",
+            file=sys.stderr,
+        )
+        print(
+            "  Remediation: once machine-local is installed, run: "
+            "python coordinator/bin/publish.py claude-klabauter-bin",
+            file=sys.stderr,
+        )
+        return False
+
+    registered = registry_get(_KLABAUTER_MIRROR_REGISTRY_KEY)
+    dest = Path(registered) if registered else None
+    if dest is None or not dest.is_dir():
+        dest = settings_home().joinpath(*_ENGINE_BUILD_SUBDIR)
+
+    stamp_path = dest / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
+    if stamp_path.is_file():
+        # Already stamped — just make sure the registry agrees (idempotent).
+        _run([*machine_local_argv, "set", _KLABAUTER_MIRROR_REGISTRY_KEY, str(dest)], timeout=30)
+        return True
+
+    dest.mkdir(parents=True, exist_ok=True)
+    if not (dest / ".git").is_dir():
+        try:
+            init_proc = _run(["git", "init", str(dest)], timeout=30, capture_output=True, text=True)
+            if init_proc.returncode != 0:
+                print(f"[first-run] WARNING: `git init {dest}` failed — cannot provision a stamped engine.", file=sys.stderr)
+                return False
+            commit_proc = _run(
+                ["git", "-C", str(dest), "commit", "--allow-empty", "-m", "engine-build: init"],
+                timeout=30,
+                capture_output=True,
+                text=True,
+            )
+            if commit_proc.returncode != 0:
+                print(f"[first-run] WARNING: initial commit in {dest} failed — cannot provision a stamped engine.", file=sys.stderr)
+                return False
+        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
+            print(f"[first-run] WARNING: git init of engine-build directory failed: {exc}", file=sys.stderr)
+            return False
+
+    set_proc = _run(
+        [*machine_local_argv, "set", _KLABAUTER_MIRROR_PATH_REGISTRY_KEY, str(dest)], timeout=30,
+        capture_output=True, text=True,
+    )
+    if set_proc.returncode != 0:
+        print(f"[first-run] WARNING: failed to register {_KLABAUTER_MIRROR_PATH_REGISTRY_KEY} — skipping engine provisioning.", file=sys.stderr)
+        return False
+
+    publish_script = claude_klabauter_root / "coordinator" / "bin" / "publish.py"
+    if not publish_script.is_file():
+        print(f"[first-run] WARNING: {publish_script} not found — cannot run a publish round.", file=sys.stderr)
+        return False
+
+    print(f"[first-run] Provisioning a stamped engine build at {dest} (running a publish round)...")
+    try:
+        publish_proc = _run(
+            [sys.executable, str(publish_script), _KLABAUTER_MIRROR_ROW_NAME],
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
+        print(f"[first-run] WARNING: publish round failed to run: {exc}", file=sys.stderr)
+        return False
+
+    if publish_proc.returncode != 0:
+        print(
+            f"[first-run] WARNING: publish round into {dest} exited {publish_proc.returncode} — "
+            "engine not stamped this run.",
+            file=sys.stderr,
+        )
+        print(f"{publish_proc.stdout}\n{publish_proc.stderr}", file=sys.stderr)
+        print(
+            "  Remediation: once the reported issue is resolved, re-run: "
+            f"python coordinator/bin/publish.py {_KLABAUTER_MIRROR_ROW_NAME}",
+            file=sys.stderr,
+        )
+        return False
+
+    if not stamp_path.is_file():
+        print(
+            f"[first-run] WARNING: publish round exited 0 but no stamp found at {stamp_path} — "
+            "engine not registered.",
+            file=sys.stderr,
+        )
+        return False
+
+    reg_proc = _run([*machine_local_argv, "set", _KLABAUTER_MIRROR_REGISTRY_KEY, str(dest)], timeout=30)
+    if reg_proc.returncode != 0:
+        print(f"[first-run] WARNING: failed to register {_KLABAUTER_MIRROR_REGISTRY_KEY} after a successful publish round.", file=sys.stderr)
+        return False
+
+    print(f"[first-run] Stamped engine registered: {_KLABAUTER_MIRROR_REGISTRY_KEY} = {dest}")
+    return True
+
+
 def run_post_toolchain(plugin_root: Path, args: _Args) -> int:
     """unit2 -- Steps 1-6. Returns EXIT_OK/EXIT_FAIL, fail-loud on any
     step's non-zero exit (mirrors the oracle's `|| { ...; exit 1; }` guards
@@ -525,6 +695,23 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
 
     # Step 3: seed machine-local registry.
     _seed_machine_local_registry(args.confirm, args.non_interactive)
+
+    # Step 3b: provision a stamped engine root (docs/plans/2026-08-19-an-
+    # engine-root-is-a-stamped-build.md C1), best-effort. On a genuinely
+    # fresh box this usually no-ops here (claude-klabauter is not yet cloned,
+    # so CLAUDE_KLABAUTER_ROOT is unresolvable) -- `scripts/setup.py`'s own
+    # `register_claude_klabauter_root` is the AUTHORITATIVE call site for that case
+    # and calls the same function once claude-klabauter's own installer runs.
+    # This call site exists for the re-run/already-registered case.
+    try:
+        claude_klabauter_root_for_engine_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        provision_stamped_engine(Path(claude_klabauter_root_for_engine_str))
+    except RuntimeError:
+        print(
+            "[post-toolchain] Skipping stamped-engine provisioning: CLAUDE_KLABAUTER_ROOT not yet "
+            "resolvable (claude-klabauter not cloned yet). scripts/setup.py provisions it "
+            "once claude-klabauter is installed.",
+        )
 
     # Step 4a: install-substrate — in-process import (template-variant #1,
     # direct-import; this caller is now Python, so the subprocess `python3

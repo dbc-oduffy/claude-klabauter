@@ -47,10 +47,9 @@ the engine clone, keyed by a hash of the resolved clone path. NOT
 `<engine_root>/state/warm/`, which is what this resolved until
 2026-08-19; `svc_dir` below carries the PM ruling that moved it and the
 rationale the original resolution was reasoning from. `engine_root` defaults to THIS
-module's own resolved clone root (`Path(__file__).resolve().parents[2]`,
-the same computation `election._default_engine_clone` / `client.
-_engine_clone_root` / `skew._default_engine_clone` each keep as a local
-copy per this package's convention) -- so on the klabauter box, running
+module's own resolved clone root, `engine_root.current_engine_clone()`
+(the single shared definition every former local copy now calls -- plan
+2026-08-19-an-engine-root-is-a-stamped-build § C3) -- so on the klabauter box, running
 this module's functions from the klabauter clone resolves the
 KLABAUTER clone's own runtime directory, never one keyed to whatever
 repo happens to be the caller's cwd. `warm-engine-stop.py` relies on exactly this: it is a
@@ -78,6 +77,7 @@ from typing import Optional
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
+from coordinator_core.warm.engine_root import current_engine_clone
 
 __all__ = [
     "SPAWN_DEBOUNCE_SECS",
@@ -98,12 +98,10 @@ BREADCRUMB_FILENAME = "warm.json"
 
 
 def _default_engine_clone() -> Path:
-    """This module's own resolved clone root -- kept as a local copy per
-    this package's convention of not reaching into a peer module's
-    private name for the same one-line computation (`election.
-    _default_engine_clone`, `client._engine_clone_root`, `skew.
-    _default_engine_clone`)."""
-    return Path(__file__).resolve().parents[2]
+    """This module's own resolved clone root -- collapsed onto the single
+    shared definition, `engine_root.current_engine_clone()` (plan
+    2026-08-19-an-engine-root-is-a-stamped-build § C3)."""
+    return current_engine_clone()
 
 
 def svc_dir(engine_root: Optional[Path] = None) -> Path:

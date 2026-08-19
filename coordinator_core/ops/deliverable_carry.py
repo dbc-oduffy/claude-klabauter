@@ -53,6 +53,17 @@ this repo. Do not re-implement or fork a second copy of
 `resolve_deliverable_and_initiative`, `DroppedDeliverableJoinError`, or
 `DivergentDeliverableIdError` anywhere else — `coordinator/bin/handoff-
 deliverable-carry.py` imports from this module rather than carrying its own copy.
+
+Sanctioned exception (DR-328, 2026-08-19): `coordinator_core.ops.ceremony.
+git_native.DeliverableIdAssertionConflictError` is a deliberate SIBLING of
+`DivergentDeliverableIdError` (not a subclass, not a fork of it) — it serves a
+different consumer (a commit-time caller-vs-message-trailer assertion
+conflict, not this module's carry-or-mint provenance cascade) and must not
+reach `baton_assemble.brief`'s `DivergentDeliverableIdError`-typed catch,
+which converts that error into a `j-divergent-deliverable-id` judgment point
+nonsensical for a commit assertion conflict. Read this negative-spec as
+scoped to forks of the carry class itself; a sibling built to stay OUT of its
+typed catch is not one.
 """
 
 from __future__ import annotations

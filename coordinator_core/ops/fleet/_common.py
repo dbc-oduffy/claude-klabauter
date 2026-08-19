@@ -1384,16 +1384,30 @@ async def archive_and_commit(
 ) -> Tuple[List[dict], List[dict]]:
     """DR-211 D3/D4 git-archive helper: git-mv each Move and commit all successes.
 
+    Before the per-Move loop, two BATCHED (amplification burn-down C4, 2026-08-19)
+    spawns cover what used to be one spawn per move each:
+    - `git diff --name-only -- <every non-restage_src src>`: the disk/HEAD drift
+      guard's result set for the whole batch — see "Disk/HEAD drift guard" below.
+    - `git add -- <every restage_src src>`: the "op-authored pre-move content"
+      restage for the whole batch — see below.
+    Per-move attribution for both is recovered in the loop via membership test
+    (drift) or a stored batch-outcome flag (restage) — see each block's own
+    comment at the call site for why this preserves the per-item failed[]
+    classification exactly.
+
     For each Move:
     1. Ensures dst.parent exists (git mv will not create directories).
-    2. If move.restage_src is True: runs a targeted
-       `git add -- src` against the private index BEFORE the git mv (see
-       "op-authored pre-move content" below). Skipped entirely for the
-       (default) restage_src=False case.
+    2. If move.restage_src is False: consults the batched drift-check result
+       (membership test) — see "Disk/HEAD drift guard" below. If True: consults
+       the batched restage `git add` outcome — see "op-authored pre-move
+       content" below. Neither spawns per move any more.
     3. Runs awaited asyncio.create_subprocess_exec("git", "mv", src, dst) with
        GIT_INDEX_FILE pointing to a private temp-file index, isolating staging from
        the main index so a concurrent 'git add -A' cannot absorb our staging
-       (DR-211 D3 :195-197; the reverse-absorption window).
+       (DR-211 D3 :195-197; the reverse-absorption window). This remains the ONE
+       genuinely per-item spawn — per-move failure isolation (the reversal and
+       `failed[]` classification below) is exactly why it is not batched; see
+       state/audits/2026-08-19-amplification-register-remaining-fourteen-dispositions.md.
     4. On per-item git mv failure: checks whether the disk rename happened and
        reverses it (src absent + dst present → Path.rename back).  Item lands
        in failed[]; processing continues for remaining moves.
@@ -1561,6 +1575,100 @@ async def archive_and_commit(
         # reversal loop for moves that succeeded here but got un-done there).
         created_dirs_by_id: dict = {}
 
+        # ---------------------------------------------------------------
+        # Batched drift check + batched restage (amplification burn-down C4,
+        # fleet-common archive_and_commit residual — the exemption register's
+        # "git mv one src/dst pair" covered only the mv itself; these two were
+        # still spawning once per move). Both run ONCE for the whole batch,
+        # ahead of the per-move loop below, which now does a membership test
+        # (drift) or nothing at all (restage — already staged) instead of its
+        # own subprocess.
+        #
+        # Drift check: `git diff --name-only -- <every non-restage_src src>`
+        # in one call. `--name-only` (not `--quiet`) so the single spawn
+        # yields the SET of drifted paths rather than a single pass/fail bit
+        # — per-move attribution is recovered below via membership test
+        # against that set (rel_id(move.src) against a git-diff-emitted path
+        # are both forward-slash, cwd-relative — cwd is worktree_root here,
+        # so "relative to cwd" and "relative to repo root" coincide). A batch
+        # failure (nonzero rc — a genuine git error, not "some files
+        # differ") is attributed to every non-restage_src move individually
+        # in the loop below, same "reason echoed per item" shape the
+        # existing _resync_main_index_for_moves/_reaps batch failures use.
+        plain_srcs = [m.src for m in moves if not m.restage_src]
+        drift_batch_error: Optional[str] = None
+        drifted_ids: set = set()
+        if plain_srcs:
+            diff_argv = ["git", "diff", "--name-only", "--"] + [str(s) for s in plain_srcs]
+            diff_proc = await asyncio.create_subprocess_exec(
+                *diff_argv,
+                cwd=str(worktree_root),
+                env=base_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            diff_out, diff_stderr = await diff_proc.communicate()
+            if diff_proc.returncode != 0:
+                err_msg = diff_stderr.decode(errors="replace").strip()
+                drift_batch_error = (
+                    f"drift-check-failed: {err_msg}" if err_msg else "drift-check-failed"
+                )
+            else:
+                drifted_ids = {
+                    line.strip()
+                    for line in diff_out.decode(errors="replace").splitlines()
+                    if line.strip()
+                }
+
+        # Restage: `git add -- <every restage_src src>` in one call. Ordering
+        # is equivalent to the previous per-move placement (each add
+        # immediately before ITS OWN move's git mv): every add names only its
+        # own move's src — a path disjoint from every other move's src and
+        # dst — and every add already ran strictly before ANY git mv in
+        # program order, so moving them all earlier changes nothing about
+        # what content the mv loop below re-keys. See Move.restage_src's
+        # docstring for why this is safe against FORWARD-B (reads src, never
+        # dst, and only for op-authored content).
+        #
+        # On batch failure the private index may hold a PARTIAL stage (git
+        # add validates pathspecs but can still stage some paths before
+        # erroring on another) — reset -- <all restage srcs> undoes exactly
+        # that before every restage_src move is failed below, mirroring the
+        # per-move reset the mv-failure branch already does for a move whose
+        # OWN add succeeded but whose mv then failed.
+        restage_moves = [m for m in moves if m.restage_src]
+        restage_batch_error: Optional[str] = None
+        if restage_moves:
+            add_argv = ["git", "add", "--"] + [str(m.src) for m in restage_moves]
+            add_proc = await asyncio.create_subprocess_exec(
+                *add_argv,
+                cwd=str(worktree_root),
+                env=base_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _out, add_stderr = await add_proc.communicate()
+            if add_proc.returncode != 0:
+                err_msg = add_stderr.decode(errors="replace").strip()
+                restage_batch_error = (
+                    f"restage-src-failed: {err_msg}" if err_msg else "restage-src-failed"
+                )
+                reset_proc = await asyncio.create_subprocess_exec(
+                    "git", "reset", "--", *[str(m.src) for m in restage_moves],
+                    cwd=str(worktree_root),
+                    env=base_env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _out, reset_stderr = await reset_proc.communicate()
+                if reset_proc.returncode != 0:
+                    _LOG.warning(
+                        "archive_and_commit: could not reset private index "
+                        "entries for restage_src batch after batched git add "
+                        "failure: %s",
+                        reset_stderr.decode(errors="replace").strip(),
+                    )
+
         for move in moves:
             # Create destination directory — git mv will not mkdir. Tracked so
             # a failed move (this loop) or a failed commit (below) can remove
@@ -1584,23 +1692,19 @@ async def archive_and_commit(
                 # mismatch. Skipped only for restage_src=True moves, which
                 # already restage src's current disk content into the index
                 # immediately below and so cannot exhibit this drift.
-                diff_proc = await asyncio.create_subprocess_exec(
-                    "git", "diff", "--quiet", "--", str(move.src),
-                    cwd=str(worktree_root),
-                    env=base_env,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _out, diff_stderr = await diff_proc.communicate()
-                if diff_proc.returncode not in (0, 1):
-                    err_msg = diff_stderr.decode(errors="replace").strip()
+                #
+                # Membership test against the batched `git diff --name-only`
+                # result computed once, above the loop — see that block's
+                # comment for why a batch failure is attributed per item here
+                # rather than re-spawning per move.
+                if drift_batch_error is not None:
                     _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
                     failed.append({
                         "id": move.candidate_id,
-                        "reason": f"drift-check-failed: {err_msg}" if err_msg else "drift-check-failed",
+                        "reason": drift_batch_error,
                     })
                     continue
-                if diff_proc.returncode == 1:
+                if rel_id(move.src, worktree_root) in drifted_ids:
                     _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
                     failed.append({
                         "id": move.candidate_id,
@@ -1614,27 +1718,22 @@ async def archive_and_commit(
                     continue
 
             if move.restage_src:
-                # Targeted `git add -- src` against the private index ONLY,
-                # so the git mv below re-keys src's CURRENT on-disk content
-                # (not the read-tree-HEAD blob) to dst — see this function's
-                # "op-authored pre-move content" docstring note. Named path
-                # only, never a directory or blanket pathspec.
-                stage_proc = await asyncio.create_subprocess_exec(
-                    "git", "add", "--", str(move.src),
-                    cwd=str(worktree_root),
-                    env=base_env,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _out, stage_stderr = await stage_proc.communicate()
-                if stage_proc.returncode != 0:
-                    err_msg = stage_stderr.decode(errors="replace").strip()
+                # `git add -- src` against the private index ONLY, so the git
+                # mv below re-keys src's CURRENT on-disk content (not the
+                # read-tree-HEAD blob) to dst — see this function's
+                # "op-authored pre-move content" docstring note. Already run,
+                # batched across every restage_src move, in the pre-loop
+                # block above (one spawn covering every move's own named src,
+                # not one spawn per move) — here we only consult that batch's
+                # outcome; a failure was already reset there so no stray
+                # staged entry from THIS move rides into the commit.
+                if restage_batch_error is not None:
                     # Nothing landed at dst for this move — remove the empty
                     # dir tree the mkdir above created (C9).
                     _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
                     failed.append({
                         "id": move.candidate_id,
-                        "reason": f"restage-src-failed: {err_msg}" if err_msg else "restage-src-failed",
+                        "reason": restage_batch_error,
                     })
                     continue
 

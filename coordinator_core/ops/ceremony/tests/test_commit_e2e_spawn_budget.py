@@ -402,6 +402,14 @@ def test_push_raced_path_spawn_count_and_sleep_match_budget(tmp_path_factory):
                 "worktree_root": str(repo),
                 "paths": ["a.txt"],
                 "message": "test commit",
+                # EXPLICIT since the op's default became `deferred` (2026-08-19
+                # op-tail-latency). This budget is the SYNC push leg's -- the
+                # raced/drain paths it counts exist only when the op pushes
+                # inline; on the default they are never reached, which the
+                # push_state assertion below reports as "measuring the wrong
+                # path". The deferred default's smaller spawn profile is a
+                # separate budget row, not this one.
+                "push_mode": "sync",
             }
         )
 
@@ -588,6 +596,14 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
                 "worktree_root": str(repo),
                 "paths": ["a.txt"],
                 "message": "test commit",
+                # EXPLICIT since the op's default became `deferred` (2026-08-19
+                # op-tail-latency). This budget is the SYNC push leg's -- the
+                # raced/drain paths it counts exist only when the op pushes
+                # inline; on the default they are never reached, which the
+                # push_state assertion below reports as "measuring the wrong
+                # path". The deferred default's smaller spawn profile is a
+                # separate budget row, not this one.
+                "push_mode": "sync",
             }
         )
 

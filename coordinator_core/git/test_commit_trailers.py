@@ -439,25 +439,26 @@ def test_two_claims_scope_match_covered_by_both_plans_omits(tmp_path, monkeypatc
     assert f"Session-Id: {_SID}" in joined
 
 
-def test_artifact_tier_raises_on_genuinely_divergent_multi_artifact_commit(
+def test_artifact_tier_omits_on_genuinely_divergent_multi_artifact_commit(
     tmp_path, monkeypatch
 ):
     """Two paths in the SAME commit naming two DIFFERENT non-empty
-    deliverable_id values is not guessed at -- fails loud, matching the
-    posture `coordinator_core.ops.deliverable_carry.DivergentDeliverableIdError`
-    already established for its own plan-vs-predecessor divergent join."""
-    from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
-
+    deliverable_id values is not guessed at -- per producer-contract § 3,
+    tier 0 OMITS rather than raises: no Deliverable-Id trailer is stamped,
+    and the session tiers below run exactly as if tier 0 found nothing."""
     repo = _init_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
     _write_handoff(repo, "state/handoffs/a.md", "dlv-a")
     _write_handoff(repo, "state/handoffs/b.md", "dlv-b")
     msg = _msg_file(repo)
 
-    with pytest.raises(DivergentDeliverableIdError):
-        compute_missing_trailer_args(
-            msg, repo, paths=["state/handoffs/a.md", "state/handoffs/b.md"]
-        )
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["state/handoffs/a.md", "state/handoffs/b.md"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+    assert f"Session-Id: {_SID}" in joined
 
 
 def test_declared_fork_pair_stamps_a_raw_id_never_the_synthesized_canonical_winner(
@@ -732,4 +733,99 @@ def test_session_id_override_none_reproduces_prior_behaviour(tmp_path, monkeypat
     args = compute_missing_trailer_args(msg, repo)
 
     joined = " ".join(args)
+    assert f"Session-Id: {_SID}" in joined
+
+
+# ---------------------------------------------------------------------------
+# C1 red: a commit pathspec spanning two deliverables must RESOLVE, never
+# raise. Inverts the raise assertion at test_artifact_tier_raises_on_
+# genuinely_divergent_multi_artifact_commit (line ~442) -- C2 re-points that
+# test; this one is the new target behaviour it must land green against.
+# ---------------------------------------------------------------------------
+
+
+def test_multi_deliverable_pathspec_resolves_without_deliverable_trailer(
+    tmp_path, monkeypatch
+):
+    """AC1 + AC2 in one assertion pair: two artifacts naming two DIFFERENT
+    non-empty deliverable_id values in the same pathspec must RETURN (not
+    raise `DivergentDeliverableIdError`), and the returned arg list must
+    carry NO `Deliverable-Id:` trailer at all -- an unresolvable multi-
+    deliverable commit omits the trailer rather than guessing or refusing."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_handoff(repo, "state/handoffs/a.md", "dlv-a")
+    _write_handoff(repo, "state/handoffs/b.md", "dlv-b")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["state/handoffs/a.md", "state/handoffs/b.md"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+    assert f"Session-Id: {_SID}" in joined
+
+
+def test_single_deliverable_pathspec_unchanged_behaviour(tmp_path, monkeypatch):
+    """AC3 companion: the single-deliverable path must be byte-identical to
+    its pre-fix behaviour -- the divergent-pathspec fix cannot be graded on
+    the multi-deliverable case alone."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_handoff(repo, "state/handoffs/only.md", "dlv-only")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["state/handoffs/only.md"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-only" in joined
+
+
+def test_eleven_distinct_deliverables_at_scale_resolves_without_trailer(
+    tmp_path, monkeypatch
+):
+    """AC11, the `mise` case AT SCALE: eleven artifacts carrying eleven
+    distinct deliverable_id values in one pathspec, not the n=2 minimal
+    reproduction -- the real autonomous-run workload the PM named. Built
+    from real handoff frontmatter shapes (`_write_handoff` -> `_write_plan`),
+    not eleven synthetic stubs."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+
+    rel_paths = []
+    for i in range(11):
+        rel_path = f"state/handoffs/mise-{i:02d}.md"
+        _write_handoff(repo, rel_path, f"dlv-mise-{i:02d}")
+        rel_paths.append(rel_path)
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=rel_paths)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+    assert f"Session-Id: {_SID}" in joined
+
+
+def test_emergency_pathspec_with_no_deliverable_id_anywhere_commits_untrailered(
+    tmp_path, monkeypatch
+):
+    """AC12, the EMERGENCY case: a pathspec whose files carry no
+    deliverable_id at all must commit untrailered and must never be
+    refused. This already passes today (verified: resolves to ``""``) --
+    pinned as a regression here because C2 edits the very function that
+    produces that ``""``, and a careless early return in the divergence fix
+    would turn the emergency path into a refusal instead of a silent
+    omission. A test that passes on the first run is the point, not a
+    defect in the test."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    (repo / "src").mkdir()
+    (repo / "src" / "emergency_fix.py").write_text("x = 1\n", encoding="utf-8")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["src/emergency_fix.py"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
     assert f"Session-Id: {_SID}" in joined

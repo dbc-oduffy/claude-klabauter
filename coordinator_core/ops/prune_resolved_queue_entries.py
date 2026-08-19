@@ -73,12 +73,22 @@ history/lessons that cite "Rule N"):
            orphaned sublines until the next non-subline. Prevents
            synthetic-subline corruption.
 
-Usage: prune-resolved-queue-entries.sh <queue-file>
+Usage: prune-resolved-queue-entries.sh <queue-file> [<queue-file> ...]
+
+Multiple queue-file positionals are pruned independently, in one process —
+each gets its own allowlist/exists/parse handling and its own stderr
+message, so a caller sweeping several queues in a single spawn still learns
+exactly which one failed. One bad queue does not stop the others from being
+pruned.
 
 Exit codes (parity-critical):
-  0 — file pruned and atomically replaced (or no changes needed)
-  1 — usage error, disallowed basename, or file-not-found (fails loud with a
-      stderr message — never skips silently)
+  0 — every given file was pruned and atomically replaced (or needed no
+      changes)
+  1 — usage error (no queue-file given), OR at least one queue-file hit a
+      disallowed basename / file-not-found / parse error (fails loud with a
+      stderr message identifying that file — never skips silently). The
+      other, non-failing queue-files in the same invocation are still
+      pruned; this is an aggregate exit code, not early-abort.
 
 On parse error or unexpected structure, fails loud with a stderr message —
 does NOT skip silently. Only operates on the allowlisted queue file
@@ -340,12 +350,13 @@ def _atomic_replace(path: str, new_lines: list[str]) -> None:
         raise
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 1:
-        print(f"Usage: {_PROG} <queue-file>", file=sys.stderr)
-        return 1
-
-    input_path = argv[0]
+def _prune_one(input_path: str) -> int:
+    """Prune a single queue-file. Returns 0/1 with the same messages/behavior
+    `main` had when it only ever accepted one positional — `main` now calls
+    this once per argv entry so a multi-file invocation attributes failure
+    to the specific file that caused it, rather than collapsing N results
+    into one opaque pass/fail.
+    """
     basename = os.path.basename(input_path)
 
     if basename not in _ALLOWED_BASENAMES:
@@ -369,6 +380,23 @@ def main(argv: list[str]) -> int:
     _atomic_replace(input_path, pruned)
 
     return 0
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        print(f"Usage: {_PROG} <queue-file> [<queue-file> ...]", file=sys.stderr)
+        return 1
+
+    # Each queue-file is independent: a bad one is reported (by _prune_one,
+    # via its own stderr message naming that file) and folded into the
+    # aggregate exit code, but does not stop the remaining files from being
+    # pruned in this same process.
+    overall_rc = 0
+    for input_path in argv:
+        if _prune_one(input_path) != 0:
+            overall_rc = 1
+
+    return overall_rc
 
 
 if __name__ == "__main__":

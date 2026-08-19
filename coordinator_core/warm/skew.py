@@ -70,7 +70,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -79,12 +81,61 @@ from coordinator_core import engine_version, lifecycle
 __all__ = [
     "ENGINE_SKEW",
     "ENGINE_STAMP_FILENAME",
+    "UnstampedEngineRootError",
     "compute_client_token",
     "write_engine_stamp",
+    "read_engine_stamp_sha",
+    "PublishLag",
+    "publish_lag",
+    "publish_lag_message",
+    "PUBLISH_LAG_THRESHOLD_MINUTES",
     "ServerVersionState",
     "build_skew_response",
     "evict_on_skew",
 ]
+
+#: Repo-relative paths whose commits count as "engine-touching" for
+#: `publish_lag`'s `rev-list` scoping -- mirrors the amplification gate's
+#: own notion of engine surface (see
+#: `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`) and
+#: `claude-klabauter-doctor-probe.py::_run_probe_publish_provenance`'s sibling
+#: computation, which this function is a placement move of, not a
+#: reimplementation.
+_ENGINE_TOUCHING_PATHS = ("coordinator_core/", "coordinator/")
+
+#: DR-335's threshold: the measured median per-fix time-to-live (28 min).
+#: Below this, an unpublished commit is the ordinary case and MUST stay
+#: silent (docs/decisions/DR-335-publish-lag-is-surfaced-not-shortened.md
+#: § Consequences) -- surfacing it here would be wallpaper, not signal.
+PUBLISH_LAG_THRESHOLD_MINUTES = 30
+
+
+class UnstampedEngineRootError(RuntimeError):
+    """Raised by `compute_client_token` when `repo_root` carries no valid
+    `coordinator_core/_engine_stamp` (`skew.ENGINE_STAMP_FILENAME`).
+
+    Spec backlink: docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C4
+
+    THE KEYSTONE. Prior to this, an unstamped tree (the live working tree)
+    fell back to a `.git/HEAD`-derived token -- reachable, therefore
+    SUPPORTED, as a dispatch target. That fallback is deleted outright, not
+    loosened: "an engine root is a stamped build; no stamp, no engine." A
+    caller reaching this on the DISPATCH axis wanted an engine and got the
+    live working tree instead -- exactly the "oops, wrong var set" hole the
+    PM vetoed. See § Hard constraint 1 (no new escape hatch).
+    """
+
+
+def _no_stamp_message(root: Path) -> str:
+    """Guard-messaging register (docs/wiki/guard-messaging.md § Register):
+    one fact, one runnable alternative, no self-legitimacy, no apology,
+    never a slash command -- this can fire on the cold path, before any
+    Claude Code session exists (`COLD_PATH_MODULES`)."""
+    setup_script = Path(root) / "scripts" / "setup.py"
+    return (
+        "engine root has no build stamp: {0} is not a published engine.\n"
+        "Remediation: python3 {1}"
+    ).format(root, setup_script)
 
 # Mirrors `coordinator_core.warm.client.ENGINE_SKEW`. Duplicated rather than
 # imported: `client.engine_token` (C15's placeholder seam) is meant to call
@@ -96,37 +147,15 @@ _REFRESH_INTERVAL_SECS = 2.0
 
 
 def _default_engine_clone() -> Path:
-    # Same computation as `election._default_engine_clone` and
-    # `client._engine_clone_root`, kept as a local copy per this codebase's
-    # convention of not reaching into a peer module's private name.
-    return Path(__file__).resolve().parents[2]
+    # Collapsed onto the single shared definition (plan
+    # 2026-08-19-an-engine-root-is-a-stamped-build § C3): every one of the
+    # seven former local `Path(__file__).resolve().parents[N]` copies now
+    # calls `engine_root.current_engine_clone()` instead. Import kept
+    # local to the function body: `engine_root` imports THIS module for
+    # its stamp-path helpers, so a module-level import here would cycle.
+    from coordinator_core.warm.engine_root import current_engine_clone
 
-
-def _stat_pair(path: Path) -> tuple:
-    """Return (st_mtime_ns, st_size) for `path`, or (0, 0) if it cannot be
-    stat'd. (0, 0) is a safe "absent/unreadable" sentinel for this token's
-    equality comparisons -- two absent paths compare equal, and no real
-    file's mtime_ns lands on the epoch, so it never collides with a
-    present file's stat pair."""
-    try:
-        st = path.stat()
-        return (st.st_mtime_ns, st.st_size)
-    except OSError:
-        return (0, 0)
-
-
-def _resolve_ref_path(git_dir: Path) -> Optional[Path]:
-    """Resolve the ref file `.git/HEAD` currently points at, or None on a
-    detached HEAD (a raw sha, no `ref:` prefix) or an unreadable HEAD."""
-    head = git_dir / "HEAD"
-    try:
-        content = head.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not content.startswith("ref:"):
-        return None
-    ref_rel = content[len("ref:"):].strip()
-    return git_dir / ref_rel
+    return current_engine_clone()
 
 
 #: Filename of the engine build stamp, written into a PUBLISHED engine tree
@@ -150,27 +179,23 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
     """Primary version-skew token: a stat-only fingerprint of this engine's
     identity, no subprocess.
 
-    TWO SOURCES, and which one applies is a property of the tree, not a
-    setting:
-
-      1. A PUBLISHED engine tree carries a build stamp
-         (`coordinator_core/_engine_stamp`). The token fingerprints the
-         stamp's bytes, so it changes exactly when a publish round ships new
-         engine code and at no other time.
-      2. A LIVE WORKING TREE has no stamp. The token falls back to the
-         original git-ref fingerprint -- `(st_mtime_ns, st_size)` of
-         `.git/HEAD` and the ref it points at (or `(0, 0)` on a detached
-         HEAD).
+    ONE SOURCE, unconditionally (docs/plans/2026-08-19-an-engine-root-is-a-
+    stamped-build.md § C4): a PUBLISHED engine tree carries a build stamp
+    (`coordinator_core/_engine_stamp`). The token fingerprints the stamp's
+    bytes, so it changes exactly when a publish round ships new engine code
+    and at no other time. `repo_root` carrying no stamp is no longer a
+    second, ref-based source -- it is `UnstampedEngineRootError`. "An
+    engine root is a stamped build. No stamp, no engine."
 
     WHY THE STAMP EXISTS -- measured, 2026-08-18. The token is embedded in
     the pipe name (`election.pipe_name`), so rotating it strands the running
-    server and makes the next client spawn a successor. Keyed on the git
-    ref, the token rotated **every ~32 seconds** on this box's shared branch,
-    because ANY of the 50-70 concurrent sessions committing ANYTHING -- a
-    doc, a `state/` artifact, a peer's unrelated code -- moves the ref. A
-    server takes ~1s to boot and was stale before a client could reach it:
-    warm served 0/6 with the feature fully enabled and correctly wired.
-    Engine code had not changed once in that window.
+    server and makes the next client spawn a successor. Keyed on the (now
+    deleted) git-ref fallback, the token rotated **every ~32 seconds** on
+    this box's shared branch, because ANY of the 50-70 concurrent sessions
+    committing ANYTHING -- a doc, a `state/` artifact, a peer's unrelated
+    code -- moves the ref. A server takes ~1s to boot and was stale before a
+    client could reach it: warm served 0/6 with the feature fully enabled
+    and correctly wired. Engine code had not changed once in that window.
 
     That is the defect this fixes: the token was COARSER than engine-source
     change in the one direction that matters, firing on commits that touch
@@ -183,17 +208,20 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
     detection does not rest on this token at all: axis 2
     (`ServerVersionState`, server-side, source-level) hashes the engine
     package itself and catches any real code change including an
-    uncommitted editor save, on a tree with a stamp or without one. Axis 1's
-    job is GENERATION BINDING -- letting a successor bind a fresh pipe while
-    a predecessor drains -- not staleness. Making axis 1 track engine
-    identity therefore removes false rotations without removing a safety
-    check; the check lives elsewhere and still runs.
+    uncommitted editor save. Axis 1's job is GENERATION BINDING -- letting a
+    successor bind a fresh pipe while a predecessor drains -- not
+    staleness. Making axis 1 track engine identity therefore removes false
+    rotations without removing a safety check; the check lives elsewhere
+    and still runs.
 
     Deliberately NOT a per-call source hash or `git rev-parse`: the client
     pays this on every dispatch, and paying a subprocess (or a ~200-file
     walk) per call to avoid a process spawn per call is self-defeating --
     the same reasoning the module docstring already applies to
     `resolve_engine_sha()`. One stat is the budget.
+
+    Raises:
+        UnstampedEngineRootError: `root` carries no valid engine stamp.
     """
     root = Path(repo_root) if repo_root is not None else _default_engine_clone()
 
@@ -202,16 +230,9 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
         stamp_bytes = stamp.read_bytes()
     except OSError:
         stamp_bytes = None
-    if stamp_bytes is not None:
-        return hashlib.sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
-
-    git_dir = root / ".git"
-    ref_path = _resolve_ref_path(git_dir)
-    signal = (
-        _stat_pair(git_dir / "HEAD"),
-        _stat_pair(ref_path) if ref_path is not None else (0, 0),
-    )
-    return hashlib.sha1(repr(signal).encode("utf-8")).hexdigest()[:16]
+    if not stamp_bytes:
+        raise UnstampedEngineRootError(_no_stamp_message(root))
+    return hashlib.sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
 
 
 def write_engine_stamp(repo_root: Path, identity: str) -> Path:
@@ -235,6 +256,153 @@ def write_engine_stamp(repo_root: Path, identity: str) -> Path:
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(identity.strip() + "\n", encoding="utf-8")
     return stamp
+
+
+def read_engine_stamp_sha(engine_root: Path) -> Optional[str]:
+    """Bare source sha off a published engine's `_engine_stamp`, or `None`.
+
+    The stamp's on-disk shape is `sha:<source-commit>` (`write_engine_stamp`'s
+    `identity` convention, publish.py's writer). Returns `None` -- never
+    raises -- for a missing file, an unreadable file, or a stamp that does
+    not carry the `sha:` prefix; this is the read leg `publish_lag` composes
+    with a `source_root` history check, and per DR-335 the caller must be
+    able to tell "cannot establish" from "current" without a try/except of
+    its own.
+    """
+    stamp = _engine_stamp_path(engine_root)
+    try:
+        raw = stamp.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.startswith("sha:"):
+        return None
+    sha = raw[len("sha:"):].strip()
+    return sha or None
+
+
+@dataclass(frozen=True)
+class PublishLag:
+    """DR-335's publish-lag verdict -- computed once per call site, never
+    per item. See `publish_lag`'s docstring for the two-git-call bound and
+    the full `None` contract.
+    """
+
+    stamp_sha: str
+    engine_commits_behind: int
+    oldest_unpublished_iso: Optional[str]
+    age_minutes: Optional[float]
+
+
+def publish_lag(engine_root: Path, source_root: Path) -> Optional[PublishLag]:
+    """DR-335's publish-lag computation -- reused from, not a reimplementation
+    of, `bin/claude-klabauter-doctor-probe.py::_run_probe_publish_provenance`'s verdict
+    shape, moved onto the consuming path per the decision's § Consequences.
+
+    At most TWO bounded git subprocess calls, both scoped to
+    `_ENGINE_TOUCHING_PATHS`, never per-commit -- the amplification gate
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
+    governs:
+      1. `git rev-list --count <sha>..HEAD -- coordinator_core/ coordinator/`
+         -- the commit count.
+      2. Only if that count is > 0: `git log -1 --format=%aI <sha>..HEAD --
+         coordinator_core/ coordinator/ | tail -1`-equivalent (`--reverse`
+         plus a single-line take) for the OLDEST unpublished commit's
+         author-date, to compute `age_minutes`.
+
+    Returns `None` whenever freshness cannot be established -- no stamp, a
+    stamp sha unresolvable in `source_root`'s history, git unavailable, or
+    any unexpected exception. Never raises into the caller and never
+    asserts freshness it cannot prove (DR-335's own negative spec: a stale
+    mirror between rounds is expected behaviour, not a defect to detect
+    wrong).
+    """
+    try:
+        sha = read_engine_stamp_sha(engine_root)
+        if not sha:
+            return None
+
+        count_proc = subprocess.run(
+            [
+                "git", "-C", str(source_root), "rev-list", "--count",
+                f"{sha}..HEAD", "--", *_ENGINE_TOUCHING_PATHS,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if count_proc.returncode != 0:
+            return None
+        count_str = count_proc.stdout.strip()
+        if not count_str.isdigit():
+            return None
+        commits_behind = int(count_str)
+
+        if commits_behind == 0:
+            return PublishLag(
+                stamp_sha=sha,
+                engine_commits_behind=0,
+                oldest_unpublished_iso=None,
+                age_minutes=None,
+            )
+
+        oldest_proc = subprocess.run(
+            [
+                "git", "-C", str(source_root), "log", "--reverse",
+                "--format=%aI", "-1", f"{sha}..HEAD", "--", *_ENGINE_TOUCHING_PATHS,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if oldest_proc.returncode != 0:
+            return None
+        oldest_iso = oldest_proc.stdout.strip()
+        if not oldest_iso:
+            return None
+
+        try:
+            from datetime import datetime
+
+            oldest_dt = datetime.fromisoformat(oldest_iso)
+            now_dt = datetime.now(oldest_dt.tzinfo)
+            age_minutes = (now_dt - oldest_dt).total_seconds() / 60.0
+        except (ValueError, TypeError):
+            return None
+
+        return PublishLag(
+            stamp_sha=sha,
+            engine_commits_behind=commits_behind,
+            oldest_unpublished_iso=oldest_iso,
+            age_minutes=age_minutes,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def publish_lag_message(lag: PublishLag) -> Optional[str]:
+    """DR-335's advisory text, shared verbatim by both call sites
+    (`ops/workflow_fire/fire.py`, `workstream_complete/directives_commit_tail.py`)
+    so the register (docs/wiki/guard-messaging.md § Register -- one fact,
+    one runnable alternative, no self-legitimacy, no repetition, no
+    reassurance, no apology) is authored once, not twice.
+
+    Returns `None` below `PUBLISH_LAG_THRESHOLD_MINUTES` or when
+    `engine_commits_behind` is 0 -- callers gate on this return, not on a
+    separately-recomputed threshold check.
+    """
+    if lag.engine_commits_behind <= 0:
+        return None
+    if lag.age_minutes is None or lag.age_minutes <= PUBLISH_LAG_THRESHOLD_MINUTES:
+        return None
+    age_hours = lag.age_minutes / 60.0
+    return (
+        f"Engine lag: {lag.engine_commits_behind} commit(s) touching engine "
+        f"code are unpublished (oldest {age_hours:.1f}h). This run executes "
+        "the published mirror, not your tree. "
+        "Publish: python coordinator/bin/percolate-round.py claude-klabauter"
+    )
 
 
 def _source_pkg_dir() -> Path:

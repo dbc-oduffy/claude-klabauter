@@ -63,6 +63,23 @@ def _reset_wrapper_memos():
     claude_klabauter_root._reset_gate_memo()
 
 
+def _write_engine_stamp(root: Path) -> None:
+    """C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md):
+    `_resolve_published_engine` now denies an unstamped root outright — "an
+    engine root is a stamped build. No stamp, no engine." Every fixture in
+    this file that builds a synthetic PUBLISHED-engine directory (i.e. one
+    meant to actually resolve as `resolved-engine`) must write this stamp
+    or the stamp gate denies it regardless of the rest of the fixture's
+    setup. Mirrors `coordinator_core.warm.skew.write_engine_stamp`'s shape
+    (one line, only its bytes matter) without importing it — this test
+    module already imports `coordinator_core`, so the duplication here is
+    about keeping the fixture self-contained and legible, not an
+    import-independence constraint like the shim's own copy."""
+    stamp = Path(root) / "coordinator_core" / "_engine_stamp"
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text("sha:test-fixture-stamp\n", encoding="utf-8")
+
+
 def _normalize_root(root: str) -> str:
     """Normalize slash direction/case for path-EQUALITY comparison only.
 
@@ -274,6 +291,7 @@ def _skew_fixture(tmp_path, monkeypatch):
 
     published_dir = tmp_path / "published"
     (published_dir / "coordinator_core").mkdir(parents=True)
+    _write_engine_stamp(published_dir)
 
     live_dir = tmp_path / "live"
     live_dir.mkdir()
@@ -549,6 +567,7 @@ def _dual_boot_fixture(tmp_path, monkeypatch):
 
     published_dir = tmp_path / "published-klabauter"
     (published_dir / "coordinator_core").mkdir(parents=True)
+    _write_engine_stamp(published_dir)
 
     session_dir = tmp_path / "session"
     session_dir.mkdir()
@@ -723,6 +742,7 @@ def _exec_fallback_fixture(tmp_path, monkeypatch):
 
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
+    _write_engine_stamp(published_root)
     published_bin = _make_bin_dir_with_sentinel(published_root)
 
     live_root = tmp_path / "live"
@@ -815,17 +835,34 @@ def test_exec_cli_falls_back_to_live_tree_for_published_only_gap(
     assert _normalize_root(recorded["target_path"]) == _normalize_root(expected_target)
 
 
-def test_exec_cli_target_absent_from_both_roots_exits_127_naming_both(_exec_fallback_fixture, capsys):
+def test_exec_cli_target_absent_from_resolved_root_exits_127_naming_only_that_root(
+    _exec_fallback_fixture, capsys
+):
+    """C13 retired exec_cli's C4b live-tree fallback: a missing target now
+    fails loud on the SINGLE root `resolve_claude_klabauter_root_with_class()`
+    actually resolved — there is no second root to silently reach into, and
+    none to name in the error either. Renamed and re-scoped 2026-08-19 (this
+    plan's own C5/C13 fallout) from `..._exits_127_naming_both`, which
+    encoded the pre-C13 two-root world C13 deliberately retired; see
+    `_resolve_claude_klabauter.py::exec_cli`'s docstring, "C4b (RETIRED by C13)"."""
     fx = _exec_fallback_fixture
     shim = _load_shim_for_test()
+
+    root, cls = shim.resolve_claude_klabauter_root_with_class()
+    resolved_root, other_root = (
+        (fx.published_root, fx.live_root)
+        if cls == shim.RESOLUTION_RESOLVED_ENGINE
+        else (fx.live_root, fx.published_root)
+    )
 
     with pytest.raises(SystemExit) as excinfo:
         shim.exec_cli("nowhere-cli", [])
 
     assert excinfo.value.code == 127
     captured = capsys.readouterr()
-    assert str(fx.published_bin) in captured.err or fx.published_bin.as_posix() in captured.err
-    assert str(fx.live_bin) in captured.err or fx.live_bin.as_posix() in captured.err
+    assert str(resolved_root) in captured.err or resolved_root.as_posix() in captured.err
+    assert str(other_root) not in captured.err
+    assert other_root.as_posix() not in captured.err
 
 
 def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkeypatch, capsys):

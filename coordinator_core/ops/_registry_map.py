@@ -206,6 +206,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "workflow.scaffold":                      "coordinator_core.ops.workflow_scaffold",
     "compute_layer.scaffold":                 "coordinator_core.ops.compute_layer_scaffold.op",
     "dispatch.emit":                          "coordinator_core.ops.dispatch_emit.op",
+    "review.mint_workflow":                   "coordinator_core.ops.review_mint.op",
     "strategic.generate":                     "coordinator_core.ops.strategic_generate",
     "strategic.emit":                         "coordinator_core.ops.strategic_emit",
     "handoff.reconcile_open":                 "coordinator_core.ops.handoff_reconcile",

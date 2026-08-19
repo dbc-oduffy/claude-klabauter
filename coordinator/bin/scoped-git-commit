@@ -640,6 +640,12 @@ _PUSH_NOTES = {
     # note is now unambiguous prose naming what was declined (the PUSH, by
     # branch policy) so it can never be misread as a path-level refusal.
     "declined": "push declined by branch policy — commit is local only",
+    # 2026-08-19 op-tail-latency: the op defaults to `push_mode="deferred"`,
+    # so the ordinary commit no longer pushes inline -- `hooks/auto_push.py`
+    # publishes it. Stated as a fact with no corrective action, unlike
+    # "unconfirmed": there is nothing for the operator to do, and a note that
+    # implies otherwise on every commit trains them to ignore the whole field.
+    "deferred": "queued for background push",
 }
 
 # Negative-spec: the op's `ownership_gate` response key (and this CLI's

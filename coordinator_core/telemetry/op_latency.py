@@ -199,6 +199,44 @@ def _sink_path(git_common_dir_path: Path) -> Path:
     return Path(git_common_dir_path) / "coordinator-sessions" / "logs" / "op-latency.jsonl"
 
 
+def sink_generations(repo_root: Path) -> list:
+    """The op-latency sink plus its rotated generations, NEWEST-FIRST.
+
+    Promoted out of ``coordinator_core.telemetry.cost_census._sink_paths``
+    (2026-08-19, plan ``2026-08-19-warm-engine-gets-an-honest-instrument``
+    C1) to a supported surface beside the ``_sink_path`` it wraps.
+    ``cost_census._sink_paths`` is now a thin call-through to this function
+    so its existing (newest-first) output shape and every existing caller
+    are unchanged.
+
+    Walks ``log_rotation.py``'s naming convention (``X.jsonl``,
+    ``X.1.jsonl``, ...) read-only — does not import or call into that
+    module. Returns only generations that exist on disk (``is_file()``),
+    resolved relative to ``repo_root`` via ``git_common_dir``. Returns an
+    empty list rather than raising if the git common dir cannot be
+    resolved — this is a reader over a sink several live processes are
+    appending to, never a source of truth for repo identity.
+    """
+    from coordinator_core.lifecycle import git_common_dir
+
+    try:
+        common_dir = git_common_dir(repo_root)
+    except (RuntimeError, OSError):
+        return []
+
+    sink = _sink_path(common_dir)
+    paths = [sink]
+    stem, suffix = sink.stem, sink.suffix
+    generation = 1
+    while True:
+        candidate = sink.with_name(f"{stem}.{generation}{suffix}")
+        if not candidate.is_file():
+            break
+        paths.append(candidate)
+        generation += 1
+    return [p for p in paths if p.is_file()]
+
+
 def new_correlation_id() -> str:
     """Build a correlation id unique across concurrent processes on this box.
 
@@ -478,10 +516,13 @@ def pairing_summary(
 ) -> dict:
     """Read the real sink and return the started/complete pairing summary (AC3).
 
-    Either ``sink_path`` (used directly) or ``repo_root`` (resolved to the
-    sink the same way ``record_op_latency``/``record_op_started`` do) must be
-    given; ``sink_path`` wins if both are given. Returns a plain dict rather
-    than a registered op — see C2 task body: op registration drags in a
+    Either ``sink_path`` (used directly, exactly that one file — never
+    generation-spanning, callers and tests depend on single-file reads) or
+    ``repo_root`` (resolved via ``sink_generations``, reading the live sink
+    PLUS every rotated generation on disk — see that function and C1/C3, plan
+    ``2026-08-19-warm-engine-gets-an-honest-instrument``) must be given;
+    ``sink_path`` wins if both are given. Returns a plain dict rather than a
+    registered op — see C2 task body: op registration drags in a
     classification/authz surface out of proportion to a reader.
 
     Return shape:
@@ -508,24 +549,22 @@ def pairing_summary(
     A torn or unparseable final line (or any line) is skipped and counted in
     ``malformed_lines_skipped`` rather than raising — never raises.
     """
-    if sink_path is None:
+    if sink_path is not None:
+        sink_paths = [sink_path]
+    else:
         if repo_root is None:
             return {
                 "total": 0, "paired": 0, "unpaired_started": 0,
                 "unpaired_rate": 0.0, "in_flight": 0,
                 "malformed_lines_skipped": 0,
             }
-        from coordinator_core.lifecycle import git_common_dir
-
-        try:
-            common_dir = git_common_dir(repo_root)
-        except (RuntimeError, OSError):
+        sink_paths = sink_generations(repo_root)
+        if not sink_paths:
             return {
                 "total": 0, "paired": 0, "unpaired_started": 0,
                 "unpaired_rate": 0.0, "in_flight": 0,
                 "malformed_lines_skipped": 0,
             }
-        sink_path = _sink_path(common_dir)
 
     if now is None:
         now = time.time()
@@ -534,34 +573,35 @@ def pairing_summary(
     completed_corr_ids: set = set()
     malformed = 0
 
-    try:
-        with open(sink_path, "r", encoding="utf-8", errors="replace") as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    malformed += 1
-                    continue
-                if not isinstance(entry, dict):
-                    malformed += 1
-                    continue
+    for path in sink_paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        malformed += 1
+                        continue
+                    if not isinstance(entry, dict):
+                        malformed += 1
+                        continue
 
-                kind = entry.get("kind") or "complete"
-                corr_id = entry.get("corr_id")
+                    kind = entry.get("kind") or "complete"
+                    corr_id = entry.get("corr_id")
 
-                if kind == "started":
-                    if corr_id is not None:
-                        started_t_start[corr_id] = entry.get("t_start")
-                elif kind == "complete":
-                    if corr_id is not None:
-                        completed_corr_ids.add(corr_id)
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
+                    if kind == "started":
+                        if corr_id is not None:
+                            started_t_start[corr_id] = entry.get("t_start")
+                    elif kind == "complete":
+                        if corr_id is not None:
+                            completed_corr_ids.add(corr_id)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     total = len(started_t_start)
     paired = 0

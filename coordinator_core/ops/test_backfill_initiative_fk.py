@@ -36,10 +36,13 @@ pytestmark = [
 
 
 def _make_fake_coordinator_initiative(bin_dir: Path, known_ids: set) -> Path:
-    """Write a fake python3 `coordinator-initiative` that supports `attach <path> <id>`:
-    succeeds (writes `initiative: <id>` into the artifact frontmatter) for ids in
-    `known_ids`, fails loud for unknown ids -- mirrors the real CLI's contract
-    closely enough to exercise this module's subprocess call + exit-code handling.
+    """Write a fake python3 `coordinator-initiative` that supports both the
+    single-pair `attach <path> <id>` form and the batch `attach --pairs-file
+    <path>` form: succeeds (writes `initiative: <id>` into the artifact
+    frontmatter) for ids in `known_ids`, fails loud for unknown ids -- mirrors the
+    real CLI's contract closely enough to exercise this module's subprocess call +
+    exit-code handling, INCLUDING the batch path's JSON-lines-per-pair-in-order
+    output contract (`coordinator/bin/coordinator-initiative.py::_cmd_attach_batch`).
 
     Python, not bash: the real `coordinator-initiative` was ported to python3
     (DoE-claude commit 6fb5fb37) and this module invokes it via `sys.executable`
@@ -48,21 +51,48 @@ def _make_fake_coordinator_initiative(bin_dir: Path, known_ids: set) -> Path:
     known_ids_repr = repr(sorted(known_ids))
     script.write_text(
         "#!/usr/bin/env python3\n"
+        "import json\n"
         "import sys\n"
         f"known_ids = set({known_ids_repr})\n"
+        "\n"
+        "def _attach_one(artifact_path, target):\n"
+        "    if target not in known_ids:\n"
+        "        return False, f'unknown initiative-id: {target}'\n"
+        "    with open(artifact_path, 'r', encoding='utf-8') as fh:\n"
+        "        contents = fh.read()\n"
+        "    if any(line.startswith('initiative:') for line in contents.splitlines()):\n"
+        "        return True, None\n"
+        "    with open(artifact_path, 'a', encoding='utf-8') as fh:\n"
+        "        fh.write(f'initiative: {target}\\n')\n"
+        "    return True, None\n"
+        "\n"
         "if sys.argv[1] != 'attach':\n"
         "    print(f'unsupported verb: {sys.argv[1]}', file=sys.stderr)\n"
         "    sys.exit(1)\n"
+        "\n"
+        "if len(sys.argv) >= 3 and sys.argv[2] == '--pairs-file':\n"
+        "    any_failed = False\n"
+        "    with open(sys.argv[3], 'r', encoding='utf-8') as fh:\n"
+        "        for raw_line in fh:\n"
+        "            line = raw_line.rstrip('\\n')\n"
+        "            if not line or line.startswith('#'):\n"
+        "                continue\n"
+        "            artifact_path, target = line.split('\\t', 1)\n"
+        "            ok, error = _attach_one(artifact_path, target)\n"
+        "            record = {'artifact_path': artifact_path, 'initiative_id': target, 'ok': ok}\n"
+        "            if ok:\n"
+        "                record['message'] = 'attached'\n"
+        "            else:\n"
+        "                record['error'] = error\n"
+        "                any_failed = True\n"
+        "            print(json.dumps(record))\n"
+        "    sys.exit(1 if any_failed else 0)\n"
+        "\n"
         "artifact_path, target = sys.argv[2], sys.argv[3]\n"
-        "if target not in known_ids:\n"
-        "    print(f'unknown initiative-id: {target}', file=sys.stderr)\n"
+        "ok, error = _attach_one(artifact_path, target)\n"
+        "if not ok:\n"
+        "    print(error, file=sys.stderr)\n"
         "    sys.exit(1)\n"
-        "with open(artifact_path, 'r', encoding='utf-8') as fh:\n"
-        "    contents = fh.read()\n"
-        "if any(line.startswith('initiative:') for line in contents.splitlines()):\n"
-        "    sys.exit(0)\n"
-        "with open(artifact_path, 'a', encoding='utf-8') as fh:\n"
-        "    fh.write(f'initiative: {target}\\n')\n"
         "sys.exit(0)\n"
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
@@ -230,10 +260,13 @@ def test_idempotent_rerun(tmp_path):
     assert fk_after_first == fk_after_second
 
 
-def test_unknown_initiative_fail_loud(tmp_path, capfd):
-    # capfd (fd-level), not capsys: the failure message this asserts on is
-    # emitted by the fake coordinator-initiative CHILD PROCESS's stderr, which
-    # bypasses Python's sys.stdout/stderr objects entirely.
+def test_unknown_initiative_fail_loud(tmp_path, capsys):
+    # capsys, not capfd: post-batching, the failure message this asserts on is
+    # `_attach_batch` re-emitting the batch subprocess's JSON-lines stdout (captured
+    # via `subprocess.run(capture_output=True)`, never inherited-fd) through this
+    # process's own `print(file=err)` -- a Python sys.stderr write, not a foreign
+    # process writing the real OS fd directly (which is what capfd was for, back
+    # when each pair spawned its own inherited-fd child).
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _make_fake_coordinator_initiative(bin_dir, set())  # no known ids
@@ -246,7 +279,7 @@ def test_unknown_initiative_fail_loud(tmp_path, capfd):
 
     rc = main([str(mapping)], script_dir=str(bin_dir))
     assert rc == 1
-    captured = capfd.readouterr()
+    captured = capsys.readouterr()
     assert "nonexistent-id" in (captured.out + captured.err)
 
 
@@ -289,7 +322,8 @@ def test_comment_blank_skipped(tmp_path, capsys):
     assert "errors=0" in captured.out
 
 
-def test_multi_failure_collection(tmp_path, capfd):
+def test_multi_failure_collection(tmp_path, capsys):
+    # capsys, not capfd -- see test_unknown_initiative_fail_loud's comment for why.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _make_fake_coordinator_initiative(bin_dir, set())
@@ -306,7 +340,7 @@ def test_multi_failure_collection(tmp_path, capfd):
 
     rc = main([str(mapping)], script_dir=str(bin_dir))
     assert rc == 1
-    captured = capfd.readouterr()
+    captured = capsys.readouterr()
     combined = captured.out + captured.err
     assert "unknown-id-alpha" in combined
     assert "unknown-id-beta" in combined
@@ -314,16 +348,21 @@ def test_multi_failure_collection(tmp_path, capfd):
 
 
 # ---------------------------------------------------------------------------
-# Platform-edge case (addendum §2, subprocess timeout rule): a hung
-# `coordinator-initiative attach` child must not block the whole batch --
-# degrade to a counted error and keep processing remaining pairs. Exercises
-# the fixed-timeout path via a monkeypatched subprocess.run, not a real
-# _ATTACH_TIMEOUT_SECS-second wait. Mirrors
-# test_verify_arch_audit_atlas_refresh.py::test_git_timeout_degrades_gracefully
-# and test_multi_failure_collection's "collect all failures, don't stop at
-# first" assertion shape, but for the timeout path specifically.
+# Platform-edge case (addendum §2, subprocess timeout rule): a timed-out batch
+# `coordinator-initiative attach --pairs-file` subprocess must not silently drop
+# pairs -- every pair still in flight is attributed as a counted, individually
+# named error. Exercises the fixed-timeout path via a monkeypatched
+# subprocess.run, not a real batch_timeout-second wait.
+#
+# This is a batch-wide timeout, not a per-pair one (the tradeoff documented in
+# `_attach_batch`'s docstring and the module docstring's "Departure from the
+# oracle" section): collapsing N spawns into one means a single hung pair now
+# times out the WHOLE batch's subprocess call, so every pair in that batch --
+# not just the one that hung -- surfaces as a distinct "FAILED pair (no batch
+# result reported)" line. Mirrors test_multi_failure_collection's "collect all
+# failures, name every one" assertion shape.
 # ---------------------------------------------------------------------------
-def test_attach_timeout_counted_as_error_and_batch_continues(tmp_path, monkeypatch):
+def test_attach_batch_timeout_fails_every_pair_by_name(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _make_fake_coordinator_initiative(bin_dir, {"good-id"})
@@ -333,14 +372,10 @@ def test_attach_timeout_counted_as_error_and_batch_continues(tmp_path, monkeypat
     _make_artifact(timeout_artifact)
     _make_artifact(ok_artifact)
 
-    real_run = subprocess.run
+    def _always_time_out(cmd, *a, **kw):
+        raise subprocess.TimeoutExpired(cmd, mod._ATTACH_TIMEOUT_SECS)
 
-    def _raise_timeout_for_timeout_artifact(cmd, *a, **kw):
-        if str(timeout_artifact) in cmd:
-            raise subprocess.TimeoutExpired(cmd, mod._ATTACH_TIMEOUT_SECS)
-        return real_run(cmd, *a, **kw)
-
-    monkeypatch.setattr(mod.subprocess, "run", _raise_timeout_for_timeout_artifact)
+    monkeypatch.setattr(mod.subprocess, "run", _always_time_out)
 
     coordinator_initiative_path = os.path.join(str(bin_dir), "coordinator-initiative.py")
     lines = [
@@ -354,13 +389,85 @@ def test_attach_timeout_counted_as_error_and_batch_continues(tmp_path, monkeypat
         lines, coordinator_initiative_path, out=out, err=err
     )
 
-    # Timed-out pair is counted as an error, not silently dropped...
-    assert errors == 1
-    assert "FAILED pair (timeout" in err.getvalue()
-    assert str(timeout_artifact) in err.getvalue()
-    # ...and the batch continues: the second (non-timing-out) pair still attaches.
-    assert attached == 1
+    # Both pairs surface as individually named errors -- none silently dropped...
+    assert errors == 2
+    assert attached == 0
     assert skipped == 0
+    err_text = err.getvalue()
+    assert str(timeout_artifact) in err_text
+    assert str(ok_artifact) in err_text
+    assert "timeout-id" in err_text
+    assert "good-id" in err_text
+
+
+def test_batch_collapses_multiple_pairs_into_one_subprocess_call(tmp_path, monkeypatch):
+    """The whole point of the fix: N pairs surviving the idempotency filter must
+    spawn coordinator-initiative exactly ONCE, not N times."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _make_fake_coordinator_initiative(bin_dir, {"id-a", "id-b", "id-c"})
+
+    artifacts = [tmp_path / f"artifact-{i}.md" for i in range(3)]
+    for a in artifacts:
+        _make_artifact(a)
+
+    mapping = tmp_path / "mapping.tsv"
+    mapping.write_text(
+        f"{artifacts[0]}\tid-a\n{artifacts[1]}\tid-b\n{artifacts[2]}\tid-c\n"
+    )
+
+    real_run = subprocess.run
+    call_count = 0
+
+    def _counting_run(*a, **kw):
+        nonlocal call_count
+        call_count += 1
+        return real_run(*a, **kw)
+
+    monkeypatch.setattr(mod.subprocess, "run", _counting_run)
+
+    rc = main([str(mapping)], script_dir=str(bin_dir))
+    assert rc == 0
+    assert call_count == 1, f"expected exactly one subprocess.run call for 3 pairs; got {call_count}"
+    for a, init_id in zip(artifacts, ["id-a", "id-b", "id-c"]):
+        assert f"initiative: {init_id}" in a.read_text()
+
+
+def test_batch_mixed_success_and_failure_attributed_to_correct_pair(tmp_path):
+    """A batch with one succeeding and one failing pair must attribute the
+    failure to the RIGHT artifact/initiative-id, not conflate the two."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _make_fake_coordinator_initiative(bin_dir, {"known-good-id"})
+
+    good_artifact = tmp_path / "good.md"
+    bad_artifact = tmp_path / "bad.md"
+    _make_artifact(good_artifact)
+    _make_artifact(bad_artifact)
+
+    mapping = tmp_path / "mapping.tsv"
+    mapping.write_text(
+        f"{bad_artifact}\tunknown-id\n{good_artifact}\tknown-good-id\n"
+    )
+
+    out = io.StringIO()
+    err = io.StringIO()
+    coordinator_initiative_path = os.path.join(str(bin_dir), "coordinator-initiative.py")
+    attached, skipped, errors = _process_pairs(
+        mapping.read_text().splitlines(keepends=True),
+        coordinator_initiative_path,
+        out=out,
+        err=err,
+    )
+
+    assert attached == 1
+    assert errors == 1
+    assert skipped == 0
+    err_text = err.getvalue()
+    assert str(bad_artifact) in err_text and "unknown-id" in err_text
+    assert str(good_artifact) not in err_text
+    assert "initiative: known-good-id" in good_artifact.read_text()
+    assert "initiative:" not in bad_artifact.read_text()
 
 
 def test_mapping_file_not_found(tmp_path):

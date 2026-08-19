@@ -194,14 +194,20 @@ from __future__ import annotations
 
 import contextvars
 import dataclasses
+import logging
 import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, List, Optional
 
+from coordinator_core.authz.dispatchable import ASSEMBLER_DISPATCHABLE
 from coordinator_core.composition_budget import BudgetBreach, CompositionBudget
 from coordinator_core.git_lock_retry import run_with_lock_retry
+from coordinator_core.ops.review_brightline_gate import _is_noise_path, classify_surface
+from coordinator_core.session import core as session_core
+
+_LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exit-code contract — shared by every apply/dispatch half. Locally scoped
@@ -404,6 +410,57 @@ def resolve_cli(
     handler = dispatch_table.get(cli_name)
     if handler is None:
         raise UnrecognizedDirective(f"unrecognized directive cli {cli_name!r}")
+    return handler
+
+
+def assert_dispatchable(assembler_name: str, verb: str) -> None:
+    """The ONE shared admission check against
+    `coordinator_core.authz.dispatchable.ASSEMBLER_DISPATCHABLE` — `resolve_op`
+    below calls it, and `workday_complete`/`workstream_complete`/`workweek_complete`'s
+    own private `_resolve_cli` functions (C7) call it too, so the membership check
+    is never hand-copied into three private bodies (DR-092's own negative-spec
+    against special-casing a consumer's divergence at its own call site instead of
+    feeding it back into this module's params).
+
+    Raises `UnrecognizedDirective` when `verb` is absent from `assembler_name`'s
+    own entry in `ASSEMBLER_DISPATCHABLE` — DEFAULT-DENY: an `assembler_name` with
+    no entry at all denies every `verb`, same as an entry present but not
+    containing `verb`."""
+    allowed = ASSEMBLER_DISPATCHABLE.get(assembler_name, frozenset())
+    if verb not in allowed:
+        raise UnrecognizedDirective(
+            f"{verb!r} is a registered op that {assembler_name!r} may not dispatch"
+        )
+
+
+def resolve_op(
+    dispatch_table: dict[str, Callable[[list[str], Path], dict[str, Any]]],
+    assembler_name: str,
+    op_name: str,
+) -> Callable[[list[str], Path], dict[str, Any]]:
+    """A second pre-validated seam, `resolve_cli`'s exact refusal shape, for
+    `directives[].op` — a lookup plus admission check, NEVER a generic
+    `(params, repo_root) -> _invoke_op_in_process(...)` shim (§ apply_base module
+    docstring's own negative-spec on hardcoding a domain verb applies equally
+    here: this function never builds params from directive-supplied keys, and
+    never reaches `_invoke_op_in_process` directly — it returns the SAME
+    hand-written per-verb adapter `dispatch_table[op_name]` already names, exactly
+    as `resolve_cli` returns the same adapter its own `_CLI_DISPATCH` entry names).
+
+    Two refusal reasons, kept distinct in the raised message so a permission
+    refusal never reads as a typo:
+      (a) `op_name` has no adapter in `dispatch_table` at all — not a name this
+          caller can dispatch, registered or not;
+      (b) `op_name` has an adapter but `assembler_name` is not allowlisted for it
+          in `ASSEMBLER_DISPATCHABLE` (`assert_dispatchable` above).
+
+    Either refusal raises `UnrecognizedDirective` — same exception `resolve_cli`
+    raises, so a caller's whole-list pre-validation pass fails the run before any
+    directive executes, never degrading to inert or skip-and-continue."""
+    handler = dispatch_table.get(op_name)
+    if handler is None:
+        raise UnrecognizedDirective(f"unrecognized directive op {op_name!r}")
+    assert_dispatchable(assembler_name, op_name)
     return handler
 
 
@@ -902,6 +959,136 @@ def execute_directives(
 
 
 # ---------------------------------------------------------------------------
+# Commit ledger join (C11, sweeping the sibling producers C5 left unwired --
+# state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-the-siblings-
+# unswept-7c3e1f9a4d22.yaml). ONE shared write helper, consumed by every
+# raw-`git commit` producer this module and its siblings own
+# (`scoped_commit` below, `backlog_grind_assemble.apply._commit_one`, and
+# `ops.ceremony.git_native.commit_authored_content`) rather than each
+# reimplementing `commit_ledger.classify`'s kind/weight derivation a third
+# time -- mirrors `ops.ceremony.scoped_git_commit._ledger_kind_and_weight`'s
+# shape (same two reused primitives, `weight_for_path` +
+# `review_brightline_gate.classify_surface`/`_is_noise_path`) without
+# importing that module's private helper across a package boundary.
+# ---------------------------------------------------------------------------
+
+#: Mirrors `commit_ledger.oracle._DOCS_KIND` -- duplicated as a literal
+#: (not imported) for the same reason `ops.ceremony.scoped_git_commit`
+#: duplicates it: `oracle.py` declares the constant private to its own
+#: two-figure split, and this module is a peer producer of the same
+#: vocabulary, not a consumer of that constant.
+_LEDGER_DOCS_KIND = "doctrine"
+
+#: Mirrors `ops.ceremony.scoped_git_commit._LEDGER_CODE_KIND` -- the oracle
+#: only ever branches on `kind == "doctrine"`, so one stable non-doctrine
+#: label is sufficient here too.
+_LEDGER_CODE_KIND = "code"
+
+
+def _ledger_kind_and_weight(repo_root: str, paths: List[str]) -> "tuple[str, float]":
+    """Commit-level `(kind, weight_basis)` for `paths`, identical shape to
+    `ops.ceremony.scoped_git_commit._ledger_kind_and_weight` (see that
+    function's own docstring) -- kept as a separate, small duplicate here
+    rather than importing that module's private name across a package
+    boundary."""
+    # Local import: `commit_ledger.store` imports `ops.resolve_swept_baton`,
+    # so a module-level import here closes a cycle back into this module and
+    # leaves `commit_ledger.store` partially initialized whenever anything
+    # imports it before `coordinator_core.ops` -- which de-registers this op.
+    from coordinator_core.commit_ledger.classify import weight_for_path
+
+    total_weight = 0.0
+    any_classified = False
+    any_non_doctrine = False
+    for p in paths:
+        total_weight += weight_for_path(repo_root, p)
+        if _is_noise_path(p):
+            continue
+        any_classified = True
+        if classify_surface(p) != _LEDGER_DOCS_KIND:
+            any_non_doctrine = True
+    kind = _LEDGER_DOCS_KIND if (any_classified and not any_non_doctrine) else _LEDGER_CODE_KIND
+    return kind, total_weight
+
+
+def _committer_id_for_ledger(repo_root: Path) -> str:
+    """The identity to bill a just-landed commit's ledger entry to:
+    prefers the active `session_identity()` contextvar scope (the shape
+    every caller of `scoped_commit`/`_commit_one` already runs inside),
+    falling back to `session_core.resolve_session_id` -- the same ambient
+    env-var read `ops.ceremony.scoped_git_commit._resolve_committing_
+    session_id` uses -- for a caller with no active scope."""
+    for var in SESSION_ENV_VARS:
+        val = current_session_env().get(var)
+        if val:
+            return val
+    return session_core.resolve_session_id(str(repo_root))
+
+
+def record_ledger_entry(
+    repo_root: Path,
+    paths: List[str],
+    sha: Optional[str],
+    *,
+    committer_id_override: Optional[str] = None,
+) -> None:
+    """Append `sha`'s commit-ledger entry (C1/C5) for a producer that
+    committed OUTSIDE `ceremony.scoped_git_commit` -- this module's own
+    `scoped_commit`, `backlog_grind_assemble.apply._commit_one`, and
+    `ops.ceremony.git_native.commit_authored_content` all call this as the
+    LAST step after their commit has already landed (C11: sweeping the
+    sibling producers C5 left unwired, see this section's own module
+    comment).
+
+    `committer_id_override` -- for a caller that already holds a resolved
+    identity of its own (e.g. `commit_authored_content`'s own
+    `attributed_session_id`) rather than the active `session_identity()`
+    contextvar scope -- passed straight through instead of re-deriving the
+    committer a second, independent way (the same disagreeing-copies hazard
+    `commit_authored_content`'s own docstring names for its trailer
+    resolution). `None` (the default) falls back to
+    `_committer_id_for_ledger`.
+
+    Hard constraint, mirrored from C5's own: a ledger write must never
+    fail the commit it accompanies -- `sha` is `None` (a clean no-op commit)
+    is a silent return, and every other failure mode (classification, owner
+    resolution, the append itself) is swallowed under one broad `except
+    Exception`, logged, never raised.
+    """
+    # Local import: `commit_ledger.store` imports `ops.resolve_swept_baton`,
+    # so a module-level import here closes a cycle back into this module and
+    # leaves `commit_ledger.store` partially initialized whenever anything
+    # imports it before `coordinator_core.ops` -- which de-registers this op.
+    from coordinator_core.commit_ledger.resolve_owner import resolve_owner_handoff_id
+    from coordinator_core.commit_ledger.store import append_entry as _ledger_append_entry
+
+    if not sha:
+        return
+    try:
+        kind, weight_basis = _ledger_kind_and_weight(str(repo_root), paths)
+        committer_id = committer_id_override or _committer_id_for_ledger(repo_root)
+        handoff_id, _degraded = resolve_owner_handoff_id(committer_id, Path(repo_root))
+        if handoff_id:
+            _ledger_append_entry(
+                handoff_id,
+                sha,
+                kind,
+                weight_basis=weight_basis,
+                cwd=str(repo_root),
+            )
+        # `handoff_id is None` is the legitimate standalone outcome
+        # (`resolve_owner_handoff_id`'s own zero-held-claims arm) -- not an
+        # error, nothing to bill this commit to, no warning.
+    except Exception:
+        _LOG.warning(
+            "contract.apply_base: commit ledger write failed for %s; the "
+            "commit already landed and is unaffected",
+            sha,
+            exc_info=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Scoped commit — the ONE commit shape every consumer's `apply` makes,
 # pathspec-limited to the artifact it itself just mutated. `apply` runs
 # against a shared concurrent-EM working tree where a sibling session's
@@ -963,4 +1150,6 @@ def scoped_commit(
 
     with _mirror_session_env_for_subprocess():
         sha_proc = run_git(["rev-parse", "HEAD"], repo_root)
-    return sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
+    landed_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
+    record_ledger_entry(repo_root, [artifact_rel_path], landed_sha)
+    return landed_sha

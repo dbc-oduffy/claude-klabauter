@@ -30,21 +30,30 @@ Input contract (flat-scalar, _payload.field() — treat "" as absent):
 
 Ownership back-pointer (subagent fires only): writes
 .agents/<agent_id>/em-session-id.txt when absent, via two writers in order —
-(1) an advisory CLAUDE_CODE_SESSION_ID-derived write attributing a
-Workflow-internal agent() spawn to its dispatching EM (Piece 2,
-docs/plans/2026-08-03-scope-guard-peer-claim-release.md § C7; skipped unless the
-env var is set AND differs from `session_id`, so it never misattributes the
-firing session's own work to itself), then (2) the pre-existing `session_id`
-fallback (2026-08-03 break-class fix). Both reuse
+(1) an advisory write attributing a Workflow-internal agent() spawn to its
+dispatching EM (Piece 2, docs/plans/2026-08-03-scope-guard-peer-claim-release.md
+§ C7; skipped unless the resolved id is non-empty AND differs from `session_id`,
+so it never misattributes the firing session's own work to itself), then (2) the
+pre-existing `session_id` fallback (2026-08-03 break-class fix). Both reuse
 track_dispatched_agents._write_backpointer_sync, so a real dispatch-time record
 always wins (idempotent, non-empty-file-wins).
+
+That first writer resolves the dispatching EM through
+`ops.session_context.resolve_current_session_id`, NOT a direct env read. This op
+is registered, so it can be served by a resident warm engine whose own
+environment names the session that spawned the server; reading the env there
+yields a stranger, which passes the `!= session_id` test and gets written as the
+owner. See coordinator_core/tests/test_warm_identity_env_reads.py, which pins the
+absence of that read.
 
 Negative-spec:
     Do NOT emit advisories — this op's value is the on-disk write side-effect.
     Do NOT write state/, archive/, or any path outside .git/coordinator-sessions/.
-    Do NOT trust CLAUDE_CODE_SESSION_ID as a subagent-vs-EM discriminator anywhere
-    else — it is read here for attribution-when-absent ONLY, gated by the
-    env != session_id guard above.
+    Do NOT trust the resolved session id as a subagent-vs-EM discriminator anywhere
+    else — it is used here for attribution-when-absent ONLY, gated by the
+    != session_id guard above.
+    Do NOT resolve that id by reading os.environ directly (see the back-pointer
+    note above) — this op is warm-servable and the server's env names its spawner.
 
 This writer emits ``T``-verb events (``scope.format_touch_event``) into the shared
 append-only ``touched.txt`` log — the same event dialect ``session/scope.py::touch``
@@ -80,6 +89,7 @@ from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session.scope import format_touch_event, normalize_touch_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -461,10 +471,26 @@ async def _handler(params: dict, repo_root=None) -> dict:
     NAMED LIMIT (DR-258, ratified permanent — not a gap awaiting a fix). Because the
     matcher is exactly those four tools, a path written **through Bash** — a generator,
     a formatter, ``python bin/*.py``, an engine op rewriting a state file — records NO
-    claim here. ``compute_scope`` then sees a dirty file with no record anywhere and,
-    per DoE's ``scoped-safety-commits.md:131``, joins it to the CALLING session: a
-    co-toucher can take a live peer's Bash-authored content into ``my_scope``. This
-    predates the claim-release workstream and is accepted on DoE's side too.
+    claim here. ``compute_scope`` then sees a dirty file with no record anywhere and treats it
+    as an **mtime-only candidate**: Step 4(d) drops it from ``my_scope`` entirely and
+    Step 5 reports it as an ORPHAN (``coordinator_core/session/scope.py ::
+    compute_scope``). It is EXCLUDED, never joined.
+
+    **CORRECTED 2026-08-19 -- this paragraph previously said the opposite**, citing
+    DoE's ``scoped-safety-commits.md:131`` for a claim that such a file "joins it to
+    the CALLING session: a co-toucher can take a live peer's Bash-authored content
+    into ``my_scope``". That was true once and is not now. The same DoE doc section
+    records the reversal: twelve SIGKILL runs measured that the population reaching
+    this path is healthy live peers' Bash-mediated writes, not crashed peers, so the
+    resolution moved to an orphans bucket -- "an orphan is visible and recoverable, a
+    misattributed commit is silent and corrupts Session-Id-trailer-derived
+    coverage/chain-ancestry accounting". ``ops/session/safe_commit_offer.py`` already
+    cites DR-258 with the orphan framing; only this docstring lagged.
+
+    The live consequence runs the OTHER way, and is why the limit below still matters:
+    a Bash-written file is not stolen from a peer, it is silently **dropped from your
+    own** commit. Guard: ``bash_guards`` ``heredoc-repo-write-advise`` advises at
+    write time.
 
     Do NOT "fix" this by widening the matcher to Bash. Three mechanisms were tried and
     each is unsound in the WIDENING direction, which is the direction this record exists
@@ -619,7 +645,24 @@ async def _handler(params: dict, repo_root=None) -> dict:
             #     real dispatch-time record always wins over this advisory write.
             #   - OSError -> swallowed inside `_write_backpointer_sync` itself; this
             #     call never raises, matching this hook's fail-open contract.
-            _em_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+            #   - warm-served dispatch -> the canonical resolver, never a raw env
+            #     read. This handler is a REGISTERED op (`hooks.track_touched_files`),
+            #     so it can execute inside a resident warm server whose own
+            #     environment names whoever SPAWNED that server rather than the
+            #     session on whose behalf it is serving. A raw env read there yields
+            #     a STRANGER's id, which fails the `!= session_id` test above and so
+            #     gets WRITTEN as this agent dir's owner back-pointer -- the one
+            #     outcome this arm's fail-closed conditions exist to prevent.
+            #     `resolve_current_session_id` reads the per-request identity binding
+            #     first and lands on exactly the value this site wants: the id the
+            #     hook's own (cold) process resolved before the call crossed the wire.
+            #     Deliberate widening: the resolver's ladder also consults
+            #     `COORDINATOR_SESSION_ID`/`CLAUDE_SESSION_ID` ahead of
+            #     `CLAUDE_CODE_SESSION_ID`. Accepted rather than special-cased -- this
+            #     write is advisory and idempotent (a real dispatch-time record always
+            #     wins), and an identity ladder that disagrees with the canonical one
+            #     is the defect class this whole seam is being swept for.
+            _em_session_id = resolve_current_session_id() or ""
             if _em_session_id and _em_session_id != session_id:
                 await asyncio.to_thread(
                     _write_backpointer_sync,

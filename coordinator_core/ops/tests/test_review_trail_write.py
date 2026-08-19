@@ -2065,7 +2065,16 @@ class TestForeignSessionScopeGuard:
         # route (C2), not re-committing to add a trailer (that remedy is
         # for the genuinely-untrailered branch only).
         assert "is untrailered" not in message
-        assert "names a different session" in message
+        # AC2 (2026-08-19-review-trail-cannot-record-a-partitioned-close § D1):
+        # the message now QUOTES the trailer it read and the identity it
+        # compared against, rather than asserting "names a different session"
+        # unconditionally. That bare assertion was FALSE for five commits whose
+        # trailer named the writing session exactly, once the warm-serving
+        # identity leak made `own_session_id` a stranger's — the reader was
+        # sent after a mismatch that was not on disk. Both sides must appear,
+        # so the claim can be checked against the commit instead of trusted.
+        assert f"names session {_GUARD_FOREIGN_SESSION!r}" in message
+        assert "not this session" in message
         # The corrected contract for a commit outside the frozen range: state
         # that no record is writable, and say why, rather than naming a call
         # that refuses. Still not a bare "impossible" — the reason is in the

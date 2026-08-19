@@ -133,6 +133,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony.renderers import _ROADMAP_ID_ALLOWLIST_RE
 from coordinator_core.ops.fleet._common import handoff_archive_dest, main_worktree_root
+from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE as _SESSION_ENV_PRECEDENCE
 
 _LOG = logging.getLogger(__name__)
@@ -211,6 +212,13 @@ def _is_roadmap_workflow_authoring_session(value: str) -> bool:
 # `coordinator_core.session.core` as `_SESSION_ENV_PRECEDENCE` (see that module's
 # `SESSION_ENV_PRECEDENCE` comment for why a guard/op divergence here is
 # break-class, not a style nit).
+
+#: AC5 source label for the one case where no precedence-chain env var names the
+#: resolved identity: a warm-served dispatch, where the caller's id arrives as a
+#: per-request `ContextVar` binding rather than in this process's environment.
+#: A label, never a variable to read — the stamp must not claim an env var
+#: resolved the id when none did.
+_WARM_REQUEST_SOURCE = "warm-request-identity"
 
 # AC3 — the load-bearing discriminator between "correction" and "progress-journal
 # append" (PM-confirmed 2026-07-31; a factual correction is characteristically a
@@ -365,18 +373,44 @@ def _err(msg: str) -> dict:
 
 
 def _resolve_session_id_with_source() -> "tuple[Optional[str], Optional[str]]":
-    """Return (session_id, source_env_var), or (None, None) if none resolved.
+    """Return (session_id, source_label), or (None, None) if none resolved.
 
-    Mirrors `_resolve_current_session_id`'s own precedence chain exactly (see
-    module docstring) — kept as a SECOND, cross-referenced copy only because
-    AC5's stamp must name WHICH variable resolved the session id, and the
-    shared function returns the value alone.
+    Resolves through `ops.session_context.resolve_current_session_id` — the
+    canonical chain — and then LABELS the result, rather than walking the env
+    ladder itself. The label is derived, not the resolution: whichever
+    precedence-chain var holds the resolved value names it, so the AC5 stamp
+    and this op's `session_source` result key keep the exact strings they had
+    (a `COORDINATOR_SESSION_ID`-resolved call still reports
+    `"COORDINATOR_SESSION_ID"`).
+
+    Negative-spec: do NOT re-derive identity by reading `os.environ` directly
+    here. Under a warm-served dispatch the server's own environment names
+    whoever SPAWNED it, not the session whose request is being served; the
+    caller's true identity arrives as a per-request `ContextVar` binding
+    (`warm.entry_seam.per_request_state` ->
+    `session.core.session_identity_override`) that only the canonical resolver
+    reads. A raw env read steps straight past it and authorizes this op's
+    authorship gate against a stranger — then stamps that stranger into the
+    AC6 correction note as the session that made the correction.
+
+    This function and `baton_assemble._resolve_current_session_id` are
+    cross-checked against each other by the caller below and a mismatch is a
+    hard refusal, so the two must be migrated together — they now agree by
+    delegating to the same resolver rather than by two copies of one ladder.
     """
+    sid = resolve_current_session_id()
+    if not sid:
+        return None, None
+    # The ladder walk below LABELS an identity already resolved above; it never
+    # selects one. Changing it to prefer an env value over `sid` reintroduces the
+    # warm-identity defect. Carried as a named exemption in
+    # coordinator_core/tests/test_warm_identity_env_reads.py ::
+    # LADDER_READ_EXEMPTIONS, whose reason text is the standard to re-read before
+    # editing here — the ratchet cannot tell a label from a decision by itself.
     for var in _SESSION_ENV_PRECEDENCE:
-        val = os.environ.get(var)
-        if val:
-            return val, var
-    return None, None
+        if os.environ.get(var) == sid:
+            return sid, var
+    return sid, _WARM_REQUEST_SOURCE
 
 
 def _is_sentinel_or_malformed_session(value: str) -> bool:

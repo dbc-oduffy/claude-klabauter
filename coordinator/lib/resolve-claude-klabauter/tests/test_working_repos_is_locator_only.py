@@ -83,7 +83,19 @@ def _make_claude_klabauter_fixture(root: Path) -> None:
 
 
 def _make_published_engine_fixture(root: Path) -> None:
+    """A registered, USABLE published engine.
+
+    The stamp is not decoration: since
+    docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C5, an engine
+    root is a stamped build and `_resolve_published_engine` denies an unstamped
+    root. A fixture that creates only `coordinator_core/` resolves
+    `live-working-tree`, so a test asserting `resolved-engine` fails for a
+    reason that has nothing to do with what it is testing.
+    """
     (root / "coordinator_core").mkdir(parents=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text(
+        "sha:0000000000000000000000000000000000000000\n", encoding="utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------

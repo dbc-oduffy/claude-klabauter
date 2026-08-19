@@ -75,6 +75,25 @@ line:
    three brightline thresholds (500 LOC / 5 commits / 4 surfaces) are
    declared once, there, and never restated below.
 
+5. **The mise-run baton-unification directive** (2026-08-19
+   `docs/plans/2026-08-19-batons-unify-into-one-successor.md`, chunk C8) —
+   which batons this run's own inventory record item-table references are
+   INHERITABLE, and one directive naming them all as
+   `additional_predecessors` fan-in legs (D-A; no new lineage axis).
+   `baton_role: work | record` (DoE-ratified,
+   `cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md`)
+   is authoritative WHERE PRESENT on a frontmatter-bearing artifact
+   (positive match only — absence is unknown, never defaulted, mirroring
+   C7's own discipline); the existing path-shape heuristic
+   (`_BATON_SPEC_PATH_RE`) is the COUNTED fallback where the axis is
+   absent, so the corpus's stamped fraction stays a number someone can
+   read rather than going silently to zero. `tasks/*/todo.md` carries no
+   frontmatter and stays on the fallback permanently — the fallback count
+   is therefore scoped to frontmatter-bearing legs only, since the
+   unqualified count can never reach zero. Exactly ONE directive per run,
+   never one per item — `_read_baton_unification` fires at most once per
+   `collect()` call.
+
 Phase 0 vs Phase 6 — how this reader tells them apart without a `--phase`
 flag: both phases invoke `backlog-grind-assemble brief mise-en-place`, so
 the tail surface self-gates on DISK state (a phase selector would force a
@@ -205,6 +224,27 @@ Negative-spec:
       "spec path" column, per `PIPELINE.md` § Phase 1's canonical row
       schema) — a genuinely-underivable record resolves to `None`, never a
       new required scout-authored field (2026-08-04 sizing).
+    - Does NOT unify per item. `_read_baton_unification` emits exactly one
+      directive per `collect()` call carrying every inheritable baton as a
+      fan-in leg — per-item unification would mint a chain of merged
+      batons and grow the chain walk without bound (C8's own anti-scope).
+    - Does NOT invent a second lineage axis for the unification directive
+      — `additional_predecessors` (D-A) names the legs; no `merged_from`.
+    - Does NOT perform the unification mutation itself (mint, claim,
+      stamp) — this module stays read-only throughout (see the git-verb
+      negative-spec above); the directive NAMES the fan-in legs for
+      whoever consumes the brief to act on, same posture as the Phase-6
+      directive naming `review-brightline-gate` rather than invoking it.
+    - Does NOT default an absent `baton_role` to `work` or `record` —
+      positive match only (`fm.get("baton_role") == "work"`), mirroring
+      C7's own discipline; an unrecognised third value is treated as
+      unknown (falls to the heuristic), never silently accepted as either
+      enum member.
+    - Does NOT count the `tasks/*/todo.md` leg toward the role-axis
+      fallback count — that leg carries no frontmatter and is on the
+      heuristic permanently, so counting it would keep the retirement gate
+      from ever reaching zero even once every frontmatter-bearing artifact
+      is stamped.
     - Does NOT narrow the reviewed range when a measurement is awkward.
       `PIPELINE.md` § Phase 6's "a partition-mandatory verdict may never be
       answered by narrowing scope" binds the verdict too: unresolvable
@@ -719,7 +759,7 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
     diff and resolve the verdict toward reviewing less.
 
     `gross_loc` is the added+deleted sum over the range's non-noise files
-    (2026-08-11 metric-wide noise exclusion, matching the removed `_compute_chain_oracle`
+    (2026-08-11 metric-wide noise exclusion, matching `_compute_chain_oracle`
     / `review_brightline_gate._session_scoped`'s contract — see
     `docs/plans/2026-08-11-brightline-gates-measure-reviewable-chan.md` AC3).
     Naming trap (review finding, 2026-08-11): `workstream_complete/__init__.py`'s
@@ -759,7 +799,7 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
         added, deleted, path = match.groups()
         # 2026-08-12: resolve rename notation (`{old => new}`/`old => new`)
         # to the destination path before any path predicate sees it — same
-        # fix as the removed `review_brightline_gate._compute_chain_oracle`'s (K-007), over
+        # fix as `review_brightline_gate._compute_chain_oracle`'s, over
         # the identical bug (`_is_noise_path`'s anchored lifecycle-prefix
         # match never fires against the literal rename fragment). See
         # `_resolve_numstat_row_path`.
@@ -1005,6 +1045,229 @@ def _read_phase_6_review_scale(run_id: Optional[str]) -> ReaderResult:
                 decision, range_, metrics, str(record.path), _run_identity(record, run_id)
             )
         ]
+    )
+
+
+#: `tasks/*/todo.md` carries no frontmatter (module docstring's resolved
+#: frontmatter-less-leg note) — matched separately so the role-axis
+#: resolution below can skip the frontmatter read entirely for this leg
+#: shape and exclude it from the fallback count's denominator.
+_TODO_LEG_RE = re.compile(r"^tasks/[\w./-]+/todo\.md$")
+
+#: The two `baton_role` values DoE ratified
+#: (`cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md`).
+#: An artifact's frontmatter value outside this set — including the
+#: retired-by-ruling `execution` spelling — is treated exactly like an
+#: absent field: unknown, never accepted as either member.
+_BATON_ROLE_VALUES = ("work", "record")
+
+#: The run's ONE unification directive, and the verb it names — a key of
+#: `apply.py`'s CLOSED `_CLI_DISPATCH` table, which is what makes it a legal
+#: directive at all: `apply_base.resolve_cli` PRE-VALIDATES every directive's
+#: `cli` before any directive in the run executes, so a `cli`-less directive
+#: does not sit inert, it raises `UnrecognizedDirective` and takes the whole
+#: `/mise-en-place` apply run down before the first real directive fires. An
+#: earlier shape of this reader emitted exactly that.
+_MISE_UNIFY_DIRECTIVE_ID = "d-mise-unify-batons"
+_MISE_UNIFY_CLI = "unify-batons"
+
+
+def _scan_spec_path_cells(raw: str) -> set[str]:
+    """The item table's spec-path cells, scanned the same way
+    `_derive_baton_count` scans them (per-table-block header/column
+    reset, backslash normalization — see that function's docstring for
+    the rationale of both). Kept standalone rather than sharing
+    `_derive_baton_count`'s body: that function's return contract already
+    has a call site (`_read_phase_6_review_scale`'s `baton_count` metric)
+    this chunk must not perturb, so the unification set below is derived
+    from its own scan rather than a refactor that risks changing it."""
+    header_cells: Optional[list[str]] = None
+    spec_path_col: Optional[int] = None
+    baton_paths: set[str] = set()
+
+    for line in raw.splitlines():
+        match = _TABLE_ROW_RE.match(line)
+        if not match:
+            header_cells = None
+            spec_path_col = None
+            continue
+        cells = [c.strip() for c in match.group(1).split("|")]
+
+        if header_cells is None:
+            header_cells = cells
+            for idx, cell in enumerate(header_cells):
+                if _SPEC_PATH_HEADER_RE.search(cell):
+                    spec_path_col = idx
+                    break
+            continue
+
+        if all(_TABLE_SEPARATOR_RE.match(c) for c in cells if c):
+            continue
+
+        if spec_path_col is None or spec_path_col >= len(cells):
+            continue
+        found = _BATON_SPEC_PATH_RE.findall(cells[spec_path_col].replace("\\", "/"))
+        baton_paths.update(found)
+
+    return baton_paths
+
+
+def _artifact_baton_role(repo_root: Path, spec_path: str) -> Optional[str]:
+    """The `baton_role` frontmatter value read directly off the artifact
+    `spec_path` names (repo-relative, `_BATON_SPEC_PATH_RE`'s own
+    alphabet). `None` on any read failure, missing/unparsable
+    frontmatter, an absent field, or a value outside `_BATON_ROLE_VALUES`
+    — POSITIVE MATCH ONLY (module docstring / C7's own discipline):
+    absence is UNKNOWN, never defaulted, and an unrecognised third value
+    is also UNKNOWN rather than silently read as legacy or as either
+    ratified member."""
+    try:
+        raw = (repo_root / spec_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    split = split_frontmatter(raw)
+    if split is None:
+        return None
+    value = read_fm_field_unquoted(split.fm_text, "baton_role")
+    if not value:
+        return None
+    value = value.strip()
+    return value if value in _BATON_ROLE_VALUES else None
+
+
+class _BatonInheritance(NamedTuple):
+    """`_resolve_baton_inheritance`'s outcome: the run's fan-in legs
+    (`baton_role: work` where present, or the counted path-shape
+    heuristic fallback where the axis is absent) and how many of those
+    legs resolved via the fallback rather than the axis — restricted to
+    FRONTMATTER-BEARING artifacts (a `tasks/*/todo.md` leg is on the
+    fallback permanently and is excluded from this count's denominator,
+    per the plan's resolved frontmatter-less-leg note)."""
+
+    inheritable: tuple[str, ...]
+    fallback_count: int
+
+
+def _resolve_baton_inheritance(repo_root: Path, baton_paths: set[str]) -> _BatonInheritance:
+    """PUT THE AXIS IN FRONT OF THE HEURISTIC — DO NOT SWAP IT OUT (ruled:
+    `cross-repo/inbox/2026-08-19-doe-claude-em-baton-role-axis-ruling.md`).
+    `baton_role: work` on a frontmatter-bearing artifact makes it
+    inheritable; `baton_role: record` excludes it explicitly; an absent
+    (or unrecognised, or frontmatter-less) axis falls to the path-shape
+    heuristic, which — same as `_derive_baton_count` today — still counts
+    a recognized `_BATON_SPEC_PATH_RE` match as inheritable, and is
+    tallied in `fallback_count` so the stamped fraction of the corpus
+    stays a readable number rather than a silent zero."""
+    inheritable: list[str] = []
+    fallback_count = 0
+    for path in sorted(baton_paths):
+        frontmatter_bearing = not _TODO_LEG_RE.match(path)
+        role = _artifact_baton_role(repo_root, path) if frontmatter_bearing else None
+        if role == "record":
+            continue
+        if role == "work":
+            inheritable.append(path)
+            continue
+        # Axis absent (or unrecognised, or this leg is permanently
+        # frontmatter-less): the counted path-shape heuristic fallback.
+        inheritable.append(path)
+        if frontmatter_bearing:
+            fallback_count += 1
+    return _BatonInheritance(tuple(inheritable), fallback_count)
+
+
+def _unify_batons_directive(
+    inheritance: _BatonInheritance, record_path: str
+) -> dict[str, Any]:
+    """ONE directive per run naming every inheritable baton as a candidate
+    fan-in leg (`additional_predecessors` — D-A, the schema-sanctioned
+    edge; no new `merged_from`-shaped axis invented here). Never one per
+    item: per-item unification would mint a chain of merged batons and grow
+    the chain walk without bound (C8's own anti-scope).
+
+    The verb is `unify-batons`, whose handler delegates to C5's routed
+    path (`pickup_assemble.unify_run_batons`) — the plan's anti-scope
+    holds: unification keeps exactly one implementation, and this reader
+    contributes the run's resolved set, not a second one.
+
+    `args` carries the legs as bare path strings, matching every other
+    directive this module emits; the two sibling keys are repacked into
+    `args[0]` by `apply.py :: _prepare_directives_for_dispatch` before
+    dispatch (that module's own docstring on why only `args` crosses the
+    handler seam).
+
+    THE LEGS ARE REPORTING INPUT, NOT THE MUTATION'S AUTHORITY. The routed
+    path stamps the batons the DURABLE CLAIM LEDGER says this session holds
+    (AC7), never this list — an inventory table naming a baton this session
+    does not hold must not be able to stamp it terminal. The two sets are
+    reported side by side so a divergence is visible rather than silently
+    reconciled.
+
+    `role_axis_fallback_count` is `_resolve_baton_inheritance`'s own counted
+    fallback, carried through unchanged so "how much of the corpus is
+    stamped" is readable off the emitted brief rather than inferred — AC10
+    gates retirement of the path-shape heuristic on that count reaching
+    zero. `inventory_record` names the record the set was resolved from.
+
+    No judgment point accompanies it, deliberately. `/mise-en-place` is an
+    autonomous backlog run and `apply` HALTS at the first unresolved
+    judgment point, so gating unification on one would stop every run at
+    this reader. The refusal that matters is not skippable and is not
+    here: the routed path resolves its held set from THIS session's own
+    claim ledger, so a baton held by anyone else cannot enter it at all.
+    (The routed predicate is ON as of `c09345b56` — do not read this
+    directive as inert.)
+    """
+    legs = list(inheritance.inheritable)
+    return {
+        "id": _MISE_UNIFY_DIRECTIVE_ID,
+        "cli": _MISE_UNIFY_CLI,
+        "args": legs,
+        "depends_on": None,
+        "already_satisfied": False,
+        "additional_predecessors": legs,
+        "role_axis_fallback_count": inheritance.fallback_count,
+        "inventory_record": record_path,
+    }
+
+
+def _read_baton_unification(run_id: Optional[str]) -> ReaderResult:
+    """Resolve this run's inheritable batons and emit ONE unification
+    directive naming them all as fan-in legs — never one per item (C8's
+    own anti-scope: per-item unification would mint a chain of merged
+    batons and grow the chain walk without bound).
+
+    Gating mirrors `_read_phase_6_review_scale`'s own silent-Phase-0 /
+    named-run split, but does NOT duplicate its unresolved judgment
+    point on a missing `--run-id` or an unusable record — that failure is
+    already surfaced there, and a second judgment point saying the same
+    thing would be noise this reader's own idiom (ask once) argues
+    against."""
+    state_root_str = _resolve_state_root()
+    if not state_root_str:
+        return ReaderResult()
+    state_root = Path(state_root_str)
+    repo_root = state_root.parent
+
+    inventory_dir = state_root / _MISE_INVENTORY_DIRNAME
+    if not inventory_dir.is_dir() or run_id is None:
+        return ReaderResult()
+
+    lookup = _named_run_record(inventory_dir, run_id)
+    record = lookup.record
+    if record is None:
+        return ReaderResult()
+
+    baton_paths = _scan_spec_path_cells(record.raw)
+    if not baton_paths:
+        return ReaderResult()
+
+    inheritance = _resolve_baton_inheritance(repo_root, baton_paths)
+    if not inheritance.inheritable:
+        return ReaderResult()
+
+    return ReaderResult(
+        directives=[_unify_batons_directive(inheritance, str(record.path))]
     )
 
 
@@ -1262,8 +1525,9 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
     `run_id` is the caller's `--run-id`, threaded uniformly to all five
     readers by the `__init__.py` seam and self-gated here exactly as
     `cadence` is: this reader consumes it, the other four ignore it, and the
-    seam never learns which is which. Only the Phase-6 tail surface reads
-    it; the other three sub-readers below are run-invariant."""
+    seam never learns which is which. Only the Phase-6 tail surface and the
+    baton-unification surface read it; the other two sub-readers below are
+    run-invariant."""
     if cadence != CADENCE:
         return ReaderResult()
 
@@ -1272,6 +1536,7 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
         _read_executor_dispatch_template(),
         _read_haiku_verifier_dispatch(),
         _read_phase_6_review_scale(run_id),
+        _read_baton_unification(run_id),
     ]
 
     directives: list[dict[str, Any]] = []

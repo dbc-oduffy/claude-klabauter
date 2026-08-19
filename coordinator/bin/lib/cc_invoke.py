@@ -399,40 +399,62 @@ def _machine_local_get(key: str) -> str | None:
     return result.stdout.strip()
 
 
+_CLAUDE_KLABAUTER_ROOT_REMEDIATION = (
+    "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
+    "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
+    "  Remediate (choose one):\n"
+    "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
+    "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
+    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
+)
+
+
+
+
 def _resolve_claude_klabauter_root() -> str:
     """Resolve CLAUDE_KLABAUTER_ROOT natively — no bash subprocess anywhere in the ladder.
 
     Resolution order (mirrors coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root,
     the native port of coordinator-claude-klabauter-root.sh):
-      Rung 1:   CLAUDE_KLABAUTER_ROOT already set in environment → fast-path return.
+      Rung 1:   CLAUDE_KLABAUTER_ROOT already set in environment → CANDIDATE, delegated
+                through the single gated ladder (see "DELEGATION" below) rather
+                than answered directly.
       Rung 1.5: machine-local pointer files → cheap direct file reads, no
                 subprocess spawn (docs/plans/2026-07-14-claude-klabauter-windows-
                 portability.md § C1). `.claude-klabauter-root` is consulted
                 FIRST and wins outright (DR-326: all engine dispatch goes to the
                 published build); `.claude-klabauter-root` answers only on a box with no
-                published mirror installed.
-      Rung 2+:  native resolver. coordinator_core.claude_klabauter_root lives INSIDE the
-                engine checkout this function is trying to locate, so it can't
-                be imported before a candidate path is known (the bootstrap
-                circularity coordinator-claude-klabauter-root.sh never had, since that
-                script lived in THIS repo). Bootstrap the candidate via a direct
-                Python subprocess to bin/_machine_local.py (_machine_local_get —
-                the same registry lookup coordinator_core.claude_klabauter_root's own
-                rung 2 performs, just invoked without a bash intermediary), then
-                hand resolution authority to the native module itself — via
-                ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class()``
-                (the DR-132 two-tier published-engine-vs-live-working-tree gate,
-                NOT the classless ``coordinator_claude_klabauter_root()`` this call site
-                used before) — for byte-identical behavior/remediation text
-                once it's importable. This is Rung 2+'s ONLY change here: the
-                bootstrap subprocess (_machine_local_get) and the delegation
-                itself are unaffected — no new subprocess, no new resolution
-                logic (plan § C5).
+                published mirror installed. Both remain a DIRECT return, not a
+                delegation — see the "no longer gate-blind in the direction
+                that mattered" note below for why that is safe.
+      Rung 2:   machine-local registry candidate → delegated, same as Rung 1.
+      Rung 3:   terminal self-location (__file__) → CANDIDATE, delegated the
+                same way — see "DISPATCH axis" note below.
 
-      PUBLISHED-ENGINE GATE COVERAGE, stated honestly: only Rung 2+ reaches
-      the gate above. Rungs 1 (env), 1.5 (pointer files), and 3
-      (self-location) all return BEFORE the oracle is ever consulted, so a
-      value resolved on any of those rungs is gate-BLIND.
+      DELEGATION (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md §
+      C6): Rungs 1, 2, and 3 no longer ANSWER the dispatch question themselves.
+      Each only supplies a CANDIDATE path capable of importing
+      coordinator_core; the nested `_delegate_to_gate()` helper bootstraps that import
+      and hands the actual decision to
+      ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class()``
+      (the DR-132/stamp-gated ladder C5 rewrote) — the single place that
+      answers "which engine executes?" for every caller. A candidate that
+      cannot import ``coordinator_core.claude_klabauter_root`` (a marker-only or broken
+      checkout) raises, rather than being trusted verbatim.
+
+      DISPATCH axis vs LOCATOR axis: this function answers the DISPATCH
+      question ("which engine executes?"), consumed by `route()`/`cc_invoke()`.
+      `resolve_colocated_claude_klabauter_root()` and `resolve_engine_root()` answer a
+      DIFFERENT question — "where is THIS co-located script's own tree, for
+      sys.path purposes?" — and deliberately keep their own, undelegated rung
+      orderings (self-location-before-env, or isdir-gated-env-before-self-
+      location respectively). Do not collapse those into this function or vice
+      versa; the two axes are allowed to disagree.
+
+      PUBLISHED-ENGINE GATE COVERAGE, stated honestly: only Rungs 1, 2, and 3
+      now reach the gate, via delegation. Rung 1.5 (pointer files) is the sole
+      remaining direct return — the note below explains why that is not a
+      gate-blind hole in practice.
 
       Rung 1.5 USED to be the live end of that blindness, and was the exact
       defect commit 0fdfb61d6 fixed inside `coordinator_claude_klabauter_root_with_class()`
@@ -446,41 +468,110 @@ def _resolve_claude_klabauter_root() -> str:
       target DR-326 exists to stop.
 
       Resolved WITHOUT breaking the constraint that caused it: the published
-      pointer is one more plain `open()`, so rungs 1/1.5/3 still spawn no
-      subprocess and still walk no gate. They are no longer gate-blind in the
-      direction that mattered, because the answer they now give is the one the
-      gate would have given (HARD CONSTRAINT preserved: no new subprocess on
-      rungs 1/1.5/3).
-      Rung 3 (NEW, TERMINAL): self-location from THIS module's own ``__file__``,
+      pointer is one more plain `open()`, so rung 1.5 still spawns no
+      subprocess and still walks no gate — it is no longer gate-blind in the
+      direction that mattered, because the answer it gives is the one the gate
+      would have given (HARD CONSTRAINT preserved: no new subprocess on rungs
+      1/1.5/3).
+      Rung 3 (TERMINAL): self-location from THIS module's own ``__file__``,
                 via the existing ``_walk_up_to_checkout`` helper — reached only
                 when rungs 1, 1.5, and 2 have all missed, immediately before the
                 function would otherwise raise. On a stranger's box none of the
                 registry/pointer/env rungs resolve, which is why ~24 of the
                 published-CLI failures this rung fixes were the single message
-                "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT". LIMITATION, stated
-                honestly: this answers with *cc_invoke.py's own* tree, not
-                necessarily the caller's — on a multi-checkout box a bare
-                ``_resolve_claude_klabauter_root()`` caller gets cc_invoke's tree, which is
-                exactly why this is the TERMINAL rung (reached only when the
-                alternative is raising) rather than an earlier one. A caller that
-                wants per-caller self-location semantics should call
-                ``resolve_engine_root(__file__)`` instead — that is not a general
-                recommendation to migrate every caller here, just the honest
-                answer for the multi-checkout case this rung cannot cover. In the
-                published payload the two trees are the same, which is the case
-                this rung targets.
+                "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT". Its answer is now
+                DELEGATED (see "DELEGATION" above) rather than returned
+                verbatim — hard constraint 2 (a script run by name must still
+                find its own tree) is preserved because self-location still
+                supplies the candidate that makes ``coordinator_core`` importable
+                at all; only the FINAL answer now comes from the gate.
+                LIMITATION, stated honestly: this answers with *cc_invoke.py's
+                own* tree, not necessarily the caller's — on a multi-checkout
+                box a bare ``_resolve_claude_klabauter_root()`` caller gets cc_invoke's
+                tree, which is exactly why this is the TERMINAL rung (reached
+                only when the alternative is raising) rather than an earlier
+                one. A caller that wants per-caller self-location semantics
+                should call ``resolve_engine_root(__file__)`` instead — that is
+                not a general recommendation to migrate every caller here, just
+                the honest answer for the multi-checkout case this rung cannot
+                cover. In the published payload the two trees are the same,
+                which is the case this rung targets.
 
     Returns the resolved absolute path.
-    Raises RuntimeError on failure (unresolvable root) — or the RuntimeError
-    subclass `_RegistryReadTimeout` specifically when the registry read at Rung
-    2+ timed out and self-location (Rung 3) also missed, so a caller wanting to
-    tell the two apart can `except _RegistryReadTimeout` before the general
+    Raises RuntimeError on failure (unresolvable root — including a candidate
+    from any delegated rung that cannot import
+    ``coordinator_core.claude_klabauter_root``) — or the RuntimeError subclass
+    `_RegistryReadTimeout` specifically when the registry read at Rung 2 timed
+    out and self-location (Rung 3) also missed, so a caller wanting to tell the
+    two apart can `except _RegistryReadTimeout` before the general
     `except RuntimeError` (see `route()`, which does exactly this).
+
+    C7 routing note (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md
+    § C7, docs/reference/engine-vs-locator-resolver-routing.md bucket
+    4-bare-class-blind): this is the class-blind ENGINE-axis resolver every
+    bare `_resolve_claude_klabauter_root()` caller reaches, and the PM's naming ruling
+    (`resolve_claude_klabauter` should read as "find the source repo", not "find the
+    engine") argues for renaming this symbol to say what it returns. That
+    rename is deliberately NOT done here: `_delegate_to_gate`'s own comment
+    above records that call-site guards elsewhere introspect
+    `inspect.getsource(_resolve_claude_klabauter_root)` by this exact name, and a
+    same-file wrapper/alias split would hand those guards the wrapper's
+    short source instead of this function's real body — silently breaking
+    them rather than fixing the naming. Renaming this symbol safely needs
+    updating every guard that source-inspects it BY NAME, which is caller
+    work outside C7's `writes:` scope (see the routing doc's bucket 4 file
+    list) — left as an explicit exception, not a silent skip.
     """
-    # Rung 1: already in environment — same idempotency gate as the shell transport.
+    def _delegate_to_gate(candidate: str, *, source: str) -> str:
+        """Bootstrap ``coordinator_core.claude_klabauter_root`` from ``candidate`` and
+        return the gated final answer from ``coordinator_claude_klabauter_root_with_class()``.
+
+        Nested (not module-level) so every DISPATCH-axis candidate rung below
+        (env, registry, self-location) shares exactly ONE delegation body,
+        which `inspect.getsource(_resolve_claude_klabauter_root)`-based call-site guards
+        elsewhere in this tree see as part of this function's own source —
+        each candidate rung now only supplies a path capable of importing
+        `coordinator_core`; the actual DR-132/stamp-gated decision comes from
+        exactly one place (the ladder C5 rewrote), never answered here
+        directly. `source` is folded into the raised message only, on a
+        candidate that cannot import `coordinator_core.claude_klabauter_root` (a
+        marker-only or broken checkout) — that candidate is NOT trusted
+        verbatim on that failure, unlike the pre-C6 behaviour of Rungs 1 and 3.
+        """
+        _injected = candidate not in sys.path
+        if _injected:
+            sys.path.insert(0, candidate)
+        try:
+            try:
+                from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
+            except ImportError as exc:
+                raise RuntimeError(
+                    f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
+                    f"a valid claude-klabauter checkout — coordinator_core.claude_klabauter_root not importable: {exc}"
+                ) from exc
+            # Published-engine rung: coordinator_claude_klabauter_root_with_class() runs the
+            # DR-132 two-tier gate (published-engine-mirror vs. live-working-tree)
+            # instead of the classless coordinator_claude_klabauter_root(), which always
+            # answered live-working-tree. The (root, resolution_class) pair is
+            # returned; this rung only needs root — cc_invoke does not branch on
+            # the class (that belongs to a future consumer, not this resolution
+            # rung: engine.target is a read-site default, never diverted on here).
+            resolved, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        finally:
+            if _injected:
+                try:
+                    sys.path.remove(candidate)
+                except ValueError:
+                    pass
+        if not resolved:
+            raise RuntimeError(_CLAUDE_KLABAUTER_ROOT_REMEDIATION)
+        return resolved
+
+    # Rung 1: already in environment — CANDIDATE only now, delegated through
+    # the gate (see docstring's "DELEGATION" note) rather than answered here.
     existing = os.environ.get("CLAUDE_KLABAUTER_ROOT", "")
     if existing:
-        return existing
+        return _delegate_to_gate(existing, source="CLAUDE_KLABAUTER_ROOT environment variable")
 
     # Rung 1.5 (NEW): cheap direct-file-read pointer, checked ahead of the
     # expensive bash-spawn resolver below. On Windows this avoids spawning a
@@ -534,20 +625,11 @@ def _resolve_claude_klabauter_root() -> str:
     if _pointer_val:
         return _pointer_val
 
-    # Rung 2+: native bootstrap — locate a candidate root via the machine-local
+    # Rung 2: native bootstrap — locate a candidate root via the machine-local
     # registry (no bash), then delegate to coordinator_core.claude_klabauter_root itself
     # once it's importable, so the FINAL answer (and any future rung additions
     # to that module) come from the single native oracle, not a re-derivation
     # duplicated here.
-    _remediation = (
-        "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
-        "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
-        "  Remediate (choose one):\n"
-        "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
-        "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-        "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
-    )
-
     _registry_read_timed_out = False
     try:
         _candidate = _machine_local_get("repos.claude_klabauter")
@@ -555,54 +637,29 @@ def _resolve_claude_klabauter_root() -> str:
         _candidate = None
         _registry_read_timed_out = True
 
-    if not _candidate or not os.path.isdir(_candidate):
-        # Rung 3 (terminal): self-locate from cc_invoke's OWN __file__ before
-        # raising. Reached only when env, pointer, and registry all missed —
-        # see the docstring's "Rung 3 (NEW, TERMINAL)" note for the limitation
-        # this rung knowingly carries.
-        _self_located = _walk_up_to_checkout(__file__)
-        if _self_located:
-            return _self_located
-        if _registry_read_timed_out:
-            # A transient reader timeout, not a genuinely absent/unregistered
-            # checkout — propagate the distinguishable outcome (AC1/AC3)
-            # instead of the clone/register text below, which is wrong here.
-            raise _RegistryReadTimeout(
-                f"{_REGISTRY_READ_TIMEOUT_TOKEN} ({_MACHINE_LOCAL_READ_TIMEOUT_SECS}s bound) "
-                "resolving repos.claude_klabauter, and self-location also missed."
-            )
-        raise RuntimeError(_remediation)
+    if _candidate and os.path.isdir(_candidate):
+        return _delegate_to_gate(_candidate, source="machine-local repos.claude_klabauter")
 
-    _injected = _candidate not in sys.path
-    if _injected:
-        sys.path.insert(0, _candidate)
-    try:
-        try:
-            from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
-        except ImportError as exc:
-            raise RuntimeError(
-                f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {_candidate!r} (from machine-local "
-                f"repos.claude_klabauter) is not a valid claude-klabauter checkout — "
-                f"coordinator_core.claude_klabauter_root not importable: {exc}"
-            ) from exc
-        # Published-engine rung: coordinator_claude_klabauter_root_with_class() runs the
-        # DR-132 two-tier gate (published-engine-mirror vs. live-working-tree)
-        # instead of the classless coordinator_claude_klabauter_root(), which always
-        # answered live-working-tree. The (root, resolution_class) pair is
-        # returned; this rung only needs root — cc_invoke does not branch on
-        # the class (that belongs to a future consumer, not this resolution
-        # rung: engine.target is a read-site default, never diverted on here).
-        resolved, _resolution_class = coordinator_claude_klabauter_root_with_class()
-    finally:
-        if _injected:
-            try:
-                sys.path.remove(_candidate)
-            except ValueError:
-                pass
+    # Rung 3 (terminal): self-locate from cc_invoke's OWN __file__ before
+    # raising. Reached only when env, pointer, and registry all missed — see
+    # the docstring's "Rung 3 (TERMINAL)" note for the limitation this rung
+    # knowingly carries. Delegated the same way as every other candidate rung
+    # (see docstring's "DELEGATION" note) — hard constraint 2 (a script run by
+    # name must still find its own tree) is preserved by self-location still
+    # supplying the candidate; only the final answer is no longer verbatim.
+    _self_located = _walk_up_to_checkout(__file__)
+    if _self_located:
+        return _delegate_to_gate(_self_located, source="self-location (__file__)")
 
-    if not resolved:
-        raise RuntimeError(_remediation)
-    return resolved
+    if _registry_read_timed_out:
+        # A transient reader timeout, not a genuinely absent/unregistered
+        # checkout — propagate the distinguishable outcome (AC1/AC3)
+        # instead of the clone/register text below, which is wrong here.
+        raise _RegistryReadTimeout(
+            f"{_REGISTRY_READ_TIMEOUT_TOKEN} ({_MACHINE_LOCAL_READ_TIMEOUT_SECS}s bound) "
+            "resolving repos.claude_klabauter, and self-location also missed."
+        )
+    raise RuntimeError(_CLAUDE_KLABAUTER_ROOT_REMEDIATION)
 
 
 def resolve_colocated_claude_klabauter_root(script_file: str) -> str:

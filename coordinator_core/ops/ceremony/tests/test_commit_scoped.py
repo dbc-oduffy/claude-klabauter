@@ -39,7 +39,7 @@ import pytest
 
 from coordinator_core.git.divergence import DivergenceCheckFailed
 from coordinator_core.ops.ceremony import git_native
-from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
+from coordinator_core.ops.ceremony.git_native import DeliverableIdAssertionConflictError
 from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from .fixtures.real_git import (
     make_agree_path,
@@ -983,7 +983,8 @@ def test_agree_branch_deliverable_id_none_is_byte_identical_to_default(tmp_path)
 
 
 # AC18 -- message-trailer-agrees (one line, no duplicate) / disagrees
-# (raises DivergentDeliverableIdError), on both branches.
+# (raises DeliverableIdAssertionConflictError, DR-328's commit-side sibling
+# of DivergentDeliverableIdError), on both branches.
 
 
 def test_agree_branch_message_trailer_agrees_no_duplicate(tmp_path):
@@ -1008,7 +1009,7 @@ def test_agree_branch_message_trailer_disagrees_raises(tmp_path):
     msg_file.write_text("subject\n\nDeliverable-Id: dlv-old\n", encoding="utf-8")
     head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
-    with pytest.raises(DivergentDeliverableIdError):
+    with pytest.raises(DeliverableIdAssertionConflictError):
         git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
 
     head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
@@ -1037,7 +1038,7 @@ def test_diverged_branch_message_trailer_disagrees_raises(tmp_path):
     msg_file.write_text("subject\n\nDeliverable-Id: dlv-old\n", encoding="utf-8")
     head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
-    with pytest.raises(DivergentDeliverableIdError):
+    with pytest.raises(DeliverableIdAssertionConflictError):
         git_native.commit_scoped(["file.txt"], msg_file, repo, deliverable_id="dlv-abc123")
 
     head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()

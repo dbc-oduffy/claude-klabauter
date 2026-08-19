@@ -1048,6 +1048,202 @@ class TestAppendGoalExplicitGoalId:
         assert all(c in "0123456789abcdef" for c in result["row"]["goal_id"])
 
 
+# ---------------------------------------------------------------------------
+# _goal_append(): `events` batch form (2026-08-19 amplification-gate fix)
+#
+# One goal.append dispatch carrying N events must fan out into N in-process
+# append_goal() calls — the whole point being that the caller
+# (append-goal-event.py's --events-file mode) makes ONE coordinator_core.invoke
+# spawn for the whole batch rather than one per event. These tests pin the
+# handler's batch branch directly, independent of the CLI trampoline.
+# ---------------------------------------------------------------------------
+
+class TestGoalAppendBatch:
+    """`events` param on the goal.append handler — batch fan-out + per-event
+    outcome reporting."""
+
+    def _fake_coordinator_root(self, tmp_path: Path) -> Path:
+        fake_coordinator = tmp_path / "fake-coordinator"
+        (fake_coordinator / "bin").mkdir(parents=True, exist_ok=True)
+        (fake_coordinator / "bin" / "query-records.js").touch()
+        return fake_coordinator
+
+    def test_batch_writes_one_row_per_event(self, tmp_path: Path) -> None:
+        """N events must produce N appended JSONL rows from ONE handler call."""
+        repo = _make_git_repo(tmp_path)
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            result = _goal_append(
+                {
+                    "repo": "test-org/test-repo",
+                    "events": [
+                        {"period": "week", "period_value": "2026-W27", "text": "goal one"},
+                        {"period": "week", "period_value": "2026-W27", "text": "goal two"},
+                        {"period": "day", "period_value": "2026-08-19", "text": "goal three"},
+                    ],
+                },
+                repo_root=repo / ".git",
+            )
+
+        assert "events" in result
+        outcomes = result["events"]
+        assert len(outcomes) == 3
+        assert all(o["ok"] for o in outcomes)
+        assert [o["result"]["row"]["text"] for o in outcomes] == [
+            "goal one", "goal two", "goal three",
+        ]
+
+    def test_batch_repo_and_coordinator_root_path_shared_across_events(self, tmp_path: Path) -> None:
+        """repo/coordinator_root_path are top-level and apply to every event."""
+        repo = _make_git_repo(tmp_path)
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            result = _goal_append(
+                {
+                    "repo": "shared-org/shared-repo",
+                    "events": [
+                        {"period": "week", "period_value": "2026-W27", "text": "a"},
+                        {"period": "week", "period_value": "2026-W28", "text": "b"},
+                    ],
+                },
+                repo_root=repo / ".git",
+            )
+
+        for outcome in result["events"]:
+            assert outcome["result"]["row"]["repo"] == "shared-org/shared-repo"
+            assert outcome["result"]["row"]["coordinator_root_path"] == "."
+
+    def test_batch_optional_fields_forwarded_per_event(self, tmp_path: Path) -> None:
+        repo = _make_git_repo(tmp_path)
+        kr_status = [{"id": "kr1", "text": "Ship X", "kind": "leading", "status": "on_track"}]
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            result = _goal_append(
+                {
+                    "repo": "test-org/test-repo",
+                    "events": [
+                        {
+                            "period": "week",
+                            "period_value": "2026-W27",
+                            "text": "goal with extras",
+                            "parent_goal_id": "abc123def456",
+                            "weekly_perceptible": True,
+                            "key_results_status": kr_status,
+                            "goal_id": "deadbeefcafe",
+                            "status": "done",
+                        },
+                    ],
+                },
+                repo_root=repo / ".git",
+            )
+
+        row = result["events"][0]["result"]["row"]
+        assert row["parent_goal_id"] == "abc123def456"
+        assert row["weekly_perceptible"] is True
+        assert row["key_results_status"] == kr_status
+        assert row["goal_id"] == "deadbeefcafe"
+        assert row["status"] == "done"
+
+    def test_batch_one_bad_event_does_not_abort_the_others(self, tmp_path: Path) -> None:
+        """A ValueError from one event (e.g. missing text) is caught per-event —
+        every OTHER event in the batch still gets appended."""
+        repo = _make_git_repo(tmp_path)
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            result = _goal_append(
+                {
+                    "repo": "test-org/test-repo",
+                    "events": [
+                        {"period": "week", "period_value": "2026-W27", "text": "good one"},
+                        {"period": "week", "period_value": "2026-W28", "text": ""},
+                        {"period": "week", "period_value": "2026-W29", "text": "good two"},
+                    ],
+                },
+                repo_root=repo / ".git",
+            )
+
+        outcomes = result["events"]
+        assert len(outcomes) == 3
+        assert outcomes[0]["ok"] is True
+        assert outcomes[1]["ok"] is False
+        assert "error" in outcomes[1]
+        assert outcomes[2]["ok"] is True
+        assert outcomes[2]["result"]["row"]["text"] == "good two"
+
+    def test_batch_non_dict_event_reported_as_failure(self, tmp_path: Path) -> None:
+        repo = _make_git_repo(tmp_path)
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            result = _goal_append(
+                {"repo": "test-org/test-repo", "events": ["not-an-object"]},
+                repo_root=repo / ".git",
+            )
+
+        assert result["events"][0]["ok"] is False
+        assert "not an object" in result["events"][0]["error"]
+
+    def test_batch_non_list_events_raises(self, tmp_path: Path) -> None:
+        repo = _make_git_repo(tmp_path)
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            with pytest.raises(ValueError, match="events"):
+                _goal_append(
+                    {"repo": "test-org/test-repo", "events": "not-a-list"},
+                    repo_root=repo / ".git",
+                )
+
+    def test_batch_goal_id_content_hash_matches_single_event_call(self, tmp_path: Path) -> None:
+        """A batch event with no explicit goal_id derives the SAME content-hash
+        id a single-event call with identical fields would — batching must not
+        change identity derivation."""
+        repo = _make_git_repo(tmp_path)
+
+        with patch(
+            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            return_value=self._fake_coordinator_root(tmp_path),
+        ):
+            single = _goal_append(
+                {
+                    "repo": "test-org/test-repo",
+                    "period": "day",
+                    "period_value": "2026-07-04",
+                    "text": "My test goal",
+                },
+                repo_root=repo / ".git",
+            )
+            batch = _goal_append(
+                {
+                    "repo": "test-org/test-repo",
+                    "events": [
+                        {"period": "day", "period_value": "2026-07-04", "text": "My test goal"},
+                    ],
+                },
+                repo_root=repo / ".git",
+            )
+
+        expected = _goal_id("test-org/test-repo", ".", "day", "2026-07-04", "My test goal")
+        assert single["row"]["goal_id"] == expected
+        assert batch["events"][0]["result"]["row"]["goal_id"] == expected
+
+
 class TestGoalAppendHandlerRejectsOutOfRepoAbsoluteCrp:
     """The goal.append handler must raise ValueError when coordinator_root_path is
     an absolute path that resolves OUTSIDE the repo, not just normalize in-repo

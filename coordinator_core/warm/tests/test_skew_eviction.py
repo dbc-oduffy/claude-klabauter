@@ -32,52 +32,73 @@ def _write_head_and_ref(git_dir: Path, ref_rel: str, sha: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_client_token_stable_when_nothing_changes(tmp_path):
+def test_client_token_raises_for_unstamped_clone_even_when_git_state_is_stable(tmp_path):
+    """docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C4: the
+    ref-based fallback for an unstamped tree is deleted, not merely
+    de-prioritized. A well-formed but unstamped clone must still fail
+    closed -- git state being unremarkable is not an exemption."""
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
 
-    first = skew.compute_client_token(root)
-    second = skew.compute_client_token(root)
-    assert first == second
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(root)
 
 
-def test_client_token_changes_when_ref_sha_changes(tmp_path):
+def test_client_token_raises_for_unstamped_clone_across_a_ref_sha_change(tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
-    before = skew.compute_client_token(root)
+
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(root)
 
     time.sleep(0.01)
     (root / ".git" / "refs" / "heads" / "main").write_text("b" * 40 + "\n", encoding="utf-8")
-    after = skew.compute_client_token(root)
 
-    assert before != after
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(root)
 
 
-def test_client_token_changes_when_head_moves_to_another_branch(tmp_path):
+def test_client_token_raises_for_unstamped_clone_across_a_head_branch_move(tmp_path):
     root = tmp_path / "clone"
     git_dir = root / ".git"
     _write_head_and_ref(git_dir, "refs/heads/main", "a" * 40)
-    before = skew.compute_client_token(root)
+
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(root)
 
     time.sleep(0.01)
     _write_head_and_ref(git_dir, "refs/heads/candidate", "a" * 40)
-    after = skew.compute_client_token(root)
 
-    assert before != after
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(root)
 
 
-def test_client_token_handles_detached_head(tmp_path):
+def test_client_token_ignores_a_detached_head_when_the_tree_is_stamped(tmp_path):
+    """docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C4:
+    this test pinned graceful non-raising behaviour for malformed git state
+    on an UNSTAMPED tree; that subject no longer exists (unstamped now
+    always raises, malformed git or not -- see the sibling tests above).
+    Its surviving subject is a STAMPED tree: once a stamp is present,
+    `compute_client_token` never touches `.git/` at all, so a detached HEAD
+    (or any other malformed git state) must not matter."""
     root = tmp_path / "clone"
     git_dir = root / ".git"
     git_dir.mkdir(parents=True)
     (git_dir / "HEAD").write_text("a" * 40 + "\n", encoding="utf-8")
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
 
     token = skew.compute_client_token(root)
     assert isinstance(token, str) and token
 
 
-def test_client_token_handles_missing_git_dir(tmp_path):
+def test_client_token_ignores_a_missing_git_dir_when_the_tree_is_stamped(tmp_path):
+    """Sibling of the detached-HEAD test above, same rationale: a stamped
+    tree's token never reads `.git/`, so a wholly absent `.git` directory
+    must not matter either."""
     root = tmp_path / "no-git-here"
+    root.mkdir(parents=True)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+
     token = skew.compute_client_token(root)
     assert isinstance(token, str) and token
 
@@ -89,12 +110,13 @@ def test_client_token_handles_missing_git_dir(tmp_path):
     != 0,
     reason="git not on PATH",
 )
-def test_client_token_changes_across_real_git_checkout(tmp_path):
-    """Pins the C16 negative-spec finding: klabauter-channel.py's `_set`
-    path runs `git checkout -B <target> --track origin/<target>`, and this
-    test proves that command rewrites `.git/HEAD` in a way axis 1 observes
-    -- i.e. an in-clone channel flip IS covered by the primary signal,
-    with no separate `engine.target` handling needed in this module."""
+def test_client_token_raises_for_unstamped_clone_across_a_real_git_checkout(tmp_path):
+    """Sibling of the C16 negative-spec finding this test used to pin
+    (klabauter-channel.py's `_set` path runs
+    `git checkout -B <target> --track origin/<target>`, which rewrites
+    `.git/HEAD`): with the ref-based fallback deleted (§ C4), an unstamped
+    clone raises regardless of what a real `git checkout -B` does to
+    `.git/HEAD` -- there is no live ref signal left to observe."""
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
     subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], **_GIT_SUBPROCESS_KWARGS)
@@ -129,7 +151,8 @@ def test_client_token_changes_across_real_git_checkout(tmp_path):
         **_GIT_SUBPROCESS_KWARGS,
     )
 
-    before = skew.compute_client_token(work)
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(work)
     time.sleep(0.01)
 
     checkout = subprocess.run(
@@ -140,8 +163,8 @@ def test_client_token_changes_across_real_git_checkout(tmp_path):
     )
     assert checkout.returncode == 0, checkout.stderr
 
-    after = skew.compute_client_token(work)
-    assert before != after
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(work)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +185,7 @@ def test_server_boots_with_sha_and_hash(monkeypatch, tmp_path):
 def test_is_skewed_false_when_client_token_matches_live_server_token(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
 
@@ -174,6 +198,7 @@ def test_is_skewed_false_when_client_token_matches_live_server_token(monkeypatch
 def test_is_skewed_true_on_axis1_primary_mismatch(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
 
@@ -185,6 +210,7 @@ def test_is_skewed_true_on_axis1_primary_mismatch(monkeypatch, tmp_path):
 def test_is_skewed_true_on_axis2_secondary_staleness_via_dirty(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
 
     hashes = iter(["hash-0", "hash-1"])
@@ -206,6 +232,7 @@ def test_is_skewed_true_on_axis2_secondary_staleness_via_dirty(monkeypatch, tmp_
 def test_axis2_does_not_rehash_when_prefilter_unchanged_and_not_dirty(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
     monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
@@ -223,6 +250,7 @@ def test_axis2_does_not_rehash_when_prefilter_unchanged_and_not_dirty(monkeypatc
 def test_axis2_refresh_throttled_to_interval(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
 
@@ -253,6 +281,7 @@ def test_axis2_refresh_throttled_to_interval(monkeypatch, tmp_path):
 def test_source_stale_is_sticky(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
 
     hashes = iter(["hash-0", "hash-1", "hash-0"])

@@ -167,9 +167,12 @@ logger = logging.getLogger(__name__)
 # ``{caller_worktree}/state/review-trail/``.
 _REVIEW_TRAIL_OUTPUT_ROOT_ENV = "REVIEW_TRAIL_OUTPUT_ROOT"
 
-# Session-id env vars (precedence order 2 and 3).
-_CLAUDE_SESSION_ID_ENV = "CLAUDE_SESSION_ID"
-_CLAUDE_CODE_SESSION_ID_ENV = "CLAUDE_CODE_SESSION_ID"
+# Negative-spec: this module deliberately holds NO session-id env-var names of
+# its own. The one handler that had them read `os.environ` directly and so
+# stepped past the warm-serving identity override — see
+# `_review_trail_write_handler`'s own session_id comment. Session identity here
+# comes from `resolve_current_session_id` only; reintroducing a local env
+# constant is how that defect comes back.
 
 # Workstream env var (precedence order 2).
 _COORDINATOR_REVIEW_WORKSTREAM_ENV = "COORDINATOR_REVIEW_WORKSTREAM"
@@ -1018,7 +1021,26 @@ class ForeignSessionRangeRefused(ValueError):
     and case 3 (a genuinely ambiguous range) of ``_guard_foreign_session_range``
     -- never from case 2 (the safe, provably-in-scope case, which returns
     normally).
+
+    ``caller_facing_validation`` (``ipc._handler_exception_error``'s duck-type
+    marker) is set because this refusal's message IS the deliverable: it names
+    the commit, the trailer it read, which of the two readings apply, and the
+    performable remedy. Unmarked, an exception escaping a handler is reduced on
+    the wire to ``Internal error: ForeignSessionRangeRefused`` and every word of
+    that is discarded -- which is exactly what a CLI caller
+    (``freeze-review-diff``, ``coordinator-write-review-trail``) received while
+    this guard was misfiring, and why diagnosing it took two sessions instead of
+    one command. The in-process caller (``ceremony.tail_ops.write_review_trail``)
+    always saw the full text because it catches the exception object directly;
+    only the wire lost it.
+
+    The message is authored to sit under ``ipc``'s 2000-char caller-facing cap.
+    Keep it there: past the cap it is truncated mid-remedy, which is worse than
+    a short message because the surviving half still reads complete.
     """
+
+    #: ipc duck-type marker — see this class's docstring.
+    caller_facing_validation = True
 
 
 def _git_runner(args: list[str], cwd: Optional[str]) -> tuple[int, str, str]:
@@ -1437,6 +1459,45 @@ def _own_frozen_diff_shas(own_session_id: str, caller_worktree: Path) -> FrozenS
             continue
         shas.update(line.strip() for line in out.splitlines() if line.strip())
     return frozenset(shas)
+
+
+def _single_commit_session_trailer(
+    sha_range: str, caller_worktree: Path
+) -> Optional[str]:
+    """The ``Session-Id`` trailer value carried by the single commit
+    *sha_range* resolves to, or ``None`` when the range is not exactly one
+    commit, the trailer is absent, or git fails.
+
+    Diagnostic-only: read by the single-commit refusal message so it can
+    QUOTE the trailer it observed instead of asserting a mismatch it never
+    checked (AC2). Never feeds an admission decision — `detect_foreign_commits`
+    remains the sole authority on whether a commit is in scope, and a failure
+    here degrades the message, never the guard.
+    """
+    # No `--no-walk`: git documents it as having no effect when a range is
+    # given, and `sha_range` here is always range-shaped (`_validate`
+    # enforces `scope_kind == "diff"` requires `..` in `sha_range`), so the
+    # flag was dead weight for every call this function ever receives —
+    # left out rather than left in misleadingly. Behaviour is unaffected
+    # either way: the caller only reaches this after independently
+    # confirming (`git rev-list --count sha_range == 1`) that the range
+    # resolves to exactly one commit, so a normal walk over that same range
+    # yields the identical single trailer line.
+    rc, out, _err = _git_runner(
+        [
+            "git",
+            "log",
+            "--format=%(trailers:key=Session-Id,valueonly)",
+            sha_range,
+        ],
+        str(caller_worktree),
+    )
+    if rc != 0:
+        return None
+    values = [line.strip() for line in out.splitlines() if line.strip()]
+    if len(values) != 1:
+        return None
+    return values[0]
 
 
 def _resolve_range_shas(sha_range: str, caller_worktree: Path) -> Optional[FrozenSet[str]]:
@@ -2057,11 +2118,39 @@ def _guard_foreign_session_range(
                 "commit carries this session's own Session-Id trailer, then "
                 "retry the write against the new SHA."
             )
+        # AC2 (state/handoffs/2026-08-19-review-trail-cannot-record-a-
+        # partitioned-close.md § D1): state the trailer this branch OBSERVED
+        # against the identity it compared it to, rather than asserting a
+        # mismatch. The prior wording asserted "names a different session"
+        # unconditionally — and when the warm-serving identity leak made
+        # `own_session_id` a stranger's, that sentence was FALSE for five
+        # commits whose trailer named the writing session exactly, sending
+        # the reader after a mismatch that was not on disk. A message that
+        # quotes both sides cannot make that claim wrongly: if they read
+        # equal, the reader knows the fault is in identity resolution, not
+        # in the commit.
+        observed_trailer = _single_commit_session_trailer(sha_range, caller_worktree)
+        if observed_trailer and observed_trailer == own_session_id:
+            observed_clause = (
+                f"its Session-Id trailer ({observed_trailer!r}) MATCHES this "
+                "write's resolved session identity, so this refusal is a "
+                "defect in session-identity resolution, not in the commit — "
+                "report it rather than working around it"
+            )
+        elif observed_trailer:
+            observed_clause = (
+                f"its own Session-Id trailer names session {observed_trailer!r}, "
+                f"not this session ({own_session_id!r})"
+            )
+        else:
+            observed_clause = (
+                "its own Session-Id trailer could not be read back, so it "
+                "cannot be placed in this session's scope"
+            )
         raise ForeignSessionRangeRefused(
             "review_trail.write: sha_range "
             f"{sha_range!r} is already a single commit and is genuinely "
-            "ambiguous — its own Session-Id trailer names a different "
-            f"session. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
+            f"ambiguous — {observed_clause}. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
             "There is no narrower range than one commit, so narrowing "
             f"further is not a performable remedy here. {_attestation_remedy_clause(sha_range, own_session_id, caller_worktree)}"
         )
@@ -4125,11 +4214,32 @@ async def _review_trail_write_handler(
     if repo_root is not None:
         caller_worktree = main_worktree_root(repo_root)
 
-    # Resolve session_id in daemon context (env is the primary source).
-    session_id = (
-        os.environ.get(_CLAUDE_SESSION_ID_ENV, "").strip()
-        or os.environ.get(_CLAUDE_CODE_SESSION_ID_ENV, "").strip()
-    )
+    # Resolve session_id through the canonical resolver, NEVER a raw
+    # `os.environ` read.
+    #
+    # Negative-spec (state/bug-backlog/2026-08-19-inherited-chain-commit-
+    # review-records-are-unwritable.yaml, own-commit case): this used to read
+    # `os.environ` directly. Under warm serving this handler runs inside a
+    # long-lived server process whose environment names WHOEVER SPAWNED IT,
+    # not the session whose request it is currently serving — so every record
+    # was stamped, and every `_guard_foreign_session_range` decision was made,
+    # against a stranger's identity. A session's own commits then read as
+    # foreign and `ForeignSessionRangeRefused` fired on a correctly-trailered
+    # own commit, which is what made a fully-reviewed partitioned close write
+    # no trail at all. `warm.entry_seam.per_request_state` already binds the
+    # true caller's cold-resolved identity via
+    # `session.core.session_identity_override`; only a resolver that reads
+    # that contextvar sees it, and a raw env read steps straight past it.
+    # The cold path is unchanged — the resolver's own env ladder serves it.
+    #
+    # Also negative-spec: do NOT accept `params["session_id"]`. Identity is an
+    # input to an anti-forgery guard; a wire-supplied value would let any
+    # caller claim any session's commits as its own. (`ipc.py` does not strip
+    # unknown params keys, so the key can arrive — it is ignored, deliberately.
+    # A 2026-08-19 fix attempt that threaded `session_id` through
+    # `freeze-review-diff`'s `route_mutation` params was refuted precisely
+    # because this handler never read it; the param was never the seam.)
+    session_id = (resolve_current_session_id(caller_worktree) or "").strip()
 
     # Cast diff_loc to int (params may carry it as a string from CLI serialization).
     raw_diff_loc = params.get("diff_loc", 0)

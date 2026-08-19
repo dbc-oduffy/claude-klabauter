@@ -1996,3 +1996,77 @@ def test_resolve_hook_python_bin_surfaces_resolution_error(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "WARNING" in err
     assert "no interpreter resolvable" in err
+
+
+# --- C13: forwarder-set gap closed -----------------------------------------
+#
+# docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C13. The four
+# names the chunk's delta-measure found genuinely missing from the publish
+# allowlist (`measure-amplification-discriminator`, `publish_refusal_record`,
+# `query-work-state`, and `classify-resolver-callers` -- the fourth, added by
+# EM ruling 2026-08-19 after C7 landed that CLI post-dating this chunk body's
+# last write) must resolve identically through BOTH surfaces this chunk
+# touches:
+#   - `_derive_agent_helper_target_map` (this module) -- the live-tree
+#     installed-name -> on-disk-target map `exec_cli`'s published-vs-live
+#     gate was measured against.
+#   - the field-7 allowlist of the `claude-klabauter-coordinator-bin` row in
+#     `setup/publish-targets.portable` -- the ONLY per-name inclusion list
+#     `publish.py`/`substrate.py` consult (neither carries one itself; see
+#     the chunk body's WHERE-THE-INCLUSION-LIST correction).
+#
+# Regression guard: a future rename/removal of any of the four that is not
+# mirrored in the allowlist should fail this test rather than silently
+# reintroduce the exec_cli-fallback-dependent gap C13 closed.
+_C13_MEASURED_GAP_NAMES = (
+    "measure-amplification-discriminator",
+    "publish_refusal_record",
+    "query-work-state",
+    "classify-resolver-callers",
+)
+
+
+def _publish_allowlist_names() -> "set[str]":
+    """Field-7 allowlist of the `claude-klabauter-coordinator-bin` row in
+    `setup/publish-targets.portable` (repo-tracked copy), split on the
+    comma-separated allowlist field. Row shape: 7 pipe-separated fields,
+    field 7 (index 6) is the comma-separated filename allowlist -- see
+    `verify-publish-targets-portable-sync.py`'s own docstring for the field
+    layout this mirrors."""
+    portable_path = (
+        Path(__file__).resolve().parents[2] / "setup" / "publish-targets.portable"
+    )
+    for line in portable_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("claude-klabauter-coordinator-bin|"):
+            fields = line.split("|")
+            return set(fields[6].split(","))
+    raise AssertionError(
+        "claude-klabauter-coordinator-bin row not found in "
+        f"{portable_path}"
+    )
+
+
+def test_c13_measured_gap_names_present_in_publish_allowlist():
+    allowlist_names = _publish_allowlist_names()
+    for installed_name in _C13_MEASURED_GAP_NAMES:
+        assert installed_name in allowlist_names or any(
+            n.startswith(installed_name + ".") for n in allowlist_names
+        ), f"{installed_name} missing from publish-targets.portable allowlist"
+
+
+def test_c13_target_map_and_publish_allowlist_agree_on_measured_gap_names():
+    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+    target_map = _derive_agent_helper_target_map(agent_bin)
+    allowlist_names = _publish_allowlist_names()
+
+    for installed_name in _C13_MEASURED_GAP_NAMES:
+        assert installed_name in target_map, (
+            f"{installed_name} not resolvable via "
+            "_derive_agent_helper_target_map against the live tree"
+        )
+        ondisk_target = target_map[installed_name]
+        assert ondisk_target in allowlist_names, (
+            f"{installed_name} -> {ondisk_target} resolved by "
+            "_derive_agent_helper_target_map but that on-disk filename is "
+            "absent from publish-targets.portable's allowlist"
+        )

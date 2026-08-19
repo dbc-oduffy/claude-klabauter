@@ -76,7 +76,7 @@ supplies is valid JS spliced at that point.
 
 from __future__ import annotations
 
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from coordinator_core.ops.review_mint.roster import Stage
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -85,12 +85,31 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 # field names stamped on every gated agent call, so a `gate_policy` closure
 # can read them straight off the captured result (`result.verdict`,
 # `result.reason`, `result.sidecar_path`) with no renaming step.
+#
+# AC12: `run_nonce` joins the schema (and `required`, alongside `verdict`) so
+# a gated agent's structured output must echo the value injected into its own
+# prompt -- see `_GATE_SCHEMA_LITERAL`'s pairing with `compose()`'s
+# `run_nonce` param below. The field name is fixed by the cross-repo charter
+# contract (coordinator-claude's `sidecar-emission-contract.md` /
+# `sidecar-frontmatter-contract.md`) -- do not rename it.
+#
+# NOT caller-symmetric, deliberately: `required` applies to every `schema:
+# true` gate-stage call this schema literal is stamped on, including
+# `dispatch.emit`'s (C4) -- which never injects a `run_nonce` into the
+# prompt (`compose()` is called there with `run_nonce=None`) and whose own
+# `gate_policy` never reads `.run_nonce` off the captured result (disarmed,
+# see `op.py`'s `_make_gate_policy` docstring). An uninstructed agent still
+# has to supply SOME string for the required field, but nothing ever
+# compares it against anything, so this is inert by construction for that
+# caller -- not a bug, and not a claim that the schema and the injection are
+# symmetric across both `compose()` callers.
 _GATE_SCHEMA_LITERAL = (
     "{ type: 'object', properties: { "
     "verdict: { type: 'string' }, "
     "reason: { type: 'string' }, "
-    "sidecar_path: { type: 'string' } "
-    "}, required: ['verdict'] }"
+    "sidecar_path: { type: 'string' }, "
+    "run_nonce: { type: 'string' } "
+    "}, required: ['verdict', 'run_nonce'] }"
 )
 
 # GatePolicy: called once per `gate: true` Stage with the stage itself, its
@@ -149,6 +168,14 @@ def _agent_call_literal(
     return f"() => {call}" if as_arrow else call
 
 
+def _composed_prompt(prompt: str, run_nonce: Optional[str]) -> str:
+    """AC12 leg 2: a GATE stage's agents get `run_nonce: <value>` appended to
+    their prompt text so they can echo it back in structured output --
+    non-gate stages never call this (see `_compose_stage`; the run-report
+    family is exempt by construction, not by a flag read here)."""
+    return f"{prompt}\n\nrun_nonce: {run_nonce}"
+
+
 def _compose_stage(
     stage: Stage,
     index: int,
@@ -156,13 +183,15 @@ def _compose_stage(
     prompt: str,
     base_phase_title: str,
     gate_policy: GatePolicy,
+    run_nonce: Optional[str] = None,
 ) -> Tuple[str, str]:
     phase_title = _stage_phase_title(base_phase_title, index, total)
     lines = [f"  phase({_js_string_literal(phase_title)});"]
 
     if not stage.gate:
         # Non-gate stage: identical shape to today's `_review_phase_calls`
-        # -- no schema, no captured result, fire-and-forget.
+        # -- no schema, no captured result, fire-and-forget, no run_nonce
+        # (AC12 anti-scope: only a gate stage has a verdict to refuse).
         if len(stage.agents) == 1:
             call = _agent_call_literal(
                 stage.agents[0], prompt, phase_title, schema=False, as_arrow=False
@@ -177,16 +206,18 @@ def _compose_stage(
             lines.append(f"  await parallel([\n{item_calls}\n  ]);")
         return phase_title, "\n".join(lines)
 
+    gate_prompt = _composed_prompt(prompt, run_nonce) if run_nonce is not None else prompt
+
     var = _result_var(index)
     if len(stage.agents) == 1:
         agent = stage.agents[0]
-        call = _agent_call_literal(agent, prompt, phase_title, schema=True, as_arrow=False)
+        call = _agent_call_literal(agent, gate_prompt, phase_title, schema=True, as_arrow=False)
         lines.append(f"  const {var} = await {call};")
         results = [(agent, var)]
     else:
         item_calls = ",\n".join(
             "    "
-            + _agent_call_literal(agent, prompt, phase_title, schema=True, as_arrow=True)
+            + _agent_call_literal(agent, gate_prompt, phase_title, schema=True, as_arrow=True)
             for agent in stage.agents
         )
         lines.append(f"  const {var} = await parallel([\n{item_calls}\n  ]);")
@@ -204,6 +235,7 @@ def compose(
     prompt: str,
     phase_title: str,
     gate_policy: GatePolicy,
+    run_nonce: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose `stages` (``roster.parse_stages``'s output) into an ordered
     list of ``(phase_title, script_block)`` pairs.
@@ -224,6 +256,13 @@ def compose(
     stage (`_stage_phase_title`) so every `phase()` call's title stays 1:1
     with its own `meta.phases` entry.
 
+    `run_nonce` (AC12, optional -- defaults to `None`, i.e. no behavior
+    change for a caller that never passes one, e.g. `dispatch.emit`'s
+    already-landed C4 call site) is appended to a GATE stage's prompt text
+    ONLY (`_composed_prompt`); non-gate stages never see it, matching the
+    fixed `run_nonce` schema field name coordinator-claude's charter
+    contracts key on -- do not rename it.
+
     Raises `ComposeError` on an empty `stages` list -- see its docstring.
     """
     if not stages:
@@ -231,6 +270,6 @@ def compose(
 
     total = len(stages)
     return [
-        _compose_stage(stage, index, total, prompt, phase_title, gate_policy)
+        _compose_stage(stage, index, total, prompt, phase_title, gate_policy, run_nonce)
         for index, stage in enumerate(stages)
     ]

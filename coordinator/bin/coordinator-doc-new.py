@@ -678,6 +678,7 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
         from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE
         from coordinator_core.frontmatter.schema_validate import (
             _SCHEMAS_DIR,
+            _lint_is_sidecar_file,
             load_schemas,
             match_schema,
             parse_frontmatter,
@@ -690,6 +691,16 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
         repo_rel = os.path.relpath(
             os.path.realpath(out_path), os.path.realpath(repo_root)
         ).replace(os.sep, "/")
+        # match_schema has no sidecar concept: a sidecar written under
+        # docs/plans/ (prior-art-check, plan-coverage-check, docs-check,
+        # review) falls through its glob fallback to docs/plans/*.md and
+        # resolves to the `plan` schema, so it would always fail plan-shape
+        # validation. The lint layer's own sidecar exemption
+        # (_lint_is_sidecar_file) is the canonical recognizer for this same
+        # gap; reuse it here rather than re-deriving a second sidecar-suffix
+        # predicate that could drift from it.
+        if _lint_is_sidecar_file(repo_rel):
+            return
         parsed = parse_frontmatter(content)
         frontmatter = parsed.get("frontmatter")
         body = parsed.get("body") or ""
@@ -1944,6 +1955,7 @@ def _scaffold_handoff(
         f"predecessor: {_predecessor if _predecessor == 'none' else _yaml_quote(_predecessor)}",
         "kind: session-handoff",
         "handoff_phase: continuation",
+        "baton_role: work",
         f"deployment_state: {_deployment_state}",
         f"category: {_category}",
         f"summary: {_yaml_quote(_summary_value)}",
@@ -2168,6 +2180,7 @@ def _scaffold_spinoff(
         "status: open",
         "predecessor: none",
         "kind: spinoff",
+        "baton_role: work",
         f"deployment_state: {_deployment_state}",
         f"category: {_category}",
         f"summary: {_yaml_quote(placeholder_summary)}",

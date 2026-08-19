@@ -593,3 +593,135 @@ body = "bin/claude-klabauter-doctor-probe.py:_run_probe_stable_pid_miss"
 required = false
 severity_if_fail = "degraded"
 remediation = "ADVISORY, never gating -- this probe is required=false and cannot break an install. One or more sessions are missing stable_pid capture (or its birth-instant witness) -- the F0 hazard K-006 ruled safe-to-deregister-heartbeat-because-0%% is live again. The probe's `detail`/`data.misses` names the affected session(s) and reason (`empty` or `no_witness`); investigate coordinator_core/session/core.py::init before assuming this is transient."
+
+# claude-klabauter.warm.residency -- enumerates resident coordinator_core/warm/server.py
+# processes via psutil.process_iter cmdline matching and classifies each as
+# REACHABLE or ORPHAN using a hand-rolled connect-and-close pipe primitive
+# (`_warm_check_pipe_reachable`, mirroring client.py's own anti-storm exception
+# table), composed with `election.pipe_name(..., engine_clone=<that server's
+# resolved engine root>)` passed EXPLICITLY -- pipe_name's default computes
+# THIS repo's own pipe name, which is wrong for a server that may be running
+# from a different engine clone (the whole point of this classification).
+#
+# AC7: resident-but-unaddressable is reported as ORPHAN, not silently PASS.
+# AC9: breadcrumb absence/corruption enriches per-server state as
+# "cannot_tell", never "no server running" -- the breadcrumb is one file per
+# clone, clobbered per generation, and is never read to enumerate population.
+# AC10: the orphan condition names NO remediation action -- the only stop
+# mechanism targets the current breadcrumb-elected server, not a specific
+# orphaned pid, and naming it here would risk killing the live server 50-70
+# sessions are using while leaving the orphan running.
+#
+# weight = "standard": psutil.process_iter reads plus a bounded, per-server
+# named-pipe connect-and-close -- no subprocess spawn. This primitive is
+# Windows-only (OSError.winerror does not exist on POSIX); on POSIX the probe
+# reports "cannot tell" (skipped) rather than misreading an unrelated
+# exception type as an answer.
+[[probe]]
+id = "claude-klabauter.warm.residency"
+cluster = "warm"
+weight = "standard"
+interactivity = "assert"
+fix = "none (read-only diagnostic -- no automated remediation is safe; see AC10)"
+symptom_keywords = ["warm server orphaned", "resident warm process unreachable", "stranded warm generation", "warm pipe unaddressable", "warm engine residency", "warm-engine-stop kills the wrong server"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_warm_residency"
+required = false
+severity_if_fail = "degraded"
+remediation = "No automated remediation is named -- the only stop mechanism targets the current, breadcrumb-elected server, not a specific orphaned pid; naming it here would risk killing the live server 50-70 sessions are using while leaving the named orphan(s) running. Investigate the named pid(s) manually before acting."
+
+# claude-klabauter.warm.generation -- compares the pipe-name token segment recorded in
+# the resident server's breadcrumb (`breadcrumb.read_breadcrumb`) against a
+# freshly recomputed `skew.compute_client_token(engine_root)`. PURE LOCAL
+# READ: never connects (no `_warm_check_pipe_reachable` call, unlike
+# claude-klabauter.warm.residency above) and never elects (`election.elect()` is never
+# called -- it mutates, contesting the first named-pipe instance). Does not
+# use `ServerVersionState.is_skewed` either: that triggers a throttled (2s)
+# source-hash refresh, not a zero-cost read.
+#
+# Attribution note (baton AC6, "resident engine predates last mirror
+# publish"): this probe's stale-token reading covers the resident-vs-publish
+# angle; `claude-klabauter.publish.provenance` (pre-existing) answers the
+# published-vs-source half.
+#
+# AC8: a stale token is reported (DEGRADED) without a connect attempt.
+#
+# weight = "standard": one breadcrumb file read plus one stat-only token
+# fingerprint -- no subprocess, no connect, no named-pipe interaction.
+[[probe]]
+id = "claude-klabauter.warm.generation"
+cluster = "warm"
+weight = "standard"
+interactivity = "assert"
+fix = "none (read-only diagnostic -- see AC8)"
+symptom_keywords = ["warm generation skew", "resident engine predates last mirror publish", "stale warm generation token", "warm pipe token mismatch", "warm engine serving stale generation"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_warm_generation"
+required = false
+severity_if_fail = "degraded"
+remediation = "A stale generation drains on its own via warm.idle's superseded-generation arm once a fresh server binds; no direct action is named here."
+
+# claude-klabauter.warm.route_share -- TRANSLATES coordinator_core.telemetry.engine_report
+# .route_distribution's verdict into the closed probe-status enum; does not
+# re-parse the op-latency sink (engine_report.iter_sink_entries is the reader,
+# built once so this probe and any other consumer read the same answer).
+#
+# Translation: reader verdict "ok" -> PASS; "degraded" -> DEGRADED (reserved
+# by the reader for a future share-threshold check, not emitted today);
+# "unknown" -> skipped=True + required=True (never PASS, never FAIL). At
+# today's ~0.257% route coverage (DR-328) the honest reading is "cannot
+# tell" -- a probe that renders FAIL off it is as wrong as one that renders
+# PASS. Never emits INFO: an INFO verdict is dropped by the envelope's
+# worst-of reduction, which would let an otherwise-all-PASS probe set render
+# overall PASS despite this probe having nothing to say -- the reader's own
+# "ok"/"degraded"/"unknown" vocabulary is reported in data.reader_verdict,
+# never assigned to status (the closed, versioned STATUS_VOCAB enum).
+#
+# required=false (manifest footer): this is a coordinator-dependent optional
+# probe for the stub-synthesis path only -- the runtime _ProbeResult.required
+# on the skipped/unknown path is stated explicitly as True in the probe body
+# (F6, same convention as claude-klabauter.warm.generation immediately above), so it
+# still reduces to DEGRADED, never drops out silently.
+#
+# weight = "standard": reads the op-latency sink file(s) across rotated
+# generations (bounded by MAX_ROWS_SCANNED) -- no subprocess, no network.
+[[probe]]
+id = "claude-klabauter.warm.route_share"
+cluster = "warm"
+weight = "standard"
+interactivity = "assert"
+fix = "none (read-only diagnostic -- see the reader's verdict_reason for the specific coverage/share figure)"
+symptom_keywords = ["warm route share unknown", "route coverage below floor", "warm share cannot be verdicted", "DR-328", "route distribution reader", "op-latency sink route coverage"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_warm_route_share"
+required = false
+severity_if_fail = "degraded"
+remediation = "This probe reports 'cannot tell' (skipped) when route coverage is below the reader's floor -- that is the honest reading at today's coverage, not a fault. See data.route_distribution / data.reader_verdict for the coverage figures."
+
+# claude-klabauter.warm.roundtrip -- a LIVE hit/miss probe: does one warm-pipe round-trip
+# (coordinator_core.warm.client.try_warm_dispatch) actually reach the resident
+# server, and how long does it take? SPLIT OUT OF C6 (staff-eng review, F2): this
+# is a real shape change to the probe engine (an explicit run-time opt-in gate),
+# not a manifest tweak -- `_apply_selector` is a POST-RUN FILTER, so weight/triage
+# alone do NOT stop a probe from running. weight = "heavy" (a live connection
+# attempt, not a static read), and per the manifest invariant above
+# (triage=true ==> weight in {cheap, standard}) that makes triage = false the
+# only legal value here -- but per the same brief, weight/triage no longer gate
+# EXECUTION at all; the new `--include-live-roundtrip` flag
+# (`run_probes(include_live_roundtrip=...)`) does. Without that flag this probe
+# reports skipped=True (never an INFO stub, never a silent absence from
+# `--cluster warm`'s membership) and attempts no connection at all -- a human
+# running `--cluster warm --include-live-roundtrip` is the only path that
+# exercises it for real.
+[[probe]]
+id = "claude-klabauter.warm.roundtrip"
+cluster = "warm"
+weight = "heavy"
+interactivity = "assert"
+fix = "none (read-only diagnostic -- a MISS is a normal, supported outcome; cold dispatch always works)"
+symptom_keywords = ["warm round-trip live probe", "warm server unreachable", "warm pipe connect hang", "warm hit/miss latency", "live warm connection attempt", "include-live-roundtrip"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_warm_roundtrip"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run with --cluster warm --include-live-roundtrip to exercise this probe for real; without that flag it reports skipped=True and attempts no connection. A join-timeout (thread still alive after the connect deadline) means the attempt hung, not a clean miss -- investigate the resident warm server via claude-klabauter.warm.residency."

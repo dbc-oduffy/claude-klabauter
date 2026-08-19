@@ -140,6 +140,47 @@ def test_empty_stage_list_refuses_loudly():
         compose([], _PROMPT, _PHASE_TITLE, _disarmed_policy)
 
 
+def test_gate_stage_schema_carries_run_nonce_and_marks_it_required():
+    """AC12 leg 2: the shared schema literal grows a `run_nonce` field,
+    required alongside `verdict`, for every gate-stage agent call --
+    unconditionally, since dispatch.emit's own gate stage reuses the same
+    literal (see compose.py module docstring)."""
+    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
+    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
+    _, block = out[0]
+    assert "run_nonce: { type: 'string' }" in block
+    assert "required: ['verdict', 'run_nonce']" in block
+
+
+def test_gate_stage_prompt_carries_the_run_nonce_when_supplied():
+    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
+    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy, run_nonce="deadbeef01234567")
+    _, block = out[0]
+    assert "run_nonce: deadbeef01234567" in block
+
+
+def test_non_gate_stage_prompt_never_carries_a_run_nonce():
+    """AC12 anti-scope: only a gate stage has a verdict to refuse -- a
+    non-gate stage's prompt is untouched even when the caller supplies a
+    run_nonce (mirrors run-report family exemption at the stage-type
+    level, not per-agent)."""
+    stages = [Stage(agents=["coordinator:review-integrator"], gate=False)]
+    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy, run_nonce="deadbeef01234567")
+    _, block = out[0]
+    assert "run_nonce" not in block
+
+
+def test_run_nonce_omitted_by_default_leaves_prompt_unmodified():
+    """A caller that never passes run_nonce (dispatch.emit's already-landed
+    C4 call site) still gets `run_nonce` in the schema literal (shared
+    constant), but the prompt itself carries no injected value."""
+    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
+    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
+    _, block = out[0]
+    assert "run_nonce:" in block  # schema field, unconditional
+    assert "\\n\\nrun_nonce:" not in block  # but no injected literal value
+
+
 def test_no_model_key_anywhere():
     stages = [
         Stage(agents=["coordinator:prior-art-checker"], gate=True),

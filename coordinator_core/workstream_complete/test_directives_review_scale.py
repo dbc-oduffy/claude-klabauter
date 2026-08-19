@@ -1040,7 +1040,7 @@ def test_ac4_genuinely_empty_session_still_resolves_indeterminate(tmp_path, caps
 
 def test_commit_slices_out_shape_and_ordering_two_commits(tmp_path):
     """(1) One slice per session-owned commit, oldest-first, `sha_range` in
-    `<sha>^..<sha>` form, `diff_loc` matching that commit's OWN noise-
+    `<sha>~1..<sha>` form, `diff_loc` matching that commit's OWN noise-
     excluded LOC -- not the running total across commits."""
     _init_git_repo(tmp_path)
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
@@ -1066,8 +1066,8 @@ def test_commit_slices_out_shape_and_ordering_two_commits(tmp_path):
     assert result[2] == 2  # commit_count
 
     assert [s["sha"] for s in slices] == [c1, c2]
-    assert slices[0]["sha_range"] == f"{c1}^..{c1}"
-    assert slices[1]["sha_range"] == f"{c2}^..{c2}"
+    assert slices[0]["sha_range"] == f"{c1}~1..{c1}"
+    assert slices[1]["sha_range"] == f"{c2}~1..{c2}"
     assert slices[0]["diff_loc"] == 1
     assert slices[1]["diff_loc"] == 3
 

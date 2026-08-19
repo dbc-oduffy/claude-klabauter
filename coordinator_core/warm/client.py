@@ -180,6 +180,8 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.warm.engine_root import current_engine_clone
+
 if __name__ != "__main__":
     from coordinator_core.warm import election
     from coordinator_core.warm.settings import is_warm_enabled
@@ -244,12 +246,11 @@ _spawned_this_process = False
 
 
 def _engine_clone_root() -> Path:
-    """This coordinator_core clone's own resolved root -- the same
-    computation `election._default_engine_clone` makes for `pipe_name`'s
-    own default, kept as a local copy rather than reaching into that
-    function's private name. Used as the `repo_root` `spawn_detached` logs
-    housekeeping failures under."""
-    return Path(__file__).resolve().parents[2]
+    """This coordinator_core clone's own resolved root -- collapsed onto
+    the single shared definition, `engine_root.current_engine_clone()`
+    (plan 2026-08-19-an-engine-root-is-a-stamped-build § C3). Used as the
+    `repo_root` `spawn_detached` logs housekeeping failures under."""
+    return current_engine_clone()
 
 
 def engine_token() -> str:
@@ -865,7 +866,7 @@ def _cli_main(argv) -> int:
             print("null")
             return 0
 
-        repo_root = Path(__file__).resolve().parents[2]
+        repo_root = current_engine_clone()
         pipe = _cli_pipe_name(repo_root)
         payload = json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
 

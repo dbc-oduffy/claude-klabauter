@@ -105,7 +105,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.core import sessions_dir
+from coordinator_core.warm import skew
+from coordinator_core.warm.engine_root import current_engine_clone
 
 # Runtime fire-registry/log state under <git-common-dir>/coordinator-sessions
 # -- not a repo artifact (mirrors session/core.py, session/claims.py).
@@ -310,6 +313,25 @@ def build_fire_command(
     ]
 
 
+def _publish_lag_message(cwd: Optional[str] = None) -> Optional[str]:
+    """DR-335, call site (a): an emitted run executes the published mirror,
+    so a stale mirror means the fired child runs stale code. Two bounded
+    git calls at most (`skew.publish_lag`'s own contract) -- fires are rare
+    and already expensive, so this is free relative to the spawn itself.
+    Never raises; `None` covers both "cannot tell" and "below threshold" --
+    `fire_workflow` does not distinguish them, per DR-335's negative spec
+    that a lag between rounds is expected, not a defect to report on.
+    """
+    try:
+        source_root = show_toplevel(cwd) or cwd or os.getcwd()
+        lag = skew.publish_lag(current_engine_clone(), Path(source_root))
+    except Exception:
+        return None
+    if lag is None:
+        return None
+    return skew.publish_lag_message(lag)
+
+
 def _registry_dir(cwd: Optional[str] = None) -> Path:
     base = sessions_dir(cwd)
     if not base:
@@ -321,12 +343,16 @@ def _record_path(registry_dir: Path, fire_id: str) -> Path:
     return registry_dir / f"{fire_id}.json"
 
 
-def _write_record(path: Path, record: dict) -> None:
+def _write_record(path: Path, record: dict) -> dict:
+    """Persist ``record`` annotated, and return exactly what landed on disk
+    -- so a caller never has to annotate separately to hold the same dict
+    the file holds (Review: coordinator:code-reviewer, double-annotate)."""
     record = _annotate_record(record)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
     tmp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
     os.replace(tmp, path)
+    return record
 
 
 def _read_record(path: Path) -> Optional[dict]:
@@ -466,13 +492,35 @@ def _log_size_bytes(log_path: str) -> Optional[int]:
         return None
 
 
-#: Substring of the harness's own banner when it terminates still-running
-#: background work at its wait ceiling. That banner is the ONLY
-#: discriminator for this flavour of truncation: a run cut short this way
-#: still prints a terminal result envelope carrying ``is_error: false``
-#: (measured 2026-08-19 on fires 5df351a6 and 1eb8711b -- both truncated,
-#: both reporting a clean driver result).
+#: The harness's own banner when it terminates still-running background
+#: work at its wait ceiling. That banner is the ONLY discriminator for this
+#: flavour of truncation: a run cut short this way still prints a terminal
+#: result envelope carrying ``is_error: false`` (measured 2026-08-19 on
+#: fires 5df351a6 and 1eb8711b -- both truncated, both reporting a clean
+#: driver result).
+#:
+#: Matched at LINE START and paired with ``terminating``, never as a bare
+#: substring anywhere in the window (Review: coordinator:code-reviewer).
+#: The loose form was self-referentially unsafe: this module's own source
+#: now contains the banner text verbatim, so a fired workflow that so much
+#: as printed this file -- a review or fix pass over ``fire.py`` -- would
+#: have classified its own clean run as truncated. Residual, accepted: a
+#: log line that begins with the banner text and quotes the word
+#: ``terminating`` still matches. The real banner is written unindented on
+#: its own line, so quoted mentions in agent output (indented, bulleted, or
+#: mid-sentence) no longer reach it.
 _TRUNCATION_BANNER = "Background tasks still running after"
+_TRUNCATION_CONFIRM = "terminating"
+
+
+def _has_truncation_banner(text: str) -> bool:
+    """True when the harness's background-work truncation banner appears as
+    its own log line -- see ``_TRUNCATION_BANNER`` for why a bare substring
+    match was not safe here."""
+    for line in text.splitlines():
+        if line.startswith(_TRUNCATION_BANNER) and _TRUNCATION_CONFIRM in line:
+            return True
+    return False
 
 #: Bounded head+tail window read from a child's log when classifying its
 #: outcome -- the truncation banner lands at the head (stderr, ahead of the
@@ -521,15 +569,28 @@ def _read_log_window(log_path: str) -> Optional[str]:
     """
     try:
         with open(log_path, "rb") as handle:
-            window = handle.read(_LOG_SCAN_WINDOW_BYTES)
+            head = handle.read(_LOG_SCAN_WINDOW_BYTES)
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
+            tail = b""
             if size > _LOG_SCAN_WINDOW_BYTES:
-                handle.seek(max(size - _LOG_SCAN_WINDOW_BYTES, len(window)))
-                window += b"\n" + handle.read()
+                handle.seek(max(size - _LOG_SCAN_WINDOW_BYTES, len(head)))
+                tail = handle.read()
     except OSError:
         return None
-    return window.decode("utf-8", errors="replace")
+    # Decoded separately, then joined in str space (Review:
+    # coordinator:code-reviewer). Splicing a separator into the BYTES put a
+    # synthetic boundary mid-stream, where a multi-byte sequence straddling
+    # it decoded to a replacement character under errors="replace". This
+    # removes that synthetic seam; it does NOT make the read lossless -- a
+    # character split by the window boundary itself still costs one
+    # replacement char at that chunk's edge, which is inherent to reading a
+    # bounded window and is confined to the edges rather than the middle.
+    return (
+        head.decode("utf-8", errors="replace")
+        + "\n"
+        + tail.decode("utf-8", errors="replace")
+    )
 
 
 def _terminal_envelope(text: str) -> Optional[dict]:
@@ -566,12 +627,12 @@ def _classify_outcome(record: dict) -> tuple:
     child itself writes: the harness's background-work truncation banner,
     and the driver's terminal result envelope.
 
-    ``clean`` means the DRIVER finished, never that the workflow's phases did
+    Returns ``(outcome, basis, driver_session_id)``. ``clean`` means the
+    DRIVER finished, never that the workflow's phases did
     work -- a fully-refused run exits 0 with a clean envelope too (see
     ``fire_status``'s docstring for that separate, still-live hazard).
 
-    Returns ``(outcome, basis, driver_session_id)``; the session id is
-    ``None`` whenever no envelope was recovered.
+    The session id is ``None`` whenever no envelope was recovered.
     """
     if record.get("state") != "exited":
         return "unknown", "the run has not been observed to end", None
@@ -580,7 +641,7 @@ def _classify_outcome(record: dict) -> tuple:
         return "unknown", "the child's log could not be read", None
     envelope = _terminal_envelope(text)
     session_id = (envelope or {}).get("session_id")
-    if _TRUNCATION_BANNER in text:
+    if _has_truncation_banner(text):
         return (
             "truncated",
             "the driver terminated still-running background work at its wait ceiling",
@@ -612,7 +673,17 @@ def _annotate_record(record: dict) -> dict:
     annotated["status_checked_at_iso"] = _iso(
         record.get("status_checked_at", record.get("reserved_at"))
     )
-    settled = annotated.get("outcome") in ("clean", "truncated")
+    # An ``unknown`` on an ALREADY-EXITED record is terminal, not pending:
+    # the child is reaped and its log will never become readable, so
+    # re-attempting the open on every sweep buys nothing and is paid by
+    # every future fire (``count_live_fires`` walks the whole registry).
+    # Review: coordinator:code-reviewer. An ``unknown`` on a record that has
+    # not yet been observed to end stays unsettled, which is the case that
+    # must keep re-checking.
+    outcome_now = annotated.get("outcome")
+    settled = outcome_now in ("clean", "truncated") or (
+        outcome_now == "unknown" and annotated.get("state") == "exited"
+    )
     current = annotated.get("_annotation_version") == _ANNOTATION_VERSION
     if not (settled and current):
         outcome, basis, driver_session_id = _classify_outcome(annotated)
@@ -793,6 +864,7 @@ def fire_workflow(
         )
 
     state = "running" if exit_code is None else "exited"
+    publish_lag_message = _publish_lag_message(cwd)
     record = {
         "fire_id": fire_id,
         "pid": process.pid,
@@ -808,10 +880,9 @@ def fire_workflow(
         "exit_code": exit_code,
         "status_checked_at": started_at,
         "log_size_bytes": _log_size_bytes(str(log_path)),
+        "publish_lag_message": publish_lag_message,
     }
-    record = _annotate_record(record)
-    _write_record(record_path, record)
-    return record
+    return _write_record(record_path, record)
 
 
 def fire_status(fire_id: str, cwd: Optional[str] = None) -> Optional[dict]:
@@ -834,17 +905,23 @@ def fire_status(fire_id: str, cwd: Optional[str] = None) -> Optional[dict]:
     (docs/research/2026-08-19-what-a-fired-runs-driver-summary-cannot-tell-you.md
     § Ruling).
 
-    The reader move, in order: take ``outcome`` for whether the run
-    FINISHED; treat the driver's own ``is_error`` / ``permission_denials``
-    as driver-scope only; and when the question is whether the PHASES did
-    the work, open the harness's workflow journal for
-    ``driver_session_id`` -- one ``started`` and one ``result`` entry per
-    agent, carrying each agent's actual return value. That journal is the
-    authoritative per-phase record; on the ten fires measured 2026-08-19
-    its started-vs-returned counts agreed with ``outcome`` on every row.
-    The engine records the id and does not read that store: it lives under
-    the harness's private, unversioned transcript layout, which is not a
-    dependency this op will take (same § Ruling).
+    The reader move, in order. Take ``outcome`` for whether the run
+    FINISHED, and treat the driver's own ``is_error`` /
+    ``permission_denials`` as driver-scope only. Then, for whether the
+    phases did WORK, ask git first -- a fired session's commits carry its
+    ``Session-Id`` trailer, so ``git log --all --grep "Session-Id:
+    <driver_session_id>"`` names exactly what the run landed, from this
+    repo's own data plane and at the cost of one command. Read a zero there
+    as a question, never a verdict: a phase that correctly found nothing to
+    commit produces the same zero (two of the ten fires measured
+    2026-08-19). Only when that is still ambiguous, open the harness's
+    workflow journal for ``driver_session_id`` -- one ``started`` and one
+    ``result`` entry per agent, carrying each agent's actual return value.
+    That journal is the authoritative per-phase record; on those same ten
+    fires its started-vs-returned counts agreed with ``outcome`` on every
+    row. The engine records the id and does not read that store: it lives
+    under the harness's private, unversioned transcript layout, which is
+    not a dependency this op will take (same § Ruling).
 
     ``log_size_bytes`` (see ``_log_size_bytes``) remains a cheap red flag
     at ``0`` ("nothing was ever captured"), and NOT proof of success at any

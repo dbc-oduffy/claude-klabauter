@@ -370,15 +370,13 @@ def _add_deliverable_id(repo, relpath: str, deliverable_id: str) -> None:
     repo._git("commit", "-q", "-m", f"seed deliverable_id {deliverable_id}")
 
 
-def test_post_commit_two_batons_commit_once_per_deliverable_id(monkeypatch, repo):
-    """`state/bug-backlog/2026-08-14-wsc-tail-cannot-stamp-a-two-baton-
-    pickup.yaml`: a `/pickup a AND b` close consumes two batons carrying
-    DIFFERENT `deliverable_id` values, and one commit cannot carry both (its
-    `Deliverable-Id:` trailer has no answerable value -- see
-    `group_stamped_by_deliverable_id`). Asserts the stamp leg emits one
-    follow-up commit per deliverable, each with only that deliverable's own
-    paths, and that only the LAST group carries the push (one `push_with_retry`
-    pushes the branch, so per-group pushes would be N pushes of one ref)."""
+def test_post_commit_two_batons_commit_once_not_per_deliverable_id(monkeypatch, repo):
+    """C10 (docs/plans/2026-08-19-commit-scoping-keys-on-the-baton.md):
+    `group_stamped_by_deliverable_id` is retired from this call site -- a
+    `/pickup a AND b` close consuming two batons with DIFFERENT
+    `deliverable_id` values now lands ONE follow-up commit carrying both
+    paths, not one per deliverable (C2/C4 supersede the tier-0 refusal this
+    grouping used to dodge)."""
     sid = "sess-two-batons"
     repo.seed_handoff("2026-07-15_100000_alpha.md", claimed_by=sid)
     repo.seed_handoff("2026-07-15_100001_beta.md", claimed_by=sid)
@@ -389,7 +387,7 @@ def test_post_commit_two_batons_commit_once_per_deliverable_id(monkeypatch, repo
 
     def _fake_commit(worktree_root, paths, committed_sha, push_mode, session_id):
         calls.append((list(paths), push_mode))
-        return f"sha{len(calls)}", True, m.PUSH_STATUS_PUSHED, None
+        return "sha1", True, m.PUSH_STATUS_PUSHED, None
 
     monkeypatch.setattr(m, "_commit_and_push_follow_up", _fake_commit)
 
@@ -399,22 +397,23 @@ def test_post_commit_two_batons_commit_once_per_deliverable_id(monkeypatch, repo
         )
     )
 
-    assert len(calls) == 2, calls
-    assert [paths for paths, _mode in calls] == [
-        ["state/handoffs/2026-07-15_100000_alpha.md"],
-        ["state/handoffs/2026-07-15_100001_beta.md"],
+    assert len(calls) == 1, calls
+    paths, mode = calls[0]
+    assert sorted(paths) == [
+        "state/handoffs/2026-07-15_100000_alpha.md",
+        "state/handoffs/2026-07-15_100001_beta.md",
     ]
-    assert [mode for _paths, mode in calls] == [PUSH_MODE_NONE, PUSH_MODE_SYNC]
+    assert mode == PUSH_MODE_SYNC
 
-    assert outcome.follow_up_committed_shas == ["sha1", "sha2"]
-    assert outcome.follow_up_committed_sha == "sha2"
+    assert outcome.follow_up_committed_shas == ["sha1"]
+    assert outcome.follow_up_committed_sha == "sha1"
     assert outcome.follow_up_error is None
     assert outcome.errors == []
 
 
 def test_post_commit_single_deliverable_still_lands_one_commit(monkeypatch, repo):
-    """The ordinary close is untouched by the grouping: one group, one commit,
-    the caller's own `push_mode` -- byte-for-byte the pre-fix call."""
+    """The ordinary single-deliverable close is byte-for-byte unchanged: one
+    call, one commit, the caller's own `push_mode`."""
     sid = "sess-one-baton"
     repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
     _add_deliverable_id(repo, "state/handoffs/2026-07-15_100000_pred.md", "dlv-solo-01")
@@ -438,12 +437,11 @@ def test_post_commit_single_deliverable_still_lands_one_commit(monkeypatch, repo
     assert outcome.follow_up_committed_sha == "sha1"
 
 
-def test_post_commit_group_commit_failure_stops_later_groups_and_reports(
-    monkeypatch, repo
-):
-    """A group's commit failure must not be overwritten by a later group's
-    success, and the groups that DID land stay reported -- they are correct
-    commits, not a partial write to unwind."""
+def test_post_commit_commit_failure_reports_error_and_no_sha(monkeypatch, repo):
+    """A commit failure on the (now single) follow-up commit call is
+    reported, with no sha recorded -- replaces the retired grouping's
+    partial-group-landed case, which no longer applies now there is only
+    ever one call."""
     sid = "sess-two-batons-fail"
     repo.seed_handoff("2026-07-15_100000_alpha.md", claimed_by=sid)
     repo.seed_handoff("2026-07-15_100001_beta.md", claimed_by=sid)
@@ -454,8 +452,6 @@ def test_post_commit_group_commit_failure_stops_later_groups_and_reports(
 
     def _fake_commit(worktree_root, paths, committed_sha, push_mode, session_id):
         calls.append(list(paths))
-        if len(calls) == 1:
-            return "sha1", None, m.PUSH_STATUS_NOT_ATTEMPTED, None
         return None, False, m.PUSH_STATUS_NOT_ATTEMPTED, "git commit failed: index.lock"
 
     monkeypatch.setattr(m, "_commit_and_push_follow_up", _fake_commit)
@@ -466,10 +462,82 @@ def test_post_commit_group_commit_failure_stops_later_groups_and_reports(
         )
     )
 
-    assert len(calls) == 2
-    assert outcome.follow_up_committed_shas == ["sha1"]
-    assert outcome.follow_up_committed_sha == "sha1"
+    assert len(calls) == 1
+    assert outcome.follow_up_committed_shas == []
+    assert outcome.follow_up_committed_sha is None
     assert outcome.follow_up_error == "git commit failed: index.lock"
+
+
+def test_post_commit_eleven_batons_land_one_follow_up_commit(repo):
+    """AC15 (C10, docs/plans/2026-08-19-commit-scoping-keys-on-the-baton.md):
+    an ELEVEN-baton close -- eleven consumed handoffs, each carrying its OWN
+    distinct `deliverable_id` -- lands ONE follow-up commit, not eleven. Real
+    git end-to-end (not the mocked `_commit_and_push_follow_up` the tests
+    above use): the property under test IS the trailer resolution
+    `git_native.commit_scoped` performs on a pathspec spanning many
+    `deliverable_id` values, which a mock would assert nothing about. Uses
+    `push_mode=PUSH_MODE_NONE` -- no remote is needed to prove the commit
+    count; the push leg is already covered elsewhere."""
+    sid = "sess-eleven-batons"
+    names = [f"2026-07-15_1000{i:02d}_baton{i}.md" for i in range(11)]
+    for i, name in enumerate(names):
+        repo.seed_handoff(name, claimed_by=sid)
+        _add_deliverable_id(repo, f"state/handoffs/{name}", f"dlv-baton-{i:02d}")
+
+    log_before = repo._git("log", "--oneline", "HEAD").stdout.splitlines()
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root,
+            repo.common_dir,
+            sid,
+            repo.head_sha(),
+            chain_terminal=True,
+            push_mode=PUSH_MODE_NONE,
+        )
+    )
+
+    assert outcome.follow_up_error is None, outcome.errors
+    assert len(outcome.stamped) == 11
+    assert len(outcome.follow_up_committed_shas) == 1
+    assert outcome.follow_up_committed_sha == outcome.follow_up_committed_shas[0]
+
+    log_after = repo._git("log", "--oneline", "HEAD").stdout.splitlines()
+    assert len(log_after) == len(log_before) + 1
+
+    message = repo._git(
+        "show", "-s", "--format=%B", outcome.follow_up_committed_sha
+    ).stdout
+    for name in names:
+        assert f"state/handoffs/{name}" in message
+
+
+def test_post_commit_single_baton_close_still_lands_one_commit_real_git(repo):
+    """Companion to the eleven-baton test above: the ordinary single-
+    deliverable close, driven the same real-git way, still lands exactly one
+    byte-for-byte-ordinary follow-up commit."""
+    sid = "sess-single-real-git"
+    repo.seed_handoff("2026-07-15_100000_solo.md", claimed_by=sid)
+    _add_deliverable_id(repo, "state/handoffs/2026-07-15_100000_solo.md", "dlv-solo-real")
+
+    log_before = repo._git("log", "--oneline", "HEAD").stdout.splitlines()
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root,
+            repo.common_dir,
+            sid,
+            repo.head_sha(),
+            chain_terminal=True,
+            push_mode=PUSH_MODE_NONE,
+        )
+    )
+
+    assert outcome.follow_up_error is None, outcome.errors
+    assert len(outcome.follow_up_committed_shas) == 1
+
+    log_after = repo._git("log", "--oneline", "HEAD").stdout.splitlines()
+    assert len(log_after) == len(log_before) + 1
 
 
 def test_post_commit_happy_path_stamps_and_ships(repo):

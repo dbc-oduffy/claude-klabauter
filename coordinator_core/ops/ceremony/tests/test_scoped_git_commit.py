@@ -1073,6 +1073,13 @@ def test_commit_spawn_stands_the_other_publisher_down(tmp_path, monkeypatch):
             "worktree_root": str(repo),
             "paths": ["notes/alpha.md"],
             "message": "add notes",
+            # EXPLICIT since the op's default became `deferred` (2026-08-19
+            # op-tail-latency): the sole-publisher marker is correct ONLY when
+            # this op is itself the publisher. Under `deferred` the hook is the
+            # publisher and the marker must be ABSENT -- pinned by
+            # `test_deferred_push_leaves_the_hook_as_publisher` below. This
+            # test owns the sync arm of that pair.
+            "push_mode": "sync",
         }
     )
 
@@ -1310,13 +1317,189 @@ def test_unreadable_remote_reports_unconfirmed_never_failure(tmp_path, monkeypat
     repo, _sha = _commit_and_fake_pipeline(tmp_path, monkeypatch, with_remote=False)
 
     result = _call(
-        {"worktree_root": str(repo), "paths": ["notes/alpha.md"], "message": "add notes"}
+        {
+            "worktree_root": str(repo),
+            "paths": ["notes/alpha.md"],
+            "message": "add notes",
+            # EXPLICIT `sync` (2026-08-19 op-tail-latency): this test's subject
+            # is the UNKNOWN rung -- a push was attempted and its outcome could
+            # not be read -- which only the sync path can produce. Under the
+            # new `deferred` default no push is attempted at all, so the honest
+            # report there is `deferred`/`no-remote`, not `unconfirmed`; that
+            # arm is pinned by `test_deferred_push_reports_deferred_not_
+            # unconfirmed`. Leaving this call on the default would have
+            # silently retargeted the test at a different state.
+            "push_mode": "sync",
+        }
     )
 
     assert result["committed"] is True
     assert result["pushed"] is None
     assert result["push_state"] == scoped_git_commit.PUSH_STATE_UNCONFIRMED
     assert "integrity_breach" not in result
+
+
+def test_deferred_push_leaves_the_hook_as_publisher(tmp_path, monkeypatch):
+    """The invariant that makes deferral safe: SOMEBODY still publishes.
+
+    `push_mode="deferred"` (this op's default since 2026-08-19) skips the
+    inline push to buy back 1.3-4.9s of network round trip. That is only
+    correct if the post-commit hook then does publish -- which it does by the
+    ABSENCE of the sole-publisher suppression marker in the `git commit`
+    child's env. If a future change ever set that marker unconditionally,
+    deferral would silently become "nobody pushes", and the commit would sit
+    local forever with the op reporting a cheerful "queued for background
+    push". Asserted against the real spawn's env for the same reason the sync
+    twin (`test_commit_spawn_stands_the_other_publisher_down`) is: the flag
+    being threaded is not the same fact as it reaching git.
+    """
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "notes/alpha.md", "content")
+
+    commit_envs = []
+    orig = git_native._git
+
+    def _spy(args, **kw):
+        if args and args[0] == "commit":
+            commit_envs.append(kw.get("env"))
+        return orig(args, **kw)
+
+    monkeypatch.setattr(git_native, "_git", _spy)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["notes/alpha.md"],
+            "message": "add notes",
+        }
+    )
+
+    assert result["committed"] is True
+    assert commit_envs, "no `git commit` spawn observed -- fixture drift"
+    for env in commit_envs:
+        if env is None:
+            continue
+        assert git_native._AUTO_PUSH_SUPPRESS_ENV not in env, (
+            "deferred push stood the post-commit publisher down -- with the "
+            "inline push already skipped, nothing would ever publish this commit"
+        )
+
+
+def test_deferred_push_publishes_the_hookless_private_index_branch(tmp_path, monkeypatch):
+    """The sibling of `test_deferred_push_leaves_the_hook_as_publisher`, for
+    the branch that has no hook to leave.
+
+    Review finding (BLOCKED, 2026-08-19): that test spies for a `git commit`
+    argv, which only `commit_scoped`'s AGREE branch spawns. A path that has
+    diverged since the caller's last read routes through
+    `_commit_scoped_private_index` instead, which lands via `commit-tree`/
+    `update-ref` and fires NO hooks at all -- so under the `deferred` default
+    the pipeline skips its own push, no `post-commit` runs, and the commit is
+    stranded local while the op cheerfully reports "queued for background
+    push". Divergence is the ORDINARY case on a tree with 50-70 concurrent
+    sessions, not an exotic one, which is what made this worth blocking on.
+
+    Pins the replay, not the push: `_replay_post_commit_auto_push` invokes
+    the hook exactly as git would and returns without waiting on the detached
+    child, so asserting it was CALLED is the honest assertion here --
+    asserting a push landed would require a remote and a network round trip
+    this test has no business taking.
+    """
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "diverge.py", "v1\n")
+    _git(["add", "--", "diverge.py"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # Stage v2, then leave v3 in the worktree: staged content now differs from
+    # worktree content, which is exactly what `diverging_paths` reports and
+    # what routes `commit_scoped` down the private-index branch.
+    _seed_file(repo, "diverge.py", "v2\n")
+    _git(["add", "--", "diverge.py"], repo)
+    _seed_file(repo, "diverge.py", "v3\n")
+
+    replays = []
+    monkeypatch.setattr(
+        git_native,
+        "_replay_post_commit_auto_push",
+        lambda root: replays.append(str(root)),
+    )
+    commit_spawns = []
+    orig = git_native._git
+
+    def _spy(args, **kw):
+        if args and args[0] == "commit":
+            commit_spawns.append(list(args))
+        return orig(args, **kw)
+
+    monkeypatch.setattr(git_native, "_git", _spy)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["diverge.py"],
+            "message": "commit a diverged path under the deferred default",
+        }
+    )
+
+    assert result["committed"] is True, result
+    assert not commit_spawns, (
+        "fixture drift -- a `git commit` spawn means this took the AGREE branch, "
+        "so it is re-testing the sibling case and proves nothing about the "
+        "hookless path"
+    )
+    assert replays, (
+        "a diverged-path commit landed under push_mode=deferred with no hook fired "
+        "and no auto-push replay -- the commit is stranded local while the op "
+        "reports push_state=deferred"
+    )
+
+
+def test_deferred_push_reports_deferred_not_unconfirmed(tmp_path, monkeypatch):
+    """A deferred push is a KNOWN state, and must not borrow the unknown one's
+    corrective note.
+
+    `PUSH_STATE_UNCONFIRMED` renders as "re-check, do not re-push" -- correct
+    when a push was attempted and its outcome could not be read, actively
+    harmful as the standing note on every ordinary commit. The op therefore
+    maps a non-sync `PUSH_STATUS_NOT_ATTEMPTED` to its own
+    `PUSH_STATE_DEFERRED`. Guards the specific regression of collapsing the
+    two states back together on the grounds that both carry `pushed=None`.
+    """
+    repo, _sha = _commit_and_fake_pipeline(tmp_path, monkeypatch, with_remote=True)
+
+    result = _call(
+        {"worktree_root": str(repo), "paths": ["notes/alpha.md"], "message": "add notes"}
+    )
+
+    assert result["committed"] is True
+    assert result["pushed"] is None
+    assert result["push_state"] == scoped_git_commit.PUSH_STATE_DEFERRED
+    assert "integrity_breach" not in result
+
+
+def test_deferred_push_still_reports_a_missing_remote(tmp_path, monkeypatch):
+    """"Queued for background push" must not be said about a repo with no
+    remote to push to -- the queue would never drain and the note would never
+    come true. The deferred branch runs one LOCAL `git remote` probe to keep
+    `no-remote` distinguishable; this pins that it is not lost to the cheaper
+    unconditional "deferred".
+    """
+    repo, _sha = _commit_and_fake_pipeline(tmp_path, monkeypatch, with_remote=False)
+
+    result = _call(
+        {"worktree_root": str(repo), "paths": ["notes/alpha.md"], "message": "add notes"}
+    )
+
+    assert result["committed"] is True
+    assert result["pushed"] is None
+    assert result["push_state"] == scoped_git_commit.PUSH_STATE_NO_REMOTE
 
 
 def test_push_subprocess_timeout_renders_unconfirmed_end_to_end(tmp_path, monkeypatch):

@@ -407,12 +407,18 @@ def _resolve_deliverable_id_from_paths(
 
     Omit-rather-than-guess: ``paths`` empty, or none of ``paths`` resolve to
     a file carrying a ``deliverable_id``, returns ``""``. Two or more staged
-    paths carrying DIFFERENT non-empty ``deliverable_id`` values raises
-    ``coordinator_core.ops.deliverable_carry.DivergentDeliverableIdError`` —
-    reused rather than forked, per that class's own negative-spec — which
-    ``_resolve_deliverable_id`` (below) downgrades to a non-aborting
-    fallback rather than letting it propagate, unlike the CLI-facing
-    sibling this mirrors.
+    paths carrying DIFFERENT non-empty ``deliverable_id`` values ALSO return
+    ``""`` (DR-328, 2026-08-19) — a divergent pathspec is the same
+    "cannot resolve" case as an empty one, not a separate fail-loud posture,
+    and producer-contract § 3 governs all three producers uniformly.
+
+    This tier used to raise ``DivergentDeliverableIdError`` and depend on
+    ``_resolve_deliverable_id``'s broad ``except Exception`` to swallow it.
+    The observable outcome was already right, but only accidentally: the
+    engine twin returned while this copy raised, so the hand-mirrored pair
+    had genuinely diverged in control flow behind identical behaviour. That
+    is the drift this file's module docstring warns the pair is kept in sync
+    to prevent, and it is why the omit is now explicit here.
 
     Contention gate (2026-08-07, DR-207): a staged artifact claimed by a
     DIFFERENT live session (per
@@ -506,12 +512,13 @@ def _resolve_deliverable_id_from_paths(
     if len(distinct_canonical) == 1:
         return found[min(found)]
 
-    conflict_desc = ", ".join(f"{p!r} -> {v!r}" for p, v in sorted(found.items()))
-    raise DivergentDeliverableIdError(
-        "coordinator-prepare-commit-msg: this commit's staged pathspec names "
-        f"artifacts with DIFFERING deliverable_id values ({conflict_desc}) -- "
-        "refusing to guess which trailer applies."
-    )
+    # Producer-contract § 3 / DR-328: omit, don't guess -- and don't raise
+    # either. The engine twin returns "" here, and this copy relying on
+    # `_resolve_deliverable_id`'s broad `except Exception` to convert a raise
+    # into the same outcome made the two LOOK equivalent while their control
+    # flow diverged; the fail-soft arm stays (it guards more than this one
+    # exception) but is no longer what makes this tier correct.
+    return ""
 
 
 def _list_held_plan_claims(cwd: str) -> list:

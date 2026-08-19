@@ -549,19 +549,25 @@ _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.p
 #: sink-side gate this pin used to name -- path-touch claims are now
 #: advisory swimlane guidance, not an enforcement primitive, PM ruling) and
 #: chunk C1d ADDED `_warn_recent_edits` (a WARN-only, never-gating read of
-#: `.edit_ts`) in its place. The two actual `claim_index.lookup(...)`
-#: invocations outside `claim_index.py` itself and outside any tests/ path
-#: are therefore `_warn_recent_edits` and `claims._clear_path_claim_if_dead`
+#: `.edit_ts`) in its place.
+#:
+#: NARROWED 2026-08-19 to a single entry: `_warn_recent_edits` was removed
+#: outright on latency grounds (its `claim_index.lookup()` cost ~50ms per
+#: invocation of the engine's hottest op to produce a log line no response
+#: envelope carried and no consumer read -- the same counterfactual
+#: `state/kill-ledger.md` K-008 applied to `_disclose_peer_claims` and
+#: `Absorbed-From:` days earlier). Its absence is pinned positively, not
+#: merely by omission here, in `coordinator_core/ops/ceremony/tests/
+#: test_scoped_git_commit_recent_edit_warn.py`. The sole surviving
+#: `claim_index.lookup(...)` invocation outside `claim_index.py` itself and
+#: outside any tests/ path is therefore `claims._clear_path_claim_if_dead`
 #: (the dead-holder release path for the PATH-TOUCH claim plane, landed per
 #: cross-repo/archive/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md) -- the decision record this pin's own
-#: docstring asks for before widening.
+#: docstring asks for before widening. A new entry re-added to the commit
+#: path needs K-008's Returns-when discharged, not just this set edited.
 _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
     {
-        (
-            "coordinator_core/ops/ceremony/scoped_git_commit.py",
-            "_warn_recent_edits",
-        ),
         (
             "coordinator_core/session/claims.py",
             "_clear_path_claim_if_dead._claimants",

@@ -104,10 +104,27 @@ answers. C5 (docs/plans/2026-08-13-claim-release-deadlock-and-the-
 doctrine-that-rejects-it.md) assessed the substrate's remaining readers
 and returned SUBSTRATE SURVIVES (two live readers independent of the
 deleted gate), which authorized C1d to build the bounded recency-of-EDIT
-warn AC1d called for: `_warn_recent_edits`, below, logs (never gates,
-pauses, or prompts) when a path in the caller's pathspec was EDITED
-within `_RECENT_EDIT_WARN_WINDOW_SECS` by a live peer session -- "someone's
-hands are on it right now".
+warn AC1d called for: `_warn_recent_edits`, which logged (never gated,
+paused, or prompted) when a path in the caller's pathspec was EDITED
+within 30s by a live peer session -- "someone's hands are on it right now".
+
+That warn was REMOVED 2026-08-19 on latency grounds, and the removal is the
+same conclusion its own C1d contract already implied. Its only output was a
+`_LOG.warning` line: it never reached this op's response envelope, so no
+caller -- CLI, agent, or peer op -- could read it, and its own docstring
+required it to swallow every failure rather than affect the commit it
+accompanied. It paid a `claim_index.lookup()` index rebuild (~50ms measured)
+on every invocation of the hottest op in the engine to produce a fact
+nothing consumed; an unread computation is cost, not a cheaper gate.
+Nothing about the ownership posture above changes -- the warn never gated,
+so its removal removes no enforcement. This is the same counterfactual, on
+the same substrate, that `state/kill-ledger.md` K-008 applied to
+`_disclose_peer_claims`/`Absorbed-From:` under a PM ruling eight days
+earlier; K-008's own "What is NOT touched" paragraph exempted this function
+on the grounds that it answers a different question, which remains true and
+is beside the point -- an answer no consumer receives is not an answer.
+A claim-presence read returns to this commit path only behind a named
+consumer whose OUTCOME differs, per that ledger entry's Returns-when.
 
 Sweeping-pathspec rejection SURVIVES, and is independent of ownership:
 `.`, `./`, `:/`, `:(top)`, a glob (`*`/`?`/`[`), an empty pathspec element,
@@ -123,15 +140,17 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from coordinator_core._settings_home import normalize_native_path
 from coordinator_core.git import divergence as git_divergence
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_MODE_DEFERRED,
+    PUSH_MODE_NONE,
+    PUSH_MODE_SYNC,
     PUSH_STATUS_DECLINED,
     PUSH_STATUS_FAILED,
     PUSH_STATUS_NO_REMOTE,
@@ -141,9 +160,13 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PipelineResult,
     run_commit_pipeline,
 )
-from coordinator_core.session import claim_index
+# `classify_surface`/`_is_noise_path` are declared shared primitives on
+# `review_brightline_gate` (its own module comment, 2026-08-04 review
+# finding) -- reused here for the ledger's per-commit `kind`, mirroring
+# `commit_ledger.classify.py`'s identical reuse rather than forking a
+# second classifier.
+from coordinator_core.ops.review_brightline_gate import _is_noise_path, classify_surface
 from coordinator_core.session import core as session_core
-from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 
 _LOG = logging.getLogger(__name__)
@@ -161,85 +184,6 @@ _SWEEPING_PATHSPEC_LITERALS = frozenset({".", "./", ":/", ":(top)", "-A", "-a", 
 #: pathspecs are rejected for elsewhere in this pipeline (see `git_native.
 #: directory_pathspecs`).
 _GLOB_CHARS = frozenset("*?[")
-
-#: Recency-of-EDIT warn window (C1d, AC1d,
-#: state/audits/2026-08-13-edit-recency-spike.md). Grounded in OBSERVED
-#: edit cadence, not machine metrics -- staff-eng finding 7 asked for this
-#: to be derived from hook write latency plus claim-index rebuild time
-#: (how fast the machinery runs); DECLINED, because what the warn tracks
-#: is how long a human-shaped editing burst lasts, a different quantity
-#: those numbers don't measure. Observed: edits land roughly every 2s
-#: while an executor is actively working, and a quiet stretch past ~20s
-#: usually means that executor is done editing for now -- 30s sits just
-#: past that quiet threshold, so the warn covers an active editing run and
-#: goes silent once one has ended. Corollary (PM, stated directly): no EM
-#: needs longer than 30s to get a commit in, so a window this size cannot
-#: strand anyone. This is a SOFT threshold on observed behaviour, not a
-#: derived bound -- freely tunable if the observed cadence changes.
-_RECENT_EDIT_WARN_WINDOW_SECS = 30
-
-
-def _warn_recent_edits(
-    worktree_root: str,
-    paths: List[str],
-    caller_session_id: str,
-    now: Optional[datetime] = None,
-) -> None:
-    """Log a WARN (never gate, pause, or prompt) when a path in `paths` was
-    EDITED, within `_RECENT_EDIT_WARN_WINDOW_SECS`, by a live peer session
-    other than `caller_session_id` -- "someone's hands are on it right
-    now" (C1d, AC1d, module docstring's "Nothing in this file replaces it").
-
-    Reads `claim_index.lookup()`'s `.edit_ts` (C1d widening -- see that
-    module's docstring), never disk mtime: `touched.txt` T-events are
-    EDIT-only by construction (the hook that writes them fast-exits outside
-    `Write|Edit|MultiEdit|NotebookEdit`, state/audits/2026-08-13-edit-
-    recency-spike.md finding 1), so a bare filesystem touch with no
-    matching T-event produces no warn here, regardless of how recent it is.
-
-    Per-claimant `edit_ts` is read AS-IS (DR-296, PM ruling -- see
-    `claim_index.py`'s RECENCY-OF-EDIT WARN section): it is the FIRST edit
-    of that claimant's current claim run, not its latest, and this
-    function does nothing to correct that under-firing -- a session mid-
-    edit for longer than the window goes silent here, deliberately.
-
-    `now`, when given, pins the comparison instant for tests exercising
-    the window's edges; production callers never pass it (defaults to
-    `datetime.now(timezone.utc)`).
-
-    Every failure mode here (an index that could not answer, a liveness
-    check that raises, anything else) is swallowed to a debug log line,
-    never re-raised -- a warn that could fail the commit it accompanies
-    would be the same defect in softer clothes.
-    """
-    try:
-        now_ts = now if now is not None else datetime.now(timezone.utc)
-        result = claim_index.lookup(paths, cwd=worktree_root)
-        for path in paths:
-            path_edit_ts = result.edit_ts.get(path)
-            if not path_edit_ts:
-                continue
-            for sid, ts in path_edit_ts.items():
-                if sid == caller_session_id or ts is None:
-                    continue
-                age = (now_ts - ts).total_seconds()
-                if age < 0 or age > _RECENT_EDIT_WARN_WINDOW_SECS:
-                    continue
-                if not session_liveness.session_live(sid, cwd=worktree_root):
-                    continue
-                _LOG.warning(
-                    "ceremony.scoped_git_commit: %s was edited %ds ago by "
-                    "live peer session %s -- committing anyway",
-                    path,
-                    int(age),
-                    sid,
-                )
-    except Exception:  # noqa: BLE001 -- advisory-only, must never gate the commit
-        _LOG.debug(
-            "ceremony.scoped_git_commit: recency-of-edit warn check failed, ignoring",
-            exc_info=True,
-        )
-
 
 def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[str]:
     """Return a human-readable rejection reason for the first sweeping
@@ -691,7 +635,73 @@ PUSH_STATE_NO_REMOTE = "no-remote"
 #: `commit_pipeline.PUSH_STATUS_DECLINED`) -- known and deliberate, never
 #: routed through the remote probe (see `_resolve_push_report`, C5).
 PUSH_STATE_DECLINED = "declined"
+#: A push this op deliberately did not attempt because publication was handed
+#: to the background pusher (`push_mode="deferred"`, this op's default since
+#: the 2026-08-19 op-tail-latency work). Distinct from
+#: `PUSH_STATE_UNCONFIRMED` on purpose: "unconfirmed" points the reader at a
+#: corrective re-check, which is exactly the wrong instruction on the path
+#: where NOT pushing inline is the designed behaviour and
+#: `hooks/auto_push.py` is already carrying the commit. Collapsing the two
+#: would put "re-check, do not re-push" on every ordinary commit.
+PUSH_STATE_DEFERRED = "deferred"
 
+
+
+#: Bucket name `commit_ledger.oracle._DOCS_KIND` treats as docs-only --
+#: duplicated as a literal (not imported) because `oracle.py` declares it
+#: private to its own two-figure split; this module's `kind` is a peer
+#: producer of the same vocabulary, not a consumer of that constant.
+_LEDGER_DOCS_KIND = "doctrine"
+
+#: Generic non-doctrine `kind` this module stamps for a commit whose
+#: pathspec is not entirely `"doctrine"`-bucketed (or is entirely noise) --
+#: the oracle (`commit_ledger.oracle.py`) only ever branches on `kind ==
+#: "doctrine"`; any other value counts toward the code-only figure, so one
+#: stable non-doctrine label is all that predicate needs.
+_LEDGER_CODE_KIND = "code"
+
+
+def _ledger_kind_and_weight(worktree_root: str, paths: List[str]) -> "tuple[str, float]":
+    """Commit-level `(kind, weight_basis)` for the commit ledger (C5),
+    derived from `paths` -- the pathspec this handler already holds, never
+    a fresh diff (hard constraint: `kind`/`weight_basis` are computed ONCE,
+    at write time, from the staged pathspec; re-deriving them by diffing at
+    read time is the mistake the plan's own K-007 measurement cost 2.8s on).
+
+    `weight_basis` is the sum of `commit_ledger.classify.weight_for_path`
+    over every path (that function already returns 0.0 for a noise path,
+    per its own AC5 contract -- never negative).
+
+    `kind` is `"doctrine"` iff every non-noise path classifies (`review_
+    brightline_gate.classify_surface`) as `"doctrine"` -- mirrors `commit_
+    ledger.oracle.py`'s own docs-only split ("a commit whose changed paths
+    are entirely doctrine-bucketed is EXCLUDED from the code-only figure").
+    A commit with at least one non-doctrine path, or with no non-noise path
+    at all, gets `_LEDGER_CODE_KIND` -- the oracle only ever tests `kind ==
+    "doctrine"`, so a single stable non-doctrine label is sufficient.
+
+    Pure local computation: `weight_for_path`/`classify_surface` read only
+    `coordinator.local.md` and do fnmatch/string classification -- no git
+    subprocess, no nested interpreter (this chunk's own runtime negative).
+    """
+    # Local import: `commit_ledger.store` imports `ops.resolve_swept_baton`,
+    # so a module-level import here closes a cycle back into this module and
+    # leaves `commit_ledger.store` partially initialized whenever anything
+    # imports it before `coordinator_core.ops` -- which de-registers this op.
+    from coordinator_core.commit_ledger.classify import weight_for_path
+
+    total_weight = 0.0
+    any_classified = False
+    any_non_doctrine = False
+    for p in paths:
+        total_weight += weight_for_path(worktree_root, p)
+        if _is_noise_path(p):
+            continue
+        any_classified = True
+        if classify_surface(p) != _LEDGER_DOCS_KIND:
+            any_non_doctrine = True
+    kind = _LEDGER_DOCS_KIND if (any_classified and not any_non_doctrine) else _LEDGER_CODE_KIND
+    return kind, total_weight
 
 
 @register_op("ceremony.scoped_git_commit")
@@ -770,6 +780,32 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                          that does not resolve to a real
                                          artifact is rejected downstream, not
                                          here.
+        push_mode      (str, optional) — "sync" | "deferred" | "none".
+                                         DEFAULTS TO "deferred" (2026-08-19
+                                         op-tail-latency): publication is
+                                         handed to the already-installed
+                                         background pusher
+                                         (`coordinator_core/hooks/
+                                         auto_push.py`), which owns the hold
+                                         window, pending records and race
+                                         resolution. The inline push this
+                                         replaces cost 1.3-4.9s of network
+                                         round trip on every one of ~692
+                                         daily calls, and nothing branched on
+                                         its result -- `pushed`/`push_state`
+                                         reach only the CLI's operator-facing
+                                         note. Under a non-sync mode the op
+                                         reports `push_state="deferred"`
+                                         (or `"no-remote"` when there is no
+                                         remote to queue for), never
+                                         `"unconfirmed"`, whose note tells
+                                         the reader to re-check.
+                                         Pass "sync" ONLY when the caller
+                                         genuinely needs the sha on the
+                                         remote before this op returns, and
+                                         say why at the call site -- the
+                                         deferred default is what keeps this
+                                         op off the network.
         stage_patch    (str, optional) — C3 (docs/plans/2026-08-14-the-tool-
                                          stages-what-it-commits.md): a path to
                                          a patch file. The tool stages what it
@@ -907,6 +943,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     prose_raw = params.get("prose", "")
     deliverable_id_raw = params.get("deliverable_id")
     stage_patch_raw = params.get("stage_patch")
+    push_mode_raw = params.get("push_mode", PUSH_MODE_DEFERRED)
 
     # AC3/AC11 (C3): the required-param and `deliverable_id`-shape checks
     # below (through the `not message` check) are malformed-REQUEST
@@ -921,6 +958,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "sha": None,
             "pushed": None,
             "error": "ceremony.scoped_git_commit: 'worktree_root' param is required",
+        }
+    if push_mode_raw not in (PUSH_MODE_SYNC, PUSH_MODE_DEFERRED, PUSH_MODE_NONE):
+        return {
+            "committed": False,
+            "sha": None,
+            "pushed": None,
+            "error": (
+                "ceremony.scoped_git_commit: 'push_mode' param must be one of "
+                f"'{PUSH_MODE_SYNC}'/'{PUSH_MODE_DEFERRED}'/'{PUSH_MODE_NONE}', "
+                f"got {push_mode_raw!r}"
+            ),
         }
     if deliverable_id_raw is not None and not isinstance(deliverable_id_raw, str):
         return {
@@ -1073,9 +1121,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # outright 2026-08-13 (docs/plans/2026-08-13-claim-release-deadlock-and-
     # the-doctrine-that-rejects-it.md, C1) -- see this module's docstring,
     # "Sink-side ownership enforcement". Nothing GATES here in its place.
-    # `_warn_recent_edits` (C1d, AC1d) is advisory-only -- a log line, never
-    # control flow -- and runs unconditionally below.
-    _warn_recent_edits(worktree_root, paths, owner_session_id)
+    # C1d's advisory `_warn_recent_edits` log line stood here until
+    # 2026-08-19; see this module's docstring for why it was removed.
 
     # W3 dead-wire finding (docs/plans/2026-08-08-a-landed-commit-reported-
     # as-failed.md, item 4 -- verified on disk 2026-08-08): `session_id` is
@@ -1112,6 +1159,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # blind `os.environ` read that had no visibility into this
         # request's own override.
         attributed_session_id=owner_session_id,
+        # 2026-08-19 op-tail-latency: this op's p50 was 8.9s over 692 calls/24h
+        # (58% of all engine wall time), and `push_with_retry`'s network round
+        # trip was 1.3-4.9s of it -- paid synchronously by every caller even
+        # though NOTHING branches on the result (`pushed`/`push_state` reach
+        # only `coordinator/bin/scoped-git-commit::_render`'s operator-facing
+        # string; `integrity_breach` is DERIVED from a sync push having
+        # failed, so it has nothing to guard once the push is deferred).
+        # `deferred` hands publication to the already-installed background
+        # pusher (`coordinator_core/hooks/auto_push.py`, which owns the hold
+        # window, pending records and race resolution) by leaving
+        # `suppress_post_commit_auto_push` False -- the same default
+        # `wsc_tail.py` has always used. Negative-spec: a caller needing the
+        # sha on the remote BEFORE this op returns must pass
+        # `push_mode="sync"` explicitly and say why -- do not flip this
+        # default back to make one caller's ordering work.
+        push_mode=push_mode_raw,
     )
 
     # W3b (2026-08-19), split out of the `committed` expression below so the
@@ -1215,7 +1278,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # which-branch.md). Test doubles in this package's own test file
         # carry `push_status` explicitly now.
         push_status = result.push_status
-        pushed, push_state = _resolve_push_report(push_status)
+        pushed, push_state = _resolve_push_report(
+            push_status, push_mode=push_mode_raw
+        )
+        # A deferred push never reaches the remote-resolution leg, so it
+        # cannot report NO_REMOTE the way the sync path did -- and "queued for
+        # background push" in a repo with no remote is a note that will never
+        # come true. One LOCAL spawn (`git remote`, no network) restores the
+        # distinction; it runs only on the deferred branch, which has already
+        # given back the whole 5-spawn push leg, so this is net -4 against the
+        # spawn budget rather than a new cost.
+        if push_state == PUSH_STATE_DEFERRED and not _repo_has_remote(worktree_root):
+            pushed, push_state = None, PUSH_STATE_NO_REMOTE
         response["pushed"] = pushed
         response["push_state"] = push_state
 
@@ -1407,6 +1481,68 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # to fail for an unrelated cause, which is exactly the removed claim
     # gate wearing a new hat (AC4). A dedicated key has no renderer that
     # branches on its presence, in this CLI or any other consumer.
+
+    # C5 (docs/plans/2026-08-19-the-baton-carries-its-commits.md): the
+    # commit ledger join. Deliberately the LAST thing this handler does --
+    # placed after every response mutation above, in particular after
+    # `commit_pipeline._reconcile_landed_despite_failure` (which runs
+    # INSIDE `run_commit_pipeline`, above, before `result` is ever returned
+    # to this handler) has already folded its reconciled sha into
+    # `response["sha"]`. A timed-out-but-landed commit is therefore
+    # ledgered under its ACTUAL sha, never a pre-reconcile guess.
+    #
+    # Hard constraint: a ledger write must never fail the commit it
+    # accompanies -- the commit is the durable outcome, the ledger is
+    # derived (mirrors `release_committed_claims`'s identical failure
+    # direction earlier in this handler). Every step below (classification,
+    # owner resolution, the append itself) is wrapped in ONE broad
+    # `except Exception` for exactly that reason -- AC3.
+    if response["committed"]:
+        landed_sha = response.get("sha")
+        if landed_sha:
+            try:
+                from coordinator_core.commit_ledger.resolve_owner import (
+                    resolve_owner_handoff_id,
+                )
+                from coordinator_core.commit_ledger.store import (
+                    append_entry as _ledger_append_entry,
+                )
+
+                kind, weight_basis = _ledger_kind_and_weight(worktree_root, paths)
+                handoff_id, _degraded = resolve_owner_handoff_id(
+                    owner_session_id, Path(worktree_root)
+                )
+                if handoff_id:
+                    _ledger_append_entry(
+                        handoff_id,
+                        landed_sha,
+                        kind,
+                        weight_basis=weight_basis,
+                        cwd=worktree_root,
+                    )
+                # `handoff_id is None` is the legitimate standalone outcome
+                # (`resolve_owner_handoff_id`'s own zero-held-claims arm) --
+                # not an error, nothing to bill this commit to, no warning.
+            except Exception:
+                _LOG.warning(
+                    "ceremony.scoped_git_commit: commit ledger write failed "
+                    "for %s; the commit already landed and is unaffected",
+                    landed_sha,
+                    exc_info=True,
+                )
+        else:
+            # sha_unverified / ambiguous-Commit-Token class (see
+            # `_commit_landed`'s own comment above, naming a462af36d/
+            # 11d1db069): this commit cannot be sha-keyed. SKIP it with a
+            # warning rather than inventing a placeholder entry -- entries
+            # key on sha, and a sha-less entry could never be deduped or
+            # marked reviewed later (AC3b).
+            _LOG.warning(
+                "ceremony.scoped_git_commit: commit landed but its sha is "
+                "unresolvable (sha_unverified=%s) -- skipped from the "
+                "commit ledger rather than recorded under a placeholder sha",
+                response.get("sha_unverified", False),
+            )
 
     return response
 
@@ -1672,8 +1808,31 @@ def _commit_paths_are_clean(worktree_root: str, paths: List[str]) -> bool:
     return not any(line.strip() for line in probe.stdout.splitlines())
 
 
+def _repo_has_remote(worktree_root: Union[str, Path]) -> bool:
+    """True when this repo has at least one configured remote.
+
+    One local `git remote` spawn, no network. Used only on the deferred-push
+    branch, to keep "no remote" distinguishable from "queued for background
+    push" now that the sync push leg (which used to surface that fact as a
+    by-product of resolving the upstream) no longer runs.
+
+    Fails OPEN -- an unreadable/erroring git returns True, so the report says
+    "queued" rather than asserting a missing remote. The asymmetry is
+    deliberate: claiming a remote is absent when the probe merely failed
+    would send an operator chasing a configuration problem that does not
+    exist, while an over-optimistic "queued" is corrected by the background
+    pusher's own logging within the hold window.
+    """
+    result = git_native._git(["remote"], cwd=str(worktree_root))
+    if result.returncode != 0:
+        return True
+    return bool(result.stdout.strip())
+
+
 def _resolve_push_report(
     push_status: str,
+    *,
+    push_mode: str = PUSH_MODE_SYNC,
 ) -> tuple[Optional[bool], str]:
     """Map the pipeline's canonical `push_status` onto this module's tri-state
     report. A pure mapping: no git, no remote, no sleep.
@@ -1725,5 +1884,15 @@ def _resolve_push_report(
         return False, PUSH_STATE_FAILED
     if push_status == PUSH_STATUS_UNCONFIRMED:
         return None, PUSH_STATE_UNCONFIRMED
-    # `PUSH_STATUS_NOT_ATTEMPTED` and any other unrecognized value fall here.
+    # `PUSH_STATUS_NOT_ATTEMPTED` under a non-sync `push_mode` is not unknown
+    # at all -- it is this op's designed behaviour, with `hooks/auto_push.py`
+    # holding the commit. Reporting it as UNCONFIRMED would put the corrective
+    # "re-check, do not re-push" note on every ordinary commit and teach
+    # operators to ignore the one state that means a real push is in doubt.
+    # Gated on the MODE, not on the status alone: a sync-mode NOT_ATTEMPTED
+    # (a commit that never landed) is still genuinely unknown and still falls
+    # through to UNCONFIRMED below.
+    if push_status == PUSH_STATUS_NOT_ATTEMPTED and push_mode != PUSH_MODE_SYNC:
+        return None, PUSH_STATE_DEFERRED
+    # Any other unrecognized value falls here.
     return None, PUSH_STATE_UNCONFIRMED

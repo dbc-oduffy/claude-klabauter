@@ -36,6 +36,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.warm.engine_root import current_engine_clone
+
 __all__ = [
     "ElectionError",
     "ElectionLost",
@@ -112,7 +114,9 @@ def current_user_sid() -> str:
 
 
 def _default_engine_clone() -> Path:
-    return Path(__file__).resolve().parents[2]
+    # Collapsed onto engine_root.current_engine_clone() (plan
+    # 2026-08-19-an-engine-root-is-a-stamped-build § C3).
+    return current_engine_clone()
 
 
 def pipe_name(

@@ -3469,6 +3469,31 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   write-ops in this package family use; see op.py module docstring.
     # Spec: docs/plans/2026-08-12-emitter-turns-a-spine-into-one-workflow.md § C5
     "dispatch.emit": OpClass.MUTATING,
+    # review.mint_workflow — MUTATING: writes the composed gated-review
+    # Workflow .mjs script text to a caller-named path (ops/review_mint/op.py).
+    # The only handler in this plan's surface that touches disk; roster.py
+    # and compose.py are pure. DR-208 five-question affirmation (citing
+    # ops/review_mint/op.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      op.py — guarded_path.write_text(script, encoding="utf-8") writes the
+    #      emitted script to the caller-named, path-guarded output_path.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only the single target output_path; no rag store write.
+    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      guarded_path.write_text(...) opens the target for write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      output_path is caller-named repo/state, not scoped to this module's
+    #      own package directory.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The written script is a durable file, readable by other sessions
+    #      and by the Workflow tool once dispatched.
+    #   Path containment: output_path is guarded via
+    #   coordinator_core.ops._path_guard.contained_path against target_root
+    #   (defaults to output_path's parent) BEFORE the write -- same seam
+    #   dispatch.emit above uses; see op.py module docstring.
+    # Spec: docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md § C3
+    "review.mint_workflow": OpClass.MUTATING,
     # gate.validate_invocable — MUTATING: merge-gate DoD checker
     # (ops/gate_validate_invocable.py). DR-208 five-question affirmation:
     #   1. Does the handler open any file for write (including append)?          YES.

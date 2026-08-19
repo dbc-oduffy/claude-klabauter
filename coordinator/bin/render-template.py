@@ -12,12 +12,17 @@ Spec backlink: docs/plans/2026-05-19-coordinator-installer-redesign-implementati
 
 Usage:
   bin/render-template.py <template-path> [-o <output-path>] [KEY=VALUE]...
+  bin/render-template.py --in-place <path> [<path>...] [KEY=VALUE]...
 
 Arguments:
   <template-path>   Path to the template file containing {{KEY}} tokens.
   -o <output-path>  Optional. Write rendered output to <output-path>
                     atomically (render to tempfile, then replace).
                     Without -o, rendered output goes to stdout.
+  --in-place        Batch form: renders every listed <path> in place (each
+                    path is both input and output), one process for the
+                    whole batch. Per-path failures are attributed by path on
+                    stderr; the rest of the batch still runs.
   KEY=VALUE         Zero or more substitution pairs. KEY must be a
                     bare identifier (no whitespace). VALUE may be any
                     string; it is treated as a literal replacement.

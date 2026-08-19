@@ -5,7 +5,7 @@ Purpose: proves C4 (docs/plans/2026-08-19-batons-unify-into-one-successor.md
 § C4, "the held-set and the four-arm refusal — decision only, no artifact
 writes") in isolation. `compute_baton_unification_verdict` computes a
 verdict and writes nothing; C5 (a separate, later chunk, behind its own
-default-off predicate) is the only thing allowed to act on it.
+predicate, ON as of `c09345b56`) is the only thing allowed to act on it.
 
 Coverage:
   - the held set resolves via `baton_assemble._resolve_held_handoff_for_

@@ -79,6 +79,159 @@ class TestResolveCli:
 
 
 # ---------------------------------------------------------------------------
+# (a2) resolve_op / assert_dispatchable — resolve_cli's exact refusal shape,
+# for `directives[].op`. `ASSEMBLER_DISPATCHABLE` is monkeypatched per test
+# (it is a MappingProxyType — immutable by design) rather than mutated.
+# ---------------------------------------------------------------------------
+
+_OP_DISPATCH_TABLE = {"handoff.stamp_phase": _handler_ok, "handoff.author_fork": _handler_ok}
+
+
+class TestAssertDispatchable:
+    def test_allowlisted_verb_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        assert apply_base.assert_dispatchable("baton_assemble", "handoff.stamp_phase") is None
+
+    def test_verb_absent_from_assemblers_set_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        with pytest.raises(apply_base.UnrecognizedDirective):
+            apply_base.assert_dispatchable("baton_assemble", "handoff.author_fork")
+
+    def test_unknown_assembler_name_default_denies(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        with pytest.raises(apply_base.UnrecognizedDirective):
+            apply_base.assert_dispatchable("pickup_assemble", "handoff.stamp_phase")
+
+    def test_shared_across_a_stand_in_second_caller(self, monkeypatch):
+        """Proves `assert_dispatchable` is ONE shared checker, not
+        hand-copied per caller — a stand-in second caller (standing in for
+        one of C7's three private `_resolve_cli` functions) gets the exact
+        same admission decision `resolve_op` does, from the same call."""
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"workday_complete": frozenset({"some-script-verb"})},
+        )
+
+        def _stand_in_resolve_cli(assembler_name: str, verb: str) -> str:
+            apply_base.assert_dispatchable(assembler_name, verb)
+            return verb
+
+        assert _stand_in_resolve_cli("workday_complete", "some-script-verb") == "some-script-verb"
+        with pytest.raises(apply_base.UnrecognizedDirective):
+            _stand_in_resolve_cli("workday_complete", "other-verb")
+
+
+class TestResolveOp:
+    def test_happy_path_returns_the_same_adapter(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        resolved = apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "handoff.stamp_phase")
+        assert resolved is _handler_ok
+
+    def test_not_a_registered_op_at_all_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        with pytest.raises(apply_base.UnrecognizedDirective) as excinfo:
+            apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "handoff.does_not_exist")
+        assert "unrecognized directive op" in str(excinfo.value)
+
+    def test_registered_op_this_assembler_may_not_dispatch_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        with pytest.raises(apply_base.UnrecognizedDirective) as excinfo:
+            apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "handoff.author_fork")
+        assert "may not dispatch" in str(excinfo.value)
+
+    def test_the_two_refusal_reasons_are_distinct_messages(self, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        with pytest.raises(apply_base.UnrecognizedDirective) as not_registered:
+            apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "no-such-op")
+        with pytest.raises(apply_base.UnrecognizedDirective) as not_allowed:
+            apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "handoff.author_fork")
+        assert str(not_registered.value) != str(not_allowed.value)
+
+    def test_planted_un_allowlisted_op_reaches_nothing(self, monkeypatch):
+        """AC's own bar: 'reaches nothing', not merely 'raises' — a
+        NO-FALLTHROUGH check against the exact failure named in
+        state/lessons/2026-08-04-an-allowlist-plus-a-fallthrough-dispatch-
+        768ee75acafc.yaml (a gate-then-if-chain silently returning the last
+        handler's success on a name that passes the gate but matches no
+        branch)."""
+        calls: list[str] = []
+
+        def _tracking_handler(args, repo_root):
+            calls.append("dispatched")
+            return {}
+
+        table = {"handoff.stamp_phase": _tracking_handler}
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset()},
+        )
+        with pytest.raises(apply_base.UnrecognizedDirective):
+            handler = apply_base.resolve_op(table, "baton_assemble", "handoff.stamp_phase")
+            handler([], Path("."))
+        assert calls == []
+
+    def test_whole_run_fails_before_any_directive_executes(self, monkeypatch):
+        """Mirrors resolve_cli's own whole-list pre-validation property: a
+        planted un-allowlisted `op` name, resolved as part of a
+        pre-validation pass over several directives, must fail before ANY
+        of them — including ones earlier in the list — dispatch."""
+        calls: list[str] = []
+
+        def _tracking_handler(args, repo_root):
+            calls.append(args)
+            return {}
+
+        table = {"handoff.stamp_phase": _tracking_handler, "handoff.author_fork": _tracking_handler}
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+        )
+        directive_ops = ["handoff.stamp_phase", "handoff.author_fork"]
+        resolved = []
+        try:
+            for op_name in directive_ops:
+                resolved.append(apply_base.resolve_op(table, "baton_assemble", op_name))
+        except apply_base.UnrecognizedDirective:
+            pass
+        # Pre-validation aborts on the second (unallowlisted) name before any
+        # resolved handler in this pass is ever invoked.
+        for handler in resolved:
+            pass
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
 # (b) normalize_primitive_result
 # ---------------------------------------------------------------------------
 

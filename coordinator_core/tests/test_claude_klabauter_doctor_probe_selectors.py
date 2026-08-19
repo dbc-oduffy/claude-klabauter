@@ -88,6 +88,17 @@ _IMPLEMENTED_IDS = frozenset(p["id"] for p in _manifest_probes())
 _TRIAGE_IDS = frozenset(p["id"] for p in _manifest_probes() if p.get("triage") is True)
 
 
+#: Wall-clock ceiling for one shelled doctor run. NOT a performance
+#: assertion: `run_probes()` always exercises the full probe set (the
+#: selector is a post-run filter), and that full set measured 45.7s on
+#: this box BEFORE any warm probe existed, against a 50-70 concurrent
+#: session load. A 60s cap left ~30% headroom over a pre-existing cost
+#: and turned ordinary load into a red suite. The doctor's own runtime
+#: is tracked as its own backlog item; this constant only stops that
+#: cost from being reported here as a selector-logic failure.
+_CLI_TIMEOUT_SECS = 300
+
+
 def _run(*args: str) -> subprocess.CompletedProcess:
     """Run bin/claude-klabauter-doctor-probe.py with the given args; CLAUDE_KLABAUTER_ROOT set to repo root."""
     env = dict(os.environ)
@@ -96,7 +107,7 @@ def _run(*args: str) -> subprocess.CompletedProcess:
         [sys.executable, str(_BIN_PROBE), *args],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=_CLI_TIMEOUT_SECS,
         env=env,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -891,3 +902,109 @@ class TestPythonVersionBrokenEnvelope:
         assert obj["name"] == "claude-klabauter.python.version"
         assert obj["status"] == "fail"
         assert obj["severity"] == "hard"
+
+
+# ---------------------------------------------------------------------------
+# C9: claude-klabauter.warm.roundtrip opt-in-flag unit tests
+#
+# Direct-import (_load_probe_module), no subprocess — fast tier per the chunk
+# brief's PREFER-a-stubbed-transport guidance. Stubs
+# coordinator_core.warm.client.try_warm_dispatch so a call proves an attempted
+# connection without needing a real warm server; the default-off assertion
+# relies on that stub NEVER being invoked.
+# ---------------------------------------------------------------------------
+
+
+class TestWarmRoundtripOptInFlag:
+    """claude-klabauter.warm.roundtrip defaults off; --include-live-roundtrip is the only opt-in.
+
+    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C9.
+    """
+
+    def test_flag_defaults_off_and_no_connection_attempted(self) -> None:
+        """_run_probe_warm_roundtrip(claude_klabauter_root, False) never calls try_warm_dispatch."""
+        mod = _load_probe_module()
+        if mod is None:
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk or not importable")
+
+        called = {"n": 0}
+
+        class _FakeWarmClient:
+            @staticmethod
+            def try_warm_dispatch(msg):
+                called["n"] += 1
+                return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+
+        # Prevent the real coordinator_core.warm.client from ever being imported
+        # inside the probe — if the probe attempted a connection despite the flag
+        # being False, this stub would be the thing it called, and `called["n"]`
+        # would move off zero.
+        sys.modules["coordinator_core.warm.client"] = _FakeWarmClient()  # type: ignore[assignment]
+        try:
+            result = mod._run_probe_warm_roundtrip(_REPO_ROOT, False)
+        finally:
+            sys.modules.pop("coordinator_core.warm.client", None)
+
+        assert called["n"] == 0, (
+            "claude-klabauter.warm.roundtrip attempted a connection with include_live_roundtrip=False"
+        )
+        assert result.probe == "claude-klabauter.warm.roundtrip"
+        assert result.skipped is True, (
+            "Flag-absent path must report skipped=True (not an INFO stub) — "
+            "see the probe's own docstring."
+        )
+        assert result.required is False
+
+    def test_cluster_warm_without_flag_still_returns_a_skipped_row(self) -> None:
+        """--cluster warm (no --include-live-roundtrip) still returns claude-klabauter.warm.roundtrip.
+
+        Confirms _apply_selector does not drop the probe's row from --cluster warm
+        membership just because it is skipped — the manifest-declared id must still
+        surface, per the chunk brief.
+        """
+        if not _BIN_PROBE.exists():
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
+
+        result = _run("--cluster", "warm")
+
+        assert result.returncode == 0, (
+            f"--cluster warm exited {result.returncode}; stderr: {result.stderr[:400]}"
+        )
+
+        envelope = json.loads(result.stdout)
+        probe_map = {p["probe"]: p for p in envelope["probes"]}
+
+        assert "claude-klabauter.warm.roundtrip" in probe_map, (
+            "claude-klabauter.warm.roundtrip must appear in --cluster warm output even without "
+            "--include-live-roundtrip"
+        )
+        row = probe_map["claude-klabauter.warm.roundtrip"]
+        assert row.get("skipped") is True, (
+            f"claude-klabauter.warm.roundtrip without --include-live-roundtrip must report "
+            f"skipped=True, got {row.get('skipped')!r}"
+        )
+
+    def test_selector_default_returns_every_manifest_probe_reconfirmed(self) -> None:
+        """AC6 re-check: registration of claude-klabauter.warm.roundtrip does not break the
+        default-mode roster invariant (test_selector_default_returns_every_manifest_probe).
+        """
+        if not _BIN_PROBE.exists():
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
+
+        result = _run()
+
+        assert result.returncode == 0, (
+            f"Default mode exited {result.returncode}; stderr: {result.stderr[:400]}"
+        )
+
+        envelope = json.loads(result.stdout)
+        probe_ids = {p["probe"] for p in envelope["probes"]}
+
+        assert "claude-klabauter.warm.roundtrip" in _IMPLEMENTED_IDS, (
+            "claude-klabauter.warm.roundtrip must be declared in bin/doctor-probes.toml"
+        )
+        assert probe_ids == _IMPLEMENTED_IDS, (
+            f"Probe set mismatch in default output: "
+            f"missing={_IMPLEMENTED_IDS - probe_ids!r}, "
+            f"unexpected={probe_ids - _IMPLEMENTED_IDS!r}"
+        )

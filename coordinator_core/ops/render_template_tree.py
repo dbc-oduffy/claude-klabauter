@@ -2,18 +2,18 @@
 coordinator_core.ops.render_template_tree — tree-walker over render-template.py.
 
 Purpose: copy <src-tree-dir> to <dst-tree-dir>, preserving structure and dotfiles, then
-substitute {{KEY}} tokens in every file that contains them by delegating each file to
-render-template.py (co-located in this repo's coordinator/bin/ as of the coordinator/bin
-executable-surface migration, DoE-claude commit b644d5a9 -- this module shells out to it,
-exactly as the bash oracle called its sibling script). Files with no {{ tokens are left as
-plain copies.
+substitute {{KEY}} tokens in every file that contains them by delegating the whole batch,
+in one spawn, to render-template.py's `--in-place <path>...` form (co-located in this
+repo's coordinator/bin/ as of the coordinator/bin executable-surface migration, DoE-claude
+commit b644d5a9). Files with no {{ tokens are left as plain copies.
 
 Negative-spec inheritance from render-template.py (unchanged from the bash oracle): NO
 conditionals, NO loops, NO includes, NO defaults, NO escaping of braces, NO whitespace
 tolerance inside {{ }}. This module is a tree-walker ONLY — it does not re-implement or
 extend the token substitution logic; that logic lives entirely in render-template.py and
-is invoked via subprocess exactly as the bash oracle invoked its sibling script by relative
-path.
+is invoked via a single batched subprocess call (`--in-place <path>...`), not one spawn
+per file -- this site's earlier per-item exemption was refuted as genuinely batchable and
+fixed accordingly (amplification gate, coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py).
 
 Port of: render-template-tree.sh (DoE 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C2
@@ -33,9 +33,10 @@ Negative-spec:
     - Does NOT re-derive the DR-148 bash-version guard -- meaningless in pure Python.
     - Does NOT capture/suppress render-template.py's stdout/stderr -- inherited straight
       through, matching the bash oracle (no `2>/dev/null`, no capture).
-    - On a failed per-file render, propagates that child's exact exit code and stops
-      immediately (mirrors `set -euo pipefail` short-circuiting the bash oracle's while
-      loop on the first non-zero render-template.sh call).
+    - Does NOT stop at the first failing file within the batch -- render-template.py's
+      `--in-place` form attempts every path and reports per-path failures on stderr with
+      the failing path named, returning the worst-severity exit code across the batch;
+      this module simply propagates that single child's exit code.
 """
 
 from __future__ import annotations
@@ -239,9 +240,9 @@ def main(argv: List[str]) -> int:
     else:
         render_single_argv = [sys.executable, render_single]
 
-    for fpath in token_bearing:
+    if token_bearing:
         proc = subprocess.run(
-            [*render_single_argv, fpath, "-o", fpath, *kv_pairs],
+            [*render_single_argv, "--in-place", *token_bearing, *kv_pairs],
             **no_console_passthrough_kwargs(),
         )
         if proc.returncode != 0:

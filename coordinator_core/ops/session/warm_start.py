@@ -83,6 +83,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.warm.breadcrumb import should_spawn
+from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.settings import is_warm_enabled
 
 __all__ = ["ASYNC", "SESSIONSTART_MATCHERS", "warm_start"]
@@ -95,12 +96,10 @@ SESSIONSTART_MATCHERS = ("startup", "resume", "clear", "compact", "fork")
 
 
 def _engine_clone_root() -> Path:
-    """This coordinator_core clone's own resolved root — the same
-    computation `warm.client._engine_clone_root` / `warm.breadcrumb.
-    _default_engine_clone` each keep as a local copy per this package's
-    convention of not reaching into a peer module's private name for the
-    same one-line computation."""
-    return Path(__file__).resolve().parents[3]
+    """This coordinator_core clone's own resolved root — collapsed onto
+    the single shared definition, `engine_root.current_engine_clone()`
+    (plan 2026-08-19-an-engine-root-is-a-stamped-build § C3)."""
+    return current_engine_clone()
 
 
 def warm_start(engine_root: Optional[Path] = None) -> bool:

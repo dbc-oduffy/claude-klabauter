@@ -201,7 +201,17 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
         # string comparison broke.
         (ml_dir / "registry.local.toml").write_text(
             f'"repos.claude_klabauter" = \'{_mirror_root()}\'\n'
-            f'"engine.working_repos.other" = \'{registered_other_working_repo}\'\n',
+            f'"engine.working_repos.other" = \'{registered_other_working_repo}\'\n'
+            # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C5
+            # (AC20): the published-engine divert requires `engine.target` to be
+            # READABLE — presence-only, its value never inspected. Omitting it
+            # here (as every fixture built before C5 did) means step 1 of the
+            # ladder never fires regardless of the stamp/gate above, falling
+            # through to the live-tree rung and resolving `live-working-tree`
+            # instead of `resolved-engine`. Same one-line fixture fix as
+            # `_make_published_engine_fixture` in
+            # test_working_repos_is_locator_only.py.
+            '"engine.target" = \'main\'\n',
             encoding="utf-8",
         )
         cwd = scratch / "no-git-here"

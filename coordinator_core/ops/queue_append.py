@@ -129,6 +129,7 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.session_context import resolve_current_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -1125,9 +1126,15 @@ def append_queue_entry(
     if body is not None:
         body = body.replace("\\n", "\n")
 
-    # Resolve session_id from env when not pre-supplied.
+    # Resolve session_id when not pre-supplied — via the canonical resolver,
+    # never a raw os.environ read. Under warm serving the process environment
+    # names the server's spawner rather than this request's caller, so an env
+    # read stamps queue entries with a stranger's authorship;
+    # `resolve_current_session_id` reads the per-request identity
+    # `warm.entry_seam.per_request_state` binds and falls through to the same
+    # env ladder cold.
     if session_id is None:
-        session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        session_id = (resolve_current_session_id() or "").strip()
 
     # Resolve from_repo fallback. cross-repo-commitment forbids from_repo entirely
     # (it uses committed_by for the sibling identity instead) — mirrors the DoE
@@ -1387,12 +1394,15 @@ def _queue_append_handler(
     if repo_root is not None:
         caller_worktree = main_worktree_root(repo_root)
 
-    # Resolve session_id: caller-authoritative param takes precedence over the daemon
-    # env, so provenance is authoritative at the call site. Absent param falls back to
-    # CLAUDE_CODE_SESSION_ID for backward compatibility (no caller change required).
+    # Resolve session_id: caller-authoritative param takes precedence, so
+    # provenance is authoritative at the call site. The fallback resolves
+    # through the canonical resolver rather than reading os.environ directly —
+    # under warm serving the process environment names the server's spawner,
+    # not this request's caller, and an env read here stamped queue entries
+    # with a stranger's authorship.
     session_id = params.get("session_id")
     if session_id is None:
-        session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        session_id = (resolve_current_session_id() or "").strip()
 
     # Parse tags: accept list or comma-separated string.
     tags = params.get("tags")

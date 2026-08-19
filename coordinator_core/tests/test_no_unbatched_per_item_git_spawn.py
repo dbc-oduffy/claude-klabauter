@@ -111,6 +111,40 @@ caused a real false suppression.
      sites (`publish._git_status_porcelain`, `percolate-round._dest_paths_exist`), both of which
      hit a git subcommand with no `--pathspec-from-file` form; keyed on the loop's OWN target
      names, never discriminator 6's grown taint set. See `_argv_splices_loop_target`.
+  8. Varying-argv0-through-one-helper exclusion. Discriminator 6's fact -- a different PROGRAM
+     each iteration, so no single argv0 exists for a batch to share -- reached across ONE call
+     hop, for the routes where 6 is deliberately forbidden (b/c). Added 2026-08-19 because 6 was
+     measured structurally blind to most of this repo: of the 65 call sites behind the exemption
+     register's 53 entries, 41 are route `b-local-helper` and only 16 are route a. Resolves the
+     callee, requires the HELPER's own argv0 to be one of the helper's parameters, then requires
+     the argument supplied for that parameter to be loop-tainted -- so a verb-gated
+     `_run_git([verb, ...], root)`, whose argv0 is a literal, is never reached, and 6's route-a
+     restriction is not relaxed. One hop, no chaining, no fallback. See
+     `_argv0_varies_through_helper`. SUPPRESSES: measured at introduction to retire exactly one
+     key (`maximalist._run_body`) and silence nothing outside the register.
+  9. Repetition-loop exclusion. A loop whose TARGET IS DISCARDED over a count-bounded `range`
+     spawns the SAME argv N times -- a repetition, not a fan-out over items. There is no set for
+     a batch to carry, and the sibling gate's remedy (hoist out of the loop) would delete N-1
+     intentional repetitions, changing meaning rather than batching. Applies at BOTH loop forms:
+     the retired benchmark keys each carried a `for _ in range(warmup)` statement AND a sampling
+     comprehension, so a statement-only matcher would have retired none of them. Safety rests
+     entirely on `_is_count_bounded_range` -- `range(len(items))` scales with input size and is
+     real amplification, so any `Call` in the argument position declines. Added 2026-08-19,
+     retiring the five `measurement-is-the-loop` sampling entries whose own comment block
+     asserted that no static pass could ever decide them; measured, zero collateral. Does NOT
+     reach the MISCLASSIFIED `retry-loop` rows, which read their target back. See
+     `_is_repetition_loop`.
+ 10. Retry-loop exclusion. Discriminator 3 excludes `while` loops wholesale because every
+     measured `while` false positive was a retry, a prompt, or a calendar walk -- bounded by a
+     constant, a human, or a window, never by input size. The same retry spelled `for attempt in
+     range(_MAX_ATTEMPTS)` was still flagged, which was an accident of SPELLING. Two halves,
+     both required: the LOOP is a count-bounded range with an early exit (`_is_retry_loop`), and
+     at the CALL, none of the loop's tainted names reach the spawn's own arguments
+     (`_names_in_call_args`) -- so every iteration issues an identical argv. The call half is
+     what separates a retry from a fan-out, and without it `for _ in range(3): run([..., item])`
+     nested in a per-item loop would be falsely suppressed. Added 2026-08-19, retiring the three
+     MISCLASSIFIED `retry-loop` keys structurally; measured, zero collateral. See
+     `_is_retry_loop`.
 
 SEVEN DETECTION ROUTES (six per gate-substrate.md Task C, plus g added out-of-band -- see its
 own entry below), restricted to the high-precision stratum:
@@ -309,6 +343,25 @@ _RUNNER_KWARG_NAMES: frozenset[str] = frozenset(
 )
 _RUNNER_NAME_PREFIXES: tuple[str, ...] = ("run", "git", "spawn")
 
+#: THE REGISTER'S REPLACEMENT, and where it is going. `_EXEMPT_SITES` holds a claim a human
+#: wrote once; `_ORACLE_CLAIMS` below holds the same kind of claim bound to a TEST THAT MEASURES
+#: IT. Both suppress a site. Only one of them can be wrong without anybody finding out.
+#:
+#: A claim about a command-line surface -- "`git config --unset` accepts exactly one key", "this
+#: sibling CLI writes one record per invocation" -- is not decidable from any AST, which is why
+#: those entries survived the discriminators. It IS decidable by running the thing. So each
+#: entry moved to `_ORACLE_CLAIMS` names an oracle in `coordinator_core/tests/oracles/`, the
+#: oracles run in the same suite as this gate, and `test_every_oracle_claim_names_a_real_oracle`
+#: refuses a claim whose oracle does not exist. A claim that stops being true turns the gate RED
+#: instead of quietly continuing to suppress.
+#:
+#: The oracle layer earned this on its first run: two entries claiming "one record per
+#: invocation" failed immediately. On reading, the FIRST DRAFT ORACLE was wrong, not the
+#: exemptions -- it asserted "no argument accepts multiple values", when a queue entry may
+#: legitimately carry several deliverables. The right assertion is over the record-IDENTITY
+#: fields. Recorded because it cuts both ways: an oracle can be as wrong as a comment, and the
+#: difference is that this one failed loudly on the day it was written rather than in a year.
+#:
 #: 2026-08-19 -- ADVERSARIAL RE-VERIFICATION, and what it cost this register. The PM rejected
 #: wave 4's shape ("I don't like having blanket exemptions, that's how we got into a situation
 #: where we had a windows-poison system in claude-klabauter"). All 75 entries were then re-read AT THE
@@ -339,6 +392,70 @@ _RUNNER_NAME_PREFIXES: tuple[str, ...] = ("run", "git", "spawn")
 #:     `test_every_exemption_carries_a_dated_rationale` silently. That test's own docstring
 #:     claims it makes a wrong exemption "visible to the next reader instead of anonymous";
 #:     for an inherited block it does not. Entry-scoped rationales are owed.
+#:
+#: DECIDED 2026-08-19 (PM ruling, "I don't know why we have any exemptions, honestly"):
+#: THIS REGISTER'S TARGET STATE IS ZERO ENTRIES. Not a smaller register, not a better-argued
+#: one -- none. An earlier EM call this same day proposed keeping the four classes and moving
+#: membership from the comment block to the entry; that was reversed on the ruling above, and
+#: reversed correctly. It improved the QUALITY OF THE ARGUING when the finding underneath says
+#: to stop arguing. Recorded rather than deleted, because the wrong call is the instructive one:
+#: a register defends itself most convincingly right when it should be dissolved.
+#:
+#: HOW MUCH OF THIS IS A COLLECTOR DEFECT -- MEASURED, after a first estimate was wrong. The
+#: first pass at this note read the class tags and concluded that 43 of the 53 were places the
+#: collector was under-powered: the 30 `structural-floor` rows looked like discriminator 6's own
+#: idea (a different PROGRAM per iteration) merely out of its reach. Discriminator 8 was then
+#: built to test exactly that hypothesis, and MEASURED it. It retired ONE key
+#: (`maximalist._run_body`, genuinely N distinct interpreters), with zero collateral.
+#:
+#: So 43 was wrong, and the shape of being wrong is worth keeping. Reading the argv at all 30
+#: `structural-floor` call sites shows argv0 is almost always CONSTANT -- `ssh`, `git`, a
+#: sibling CLI under `sys.executable`. What varies is a LATER operand: the host, the `-C` root,
+#: the config key, the one record the callee accepts. So these rows are not claiming "a
+#: different program each time" (mechanical); they are claiming "THIS CLI HAS NO MULTI-ITEM
+#: FORM" -- whether `git config --unset` takes two keys, whether `ssh` batches hosts, whether
+#: `npm view` takes two packages. That is knowledge of a command-line surface, and NO AST PASS
+#: HAS IT. It is the same claim `no-primitive` makes, just tagged differently.
+#:
+#: The measured split, replacing the estimate:
+#:
+#:      1  decided by discriminator 8 (built here, retired, entry deleted)
+#:     10  `measurement-is-the-loop` -- `for _ in range(n)`, target DISCARDED, results reduced
+#:                                     to a statistic. Structurally identical to the retry-loop
+#:                                     shape the MISCLASSIFIED bucket already wants a
+#:                                     discriminator for. STILL A COLLECTOR DEFECT; next.
+#:      3  `retained-fallback`       -- the call is dominated by the failure branch of an
+#:                                     already-batched primary. A dominator check over the
+#:                                     enclosing try/returncode structure. Mechanical, harder.
+#:     ~39  a claim about a CLI's argument surface (the `structural-floor` bulk plus
+#:                                     `no-primitive`). NOT statically decidable, by anyone.
+#:
+#: THE ~39 STILL DO NOT GET PROSE. The right form already exists in this tree, once:
+#: `TestOwnFrozenDiffShas::test_ranges_resolve_independently` MEASURES the rev-list
+#: global-exclusion narrowing rather than asserting it, so the claim fails loudly if git's
+#: behaviour ever changes. "`git config --unset` accepts one key" is a RUNNABLE assertion, not
+#: an opinion -- and a runnable one is the only kind that cannot rot silently, which is the
+#: whole defect the adversarial pass found. An exemption that runs is a test; an exemption that
+#: does not is a claim.
+#:
+#: So every entry here is owed one of two things, and a comment is neither:
+#:
+#:     a widened discriminator   (14 -- the collector is wrong), or
+#:     an executable oracle      (~39 -- the claim is real, unmeasured, and rots silently).
+#:
+#: Sequencing note for whoever builds this: BOTH 6 AND 7 SUPPRESS, and so does everything
+#: proposed here. An over-broad widening silences a REAL amplification site and nothing
+#: downstream notices -- the inverted safety direction this module's own docstring warns about,
+#: and the one place this program can do harm. Each extension ships MEASURED: suppresses exactly
+#: the intended keys and nothing else -- discriminator 8 shipped that way (measured: exactly one
+#: key retired, zero keys outside the register silenced), and that measurement is also what
+#: refuted the 43 estimate above. Measuring the widening was worth more than the widening.
+#:
+#: Next, in order of remaining mechanical yield: `measurement-is-the-loop` (10 keys, the
+#: `for _ in range(n)` discard-target shape, which also retires 3 of the MISCLASSIFIED
+#: retry-loop rows with the same matcher), then `retained-fallback` (3). After that the
+#: register is entirely CLI-surface claims, and the work stops being discriminators and becomes
+#: oracles. Until then, entries 2..N of any shared block remain UNVERIFIED BY CONSTRUCTION.
 #:
 #: Known, LIVE, outstanding exemptions -- what remains AFTER the varying-argv0 discriminator
 #: (see module docstring, discriminator 4). G1's comment here reserved this register for G2
@@ -373,7 +490,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # 2026-08-17 -- # class: measurement-is-the-loop. The spawn loop IS the measurement. `_spawn_n_processes` times N sequential
     # `python -c "import <module>"` children as the fan-in arm's control; batching the N imports
     # into one child measures a different quantity and voids the comparison the module exists for.
-    ('coordinator_core/benchmarks/shim_fanin_measure.py', '_spawn_n_processes', 'run'),
     # 2026-08-17 -- # class: measurement-is-the-loop. One FRESH login shell per entrypoint is
     # the subject under test: the probe
     # reports how each entrypoint resolves on the PATH a login shell builds. The two spawns per
@@ -381,24 +497,27 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # would report one shell's resolution N times. NOT decided by the varying-argv0 discriminator
     # -- `shell` (argv0) is loop-invariant here; only the script text varies, which the four
     # measured argv0 shapes do not reach.
-    # 2026-08-19 -- # class: measurement-is-the-loop. THE SAMPLING LOOP IS THE MEASUREMENT. Each of the five below draws N
-    # independent timing samples (`for _ in range(n)`, target discarded) and reduces them to a
-    # statistic: `min` for a cold-start floor, a coefficient of variation for its stability.
-    # Collapsing N draws into one invocation does not measure the same quantity faster -- it
-    # measures a DIFFERENT quantity, a single draw, and destroys the variance the statistic is
-    # computed over. Deliberately exempted rather than decided by a discriminator: the shape
-    # here (a spawn whose arguments are entirely loop-invariant) is indistinguishable to a
-    # static pass from genuinely redundant repeated work, which IS amplification. Only a human
-    # can say which one a given repetition is, which is what this register is for.
-    ('coordinator_core/benchmarks/floor.py', 'measure_floor', 'time_invocation'),
-    ('coordinator_core/benchmarks/harness.py', '_collect_samples', 'time_invocation'),
-    ('coordinator_core/benchmarks/measure_read_events.py', 'measure', '_time_probe'),
-    ('coordinator_core/benchmarks/measure_render_status.py', 'measure', '_time_probe'),
-    (
-        'coordinator_core/benchmarks/measure_render_status.py',
-        'measure_bare_import',
-        '_time_bare_import',
-    ),
+    # RETIRED 2026-08-19 -- the five sampling-loop entries that stood here are now decided
+    # structurally by DISCRIMINATOR 9 (`_is_repetition_loop`), and their keys are deleted.
+    #
+    # Kept as a marker because of what the block ARGUED, which was this, verbatim:
+    #
+    #     "Deliberately exempted rather than decided by a discriminator: the shape here (a spawn
+    #      whose arguments are entirely loop-invariant) is indistinguishable to a static pass
+    #      from genuinely redundant repeated work, which IS amplification. Only a human can say
+    #      which one a given repetition is, which is what this register is for."
+    #
+    # That is false, and it was refuted by building the pass it said could not exist:
+    # discriminator 9 retired all five, measured, with ZERO keys silenced outside the register.
+    # The distinguisher the argument called impossible is the DISCARDED TARGET -- a loop that
+    # never reads its own target back is a repetition, and one whose count derives from a
+    # collection's size is a fan-out. Both are visible in the AST.
+    #
+    # Worth leaving here, because this is the register's own self-justification failing on the
+    # merits: it did not merely record a wrong exemption, it argued that mechanising the class
+    # was IMPOSSIBLE, and that argument is what kept five decidable keys in prose. When a future
+    # entry says a static pass cannot decide it, this is the precedent for trying anyway before
+    # believing it.
     # 2026-08-19 -- # class: retained-fallback. Retained per-item fallback behind a batched
     # hot path. The batch is the
     # primary call; the per-item loop the collector counts fires only when that batch spawn
@@ -407,11 +526,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # the fallback to clear the key would trade a degrade-on-failure posture for a metric --
     # forbidden by name in `state/ledgers/amp-cfinal-exemption-ledger.md`. Precedent:
     # `orphan_branch_sweep.py::main`, frozen in `_KNOWN_SITES` on the same argument.
-    (
-        'coordinator/bin/publish.py',
-        '_argv_parity_pairing_origin_batch',
-        '_argv_parity_pairing_origin',
-    ),
     # 2026-08-19 -- # class: no-primitive-MEASURED-wrong. No batch primitive, and this one was
     # MEASURED after a batched version of it
     # was written and found wrong. `git rev-list` cannot express a union of ranges: its
@@ -421,11 +535,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # the call site. Pinned by `TestOwnFrozenDiffShas::test_ranges_resolve_independently`,
     # which fails against the batched form. Checked against the walking seams per the ledger's
     # primitive-absence doctrine correction: inapplicable, this needs commit history.
-    (
-        'coordinator_core/ops/review_trail_write.py',
-        '_own_frozen_diff_shas',
-        '_git_runner',
-    ),
     # 2026-08-19 -- # class: structural-floor. N ROOTS, N SPAWNS, not an unbatched loop. No git
     # invocation spans multiple `-C` roots, so one spawn per DISTINCT destination worktree is
     # the minimum however the loop is arranged; relocating it only moves the flag. Checked
@@ -433,11 +542,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # do not apply -- this needs `git status`, which no filesystem walk can serve. Precedent,
     # architecturally identical and already frozen: `publish.py::_publish_relevant_allowlist_
     # leg` -> `_git_ls_tree_entries_files`.
-    (
-        'coordinator/bin/publish.py',
-        '_argv_parity_pairing_origin_batch_by_root',
-        '_argv_parity_pairing_origin_batch',
-    ),
     # 2026-08-19 -- # class: structural-floor. Isolation is the contract, evidenced by a live
     # failure. `scan-secrets` is
     # target-scoped (peer-repo pattern, `registry_codenames` guard), so each row must be handed
@@ -445,7 +549,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # "over-inclusive is safe" reading and raised HIGH-tier findings against other rows'
     # sources under the wrong ruleset (observed 2026-08-18, recorded at the call site).
     # Batching reintroduces exactly that defect.
-    ('coordinator/bin/percolate-mirror.py', '_run_gate_legs', '_run'),
     # 2026-08-19 -- # class: structural-floor. Isolation is the contract (anti-forgery gate). Each
     # `ForeignSessionRangeRefused` names the specific offending `reviewed_range` entry; a
     # batched resolve destroys the per-entry attributability AC1c depends on, and this seam's
@@ -459,12 +562,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # plan's anti-scope. `_first_invalid_pathspec` is this wave's own: its batched
     # `git ls-files -- <all>` confirms "all valid" in one spawn and falls back to the per-item
     # check only to name WHICH entry is bad.
-    (
-        'coordinator/bin/coordinator-safe-commit.py',
-        '_first_invalid_pathspec',
-        '_validate_pathspec',
-    ),
-    ('coordinator_core/ops/cutover_gate.py', '_reverify_test_node_ids_batch', '_run_pytest_batch'),
     # 2026-08-19 (wave 4) -- # class: measurement-is-the-loop. The loop body IS the subject,
     # so collapsing it measures a different thing or destroys the property it exists for.
     # `_interactive_gate` spawns only when the OPERATOR types `d` for one file's diff --
@@ -474,10 +571,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # whether to continue. The two `_is_tracked` rows are act-time TOCTOU rechecks fired
     # immediately before their own `unlink()`; both already carry an in-source refusal naming
     # this same sweep, because hoisting either widens the window the recheck exists to narrow.
-    ('coordinator/bin/refresh-plugin-live-install.py', '_interactive_gate', '_git'),
-    ('coordinator_core/ops/find_polluter.py', 'main', 'run'),
-    ('coordinator_core/ops/distill_apply_disposal.py', 'apply_disposal_manifest', '_is_tracked'),
-    ('coordinator_core/ops/fleet/_findings_reap.py', 'reap_findings', '_is_tracked'),
     # 2026-08-19 (wave 4) -- # class: no-primitive-MEASURED-wrong. Absence was measured at the
     # callee, never asserted from the call site. The `rev-list` cluster is one finding: git
     # cannot express a UNION of ranges, since its exclusions are global (`rev-list A..B C..D`
@@ -491,27 +584,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # hypothetical batch form would need per-item demultiplexing rather than a collapse.
     # Every row checked against the walking seams first: none is a `--show-toplevel`/`--git-dir`
     # shape, so none converts to a zero-spawn removal.
-    ('coordinator_core/coverage.py', '_reviewed_via_graph_walk', '_run'),
-    (
-        'coordinator_core/ops/plan_suggest_completion_steps.py',
-        '_plans_with_review_trail_coverage',
-        '_resolve_range_shas',
-    ),
-    ('coordinator_core/ops/review_coverage_core.py', 'build_reviewed_set', '_run'),
-    ('coordinator_core/ops/review_coverage_core.py', 'build_segments', '_run'),
-    (
-        'coordinator_core/ops/review_trail_readjudication_report.py',
-        'compute_readjudication_report',
-        '_full_range_shas',
-    ),
-    (
-        'coordinator/bin/workday-complete-reconcile.py',
-        'run_completion_reconcile',
-        '_run_reconcile_append',
-    ),
-    ('coordinator/bin/workday-start-reconcile-sweep.py', 'run_sweep', '_run_reconcile_helper'),
-    ('coordinator/bin/workweek-complete-close.py', 'run_reconcile_sweep', '_run_reconcile_helper'),
-    ('coordinator/bin/merge-release-notes-derive.py', 'cmd_reconcile_sweep', '_run_sibling_cli'),
     # 2026-08-19 (wave 4, C13) -- # class: structural-floor. N ROOTS, N SPAWNS. The loop here
     # iterates contributing SOURCE ROOTS, not allowlist entries, and hands every entry belonging
     # to a root to `_git_ls_tree_entries_files` in ONE call -- per-entry batching is already
@@ -523,11 +595,6 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # concurrent session's uncommitted work, and ran once that landed and the file went clean.
     # Re-derived at disposition: the two REGROWTH keys the plan predicted from
     # `_commit_published_dests` are NOT observed, though the function is present at HEAD.
-    (
-        'coordinator/bin/publish.py',
-        '_publish_relevant_allowlist_leg',
-        '_git_ls_tree_entries_files',
-    ),
     # 2026-08-19 (wave 4) -- # class: structural-floor. One spawn per DISTINCT target is the
     # minimum however the loop is arranged, so relocating the call only moves the flag. Three
     # shapes recur: N distinct WORKTREE ROOTS (no git invocation spans multiple `-C` roots);
@@ -546,45 +613,19 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # never O(items) -- the loop the collector sees iterates BATCHES, not entries, and
     # discriminator 7 misses it only because the loop target is a `Path` list rather than a
     # raw argv splice.
-    ('coordinator/bin/age-sweep-lessons.py', '_batched_git_mv_into_dir', 'run'),
-    ('coordinator/bin/check-mcp-versions.py', 'main', '_npm_latest'),
-    ('coordinator/bin/coordinator-harvest-deferrals.py', '_harvest', '_run_lesson_promote'),
-    ('coordinator/bin/coordinator-harvest-deferrals.py', '_harvest', '_run_queue_append'),
-    ('coordinator/bin/emit-goal-from-artifact.py', 'main', 'run'),
-    ('coordinator/bin/reap-orphaned-in-flight-handoffs.py', 'main', '_run_archive_stamp_cli'),
-    (
-        'coordinator/bin/workday-complete-close.py',
-        'cmd_backfill_dispatch_rows',
-        '_dispatch_step9_row',
-    ),
     ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'worktree_is_dirty'),
     ('coordinator_core/install/first_run.py', '_seed_machine_local_registry', '_run'),
-    ('coordinator_core/install/maximalist.py', '_run_body', '_run_compileall'),
-    ('coordinator_core/install/prereq_probe.py', 'probe_clone_auth', '_run'),
-    (
-        'coordinator_core/install/uninstall_legs.py',
-        'uninstall_reverse_git_config_group',
-        'config_unset',
-    ),
-    ('coordinator_core/ops/backfill_initiative_fk.py', '_process_pairs', 'run'),
-    ('coordinator_core/ops/bootstrap_orchestrate.py', 'main', '_git'),
-    ('coordinator_core/ops/bootstrap_orchestrate.py', 'main', 'run'),
-    (
-        'coordinator_core/ops/ceremony/tail_ops.py',
-        'fire_archive_sweeps_detached',
-        'spawn_detached',
-    ),
-    ('coordinator_core/ops/check_atlas_watch_drift.py', 'run', '_watch_line'),
-    ('coordinator_core/ops/configure_git.py', 'main', '_git_config_set'),
     ('coordinator_core/ops/fleet/_common.py', 'archive_and_commit', 'create_subprocess_exec'),
-    ('coordinator_core/ops/fleet/_common.py', 'rm_and_commit', 'create_subprocess_exec'),
     ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
-    ('coordinator_core/ops/render_template_tree.py', 'main', 'run'),
-    ('coordinator_core/ops/run_pre_ci_hooks.py', '_run_pre_ci_hooks', 'run'),
-    ('coordinator_core/ops/setup_chain_walker.py', 'dep_probe_all', 'dep_probe'),
     ('coordinator_core/ops/updatedocs_gates.py', '_gate_queue_prune_sweep', '_run'),
     ('coordinator_core/ops/workweek_reverse_drift_gate.py', 'run_gate', 'run'),
-    ('coordinator_core/percolate/engine.py', 'run_entrypoint_gate', '_run_one_entrypoint'),
+    # RETIRED 2026-08-19 -- `percolate/engine.py::run_entrypoint_gate::_run_one_entrypoint` stood
+    # here as "N distinct EXECUTABLES". True, and already decidable: the helper spells it
+    # `script_path = root / rel` then `[interpreter, str(script_path), "--help"]`, which is the
+    # shape `_helper_spawn_argv0_params`' docstring names as its motivating case. It declined
+    # only because that function merged its two binding maps with the argv0-HEAD map last, so
+    # `argv` resolved to the bare `sys.executable` and nothing could look past the interpreter.
+    # One merge order, measured: exactly this key, zero collateral.
 }
 
 
@@ -674,6 +715,16 @@ def _module_level_literal_names(tree: ast.Module) -> set[str]:
             and isinstance(node.value, (ast.List, ast.Tuple, ast.Set, ast.Dict))
         ):
             names.add(node.targets[0].id)
+        #: `_ARCHIVE_SWEEP_SCRIPTS: tuple[str, ...] = (...)` is the same constant wearing an
+        #: annotation, and reading only `ast.Assign` missed every one of them. The literal is
+        #: what discriminator 2 keys on; whether the author annotated it is not a property of
+        #: the loop. Retired one register entry that had been filed as "N distinct EXECUTABLES".
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.value, (ast.List, ast.Tuple, ast.Set, ast.Dict))
+        ):
+            names.add(node.target.id)
     return names
 
 
@@ -688,6 +739,75 @@ def _unwrap_literal_wrapper(node: ast.expr) -> ast.expr:
         if isinstance(func, ast.Attribute) and func.attr == "items":
             return func.value
     return node
+
+
+def _function_local_literal_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Names bound INSIDE `fn` to a literal sequence and only ever grown by `.append(...)`.
+
+    Discriminator 2's safety argument is "the iteration count is fixed at author time, not by
+    input size", and that argument is untouched by an append: `hosts = ['git@github.com',
+    'git@gitlab.com']` followed by a conditional `hosts.append(probe_url)` runs 2 or 3 times, both
+    compile-time constants. The rule already accepted exactly this shape at MODULE scope; the
+    only thing keeping `prereq_probe.probe_clone_auth` in the register was that its constant is
+    function-local.
+
+    Declines on anything that can grow by an unknown amount -- `extend`, `+=`, `.update`, a
+    rebind, a comprehension, or handing the name to a call that could mutate it. Those are the
+    shapes where length stops being author-time knowable, and this SUPPRESSES, so an uncertain
+    name must not qualify."""
+    bound: dict[str, int] = {}
+    disqualified: set[str] = set()
+
+    #: An `append` INSIDE a loop runs once per iteration, so the sequence's length is the loop's
+    #: length -- input-sized, not author-time. Counting append STATEMENTS without this check was
+    #: measured over-broad on 2026-08-19: it silenced seven sites where one was intended,
+    #: including two act-time TOCTOU rechecks and `review_trail_write._own_frozen_diff_shas`.
+    #: `results = []` grown in a loop and then iterated is the single most common shape in this
+    #: tree, and it is genuine amplification every time.
+    for loop in ast.walk(fn):
+        if not isinstance(loop, (ast.For, ast.AsyncFor, ast.While, *_COMPREHENSIONS)):
+            continue
+        for inner in ast.walk(loop):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Attribute)
+                and isinstance(inner.func.value, ast.Name)
+            ):
+                disqualified.add(inner.func.value.id)
+
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                for name in _names_in(target):
+                    if isinstance(target, ast.Name) and isinstance(
+                        node.value, (ast.List, ast.Tuple, ast.Set, ast.Dict)
+                    ):
+                        bound[name] = bound.get(name, 0) + 1
+                    else:
+                        disqualified.add(name)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            for name in _names_in(node.target):
+                if isinstance(node.target, ast.Name) and isinstance(
+                    node.value, (ast.List, ast.Tuple, ast.Set, ast.Dict)
+                ):
+                    bound[name] = bound.get(name, 0) + 1
+                else:
+                    disqualified.add(name)
+        elif isinstance(node, ast.AugAssign):
+            disqualified |= _names_in(node.target)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            disqualified |= _names_in(node.target)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                if func.attr != "append":
+                    disqualified.add(func.value.id)
+            #: Passed as an argument -- the callee may mutate it by any amount.
+            for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                if isinstance(arg, ast.Name):
+                    disqualified.add(arg.id)
+
+    return {name for name, count in bound.items() if count == 1 and name not in disqualified}
 
 
 def _is_constant_literal_iterable(node: ast.expr, literal_names: set[str]) -> bool:
@@ -875,6 +995,95 @@ def _argv0_expr(
     return None
 
 
+def _argv_list_elts(
+    argv_arg: ast.expr, bindings: dict[str, ast.expr] | None = None
+) -> list[ast.expr] | None:
+    """The LEADING argv list's elements, for the same shapes `_argv0_expr` resolves -- a `List`
+    literal, the left arm of an `Add` chain, or a bare `Name` resolved one hop through
+    `bindings`. `None` when no list literal is reachable.
+
+    `_argv0_expr` answers "what is at position 0"; this answers "what are the first few
+    positions", which is what discriminator 11 needs to look PAST a fixed interpreter."""
+    if isinstance(argv_arg, ast.List):
+        return list(argv_arg.elts)
+    if isinstance(argv_arg, ast.BinOp) and isinstance(argv_arg.op, ast.Add):
+        return _argv_list_elts(argv_arg.left, bindings)
+    if bindings and isinstance(argv_arg, ast.Name) and argv_arg.id in bindings:
+        return _argv_list_elts(bindings[argv_arg.id], bindings)
+    return None
+
+
+def _is_fixed_interpreter_expr(expr: ast.expr) -> bool:
+    """True for `sys.executable` -- the one program name in this tree that is FIXED while the
+    thing actually being run varies.
+
+    Deliberately just this. A parameter named `interpreter` might hold a fixed interpreter or
+    might be the very thing varying per iteration, and a suppressor that guessed would silence
+    a real fan-out over interpreters. `sys.executable` is unambiguous: it is this process's own
+    interpreter, constant for the run."""
+    return (
+        isinstance(expr, ast.Attribute)
+        and expr.attr == "executable"
+        and isinstance(expr.value, ast.Name)
+        and expr.value.id == "sys"
+    )
+
+
+def _program_identity_expr(
+    argv_arg: ast.expr, bindings: dict[str, ast.expr] | None = None
+) -> ast.expr | None:
+    """The expression that names WHICH PROGRAM this spawn runs -- argv[0] normally, but argv[1]
+    when argv[0] is a fixed interpreter.
+
+    Discriminator 6 reads argv[0] and asks whether it varies with the loop. That is the right
+    question and the wrong slot for most of this repo: the dominant spawn shape here is
+    `[sys.executable, str(SCRIPT), ...]`, where argv[0] is constant for every iteration and the
+    SCRIPT is what differs. Sibling CLIs, per-plugin drift commands, drop-in health legs and
+    bare entrypoint probes all wear it. Reading argv[0] alone, discriminator 6 sees one fixed
+    program and correctly declines -- while the loop is in fact running N different programs.
+
+    DECLINES when a flag sits between the interpreter and the script (`[sys.executable, "-m",
+    ...]`): what a flag consumes is not knowable from the AST, so argv[1] stops being the
+    program-identity slot and guessing would suppress on a position that means something else.
+    Falls back to argv[0] whenever no list literal is reachable."""
+    elts = _argv_list_elts(argv_arg, bindings)
+    if not elts:
+        return _argv0_expr(argv_arg, bindings)
+    head = elts[0]
+    if not _is_fixed_interpreter_expr(head):
+        return head
+    if len(elts) < 2:
+        return None
+    second = elts[1]
+    if isinstance(second, ast.Constant) and isinstance(second.value, str):
+        if second.value.startswith("-"):
+            return None
+    return second
+
+
+def _program_identity_varies_with_loop_target(
+    call: ast.Call, tainted: frozenset[str], bindings: dict[str, ast.expr] | None = None
+) -> bool:
+    """DISCRIMINATOR 11 -- a different PROGRAM each iteration, read at the slot that actually
+    names the program.
+
+    Same fact as discriminator 6, and the same unbatchability argument: there is no single
+    program for a batched call to share, so the sibling gate's remedy has nothing to hoist. The
+    only change is WHERE the program name is read from -- `_program_identity_expr` looks past a
+    fixed `sys.executable` to the script path behind it.
+
+    Carries discriminator 6's own restriction unchanged: the caller must apply this only to a
+    call that IS the recognized spawn syscall. At a wrapper call site `args[0]` is the wrapper's
+    parameter, not an OS argv, and reading a program identity out of it is the false suppression
+    discriminator 6 already shipped once."""
+    if not tainted or not call.args:
+        return False
+    identity = _program_identity_expr(call.args[0], bindings)
+    if identity is None:
+        return False
+    return bool(_names_in(identity) & tainted)
+
+
 def _loop_argv0_bindings(loop: ast.AST) -> dict[str, ast.expr]:
     """Name -> its resolved `argv0` expression, for every single-target `ast.Assign`/
     `ast.AnnAssign` in `loop`'s subtree whose RHS itself resolves via `_argv0_expr` -- the
@@ -979,10 +1188,23 @@ def _splices_name_from(node: ast.expr, target_names: set[str]) -> bool:
         and len(node.args) == 1
     ):
         return _splices_name_from(node.args[0], target_names)
+    #: An ELEMENTWISE comprehension over the group is the same proof one step later:
+    #: `*[str(s) for s in batch]` puts every member of `batch` into this one argv, exactly as a
+    #: bare `*batch` would. `age-sweep-lessons._batched_git_mv_into_dir` is the real shape --
+    #: already byte-budget chunked, so its spawn count is O(argv_bytes), never O(items), and it
+    #: sat in the register as a `structural-floor` claim only because the matcher stopped at a
+    #: bare `Name`. Restricted to ONE generator with no `async`: a nested comprehension does not
+    #: carry one loop's group, and `ifs` are harmless because filtering shrinks the group rather
+    #: than multiplying spawns.
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        if len(node.generators) == 1 and not node.generators[0].is_async:
+            return _splices_name_from(node.generators[0].iter, target_names)
     return False
 
 
-def _argv_splices_loop_target(call: ast.Call, target_names: set[str]) -> bool:
+def _argv_splices_loop_target(
+    call: ast.Call, target_names: set[str], bindings: dict[str, ast.expr] | None = None
+) -> bool:
     """True when `call`'s first positional argument is an argv-shaped expression that splices a
     loop-target name into itself as a sequence -- `<List> + chunk`, `chunk + <List>`, a chain of
     either, or `[*base, *chunk]`.
@@ -991,10 +1213,58 @@ def _argv_splices_loop_target(call: ast.Call, target_names: set[str]) -> bool:
     declines, because a call passing the loop target ALONE says nothing about whether that
     target is one item or a group -- `for path in paths: _run(argv_for(path))` and `for chunk in
     chunks: _run(chunk)` are indistinguishable at this seam, and declining is the safe direction
-    for a suppressor."""
+    for a suppressor.
+
+    ONE-HOP LOCAL BINDING (2026-08-19). That bare-`Name` decline was over-strict for the most
+    common spelling of the very idiom this discriminator exists for: the chunker builds argv as
+    its own statement and then passes the local --
+
+        cmd = log_cmd_base + revision_args + ["--"] + batch
+        subprocess.run(cmd, ...)
+
+    -- so `args[0]` is `Name('cmd')` and the splice is one assignment away. `bindings`
+    (`_loop_expr_bindings`, argv-shaped RHSs only) resolves that hop, which is the SAME
+    treatment discriminator 6 has always given argv0. Measured cost of not having it: two keys
+    sat in the registers on a stated reason that was wrong -- the MISCLASSIFIED note for
+    `percolate-gate._git_log_batched` blamed a missing multi-operand `BinOp(Add)` walk, but
+    `_argv_expr_splices` already recurses through chains; the local binding was the actual gap,
+    and the fix the note prescribed would not have retired the key.
+
+    Resolving a binding is NOT the same relaxation the bare-`Name` rule refuses: after the hop
+    the real `List`/`BinOp` shape is in hand and the sequence-splice test runs against it
+    unchanged. A name bound to anything not argv-shaped still declines, and the loop target
+    itself is never resolvable -- it is not assigned in the loop body."""
     if not target_names or not call.args:
         return False
-    return _argv_expr_splices(call.args[0], target_names)
+    argv = call.args[0]
+    if isinstance(argv, ast.Name) and bindings and argv.id in bindings:
+        argv = bindings[argv.id]
+    return _argv_expr_splices(argv, target_names)
+
+
+def _loop_expr_bindings(loop: ast.AST) -> dict[str, ast.expr]:
+    """Name -> its full right-hand-side expression, for every single-target `ast.Assign` in
+    `loop`'s subtree whose RHS is argv-SHAPED (a `List` or an `Add` `BinOp`).
+
+    Discriminator 7's one-hop resolution. `_loop_argv0_bindings` is the sibling of this for
+    discriminator 6 and keeps only the extracted argv0 HEAD; discriminator 7 needs the whole
+    expression, because what it asks is whether the loop target is spliced in as a SEQUENCE
+    anywhere in argv, not what sits at position zero.
+
+    Restricted to argv-shaped RHSs on purpose: a name bound to anything else tells this
+    discriminator nothing, and resolving it would only widen a suppressor."""
+    bindings: dict[str, ast.expr] = {}
+    for node in ast.walk(loop):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if isinstance(node.value, ast.List) or (
+            isinstance(node.value, ast.BinOp) and isinstance(node.value.op, ast.Add)
+        ):
+            bindings[target.id] = node.value
+    return bindings
 
 
 def _argv_expr_splices(argv: ast.expr, target_names: set[str]) -> bool:
@@ -1358,6 +1628,761 @@ def _forwarded_arg_slots(
     return out
 
 
+def _arg_expr_for_param(
+    call: ast.Call, callee_fn: ast.FunctionDef | ast.AsyncFunctionDef, param: str
+) -> ast.expr | None:
+    """The ARGUMENT EXPRESSION `call` supplies for `callee_fn`'s parameter `param` -- positional
+    by index, keyword by name. `None` when the slot is not filled at this call site (the
+    parameter falls back to its default, which is loop-invariant by construction and therefore
+    cannot be what varies).
+
+    Distinct from `_forwarded_arg_slots`, which runs the other direction and only recognises a
+    bare `Name`: discriminator 8 needs the whole expression (`entry["cmd"]`, `spec.exe`,
+    `_resolve(tool)`) because the program name at a real per-item spawn is rarely a bare local.
+    Never guesses a slot -- `*args`/`**kwargs` forwarding declines, since which parameter
+    receives what is not statically known there and a suppressor must not guess."""
+    positional = _func_positional_params(callee_fn)
+    for i, arg in enumerate(call.args):
+        if isinstance(arg, ast.Starred):
+            return None
+        if i < len(positional) and positional[i] == param:
+            return arg
+    for kw in call.keywords:
+        if kw.arg is None:
+            return None
+        if kw.arg == param:
+            return kw.value
+    return None
+
+
+def _helper_spawn_argv0_params(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, spawn_linenos: set[int]
+) -> set[str]:
+    """Parameters of `fn` that ARE the argv0 of a spawn `fn` itself performs.
+
+    The interprocedural half of discriminator 8. Walks `fn`'s own body for a recognized spawn
+    call, extracts that call's `argv[0]` with `_argv0_expr` (resolved through `fn`-local
+    assignment bindings, the same one-hop idiom discriminator 6 already handles at route a),
+    and keeps the result only when it is a bare `Name` naming one of `fn`'s own parameters.
+
+    Deliberately narrow. The program-identity slot being caller-supplied is the only shape that
+    lets a caller's loop vary the program. An identity built from a module constant, a literal,
+    or a closure is loop-invariant no matter what the caller does, and returning it here would
+    suppress a real amplification site.
+
+    Reads the identity via `_program_identity_expr`, not `_argv0_expr`, so it looks past a fixed
+    `sys.executable` to the script behind it -- and MATCHES ON REFERENCE rather than on a bare
+    parameter `Name`. Both were measured necessities, not generalisation for its own sake: the
+    real helpers spell it `script_path = root / rel` then `[interpreter, str(script_path), ...]`,
+    so the identity expression REFERENCES the parameter through an assignment and a call instead
+    of being one. Requiring a bare `Name` retired one key of six.
+
+    Referencing a parameter from the identity slot is still a strong claim: it says the caller
+    supplies part of WHICH PROGRAM RUNS, never merely an argument to a fixed one. The slot does
+    the discriminating; the reference only says who filled it."""
+    params = set(_func_params(fn))
+    if not params:
+        return set()
+    bindings = _loop_argv0_bindings(fn)
+    local = _loop_expr_bindings(fn)
+    out: set[str] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or node.lineno not in spawn_linenos:
+            continue
+        if _call_callee_name(node) not in _SPAWN_API_NAMES or not node.args:
+            continue
+        #: MERGE ORDER IS LOAD-BEARING, and was backwards until 2026-08-19. `bindings`
+        #: (`_loop_argv0_bindings`) holds only the extracted argv0 HEAD; `local`
+        #: (`_loop_expr_bindings`) holds the FULL argv expression. With `bindings` last, a name
+        #: present in both resolved to the bare head -- `sys.executable` -- and
+        #: `_program_identity_expr` could never look past the interpreter to the script behind
+        #: it, which is the exact shape this function's docstring above says it was built for.
+        #: `local` is strictly more informative wherever both hold a name, so it wins.
+        identity = _program_identity_expr(node.args[0], {**bindings, **local})
+        if identity is None:
+            continue
+        out |= _names_in_through_assignments(identity, fn) & params
+    return out
+
+
+def _names_in_through_assignments(expr: ast.expr, fn: ast.AST) -> set[str]:
+    """Every name `expr` references, followed back through single-target assignments in `fn`.
+
+    `script_path = root / rel` then `str(script_path)` references `rel` as far as this is
+    concerned. Bounded by a fixed-point over `fn`'s own assignments, so it terminates and never
+    leaves the function."""
+    assigns: dict[str, ast.expr] = {}
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                assigns.setdefault(target.id, node.value)
+    seen = _names_in(expr)
+    while True:
+        grown = set(seen)
+        for name in list(seen):
+            if name in assigns:
+                grown |= _names_in(assigns[name])
+        if grown == seen:
+            return seen
+        seen = grown
+
+
+def _argv0_varies_through_helper(
+    call: ast.Call,
+    callee: str,
+    index: _FuncIndex,
+    relpath: str,
+    tainted: frozenset[str],
+    spawn_linenos_by_file: dict[str, set[int]],
+) -> bool:
+    """DISCRIMINATOR 8 -- argv0 varies with the loop target ACROSS ONE HELPER HOP.
+
+    Discriminator 6 answers "does this loop spawn a different PROGRAM each iteration", which is
+    unbatchable by construction: there is no single argv0 for a batched call to share, so the
+    sibling gate's remedy (hoist to one call outside the loop) has nothing to hoist. But 6 is
+    restricted to route a -- a call that IS the spawn syscall -- because `args[0]` at a wrapper
+    call site is the wrapper's own parameter, not an OS argv, and applying 6 there caused a real
+    false suppression (a verb-gated `_run_git([verb, '--quiet'], root)`, where `verb` is the loop
+    target but names a git SUBCOMMAND, not a program).
+
+    That restriction is correct and is also why 6 could not see most of this repo: MEASURED
+    2026-08-19 over the 53 entries the exemption register held after adversarial
+    re-verification, 41 of their 65 call sites are route `b-local-helper` and only 16 are route
+    a. Discriminator 6 was structurally blind to three quarters of the population, and the gap
+    was filled with 30 hand-written `structural-floor` exemptions instead of a pass that decides
+    it -- the register's own comment records that trade.
+
+    This closes the gap WITHOUT relaxing 6's guard, by resolving the program name through the
+    helper rather than assuming it:
+
+      1. resolve `callee` to its definition (same-module, else imported -- routes b/c's own
+         discipline, via `_resolve_callee_def`);
+      2. ask which of that function's PARAMETERS is the argv0 of a spawn it performs itself
+         (`_helper_spawn_argv0_params`) -- never a constant, literal, or closure, which no
+         caller can vary;
+      3. read the argument this call site actually supplies for that parameter
+         (`_arg_expr_for_param`); and
+      4. require that argument to reference a loop-tainted name.
+
+    Only then is the program genuinely different each iteration. The verb-gated false
+    suppression cannot recur here: `_run_git([verb, ...], root)` fails step 2, because
+    `_run_git`'s argv0 is the literal `"git"` in its own body, never one of its parameters.
+
+    One hop only, and no fallback: a helper that forwards to a second helper declines rather
+    than chaining. This SUPPRESSES, so it inherits the inversion this module's docstring warns
+    about -- an over-broad match silences a REAL site and nothing downstream notices. Declining
+    a site it cannot decide is the safe direction; suppressing one it guessed at is not."""
+    if not tainted:
+        return False
+    for tgt_relpath, tgt_name in _resolve_callee_def(index, relpath, callee):
+        fn = index.func_defs.get((tgt_relpath, tgt_name))
+        if fn is None:
+            continue
+        argv0_params = _helper_spawn_argv0_params(
+            fn, spawn_linenos_by_file.get(tgt_relpath, set())
+        )
+        for param in argv0_params:
+            supplied = _arg_expr_for_param(call, fn, param)
+            if supplied is not None and (_names_in(supplied) & tainted):
+                return True
+    return False
+
+
+# --------------------------------------------------------------------------
+# Discriminator 14: the loop is a LINEAR SEARCH whose subject is an out-of-band observation.
+# The spawn's job is to perturb something, and the loop exists to find WHICH iteration perturbed
+# it -- so collapsing the loop destroys attribution, which is the whole output. `find_polluter`
+# is the type specimen: it runs one test file, then asks the filesystem whether a stray artifact
+# appeared, and stops at the first one that did.
+#
+# Discriminator 15: the spawn fires only on a branch gated by an OPERATOR KEYPRESS read inside
+# the loop. Spawn count is bounded by human input, not by item count, and the modal path spawns
+# zero.
+# --------------------------------------------------------------------------
+
+#: Expressions that read a fresh answer from the operator. `input()` and `sys.stdin.read*`.
+_OPERATOR_READ_ATTRS = frozenset({"readline", "readlines", "read"})
+
+
+def _reads_operator_input(expr: ast.expr) -> bool:
+    """True when `expr` obtains a value from the interactive operator."""
+    for node in ast.walk(expr):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "input":
+            return True
+        if isinstance(func, ast.Attribute) and func.attr in _OPERATOR_READ_ATTRS:
+            value = func.value
+            #: `sys.stdin.readline()` -- require the stdin qualifier, so an ordinary
+            #: `path.read_text()` or a socket read is not mistaken for a human.
+            if isinstance(value, ast.Attribute) and value.attr == "stdin":
+                return True
+            if isinstance(value, ast.Name) and value.id == "stdin":
+                return True
+    return False
+
+
+def _is_operator_gated_spawn(call: ast.Call, loop: ast.AST | None) -> bool:
+    """DISCRIMINATOR 15 -- the call is reachable only through a test on a value the operator
+    typed DURING this iteration.
+
+    The inside-the-loop-body requirement is the whole narrowness. A stdin read BEFORE the loop is
+    the ITERABLE'S SOURCE, not a per-item gate, and suppressing on that would silence the ordinary
+    "read a work list from stdin, then fan out over it" shape -- which is real amplification and
+    common in this tree."""
+    if loop is None:
+        return False
+    gate_names: set[str] = set()
+    for node in ast.walk(loop):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            if _reads_operator_input(node.value):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for t in targets:
+                    gate_names |= _names_in(t)
+    if not gate_names:
+        return False
+    for node in ast.walk(loop):
+        if not isinstance(node, ast.If) or not (_names_in(node.test) & gate_names):
+            continue
+        if any(sub is call for stmt in node.body for sub in ast.walk(stmt)):
+            return True
+    return False
+
+
+def _is_attribution_search(
+    call: ast.Call, loop: ast.AST | None, tainted: frozenset[str]
+) -> bool:
+    """DISCRIMINATOR 14 -- see the block comment above.
+
+    Requires, inside the enclosing loop and AFTER this call:
+      1. an `If` whose body terminates the iteration (`Return`/`Break`), and
+      2. whose test references NEITHER a loop-tainted name NOR the name this call's result was
+         bound to.
+
+    Clause 2 is what excludes ordinary fail-fast. `if result.returncode: return` reads the
+    SPAWN'S OWN result and is a per-item check on a batchable fan-out; `if os.path.exists(marker)`
+    reads state the spawn perturbed as a side effect, which only a per-item invocation can
+    attribute. Without clause 2 this would silence every early-exit loop in the tree."""
+    if loop is None:
+        return False
+
+    result_names: set[str] = set()
+    for node in ast.walk(loop):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            if any(sub is call for sub in ast.walk(node.value)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for t in targets:
+                    result_names |= _names_in(t)
+
+    #: Every name the loop BINDS -- targets and assignments alike. A test built only from these
+    #: is reading the loop's own working state, never out-of-band state the spawn perturbed.
+    bound_in_loop: set[str] = set()
+    for node in ast.walk(loop):
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            bound_in_loop |= _names_in(node.target)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                bound_in_loop |= _names_in(t)
+        elif isinstance(node, ast.AnnAssign):
+            bound_in_loop |= _names_in(node.target)
+        elif isinstance(node, ast.comprehension):
+            bound_in_loop |= _names_in(node.target)
+        #: MUTATED counts as bound. `covered.add(rel_path)` makes `covered` the loop's own
+        #: accumulator, so `if len(covered) == len(candidate_shas): break` is a
+        #: work-is-complete check, NOT an observation of state the spawn perturbed. Measured
+        #: 2026-08-19: without this, `plan_suggest_completion_steps` matched -- its spawn is
+        #: memoized behind a cache and may well deserve to be quiet, but not for THIS reason.
+        #: Out-of-band means the loop never touches it.
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name):
+                bound_in_loop.add(node.func.value.id)
+
+    excluded = set(tainted) | result_names | bound_in_loop
+    for node in ast.walk(loop):
+        if not isinstance(node, ast.If) or node.lineno <= call.lineno:
+            continue
+        test_names = _names_in(node.test)
+        if not test_names or (test_names & excluded):
+            continue
+        #: MEASURED necessity, 2026-08-19: without requiring a name from OUTSIDE the loop, this
+        #: matched `plan_suggest_completion_steps._plans_with_review_trail_coverage`, whose spawn
+        #: is MEMOIZED behind a cache check. That site may well deserve to be quiet, but not for
+        #: this reason -- a right answer reached by a wrong mechanism is the register's failure
+        #: wearing a discriminator's clothes.
+        if not (test_names - excluded):
+            continue
+        if node.body and isinstance(node.body[-1], (ast.Return, ast.Break)):
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------
+# Discriminator 13: retained per-item fallback behind a batched primary. The batch IS the
+# primary call; the loop the collector counts fires only when that batch fails, recovering
+# per-item attribution instead of collapsing the whole set to one degraded verdict. Deleting the
+# fallback to clear the key would trade a degrade-on-failure posture for a metric.
+#
+# The relationship is entirely local -- no cross-module analysis -- but it wears THREE
+# control-flow shapes, and a predicate handling only the obvious one (loop nested in an `except`)
+# decides one of the three real sites.
+# --------------------------------------------------------------------------
+
+
+def _derived_names(seed: set[str], fn: ast.AST) -> set[str]:
+    """`seed` plus every name assigned from an expression referencing something already in it.
+
+    `outcomes = fut.result()` then `missing = [r for r in refs if r not in outcomes]` -- the
+    guard that gates the fallback tests `missing`, not `outcomes`, so a predicate matching only
+    the directly-bound name misses it. Same bounded fixed-point idiom as
+    `_tainted_names_for_loop`, and bounded for the same reason."""
+    out = set(seed)
+    for _ in range(10):
+        grew = False
+        for node in ast.walk(fn):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            if not (_names_in(node.value) & out):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                for name in _names_in(t):
+                    if name not in out:
+                        out.add(name)
+                        grew = True
+        if not grew:
+            break
+    return out
+
+
+def _carries_whole(expr: ast.expr, names: set[str]) -> bool:
+    """True when `expr` hands one of `names` over WHOLE -- `*N`, a bare `N`, or `N` on either
+    arm of an `Add` chain. This is clause 2: a "batched primary" that does not actually carry the
+    collection is not a primary at all, and without this the predicate would accept any earlier
+    spawn as cover for an unrelated fan-out."""
+    if isinstance(expr, ast.Starred):
+        return _carries_whole(expr.value, names)
+    if isinstance(expr, ast.Name):
+        return expr.id in names
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        return _carries_whole(expr.left, names) or _carries_whole(expr.right, names)
+    if isinstance(expr, (ast.List, ast.Tuple)):
+        return any(_carries_whole(e, names) for e in expr.elts)
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+        if expr.func.id in ("list", "tuple", "sorted", "set") and len(expr.args) == 1:
+            return _carries_whole(expr.args[0], names)
+    return False
+
+
+def _batched_primary_result_names(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    callee: str | None,
+    group_names: set[str],
+    spawn_linenos: set[int],
+) -> set[str]:
+    """Names bound to the result of a BATCHED PRIMARY inside `fn`.
+
+    A primary is either a recognized spawn call, or a call/reference naming the SAME callee the
+    per-item loop calls -- the second clause is what reaches `cutover_gate`, whose primary is
+    `pool.submit(_run_pytest_batch, root, root_refs)` and whose spawn lives one hop inside that
+    callee rather than in this function at all. Either way it must CARRY THE COLLECTION WHOLE."""
+    out: set[str] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        for call in ast.walk(node.value):
+            if not isinstance(call, ast.Call):
+                continue
+            is_spawn = call.lineno in spawn_linenos and _call_callee_name(call) in _SPAWN_API_NAMES
+            names_here = {
+                n.id for n in ast.walk(call) if isinstance(n, ast.Name)
+            }
+            is_same_callee = callee is not None and (
+                _call_callee_name(call) == callee or callee in names_here
+            )
+            if not (is_spawn or is_same_callee):
+                continue
+            operands = list(call.args) + [kw.value for kw in call.keywords]
+            if not any(_carries_whole(a, group_names) for a in operands):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                out |= _names_in(t)
+    return out
+
+
+def _loop_is_gated_on_failure(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    loop: ast.AST,
+    result_names: set[str],
+) -> bool:
+    """Clause 3, the load-bearing one -- the ONLY thing separating a real fallback from "calls a
+    batch, ignores the result, fans out anyway". Relaxing it makes this discriminator silently
+    over-broad, and it SUPPRESSES, so that is the dangerous direction.
+
+    Three shapes, all decided from straight-line statement structure:
+      3a  the loop sits in an `except` handler of a `Try` whose body holds the primary;
+      3b  the loop sits inside an `If` whose test references the primary's result;
+      3c  the loop FOLLOWS an `If` that returns on success -- dominance by early return rather
+          than by nesting, which is `coordinator-safe-commit`'s shape and which a nesting-only
+          matcher misses entirely.
+    """
+    gated = _derived_names(result_names, fn)
+
+    for node in ast.walk(fn):
+        #: 3a -- an except handler containing the loop.
+        if isinstance(node, ast.Try):
+            for handler in node.handlers:
+                if any(sub is loop for sub in ast.walk(handler)):
+                    return True
+        #: 3b -- an `if` on the primary's result (or a name derived from it).
+        if isinstance(node, ast.If) and (_names_in(node.test) & gated):
+            if any(sub is loop for sub in node.body) or any(
+                sub is loop for stmt in node.body for sub in ast.walk(stmt)
+            ):
+                return True
+
+    #: 3c -- a preceding sibling `if` that RETURNS on the success path, at any statement-bearing
+    #: level of the function.
+    for parent in ast.walk(fn):
+        body = getattr(parent, "body", None)
+        if not isinstance(body, list):
+            continue
+        loop_index = next((i for i, stmt in enumerate(body) if stmt is loop), None)
+        if loop_index is None:
+            continue
+        for stmt in body[:loop_index]:
+            if not isinstance(stmt, ast.If) or not (_names_in(stmt.test) & gated):
+                continue
+            if stmt.body and isinstance(stmt.body[-1], (ast.Return, ast.Raise)):
+                return True
+    return False
+
+
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _enclosing_loop_of(fn: ast.AST, call: ast.Call) -> ast.AST | None:
+    """The innermost loop CONSTRUCT in `fn` whose subtree contains `call` -- a `for`/`async for`
+    statement, or a comprehension.
+
+    Comprehensions are not an afterthought here. `publish.py`'s fallback is spelled
+    `return {rm: _pairing(rm, ...) for rm in rel_modules}` inside an `except` handler, so a
+    statement-only matcher decides its sibling and not it -- the same lesson discriminator 9's
+    docstring already records about covering both loop forms."""
+    best: ast.AST | None = None
+    best_lineno = -1
+    for node in ast.walk(fn):
+        if not isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
+            continue
+        if any(sub is call for sub in ast.walk(node)) and node.lineno > best_lineno:
+            best, best_lineno = node, node.lineno
+    return best
+
+
+def _loop_iterables(loop: ast.AST) -> list[ast.expr]:
+    """The expression(s) a loop construct iterates -- `.iter` for a statement, every generator's
+    `.iter` for a comprehension."""
+    if isinstance(loop, (ast.For, ast.AsyncFor)):
+        return [loop.iter]
+    if isinstance(loop, _COMPREHENSIONS):
+        return [gen.iter for gen in loop.generators]
+    return []
+
+
+def _source_names(seed: set[str], fn: ast.AST) -> set[str]:
+    """`seed` plus every name it was DERIVED FROM, following assignments backwards.
+
+    Deliberately NOT a general backward closure over names, and this is the second time this
+    module has had to learn the lesson in the same direction (see `_tainted_names_for_loop`'s
+    inversion warning). A general walk over `_names_in(value)` was written first and MEASURED
+    over-broad on 2026-08-19: from `incoming` in `refresh-plugin-live-install._interactive_gate`
+    it reached `_git`, `checkout_ref`, `live_path` and `diff` -- including the callee's own name
+    -- after which almost any earlier call "carried the collection" and the fallback test passed
+    on a site that is not a fallback at all.
+
+    So: ONE hop, and only through a FILTERING shape -- a comprehension over a bare name, or
+    `list`/`tuple`/`sorted`/`set` of one. That is exactly the provenance `cutover_gate` needs
+    (`missing = [r for r in root_refs if r not in outcomes]`, the only thing connecting its loop
+    to the collection its primary carried) and nothing wider. A derived collection whose
+    provenance runs through a method call or a slice declines, because at that point what the
+    loop iterates is no longer demonstrably the set the primary was handed."""
+
+    def _one_hop(expr: ast.expr) -> set[str]:
+        if isinstance(expr, _COMPREHENSIONS):
+            if len(expr.generators) == 1 and isinstance(expr.generators[0].iter, ast.Name):
+                return {expr.generators[0].iter.id}
+            return set()
+        if (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Name)
+            and expr.func.id in ("list", "tuple", "sorted", "set")
+            and len(expr.args) == 1
+        ):
+            return _one_hop(expr.args[0])
+        if isinstance(expr, ast.Name):
+            return {expr.id}
+        return set()
+
+    out = set(seed)
+    for _ in range(3):
+        grew = False
+        for node in ast.walk(fn):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(_names_in(t) & out for t in targets):
+                continue
+            for name in _one_hop(node.value):
+                if name not in out:
+                    out.add(name)
+                    grew = True
+        if not grew:
+            break
+    return out
+
+
+def _is_batched_primary_fallback(
+    call: ast.Call,
+    callee: str | None,
+    fn: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    spawn_linenos: set[int],
+) -> bool:
+    """DISCRIMINATOR 13 -- see the block comment above."""
+    if fn is None:
+        return False
+    loop = _enclosing_loop_of(fn, call)
+    if loop is None:
+        return False
+    iterables = _loop_iterables(loop)
+    if not iterables:
+        return False
+    #: Walk BACKWARDS from the iterable: the primary may have carried the collection this loop's
+    #: iterable was filtered out of, which is `cutover_gate`'s `missing` <- `root_refs`.
+    group_names = _source_names(
+        {name for it in iterables for name in _names_in(it)}, fn
+    )
+    if not group_names:
+        return False
+    result_names = _batched_primary_result_names(fn, callee, group_names, spawn_linenos)
+    if not result_names:
+        return False
+    return _loop_is_gated_on_failure(fn, loop, result_names)
+
+
+# --------------------------------------------------------------------------
+# Discriminator 12: root-scoped spawn. argv0 is the CONSTANT `git`, and what varies per
+# iteration is the worktree the invocation is scoped TO. No git process spans two `-C` roots,
+# so one spawn per distinct root is the floor however the loop is arranged -- relocating the
+# call only moves the flag. Discriminators 6, 8 and 11 all read the PROGRAM-IDENTITY slot and
+# decline here correctly, because the program really is invariant; nothing in this module read a
+# SCOPING slot until now, and that gap was filled with hand-written `structural-floor` register
+# entries instead (measured 2026-08-19: five of them).
+# --------------------------------------------------------------------------
+
+#: Flags whose FOLLOWING argv element names the tree a git invocation is scoped to. Closed set,
+#: deliberately: these three are the only ones whose operand is a repository/worktree root, and
+#: the discriminator's whole safety argument is that one process cannot serve two of them.
+_SCOPING_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
+
+
+def _scope_operand(elts: list[ast.expr]) -> ast.expr | None:
+    """The argv element a scoping flag scopes to -- `elts[i + 1]` for the first `elts[i]` that is
+    a literal in `_SCOPING_FLAGS`. `None` when no scoping flag is present or it is last.
+
+    Requires `elts[0]` to be the literal `"git"`. Without that the flag semantics are unknowable:
+    `-C` means "change directory" to git and something else entirely to another program, and a
+    suppressor that guessed would silence a real fan-out on a coincidence of spelling."""
+    if not elts:
+        return None
+    head = elts[0]
+    if not (isinstance(head, ast.Constant) and head.value == "git"):
+        return None
+    for i, elt in enumerate(elts[:-1]):
+        if isinstance(elt, ast.Constant) and elt.value in _SCOPING_FLAGS:
+            return elts[i + 1]
+    return None
+
+
+def _only_tainted_in(scope_expr: ast.expr, other_exprs: list[ast.expr], tainted: frozenset[str]) -> bool:
+    """The precision constraint, and the reason this discriminator is not over-broad.
+
+    Suppression is only sound when the loop target reaches the SCOPE and nothing else. Consider
+    `for path in paths: _git(["status", path], root=str(path.parent))` -- the root varies, but so
+    does the pathspec, and THAT dimension is genuinely batchable within one root. Requiring the
+    tainted name to appear nowhere but the scope slot is what separates "N roots, N spawns" from
+    "N items that happen to carry a root with them".
+
+    All five real sites this was measured against satisfy it: their non-scope argv is entirely
+    literals or an already-spliced per-root batch."""
+    if not (_names_in(scope_expr) & tainted):
+        return False
+    for expr in other_exprs:
+        if _names_in(expr) & tainted:
+            return False
+    return True
+
+
+def _root_scoped_direct(
+    call: ast.Call, tainted: frozenset[str], bindings: dict[str, ast.expr] | None
+) -> bool:
+    """Discriminator 12, LEG A -- route a, where the scope is visible in this call's own argv
+    (`["git", "-C", root, ...]`) or in its `cwd=` keyword."""
+    if not tainted or not call.args:
+        return False
+
+    elts = _argv_list_elts(call.args[0], bindings)
+    cwd = next((kw.value for kw in call.keywords if kw.arg == "cwd"), None)
+
+    if elts:
+        scope = _scope_operand(elts)
+        if scope is not None:
+            others = [e for e in elts if e is not scope]
+            if cwd is not None:
+                others.append(cwd)
+            if _only_tainted_in(scope, others, tainted):
+                return True
+
+    #: `cwd=` carries the same fact without a flag -- `subprocess.run(["git", *args], cwd=root)`.
+    #: The argv0 check still applies, so a non-git program's cwd never reaches here.
+    if cwd is not None and elts:
+        head = elts[0]
+        if isinstance(head, ast.Constant) and head.value == "git":
+            if _only_tainted_in(cwd, list(elts), tainted):
+                return True
+    return False
+
+
+def _helper_spliced_params(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, spawn_linenos: set[int]
+) -> set[str]:
+    """Parameters of `fn` that reach a spawn's argv as a `Starred` SPLICE -- the batch dimension.
+
+    Exists for the precision constraint's one legitimate exception. A root-scoped helper is
+    typically called as `_batch(root, entries_for_that_root)`, where BOTH arguments co-vary with
+    the loop: the root is the scope, and `entries` is the per-root group already carried whole in
+    one spawn. Refusing to suppress because a second tainted argument exists would refuse exactly
+    the sites that did their batching correctly -- and a `Starred` splice is the same proof
+    discriminator 7 reads to decide that one call carries a whole group."""
+    params = set(_func_params(fn))
+    if not params:
+        return set()
+    bindings = _loop_argv0_bindings(fn)
+    local = _loop_expr_bindings(fn)
+    out: set[str] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or node.lineno not in spawn_linenos:
+            continue
+        if _call_callee_name(node) not in _SPAWN_API_NAMES or not node.args:
+            continue
+        for elt in _argv_list_elts(node.args[0], {**bindings, **local}) or []:
+            if isinstance(elt, ast.Starred):
+                out |= _names_in_through_assignments(elt.value, fn) & params
+    return out
+
+
+def _helper_spawn_scope_params(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, spawn_linenos: set[int]
+) -> set[str]:
+    """Parameters of `fn` that fill the SCOPE slot of a spawn `fn` performs itself.
+
+    Literally `_helper_spawn_argv0_params`' test moved one slot to the right: same resolution,
+    same reference-not-bare-`Name` matching (the real helpers spell it `["git", "-C", str(root)]`
+    or `cwd=str(cwd)`), same refusal to accept an identity built from a module constant. What
+    differs is only WHICH slot is read, and therefore what the suppression claims -- not "the
+    caller chooses the program" but "the caller chooses the tree"."""
+    params = set(_func_params(fn))
+    if not params:
+        return set()
+    bindings = _loop_argv0_bindings(fn)
+    local = _loop_expr_bindings(fn)
+    out: set[str] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or node.lineno not in spawn_linenos:
+            continue
+        if _call_callee_name(node) not in _SPAWN_API_NAMES or not node.args:
+            continue
+        elts = _argv_list_elts(node.args[0], {**bindings, **local})
+        scope: ast.expr | None = None
+        if elts:
+            scope = _scope_operand(elts)
+            if scope is None:
+                head = elts[0]
+                if isinstance(head, ast.Constant) and head.value == "git":
+                    scope = next((kw.value for kw in node.keywords if kw.arg == "cwd"), None)
+        if scope is None:
+            continue
+        #: The helper's OWN non-scope argv must not carry a parameter either, or a batchable
+        #: pathspec dimension could ride in behind the root. `*rel_modules` is exempt from this
+        #: by construction: a `Starred` splice IS the batch, which is what discriminator 7 reads.
+        others = [e for e in (elts or []) if e is not scope and not isinstance(e, ast.Starred)]
+        other_params = set()
+        for expr in others:
+            other_params |= _names_in_through_assignments(expr, fn) & params
+        scope_params = _names_in_through_assignments(scope, fn) & params
+        out |= scope_params - other_params
+    return out
+
+
+def _root_scoped_through_helper(
+    call: ast.Call,
+    callee: str,
+    index: _FuncIndex,
+    relpath: str,
+    tainted: frozenset[str],
+    spawn_linenos_by_file: dict[str, set[int]],
+) -> bool:
+    """Discriminator 12, LEG B -- routes b/c, the same fact reached through one helper hop.
+    Mirrors `_argv0_varies_through_helper` step for step, reading the scope slot instead of the
+    program slot, and under the same one-hop, no-fallback discipline."""
+    if not tainted:
+        return False
+    for tgt_relpath, tgt_name in _resolve_callee_def(index, relpath, callee):
+        fn = index.func_defs.get((tgt_relpath, tgt_name))
+        if fn is None:
+            continue
+        spawn_linenos = spawn_linenos_by_file.get(tgt_relpath, set())
+        scope_params = _helper_spawn_scope_params(fn, spawn_linenos)
+        #: Arguments filling a SPLICED parameter are the batch dimension, already carried whole
+        #: in one spawn -- they may co-vary with the loop without defeating the constraint.
+        #: Restricted to a BARE NAME, and the restriction is load-bearing (measured 2026-08-19).
+        #: That the helper splices a parameter says only what the helper does with the list; it
+        #: says nothing about whether the CALLER handed it a group or a per-item argv. The real
+        #: refutation: `_run_git(['log', '--format=...', '%s..HEAD' % target], cwd=git_cwd)` in
+        #: `dispatch_checks.check_destructive_git_orphan` splices `args` too, but its list is
+        #: built per iteration around a loop-variant `target` -- a genuinely batchable site, and
+        #: the in-source comment there says so in as many words. A bare `Name` is the shape that
+        #: carries a collection whole (`rel_modules`); a `List` literal is where per-item argv
+        #: hides, so it stays subject to the constraint.
+        batch_exprs = {
+            id(expr)
+            for param in _helper_spliced_params(fn, spawn_linenos)
+            if isinstance((expr := _arg_expr_for_param(call, fn, param)), (ast.Name, ast.Attribute))
+        }
+        for param in scope_params:
+            supplied = _arg_expr_for_param(call, fn, param)
+            if supplied is None or not (_names_in(supplied) & tainted):
+                continue
+            #: Same precision constraint as leg A, applied at the CALL SITE: the tainted name
+            #: that fills the scope slot must fill nothing else this call passes -- except the
+            #: batch dimension above.
+            others = [
+                arg
+                for arg in call.args
+                if arg is not supplied
+                and not isinstance(arg, ast.Starred)
+                and id(arg) not in batch_exprs
+            ] + [
+                kw.value
+                for kw in call.keywords
+                if kw.value is not supplied and id(kw.value) not in batch_exprs
+            ]
+            if _only_tainted_in(supplied, others, tainted):
+                return True
+    return False
+
+
 def _resolve_callee_def(
     index: _FuncIndex, relpath: str, callee: str
 ) -> list[tuple[str, str]]:
@@ -1504,6 +2529,173 @@ def _call_arg_is_argv_shaped(call: ast.Call, param_index: int) -> bool:
 # --------------------------------------------------------------------------
 
 
+def _is_discarded_target(target: ast.expr, body: list[ast.AST]) -> bool:
+    """True when `target` binds nothing the loop body ever reads back.
+
+    Canonically `_`, but decided by USE rather than by name: a target named `i` that no
+    statement references is just as discarded, and a target named `_` that the body somehow
+    reads is not. Any non-`Name` target (tuple unpack, subscript, attribute) declines --
+    unpacking a per-item structure is the opposite of discarding it."""
+    if not isinstance(target, ast.Name):
+        return False
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Name) and node.id == target.id:
+                return False
+    return True
+
+
+def _is_count_bounded_range(iterable: ast.expr) -> bool:
+    """True for `range(...)` whose every argument is a bare `Name` or a `Constant`.
+
+    The argument restriction is the whole safety of discriminator 9. `range(n)` is a repeat
+    count; `range(len(paths))` scales with input size and is exactly the amplification this gate
+    exists to catch, so ANY `Call` in the argument position declines -- `len()` first among
+    them. A `Name` is accepted because a repeat count reaching the loop as a parameter or module
+    constant (`warmup`, `_SAMPLES`, `_RETRIES`) is the shape every real site here uses; the
+    residual risk is a local pre-bound to `len(...)`, which is bounded by the discarded-target
+    requirement above -- with nothing per-item in scope, all N spawns carry IDENTICAL argv, so
+    the loop is a repetition rather than a fan-out over items whatever the count came from."""
+    if not isinstance(iterable, ast.Call):
+        return False
+    if not isinstance(iterable.func, ast.Name) or iterable.func.id != "range":
+        return False
+    if iterable.keywords or not iterable.args:
+        return False
+    return all(isinstance(a, (ast.Name, ast.Constant)) for a in iterable.args)
+
+
+def _names_in_call_args(call: ast.Call) -> set[str]:
+    """Every `Name` referenced anywhere in `call`'s arguments -- positional, starred, and
+    keyword -- but NOT in the callee expression itself.
+
+    Discriminator 10 asks whether the loop's target reaches what is SPAWNED. The callee is
+    excluded deliberately: `runners[kind](argv)` varies the runner with the loop, which is
+    discriminator 6/8's question, not this one."""
+    out: set[str] = set()
+    for arg in call.args:
+        out |= _names_in(arg)
+    for kw in call.keywords:
+        out |= _names_in(kw.value)
+    return out
+
+
+def _is_retry_bounded_range(iterable: ast.expr) -> bool:
+    """True for `range(...)` whose arguments carry an ATTEMPT COUNT rather than a collection
+    size. Looser than `_is_count_bounded_range` (discriminator 9's, which takes only a bare
+    `Name`/`Constant`) because the real retry sites in this tree spell their bound as
+    `range(max(1, _ATTEMPTS))` and `range(1, _MAX_ATTEMPTS + 1)` -- arithmetic and a clamp, not
+    a different KIND of quantity.
+
+    The line that matters is unchanged: `len(...)` anywhere in the arguments declines, and so
+    does any call that is not `max`/`min`. A bound derived from a collection's size is a fan-out
+    however it is spelled, and this discriminator must never reach one."""
+    if not isinstance(iterable, ast.Call):
+        return False
+    if not isinstance(iterable.func, ast.Name) or iterable.func.id != "range":
+        return False
+    if iterable.keywords or not iterable.args:
+        return False
+    for arg in iterable.args:
+        for node in ast.walk(arg):
+            if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name) or node.func.id not in {"max", "min"}:
+                    return False
+    return True
+
+
+def _loop_has_own_early_exit(loop: ast.For | ast.AsyncFor) -> bool:
+    """True when `loop`'s body can leave the loop early -- a `break` that belongs to THIS loop,
+    or any `return`. Nested loops and nested function bodies are not descended into: a `break`
+    inside an inner `for` binds to that inner loop and says nothing about this one."""
+    stack: list[ast.AST] = list(loop.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, (ast.Break, ast.Return)):
+            return True
+        stack.extend(ast.iter_child_nodes(node))
+    return False
+
+
+def _is_retry_loop(loop: ast.For | ast.AsyncFor) -> bool:
+    """DISCRIMINATOR 10 -- a bounded RETRY of one operation, not one spawn per item.
+
+    Discriminator 3 excludes `while` loops wholesale on exactly this reasoning: every measured
+    `while` false positive was a retry, an interactive prompt, or a calendar walk -- bounded by
+    a constant, a human, or a fixed window, never by input size. That a retry spelled
+    `for attempt in range(_MAX_ATTEMPTS)` was still flagged, while the same retry spelled
+    `while attempts < _MAX_ATTEMPTS` was not, is an accident of SPELLING, and the three
+    MISCLASSIFIED `retry-loop` rows in `_KNOWN_SITES` were parked waiting for this matcher.
+
+    Two conditions, both required, and the second is the load-bearing one:
+
+      - the bound is an attempt count, not a collection size (`_is_retry_bounded_range`); and
+      - the loop can exit early (`_loop_has_own_early_exit`) -- a retry stops when it succeeds.
+        A loop that runs all N iterations unconditionally is not retrying anything.
+
+    The caller supplies the third and sharpest condition, at the call rather than the loop: the
+    loop's tainted names must not appear in the spawning call's OWN arguments. That is what
+    separates a retry from a fan-out, and it is checked in
+    `find_unbatched_per_item_spawns` because it is a property of the call, not the loop.
+    MEASURED 2026-08-19: all three real sites name their target `attempt` and read it only for
+    backoff and logging -- never into argv -- so every iteration issues an IDENTICAL spawn, and
+    there is nothing for a batched call to carry.
+
+    SUPPRESSES. The trap this must refuse is `for _ in range(3): run([..., item])` inside an
+    outer per-item loop, where the argv does vary -- caught by the tainted-names condition, not
+    by anything here."""
+    return _is_retry_bounded_range(loop.iter) and _loop_has_own_early_exit(loop)
+
+
+def _comp_elt_expr(
+    node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+) -> ast.AST:
+    """A comprehension's element expression as ONE node, for the discarded-target check --
+    a `DictComp` has `key`/`value` rather than `elt`, and reading only one of the two would let
+    a target referenced in the other half pass as discarded. Wrapped in a `Tuple` so both halves
+    are walked. Mirrors `_QualifyingLoopVisitor._visit_comp_elt`'s own split."""
+    if isinstance(node, ast.DictComp):
+        return ast.Tuple(elts=[node.key, node.value], ctx=ast.Load())
+    return node.elt
+
+
+def _is_repetition_loop(target: ast.expr, iterable: ast.expr, body: list[ast.AST]) -> bool:
+    """DISCRIMINATOR 9 -- N repetitions of ONE operation, not one spawn per item.
+
+    `for _ in range(n)` with the target discarded is not a fan-out: nothing per-item is in
+    scope, so every iteration's argv is IDENTICAL. There is no set for a batched call to carry
+    and nothing for the sibling gate's remedy (hoist to one call outside the loop) to hoist --
+    hoisting would delete N-1 repetitions, which is a change of MEANING, not a batching.
+
+    Two real populations in this repo wear this shape, and the register currently pays for both
+    in prose:
+
+      - SAMPLING (`_EXEMPT_SITES` class `measurement-is-the-loop`): `samples = [time_invocation(
+        op, params) for _ in range(n)]`, reduced to a min / mean / coefficient of variation.
+        Collapsing N draws into one does not measure the same quantity faster; it measures a
+        different quantity. MEASURED 2026-08-19: these keys each carry TWO call sites, a
+        `for _ in range(warmup)` statement AND a comprehension, which is why this discriminator
+        is applied at both loop forms rather than only at `ast.For`.
+    NOT the MISCLASSIFIED `retry-loop` group, though the first draft of this docstring claimed
+    it was. MEASURED: all three of those rows (`cross-repo-memo._verify_delivery_landed`,
+    `detached_render_commit.commit_own_artifact`, `_common._update_index_with_retry`) name their
+    target `attempt` and READ IT BACK for backoff and logging, so `_is_discarded_target`
+    declines and none went quiet. Reaching them needs the retry shape decided on its own terms
+    -- a count-bounded loop that `break`s or returns on success, which is discriminator 3's
+    `while` reasoning ported to `range` -- and that is a DIFFERENT discriminator, not a widening
+    of this one. Stretching 9 to cover a neighbouring class would be the register's own failure
+    ("satisfying a rationale is not membership") committed in code instead of prose.
+
+    SUPPRESSES, so it inherits the inversion this module's docstring warns about. The guard that
+    keeps it honest is `_is_count_bounded_range`: a count derived from a collection's size is a
+    fan-out wearing a repeat's clothes, and declines."""
+    return _is_count_bounded_range(iterable) and _is_discarded_target(target, body)
+
+
 class _QualifyingLoopVisitor(ast.NodeVisitor):
     """Marks every `ast.Call` node that sits directly inside a qualifying loop's body -- a
     `for`/`async for`/comprehension whose iterable is NOT a constant-literal sequence
@@ -1528,6 +2720,17 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         #: target names, NOT `call_loop_taint`'s one-hop growth: this discriminator suppresses,
         #: so it takes the narrower of the two sets. See `_argv_splices_loop_target`.
         self.call_loop_targets: dict[tuple[int, int], set[str]] = {}
+        #: (lineno, col_offset) -> True when the NEAREST enclosing qualifying loop is a bounded
+        #: retry (`_is_retry_loop`), for discriminator 10. Only half the test: the collector
+        #: pairs this with "none of the loop's tainted names reach this call's own arguments",
+        #: which is what separates a retry from a fan-out and is not knowable here.
+        self.call_loop_is_retry: dict[tuple[int, int], bool] = {}
+        #: (lineno, col_offset) -> the loop's argv-shaped assignment bindings
+        #: (`_loop_expr_bindings`), for discriminator 7's one-hop resolution of a call that
+        #: passes a local (`cmd = base + batch; run(cmd)`) rather than the splice itself.
+        self.call_expr_bindings: dict[tuple[int, int], dict[str, ast.expr]] = {}
+        self._loop_expr_bindings_stack: list[dict[str, ast.expr]] = []
+        self._loop_retry_stack: list[bool] = []
         self._loop_taint_stack: list[frozenset[str]] = []
         self._loop_argv0_bindings_stack: list[dict[str, ast.expr]] = []
         self._loop_target_stack: list[set[str]] = []
@@ -1538,11 +2741,20 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self._in_qualifying_loop_depth = saved
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def _function_scope(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """A function boundary resets loop context AND admits that function's own author-time
+        literal sequences (`_function_local_literal_names`). Pushed and popped exactly where the
+        loop depth is, so a name qualifying inside one function never leaks into a sibling."""
+        saved_literals = self._literal_names
+        self._literal_names = saved_literals | _function_local_literal_names(node)
         self._scope_boundary(node)
+        self._literal_names = saved_literals
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._function_scope(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._scope_boundary(node)
+        self._function_scope(node)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         self._scope_boundary(node)
@@ -1553,8 +2765,14 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
     def _visit_for(self, node: ast.For | ast.AsyncFor) -> None:
         # Discriminator 1: iter is evaluated outside any loop context this loop introduces.
         self.visit(node.iter)
-        if _is_constant_literal_iterable(node.iter, self._literal_names) or _is_chunking_stride_iterable(node.iter):
-            # Discriminators 2 and 4 (chunking-stride): excluded wholesale -- body still
+        if (
+            _is_constant_literal_iterable(node.iter, self._literal_names)
+            or _is_chunking_stride_iterable(node.iter)
+            # Discriminator 9 (repetition loop): target discarded over a count-bounded
+            # `range` -- N identical spawns, not one per item. See `_is_repetition_loop`.
+            or _is_repetition_loop(node.target, node.iter, list(node.body))
+        ):
+            # Discriminators 2, 4 (chunking-stride) and 9: excluded wholesale -- body still
             # visited (a nested qualifying loop inside it may exist), but WITHOUT this loop's
             # own context pushed.
             for stmt in node.body:
@@ -1570,8 +2788,14 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         )
         self._loop_argv0_bindings_stack.append(_loop_argv0_bindings(node))
         self._loop_target_stack.append(_loop_target_names(node.target))
+        # Discriminator 10 (retry loop): the LOOP half of the test, recorded per call so the
+        # collector can pair it with the call-level half. See `_is_retry_loop`.
+        self._loop_retry_stack.append(_is_retry_loop(node))
+        self._loop_expr_bindings_stack.append(_loop_expr_bindings(node))
         for stmt in node.body:
             self.visit(stmt)
+        self._loop_expr_bindings_stack.pop()
+        self._loop_retry_stack.pop()
         self._loop_target_stack.pop()
         self._loop_argv0_bindings_stack.pop()
         self._loop_taint_stack.pop()
@@ -1599,8 +2823,19 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
             return
         # Discriminator 1: generator-0's iter is evaluated once, outside loop context.
         self.visit(generators[0].iter)
-        if _is_constant_literal_iterable(generators[0].iter, self._literal_names):
-            # Discriminator 2, first generator only -- see module docstring blind spots.
+        if _is_constant_literal_iterable(
+            generators[0].iter, self._literal_names
+        ) or _is_repetition_loop(
+            generators[0].target,
+            generators[0].iter,
+            # A comprehension has no statement body; its element expression (and this
+            # generator's own `if` clauses) is what could read the target back, so that is
+            # what `_is_discarded_target` is handed. `[time_invocation(op) for _ in range(n)]`
+            # never mentions `_`, which is precisely the sampling shape.
+            [_comp_elt_expr(node), *generators[0].ifs],
+        ):
+            # Discriminator 2 (first generator only -- see module docstring blind spots) and
+            # discriminator 9.
             for gen in generators:
                 for if_clause in gen.ifs:
                     self.visit(if_clause)
@@ -1652,6 +2887,10 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
                 self.call_loop_taint[key] = self._loop_taint_stack[-1]
                 self.call_argv0_bindings[key] = self._loop_argv0_bindings_stack[-1]
                 self.call_loop_targets[key] = self._loop_target_stack[-1]
+            if self._loop_retry_stack:
+                self.call_loop_is_retry[key] = self._loop_retry_stack[-1]
+            if self._loop_expr_bindings_stack:
+                self.call_expr_bindings[key] = self._loop_expr_bindings_stack[-1]
         self.generic_visit(node)
 
 
@@ -1725,6 +2964,13 @@ def find_unbatched_per_item_spawns(
     if index is None:
         index = _build_func_index(records)
 
+    #: Discriminator 8 resolves argv0 inside the CALLEE's module, which is not the module being
+    #: walked when the callee was imported (route c). Built once over every record rather than
+    #: read off the current one for that reason.
+    spawn_linenos_by_file: dict[str, set[int]] = {
+        rec.relpath: _spawn_linenos(rec.spawn_sites) for rec in records
+    }
+
     violations: list[AmpSite] = []
 
     for record in records:
@@ -1756,6 +3002,11 @@ def find_unbatched_per_item_spawns(
             callee = _call_callee_name(node)
             if (relpath, enclosing, callee) in _EXEMPT_SITES:
                 continue
+            # Same suppression point as `_EXEMPT_SITES`, and deliberately adjacent to it: an
+            # oracle claim IS an exemption, differing only in that a test measures it. When this
+            # dict holds every claim and that set is empty, the register is gone.
+            if (relpath, enclosing, callee) in _ORACLE_CLAIMS:
+                continue
             is_direct_spawn_call = node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES
             # Discriminator 6: argv0 derives from this call's own enclosing loop target (or an
             # in-loop assignment hop off it) -- unbatchable by construction, same suppression
@@ -1771,6 +3022,101 @@ def find_unbatched_per_item_spawns(
                 loop_visitor.call_argv0_bindings.get(key),
             ):
                 continue
+            # Discriminator 11: the PROGRAM varies per iteration, read at the slot that names
+            # the program rather than at argv[0]. `[sys.executable, str(SCRIPT), ...]` is the
+            # dominant spawn shape in this tree, and discriminator 6 sees only the constant
+            # interpreter there. Same route-a restriction as 6, for the same reason.
+            if is_direct_spawn_call and _program_identity_varies_with_loop_target(
+                node,
+                loop_visitor.call_loop_taint.get(key, frozenset()),
+                loop_visitor.call_argv0_bindings.get(key),
+            ):
+                continue
+            # Discriminator 8: argv0 varies with the loop target ACROSS ONE HELPER HOP -- the
+            # same "different program each iteration" fact discriminator 6 decides, reached
+            # through a wrapper instead of read off the syscall. Applies where 6 is deliberately
+            # forbidden (routes b/c), and is NOT the relaxation 6's guard exists to prevent: it
+            # resolves the callee and requires the helper's OWN argv0 to be one of its
+            # parameters before looking at what this call site supplies for it, so a verb-gated
+            # `_run_git([verb, ...], root)` -- whose argv0 is the literal "git" in its own body
+            # -- is never reached. See `_argv0_varies_through_helper` for the measurement that
+            # motivated it (41 of 65 exempt call sites were route b, invisible to 6).
+            if (
+                not is_direct_spawn_call
+                and callee is not None
+                and _argv0_varies_through_helper(
+                    node,
+                    callee,
+                    index,
+                    relpath,
+                    loop_visitor.call_loop_taint.get(key, frozenset()),
+                    spawn_linenos_by_file,
+                )
+            ):
+                continue
+            # Discriminators 14 and 15 both need the enclosing loop NODE rather than the taint
+            # set the visitor already carries, so it is resolved once here and shared.
+            _enclosing_fn = index.func_defs.get((relpath, enclosing))
+            _loop_node = (
+                _enclosing_loop_of(_enclosing_fn, node) if _enclosing_fn is not None else None
+            )
+            # Discriminator 15: the spawn fires only behind a test on a value the OPERATOR typed
+            # during this iteration -- bounded by keypresses, zero on the modal path.
+            if _is_operator_gated_spawn(node, _loop_node):
+                continue
+            # Discriminator 14: the loop is a linear search for WHICH iteration perturbed some
+            # out-of-band state, so collapsing it destroys the attribution that IS the output.
+            if _is_attribution_search(
+                node, _loop_node, loop_visitor.call_loop_taint.get(key, frozenset())
+            ):
+                continue
+            # Discriminator 13: the loop is the RETAINED PER-ITEM FALLBACK behind a batched
+            # primary -- it runs only when the batch failed, recovering per-item attribution
+            # instead of collapsing the set to one degraded verdict. Deleting it to clear a key
+            # would trade a degrade-on-failure posture for a metric.
+            if _is_batched_primary_fallback(
+                node,
+                callee,
+                index.func_defs.get((relpath, enclosing)),
+                spawn_linenos,
+            ):
+                continue
+            # Discriminator 12: the spawn is SCOPED to a tree that varies per iteration -- argv0
+            # is the constant `git` and the loop target reaches only the `-C`/`--git-dir`/
+            # `--work-tree` operand (or `cwd=`). One process cannot serve two roots, so N roots
+            # is N spawns however the loop is arranged. Both legs carry the precision constraint
+            # that the tainted name appears in NO other argument: without it a per-item fan-out
+            # that merely carries a root with it would be silenced, and this SUPPRESSES, so that
+            # is the dangerous direction (see `_tainted_names_for_loop`'s inversion warning).
+            if is_direct_spawn_call and _root_scoped_direct(
+                node,
+                loop_visitor.call_loop_taint.get(key, frozenset()),
+                loop_visitor.call_expr_bindings.get(key),
+            ):
+                continue
+            if (
+                not is_direct_spawn_call
+                and callee is not None
+                and _root_scoped_through_helper(
+                    node,
+                    callee,
+                    index,
+                    relpath,
+                    loop_visitor.call_loop_taint.get(key, frozenset()),
+                    spawn_linenos_by_file,
+                )
+            ):
+                continue
+            # Discriminator 10 (retry loop): the enclosing loop is a bounded retry with an early
+            # exit, AND none of its tainted names reach this call's own arguments -- so every
+            # iteration issues an IDENTICAL spawn and there is no set for a batch to carry. Both
+            # halves are required: the loop half alone would suppress `for _ in range(3):
+            # run([..., item])` nested inside a per-item loop, where the argv genuinely varies.
+            if loop_visitor.call_loop_is_retry.get(key) and not (
+                _names_in_call_args(node)
+                & loop_visitor.call_loop_taint.get(key, frozenset())
+            ):
+                continue
             # Discriminator 7: this call's argv splices its enclosing loop's target in as a
             # SEQUENCE, so one call carries the whole group -- the byte-budget chunking shape
             # discriminator 4's literal-`range` stride test cannot see. Same suppression point
@@ -1778,7 +3124,11 @@ def find_unbatched_per_item_spawns(
             # gate and the `designed_red` worklist. NOT gated on `is_direct_spawn_call`: it
             # reads how many items one call carries, not what program argv0 names, and that
             # holds at a wrapper route too -- see `_argv_splices_loop_target`'s docstring.
-            if _argv_splices_loop_target(node, loop_visitor.call_loop_targets.get(key, set())):
+            if _argv_splices_loop_target(
+                node,
+                loop_visitor.call_loop_targets.get(key, set()),
+                loop_visitor.call_expr_bindings.get(key),
+            ):
                 continue
             route: str | None = None
 
@@ -2113,6 +3463,169 @@ class _EnclosingTracker(ast.NodeVisitor):
 #: sites exactly this way). They are gate-collector surgery with their own regression surface
 #: and measurement obligation -- "suppresses exactly the intended keys and nothing else" -- so
 #: they are named here as work, not smuggled in beside a disposition fold.
+#: Site key -> the oracle that MEASURES its exemption claim, as `<module>::<test function>`
+#: relative to `coordinator_core.tests.oracles`.
+#:
+#: Suppresses exactly like `_EXEMPT_SITES`, and is a different object in the one way that
+#: matters: membership requires a test that exists and passes. `test_every_oracle_claim_names_a
+#: _real_oracle` refuses an entry whose oracle is missing, and the oracles run in this same
+#: suite, so a claim that stops holding fails the gate instead of silently continuing to
+#: suppress a site that should now be batched.
+#:
+#: What belongs here and nowhere else: a claim about an EXTERNAL COMMAND'S ARGUMENT SURFACE.
+#: Whether `git config --unset` takes two keys, whether a sibling CLI can describe two records
+#: in one invocation. No static pass can know these; running them can. A claim decidable from
+#: the AST is a discriminator's job and must not be parked here -- that would be the register's
+#: growth-by-category failure wearing the oracle layer's clothes.
+#: The value is `(oracle_ref, tier)`. TIER IS RECORDED, NOT INFERRED, because the two tiers are
+#: not equally strong and a reader must not have to guess which they are looking at:
+#:
+#:   "fast"    -- argparse introspection, no subprocess, ~0.1s. Runs on the same tier as this
+#:                gate, so a claim that stops holding fails on the next commit.
+#:   "cadence" -- spawns a real binary, so the spawn ratchet requires `spawns_process` and the
+#:                test lands on the cadence tier. Re-measured at cadence gates, not per commit.
+#:                The suppression is still unconditional in between, so a git claim can be stale
+#:                for longer than a sibling-CLI one. That is a real weakness and it is written
+#:                here rather than discovered later.
+_ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
+    # --- sibling CLI writes one record per invocation (fast tier) ---
+    ("coordinator/bin/percolate-mirror.py", "_run_gate_legs", "_run"): (
+        "test_sibling_cli_single_record::test_percolate_gate_scan_secrets_takes_one_target",
+        "fast",
+    ),
+    ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_lesson_promote"): (
+        "test_sibling_cli_single_record::test_lesson_promote_takes_one_record",
+        "fast",
+    ),
+    ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_queue_append"): (
+        "test_sibling_cli_single_record::test_queue_append_takes_one_record",
+        "fast",
+    ),
+    # --- in-repo Python API takes one record (fast tier, strongest shape available:
+    #     settled by the signature, nothing executed and nothing spawned) ---
+    ("coordinator/bin/reap-orphaned-in-flight-handoffs.py", "main", "_run_archive_stamp_cli"): (
+        "test_python_api_single_record::test_archive_stamp_verbs_take_exactly_one_handoff",
+        "fast",
+    ),
+    # --- `reconcile-completion-commits.py` takes exactly one entry path (fast tier) ---
+    # One oracle, four callers. The prose register carried this claim four separate times, once
+    # per site, each written independently and each unverifiable.
+    ("coordinator/bin/workday-complete-reconcile.py", "run_completion_reconcile", "_run_reconcile_append"): (
+        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
+        "fast",
+    ),
+    ("coordinator/bin/workday-start-reconcile-sweep.py", "run_sweep", "_run_reconcile_helper"): (
+        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
+        "fast",
+    ),
+    ("coordinator/bin/workweek-complete-close.py", "run_reconcile_sweep", "_run_reconcile_helper"): (
+        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
+        "fast",
+    ),
+    ("coordinator/bin/merge-release-notes-derive.py", "cmd_reconcile_sweep", "_run_sibling_cli"): (
+        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
+        "fast",
+    ),
+    # --- act-time TOCTOU rechecks: the property, not a description of it (fast tier) ---
+    #: Both files already batch the CLASSIFICATION pass; what remains is the recheck fired
+    #: immediately before `unlink()`. Any hoist lands before the first unlink and widens exactly
+    #: the window the recheck exists to narrow, so the oracle flips a survivor's tracked status
+    #: between classification and unlink and asserts the row is refused with a named reason.
+    ("coordinator_core/ops/distill_apply_disposal.py", "apply_disposal_manifest", "_is_tracked"): (
+        "test_toctou_act_time_recheck::"
+        "test_apply_disposal_manifest_recheck_fires_adjacent_to_its_own_unlink",
+        "fast",
+    ),
+    ("coordinator_core/ops/fleet/_findings_reap.py", "reap_findings", "_is_tracked"): (
+        "test_toctou_act_time_recheck::test_reap_findings_recheck_fires_adjacent_to_its_own_unlink",
+        "fast",
+    ),
+    # --- the N-spawn cost IS the measured quantity (fast tier) ---
+    #: The control arm of an A/B measurement whose opposing arm already does the batched form in
+    #: the same module. Pinning both arms' spawn counts turns any future "batching fix" red.
+    ("coordinator_core/benchmarks/shim_fanin_measure.py", "_spawn_n_processes", "run"): (
+        "test_benchmark_fanin_spawn_count::test_spawn_n_processes_issues_one_spawn_per_module",
+        "fast",
+    ),
+    # --- varying program, observed rather than inferred (fast tier) ---
+    ("coordinator_core/ops/setup_chain_walker.py", "dep_probe_all", "dep_probe"): (
+        "test_dep_probe_varying_program::"
+        "test_dep_probe_all_python_import_spawns_have_distinct_argv",
+        "fast",
+    ),
+    # --- per-row isolation contract, which is what this site is REALLY about (fast tier) ---
+    #: Re-classed off `structural-floor`: the load-bearing reasons are an explicit per-row
+    #: isolation contract (a TimeoutExpired must fail THIS row only) and per-item rc
+    #: demultiplexing -- neither of which the register's prose named. A static predicate was
+    #: considered and rejected: "callee's per-iteration return drives per-item control flow"
+    #: would silence a large fraction of real amplification, since a batched call can return
+    #: per-item results too.
+    (
+        "coordinator/bin/workday-complete-close.py",
+        "cmd_backfill_dispatch_rows",
+        "_dispatch_step9_row",
+    ): (
+        "test_step9_backfill_row_isolation::test_one_row_failure_does_not_abort_remaining_rows",
+        "fast",
+    ),
+    # --- a third-party CLI's arity, and honestly the weakest claim here (cadence tier) ---
+    #: `npm view` takes ONE package-spec; a second positional parses as a FIELD, so a batched
+    #: form would silently query the wrong thing rather than error. Not our binary to change.
+    #: Weaker than its siblings by construction: it needs npm on PATH, so it is skip-guarded and
+    #: degrades to "passes when runnable". Recorded rather than hidden.
+    ("coordinator/bin/check-mcp-versions.py", "main", "_npm_latest"): (
+        "test_npm_view_single_package_spec::test_npm_view_usage_names_exactly_one_package_spec",
+        "cadence",
+    ),
+    # --- git's own argument surface (cadence tier) ---
+    (
+        "coordinator_core/install/uninstall_legs.py",
+        "uninstall_reverse_git_config_group",
+        "config_unset",
+    ): ("test_git_argument_surface::test_git_config_unset_takes_exactly_one_key", "cadence"),
+    #: RETIRED 2026-08-19 -- `configure_git.py::main::_git_config_set` no longer needs a claim of
+    #: any kind. Its loop runs over `_SETTINGS`, a module-level literal tuple fixed at author
+    #: time, and discriminator 2 has always decided that shape; it was invisible only because
+    #: the constant carries a type annotation and `_module_level_literal_names` read `ast.Assign`
+    #: alone. The git-arity oracle it named still exists and still passes -- it is simply no
+    #: longer load-bearing for this site, which is the better outcome: a bounded loop decided
+    #: structurally beats the same loop decided by asking git about its argument surface.
+    ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec"): (
+        "test_git_argument_surface::test_git_rm_is_atomic_across_its_pathspec",
+        "cadence",
+    ),
+    # --- `git rev-list` cannot express a union of ranges (cadence tier) ---
+    # One measured fact, six call sites. This is the shape the prose register got RIGHT and
+    # could not prove: the claim was true, and nothing tested it at five of the six sites.
+    ("coordinator_core/coverage.py", "_reviewed_via_graph_walk", "_run"): (
+        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
+        "cadence",
+    ),
+    ("coordinator_core/ops/review_coverage_core.py", "build_reviewed_set", "_run"): (
+        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
+        "cadence",
+    ),
+    ("coordinator_core/ops/review_coverage_core.py", "build_segments", "_run"): (
+        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
+        "cadence",
+    ),
+    (
+        "coordinator_core/ops/plan_suggest_completion_steps.py",
+        "_plans_with_review_trail_coverage",
+        "_resolve_range_shas",
+    ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
+    (
+        "coordinator_core/ops/review_trail_readjudication_report.py",
+        "compute_readjudication_report",
+        "_full_range_shas",
+    ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
+    ("coordinator_core/ops/review_trail_write.py", "_own_frozen_diff_shas", "_git_runner"): (
+        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
+        "cadence",
+    ),
+}
+
+
 _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
     {
         # OPEN (4) -- wave 4 left these UNDECIDED, and that is recorded rather than laundered.
@@ -2172,7 +3685,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   `configure_git.py::main` -> `_git_config_get`: git config --global --get-regexp
         #   reads all global keys in one call; the block conflated the unbatchable SET side
         #   with the batchable GET side
-        ('coordinator_core/ops/configure_git.py', 'main', '_git_config_get'),
         #   `distill_apply_disposal.py::_delete_tracked_and_append_log` -> `_run_git`: git
         #   rm/add/checkout HEAD -- all accept N pathspecs; nothing here needs per-item
         #   isolation, unlike the rm_and_commit sibling
@@ -2253,11 +3765,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   `setup_chain_walker.py::_sibling_fallback` -> `_functional_probe_ok`: no batch
         #   primary exists anywhere in this function, so the block's retained-fallback shape
         #   does not describe this call site at all
-        (
-            'coordinator_core/ops/setup_chain_walker.py',
-            '_sibling_fallback',
-            '_functional_probe_ok',
-        ),
         #   `setup_chain_walker.py::command_succeeds_native` -> `_run_probe_argv`: same: no
         #   antecedent batch call; this is a ||-chain short-circuit search over heterogeneous
         #   commands
@@ -2288,21 +3795,15 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # DISCRIMINATOR (precedent: discriminators 6 and 7 each retired sites exactly this way),
         # not a ledger note. That work is scoped and NOT done here -- see the delta log below.
         #
-        #   retry-loop (3): `for _ in range(<module-level int constant>)` re-runs ONE target
-        #   until it settles. Functionally identical to the `while` retry shape discriminator 3
-        #   already excludes wholesale, but discriminator 3 fires only on a literal `while` and
-        #   discriminator 2's literal-sequence match does not cover `range()`.
-        ('coordinator/bin/cross-repo-memo.py', '_verify_delivery_landed', 'run'),
-        (
-            'coordinator_core/ops/ceremony/detached_render_commit.py',
-            'commit_own_artifact',
-            '_run_git',
-        ),
-        (
-            'coordinator_core/ops/fleet/_common.py',
-            '_update_index_with_retry',
-            'create_subprocess_exec',
-        ),
+        #   retry-loop (3): RETIRED 2026-08-19 by DISCRIMINATOR 10 (`_is_retry_loop`), which is
+        #   the disposition the anti-scope demanded for a mechanically-decidable class all
+        #   along. Its predicted shape was slightly wrong and the code was read rather than the
+        #   note believed: all three spell their target `attempt` and READ IT BACK for backoff
+        #   and logging, so the discarded-target test discriminator 9 uses does not reach them.
+        #   What decides them is the pair "count-bounded range WITH an early exit" plus "the
+        #   loop's tainted names never reach the spawn call's own arguments" -- identical argv
+        #   every iteration, nothing for a batch to carry. Measured: exactly these three keys,
+        #   zero collateral.
         #   single-shot (4): the call sits lexically inside a `for` body but on a path that
         #   `break`s or `return`s in the same iteration, so it executes AT MOST ONCE per call
         #   regardless of collection size. Frozen precedent for the shape:
@@ -2319,11 +3820,14 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'check_allowlist_string',
             '_run_child',
         ),
-        #   discriminator-7 gap (1): `_git_log_batched` IS the byte-budget chunking idiom the
-        #   Safe-primitive map calls known-correct, but `_argv_splices_loop_target` does not
-        #   walk a multi-operand `BinOp(Add)` chain, so `log_cmd_base + revision_args + ["--"]
-        #   + batch` is missed. Widening that matcher retires this key structurally.
-        ('coordinator/bin/percolate-gate.py', '_git_log_batched', 'run'),
+        #   discriminator-7 gap (1): RETIRED 2026-08-19 by giving discriminator 7 a ONE-HOP
+        #   LOCAL BINDING resolution (`_loop_expr_bindings`). The note that stood here named the
+        #   wrong mechanism: it blamed `_argv_splices_loop_target` for not walking a
+        #   multi-operand `BinOp(Add)` chain, but `_argv_expr_splices` has always recursed
+        #   through chains. The actual gap was that `_git_log_batched` assigns argv to a local
+        #   (`cmd = log_cmd_base + revision_args + ["--"] + batch`) and passes THAT, so the
+        #   matcher saw a bare `Name` and declined by design. Implementing the widening as
+        #   written would have retired nothing. Read the code, not the ledger.
         #   route-d name collision (1): `_fold_template_is_bounded`'s comprehension variable is
         #   named `run` because it holds a regex digit-RUN. Route d resolves that bare name to
         #   an unrelated module-level `run` that spawns. The callee is the builtin `int`, which
@@ -2442,6 +3946,63 @@ def _exempt_entry_comment_blocks() -> dict[tuple[str, str, str], str]:
     return blocks
 
 
+def test_every_oracle_claim_names_a_real_oracle():
+    """The binding that makes `_ORACLE_CLAIMS` a different object from `_EXEMPT_SITES`.
+
+    A prose exemption costs one sentence and suppresses forever. An oracle claim cannot be added
+    without a test function that EXISTS -- and since the oracles run in this same suite, cannot
+    survive without that test PASSING. This is the leg that makes the claim falsifiable; without
+    it the dict is just a register with a comment column."""
+    import importlib
+
+    broken: list[str] = []
+    for key, (ref, tier) in sorted(_ORACLE_CLAIMS.items()):
+        if tier not in {"fast", "cadence"}:
+            broken.append(f"{key} -- unknown tier {tier!r}, expected 'fast' or 'cadence'")
+            continue
+        if "::" not in ref:
+            broken.append(f"{key} -- malformed oracle ref {ref!r}, expected '<module>::<test>'")
+            continue
+        mod_name, func_name = ref.split("::", 1)
+        try:
+            module = importlib.import_module(f"coordinator_core.tests.oracles.{mod_name}")
+        except ImportError as exc:
+            broken.append(f"{key} -- oracle module {mod_name!r} does not import: {exc}")
+            continue
+        if not callable(getattr(module, func_name, None)):
+            broken.append(f"{key} -- oracle {ref} names no test function")
+    assert not broken, (
+        "these `_ORACLE_CLAIMS` entries suppress a site on an oracle that does not exist, which "
+        "makes them ordinary unverified exemptions:\n" + "\n".join(f"  {b}" for b in broken)
+    )
+
+
+def test_oracle_claims_and_exemptions_do_not_overlap():
+    """A site is suppressed by an oracle or by prose, never both. An overlap would let a
+    still-listed prose entry keep a site quiet after its oracle went red -- the fail-OPEN shape
+    this whole layer exists to remove."""
+    overlap = sorted(set(_ORACLE_CLAIMS) & set(_EXEMPT_SITES))
+    assert not overlap, (
+        "these keys are BOTH oracle-claimed and prose-exempt, so a failing oracle would not "
+        "surface the site:\n" + "\n".join(f"  {k}" for k in overlap)
+    )
+
+
+def test_oracle_claims_still_name_live_sites(monkeypatch):
+    """`_EXEMPT_SITES`'s self-invalidation leg, extended to the replacement. A claim whose site
+    no longer fires is dead weight that will silently pre-approve whatever next takes that key,
+    and it must be deleted rather than left to age."""
+    declared = set(_ORACLE_CLAIMS)
+    monkeypatch.setitem(globals(), "_ORACLE_CLAIMS", {})
+    monkeypatch.setitem(globals(), "_EXEMPT_SITES", set())
+    observed = {site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())}
+    stale = sorted(declared - observed)
+    assert not stale, (
+        "these `_ORACLE_CLAIMS` entries no longer match any detected site -- delete them:\n"
+        + "\n".join(f"  {key}" for key in stale)
+    )
+
+
 def test_every_exemption_carries_a_dated_rationale():
     """AC8 of `docs/plans/2026-08-19-burn-down-the-amplification-worklist-to-zero.md`.
 
@@ -2475,6 +4036,216 @@ def test_every_exemption_carries_a_dated_rationale():
         "these _EXEMPT_SITES entries name a class outside the closed set "
         f"{sorted(_EXEMPTION_CLASSES)}:\n"
         + "\n".join(f"  {key} -- {cls}" for key, cls in bad_class)
+    )
+
+
+#: Every SUPPRESSING discriminator, bound to the self-test(s) that prove it still DECLINES a
+#: genuinely batchable site. See `test_every_discriminator_is_pinned_by_a_declining_test` for what
+#: this buys and why an unpinned discriminator is the register's failure in new clothes.
+_DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
+    "_argv0_varies_with_loop_target": (
+        "test_discriminator_varying_argv0_invariant_argv0_still_flagged",
+        "test_discriminator_varying_argv0_unpacked_constant_argv0_still_flagged",
+    ),
+    "_program_identity_varies_with_loop_target": (
+        "test_discriminator_program_identity_declines_behind_an_interpreter_flag",
+        "test_discriminator_program_identity_declines_a_varying_value_argument",
+    ),
+    "_argv0_varies_through_helper": (
+        "test_discriminator_argv0_through_helper_declines_a_constant_program",
+        "test_discriminator_argv0_through_helper_declines_an_unfilled_slot",
+    ),
+    "_argv_splices_loop_target": (
+        "test_discriminator_argv_element_loop_target_still_flagged",
+        "test_discriminator_argv_splice_declines_bare_name_argv",
+        "test_discriminator_argv_splice_declines_attribute_off_loop_target",
+        "test_discriminator_argv_splice_binding_declines_a_non_argv_shaped_local",
+        "test_discriminator_argv_splice_declines_a_comprehension_not_over_the_target",
+    ),
+    #: Discriminator 10's condition is the retry-loop flag AND this name-overlap test; the flag
+    #: is set in the visitor and pinned under `_is_retry_loop`, so the overlap half is pinned by
+    #: the same three tests -- they are what fails if either half stops discriminating.
+    "_names_in_call_args": (
+        "test_discriminator_retry_loop_declines_when_the_target_reaches_argv",
+        "test_discriminator_retry_loop_declines_a_size_derived_bound",
+        "test_discriminator_retry_loop_declines_without_an_early_exit",
+    ),
+    "_is_retry_loop": (
+        "test_discriminator_retry_loop_declines_when_the_target_reaches_argv",
+        "test_discriminator_retry_loop_declines_a_size_derived_bound",
+        "test_discriminator_retry_loop_declines_without_an_early_exit",
+    ),
+    "_is_repetition_loop": (
+        "test_discriminator_repetition_loop_declines_a_size_derived_count",
+        "test_discriminator_repetition_loop_declines_a_target_read_back",
+    ),
+    "_is_operator_gated_spawn": (
+        "test_discriminator_operator_gate_declines_a_read_before_the_loop",
+    ),
+    "_is_attribution_search": (
+        "test_discriminator_attribution_search_declines_ordinary_fail_fast",
+        "test_discriminator_attribution_search_declines_a_loop_target_test",
+    ),
+    "_is_batched_primary_fallback": (
+        "test_discriminator_batched_primary_fallback_declines_an_ungated_loop",
+        "test_discriminator_batched_primary_fallback_declines_without_a_primary",
+    ),
+    "_root_scoped_direct": (
+        "test_discriminator_root_scoped_declines_a_non_git_program",
+        "test_discriminator_root_scoped_declines_when_a_pathspec_also_varies",
+    ),
+    "_root_scoped_through_helper": (
+        "test_discriminator_root_scoped_declines_when_a_pathspec_also_varies",
+        "test_discriminator_root_scoped_declines_a_non_git_program",
+    ),
+    "_is_chunking_stride_iterable": ("test_discriminator_unit_stride_range_still_flagged",),
+    "_is_constant_literal_iterable": (
+        "test_discriminator_verb_gated_chokepoint_spawning_verb_still_flagged",
+        "test_discriminator_annotated_module_name_without_a_literal_still_flagged",
+        "test_discriminator_function_local_literal_declines_an_unbounded_grow",
+    ),
+}
+
+#: Names a suppression site calls that are builtins or plumbing, not discriminators.
+_NOT_A_DISCRIMINATOR = frozenset({"frozenset", "set", "list", "isinstance"})
+
+
+def _suppressing_predicate_names() -> set[str]:
+    """Every module-local predicate whose truth SUPPRESSES a site, discovered from the code
+    rather than listed by hand -- which is the whole point: a discriminator added later is found
+    by this walk and fails the pin guard until it carries a declining test.
+
+    Two layers, because suppression happens at two. The collector suppresses with an `if <pred>:
+    continue`; the loop visitor suppresses earlier, by declining to MARK a call at all, so its
+    `_is_*` predicates never reach a `continue` and a collector-only walk would miss every one of
+    discriminators 2, 4, 9 and 10."""
+    tree = ast.parse(_THIS_FILE.read_text(encoding="utf-8"))
+
+    def called_names(node: ast.AST) -> set[str]:
+        return {
+            n.func.id
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+
+    module_funcs = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    found: set[str] = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "find_unbatched_per_item_spawns":
+            for sub in ast.walk(node):
+                if (
+                    isinstance(sub, ast.If)
+                    and len(sub.body) == 1
+                    and isinstance(sub.body[0], ast.Continue)
+                ):
+                    found |= called_names(sub.test) & module_funcs
+        if isinstance(node, ast.ClassDef) and node.name == "_QualifyingLoopVisitor":
+            for method in node.body:
+                if not isinstance(method, ast.FunctionDef):
+                    continue
+                found |= {
+                    name
+                    for name in called_names(method) & module_funcs
+                    if name.startswith("_is_")
+                }
+
+    return found - _NOT_A_DISCRIMINATOR
+
+
+def _asserts_a_site_is_still_reported(func: ast.FunctionDef) -> bool:
+    """True when `func` asserts the collector STILL reports something -- the only assertion shape
+    that pins a suppressor. A test that merely asserts `violations == []` is a POSITIVE control
+    for a discriminator and proves nothing about its limits; forcing that discriminator maximally
+    permissive would leave it green."""
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        #: `assert violations` / `assert keys`
+        if isinstance(test, ast.Name):
+            return True
+        #: `assert len(violations) == 1`, `>= 1`, `== 2` ...
+        if isinstance(test, ast.Compare) and isinstance(test.left, ast.Call):
+            func_node = test.left.func
+            if isinstance(func_node, ast.Name) and func_node.id == "len":
+                for comparator in test.comparators:
+                    if isinstance(comparator, ast.Constant) and comparator.value:
+                        return True
+        #: `assert violations[0].route == "a-direct"`
+        if isinstance(test, ast.Compare) and any(
+            isinstance(n, ast.Subscript) for n in ast.walk(test.left)
+        ):
+            return True
+        #: The dominant idiom in this module's own self-tests:
+        #: `assert [site.enclosing for site in violations] == ["check"]`. The pin is the NON-EMPTY
+        #: literal on the right -- an equality against `[]` is a positive control, not a pin, and
+        #: must not be accepted here.
+        if isinstance(test, ast.Compare):
+            for comparator in test.comparators:
+                if isinstance(comparator, (ast.List, ast.Set, ast.Tuple)) and comparator.elts:
+                    return True
+    return False
+
+
+def test_every_discriminator_is_pinned_by_a_declining_test():
+    """The keep-at-zero guard, and the one that actually matters once `_EXEMPT_SITES` is empty.
+
+    An empty register is trivially reachable the wrong way: widen a discriminator until it
+    silences everything. That buys the same silence the register bought, with none of the
+    visibility -- a prose exemption at least names its site, while an over-broad matcher names
+    nothing and nothing downstream notices. This module's own `_tainted_names_for_loop` docstring
+    records exactly that failure shipping once already, as a real false suppression.
+
+    So: every suppressing predicate, discovered from the code by
+    `_suppressing_predicate_names()`, must be bound in `_DISCRIMINATOR_PINS` to at least one test
+    that asserts a genuinely batchable site is STILL REPORTED. Adding a discriminator without one
+    fails here, naming the predicate. The binding is checked in both directions -- a retired
+    discriminator's stale pin entry fails too, matching the self-invalidation legs
+    `_EXEMPT_SITES` and `_ORACLE_CLAIMS` already carry."""
+    discovered = _suppressing_predicate_names()
+    registered = set(_DISCRIMINATOR_PINS)
+
+    unpinned = sorted(discovered - registered)
+    assert not unpinned, (
+        "these suppressing discriminators carry no declining test in `_DISCRIMINATOR_PINS`:\n"
+        + "\n".join(f"  {name}" for name in unpinned)
+        + "\n\nA suppressor without a negative pin can be widened until it silences every real "
+        "site, and the gate stays green while it happens. Add a test that builds a genuinely "
+        "batchable fixture and asserts the collector STILL reports it, then bind it here."
+    )
+
+    stale = sorted(registered - discovered)
+    assert not stale, (
+        "these `_DISCRIMINATOR_PINS` entries name a predicate that no longer suppresses "
+        "anything -- delete them:\n" + "\n".join(f"  {name}" for name in stale)
+    )
+
+    tree = ast.parse(_THIS_FILE.read_text(encoding="utf-8"))
+    tests_by_name = {
+        n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("test_")
+    }
+
+    missing = sorted(
+        f"{pred} -> {test}"
+        for pred, tests in _DISCRIMINATOR_PINS.items()
+        for test in tests
+        if test not in tests_by_name
+    )
+    assert not missing, (
+        "these `_DISCRIMINATOR_PINS` entries name a test that does not exist in this module:\n"
+        + "\n".join(f"  {entry}" for entry in missing)
+    )
+
+    toothless = sorted(
+        f"{pred} -> {test}"
+        for pred, tests in _DISCRIMINATOR_PINS.items()
+        for test in tests
+        if not _asserts_a_site_is_still_reported(tests_by_name[test])
+    )
+    assert not toothless, (
+        "these pin tests never assert that a site is STILL REPORTED, so they do not constrain "
+        "the discriminator they are bound to:\n" + "\n".join(f"  {entry}" for entry in toothless)
     )
 
 
@@ -3137,6 +4908,696 @@ def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
+
+
+def test_discriminator_program_identity_behind_a_fixed_interpreter_not_flagged(tmp_path):
+    """Discriminator 11: argv[0] is a constant `sys.executable` and the SCRIPT behind it varies,
+    so the loop runs N different programs. Discriminator 6 reads argv[0] only and sees one fixed
+    interpreter -- correct about the slot it reads, blind to the one that names the program."""
+    fixture = tmp_path / "disc_identity.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def run_all(scripts):\n"
+        "    for script in scripts:\n"
+        "        subprocess.run([sys.executable, str(script), '--help'])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_program_identity_declines_behind_an_interpreter_flag(tmp_path):
+    """Discriminator 11's load-bearing negative. With a flag between the interpreter and the
+    rest, argv[1] stops naming the program -- `-m` makes argv[2] a MODULE, and what a flag
+    consumes is not knowable from the AST. Declines rather than guessing at a position."""
+    fixture = tmp_path / "disc_identity_flag.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def run_all(paths):\n"
+        "    for path in paths:\n"
+        "        subprocess.run([sys.executable, '-m', 'tool', str(path)])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
+
+
+def test_discriminator_program_identity_declines_a_varying_value_argument(tmp_path):
+    """Discriminator 11 reads the PROGRAM slot, never a value slot. Here the interpreter and the
+    script are both fixed and only an argument varies -- one program, N items, genuinely
+    batchable, and the exact site this gate exists to catch."""
+    fixture = tmp_path / "disc_identity_value.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "SCRIPT = 'tool.py'\n"
+        "\n"
+        "def run_all(paths):\n"
+        "    for path in paths:\n"
+        "        subprocess.run([sys.executable, SCRIPT, str(path)])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
+
+
+def test_discriminator_argv_splice_resolves_a_one_hop_local_binding(tmp_path):
+    """Discriminator 7's one-hop binding resolution: the chunker builds argv as its own
+    statement and passes the local, which is how the idiom is actually spelled in this tree.
+    Before this, `args[0]` was a bare `Name` and the matcher declined."""
+    fixture = tmp_path / "disc_splice_binding.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def sweep(batches, base):\n"
+        "    for batch in batches:\n"
+        "        cmd = base + ['--'] + batch\n"
+        "        subprocess.run(cmd)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_argv_splice_binding_declines_a_non_argv_shaped_local(tmp_path):
+    """The hop resolves only argv-SHAPED right-hand sides. A local bound to a per-item value is
+    not a spliced group, and resolving it would turn a suppressor loose on ordinary per-item
+    spawns -- the bare-`Name` decline this discriminator has always made, preserved."""
+    fixture = tmp_path / "disc_splice_binding_scalar.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def sweep(paths):\n"
+        "    for path in paths:\n"
+        "        cmd = argv_for(path)\n"
+        "        subprocess.run(cmd)\n"
+        "\n"
+        "def argv_for(p):\n"
+        "    return ['git', 'add', p]\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
+
+
+def test_discriminator_retry_loop_not_flagged(tmp_path):
+    """Discriminator 10: a bounded retry with an early exit, whose target never reaches the
+    spawn's arguments. Every iteration issues an identical spawn. Discriminator 3 already
+    excludes the `while` spelling of this wholesale; that `for attempt in range(N)` was still
+    flagged was an accident of spelling."""
+    fixture = tmp_path / "disc_retry.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "_ATTEMPTS = 3\n"
+        "\n"
+        "def resync():\n"
+        "    for attempt in range(_ATTEMPTS):\n"
+        "        result = subprocess.run(['git', 'update-index', '--refresh'])\n"
+        "        if result.returncode == 0:\n"
+        "            return True\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_retry_loop_declines_when_the_target_reaches_argv(tmp_path):
+    """Discriminator 10's load-bearing negative -- the call-level half of the test. The loop is
+    retry-SHAPED (count-bounded range, early exit) but its target reaches the spawn's arguments,
+    so the argv genuinely varies and the site is a fan-out, not a retry."""
+    fixture = tmp_path / "disc_retry_varying.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "_ATTEMPTS = 3\n"
+        "\n"
+        "def sweep(paths):\n"
+        "    for path in paths:\n"
+        "        result = subprocess.run(['git', 'add', path])\n"
+        "        if result.returncode == 0:\n"
+        "            return True\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
+
+
+def test_discriminator_retry_loop_declines_a_size_derived_bound(tmp_path):
+    """Discriminator 10 inherits discriminator 9's safety line: a bound derived from a
+    collection's SIZE is a fan-out however it is spelled, so `len(...)` anywhere in the range
+    arguments declines even when the loop is otherwise retry-shaped."""
+    fixture = tmp_path / "disc_retry_len.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def sweep(paths):\n"
+        "    for i in range(len(paths)):\n"
+        "        result = subprocess.run(['git', 'status'])\n"
+        "        if result.returncode == 0:\n"
+        "            return True\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
+
+
+def test_discriminator_retry_loop_declines_without_an_early_exit(tmp_path):
+    """Discriminator 10 requires the loop to be able to STOP on success. A count-bounded loop
+    that runs all N iterations unconditionally is not retrying anything -- it is repeating work,
+    and whether that is intentional is exactly what discriminator 9's discarded-target test
+    decides instead. Here the target is read back, so neither discriminator applies."""
+    fixture = tmp_path / "disc_retry_no_exit.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "_ROUNDS = 3\n"
+        "\n"
+        "def churn():\n"
+        "    for round_no in range(_ROUNDS):\n"
+        "        subprocess.run(['git', 'gc', '--quiet'])\n"
+        "        print(round_no)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("churn", "run")]
+
+
+def test_discriminator_repetition_loop_statement_form_not_flagged(tmp_path):
+    """Discriminator 9, `ast.For` form: target discarded over a count-bounded `range`, so every
+    iteration's argv is identical -- a repetition, not one spawn per item."""
+    fixture = tmp_path / "disc_repetition_for.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def warm(warmup):\n"
+        "    for _ in range(warmup):\n"
+        "        subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_repetition_loop_comprehension_form_not_flagged(tmp_path):
+    """Discriminator 9, comprehension form -- load-bearing, not a symmetry nicety. MEASURED
+    2026-08-19: each retired benchmark key carried TWO call sites, a `for _ in range(warmup)`
+    statement AND the sampling comprehension, so a statement-only matcher would have retired
+    none of them."""
+    fixture = tmp_path / "disc_repetition_comp.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def sample(n):\n"
+        "    return [subprocess.run(['git', 'status']) for _ in range(n)]\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_repetition_loop_declines_a_size_derived_count(tmp_path):
+    """Discriminator 9's load-bearing negative and its entire safety argument. `range(len(x))`
+    scales with INPUT SIZE -- that is the amplification this gate exists to catch, wearing a
+    discarded target. Any `Call` in the `range` argument declines."""
+    fixture = tmp_path / "disc_repetition_len.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def sweep(paths):\n"
+        "    for _ in range(len(paths)):\n"
+        "        subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
+
+
+def test_discriminator_repetition_loop_declines_a_target_read_back(tmp_path):
+    """Discriminator 9 decides by USE, not by name: a target the body reads back is not
+    discarded, whatever it is called. This is why the three MISCLASSIFIED `retry-loop` rows --
+    all of which name their target `attempt` and read it for backoff -- are NOT retired here,
+    and need the retry shape decided on its own terms instead."""
+    fixture = tmp_path / "disc_repetition_used.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def attempts(tries):\n"
+        "    for attempt in range(tries):\n"
+        "        subprocess.run(['git', 'status', str(attempt)])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("attempts", "run")]
+
+
+def test_discriminator_argv0_varies_through_a_local_helper_not_flagged(tmp_path):
+    """Discriminator 8, positive: the loop calls a HELPER and the helper spawns whichever
+    program its caller handed it. Same "different program each iteration" fact discriminator 6
+    decides at route a, reached across one hop -- which is where this repo's population actually
+    lives (41 of 65 exempt call sites measured route `b-local-helper`, only 16 route a)."""
+    fixture = tmp_path / "disc_argv0_helper.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run_tool(exe, args):\n"
+        "    return subprocess.run([exe, *args])\n"
+        "\n"
+        "def check(interpreters):\n"
+        "    for interp in interpreters:\n"
+        "        _run_tool(interp, ['-m', 'compileall'])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_operator_gated_spawn_not_flagged(tmp_path):
+    """Discriminator 15. The spawn fires only when the operator types `d`, so its count is bounded
+    by keypresses and the modal path spawns zero."""
+    fixture = tmp_path / "disc_operator_gate.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def review(incoming, ref):\n"
+        "    for f in incoming:\n"
+        "        ans = sys.stdin.readline().strip()\n"
+        "        if ans in ('d', 'D'):\n"
+        "            subprocess.run(['git', 'diff', ref, '--', f])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_operator_gate_declines_a_read_before_the_loop(tmp_path):
+    """Discriminator 15's load-bearing negative. A stdin read BEFORE the loop is the ITERABLE'S
+    SOURCE, not a per-item gate -- "read a work list from stdin, then fan out over it" is ordinary
+    amplification and common in this tree. Only a read inside the loop body gates per item."""
+    fixture = tmp_path / "disc_operator_gate_outside.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def review(ref):\n"
+        "    ans = sys.stdin.readline().strip()\n"
+        "    for f in ans.split(','):\n"
+        "        subprocess.run(['git', 'diff', ref, '--', f])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["review"]
+
+
+def test_discriminator_attribution_search_not_flagged(tmp_path):
+    """Discriminator 14. The loop runs one candidate, then asks OUT-OF-BAND state whether it was
+    perturbed, and stops at the first that was. A batched run reports that the artifact appeared
+    but not which candidate made it -- and that attribution is the entire output."""
+    fixture = tmp_path / "disc_attribution_search.py"
+    fixture.write_text(
+        "import os\n"
+        "import subprocess\n"
+        "\n"
+        "def main(test_files, marker):\n"
+        "    for test_file in test_files:\n"
+        "        subprocess.run(['npm', 'test', test_file])\n"
+        "        if os.path.exists(marker):\n"
+        "            return 1\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_attribution_search_declines_ordinary_fail_fast(tmp_path):
+    """Discriminator 14's load-bearing negative, and the clause that keeps it from silencing every
+    early-exit loop in the tree. `if result.returncode: return` reads the SPAWN'S OWN result -- a
+    per-item check on a genuinely batchable fan-out, not an out-of-band observation."""
+    fixture = tmp_path / "disc_attribution_failfast.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def main(paths):\n"
+        "    for path in paths:\n"
+        "        result = subprocess.run(['git', 'log', path])\n"
+        "        if result.returncode:\n"
+        "            return 1\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["main"]
+
+
+def test_discriminator_attribution_search_declines_a_loop_target_test(tmp_path):
+    """The other half of clause 2: a test on the LOOP TARGET is a per-item filter, not an
+    observation of state the spawn perturbed."""
+    fixture = tmp_path / "disc_attribution_target_test.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def main(paths):\n"
+        "    for path in paths:\n"
+        "        subprocess.run(['git', 'log', path])\n"
+        "        if path.endswith('.stop'):\n"
+        "            return 1\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["main"]
+
+
+def test_discriminator_function_local_append_only_literal_not_flagged(tmp_path):
+    """Discriminator 2 at FUNCTION scope. The count is `len(literal) + number of append
+    statements` -- both fixed at author time, which is the same safety argument the rule already
+    made at module scope. `prereq_probe.probe_clone_auth`'s real shape."""
+    fixture = tmp_path / "disc_local_literal.py"
+    fixture.write_text(
+        "import os\n"
+        "import subprocess\n"
+        "\n"
+        "def probe():\n"
+        "    hosts = ['git@github.com', 'git@gitlab.com']\n"
+        "    extra = os.environ.get('PROBE', '')\n"
+        "    if extra.startswith('git@'):\n"
+        "        hosts.append(extra)\n"
+        "    for host in hosts:\n"
+        "        subprocess.run(['ssh', '-T', host])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_function_local_literal_declines_an_unbounded_grow(tmp_path):
+    """The negative that keeps the function-local arm honest. `extend` grows the sequence by an
+    amount nobody can read off the source, so the loop is input-sized again and the site must
+    stay reported. Same for a rebind or a comprehension -- `append` is the only growth whose
+    contribution is countable at author time."""
+    fixture = tmp_path / "disc_local_literal_extend.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def probe(discovered):\n"
+        "    hosts = ['git@github.com']\n"
+        "    hosts.extend(discovered)\n"
+        "    for host in hosts:\n"
+        "        subprocess.run(['ssh', '-T', host])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["probe"]
+
+
+def test_discriminator_batched_primary_fallback_except_shape_not_flagged(tmp_path):
+    """Discriminator 13, shape 3a -- the per-item loop lives in the `except` of the batched
+    primary, so it runs only when the batch spawn failed."""
+    fixture = tmp_path / "disc_fallback_except.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    try:\n"
+        "        result = subprocess.run(['git', 'ls-files', '--', *paths])\n"
+        "    except OSError:\n"
+        "        for p in paths:\n"
+        "            subprocess.run(['git', 'ls-files', '--', p])\n"
+        "        return None\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_early_return_shape_not_flagged(tmp_path):
+    """Discriminator 13, shape 3c -- dominance by EARLY RETURN ON SUCCESS rather than by
+    nesting. `coordinator-safe-commit._first_invalid_pathspec`'s real shape, and the one a
+    nesting-only matcher misses entirely."""
+    fixture = tmp_path / "disc_fallback_early_return.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    batch = subprocess.run(['git', 'ls-files', '--', *paths])\n"
+        "    if batch is not None and batch.returncode == 0:\n"
+        "        return None\n"
+        "    for p in paths:\n"
+        "        subprocess.run(['git', 'ls-files', '--', p])\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_declines_an_ungated_loop(tmp_path):
+    """Discriminator 13's load-bearing negative. Clause 3 is the ONLY thing separating a real
+    fallback from "calls a batch, ignores the result, fans out anyway" -- here the batch runs and
+    its result is never consulted, so the per-item loop is unconditional amplification and must
+    stay reported."""
+    fixture = tmp_path / "disc_fallback_ungated.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    subprocess.run(['git', 'ls-files', '--', *paths])\n"
+        "    for p in paths:\n"
+        "        subprocess.run(['git', 'log', p])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_batched_primary_fallback_declines_without_a_primary(tmp_path):
+    """Clause 1/2: a guard on some unrelated condition is not a batched primary. Without a call
+    that CARRIES THE COLLECTION WHOLE, there is nothing for the fallback to be a fallback to."""
+    fixture = tmp_path / "disc_fallback_no_primary.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths, flag):\n"
+        "    if flag:\n"
+        "        return None\n"
+        "    for p in paths:\n"
+        "        subprocess.run(['git', 'log', p])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_annotated_module_literal_not_flagged(tmp_path):
+    """Discriminator 2 reads an ANNOTATED module-level literal too. The annotation is a fact
+    about the author's typing discipline, never about how many times the loop runs."""
+    fixture = tmp_path / "disc_annotated_literal.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "SCRIPTS: tuple[str, ...] = ('a.py', 'b.py')\n"
+        "\n"
+        "def check():\n"
+        "    for script in SCRIPTS:\n"
+        "        subprocess.run(['git', 'log', script])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_annotated_module_name_without_a_literal_still_flagged(tmp_path):
+    """The negative that keeps the annotation arm honest: an annotated module-level name bound
+    to a CALL is not a literal, its length is not fixed at author time, and the loop over it is
+    a genuine input-sized fan-out."""
+    fixture = tmp_path / "disc_annotated_non_literal.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "SCRIPTS: list[str] = sorted(open('manifest').read().split())\n"
+        "\n"
+        "def check():\n"
+        "    for script in SCRIPTS:\n"
+        "        subprocess.run(['git', 'log', script])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_argv_splice_accepts_an_elementwise_comprehension(tmp_path):
+    """Discriminator 7, comprehension arm. `*[str(s) for s in batch]` puts the whole group into
+    one argv exactly as `*batch` would -- the byte-budget chunking shape, where spawn count is
+    O(argv_bytes) and never O(items)."""
+    fixture = tmp_path / "disc_splice_comprehension.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(batches, dst):\n"
+        "    for batch in batches:\n"
+        "        subprocess.run(['git', 'mv', *[str(s) for s in batch], dst])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_argv_splice_declines_a_comprehension_not_over_the_target(tmp_path):
+    """The comprehension arm must read the group the LOOP yielded, not any comprehension that
+    happens to sit in argv. Here the comprehension iterates an unrelated collection while the
+    loop target rides in as a single element -- a real per-item fan-out."""
+    fixture = tmp_path / "disc_splice_comprehension_other.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(items, flags):\n"
+        "    for item in items:\n"
+        "        subprocess.run(['git', 'log', *[str(f) for f in flags], str(item)])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_root_scoped_direct_not_flagged(tmp_path):
+    """Discriminator 12, leg A. argv0 is the constant `git` and the loop target reaches only the
+    `-C` operand -- one process cannot serve two roots, so N roots is N spawns."""
+    fixture = tmp_path / "disc_root_scoped_direct.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(roots):\n"
+        "    for root in roots:\n"
+        "        subprocess.run(['git', '-C', str(root), 'status', '--porcelain'])\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_root_scoped_through_helper_not_flagged(tmp_path):
+    """Discriminator 12, leg B -- the same fact one helper hop away, with the per-root group
+    already spliced whole into the single spawn (`publish.py`'s real shape)."""
+    fixture = tmp_path / "disc_root_scoped_helper.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _batch(root, entries):\n"
+        "    subprocess.run(['git', '-C', str(root), 'ls-tree', '--', *entries])\n"
+        "\n"
+        "def check(by_root):\n"
+        "    for root, entries in by_root.items():\n"
+        "        _batch(root, entries)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_root_scoped_declines_when_a_pathspec_also_varies(tmp_path):
+    """Discriminator 12's load-bearing negative, and a REAL refutation rather than a synthetic
+    one: this is `dispatch_checks.check_destructive_git_orphan`'s shape, which an earlier draft
+    of leg B silenced. The root varies AND a per-item pathspec rides along in the same argv --
+    that second dimension is genuinely batchable within one root, so the site must stay
+    reported. Measured as collateral on 2026-08-19 and fixed by requiring the batch-dimension
+    argument to be a bare Name rather than a per-iteration list literal."""
+    fixture = tmp_path / "disc_root_scoped_pathspec.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run_git(args, cwd=None):\n"
+        "    return subprocess.run(['git', *args], cwd=cwd)\n"
+        "\n"
+        "def check(targets, git_cwd):\n"
+        "    for target in targets:\n"
+        "        _run_git(['log', '%s..HEAD' % target], cwd=git_cwd)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
+
+
+def test_discriminator_root_scoped_declines_a_non_git_program(tmp_path):
+    """`-C` means "change directory" to git and something else entirely to another program. The
+    `elts[0] == "git"` requirement is what makes the flag's semantics knowable; without it this
+    suppresses on a coincidence of spelling."""
+    fixture = tmp_path / "disc_root_scoped_non_git.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(roots):\n"
+        "    for root in roots:\n"
+        "        subprocess.run(['make', '-C', str(root), 'all'])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_argv0_through_helper_looks_past_a_fixed_interpreter(tmp_path):
+    """The merge-order regression (2026-08-19). The helper's argv is bound to a local before the
+    spawn, so BOTH binding maps hold the name `argv`: `_loop_argv0_bindings` holds the extracted
+    head (`sys.executable`), `_loop_expr_bindings` holds the whole list. Merged with the head map
+    last, the identity resolved to the interpreter and the script behind it was unreachable --
+    which silently disabled discriminator 8 for the dominant spawn shape in this tree."""
+    fixture = tmp_path / "disc_helper_past_interpreter.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def _spawn(root, rel):\n"
+        "    script_path = root / rel\n"
+        "    argv = [sys.executable, str(script_path), '--help']\n"
+        "    subprocess.run(argv)\n"
+        "\n"
+        "def check(root, rels):\n"
+        "    for rel in rels:\n"
+        "        _spawn(root, rel)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_argv0_through_helper_declines_a_constant_program(tmp_path):
+    """Discriminator 8's load-bearing negative, and the reason it is not the relaxation
+    discriminator 6's route-a restriction exists to prevent. The helper's argv0 is the LITERAL
+    `git`; only a git SUBCOMMAND varies with the loop. The program is identical every iteration,
+    so the site is batchable and must stay flagged.
+
+    This is the exact shape that produced a real false suppression when discriminator 6 was
+    applied at a wrapper call site. 8 cannot repeat it: it requires the helper's own argv0 to be
+    one of the helper's PARAMETERS before it ever looks at what the caller supplies, and a
+    literal is not a parameter."""
+    fixture = tmp_path / "disc_argv0_helper_constant.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run_git(args, root):\n"
+        "    return subprocess.run(['git', '-C', root, *args])\n"
+        "\n"
+        "def check(verbs, root):\n"
+        "    for verb in verbs:\n"
+        "        _run_git([verb, '--quiet'], root)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
+
+
+def test_discriminator_argv0_through_helper_declines_an_unfilled_slot(tmp_path):
+    """Discriminator 8 declines when the caller does not supply the argv0 parameter at all --
+    the helper falls back to its default, which is loop-invariant by construction, so the loop
+    spawns ONE program N times and is genuinely batchable."""
+    fixture = tmp_path / "disc_argv0_helper_default.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run_tool(args, exe='git'):\n"
+        "    return subprocess.run([exe, *args])\n"
+        "\n"
+        "def check(paths):\n"
+        "    for path in paths:\n"
+        "        _run_tool(['add', path])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_tool")]
 
 
 def test_discriminator_varying_argv0_direct_loop_target_not_flagged(tmp_path):

@@ -81,6 +81,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 try:
     import tomllib
@@ -165,7 +166,7 @@ _PYVER_DETAIL = (
     f"(running {sys.version.split()[0]}); tomllib unavailable."
 )
 _PYVER_REMEDIATION = (
-    "Install or select Python 3.11+ (coordinator:install provisions a supported "
+    "Install or select Python 3.11+ (python3 scripts/setup.py provisions a supported "
     "interpreter), then re-run the probe."
 )
 
@@ -194,6 +195,13 @@ class _ProbeResult:
     data: dict[str, Any] | None = None
     required: bool = True
     skipped: bool = False
+    # Wall time this probe's own function spent, stamped by run_probes' `_timed`
+    # wrapper. None when the result was synthesised rather than run (selector INFO
+    # stubs, the dependency-skipped claude-klabauter.core.import placeholder, the broken-tree
+    # envelopes). Local-only: `_build_envelope_via_module` constructs
+    # coordinator_core.doctor_envelope.ProbeResult field-by-field, so this never
+    # reaches the shared cross-repo dataclass.
+    duration_ms: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +311,19 @@ def _build_envelope_via_module(
 #   Rung 1 — CLAUDE_KLABAUTER_ROOT env var (caller already exported it)
 #   Rung 2 — machine-local get repos.claude_klabauter (authoritative coordinator-side key)
 #   Rung 3 — git-root auto-discovery from this script's bin/ location
+#
+# EXCLUDED BY NAME from the C3 collapse (plan
+# 2026-08-19-an-engine-root-is-a-stamped-build § C3, § "The fourth site"):
+# this ladder stays its own local implementation and is NOT routed through
+# `coordinator_core.warm.engine_root`. The doctor must stay functional on a
+# tree where `coordinator_core` is not importable -- that is the broken
+# state operators actually run a doctor in -- and it resolves the live
+# CLAUDE-KLABAUTER source tree (a locator question), never a stamped engine (a
+# dispatch question), so collapsing it onto the engine-root predicate would
+# both destroy the case the doctor exists for and conflate the two axes.
+# `coordinator/bin/tests/test_doctor_probe_ladder_parity.py` pins that this
+# ladder and the shared resolver agree on rung semantics without merging
+# their implementations.
 # ---------------------------------------------------------------------------
 
 
@@ -3256,6 +3277,905 @@ def _run_probe_orphaned_execnet_gateways() -> _ProbeResult:
         )
 
 
+_WARM_RESIDENCY_PROBE = "claude-klabauter.warm.residency"
+_WARM_SERVER_CMDLINE_SIGNATURE = "coordinator_core/warm/server.py"
+
+
+def _warm_check_pipe_reachable(pipe_name: str) -> tuple[bool | None, bool]:
+    """Connect-and-close reachability primitive for a warm server's named pipe.
+
+    Returns (reachable, primitive_skipped). Hand-rolled because there is no
+    connect-only helper to reuse: `coordinator_core.warm.client._open_pipe`
+    is a plain `open(pipe, "r+b")`, and `try_warm_dispatch`'s liveness path
+    is a full dispatch send, not a bare probe. Mirrors client.py's own
+    anti-storm exception table (module docstring):
+      - FileNotFoundError -> no server -> unreachable.
+      - OSError winerror == 231 (ERROR_PIPE_BUSY) -> server up, busy -> REACHABLE.
+        Treating 231 as failure would report every healthy busy server as
+        unreachable.
+      - PermissionError -> someone else's pipe -> unreachable (not addressable
+        by this caller).
+      - any other OSError -> unreachable.
+
+    Windows-only: `OSError.winerror` does not exist on POSIX, so this branches
+    explicitly on `sys.platform` rather than relying on the accident that an
+    unguarded `AttributeError` there is caught by a broader except and
+    degrades to skipped — on POSIX this primitive cannot establish
+    reachability at all, and callers must report that honestly (skipped=True)
+    rather than letting an unrelated exception type imply an answer.
+
+    Connect-and-close is a live interaction with a named-pipe instance on a
+    server 50-70 sessions are contending for, not a pure read — mutates no
+    persistent state, but is not side-effect-free the way a file read is.
+    """
+    if sys.platform != "win32":
+        return None, True
+    try:
+        fh = open(pipe_name, "r+b")
+    except FileNotFoundError:
+        return False, False
+    except PermissionError:
+        return False, False
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 231:
+            return True, False
+        return False, False
+    else:
+        try:
+            fh.close()
+        except Exception:
+            pass
+        return True, False
+
+
+def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]:
+    """Shared psutil.process_iter walk matching resident warm server processes
+    against `_WARM_SERVER_CMDLINE_SIGNATURE` (`coordinator_core/warm/server.py`).
+
+    SINGLE enumeration site: `_run_probe_warm_residency` and
+    `_run_probe_warm_generation` both call this rather than each carrying
+    its own copy of the psutil walk — a resident server's engine root is
+    encoded in its matched cmdline argument regardless of which probe is
+    asking, so there is exactly one correct way to derive it.
+
+    Returns one dict per matched process: `{"pid": int | None,
+    "create_time": float | None, "engine_root": Path}`. Pure enumeration
+    only — no breadcrumb read, no pipe reachability, no classification;
+    callers layer their own per-probe semantics on top.
+    """
+    servers: list[dict[str, Any]] = []
+
+    proc_iter = psutil_module.process_iter(["pid", "create_time", "cmdline"])
+    while True:
+        try:
+            proc = next(proc_iter)
+        except StopIteration:
+            break
+        except Exception:
+            continue
+
+        try:
+            cmdline = proc.info.get("cmdline") or []
+        except Exception:
+            continue
+
+        script_arg = None
+        for part in cmdline:
+            if part.replace("\\", "/").endswith(_WARM_SERVER_CMDLINE_SIGNATURE):
+                script_arg = part
+                break
+        if script_arg is None:
+            continue
+
+        pid = proc.info.get("pid")
+        try:
+            create_time = proc.info.get("create_time")
+        except Exception:
+            create_time = None
+
+        engine_root = Path(script_arg).resolve().parent.parent.parent
+        servers.append({"pid": pid, "create_time": create_time, "engine_root": engine_root})
+
+    return servers
+
+
+def _run_probe_warm_residency(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.warm.residency — REQUIRED (process scan; `warm` cluster).
+
+    Enumerates resident warm server processes via `psutil.process_iter`,
+    matching cmdline against `coordinator_core/warm/server.py`
+    (`_WARM_SERVER_CMDLINE_SIGNATURE`) — the exact script
+    `coordinator_core.warm.client.SERVER_ENTRY_SCRIPT` names as its spawn
+    target, respawned by resolved absolute path (never `-m`), so the matched
+    cmdline argument itself encodes which engine clone spawned it: the
+    argument is `<engine_root>/coordinator_core/warm/server.py`, three path
+    components below the clone root.
+
+    Classifies each resident server as REACHABLE or ORPHAN using the
+    connect-and-close reachability primitive (`_warm_check_pipe_reachable`),
+    composed as `election.pipe_name(skew.compute_client_token(engine_root),
+    engine_clone=engine_root)` with `engine_clone=` passed EXPLICITLY —
+    `pipe_name`'s default computes THIS repo's own pipe name, which is wrong
+    for a server that may run from a different engine clone (the entire
+    point of this classification).
+
+    Per-server `breadcrumb_state` is enrichment only, never population
+    enumeration — the breadcrumb is one file per clone, clobbered per
+    generation, so it cannot answer "what servers exist". It IS read (via
+    `breadcrumb.read_breadcrumb`, a pure read returning None on
+    absent-or-corrupt, never raising) to say whether THIS resident server is
+    the one the breadcrumb currently names ("current"), a different pid
+    ("superseded"), or unknowable ("cannot_tell" — an absent/corrupt
+    breadcrumb is a no-op, not evidence of "no server running"; AC9).
+    `stable_pid_alive` (not raw pid_exists) confirms it is the SAME process,
+    not a recycled pid.
+
+    Orphan remediation NAMES NO ACTION (AC10): the only stop mechanism
+    targets the currently-elected (breadcrumb-named) server, not a specific
+    orphaned pid — pointing an operator at it would kill the live server
+    50-70 sessions are using and leave the orphan running. A doctor that
+    names an unsafe action is worse than one that names none.
+
+    `_ProbeResult.required` is stated explicitly at every return, per
+    finding F6: the TOML manifest's `required = false` footer governs
+    synthesised INFO stubs for an UN-implemented probe only (inert here,
+    since this probe IS implemented) and is not the same field as this
+    runtime `required`, which the envelope's worst-of reduction and
+    advisory-rendering both read directly. A "cannot tell" (skipped) result
+    here is `required=True` so it participates in worst-of ranking, per
+    AC9/AC10's intent.
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions
+    become an INFO+skipped verdict, never an unhandled crash.
+
+    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C5a, AC7, AC9, AC10.
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_WARM_RESIDENCY_PROBE,
+                status=_INFO,
+                detail="Cannot check warm residency — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=True,
+                skipped=True,
+            )
+
+        try:
+            import psutil  # Probe-local guarded third-party import — see module docstring Negative-spec (mirrors _run_probe_orphaned_execnet_gateways).
+        except ImportError:
+            return _ProbeResult(
+                probe=_WARM_RESIDENCY_PROBE,
+                status=_INFO,
+                detail=(
+                    "psutil not importable; warm residency detection skipped. "
+                    "psutil is a declared, required coordinator_core dependency — its "
+                    "absence indicates an incomplete engine install, not a normal state."
+                ),
+                remediation=(
+                    "Install coordinator_core's declared dependencies "
+                    "(pip install -e . from CLAUDE_KLABAUTER_ROOT), then re-run the doctor probe."
+                ),
+                required=True,
+                skipped=True,
+            )
+
+        # sys.path already set by _run_probe_core_import (runs before this probe).
+        try:
+            from coordinator_core.warm import breadcrumb, election, skew
+            from coordinator_core.session.core import stable_pid_alive
+        except ImportError as exc:
+            return _ProbeResult(
+                probe=_WARM_RESIDENCY_PROBE,
+                status=_INFO,
+                detail=f"coordinator_core.warm not importable: {exc}",
+                remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+                required=True,
+                skipped=True,
+            )
+
+        servers: list[dict[str, Any]] = []
+
+        for resident in _enumerate_resident_warm_servers(psutil):
+            pid = resident["pid"]
+            create_time = resident["create_time"]
+            age_secs = (time.time() - create_time) if create_time else None
+            engine_root = resident["engine_root"]
+
+            classification = "cannot_tell"
+            reach_skipped = True
+            try:
+                token = skew.compute_client_token(engine_root)
+                pipe = election.pipe_name(token, engine_clone=engine_root)
+                reachable, reach_skipped = _warm_check_pipe_reachable(pipe)
+                if reach_skipped:
+                    classification = "cannot_tell"
+                elif reachable:
+                    classification = "reachable"
+                else:
+                    classification = "orphan"
+            except Exception:
+                classification = "cannot_tell"
+                reach_skipped = True
+
+            bc = None
+            try:
+                bc = breadcrumb.read_breadcrumb(engine_root)
+            except Exception:
+                bc = None
+            if bc is None:
+                breadcrumb_state = "cannot_tell"
+            else:
+                try:
+                    matches = bc.get("pid") == pid and stable_pid_alive(
+                        pid, stored_start_epoch=bc.get("stable_pid_start_epoch", 0)
+                    )
+                except Exception:
+                    matches = False
+                breadcrumb_state = "current" if matches else "superseded"
+
+            servers.append({
+                "pid": pid,
+                "age_secs": age_secs,
+                "engine_root": str(engine_root),
+                "classification": classification,
+                "breadcrumb_state": breadcrumb_state,
+            })
+
+        orphans = [s for s in servers if s["classification"] == "orphan"]
+        cannot_tell = [s for s in servers if s["classification"] == "cannot_tell"]
+
+        if not servers:
+            return _ProbeResult(
+                probe=_WARM_RESIDENCY_PROBE,
+                status=_PASS,
+                detail="No resident warm server processes found (matched by cmdline against coordinator_core/warm/server.py).",
+                remediation="—",
+                required=True,
+                data={"servers": []},
+            )
+
+        if orphans:
+            pids_str = ", ".join(str(s["pid"]) for s in orphans)
+            return _ProbeResult(
+                probe=_WARM_RESIDENCY_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"{len(orphans)} resident warm server process(es) unreachable (orphaned): "
+                    f"pid(s) {pids_str}, of {len(servers)} resident server(s) total."
+                ),
+                remediation=(
+                    "No automated remediation is named — this probe does not point at the "
+                    "stop mechanism. That mechanism targets the current, breadcrumb-elected "
+                    "server, not a specific orphaned pid; pointing it here would risk killing "
+                    "the live server 50-70 sessions are using while leaving the named orphan(s) "
+                    "running. Investigate the named pid(s) manually before acting."
+                ),
+                required=True,
+                data={"servers": servers, "orphan_pids": [s["pid"] for s in orphans]},
+            )
+
+        if cannot_tell:
+            return _ProbeResult(
+                probe=_WARM_RESIDENCY_PROBE,
+                status=_INFO,
+                detail=(
+                    f"Found {len(servers)} resident warm server process(es); reachability "
+                    "cannot be established for at least one of them "
+                    + ("(reachability primitive is Windows-only; running on a non-Windows platform)"
+                       if sys.platform != "win32"
+                       else "(pipe-name computation or connect attempt failed unexpectedly)")
+                    + ". Absence of evidence here is not evidence of absence — cannot tell, "
+                    "not confirmed orphaned and not confirmed reachable."
+                ),
+                remediation="—",
+                required=True,
+                skipped=True,
+                data={"servers": servers},
+            )
+
+        return _ProbeResult(
+            probe=_WARM_RESIDENCY_PROBE,
+            status=_PASS,
+            detail=f"{len(servers)} resident warm server process(es), all reachable.",
+            remediation="—",
+            required=True,
+            data={"servers": servers},
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_WARM_RESIDENCY_PROBE,
+            status=_INFO,
+            detail=f"Unexpected error in warm residency probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=True,
+            skipped=True,
+        )
+
+
+_WARM_GENERATION_PROBE = "claude-klabauter.warm.generation"
+
+
+def _warm_generation_current_token_stale(engine_root: Path, breadcrumb_pipe_token: str) -> bool | None:
+    """SINGLE named predicate: is `breadcrumb_pipe_token` (the pipe-name token
+    segment the resident server's breadcrumb recorded at boot) stale relative
+    to a freshly recomputed `skew.compute_client_token(engine_root)`?
+
+    Returns True (stale) / False (current) / None ("cannot tell" — token
+    computation itself failed).
+
+    FORWARD NOTE (state/handoffs/2026-08-19-one-engine-never-the-live-tree.md):
+    that plan intends to delete `skew.compute_client_token`'s no-stamp
+    fallback and raise a named error in its place. This predicate is the
+    ONE site that calls `compute_client_token` for this probe, and its
+    `except Exception` is where that future error gets caught (broad today
+    because no such error exists yet) — the swap to "is this root stamped?"
+    becomes a one-line edit here, not a probe-wide rewrite.
+    """
+    from coordinator_core.warm import skew
+
+    try:
+        current_token = skew.compute_client_token(engine_root)
+    except Exception:
+        return None
+    return current_token != breadcrumb_pipe_token
+
+
+def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.warm.generation — REQUIRED (pure local read; `warm` cluster).
+
+    Compares the pipe-name TOKEN SEGMENT each RESIDENT SERVER's OWN
+    breadcrumb recorded at boot (the last dot-separated component of
+    `election.pipe_name(...)`'s output, i.e. the `engine_token` argument
+    verbatim) against a freshly recomputed
+    `skew.compute_client_token(engine_root)` computed against that SAME
+    server's own engine root — never `claude_klabauter_root` (this repo's own root).
+    A mismatch means that resident server's generation token predates the
+    current tree/mirror it was spawned from — a stale-generation signal,
+    not a liveness check.
+
+    Resident servers, and each one's own engine root, are discovered the
+    SAME way `_run_probe_warm_residency` discovers them: via
+    `_enumerate_resident_warm_servers` (the shared psutil.process_iter walk
+    — do not copy-paste a second enumeration site). A warm server on this
+    box commonly runs out of a published engine mirror, not this repo's own
+    clone (`claude_klabauter_root`); the breadcrumb it wrote lives under ITS clone,
+    not this one, so resolving `claude_klabauter_root`'s own breadcrumb here would
+    silently miss it (the bug this probe existed to fix). `claude_klabauter_root`
+    itself is retained only as the pre-flight "is CLAUDE_KLABAUTER_ROOT resolved at
+    all" gate — it plays no further role once enumeration starts.
+
+    PURE LOCAL READ, by design: this probe must not connect to any server
+    and must not elect.
+      - `_enumerate_resident_warm_servers` only reads process cmdlines via
+        psutil — no connect, no elect.
+      - `breadcrumb.read_breadcrumb` is a pure read, never raises, returns
+        None on absent/corrupt (module contract).
+      - `skew.compute_client_token` is a stat-only fingerprint (no
+        subprocess, no connect).
+      - `election.pipe_name` is NOT called here at all — each breadcrumb
+        already recorded its own actual bound pipe string; this probe only
+        needs to isolate its trailing token segment and diff it against a
+        fresh token, not reconstruct the whole pipe name.
+      - `election.elect()` is NEVER called — it mutates (contests the
+        first named-pipe instance, calls `CreateNamedPipe`, raises
+        `ElectionLost`) and has no place in a read-only probe.
+      - `ServerVersionState.is_skewed` is NEVER called either — it
+        triggers a throttled (2s) source-hash refresh, so it is not the
+        zero-cost read it appears to be.
+      - `_warm_check_pipe_reachable` (C5a's connect-and-close primitive)
+        is NEVER called here — this probe never opens a pipe.
+
+    Multiple resident servers is a real case on this box: EVERY matched
+    server's own breadcrumb is read and diffed against its own engine
+    root. If ANY resident server's token is stale, the overall verdict is
+    DEGRADED, naming every stale server's pid. Otherwise, if ANY server's
+    generation could not be determined (no breadcrumb, malformed pipe
+    field, or token computation failure), the verdict is the "cannot tell"
+    skip (naming the affected pids) rather than a false PASS. Only when
+    every resident server's token is confirmed current is the verdict
+    PASS. No resident server at all is itself a legitimate "cannot tell".
+
+    Attribution note (baton AC6, "resident engine predates last mirror
+    publish"): this probe's stale-token reading covers the
+    resident-vs-publish angle via `skew.compute_client_token`'s stamp-file
+    fingerprint. `claude-klabauter.publish.provenance` (pre-existing probe) answers
+    the published-vs-source half; the two are complementary, not
+    duplicative.
+
+    `_ProbeResult.required` is stated explicitly at every return, per
+    finding F6 (same reasoning as C5a's docstring): the TOML manifest's
+    `required = false` footer governs synthesised INFO stubs for an
+    UN-implemented probe only, and is not the same field as this runtime
+    `required`, which the envelope's worst-of reduction and
+    advisory-rendering both read directly. A "cannot tell" (skipped)
+    result here is `required=True`.
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions
+    become an INFO+skipped verdict, never an unhandled crash.
+
+    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C5b.
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_WARM_GENERATION_PROBE,
+                status=_INFO,
+                detail="Cannot check warm generation skew — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=True,
+                skipped=True,
+            )
+
+        try:
+            import psutil  # Probe-local guarded third-party import — see module docstring Negative-spec (mirrors _run_probe_warm_residency).
+        except ImportError:
+            return _ProbeResult(
+                probe=_WARM_GENERATION_PROBE,
+                status=_INFO,
+                detail=(
+                    "psutil not importable; warm generation detection skipped. "
+                    "psutil is a declared, required coordinator_core dependency — its "
+                    "absence indicates an incomplete engine install, not a normal state."
+                ),
+                remediation=(
+                    "Install coordinator_core's declared dependencies "
+                    "(pip install -e . from CLAUDE_KLABAUTER_ROOT), then re-run the doctor probe."
+                ),
+                required=True,
+                skipped=True,
+            )
+
+        try:
+            from coordinator_core.warm import breadcrumb
+        except ImportError as exc:
+            return _ProbeResult(
+                probe=_WARM_GENERATION_PROBE,
+                status=_INFO,
+                detail=f"coordinator_core.warm not importable: {exc}",
+                remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+                required=True,
+                skipped=True,
+            )
+
+        resident = _enumerate_resident_warm_servers(psutil)
+
+        if not resident:
+            return _ProbeResult(
+                probe=_WARM_GENERATION_PROBE,
+                status=_INFO,
+                detail=(
+                    "No resident warm server process found — cannot tell whether any "
+                    "server's generation token is stale. Absence of a resident process "
+                    "is not evidence of 'stale' or 'current'; it is simply nothing to check."
+                ),
+                remediation="—",
+                required=True,
+                skipped=True,
+                data={"servers": []},
+            )
+
+        stale_pids: list[Any] = []
+        cannot_tell_pids: list[Any] = []
+        servers_data: list[dict[str, Any]] = []
+
+        for server in resident:
+            pid = server["pid"]
+            engine_root = server["engine_root"]
+
+            try:
+                bc = breadcrumb.read_breadcrumb(engine_root)
+            except Exception:
+                bc = None
+
+            if bc is None:
+                cannot_tell_pids.append(pid)
+                servers_data.append({
+                    "pid": pid,
+                    "engine_root": str(engine_root),
+                    "generation_state": "cannot_tell",
+                    "reason": "no breadcrumb on disk for this server's engine root",
+                })
+                continue
+
+            pipe = bc.get("pipe")
+            if not isinstance(pipe, str) or "." not in pipe:
+                cannot_tell_pids.append(pid)
+                servers_data.append({
+                    "pid": pid,
+                    "engine_root": str(engine_root),
+                    "generation_state": "cannot_tell",
+                    "reason": "breadcrumb 'pipe' field missing or malformed",
+                })
+                continue
+
+            breadcrumb_pipe_token = pipe.rsplit(".", 1)[-1]
+            stale = _warm_generation_current_token_stale(engine_root, breadcrumb_pipe_token)
+
+            if stale is None:
+                cannot_tell_pids.append(pid)
+                servers_data.append({
+                    "pid": pid,
+                    "engine_root": str(engine_root),
+                    "generation_state": "cannot_tell",
+                    "reason": "skew.compute_client_token(engine_root) could not be computed",
+                    "breadcrumb_pipe_token": breadcrumb_pipe_token,
+                })
+                continue
+
+            if stale:
+                stale_pids.append(pid)
+                servers_data.append({
+                    "pid": pid,
+                    "engine_root": str(engine_root),
+                    "generation_state": "stale",
+                    "breadcrumb_pipe_token": breadcrumb_pipe_token,
+                })
+            else:
+                servers_data.append({
+                    "pid": pid,
+                    "engine_root": str(engine_root),
+                    "generation_state": "current",
+                    "breadcrumb_pipe_token": breadcrumb_pipe_token,
+                })
+
+        if stale_pids:
+            pids_str = ", ".join(str(p) for p in stale_pids)
+            return _ProbeResult(
+                probe=_WARM_GENERATION_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"{len(stale_pids)} resident warm server process(es) have a stale "
+                    f"generation token (pid(s) {pids_str}): the breadcrumb pipe-name "
+                    "token differs from a freshly computed "
+                    "skew.compute_client_token(engine_root) for that server's own "
+                    "engine root — that resident generation predates its current "
+                    "tree/mirror."
+                ),
+                remediation=(
+                    "A stale generation drains on its own via warm.idle's superseded-"
+                    "generation arm once a fresh server binds; no direct action is named here."
+                ),
+                required=True,
+                data={"servers": servers_data, "stale_pids": stale_pids},
+            )
+
+        if cannot_tell_pids:
+            pids_str = ", ".join(str(p) for p in cannot_tell_pids)
+            return _ProbeResult(
+                probe=_WARM_GENERATION_PROBE,
+                status=_INFO,
+                detail=(
+                    f"Found {len(resident)} resident warm server process(es); generation "
+                    f"currency cannot be established for at least one of them (pid(s) "
+                    f"{pids_str}). Absence of evidence here is not evidence of a stale "
+                    "or current generation — cannot tell."
+                ),
+                remediation="—",
+                required=True,
+                skipped=True,
+                data={"servers": servers_data},
+            )
+
+        return _ProbeResult(
+            probe=_WARM_GENERATION_PROBE,
+            status=_PASS,
+            detail=(
+                f"{len(resident)} resident warm server process(es); every one's "
+                "breadcrumb pipe-name token matches its own engine root's current "
+                "generation token."
+            ),
+            remediation="—",
+            required=True,
+            data={"servers": servers_data},
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_WARM_GENERATION_PROBE,
+            status=_INFO,
+            detail=f"Unexpected error in warm generation probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=True,
+            skipped=True,
+        )
+
+
+_WARM_ROUTE_SHARE_PROBE = "claude-klabauter.warm.route_share"
+
+
+def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.warm.route_share — OPTIONAL (route-share reader; `warm` cluster).
+
+    Calls `coordinator_core.telemetry.engine_report.route_distribution` over
+    `engine_report.iter_sink_entries(repo_root=claude_klabauter_root)` and TRANSLATES its
+    verdict into the closed probe-status enum. This probe does not re-parse the
+    op-latency sink itself — two parsers drift, which is the whole point of
+    building the reader (`iter_sink_entries` / `route_distribution`) first.
+
+    Translation (do not extend without also updating this comment and the
+    reader's own docstring):
+      reader verdict "ok"       -> `_PASS`
+      reader verdict "degraded" -> `_DEGRADED` (reserved by the reader for a
+                                    future share-threshold check; not emitted
+                                    today)
+      reader verdict "unknown"  -> `skipped=True`, `required=True` — never
+                                    PASS, never FAIL. At today's ~0.257% route
+                                    coverage (DR-328) the honest reading is
+                                    "cannot tell", not a verdict; a probe that
+                                    renders FAIL off it is as wrong as one that
+                                    renders PASS.
+
+    NEGATIVE SPEC: the reader's own verdict string ("ok"/"degraded"/"unknown")
+    is a richer DATA-PAYLOAD vocabulary than the probe status enum and is
+    reported verbatim in `data["reader_verdict"]`, never assigned to
+    `_ProbeResult.status` — `status` is the closed, versioned enum in
+    `coordinator_core.doctor_envelope.STATUS_VOCAB`, whose own comment says
+    do not extend without bumping `ENVELOPE_SCHEMA_VERSION`.
+
+    `_ProbeResult.required` is stated explicitly at every return (F6, same
+    convention as C5a/C5b): the TOML manifest's `required = false` footer
+    governs only the synthesised-stub path for an unimplemented probe id, not
+    this runtime field. The skipped/unknown path here sets required=True so
+    it reduces to DEGRADED, never drops out silently.
+
+    Never uses `_INFO`: an INFO verdict is dropped entirely by the envelope's
+    worst-of reduction (`_local_reduce_overall` / `build_envelope` both treat
+    INFO as "no opinion"), which would let an otherwise-all-PASS probe set
+    render overall PASS despite this probe having nothing to say at today's
+    coverage — exactly the false-PASS this probe exists to prevent. `_DEGRADED`
+    (with `skipped=True` where applicable) is used instead on every path,
+    including the claude_klabauter_root-unresolved and unexpected-exception paths.
+
+    Cross-reference (reviewer nit, coordinator:code-reviewer): this probe's
+    `_DEGRADED`+`skipped=True`+`required=True` "cannot tell" convention and
+    `_run_probe_warm_residency`/`_run_probe_warm_generation`'s `_INFO`+
+    `skipped=True`+`required=True` convention are DIFFERENT stored `status`
+    values for the same semantic case, but they reduce IDENTICALLY through
+    `_local_reduce_overall`/`build_envelope`: a `skipped=True` row's rendered
+    verdict is derived from `required` alone, never from `status`. Both are
+    correct; this is one convention documented three times across sibling
+    probes, not three independent decisions.
+
+    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C6.
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_WARM_ROUTE_SHARE_PROBE,
+                status=_DEGRADED,
+                detail="Cannot check warm route share — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=True,
+                skipped=True,
+            )
+
+        try:
+            from coordinator_core.telemetry import engine_report
+        except ImportError as exc:
+            return _ProbeResult(
+                probe=_WARM_ROUTE_SHARE_PROBE,
+                status=_DEGRADED,
+                detail=f"coordinator_core.telemetry.engine_report not importable: {exc}",
+                remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+                required=True,
+                skipped=True,
+            )
+
+        entries = engine_report.iter_sink_entries(repo_root=claude_klabauter_root)
+        reader_result = engine_report.route_distribution(entries)
+        verdict = reader_result.get("verdict")
+        verdict_reason = reader_result.get("verdict_reason")
+
+        if verdict == "ok":
+            return _ProbeResult(
+                probe=_WARM_ROUTE_SHARE_PROBE,
+                status=_PASS,
+                detail=f"Route-share coverage sufficient: {verdict_reason}",
+                remediation="—",
+                required=True,
+                data={"reader_verdict": verdict, "route_distribution": reader_result},
+            )
+
+        if verdict == "degraded":
+            return _ProbeResult(
+                probe=_WARM_ROUTE_SHARE_PROBE,
+                status=_DEGRADED,
+                detail=f"Route-share reader reports degraded: {verdict_reason}",
+                remediation="Investigate the warm-route share regression named in the reader's verdict_reason.",
+                required=True,
+                data={"reader_verdict": verdict, "route_distribution": reader_result},
+            )
+
+        # "unknown" (or any future unrecognised value) — honest "cannot tell",
+        # never PASS and never FAIL.
+        return _ProbeResult(
+            probe=_WARM_ROUTE_SHARE_PROBE,
+            status=_DEGRADED,
+            detail=f"Route-share coverage cannot support a verdict: {verdict_reason}",
+            remediation="—",
+            required=True,
+            skipped=True,
+            data={"reader_verdict": verdict, "route_distribution": reader_result},
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_WARM_ROUTE_SHARE_PROBE,
+            status=_DEGRADED,
+            detail=f"Unexpected error in warm route-share probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=True,
+            skipped=True,
+        )
+
+
+_WARM_ROUNDTRIP_PROBE = "claude-klabauter.warm.roundtrip"
+
+# Connect-deadline for this probe's live warm round-trip attempt (F10). There is no
+# existing connect-deadline helper to reuse: coordinator_core.warm.client's only
+# timeout surface is a per-op BUDGET resolver (`_mutation_deadline_for` ->
+# `coordinator_core.ipc._timeout_for(method)`) that bounds an OP's execution once
+# dispatched, not a raw connect attempt — pointing this probe at it would be wrong
+# per the chunk brief. Hand-rolled instead via a bounded background thread (below),
+# with this short, explicitly-named deadline: long enough to distinguish "reachable"
+# from "hung", short enough not to stall a --cluster warm --include-live-roundtrip run.
+_WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS = 3.0
+
+
+def _run_probe_warm_roundtrip(
+    claude_klabauter_root: Path | None,
+    include_live_roundtrip: bool,
+) -> _ProbeResult:
+    """Probe claude-klabauter.warm.roundtrip — OPTIONAL, weight=heavy, gated behind an explicit opt-in.
+
+    SPLIT OUT OF C6 (staff-eng review, F2): `_apply_selector` is a POST-RUN FILTER —
+    `run_probes()` always exercises the full probe set and the selector only shapes
+    what is emitted. A manifest `weight = "heavy"` / `triage = false` row governs
+    OUTPUT MEMBERSHIP, not execution — it does NOT stop a probe from running. This
+    probe therefore self-gates on the `include_live_roundtrip` parameter, threaded
+    from `main()`'s `--include-live-roundtrip` flag, rather than relying on the
+    manifest alone: without that gate, this probe would fire a live warm-server
+    round-trip on every default `run_probes()` call, every `--triage` run, every
+    `--cluster registry` run, and every CLI shell in the test suite.
+
+    Default OFF: when `include_live_roundtrip` is False, this probe does NOT attempt
+    a connection at all — it returns `skipped=True` (never an INFO stub) so it still
+    appears as a row in `--cluster warm`'s membership rather than silently vanishing.
+    A human running `--cluster warm --include-live-roundtrip` is the only path that
+    exercises it for real.
+
+    A live hit/miss round-trip: attempts one `try_warm_dispatch` ping in a
+    daemon thread, bounded by `_WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS` via
+    `Thread.join(timeout=...)` (see the constant's own comment for why this
+    is hand-rolled rather than reused from `ipc._timeout_for`). `try_warm_dispatch`
+    itself never raises (its own Backstop 2) and returns `None` uniformly for
+    every miss shape (warmth disabled, no pipe, busy, someone else's pipe, a
+    broken mid-request pipe, read-deadline expiry) — this probe reports that
+    as an informational MISS (`_INFO`, non-gating: cold dispatch is a normal,
+    supported outcome), a HIT as `_PASS`, and a join-timeout (the thread still
+    alive after the deadline — a hang, not a clean miss) as `_DEGRADED`.
+
+    `required=False` throughout: a live warm-server reachability check is
+    never allowed to gate an otherwise-healthy install.
+
+    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C9.
+    """
+    if not include_live_roundtrip:
+        return _ProbeResult(
+            probe=_WARM_ROUNDTRIP_PROBE,
+            status=_INFO,
+            detail=(
+                "Live warm round-trip probe skipped — opt-in only. Pass "
+                "--include-live-roundtrip to exercise it for real."
+            ),
+            remediation=(
+                "Run: python3 bin/claude-klabauter-doctor-probe.py --cluster warm "
+                "--include-live-roundtrip"
+            ),
+            required=False,
+            skipped=True,
+        )
+
+    if claude_klabauter_root is None:
+        return _ProbeResult(
+            probe=_WARM_ROUNDTRIP_PROBE,
+            status=_DEGRADED,
+            detail="Cannot attempt a warm round-trip — CLAUDE_KLABAUTER_ROOT unresolved.",
+            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+            required=False,
+            skipped=True,
+        )
+
+    root_str = str(claude_klabauter_root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+    try:
+        from coordinator_core.warm import client as warm_client
+    except ImportError as exc:
+        return _ProbeResult(
+            probe=_WARM_ROUNDTRIP_PROBE,
+            status=_DEGRADED,
+            detail=f"coordinator_core.warm.client not importable: {exc}",
+            remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+            required=False,
+            skipped=True,
+        )
+
+    msg = {"jsonrpc": "2.0", "id": "doctor-probe-warm-roundtrip", "method": "ping", "params": {}}
+    result_box: dict[str, Any] = {}
+
+    def _attempt() -> None:
+        start = time.monotonic()
+        try:
+            response = warm_client.try_warm_dispatch(msg)
+        except Exception as exc:  # try_warm_dispatch itself never raises; belt-and-braces only.
+            result_box["error"] = f"{type(exc).__name__}: {exc}"
+            result_box["latency_ms"] = (time.monotonic() - start) * 1000.0
+            return
+        result_box["response"] = response
+        result_box["latency_ms"] = (time.monotonic() - start) * 1000.0
+
+    thread = threading.Thread(target=_attempt, daemon=True)
+    thread.start()
+    thread.join(_WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        # Review: coordinator:code-reviewer — required=False, skipped=True must be
+        # paired here: _local_reduce_overall only consults `required` when `skipped`
+        # is True, so an un-skipped DEGRADED would gate `overall` regardless of
+        # required=False, contradicting this probe's never-gates docstring above.
+        return _ProbeResult(
+            probe=_WARM_ROUNDTRIP_PROBE,
+            status=_DEGRADED,
+            detail=(
+                f"Warm round-trip attempt did not return within "
+                f"{_WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS}s — treated as a hang, "
+                "not a clean miss (the thread is left running as a daemon; it "
+                "cannot be forcibly killed from here)."
+            ),
+            remediation=(
+                "Investigate the resident warm server (see claude-klabauter.warm.residency) — "
+                "a hung round-trip is not a normal miss."
+            ),
+            required=False,
+            skipped=True,
+            data={"timeout_seconds": _WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS},
+        )
+
+    if "error" in result_box:
+        return _ProbeResult(
+            probe=_WARM_ROUNDTRIP_PROBE,
+            status=_DEGRADED,
+            detail=f"Warm round-trip attempt raised unexpectedly: {result_box['error']}",
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+            data={"latency_ms": result_box.get("latency_ms")},
+        )
+
+    response = result_box.get("response")
+    latency_ms = result_box.get("latency_ms")
+
+    if response is not None:
+        return _ProbeResult(
+            probe=_WARM_ROUNDTRIP_PROBE,
+            status=_PASS,
+            detail=f"Warm round-trip HIT — server answered in {latency_ms:.1f}ms.",
+            remediation="—",
+            required=False,
+            data={"hit": True, "latency_ms": latency_ms},
+        )
+
+    return _ProbeResult(
+        probe=_WARM_ROUNDTRIP_PROBE,
+        status=_INFO,
+        detail=f"Warm round-trip MISS — no warm server answered ({latency_ms:.1f}ms to conclude).",
+        remediation="Cold dispatch is a normal, supported outcome — warmth is opportunistic, not required.",
+        required=False,
+        data={"hit": False, "latency_ms": latency_ms},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Probe manifest — doctor-probes.toml loader
 # ---------------------------------------------------------------------------
@@ -3461,11 +4381,42 @@ def _apply_selector(
 # ---------------------------------------------------------------------------
 
 
-def run_probes() -> tuple[list[_ProbeResult], Path | None]:
+def _timed(fn: "Any", *args: "Any") -> _ProbeResult:
+    """Run one probe function and stamp its wall time onto the result.
+
+    Purpose: per-probe cost is the only thing that makes a doctor regression
+    visible without re-running a hand-written profiler. The whole probe suite
+    costs ~41s in-process and two probes carry ~72% of it
+    (docs/research/2026-08-19-doctor-per-probe-cost-profile.md); before this
+    wrapper the envelope carried no timing at all, so that split had to be
+    re-derived by hand every time somebody asked where the time went.
+
+    Negative-spec:
+      - Does NOT swallow, retry, or bound a probe. A probe that raises still
+        raises; timing is observation, never control flow.
+      - Does NOT stamp synthesised results (selector INFO stubs, the
+        dependency-skipped core.import placeholder) — those carry duration_ms
+        None, which reads as "not run", not "free".
+    """
+    t0 = time.perf_counter()
+    result = fn(*args)
+    result.duration_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+    return result
+
+
+def run_probes(*, include_live_roundtrip: bool = False) -> tuple[list[_ProbeResult], Path | None]:
     """Run the full static probe suite (seven probes) in dependency order.
 
     Returns (results, claude_klabauter_root_or_None).
     The returned claude_klabauter_root is the resolved path when probe 1 succeeds; None otherwise.
+
+    `include_live_roundtrip` (default False) gates ONLY `claude-klabauter.warm.roundtrip`
+    (§ C9): every other probe in this function runs unconditionally, exactly as
+    before. False is the correct default for every caller that does not
+    explicitly opt in — the bare CLI invocation, `--triage`, `--cluster warm`
+    without the flag, and this module's own test suite all must skip the live
+    round-trip by default (see `_run_probe_warm_roundtrip`'s own docstring for
+    why this is a run-time gate, not a manifest-only one).
 
     DR-215: all live-probe machinery (UDS ping, shim handshake, shim harness-env) was
     retired — coordinator_core is a command-type engine with no resident process to probe.
@@ -3474,17 +4425,19 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results: list[_ProbeResult] = []
 
     # Probe 1: CLAUDE_KLABAUTER_ROOT resolves (REQUIRED)
+    _t0 = time.perf_counter()
     probe1, claude_klabauter_root = _run_probe_claude_klabauter_root()
+    probe1.duration_ms = round((time.perf_counter() - _t0) * 1000.0, 1)
     results.append(probe1)
 
     # Probe 2: registry key (REQUIRED when machine-local present; OPTIONAL otherwise)
     # Runs independently of probe 1 — it checks the machine-local registration path
     # directly, which may differ from the resolution path used in probe 1.
-    results.append(_run_probe_registry_key())
+    results.append(_timed(_run_probe_registry_key))
 
     # Probe 3: import coordinator_core (REQUIRED; depends on probe 1)
     if claude_klabauter_root is not None:
-        probe3 = _run_probe_core_import(claude_klabauter_root)
+        probe3 = _timed(_run_probe_core_import, claude_klabauter_root)
     else:
         probe3 = _ProbeResult(
             probe="claude-klabauter.core.import",
@@ -3500,24 +4453,28 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     # Command-type static checks (DR-215 rebuild § C1b). Each accepts claude_klabauter_root
     # (Path | None) and self-handles the unresolved case. Manifest triage flags +
     # _apply_selector govern which appear in --triage / --cluster; run_probes runs all.
-    results.append(_run_probe_dialect_guard_armed(claude_klabauter_root))
-    results.append(_run_probe_settings_home_complete(claude_klabauter_root))
-    results.append(_run_probe_entrypoints_path_resolved(claude_klabauter_root))
-    results.append(_run_probe_resident_debris(claude_klabauter_root))
-    results.append(_run_probe_worktree_bloat(claude_klabauter_root))
-    results.append(_run_probe_version_sanity(claude_klabauter_root))
-    results.append(_run_probe_invoke_smoke(claude_klabauter_root))
-    results.append(_run_probe_strategic_draft_staleness(claude_klabauter_root))
-    results.append(_run_probe_vendored_schema_drift(claude_klabauter_root))
-    results.append(_run_probe_generator_output_staleness(claude_klabauter_root))
-    results.append(_run_probe_commitments_recheck(claude_klabauter_root))
-    results.append(_run_probe_stable_pid_miss(claude_klabauter_root))
-    results.append(_run_probe_root_pointer(claude_klabauter_root))
-    results.append(_run_probe_publish_provenance(claude_klabauter_root))
-    results.append(_run_probe_engine_target_rollout())
-    results.append(_run_probe_invoke_latency(claude_klabauter_root))
-    results.append(_run_probe_orphaned_execnet_gateways())
-    results.append(_run_probe_launch_chain())
+    results.append(_timed(_run_probe_dialect_guard_armed, claude_klabauter_root))
+    results.append(_timed(_run_probe_settings_home_complete, claude_klabauter_root))
+    results.append(_timed(_run_probe_entrypoints_path_resolved, claude_klabauter_root))
+    results.append(_timed(_run_probe_resident_debris, claude_klabauter_root))
+    results.append(_timed(_run_probe_worktree_bloat, claude_klabauter_root))
+    results.append(_timed(_run_probe_version_sanity, claude_klabauter_root))
+    results.append(_timed(_run_probe_invoke_smoke, claude_klabauter_root))
+    results.append(_timed(_run_probe_strategic_draft_staleness, claude_klabauter_root))
+    results.append(_timed(_run_probe_vendored_schema_drift, claude_klabauter_root))
+    results.append(_timed(_run_probe_generator_output_staleness, claude_klabauter_root))
+    results.append(_timed(_run_probe_commitments_recheck, claude_klabauter_root))
+    results.append(_timed(_run_probe_stable_pid_miss, claude_klabauter_root))
+    results.append(_timed(_run_probe_root_pointer, claude_klabauter_root))
+    results.append(_timed(_run_probe_publish_provenance, claude_klabauter_root))
+    results.append(_timed(_run_probe_engine_target_rollout))
+    results.append(_timed(_run_probe_invoke_latency, claude_klabauter_root))
+    results.append(_timed(_run_probe_orphaned_execnet_gateways))
+    results.append(_timed(_run_probe_launch_chain))
+    results.append(_timed(_run_probe_warm_residency, claude_klabauter_root))
+    results.append(_timed(_run_probe_warm_generation, claude_klabauter_root))
+    results.append(_timed(_run_probe_warm_route_share, claude_klabauter_root))
+    results.append(_timed(_run_probe_warm_roundtrip, claude_klabauter_root, include_live_roundtrip))
 
     return results, claude_klabauter_root
 
@@ -3587,6 +4544,7 @@ def _build_enriched_envelope(
     results: list[_ProbeResult],
     claude_klabauter_root: Path | None,
     manifest: dict[str, Any] | None = None,
+    suite_total_ms: float | None = None,
 ) -> dict[str, Any]:
     """Build the full JSON verdict envelope (does not print).
 
@@ -3621,7 +4579,22 @@ def _build_enriched_envelope(
             row["detail"] = _mark_advisory_detail(
                 str(row.get("detail") or ""), pr.required, str(row.get("status") or "")
             )
+            # Additive per-row key (see _write_doctor_sentinel's ADDITIVE-KEY
+            # POLICY): a consumer that does not know about it is unaffected, and
+            # None means "not run", never "free".
+            row["duration_ms"] = pr.duration_ms
         row["cluster"] = manifest_safe.get(pid, {}).get("cluster")
+
+    # Additive top-level keys. `probe_total_ms` is the cost of what was EMITTED;
+    # `probe_suite_total_ms` is the cost of what was RUN. Under a selector the two
+    # diverge by the whole post-run-filter tax — `--probe claude-klabauter.warm.generation`
+    # emits a 43ms probe after running a ~41s suite — and that gap is precisely
+    # the thing this instrumentation exists to keep visible.
+    measured = [r.duration_ms for r in results if r.duration_ms is not None]
+    if measured:
+        envelope["probe_total_ms"] = round(sum(measured), 1)
+    if suite_total_ms is not None:
+        envelope["probe_suite_total_ms"] = round(suite_total_ms, 1)
 
     return envelope
 
@@ -3630,9 +4603,10 @@ def emit_envelope(
     results: list[_ProbeResult],
     claude_klabauter_root: Path | None,
     manifest: dict[str, Any] | None = None,
+    suite_total_ms: float | None = None,
 ) -> int:
     """Emit the full JSON verdict envelope; always exits 0."""
-    envelope = _build_enriched_envelope(results, claude_klabauter_root, manifest)
+    envelope = _build_enriched_envelope(results, claude_klabauter_root, manifest, suite_total_ms)
     sys.stdout.write(json.dumps(envelope, indent=2, default=str) + "\n")
     sys.stdout.flush()
     return 0
@@ -4036,6 +5010,21 @@ def main() -> int:
         ),
     )
 
+    # Not part of the mutually-exclusive mode group — orthogonal opt-in, combinable
+    # with any of the above (e.g. --cluster warm --include-live-roundtrip). Default
+    # OFF everywhere: the bare CLI invocation, --triage, --cluster warm, and the test
+    # suite's default runs must all skip claude-klabauter.warm.roundtrip's live connection
+    # attempt unless this flag is explicitly passed (§ C9).
+    parser.add_argument(
+        "--include-live-roundtrip",
+        action="store_true",
+        help=(
+            "Opt in to the live warm round-trip probe (claude-klabauter.warm.roundtrip, "
+            "weight=heavy). Without this flag the probe reports skipped=True and "
+            "does not attempt a connection. Combine with --cluster warm to see it."
+        ),
+    )
+
     args = parser.parse_args()
 
     # -----------------------------------------------------------------------
@@ -4102,7 +5091,8 @@ def main() -> int:
         sys.exit(2)
 
     # Run all probes (full set; selector is a post-run filter).
-    results, claude_klabauter_root = run_probes()
+    results, claude_klabauter_root = run_probes(include_live_roundtrip=args.include_live_roundtrip)
+    suite_total_ms = sum(r.duration_ms for r in results if r.duration_ms is not None)
 
     # Apply selector filter to the results.
     results = _apply_selector(results, manifest, args)
@@ -4110,7 +5100,7 @@ def main() -> int:
     if args.step_zero:
         return emit_step_zero(results)
 
-    envelope = _build_enriched_envelope(results, claude_klabauter_root, manifest)
+    envelope = _build_enriched_envelope(results, claude_klabauter_root, manifest, suite_total_ms)
 
     # Sentinel write — ONLY --triage and full-run (no selector at all) write
     # state/doctor-last-run.json. --cluster and --probe are scalpel runs and must

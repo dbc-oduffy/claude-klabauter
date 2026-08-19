@@ -1299,6 +1299,53 @@ def _trailer_value(msg_text: str, prefix: str) -> Optional[str]:
     return None
 
 
+class DeliverableIdAssertionConflictError(RuntimeError):
+    """Raised when a caller-supplied `deliverable_id` disagrees with a
+    `Deliverable-Id:` trailer already present in the commit message
+    (most often stamped by `commit_anchors.py` from staged plan
+    frontmatter, ahead of `_check_deliverable_id_precedence`'s call).
+
+    Deliberately a SIBLING of `coordinator_core.ops.deliverable_carry.
+    DivergentDeliverableIdError`, not a subclass of it, though the two
+    look alike at a glance (both fire on "two sources disagree on a
+    deliverable_id"). `baton_assemble.brief`'s typed catch on
+    `DivergentDeliverableIdError` converts THAT error into a
+    `j-divergent-deliverable-id` judgment point offering keep-plan /
+    keep-predecessor -- a question that is nonsense here: this error
+    fires on an AUTHORING assertion conflict (one commit call was handed
+    two disagreeing ids for the SAME artifact set being staged), not on
+    two artifacts in a carry-or-mint cascade whose provenance a human
+    could arbitrate by "which came first". Had this stayed a subclass,
+    it would reach that handler and produce a nonsense keep-plan/keep-
+    predecessor round trip against a commit that isn't a carry cascade
+    at all. A sibling class cannot be caught by that typed handler, so
+    it can't be routed there by accident.
+
+    2026-08-10 PM ruling ("FAIL LOUD by raising the existing ...
+    DivergentDeliverableIdError") governed the carry-or-mint system this
+    class splits away from; the 2026-08-19 PM ruling (DR-328) supersedes
+    it, naming this split so a commit assertion conflict gets its own
+    class instead of borrowing the carry system's. See `docs/decisions/
+    DR-328` and this plan's chunk C4 authorization.
+
+    `caller_facing_validation` (DR-328 chunk C7): this class's message
+    already names both disagreeing ids and what the caller must do, so it
+    opts into `ipc.py`'s existing duck-type marker rather than inventing a
+    parallel signal -- that module's `CallerFacingValidationError` docstring
+    asks any future validator composing its own caller-facing message to do
+    exactly this. Without it, `_handler_exception_error`'s generic fallback
+    collapses this to `INTERNAL_ERROR: "Internal error:
+    DeliverableIdAssertionConflictError"`, which is indistinguishable on the
+    wire from a genuine engine bug and leaves the operator with a business
+    refusal wearing a crash's clothes. Setting the marker uses the envelope's
+    EXISTING shape (the emitted `code` becomes INVALID_PARAMS) -- it is not
+    an envelope-shape change, which C7's own body reserved for a separate
+    plan.
+    """
+
+    caller_facing_validation = True
+
+
 def _check_deliverable_id_precedence(
     msg_text: str, deliverable_id: str, equivalence_map: Optional[dict] = None
 ) -> bool:
@@ -1318,14 +1365,17 @@ def _check_deliverable_id_precedence(
                correct; the caller applies nothing further (never a
                duplicate line).
 
-    Raises `coordinator_core.ops.deliverable_carry.DivergentDeliverableIdError`
-    -- (iii) an existing line DISAGREES. FAIL LOUD, never silently pick
-    either side (reuses the existing exception verbatim, per that class's
-    own negative-spec against forking a second copy). Both `commit_scoped`
-    branches propagate this raised, uncaught -- a deliberate, NAMED
-    exception to this module's usual "every wrapper returns a GitResult,
-    never raises" convention (see the PM ruling text itself: "FAIL LOUD by
-    raising the existing ... DivergentDeliverableIdError").
+    Raises `DeliverableIdAssertionConflictError` -- (iii) an existing line
+    DISAGREES. FAIL LOUD, never silently pick either side. Both `commit_
+    scoped` branches propagate this raised, uncaught -- a deliberate,
+    NAMED exception to this module's usual "every wrapper returns a
+    GitResult, never raises" convention. DR-328 (2026-08-19) split this
+    off `DivergentDeliverableIdError` as a SIBLING, not a subclass -- see
+    `DeliverableIdAssertionConflictError`'s own docstring for why; the
+    original 2026-08-10 PM ruling ("FAIL LOUD by raising the existing ...
+    DivergentDeliverableIdError") governed the carry system this class
+    split away from and is superseded here by DR-328's naming of this
+    split.
     """
     existing = _trailer_value(msg_text, "Deliverable-Id:")
     if existing is None:
@@ -1337,17 +1387,15 @@ def _check_deliverable_id_precedence(
     if canonicalize(existing, equivalence_map) == canonicalize(deliverable_id, equivalence_map):
         return False
 
-    from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
-
-    raise DivergentDeliverableIdError(
+    raise DeliverableIdAssertionConflictError(
         f"commit_scoped: caller-supplied deliverable_id {deliverable_id!r} "
         f"disagrees with the commit message's own pre-existing Deliverable-Id "
         f"trailer {existing!r} (most likely stamped by commit_anchors.py from "
         "staged plan frontmatter) -- refusing to silently pick either side. "
         "A caller asserting one deliverable while staging another's "
         "already-stamped artifact is an authoring error fixed by splitting "
-        "the commit, per DR-207 DD#1's earliest-artifact-wins ruling (see "
-        "DivergentDeliverableIdError's own docstring)."
+        "the commit -- see DeliverableIdAssertionConflictError's own "
+        "docstring for why this is not DivergentDeliverableIdError."
     )
 
 
@@ -2269,8 +2317,11 @@ def _commit_scoped_private_index(
         # mirror that sibling (its message-first rule is silent about the
         # THIRD source `commit_anchors.py` may have already stamped here;
         # see `commit_scoped`'s own docstring and PM ruling (2)). May raise
-        # `DivergentDeliverableIdError` -- see `_check_deliverable_id_
-        # precedence`'s own docstring; deliberately uncaught here.
+        # `DeliverableIdAssertionConflictError` -- see `_check_deliverable_id_
+        # precedence`'s own docstring; deliberately uncaught here. Gated on
+        # the caller-supplied `deliverable_id` parameter, never on a tier-0-
+        # resolved value, so this raise site is opt-in (staff-eng review
+        # finding 4).
         if deliverable_id:
             from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 
@@ -2469,10 +2520,12 @@ def commit_scoped(
     on WHICHEVER branch this call takes, per the precedence ruling in
     `_check_deliverable_id_precedence`: an explicit value wins when the
     message carries no `Deliverable-Id:` trailer yet; is a no-op when one
-    already agrees; and raises `DivergentDeliverableIdError` (uncaught, a
-    deliberate exception to this function's own "always returns a
-    GitResult" contract -- see that ruling's own docstring) when one
-    disagrees. Advisory-only half (not enforced here, prose guidance only):
+    already agrees; and raises `DeliverableIdAssertionConflictError`
+    (uncaught, a deliberate exception to this function's own "always
+    returns a GitResult" contract -- see that ruling's own docstring, and
+    `DeliverableIdAssertionConflictError`'s own docstring for why this is
+    a sibling of `DivergentDeliverableIdError`, not that class itself) when
+    one disagrees. Advisory-only half (not enforced here, prose guidance only):
     an explicit `deliverable_id` should be PROVENANCE-BEARING -- sourced
     from the plan the caller is ACTUALLY EXECUTING AGAINST, never invented
     or defaulted to satisfy this parameter. Whether the resolvable id is
@@ -2712,9 +2765,12 @@ def commit_scoped(
         # own Deliverable-Id leg entirely -- LOAD-BEARING, not incidental:
         # without this, the hook would independently infer (and stamp) its
         # own session/claimed-plan-derived value, silently overriding the
-        # caller's explicit one. May raise `DivergentDeliverableIdError` --
-        # see `_check_deliverable_id_precedence`'s own docstring; deliberately
-        # uncaught here, before any staging happens.
+        # caller's explicit one. May raise
+        # `DeliverableIdAssertionConflictError` -- see `_check_deliverable_id_
+        # precedence`'s own docstring; deliberately uncaught here, before any
+        # staging happens. Gated on the caller-supplied `deliverable_id`
+        # parameter, never on a tier-0-resolved value, so this raise site is
+        # opt-in (staff-eng review finding 4).
         #
         # 2026-08-14 (cross-repo memo, `2026-08-14-doe-claude-em-scoped-git-
         # commit-drops-session-id-trailer.md`; docs/plans/2026-07-27-computed-
@@ -2793,11 +2849,33 @@ def commit_scoped(
 
     diverged_set = set(diverged)
     non_diverged = [p for p in path_list if p not in diverged_set]
-    return _commit_scoped_private_index(
+    result = _commit_scoped_private_index(
         diverged, non_diverged, msg_file, root, deliverable_id,
         supplied_blobs=supplied_blobs,
         attributed_session_id=attributed_session_id,
     )
+    # This branch lands via `commit-tree`/`update-ref`, which fire NO hooks --
+    # so unlike the agree branch above there is no `post-commit` to stand down
+    # OR to rely on, and the flag is meaningless here except as the caller's
+    # answer to "am I publishing this myself?".
+    #
+    # `suppress_post_commit_auto_push=True` means the caller IS the sole
+    # publisher (`push_mode="sync"`, which pushes synchronously right after
+    # this returns) -- replaying here would make two publishers race one tip,
+    # the 2026-07-30 false negative `_sole_publisher_env` exists to prevent.
+    #
+    # False means the caller is NOT publishing and expects the hook to. On the
+    # agree branch that is true for free; here nothing fires, so without this
+    # replay the commit lands and is stranded local forever while the op
+    # reports `push_state="deferred"` -- "queued for background push" with no
+    # queue behind it. `_replay_post_commit_auto_push`'s own docstring names
+    # this failure ("a commit landed this way that never replays this hook
+    # never pushes"); it was wired for `commit_authored_content` and never
+    # for this path, which went unnoticed only because `run_commit_pipeline`
+    # used to push synchronously on EVERY mode and covered it incidentally.
+    if result.ok and not suppress_post_commit_auto_push:
+        _replay_post_commit_auto_push(root)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -3198,6 +3276,23 @@ def commit_authored_content(
         # successful CAS, mirroring the trailer replay's own "replay what
         # the hook would have done" precedent.
         _replay_post_commit_auto_push(root)
+
+        # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-
+        # the-siblings-unswept-7c3e1f9a4d22.yaml): this entrypoint is one of
+        # the sibling commit producers C5 left unwired -- last step, after
+        # the CAS has already landed, per `apply_base.record_ledger_entry`'s
+        # own contract (never fails the commit it accompanies). Local
+        # import: `contract.apply_base` transitively imports back into this
+        # `ops.ceremony` package (`ops.review_brightline_gate`) -- a
+        # module-level import here creates the same partially-initialized-
+        # module cycle `commit_ledger.resolve_owner` already documents its
+        # own deferred `baton_assemble` import to avoid.
+        from coordinator_core.contract.apply_base import record_ledger_entry
+
+        record_ledger_entry(
+            root, [normalized], new_commit_sha,
+            committer_id_override=attributed_session_id,
+        )
 
         return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
     finally:

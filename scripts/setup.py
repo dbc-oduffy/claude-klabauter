@@ -2237,6 +2237,24 @@ def register_claude_klabauter_root(
         print(f"PASS [registration] {key} = {value}")
     for advisory in pending_advisories:
         advisory()
+
+    # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md C1 —
+    # PREREQUISITE FOR that plan's C4 (fail-closed on an unstamped engine
+    # root): a fresh box with no discoverable klabauter checkout has no
+    # mirror and no way to get one once C4 lands. This is the AUTHORITATIVE
+    # call site (this script, not first_run.py's best-effort re-run path —
+    # see `provision_stamped_engine`'s own docstring) because this is where
+    # `claude_klabauter_root_resolved` is reliably known. Best-effort/advisory only:
+    # a failure here prints a WARNING and does not fail the install (Hard
+    # constraint 1/2 — no new escape hatch, deliberate invocation stays
+    # working; this is neither).
+    if identity == "claude-klabauter" and not discovered_klabauter:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core.install.first_run import provision_stamped_engine
+
+        provision_stamped_engine(claude_klabauter_root_resolved)
+
     return claude_klabauter_root_resolved
 
 

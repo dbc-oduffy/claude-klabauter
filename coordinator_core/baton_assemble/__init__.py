@@ -206,6 +206,7 @@ from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_id
 from coordinator_core.ops.session_commits import resolve_session_commits
+from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session_baton.store import merge_baton
 from coordinator_core.ops.read_frontmatter_field import (
     read_frontmatter_field as _read_frontmatter_field,
@@ -797,17 +798,31 @@ def _resolve_current_session_id() -> Optional[str]:
     """Resolve THIS RUN's own harness session id, for gating
     `_adopt_prior_attempt_scaffold_path`'s authorship check below.
 
-    Same env var + precedence chain `coordinator/bin/coordinator-doc-new.py`'s
-    `_resolve_session_id` uses (`COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID`
-    > `CLAUDE_CODE_SESSION_ID`) -- kept as a SECOND, cross-referenced
-    definition rather than an import. That CLI's own comment above its
-    `_SESSION_SEGMENT_WHITELIST_RE` explains why: it is invoked from an
-    arbitrary consumer repo's cwd and must keep working even when this
-    package tree is not importable from there, so it already duplicates
-    (rather than imports) this exact class of small env-resolution helper.
-    This is the established precedent this function follows, not a new one.
-    If either copy's precedence chain ever changes, update both and keep
-    this cross-reference; the two must never independently drift.
+    Delegates to `ops.session_context.resolve_current_session_id`, the
+    canonical chain (`COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID` >
+    `CLAUDE_CODE_SESSION_ID`, above them a per-request identity binding).
+    This was formerly a local re-implementation of that env ladder, on the
+    precedent that `coordinator/bin/coordinator-doc-new.py` duplicates the
+    same helper because it runs from an arbitrary consumer repo's cwd where
+    this package may not be importable. That precedent does not reach here:
+    this function is inside the package, so it can import the resolver, and
+    a copy that reads `os.environ` directly is not equivalent to one that
+    does not.
+
+    Negative-spec: do NOT restore the inline `os.environ` reads. This
+    function is reachable inside a WARM-SERVED dispatch -- the registered op
+    `handoff.correct_body` imports it at call time (see that module's
+    own import-cycle note) and gates authorship on it. A warm server's
+    environment names whoever SPAWNED it, so a raw env read there resolves a
+    stranger; the caller's true identity arrives only as the per-request
+    `ContextVar` that the canonical resolver reads. Cold callers are
+    unaffected -- with nothing bound, the resolver walks the same three env
+    tiers this code used to walk inline.
+
+    `handoff_correct_body._resolve_session_id_with_source` is the paired
+    copy: that op cross-checks the two against each other and REFUSES on a
+    mismatch, so the two must never be migrated one at a time. They now
+    agree by sharing a resolver instead of by two hand-synced ladders.
 
     Returns `None`, never the CLI's own `'em-unknown'` fallback sentinel,
     when nothing is set -- this copy exists only to GATE an equality check,
@@ -815,12 +830,7 @@ def _resolve_current_session_id() -> Optional[str]:
     coerce into a value that could coincidentally equal a candidate's own
     unset/placeholder field.
     """
-    return (
-        os.environ.get("COORDINATOR_SESSION_ID")
-        or os.environ.get("CLAUDE_SESSION_ID")
-        or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        or None
-    )
+    return resolve_current_session_id()
 
 
 def _sizing_slug_from_path(path: Path) -> str:

@@ -240,6 +240,73 @@ def test_guard_sentinel_existing_unreadable_file_fails_closed(tmp_path, capsys):
     assert residue == []
 
 
+def test_in_place_batch_renders_every_file_one_call(tmp_path, capsys):
+    """--in-place renders N files in a single main() invocation (one spawn at the caller)."""
+    f1 = tmp_path / "a.tpl"
+    f2 = tmp_path / "b.tpl"
+    f1.write_text("Hello {{NAME}}\n")
+    f2.write_text("Bye {{NAME}}\n")
+    rc, out, err = _run(capsys, ["--in-place", str(f1), str(f2), "NAME=Donal"])
+    assert rc == 0
+    assert err == ""
+    assert f1.read_text() == "Hello Donal\n"
+    assert f2.read_text() == "Bye Donal\n"
+
+
+def test_in_place_batch_atomic_write_no_tmp_residue(tmp_path, capsys):
+    f1 = tmp_path / "a.tpl"
+    f1.write_text("X={{X}}")
+    rc, out, err = _run(capsys, ["--in-place", str(f1), "X=5"])
+    assert rc == 0
+    assert f1.read_text() == "X=5"
+    assert list(tmp_path.glob("a.tpl.render-template.tmp.*")) == []
+
+
+def test_in_place_batch_per_file_failure_attribution(tmp_path, capsys):
+    """One bad file among several fails loud with ITS OWN path, and does not skip the rest."""
+    good1 = tmp_path / "good1.tpl"
+    bad = tmp_path / "bad.tpl"
+    good2 = tmp_path / "good2.tpl"
+    good1.write_text("{{NAME}}")
+    bad.write_text("{{MISSING}}")
+    good2.write_text("{{NAME}}")
+
+    rc, out, err = _run(capsys, ["--in-place", str(good1), str(bad), str(good2), "NAME=x"])
+
+    assert rc == 1
+    assert good1.read_text() == "x"
+    assert good2.read_text() == "x"
+    assert bad.read_text() == "{{MISSING}}"  # untouched -- the failing render never wrote
+    assert err.strip() == f"render-template: {bad}: unsubstituted keys: MISSING in {bad}"
+
+
+def test_in_place_batch_worst_severity_wins(tmp_path, capsys):
+    """rc 3 (guard-style severity) is never applicable here, but 1 beats 0 across the batch."""
+    good = tmp_path / "good.tpl"
+    bad = tmp_path / "bad.tpl"
+    good.write_text("{{NAME}}")
+    bad.write_text("{{MISSING}}")
+
+    rc, out, err = _run(capsys, ["--in-place", str(bad), str(good), "NAME=x"])
+
+    assert rc == 1
+    assert good.read_text() == "x"
+
+
+def test_in_place_requires_at_least_one_path(capsys):
+    rc, out, err = _run(capsys, ["--in-place", "NAME=x"])
+    assert rc == 1
+    assert err.strip() == "render-template: --in-place requires at least one path"
+
+
+def test_in_place_unexpected_flag_argument(tmp_path, capsys):
+    f1 = tmp_path / "a.tpl"
+    f1.write_text("{{NAME}}")
+    rc, out, err = _run(capsys, ["--in-place", str(f1), "--bogus"])
+    assert rc == 1
+    assert err.strip() == "render-template: unexpected argument: --bogus"
+
+
 def test_no_guard_legacy_path_still_clobbers(tmp_path, capsys):
     """Regression pin: default behaviour (no --guard-sentinel) is unchanged."""
     tpl = tmp_path / "t14.tpl"

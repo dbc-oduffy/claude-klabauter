@@ -18,8 +18,15 @@ bootstrap of the same symbol, which sat a few lines below the import of the
 poisoned module and was therefore never reached.
 
 Permitted shapes (both defer resolution to a point where a fallback can run):
-    - the import sits inside a `try:` block with an `ImportError` fallback, or
+    - the import sits inside a `try:` block where at least one `except` clause
+      catches `ImportError` (or a superclass — `Exception`/`BaseException`, or
+      a bare `except:`), or
     - the import sits inside a function/method body.
+
+A `try:` whose handlers only catch unrelated exceptions (or a bare
+`try/finally` with no `except` at all) does NOT count as guarded — the
+walker descends into its body and flags any `coordinator[.*]` import found
+there, since `ImportError` would propagate uncaught.
 
 Negative-spec:
     - Does NOT ban the dependency itself. Reaching into `coordinator/bin/lib`
@@ -61,26 +68,59 @@ def _names_coordinator_pkg(node: ast.AST) -> bool:
     return False
 
 
+def _dotted_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _handler_catches_import_error(handler: ast.ExceptHandler) -> bool:
+    """True if `handler` would catch an `ImportError` — including a bare
+    `except:` and a superclass catch (`Exception`/`BaseException`)."""
+    if handler.type is None:
+        return True
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(
+        _dotted_name(t) in ("ImportError", "Exception", "BaseException") for t in types
+    )
+
+
+def _try_is_guarded(node: ast.Try) -> bool:
+    return any(_handler_catches_import_error(h) for h in node.handlers)
+
+
 def _unguarded_module_scope_imports(tree: ast.Module) -> List[int]:
     """Line numbers of `coordinator[.*]` imports reachable at module scope.
 
-    Descends through module-scope control flow (`if`/`with`) but stops at
-    `Try` (guarded) and at function/class bodies (deferred) — both are the
-    sanctioned shapes.
+    Descends through module-scope control flow (`if`/`with`/`for`/`while`/
+    `match`) and stops at function/class bodies (deferred — a sanctioned
+    shape). A `Try` only counts as guarded, and is skipped, when at least one
+    of its handlers would catch `ImportError`; otherwise the walker descends
+    into the try body, since an import there is not actually protected.
     """
     offending: List[int] = []
 
     def walk(body: List[ast.stmt]) -> None:
         for node in body:
-            if isinstance(
-                node, (ast.Try, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-            ):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(node, ast.Try):
+                if not _try_is_guarded(node):
+                    walk(node.body)
                 continue
             if _names_coordinator_pkg(node):
                 offending.append(node.lineno)
-            elif isinstance(node, (ast.If, ast.With, ast.AsyncWith)):
+            elif isinstance(
+                node,
+                (ast.If, ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While),
+            ):
                 walk(node.body)
                 walk(getattr(node, "orelse", []))
+            elif isinstance(node, ast.Match):
+                for case in node.cases:
+                    walk(case.body)
 
     walk(tree.body)
     return offending
@@ -104,3 +144,107 @@ def test_no_unguarded_coordinator_package_import_at_module_scope() -> None:
         "sys.path, and poisons every op registered by the importing module "
         "when it is not:\n  " + "\n  ".join(violations)
     )
+
+
+def _flag(source: str) -> List[int]:
+    return _unguarded_module_scope_imports(ast.parse(source))
+
+
+def test_bare_module_scope_import_is_flagged() -> None:
+    lines = _flag("from coordinator.bin.lib.win_argv import x\n")
+    assert lines == [1]
+
+
+def test_import_nested_in_module_scope_for_is_flagged() -> None:
+    lines = _flag(
+        "for _ in range(1):\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+    )
+    assert lines == [2]
+
+
+def test_import_nested_in_while_is_flagged() -> None:
+    lines = _flag(
+        "while True:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+        "    break\n"
+    )
+    assert lines == [2]
+
+
+def test_import_nested_in_match_case_is_flagged() -> None:
+    lines = _flag(
+        "match 1:\n"
+        "    case 1:\n"
+        "        from coordinator.bin.lib.win_argv import x\n"
+    )
+    assert lines == [3]
+
+
+def test_import_nested_in_module_scope_if_body_is_flagged() -> None:
+    lines = _flag(
+        "if True:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+    )
+    assert lines == [2]
+
+
+def test_import_nested_in_module_scope_if_orelse_is_flagged() -> None:
+    lines = _flag(
+        "if True:\n"
+        "    pass\n"
+        "else:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+    )
+    assert lines == [4]
+
+
+def test_import_guarded_by_try_except_import_error_is_not_flagged() -> None:
+    lines = _flag(
+        "try:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+        "except ImportError:\n"
+        "    pass\n"
+    )
+    assert lines == []
+
+
+def test_import_inside_function_body_is_not_flagged() -> None:
+    lines = _flag(
+        "def f():\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+    )
+    assert lines == []
+
+
+def test_import_inside_class_body_is_not_flagged() -> None:
+    lines = _flag(
+        "class C:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+    )
+    assert lines == []
+
+
+def test_unrelated_import_is_not_flagged() -> None:
+    lines = _flag("from coordinator_core.x import y\n")
+    assert lines == []
+
+
+def test_try_except_mismatched_exception_type_is_flagged() -> None:
+    lines = _flag(
+        "try:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+        "except ValueError:\n"
+        "    pass\n"
+    )
+    assert lines == [2]
+
+
+def test_bare_try_finally_with_no_except_is_flagged() -> None:
+    lines = _flag(
+        "try:\n"
+        "    from coordinator.bin.lib.win_argv import x\n"
+        "finally:\n"
+        "    pass\n"
+    )
+    assert lines == [2]

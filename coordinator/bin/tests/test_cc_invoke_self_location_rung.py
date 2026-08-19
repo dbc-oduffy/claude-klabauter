@@ -150,6 +150,25 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     lib_dir.mkdir(parents=True)
     (checkout_root / "coordinator_core").mkdir(parents=True)
     (checkout_root / "pyproject.toml").write_text("[project]\nname = \"stub\"\n", encoding="utf-8")
+    # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C6: every
+    # DISPATCH-axis candidate rung (env, registry, self-location) now
+    # DELEGATES its final answer to coordinator_core.claude_klabauter_root's own
+    # coordinator_claude_klabauter_root_with_class() instead of returning the candidate
+    # verbatim — so a fixture whose sole purpose is to be self-located must
+    # also be a real enough package for that delegation to succeed. This stub
+    # answers exactly what the real function would on a single-tree box with
+    # no CLAUDE_KLABAUTER_ROOT/registry/published mirror: the checkout root itself.
+    # A regular package (``__init__.py`` present), not an implicit namespace
+    # package: this box has a real, ambiently-importable ``coordinator_core``
+    # (editable install) elsewhere on ``sys.path`` — a namespace-package stub
+    # would lose the module search to that real package regardless of
+    # ``sys.path`` insertion order, silently exercising the wrong module.
+    (checkout_root / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
+    (checkout_root / "coordinator_core" / "claude_klabauter_root.py").write_text(
+        "def coordinator_claude_klabauter_root_with_class():\n"
+        f"    return ({str(checkout_root)!r}, 'live-working-tree')\n",
+        encoding="utf-8",
+    )
 
     cc_invoke_copy = lib_dir / "cc_invoke.py"
     shutil.copyfile(_CC_INVOKE_PY, cc_invoke_copy)
@@ -203,18 +222,92 @@ def test_terminal_rung_resolves_under_both_home_shapes_with_no_prior_rung(shape)
         )
 
 
-def test_explicit_claude_klabauter_root_wins_over_self_location():
-    """AC1's ordering discriminator: an all-three-absent case alone does not
-    prove the rung is TERMINAL (lowest precedence) — this asserts that an
-    explicit, existing, DIFFERENT valid checkout set via CLAUDE_KLABAUTER_ROOT still
-    outranks the new rung, i.e. rung 1 is untouched by this change."""
+def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_axis():
+    """LOCATOR-axis subject, moved here 2026-08-19 by § C6 of
+    docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md.
+
+    This test used to pin that an explicit CLAUDE_KLABAUTER_ROOT wins over self-location
+    INSIDE `_resolve_claude_klabauter_root()` (the DISPATCH axis). C6 makes rungs 1 and 3
+    of that function both delegate their final answer to the single gated
+    ladder (`coordinator_claude_klabauter_root_with_class()`) instead of racing each
+    other directly — so a bare, marker-only directory set via CLAUDE_KLABAUTER_ROOT (this
+    fixture's `other_root`, which deliberately has no real
+    `coordinator_core/claude_klabauter_root.py`) is no longer trusted verbatim on the
+    DISPATCH axis; delegation now raises for it (see the sibling raise-path
+    test below). The "explicit override outranks self-location" CONTRACT
+    itself is still real, just on a different function: `resolve_engine_root()`
+    documents exactly this ordering (env, gated only on `os.path.isdir`, not
+    on importability) ahead of self-location — the LOCATOR axis this function
+    was never part of. Deliberately kept as a live subject here rather than
+    silently becoming an assertion about the new raise (per C6's own
+    instruction) — see the raise-path test immediately below for that half.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         # The self-locatable checkout the new rung would resolve to if reached.
         checkout_root, cc_invoke_copy = _build_checkout(tmp_path, "flat")
 
-        # A second, distinct, EXISTING, valid checkout directory — CLAUDE_KLABAUTER_ROOT
-        # is expected to win outright over self-location.
+        # A second, distinct, EXISTING checkout directory — CLAUDE_KLABAUTER_ROOT
+        # is expected to win outright over self-location on the LOCATOR axis.
+        # Deliberately marker-only (no coordinator_core/claude_klabauter_root.py): this
+        # is exactly resolve_engine_root()'s isdir-only gate, unlike the
+        # DISPATCH-axis delegation the sibling raise-path test below exercises.
+        other_root = tmp_path / "other-existing-checkout"
+        (other_root / "coordinator_core").mkdir(parents=True)
+        (other_root / "pyproject.toml").write_text("[project]\nname = \"other\"\n", encoding="utf-8")
+
+        isolated_home = tmp_path / "empty-home"
+        isolated_home.mkdir()
+
+        env = _hermetic_child_env(str(isolated_home), extra={"CLAUDE_KLABAUTER_ROOT": str(other_root)})
+        snippet = textwrap.dedent(
+            """\
+            import sys
+            sys.path.insert(0, {lib_dir!r})
+            import cc_invoke
+            print(cc_invoke.resolve_engine_root({script_file!r}))
+            """
+        ).format(lib_dir=str(cc_invoke_copy.parent), script_file=str(cc_invoke_copy))
+        result = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert result.returncode == 0, f"expected success; stderr:\n{result.stderr}"
+        resolved = result.stdout.strip()
+        assert os.path.realpath(resolved) == os.path.realpath(str(other_root)), (
+            f"expected explicit CLAUDE_KLABAUTER_ROOT ({other_root!r}) to win over the "
+            f"self-located checkout ({checkout_root!r}); got {resolved!r}"
+        )
+
+
+def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust():
+    """DISPATCH-axis Rung 1, the half § C6 warns not to silently drop.
+
+    Measured, not assumed: an explicit CLAUDE_KLABAUTER_ROOT still resolves outright
+    over self-location, even against a marker-only directory (no real
+    `coordinator_core/claude_klabauter_root.py`) — because
+    `coordinator_claude_klabauter_root_with_class()` (the gate C6's Rung 1 now delegates
+    to) carries its OWN env-first rung, the DR-313 item 5 sanctioned exemption
+    ("CLAUDE_KLABAUTER_ROOT ahead of everything else"), which this chunk's `writes:`
+    scope (cc_invoke.py only) does not touch or override. `_resolve_claude_klabauter_root()`
+    no longer ANSWERS this itself, though: it now only supplies `existing` as a
+    CANDIDATE and lets the gate re-decide — the same exemption, reached through
+    one fewer independent copy of it. `test_terminal_rung_resolves_under_both_
+    home_shapes_with_no_prior_rung` above is Rung 3's contrasting case: when
+    self-location (not env) supplies the candidate, delegation genuinely can
+    raise — see that test's stub coordinator_core/claude_klabauter_root.py, without which
+    this same delegation would fail loud instead of resolving.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        # A self-locatable, REAL checkout the terminal rung could otherwise
+        # resolve to — never reached here, because Rung 1 wins first.
+        checkout_root, cc_invoke_copy = _build_checkout(tmp_path, "flat")
+
         other_root = tmp_path / "other-existing-checkout"
         (other_root / "coordinator_core").mkdir(parents=True)
         (other_root / "pyproject.toml").write_text("[project]\nname = \"other\"\n", encoding="utf-8")
@@ -235,8 +328,9 @@ def test_explicit_claude_klabauter_root_wins_over_self_location():
         assert result.returncode == 0, f"expected success; stderr:\n{result.stderr}"
         resolved = result.stdout.strip()
         assert os.path.realpath(resolved) == os.path.realpath(str(other_root)), (
-            f"expected explicit CLAUDE_KLABAUTER_ROOT ({other_root!r}) to win over the "
-            f"self-located checkout ({checkout_root!r}); got {resolved!r}"
+            f"expected CLAUDE_KLABAUTER_ROOT ({other_root!r}) to still win outright over "
+            f"self-location ({checkout_root!r}) via the gate's own env rung; "
+            f"got {resolved!r}"
         )
 
 

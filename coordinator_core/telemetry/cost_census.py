@@ -141,32 +141,18 @@ LOOKBACK_SECS_DEFAULT = 24 * 60 * 60
 
 
 def _sink_paths(repo_root: Path) -> List[Path]:
-    """The op-latency sink plus its rotated generations (newest first),
-    resolved the same way `op_latency._sink_path` does. Read-only glob over
-    `log_rotation.py`'s naming convention (`X.jsonl`, `X.1.jsonl`, ...) —
-    does not import or call into that module, per this dispatch's
-    instruction to reuse it read-only and not modify it; duplicating its
-    trivial naming convention here (rather than importing a private
-    helper) keeps this module decoupled from that one's internals."""
-    from coordinator_core.lifecycle import git_common_dir
-    from coordinator_core.telemetry.op_latency import _sink_path
+    """The op-latency sink plus its rotated generations, newest first.
 
-    try:
-        common_dir = git_common_dir(repo_root)
-    except (RuntimeError, OSError):
-        return []
+    Thin call-through to `op_latency.sink_generations` (promoted there
+    2026-08-19, plan `2026-08-19-warm-engine-gets-an-honest-instrument`
+    C1 — the rotation-aware resolver's supported home, chosen to avoid an
+    import cycle once C3 makes `op_latency.pairing_summary` consume the
+    same resolver). Kept as a wrapper, not inlined at call sites, so this
+    module's existing (newest-first) output shape and every existing
+    caller are unchanged."""
+    from coordinator_core.telemetry.op_latency import sink_generations
 
-    sink = _sink_path(common_dir)
-    paths = [sink]
-    stem, suffix = sink.stem, sink.suffix
-    generation = 1
-    while True:
-        candidate = sink.with_name(f"{stem}.{generation}{suffix}")
-        if not candidate.is_file():
-            break
-        paths.append(candidate)
-        generation += 1
-    return [p for p in paths if p.is_file()]
+    return sink_generations(repo_root)
 
 
 def _percentile(sorted_vals: List[float], pct: float) -> Optional[float]:

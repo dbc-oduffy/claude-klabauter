@@ -182,8 +182,14 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "working-repo-with-published-engine-still-resolves-live-tree": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="working-repo-with-published-engine-still-resolves-live-tree"
     )
-    + " Both entrypoints fall through to the published-engine last-resort branch "
-    "instead, returning resolved-engine rather than live-working-tree.",
+    + " AMENDED 2026-08-19 (C5, docs/plans/2026-08-19-an-engine-root-is-a-"
+    "stamped-build.md; see the C9 DoE memo): this reason's original trailing "
+    "clause said both entrypoints fall through to the published-engine "
+    "last-resort branch, returning resolved-engine. That consequence is "
+    "stale post-C5 — the fixture creates no "
+    "<KLABAUTER>/coordinator_core/_engine_stamp, so the stamp check now "
+    "denies the published root too, and both entrypoints raise "
+    "ClaudeKlabauterResolutionError instead. The env-rung cause above is unchanged.",
     # Backfilled 2026-08-17. These two arrived with DoE's rung-0 work
     # (`cd0d8bf38` added the rung and the first case, `742821db9` the second),
     # which landed 2026-08-08 — a day AFTER this table was authored in
@@ -197,18 +203,36 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "explicit-env-override-beats-registered-published-engine": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="explicit-env-override-beats-registered-published-engine"
     )
-    + " Both entrypoints fall through to the published-engine last-resort branch "
-    "instead, returning resolved-engine rather than live-working-tree.",
+    + " AMENDED 2026-08-19 (C5, docs/plans/2026-08-19-an-engine-root-is-a-"
+    "stamped-build.md; see the C9 DoE memo): this reason's original trailing "
+    "clause said both entrypoints fall through to the published-engine "
+    "last-resort branch, returning resolved-engine. That consequence is "
+    "stale post-C5 — the fixture creates no "
+    "<KLABAUTER>/coordinator_core/_engine_stamp, so the stamp check now "
+    "denies the published root too, and both entrypoints raise "
+    "ClaudeKlabauterResolutionError instead. The env-rung cause above is unchanged.",
     "engine-target-readable-still-beaten-by-healthy-rung0-override": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="engine-target-readable-still-beaten-by-healthy-rung0-override"
     )
-    + " Both entrypoints fall through to the published-engine last-resort branch "
-    "instead, returning resolved-engine rather than live-working-tree.",
+    + " AMENDED 2026-08-19 (C5, docs/plans/2026-08-19-an-engine-root-is-a-"
+    "stamped-build.md; see the C9 DoE memo): this reason's original trailing "
+    "clause said both entrypoints fall through to the published-engine "
+    "last-resort branch, returning resolved-engine. That consequence is "
+    "stale post-C5 — the fixture creates no "
+    "<KLABAUTER>/coordinator_core/_engine_stamp, so the stamp check now "
+    "denies the published root too, and both entrypoints raise "
+    "ClaudeKlabauterResolutionError instead. The env-rung cause above is unchanged.",
     "undeterminable-session-root-resolves-live-tree-never-diverts": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="undeterminable-session-root-resolves-live-tree-never-diverts"
     )
-    + " Both entrypoints fall through to the published-engine last-resort branch "
-    "instead of the live tree.",
+    + " AMENDED 2026-08-19 (C5, docs/plans/2026-08-19-an-engine-root-is-a-"
+    "stamped-build.md; see the C9 DoE memo): this reason's original trailing "
+    "clause said both entrypoints fall through to the published-engine "
+    "last-resort branch instead of the live tree. That consequence is stale "
+    "post-C5 — the fixture creates no "
+    "<KLABAUTER>/coordinator_core/_engine_stamp, so the stamp check now "
+    "denies the published root too, and both entrypoints raise "
+    "ClaudeKlabauterResolutionError instead. The env-rung cause above is unchanged.",
     "empty-string-working-repos-declarations-gate-none": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="empty-string-working-repos-declarations-gate-none"
     )
@@ -217,8 +241,14 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "working-repos-merge-across-both-registry-files": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="working-repos-merge-across-both-registry-files"
     )
-    + " Both entrypoints fall through to the published-engine last-resort branch "
-    "instead of the live tree.",
+    + " AMENDED 2026-08-19 (C5, docs/plans/2026-08-19-an-engine-root-is-a-"
+    "stamped-build.md; see the C9 DoE memo): this reason's original trailing "
+    "clause said both entrypoints fall through to the published-engine "
+    "last-resort branch instead of the live tree. That consequence is stale "
+    "post-C5 — the fixture creates no "
+    "<KLABAUTER>/coordinator_core/_engine_stamp, so the stamp check now "
+    "denies the published root too, and both entrypoints raise "
+    "ClaudeKlabauterResolutionError instead. The env-rung cause above is unchanged.",
     "half-installed-klabauter-missing-coordinator-core": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
         cid="half-installed-klabauter-missing-coordinator-core"
     )
@@ -237,6 +267,57 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "CLAUDE_KLABAUTER_ROOT-only rung short-circuits and returns CLAUDE_KLABAUTER_ROOT's value "
     "(<OTHER_REPO> in this case) rather than REPO_CLAUDE_KLABAUTER's — the two "
     "entrypoints disagree with EACH OTHER, not just with DoE's expectation.",
+}
+
+
+#: C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md): "an
+#: engine root is a stamped build. No stamp, no engine." claude-klabauter's
+#: `_resolve_published_engine` now ALSO requires a valid engine build stamp
+#: (`coordinator_core/_engine_stamp`, non-empty) before treating
+#: `repos.claude_klabauter` as usable. No case in DoE's fixture creates
+#: `<KLABAUTER>/coordinator_core/_engine_stamp` (`existing_dirs` lists stop
+#: one level short, at `<KLABAUTER>/coordinator_core`), so this stamp check
+#: makes `_resolve_published_engine` return `None` for EVERY fixture case —
+#: these four currently-PASSING cases expect `resolved-engine` and now get a
+#: raised `ClaudeKlabauterResolutionError` instead. Re-derived from an actual test
+#: run against the live fixture, not from prose — see the plan's § Cross-repo
+#: CORRECTION block for why an earlier draft's "seven cases move" claim was
+#: wrong and must not be re-cited. C9's DoE memo names this table and asks
+#: DoE to ship stamped-klabauter fixture cases; `strict=True` below forces
+#: removal of each entry the moment that lands and the case starts passing
+#: for real.
+_STAMP_RULE_REASON_TEMPLATE = (
+    "{cid}: C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md; "
+    "see the C9 DoE memo) added a stamp check to "
+    "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::_resolve_published_engine "
+    "— 'an engine root is a stamped build. No stamp, no engine.' This "
+    "fixture case creates no <KLABAUTER>/coordinator_core/_engine_stamp, so "
+    "the published root is no longer 'usable' and both entrypoints raise "
+    "ClaudeKlabauterResolutionError instead of returning resolved-engine as this "
+    "case expects."
+)
+
+_XFAIL_STAMP_RULE_REASON: dict[str, str] = {
+    "confirmed-non-working-repo-with-published-engine-resolves-engine": (
+        _STAMP_RULE_REASON_TEMPLATE.format(
+            cid="confirmed-non-working-repo-with-published-engine-resolves-engine"
+        )
+    ),
+    "step4-last-resort-published-engine-when-live-rung-misses": (
+        _STAMP_RULE_REASON_TEMPLATE.format(
+            cid="step4-last-resort-published-engine-when-live-rung-misses"
+        )
+    ),
+    "engine-target-readable-diverts-working-repo": (
+        _STAMP_RULE_REASON_TEMPLATE.format(
+            cid="engine-target-readable-diverts-working-repo"
+        )
+    ),
+    "unhealthy-rung0-override-falls-through-to-published-engine": (
+        _STAMP_RULE_REASON_TEMPLATE.format(
+            cid="unhealthy-rung0-override-falls-through-to-published-engine"
+        )
+    ),
 }
 
 
@@ -321,17 +402,44 @@ if _DOE_ROOT is None:
 else:
     _FIXTURE = _load_fixture(_DOE_ROOT)
     _CASES = _FIXTURE["cases"]
+    _LIVE_CASE_IDS = {case["id"] for case in _CASES}
+
+    # C5: the two xfail tables must be membership-disjoint — each names a
+    # DISTINCT divergence cause (env-rung vs stamp-rule); a case appearing
+    # in both would be ambiguous about which xfail reason actually applies.
+    _XFAIL_TABLE_OVERLAP = set(_XFAIL_ENV_RUNG_REASON) & set(_XFAIL_STAMP_RULE_REASON)
+    assert not _XFAIL_TABLE_OVERLAP, (
+        f"case id(s) {sorted(_XFAIL_TABLE_OVERLAP)} appear in BOTH "
+        "_XFAIL_ENV_RUNG_REASON and _XFAIL_STAMP_RULE_REASON — each table "
+        "names a distinct divergence cause; a case must not carry two "
+        "different xfail reasons at once"
+    )
+
+    # C5: close the tables' own silent-drift mode — a key naming a case
+    # DoE later renames or removes is otherwise never looked up again (no
+    # error, no warning, the marker silently inert). See both tables' own
+    # docstrings/comments; this converts that into one named failure that
+    # says exactly which case moved, rather than 50-70 concurrent sessions
+    # going red unannounced when DoE's fixture changes shape.
+    _STALE_XFAIL_KEYS = (
+        set(_XFAIL_ENV_RUNG_REASON) | set(_XFAIL_STAMP_RULE_REASON)
+    ) - _LIVE_CASE_IDS
+    assert not _STALE_XFAIL_KEYS, (
+        f"xfail table key(s) {sorted(_STALE_XFAIL_KEYS)} do not match any "
+        "case id in the fixture loaded this run — DoE renamed or removed "
+        "the case; update or remove the stale xfail table entry rather than "
+        "leaving it silently inert"
+    )
+
+    def _xfail_marks(case_id: str) -> list:
+        if case_id in _XFAIL_ENV_RUNG_REASON:
+            return [pytest.mark.xfail(strict=True, reason=_XFAIL_ENV_RUNG_REASON[case_id])]
+        if case_id in _XFAIL_STAMP_RULE_REASON:
+            return [pytest.mark.xfail(strict=True, reason=_XFAIL_STAMP_RULE_REASON[case_id])]
+        return []
 
     _params = [
-        pytest.param(
-            case,
-            id=case["id"],
-            marks=(
-                [pytest.mark.xfail(strict=True, reason=_XFAIL_ENV_RUNG_REASON[case["id"]])]
-                if case["id"] in _XFAIL_ENV_RUNG_REASON
-                else []
-            ),
-        )
+        pytest.param(case, id=case["id"], marks=_xfail_marks(case["id"]))
         for case in _CASES
     ]
 

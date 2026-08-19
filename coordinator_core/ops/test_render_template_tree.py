@@ -28,9 +28,42 @@ def _write_render_template_sh(bin_dir: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env python3
+            import re
             import sys
 
+
+            def render_one(path, kv_pairs):
+                with open(path, "r") as fh:
+                    content = fh.read()
+                for key, value in kv_pairs:
+                    content = content.replace("{{" + key + "}}", value)
+                tokens = sorted(set(re.findall(r"\\{\\{([^}]+)\\}\\}", content)))
+                if tokens:
+                    return None, "unsubstituted keys: " + ",".join(tokens) + " in " + path
+                return content, None
+
+
             args = sys.argv[1:]
+
+            if args and args[0] == "--in-place":
+                rest = args[1:]
+                paths = []
+                i = 0
+                while i < len(rest) and "=" not in rest[i] and not rest[i].startswith("-"):
+                    paths.append(rest[i])
+                    i += 1
+                kv_pairs = [tuple(a.split("=", 1)) for a in rest[i:]]
+                worst_rc = 0
+                for path in paths:
+                    content, err = render_one(path, kv_pairs)
+                    if err is not None:
+                        sys.stderr.write("render-template: " + path + ": " + err + "\\n")
+                        worst_rc = max(worst_rc, 1)
+                        continue
+                    with open(path, "w") as fh:
+                        fh.write(content)
+                sys.exit(worst_rc)
+
             template_path = args[0]
             rest = args[1:]
             output_path = None
@@ -38,21 +71,10 @@ def _write_render_template_sh(bin_dir: Path) -> Path:
                 output_path = rest[1]
                 rest = rest[2:]
 
-            with open(template_path, "r") as fh:
-                content = fh.read()
-
-            for pair in rest:
-                key, _, value = pair.partition("=")
-                content = content.replace("{{" + key + "}}", value)
-
-            if "{{" in content:
-                import re
-                tokens = sorted(set(re.findall(r"\\{\\{([^}]+)\\}\\}", content)))
-                sys.stderr.write(
-                    "render-template: unsubstituted keys: "
-                    + ",".join(tokens)
-                    + " in " + template_path + "\\n"
-                )
+            kv_pairs = [tuple(a.split("=", 1)) for a in rest]
+            content, err = render_one(template_path, kv_pairs)
+            if err is not None:
+                sys.stderr.write("render-template: " + err + "\\n")
                 sys.exit(1)
 
             if output_path:
@@ -109,6 +131,86 @@ def test_happy_path_renders_and_copies(tmp_path, monkeypatch, doe_root):
     assert (dst / "readme.txt").read_text() == "This file has no template tokens.\n"
     assert (dst / ".gitignore").is_file()
     assert (dst / "sub" / "deep" / "config.txt").read_text() == "project=testproj\n"
+
+
+def test_multiple_token_files_render_in_one_spawn(tmp_path, monkeypatch, doe_root):
+    """The whole token-bearing set is delegated to a single subprocess.run call.
+
+    Verifies the amplification-gate fix: N token-bearing files no longer cost
+    N spawns of render-template.py.
+    """
+    monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
+    src = tmp_path / "src-multi"
+    (src / "sub").mkdir(parents=True)
+    for i in range(5):
+        (src / f"f{i}.txt").write_text("v={{V}}\n")
+    (src / "sub" / "g.txt").write_text("v={{V}}\n")
+    (src / "plain.txt").write_text("no tokens here\n")
+    dst = tmp_path / "dst-multi"
+
+    calls = []
+    real_run = render_template_tree.subprocess.run
+
+    def _counting_run(argv, **kwargs):
+        calls.append(argv)
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(render_template_tree.subprocess, "run", _counting_run)
+
+    rc = main([str(src), str(dst), "V=hi"])
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert "--in-place" in calls[0]
+    for i in range(5):
+        assert (dst / f"f{i}.txt").read_text() == "v=hi\n"
+    assert (dst / "sub" / "g.txt").read_text() == "v=hi\n"
+    assert (dst / "plain.txt").read_text() == "no tokens here\n"
+
+
+def test_no_token_bearing_files_skips_spawn(tmp_path, monkeypatch, doe_root):
+    """No {{ }} anywhere in the tree -- zero spawns, not one wasted call."""
+    monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
+    src = tmp_path / "src-notoken"
+    src.mkdir()
+    (src / "plain.txt").write_text("no tokens here\n")
+    dst = tmp_path / "dst-notoken"
+
+    calls = []
+    real_run = render_template_tree.subprocess.run
+
+    def _counting_run(argv, **kwargs):
+        calls.append(argv)
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(render_template_tree.subprocess, "run", _counting_run)
+
+    rc = main([str(src), str(dst)])
+
+    assert rc == 0
+    assert calls == []
+
+
+def test_one_bad_file_does_not_block_the_rest(tmp_path, monkeypatch, doe_root):
+    """A single failing file in the batch still fails the tree-walk (matches the old
+    short-circuit's observable rc), but the render-template.py --in-place layer it
+    delegates to renders every OTHER file rather than stopping at the first failure.
+    """
+    monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
+    src = tmp_path / "src-onebad"
+    src.mkdir()
+    (src / "good.txt").write_text("v={{V}}\n")
+    (src / "bad.txt").write_text("v={{MISSING}}\n")
+    dst = tmp_path / "dst-onebad"
+
+    rc = main([str(src), str(dst), "V=hi"])
+
+    assert rc != 0
+    assert (dst / "good.txt").read_text() == "v=hi\n"
+    assert "{{" in (dst / "bad.txt").read_text()
 
 
 def test_dst_may_be_pre_existing_empty_dir(tmp_path, monkeypatch, doe_root):

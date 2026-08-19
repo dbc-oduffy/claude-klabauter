@@ -18,8 +18,9 @@ that matters: it fired on commits touching no engine code at all.
 
 A published engine tree now carries `coordinator_core/_engine_stamp`, so its
 generation changes exactly when a publish ships new engine code. A live
-working tree has no stamp and keeps the original ref-based behaviour, which is
-over-sensitive but never stale.
+working tree has no stamp and, per plan 2026-08-19-an-engine-root-is-a-
+stamped-build § C4, no longer falls back to ref-based behaviour at all --
+`compute_client_token` raises `UnstampedEngineRootError` instead.
 
 NOT a staleness hole: axis 2 (`ServerVersionState`) hashes the engine package
 server-side and evicts on any real code change, stamp or no stamp. Axis 1's
@@ -29,6 +30,8 @@ negative spec.
 
 import time
 from pathlib import Path
+
+import pytest
 
 from coordinator_core.warm import skew
 
@@ -81,19 +84,17 @@ def test_published_tree_token_rotates_when_a_publish_ships_new_engine_code(tmp_p
     assert before != after, "a publish shipping new engine code did not rotate the generation"
 
 
-def test_working_tree_without_a_stamp_keeps_the_ref_based_fallback(tmp_path):
-    """A live working tree has no stamp and must keep the original
-    behaviour -- over-sensitive, never stale. Pinned so a later change cannot
-    quietly extend stamp semantics to unstamped trees, which would pin a
-    generation while the code moved underneath it."""
-    root, ref = _make_clone(tmp_path)
+def test_working_tree_without_a_stamp_raises_unstamped_engine_root_error(tmp_path):
+    """docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C4: the
+    ref-based fallback for an unstamped tree is DELETED, not kept. A live
+    working tree with no stamp must fail closed -- "an engine root is a
+    stamped build; no stamp, no engine" -- rather than silently serving as a
+    dispatch target via the (now removed) git-ref token."""
+    root, _ref = _make_clone(tmp_path)
     assert not (root / "coordinator_core" / skew.ENGINE_STAMP_FILENAME).exists()
 
-    before = skew.compute_client_token(root)
-    _peer_commit(ref, "c")
-    after = skew.compute_client_token(root)
-
-    assert before != after, "an unstamped working tree stopped tracking its ref"
+    with pytest.raises(skew.UnstampedEngineRootError):
+        skew.compute_client_token(root)
 
 
 def test_stamp_identity_is_recorded_verbatim_for_debugging(tmp_path):

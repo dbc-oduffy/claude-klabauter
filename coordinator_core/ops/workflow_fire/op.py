@@ -36,7 +36,13 @@ Reply fields -- workflow.fire:
       "max_turns", "command", "started_at", "log_path", "state",
       "exit_code", "exit_code_note", "outcome", "outcome_basis",
       "driver_session_id", "status_checked_at", "status_checked_at_iso",
-      "log_size_bytes", "_readme" }
+      "log_size_bytes", "publish_lag_message", "_readme" }
+      ``publish_lag_message`` (DR-335) is non-``None`` only when the
+      published engine mirror is more than 30 minutes AND more than zero
+      engine-touching commits behind this fire's source tree -- see
+      ``coordinator_core.warm.skew.publish_lag``/``publish_lag_message``.
+      ``None`` covers both "current" and "cannot tell"; this run always
+      executes the published mirror regardless of this field's value.
       ``state``, ``exit_code`` and ``outcome`` are valid only as of
       ``status_checked_at`` -- the record is NOT written when the child
       exits, so a raw file read can report a dead run as running.

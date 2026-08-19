@@ -445,6 +445,62 @@ def test_usage_error_wrong_arg_count(capsys):
 
 
 # ---------------------------------------------------------------------------
+# Multi-queue positionals — one process, per-file attribution preserved.
+# ---------------------------------------------------------------------------
+
+
+def test_multi_queue_prunes_every_file_in_one_call(tmp_path):
+    a = tmp_path / "improvement-queue.md"
+    b = tmp_path / "bug-backlog.md"
+    a.write_text("## Open\n- alpha\n## Resolved\n- gone\n")
+    b.write_text("## Open\n- beta\n## Closed\n- also gone\n")
+
+    rc = main([str(a), str(b)])
+
+    assert rc == 0
+    assert a.read_text() == "## Open\n- alpha\n"
+    assert b.read_text() == "## Open\n- beta\n"
+
+
+def test_multi_queue_single_positional_path_unchanged(tmp_path):
+    p = tmp_path / "bug-backlog.md"
+    p.write_text("## Open\n- alpha\n## Resolved\n- gone\n")
+
+    rc = main([str(p)])
+
+    assert rc == 0
+    assert p.read_text() == "## Open\n- alpha\n"
+
+
+def test_multi_queue_one_bad_file_reports_which_one_and_still_prunes_rest(tmp_path, capsys):
+    good = tmp_path / "bug-backlog.md"
+    good.write_text("## Open\n- alpha\n## Resolved\n- gone\n")
+    bad = tmp_path / "not-allowlisted.md"
+    bad.write_text("content\n")
+
+    rc = main([str(good), str(bad)])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert str(bad) in captured.err
+    assert str(good) not in captured.err
+    # the good file was still pruned despite the other positional failing
+    assert good.read_text() == "## Open\n- alpha\n"
+
+
+def test_multi_queue_missing_file_among_positionals_is_attributed(tmp_path, capsys):
+    good = tmp_path / "improvement-queue.md"
+    good.write_text("## Open\n- alpha\n")
+    missing = tmp_path / "bug-backlog.md"
+
+    rc = main([str(good), str(missing)])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert f"file not found: {missing}" in captured.err
+
+
+# ---------------------------------------------------------------------------
 # Windows/permission edge — atomic replace must not require TMPDIR and must
 # not crash when the target directory has no world-writable temp fallback
 # (regression guard for the addendum's Windows-portability rule: this module

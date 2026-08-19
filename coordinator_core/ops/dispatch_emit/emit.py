@@ -127,16 +127,31 @@ its own schema (``sizing-object.schema.json``) — and maps it through
 it is the same vocabulary ``coordinator:staff-session`` already selects a
 tier on, so a fragment author has a live cross-repo precedent rather than a
 fresh one. The tier->reviewer roster stays entirely DoE-owned, supplied as
-a machine-readable fragment (shape documented at ``_reviewers_for_tier``)
-that this module consumes and never authors. Composing a review phase
-therefore needs BOTH a derived tier (this repo's data) AND a supplied
-fragment (DoE's data) — either alone composes nothing.
+a machine-readable fragment (shape documented at ``review_mint.roster.
+parse_stages``) that this module consumes and never authors. Composing a
+review phase therefore needs BOTH a derived tier (this repo's data) AND a
+supplied fragment (DoE's data) — either alone composes nothing.
 
-The DoE-side roster fragment does not exist yet. This module is built and
-tested against a fixture fragment of its own making
-(``tests/test_emit.py``'s review-phase tests) — only LIVE consumption of a
-real DoE fragment waits on the fragment landing; tier derivation and
-fragment-shaped composition are real and tested today.
+Fragment parsing and stage composition are NOT reimplemented here.
+``review_mint.roster.parse_stages`` (C1) turns the caller-supplied fragment
+dict into an ordered ``[Stage, ...]`` list — a flat ``schema_version 1``
+list reads as one non-gated stage, a staged (``schema_version >= 2``)
+fragment reads as its own ordered stages, gate flag and all — and
+``review_mint.compose.compose`` (C2) turns that stage list into
+``(phase_title, script_block)`` pairs this module splices straight into its
+own ``phase_titles``/``body_blocks``, the same shape every other section of
+this module already produces. This module supplies only what is its own to
+supply: the injected fragment dict (this caller does NOT call
+``review_mint.op.load_fragment()`` — that cross-repo pointer resolution
+lives at the op boundary only, see that module's docstring), the
+post-execution review prompt (``_REVIEW_PROMPT``), and a ``gate_policy``
+(``_review_gate_policy``) that disarms every gate's early-return so a gate
+verdict here narrates rather than suppresses the terminal test phase that
+always runs after — this caller's commits have already landed by the time
+a review phase runs, so an abort here must never skip the test phase that
+reports on those landed commits. ``review.mint_workflow`` (pre-execution)
+supplies its own, different prompt and a real abort ``gate_policy`` — the
+two callers never share either.
 
 ## Commit-phase placement keyed to wave size (b)
 
@@ -181,6 +196,19 @@ U both require a live session-scoped test-invocation grant that no emitted
 phase (running with nobody present) can obtain; ``coordinator:test-runner``
 is Tier-T-only by its own agent description, which is what makes this phase
 safe to emit unconditionally.
+
+## A review-phase gate abort never suppresses the terminal test phase (Anti-scope)
+
+This caller's commits have already landed by the time any review phase it
+composes runs (post-execution). ``_review_gate_policy`` therefore disarms
+every gated stage's early-return unconditionally (returns ``""`` always) —
+a gate verdict here narrates onto the emitted script, it never composes a
+``return`` that would skip the terminal ``coordinator:test-runner`` phase
+``compose_script`` always appends after the review phase. This module never
+composes the abort branch ``review.mint_workflow`` (pre-execution, C3) is
+free to compose for the identical staged fragment — the two callers'
+``gate_policy`` closures are never shared or defaulted to each other's
+behaviour.
 
 ## Permission-mode (contract confirmation, 2026-08-13)
 
@@ -227,8 +255,18 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec, terminal_test_scope
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
+from coordinator_core.ops.review_mint.compose import compose as compose_review_stages
+from coordinator_core.ops.review_mint.roster import RosterFragmentError, Stage, parse_stages
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
+
+# Back-compat alias: this module's own review-composition refusal surfaced
+# under this name before the C1/C2 extraction (task C4,
+# docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md). `roster.
+# parse_stages` is now the sole raiser of a malformed-fragment refusal; this
+# alias keeps this module's own public surface name stable for any importer
+# that still names it, without a second exception class to keep in sync.
+ReviewRosterFragmentError = RosterFragmentError
 
 _MODEL_OPT = "model: 'sonnet'"
 _EXECUTOR_AGENT_TYPE = "coordinator:executor"
@@ -389,25 +427,71 @@ _TEST_PHASE_TITLE = "Scoped test run"
 _PREFLIGHT_PHASE_TITLE = "Preflight: commit claimability"
 
 
-def _row_prompt(row: WaveRow) -> str:
-    return f"Execute {row.id}: {row.title}"
+def _row_prompt(row: WaveRow, plan_path: Optional[str] = None) -> str:
+    """Compose one executor row's dispatch prompt.
+
+    The prompt MUST name where the row's own spec lives. A title-only
+    prompt (``Execute C7: <title>``) leaves the executor to locate its
+    spec by guesswork: measured 2026-08-19 against
+    ``2026-08-16-one-engine-for-the-whole-box``, one row's executor
+    searched ``docs/plans/``, ``state/dispatch-briefs/``,
+    ``state/subagent-share/`` and ``archive/``, failed to find the plan,
+    and returned BLOCKED-structural; a sibling row in the same wave
+    happened to have a greppable title, found the plan, and delivered.
+    Spec discovery was therefore a function of how searchable a title
+    was, and a row whose executor improvises past that point silently
+    violates the negative specs its body carries.
+
+    Negative spec: never emit a prompt that names only ``id`` and
+    ``title``. ``plan_path`` is optional solely so pre-existing callers
+    that compose from already-derived waves keep working; every caller
+    that knows its plan is expected to pass it.
+    """
+    head = f"Execute {row.id}: {row.title}"
+    if not plan_path:
+        return head
+    return (
+        f"{head}\n\n"
+        f"Your spec is the row with `id: {row.id}` in the `## Tasks` plan-spine "
+        f"of {plan_path} — a fenced ```yaml plan-tasks block. Read that row's "
+        "`body`, `writes` and `depends_on` in full before you edit anything, and "
+        "follow the body exactly: it carries negative specs, prior-art citations "
+        "and constraints this one-line title does not. Do not reconstruct the "
+        "spec from the title, from a file search, or from surrounding code — if "
+        "you cannot read that row, stop and report BLOCKED rather than "
+        "improvising."
+    )
 
 
-def _wave_agent_calls(wave: list[WaveRow], phase_title: str) -> str:
+def _wave_agent_calls(
+    wave: list[WaveRow],
+    phase_title: str,
+    plan_path: Optional[str] = None,
+    results_var: Optional[str] = None,
+) -> str:
     """Compose the ``phase()`` + agent-dispatch call(s) for one executor wave.
 
     A single-row wave emits one ``await agent(...)`` call (a serial gate,
     per the workflow-emitter-contract topology). A multi-row wave emits one
     ``await parallel(...)`` call wrapping one ``agent()`` per row (the
     parallel-wave shape).
+
+    When ``results_var`` is supplied, the call's return value is bound to
+    that name (``const {results_var} = await agent(...)`` /
+    ``const {results_var} = await parallel([...])``) so the following commit
+    phase can splice the returning executor(s)' own reports into its prompt
+    as genuine pathspec provenance — see ``_commit_agent_call``. Omitting it
+    keeps the pre-existing unbound ``await`` shape (back-compat for any
+    caller not threading a commit phase after this wave).
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
+    binder = f"const {results_var} = " if results_var else ""
 
     if len(wave) == 1:
         row = wave[0]
         call = (
-            "  await agent("
-            f"{_js_string_literal(_row_prompt(row))}, "
+            f"  {binder}await agent("
+            f"{_js_string_literal(_row_prompt(row, plan_path))}, "
             "{ "
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
@@ -419,7 +503,7 @@ def _wave_agent_calls(wave: list[WaveRow], phase_title: str) -> str:
 
     item_calls = ",\n".join(
         "    () => agent("
-        f"{_js_string_literal(_row_prompt(row))}, "
+        f"{_js_string_literal(_row_prompt(row, plan_path))}, "
         "{ "
         f"label: {_js_string_literal(f'work:{row.id}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
@@ -429,19 +513,125 @@ def _wave_agent_calls(wave: list[WaveRow], phase_title: str) -> str:
         for row in wave
     )
     call = (
-        "  await parallel([\n"
+        f"  {binder}await parallel([\n"
         f"{item_calls}\n"
         "  ]);"
     )
     return f"{phase_call}\n{call}"
 
 
-def _commit_agent_call(pathspec: list[str], phase_title: str, index: int) -> str:
+def _escape_for_js_template_literal(text: str) -> str:
+    """Escape ``text`` for splicing as LITERAL (non-code) content inside a
+    JS template-literal (backtick-quoted) string.
+
+    Only three sequences are special inside a template literal's literal
+    text: a bare backtick (would close the literal early), ``${`` (would
+    open an interpolation), and a backslash (the escape character itself,
+    which must be escaped first so the two escapes below aren't
+    double-interpreted). This is deliberately narrower than
+    ``workflow_scaffold._js_string_literal`` (which escapes for a
+    single-quoted literal) -- a template literal has a different forbidden-
+    character set.
+    """
+    return (
+        text.replace("\\", "\\\\")
+        .replace("`", "\\`")
+        .replace("${", "\\${")
+    )
+
+
+_PROVENANCE_HEADING = (
+    "Pathspec provenance: the pathspec above is this wave's declared "
+    "`writes:` scope. The executor report(s) below are, direct from the "
+    "executor(s) that just finished, their own touched-files set for this "
+    "wave -- verify the handed pathspec against what they actually "
+    "reported, and refuse any path in the pathspec that the reports do "
+    "not corroborate."
+)
+
+
+def _commit_agent_call(
+    pathspec: list[str],
+    phase_title: str,
+    index: int,
+    chunk_ids: list[str] | None = None,
+    results_var: Optional[str] = None,
+) -> str:
+    """Emit the wave's commit-agent call.
+
+    ``chunk_ids`` is load-bearing, not cosmetic: `close-out-and-stamp`
+    joins a commit to a plan chunk on TWO legs -- the ``Deliverable-Id:``
+    trailer AND a subject that registers the chunk-id. A wave-scoped
+    subject ("Commit wave 2's work") satisfies only the first, so a fully
+    executed plan stamps `partial` with every chunk reading uncommitted,
+    and the operator has to re-register each row by hand against the
+    commit log. Naming the ids here is what makes the emitted run
+    close itself out.
+
+    ``results_var``, when supplied, names the JS variable
+    ``_wave_agent_calls`` bound to this wave's executor return value(s)
+    (see that function's docstring). The prompt then splices those
+    results in via ``${JSON.stringify(...)}`` inside a JS template
+    literal, under an explicit provenance heading -- see
+    ``git-commit-agent.md`` § Pathspec provenance: the committer refuses a
+    pathspec whose provenance is a plan chunk's ``writes:`` declaration or
+    an EM tree survey, and previously received exactly that (this
+    function's pre-existing shape, "Commit wave N's work. Pathspec:
+    [...]", states no provenance at all). ``JSON.stringify`` is evaluated
+    at RUNTIME inside the emitted script, over whatever the executor(s)
+    actually returned -- an executor report containing a stray backtick,
+    ``${...}``, or quote is therefore never re-parsed as script syntax:
+    template-literal interpolation only concerns itself with the OUTER
+    literal's own source text, and the runtime string
+    ``JSON.stringify`` produces is spliced in as a value, not re-tokenized.
+    The STATIC prompt text this function composes at emit time (subject
+    rule, pathspec, provenance heading) is separately escaped via
+    ``_escape_for_js_template_literal`` for the same reason: it too now
+    lives inside a template literal, not a single-quoted ``_js_string_
+    literal`` call.
+
+    Shape of the spliced value: ``agent()``/``parallel()``'s runtime
+    return, per the Workflow JS engine, is a plain free-form string --
+    the executor's prose report (it names the files it touched, e.g.
+    "- `path/to/file.py`: added X ...", but there is no structured
+    per-file field). The provenance splice therefore satisfies the
+    committer contract's letter -- a returning executor's report is
+    genuinely present, and it does name files -- but what the committer
+    receives is narrative it must read and reconcile against the handed
+    pathspec itself, not a machine-checkable touched-files set. A
+    structured shape would require changing the executor contract, not
+    this splice; this function does not parse or validate report content.
+    """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
-    prompt = f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
+    registered = ", ".join(chunk_ids or [])
+    subject_rule = (
+        f" The commit subject MUST register the chunk id(s) it delivers: {registered}."
+        f" Lead the subject with ALL of them, e.g. '{registered}: <what changed>'"
+        " -- a wave delivering several chunks needs every id in the subject,"
+        " not just the first; close-out registers only the ids it can read there."
+        " close-out joins on the subject's chunk-id as well as the"
+        " Deliverable-Id trailer; a wave-scoped subject leaves the plan"
+        " stamped partial."
+        if chunk_ids
+        else ""
+    )
+    static_prompt = (
+        f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
+        f"{subject_rule}"
+    )
+
+    if results_var:
+        static_prompt = f"{static_prompt}\n\n{_PROVENANCE_HEADING}\n\nExecutor report(s):"
+        escaped_static = _escape_for_js_template_literal(static_prompt)
+        prompt_literal = (
+            f"`{escaped_static}\\n${{JSON.stringify({results_var}, null, 2)}}`"
+        )
+    else:
+        prompt_literal = _js_string_literal(static_prompt)
+
     call = (
         "  await agent("
-        f"{_js_string_literal(prompt)}, "
+        f"{prompt_literal}, "
         "{ "
         f"label: {_js_string_literal(f'commit:wave-{index + 1}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
@@ -462,7 +652,11 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prompt = (
-        "Preflight only -- do not stage or commit anything. Verify that "
+        "Preflight only -- do not stage or commit anything. Every path below is "
+        "EXPECTED to be unchanged or nonexistent right now: the chunks that write "
+        "them have not run yet, so 'no diff' is the correct state and is NOT a "
+        "refusal. Report BLOCKED only if a path would be refused by a claim "
+        "conflict, an ignore rule, or a guard. Verify that "
         f"every path in [{', '.join(pathspec)}] is currently claimable and "
         "committable by you. If any path would be refused, report BLOCKED "
         "immediately, naming the refused paths and the denial reason, "
@@ -495,14 +689,6 @@ def _test_agent_call(scope: list[str], phase_title: str) -> str:
         "});"
     )
     return f"{phase_call}\n{call}"
-
-
-class ReviewRosterFragmentError(ValueError):
-    """Raised when a supplied review-roster fragment lacks the expected shape.
-
-    See ``_reviewers_for_tier``'s docstring for the fragment shape this
-    error is checked against.
-    """
 
 
 def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Optional[str]:
@@ -581,120 +767,29 @@ def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Option
     return _TSHIRT_TO_REVIEW_TIER[tshirt]
 
 
-def _reviewers_for_tier(fragment: dict, tier: str) -> list[str]:
-    """Look up ``tier``'s reviewer ``agentType`` list in a DoE-supplied
-    review-roster fragment.
+_REVIEW_PROMPT = "Review this plan's completed work."
 
-    FRAGMENT SHAPE (DoE-owned; this repo consumes it and never authors the
-    mapping — see module docstring § Review phases)::
 
-        {
-          "schema": "review-roster-fragment",
-          "tiers": {
-            "lightweight": ["coordinator:code-reviewer"],
-            "standard": ["coordinator:code-reviewer", "coordinator:review-integrator"],
-            "full": [
-              "coordinator:code-reviewer",
-              "coordinator:review-integrator",
-              "coordinator:staff-eng"
-            ]
-          }
-        }
+def _review_gate_policy(stage: Stage, index: int, results: list[tuple[str, str]]) -> str:
+    """``dispatch.emit``'s ``gate_policy`` for C2's ``compose()`` (GATE POLICY).
 
-    ``tiers`` keys are exactly the three tier names ``_TSHIRT_TO_REVIEW_
-    TIER`` derives (``lightweight``/``standard``/``full``) — the same
-    vocabulary ``coordinator:staff-session`` already selects a tier on.
-    Each value is a non-empty list of ``agentType`` strings, composed onto
-    a review phase the same way a commit phase's ``agentType`` is composed
-    (``_review_phase_calls``) — no new firing mechanism.
+    This caller's commits have already landed by the time a review phase
+    runs (post-execution), so a gate abort here must NOT suppress the
+    terminal ``coordinator:test-runner`` phase ``compose_script`` appends
+    after the review phase. Returning ``""`` unconditionally disarms
+    ``compose()``'s early-return branch entirely for every gated stage —
+    option (a) from the module docstring's § Review phases / this
+    function's callers: stages still compose in order, and a gated stage's
+    agent calls still carry the structured-output ``schema``, for
+    narration only. No ``return`` is ever spliced, so control always falls
+    through to the terminal test phase regardless of verdict.
 
-    Raises ``ReviewRosterFragmentError`` naming what is missing — a
-    fragment with no ``tiers`` mapping, or a ``tiers`` mapping missing
-    ``tier``'s key, or an empty list at that key — never a silent empty
-    reviewer list, which would compose a review phase dispatching nobody.
+    ``review.mint_workflow`` (pre-execution, C3) supplies its OWN
+    ``gate_policy`` closure with real abort composition — this function is
+    ``dispatch.emit``'s alone and is never shared with that caller (see C4's
+    body: prompt/phase_title/gate_policy are per-caller, never inherited).
     """
-    tiers = fragment.get("tiers") if isinstance(fragment, dict) else None
-    if not isinstance(tiers, dict):
-        raise ReviewRosterFragmentError(
-            "review roster fragment carries no 'tiers' mapping"
-        )
-    reviewers = tiers.get(tier)
-    if not reviewers:
-        raise ReviewRosterFragmentError(
-            f"review roster fragment declares no reviewers for tier {tier!r}"
-        )
-    # A schema_version >= 2 fragment maps each tier to {"stages": [...]}, not
-    # to a flat reviewer list. `list()` over that mapping yields its KEYS --
-    # ``['stages']`` -- which composes a review phase dispatching a
-    # nonexistent ``agentType: 'stages'``. Silently wrong beats loudly wrong
-    # for nobody, so refuse: stage consumption is deliberately not implemented
-    # here (it needs gate/abort composition this module has no concept of).
-    if not isinstance(reviewers, list):
-        raise ReviewRosterFragmentError(
-            f"review roster fragment tier {tier!r} is not a flat reviewer "
-            f"list (schema_version {fragment.get('schema_version', 1)!r}); "
-            "this emitter consumes the flat shape only and cannot compose "
-            "the staged shape's gates"
-        )
-    return list(reviewers)
-
-
-def _review_phase_calls(reviewers: list[str], phase_title: str) -> str:
-    """Compose the review phase's ``phase()`` + agent-dispatch call(s) (a).
-
-    One ``agent()`` call per reviewer ``agentType`` — a single reviewer
-    emits a plain serial ``await agent(...)``, more than one emits
-    ``await parallel([...])``, the identical single-vs-multi shape
-    ``_wave_agent_calls`` already uses for an executor wave. Composed on
-    the SAME phase mechanism as every other phase in this module (no new
-    firing mechanism) — see module docstring § Review phases.
-
-    NEGATIVE SPEC — reviewer calls carry NO ``model:`` key, unlike every
-    other call this module composes. The roster fragment supplies reviewer
-    ``agentType``s, and an agent definition pins its own tier in its
-    frontmatter (the persona agents are ``model: opus`` by charter). The
-    Workflow tool's ``opts.model`` takes PRECEDENCE over that frontmatter,
-    so stamping ``model: 'sonnet'`` here would silently run a persona below
-    the tier its own definition declares and produce a Sonnet review
-    wearing an Opus reviewer's name — cheaper, and invalid. Tier for an
-    ``agentType`` call site is the definition's to state, never this
-    emitter's to override. Every non-reviewer call in an emitted script
-    still carries ``_MODEL_OPT``, so a script composed this way retains
-    modeled call sites and reads as partial coverage, not zero, to the
-    Workflow model guard.
-    """
-    phase_call = f"  phase({_js_string_literal(phase_title)});"
-    prompt = "Review this plan's completed work."
-
-    if len(reviewers) == 1:
-        reviewer = reviewers[0]
-        call = (
-            "  await agent("
-            f"{_js_string_literal(prompt)}, "
-            "{ "
-            f"label: {_js_string_literal(f'review:{reviewer}')}, "
-            f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(reviewer)} "
-            "});"
-        )
-        return f"{phase_call}\n{call}"
-
-    item_calls = ",\n".join(
-        "    () => agent("
-        f"{_js_string_literal(prompt)}, "
-        "{ "
-        f"label: {_js_string_literal(f'review:{reviewer}')}, "
-        f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(reviewer)} "
-        "})"
-        for reviewer in reviewers
-    )
-    call = (
-        "  await parallel([\n"
-        f"{item_calls}\n"
-        "  ]);"
-    )
-    return f"{phase_call}\n{call}"
+    return ""
 
 
 def _meta_block(name: str, description: str, phase_titles: list[str]) -> str:
@@ -716,6 +811,7 @@ def compose_script(
     repo_root: Optional[Path] = None,
     review_tier: Optional[str] = None,
     review_roster_fragment: Optional[dict] = None,
+    plan_path: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
@@ -727,8 +823,8 @@ def compose_script(
 
     A review phase (a) composes ONLY when BOTH ``review_tier`` (this repo's
     data — see ``derive_review_tier``) AND ``review_roster_fragment`` (DoE's
-    data — see ``_reviewers_for_tier``) are supplied; either alone composes
-    no review phase, never a guessed one. A wave over
+    data — see ``review_mint.roster.parse_stages``) are supplied; either
+    alone composes no review phase, never a guessed one. A wave over
     ``_WAVE_COMMIT_BATCH_THRESHOLD`` rows (b) is split into commit-sized
     batches — see module docstring § Commit-phase placement keyed to wave
     size; this changes WHERE ``_commit_agent_call`` fires, never how many
@@ -772,17 +868,35 @@ def compose_script(
             # the rows that batch actually dispatches.)
             wave_title = f"{_wave_phase_title(index, batch)}{suffix}"
             phase_titles.append(wave_title)
-            body_blocks.append(_wave_agent_calls(batch, wave_title))
+            results_var = (
+                f"wave{index + 1}Batch{batch_index + 1}Results"
+                if multi_batch
+                else f"wave{index + 1}Results"
+            )
+            body_blocks.append(
+                _wave_agent_calls(batch, wave_title, plan_path, results_var)
+            )
 
             batch_pathspec = commit_pathspec(batch)
             commit_title = f"{_commit_phase_title(index)}{suffix}"
             phase_titles.append(commit_title)
-            body_blocks.append(_commit_agent_call(batch_pathspec, commit_title, index))
+            body_blocks.append(
+                _commit_agent_call(
+                    batch_pathspec,
+                    commit_title,
+                    index,
+                    [row.id for row in batch],
+                    results_var,
+                )
+            )
 
     if review_tier is not None and review_roster_fragment is not None:
-        reviewers = _reviewers_for_tier(review_roster_fragment, review_tier)
-        phase_titles.append(_REVIEW_PHASE_TITLE)
-        body_blocks.append(_review_phase_calls(reviewers, _REVIEW_PHASE_TITLE))
+        stages = parse_stages(review_roster_fragment, review_tier)
+        for title, block in compose_review_stages(
+            stages, _REVIEW_PROMPT, _REVIEW_PHASE_TITLE, _review_gate_policy
+        ):
+            phase_titles.append(title)
+            body_blocks.append(block)
 
     scope = terminal_test_scope(waves, repo_root=repo_root)
     phase_titles.append(_TEST_PHASE_TITLE)
@@ -794,6 +908,51 @@ def compose_script(
     # Top-level, never `async function run(ctx) { ... }` -- see module
     # docstring § Top-level body, never a defined-but-uninvoked wrapper.
     return f"{meta_block}\n{body}\n"
+
+
+def _spec_path_for_prompt(plan_path: Path, repo_root: Optional[Path]) -> Path:
+    """The plan path as it should appear in a dispatched executor's prompt.
+
+    Repo-relative, ALWAYS. The dispatched executor resolves the spec from the
+    repo root it is already standing in, and an absolute drive-letter path in
+    an emitted prompt is exactly the concrete-path-citation hazard AC12 exists
+    to keep out of emitted artifacts.
+
+    Negative-spec: this must never return an absolute path. The obvious
+    shape -- ``relative_to(repo_root)`` guarded by ``if repo_root is not
+    None`` -- silently does exactly that on two reachable paths, and both are
+    real rather than theoretical: ``repo_root`` is documented as optional per
+    request in ``op.py``, and ``relative_to`` raises ``ValueError`` whenever
+    the plan sits on a different mount or drive from the root. Either one puts
+    a drive-lettered path into every executor prompt in the emitted script,
+    with nothing going red. Found in review, 2026-08-19.
+
+    Ladder, first that yields a relative path wins:
+      1. relative to ``repo_root`` when supplied and containing the plan
+      2. relative to the process cwd, which for an in-repo invocation is the
+         repo root even when the caller passed none
+      3. the last three components (``docs/plans/<file>.md`` in practice) --
+         still resolvable by an executor standing in the repo, and carrying
+         no drive letter
+    """
+    candidates = []
+    if repo_root is not None:
+        candidates.append(repo_root)
+    try:
+        candidates.append(Path.cwd())
+    except OSError:
+        pass
+
+    for base in candidates:
+        try:
+            return plan_path.relative_to(base)
+        except ValueError:
+            continue
+
+    if plan_path.is_absolute():
+        parts = plan_path.parts[-3:] if len(plan_path.parts) >= 3 else plan_path.parts[1:]
+        return Path(*parts) if parts else Path(plan_path.name)
+    return plan_path
 
 
 def emit_script(
@@ -829,6 +988,8 @@ def emit_script(
 
     review_tier = derive_review_tier(plan_path, repo_root=repo_root)
 
+    spec_path = _spec_path_for_prompt(plan_path, repo_root)
+
     return compose_script(
         waves,
         name=resolved_name,
@@ -836,6 +997,7 @@ def emit_script(
         repo_root=repo_root,
         review_tier=review_tier,
         review_roster_fragment=review_roster_fragment,
+        plan_path=spec_path.as_posix(),
     )
 
 

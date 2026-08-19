@@ -77,6 +77,32 @@ def test_session_id_survives_the_fallback(ctx, monkeypatch):
     assert seen["session_id"] == "sid-42"
 
 
+def test_broken_pool_returns_indeterminate_for_a_mutating_op(ctx, monkeypatch):
+    """A dead worker's future.result() also raises BrokenProcessPool for its
+    OWN request -- the worker may have already performed a mutation before
+    dying. Re-running it in-process (as the compute-only path does) would be
+    the server double-executing a possibly-already-done mutation."""
+    monkeypatch.setattr(
+        server, "_run_dispatch", lambda *a, **k: pytest.fail("re-ran a MUTATING op after an ambiguous pool death")
+    )
+    result = ctx._pool_dispatch(
+        {"jsonrpc": "2.0", "id": 7, "method": "ceremony.scoped_git_commit"}
+    )
+    assert result["error"]["code"] == server.WARM_DISPATCH_INDETERMINATE
+    assert "MUTATING op" in result["error"]["message"]
+    assert result["id"] == 7
+
+
+def test_broken_pool_still_reruns_a_compute_only_op(ctx, monkeypatch):
+    """Negative-spec companion to the mutating case above: a COMPUTE_ONLY op
+    stays on the pre-existing in-process fallback, unchanged."""
+    monkeypatch.setattr(
+        server, "_run_dispatch", lambda msg, session_id=None: {"ok": True, "via": "in_process"}
+    )
+    result = ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    assert result == {"ok": True, "via": "in_process"}
+
+
 def test_a_healthy_pool_is_not_disturbed(monkeypatch):
     class _GoodPool:
         def submit(self, fn, msg, session_id):

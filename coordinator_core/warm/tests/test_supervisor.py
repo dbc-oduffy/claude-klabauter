@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.warm import supervisor
+from coordinator_core.warm import skew, supervisor
 
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="election.elect is Windows-only")
 
@@ -341,8 +341,9 @@ def test_ensure_listener_never_raises_even_if_a_primitive_blows_up(
 
 @pytestmark_win
 def test_supervisor_pipe_name_distinct_from_the_pipe_server_election(tmp_path: Path) -> None:
-    from coordinator_core.warm import election, skew
+    from coordinator_core.warm import election
 
+    skew.write_engine_stamp(tmp_path, "sha-supervisor-distinct")
     token = skew.compute_client_token(tmp_path)
     sid = "S-1-5-21-1-2-3-1001"
     http_name = supervisor.supervisor_pipe_name(tmp_path, user_sid=sid)
@@ -353,6 +354,7 @@ def test_supervisor_pipe_name_distinct_from_the_pipe_server_election(tmp_path: P
 
 @pytestmark_win
 def test_supervisor_pipe_name_deterministic(tmp_path: Path) -> None:
+    skew.write_engine_stamp(tmp_path, "sha-supervisor-deterministic")
     sid = "S-1-5-21-1-2-3-1001"
     a = supervisor.supervisor_pipe_name(tmp_path, user_sid=sid)
     b = supervisor.supervisor_pipe_name(tmp_path, user_sid=sid)
@@ -370,6 +372,7 @@ def test_main_exits_zero_and_untouched_when_election_lost(
 ) -> None:
     from coordinator_core.warm import election
 
+    skew.write_engine_stamp(tmp_path, "sha-supervisor-election-lost")
     monkeypatch.setattr(supervisor, "_default_engine_clone", lambda: tmp_path)
 
     def _lose(name, *, user_sid=None):

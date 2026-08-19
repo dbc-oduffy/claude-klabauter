@@ -30,7 +30,6 @@ from coordinator_core.ops.ceremony.consumed_handoff_stamp import (
     _commit_and_push_follow_up,
     group_stamped_by_deliverable_id,
 )
-from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
 
 # Real git, per the docstring above. Same tiering rationale as the sibling
 # `test_consumed_handoff_stamp_claim_release.py`; the spawn ratchet's
@@ -78,18 +77,45 @@ def sid_env(monkeypatch):
     return _SID
 
 
-def test_ungrouped_two_baton_pathspec_still_refuses_to_guess(repo, sid_env):
-    """The resolver's refusal is load-bearing and stays: handing ONE commit a
-    pathspec spanning two `deliverable_id` values raises rather than stamping
-    a guessed trailer. This is the failure the grouping routes around, not one
-    it suppresses -- a future change that relaxed the resolver into guessing
-    would make the grouping look unnecessary while silently mis-attributing
-    every multi-baton commit."""
+def test_ungrouped_two_baton_pathspec_commits_untrailered(repo, sid_env):
+    """Inverted by DR-328 (2026-08-19). This test formerly asserted that an
+    ungrouped two-baton pathspec RAISES `DivergentDeliverableIdError`, and its
+    docstring warned that "a future change that relaxed the resolver into
+    guessing would make the grouping look unnecessary while silently
+    mis-attributing every multi-baton commit".
+
+    That warning was right about guessing and wrong about the only alternative.
+    DR-328's C2 did not relax the resolver into guessing -- it relaxed it into
+    OMITTING, per producer-contract § 3: on a divergent pathspec the commit
+    lands carrying no `Deliverable-Id:` trailer at all, so nothing is
+    mis-attributed. The commit is then attributed via `Session-Id:`, which C9
+    measured against real history and found loses no rows
+    (`state/audits/2026-08-19-multi-deliverable-commit-attribution.md`).
+
+    The grouping this test defended IS now unnecessary, and C10 retired its
+    production call site deliberately rather than by accident -- which is the
+    distinction the original docstring existed to force someone to make.
+    """
     a = _write(repo, "state/handoffs/a.md", "dlv-alpha-000001")
     b = _write(repo, "state/handoffs/b.md", "dlv-beta-000002")
 
-    with pytest.raises(DivergentDeliverableIdError):
-        _commit_and_push_follow_up(repo, [a, b], "deadbeef", PUSH_MODE_NONE, sid_env)
+    sha, _pushed, _status, error = _commit_and_push_follow_up(
+        repo, [a, b], "deadbeef", PUSH_MODE_NONE, sid_env
+    )
+
+    assert error is None, error
+    assert sha is not None
+    msg = subprocess.run(
+        ["git", "log", "-1", "--format=%B", sha],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "Deliverable-Id:" not in msg, (
+        "a pathspec spanning two deliverables must omit the trailer, never "
+        f"guess a winner; got:\n{msg}"
+    )
 
 
 def test_each_group_commits_cleanly_with_its_own_trailer(repo, sid_env):

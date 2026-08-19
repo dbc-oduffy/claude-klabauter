@@ -263,6 +263,38 @@ def test_fire_workflow_returns_registry_record_not_bare_pid(repo, script, monkey
     assert Path(record["log_path"]).parent.is_dir()
 
 
+def test_fire_workflow_record_carries_publish_lag_message_field(repo, script, monkeypatch):
+    """DR-335 call site (a): the field is always present on the record,
+    `None` when the lag helper cannot establish a signal (no stamp, no
+    resolvable sha, below threshold) -- never absent, never raising."""
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert "publish_lag_message" in record
+
+
+def test_fire_workflow_surfaces_publish_lag_message_when_above_threshold(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(fire, "_publish_lag_message", lambda cwd=None: "Engine lag: 4 commit(s) ...")
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert record["publish_lag_message"] == "Engine lag: 4 commit(s) ..."
+
+
+def test_publish_lag_message_never_raises_when_skew_publish_lag_errors(repo, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(fire.skew, "publish_lag", boom)
+    assert fire._publish_lag_message(str(repo)) is None
+
+
 def test_fire_workflow_persists_record_readable_by_fire_status(repo, script, monkeypatch):
     _patch_plugin_dir(monkeypatch)
     monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
@@ -656,7 +688,7 @@ def test_terminal_envelope_returns_the_parsed_envelope_not_a_bare_flag(repo):
     assert fire._terminal_envelope('{"type":"assistant"}') is None
 
 
-def test_a_record_settled_by_an_older_annotation_version_is_reclassified_once(repo):
+def test_a_record_settled_by_an_older_annotation_version_is_reclassified_once(repo, monkeypatch):
     """A record settled before `driver_session_id` existed picks it up on its
     next refresh -- and then stops re-reading its log."""
     envelope = '{"is_error":false,"type":"result","session_id":"e090f8be-c4a9-4fe9-99f5-000000000000"}\n'
@@ -672,9 +704,86 @@ def test_a_record_settled_by_an_older_annotation_version_is_reclassified_once(re
     def _fail(*_args, **_kwargs):
         raise AssertionError("log re-read after the version migration already ran")
 
-    monkeypatched = fire._read_log_window
-    fire._read_log_window = _fail
-    try:
-        assert fire._refresh_record_state(migrated) is migrated
-    finally:
-        fire._read_log_window = monkeypatched
+    monkeypatch.setattr(fire, "_read_log_window", _fail)
+    assert fire._refresh_record_state(migrated) is migrated
+
+
+def test_an_exited_record_with_an_unreadable_log_stops_re_reading_it(repo, monkeypatch):
+    """`unknown` on an already-exited record is terminal: the child is reaped
+    and its log will never become readable. Re-attempting the open on every
+    sweep is paid by every future fire, since `count_live_fires` walks the
+    whole registry."""
+    gone = _exited_record(repo, log_text="")
+    gone["log_path"] = str(Path(repo) / "vanished.log")  # never created
+
+    settled = fire._refresh_record_state(gone)
+    assert settled["outcome"] == "unknown"
+    assert "could not be read" in settled["outcome_basis"]
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("unreadable log re-opened on a later sweep")
+
+    monkeypatch.setattr(fire, "_read_log_window", _fail)
+    assert fire._refresh_record_state(settled) is settled
+
+
+def test_a_running_record_with_no_log_yet_keeps_re_checking(repo, monkeypatch):
+    """The other half of the same rule: `unknown` on a record NOT yet observed
+    to end must stay unsettled, or a live fire would never be classified."""
+    live = _exited_record(repo, log_text="")
+    live["state"] = "running"
+    monkeypatch.setattr(fire, "_pid_alive", lambda _pid: True)
+
+    refreshed = fire._refresh_record_state(live)
+
+    assert refreshed["outcome"] == "unknown"
+    assert "not been observed to end" in refreshed["outcome_basis"]
+
+
+def test_the_banner_text_quoted_in_agent_output_is_not_a_truncation(repo):
+    """This module's own source contains the banner verbatim, so a fired
+    workflow that merely printed `fire.py` used to classify its own clean run
+    as truncated."""
+    quoted = (
+        '    _TRUNCATION_BANNER = "Background tasks still running after"  # terminating\n'
+        "  > Background tasks still running after 600s; terminating.\n"
+        "the agent said Background tasks still running after 600s; terminating.\n"
+    ) + _CLEAN_ENVELOPE
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text=quoted))
+
+    assert refreshed["outcome"] == "clean"
+
+
+def test_the_real_banner_on_its_own_line_still_classifies_truncated(repo):
+    """The anchoring must not cost the true positives it was measured on."""
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text=_TRUNCATION_LOG))
+
+    assert refreshed["outcome"] == "truncated"
+
+
+def test_multibyte_log_degrades_only_at_the_window_edges(repo):
+    """Head and tail decode separately, so no SYNTHETIC seam is introduced
+    mid-stream. A character split by the window boundary itself still costs
+    one replacement char at that chunk's edge -- inherent to a bounded read,
+    and bounded to the edges rather than loose in the middle."""
+    log_path = Path(repo) / "multibyte.log"
+    pad = "\u00e9" * fire._LOG_SCAN_WINDOW_BYTES
+    log_path.write_text("HEAD-MARKER\n" + pad + "\nTAIL-MARKER\n", encoding="utf-8")
+
+    window = fire._read_log_window(str(log_path))
+
+    assert "HEAD-MARKER" in window
+    assert "TAIL-MARKER" in window
+    assert window.count("\ufffd") <= 2
+
+
+def test_write_record_returns_exactly_what_landed_on_disk(repo, script, monkeypatch):
+    """A caller holds the same dict the file holds, without annotating twice."""
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+    registry_path = fire._record_path(fire._registry_dir(str(repo)), record["fire_id"])
+
+    assert json.loads(registry_path.read_text(encoding="utf-8")) == record

@@ -529,6 +529,217 @@ class TestStaffEngReviewSidecarRoundTrip:
         assert mod._findings_section_is_empty(section)
 
 
+#: A real persona sidecar body, trimmed to the load-bearing shape but
+#: modeled directly on two live fixtures read during this fix:
+#: state/subagent-share/931ad709-a702-4279-98b6-0b47ec3af140/
+#: coordinatorstaff-eng-f7748ca8.md and state/subagent-share/
+#: 352895b8-a3f9-4c20-bee5-95924bdbff99/coordinatorstaff-eng-28c30594.md.
+#: Both real files: NO `## Findings` heading anywhere, an H1 whose wording
+#: varies file to file ("# Staff review — ...", "# Staff-eng review — ...",
+#: "# Review — ...", "# Re-review ..." all observed live), and a single
+#: fenced ```json block (immediately after the H1 in both) whose top-level
+#: object carries a `findings` array of finding dicts (file/line_start/
+#: line_end/severity/category/finding/suggested_fix — no `id` field; the
+#: integrator assigns bucket ids externally, same as the review-findings
+#: shape). This fixture keeps that exact field set and section order
+#: (H1 -> json fence -> ## Narrative -> ## Coverage -> ## Run notes).
+_STAFF_ENG_REVIEW_BODY = (
+    "# Staff review — widget throughput regression\n\n"
+    "```json\n"
+    "{\n"
+    '  "reviewer": "staff-eng",\n'
+    '  "verdict": "REQUIRES_CHANGES",\n'
+    '  "summary": "One correctness defect in the retry path.",\n'
+    '  "findings": [\n'
+    "    {\n"
+    '      "file": "widget.py",\n'
+    '      "line_start": 10,\n'
+    '      "line_end": 12,\n'
+    '      "severity": "major",\n'
+    '      "category": "correctness",\n'
+    '      "finding": "retry loop never increments the backoff counter.",\n'
+    '      "suggested_fix": "increment backoff inside the except clause."\n'
+    "    }\n"
+    "  ]\n"
+    "}\n"
+    "```\n\n"
+    "## Narrative\n\nRead the retry path end to end.\n\n"
+    "## Coverage\n- **Reviewed:** widget.py\n\n"
+    "## Run notes\n- No source modified.\n"
+)
+
+_STAFF_ENG_REVIEW_EMPTY_FINDINGS_BODY = (
+    "# Staff review — clean pass\n\n"
+    "```json\n"
+    "{\n"
+    '  "reviewer": "staff-eng",\n'
+    '  "verdict": "SHIP",\n'
+    '  "summary": "Nothing to flag.",\n'
+    '  "findings": []\n'
+    "}\n"
+    "```\n\n"
+    "## Narrative\n\nClean.\n"
+)
+
+
+#: A persona sidecar that carries BOTH shapes: the `## Findings` scaffold
+#: `provision_report._build_staff_eng_review_doc_text` provisions at spawn
+#: time, left UNFILLED, plus the JSON block the persona actually wrote. 19 of
+#: 307 live persona sidecars carry both headings today (all with a filled
+#: section); this is the unfilled variant the ordering must not refuse on.
+_STAFF_ENG_REVIEW_WITH_UNFILLED_SCAFFOLD_BODY = (
+    _STAFF_ENG_REVIEW_BODY
+    + "\n## Findings\n\n"
+    + mod._FINDINGS_SENTINEL
+    + "\n\n## Exit interview\n\n- Nothing.\n"
+)
+
+
+class TestStaffEngReviewJsonShapeRoundTrip:
+    """The regression anchor for the live defect: real persona sidecars carry
+    NO `## Findings` heading at all -- only a fenced ```json block with a
+    `findings` array. Fixture bodies above are modeled on two real files read
+    during this fix (see their own docstring)."""
+
+    def test_unfilled_scaffold_falls_through_to_the_json_block(self, tmp_path):
+        """An empty `## Findings` scaffold attests nothing. Refusing on it
+        while a populated JSON block sits in the same file is the original
+        defect wearing a new label, so the dispatcher falls through instead of
+        stopping at the first shape that merely MATCHES."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-both", "coordinatorstaff-eng-both01.md",
+            agent_type="coordinator:staff-eng",
+            body=_STAFF_ENG_REVIEW_WITH_UNFILLED_SCAFFOLD_BODY,
+        )
+        shape, is_empty = mod._detect_findings_shape(
+            sidecar.read_text(encoding="utf-8")
+        )
+        assert shape == mod._SHAPE_STAFF_ENG_REVIEW
+        assert is_empty is False
+
+        result = mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is False
+        assert mod._DISPOSITIONS_HEADING in sidecar.read_text(encoding="utf-8")
+
+    def test_filled_scaffold_still_wins_over_a_json_block(self, tmp_path):
+        """The fall-through must not invert the order for the 19 live
+        both-shape files whose section IS filled — those stay on the
+        review-findings path they resolve to today."""
+        filled = _STAFF_ENG_REVIEW_WITH_UNFILLED_SCAFFOLD_BODY.replace(
+            mod._FINDINGS_SENTINEL, "- [major] a real hand-written finding"
+        )
+        sidecar = _write_sidecar(
+            tmp_path, "sess-filled", "coordinatorstaff-eng-filled1.md",
+            agent_type="coordinator:staff-eng", body=filled,
+        )
+        shape, is_empty = mod._detect_findings_shape(
+            sidecar.read_text(encoding="utf-8")
+        )
+        assert shape == mod._SHAPE_REVIEW_FINDINGS
+        assert is_empty is False
+
+    def test_staff_eng_review_json_shape_appends_successfully(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body=_STAFF_ENG_REVIEW_BODY,
+        )
+        result = mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is False
+        text = sidecar.read_text(encoding="utf-8")
+        assert mod._DISPOSITIONS_HEADING in text
+        assert "applied: [0]" in text
+
+    def test_review_findings_heading_shape_still_works_unchanged(self, tmp_path):
+        """Live-path non-regression: the pre-existing `## Findings` shape
+        (code-reviewer's own output) must keep working exactly as before,
+        routed through the same dispatcher that now also serves the
+        staff-eng-review shape."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        result = mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is False
+        assert "## Integrator Dispositions" in sidecar.read_text(encoding="utf-8")
+
+    def test_empty_json_findings_array_is_refused(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body=_STAFF_ENG_REVIEW_EMPTY_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError, match="empty"):
+            mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+
+    def test_neither_shape_is_refused_naming_both_shapes(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body="## Run notes\n\nNo findings section at all.\n",
+        )
+        with pytest.raises(mod.DispositionsError) as excinfo:
+            mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        message = str(excinfo.value)
+        assert "review-findings" in message
+        assert "staff-eng-review" in message
+
+    def test_json_fence_quoted_in_prose_does_not_false_positive(self, tmp_path):
+        """A code fence that merely DISCUSSES the json-findings mechanism
+        (not valid JSON, or valid JSON with no `findings` list) must not be
+        mistaken for the real shape -- the staff-eng-review counterpart to
+        `_find_heading`'s prose-quoting negative-spec."""
+        body = (
+            "# Staff review — mechanism note\n\n"
+            "Explaining how the extractor works below, not an actual findings block:\n\n"
+            "```json\n"
+            "{\"reviewer\": \"staff-eng\", \"verdict\": \"SHIP\", \"summary\": \"no findings key here\"}\n"
+            "```\n\n"
+            "## Narrative\n\nSee above.\n"
+        )
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body=body,
+        )
+        with pytest.raises(mod.DispositionsError) as excinfo:
+            mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        assert "review-findings" in str(excinfo.value)
+        assert "staff-eng-review" in str(excinfo.value)
+
+    def test_staff_eng_heading_quoted_in_prose_does_not_trigger_detection(self, tmp_path):
+        """Quoting the literal H1 text `# Staff review` in running prose must
+        not, by itself, make a document look like the staff-eng-review shape
+        -- detection is content-addressed (the fenced JSON payload), not
+        heading-anchored, so a prose mention has no path to a false
+        positive. Pinned explicitly since the sibling `review-findings`
+        shape has an analogous documented failure mode."""
+        body = (
+            "## Run notes\n\n"
+            "This document is not itself a `# Staff review` sidecar, it just "
+            "quotes that heading while describing one.\n\n"
+            "```text\n"
+            "# Staff review — not actually this shape, no json fence follows.\n"
+            "```\n"
+        )
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body=body,
+        )
+        with pytest.raises(mod.DispositionsError) as excinfo:
+            mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        message = str(excinfo.value)
+        assert "review-findings" in message
+        assert "staff-eng-review" in message
+
+    def test_second_call_on_json_shape_is_a_safe_noop(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body=_STAFF_ENG_REVIEW_BODY,
+        )
+        mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        first_text = sidecar.read_text(encoding="utf-8")
+        result = mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is True
+        assert sidecar.read_text(encoding="utf-8") == first_text
+
+
 class TestFailsLoudOnMisdirection:
     def test_refuses_own_run_report_sidecar_wrong_agent_type(self, tmp_path):
         sidecar = _write_sidecar(
@@ -698,3 +909,75 @@ class TestHeadingsAreLineAnchoredNotSubstrings:
 
     def test_trailing_whitespace_is_tolerated(self):
         assert mod._find_heading("## Findings   \n", "## Findings") == 0
+
+
+class TestFencePairingSurvivesAnUnterminatedFence:
+    """Regression for the 2026-08-19 review finding: `_FENCE_RE`'s prior
+    whole-block DOTALL match had no pairing awareness, so an unterminated
+    fence BEFORE the real ```json block greedily expanded to steal the real
+    block's own closing delimiter -- the real block's opening line was then
+    consumed as body text of the bogus match, and the genuinely populated
+    findings block became invisible to detection (a false refusal on a
+    sidecar that does carry real findings).
+    """
+
+    def test_unterminated_fence_before_the_real_block_does_not_swallow_it(self):
+        real_block = (
+            "```json\n"
+            '{"reviewer": "staff-eng", "findings": [{"finding": "real one"}]}\n'
+            "```\n"
+        )
+        doc = (
+            "# Staff review\n\n"
+            "## Notes\n\n"
+            "```\n"
+            "an unterminated snippet, no closing fence\n\n"
+            + real_block
+            + "\n## Narrative\n\nprose.\n"
+        )
+        findings = mod._find_json_findings_block(doc)
+        assert findings == [{"finding": "real one"}]
+        shape, is_empty = mod._detect_findings_shape(doc)
+        assert shape == mod._SHAPE_STAFF_ENG_REVIEW
+        assert is_empty is False
+
+    def test_unterminated_fence_after_the_real_block_still_works(self):
+        """Pin: this direction already worked before the fix (the real
+        block is well-formed and self-contained before any malformed fence
+        is reached) -- a fix must not regress it."""
+        real_block = (
+            "```json\n"
+            '{"reviewer": "staff-eng", "findings": [{"finding": "real one"}]}\n'
+            "```\n"
+        )
+        doc = (
+            real_block
+            + "\n## Narrative\n\n"
+            + "```\n"
+            + "an unterminated snippet after, no closing fence\n"
+        )
+        findings = mod._find_json_findings_block(doc)
+        assert findings == [{"finding": "real one"}]
+
+    def test_unterminated_fence_before_full_append_dispositions_round_trip(self, tmp_path):
+        """End-to-end: the same shape via the real `append_dispositions`
+        entrypoint, not just the extractor helper."""
+        real_block = (
+            "```json\n"
+            '{"reviewer": "staff-eng", "findings": [{"finding": "real one"}]}\n'
+            "```\n"
+        )
+        body = (
+            "## Notes\n\n"
+            "```\n"
+            "an unterminated snippet, no closing fence\n\n"
+            + real_block
+            + "\n## Narrative\n\nprose.\n"
+        )
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
+            agent_type="coordinator:staff-eng", body=body,
+        )
+        result = mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
+        assert result["already_dispositioned"] is False
+        assert mod._DISPOSITIONS_HEADING in sidecar.read_text(encoding="utf-8")

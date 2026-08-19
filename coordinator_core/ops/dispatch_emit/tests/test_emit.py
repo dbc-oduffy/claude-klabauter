@@ -16,7 +16,6 @@ from coordinator_core.ops.dispatch_emit.emit import (
     MixedAgentTypeRowError,
     NoWavesError,
     ReviewRosterFragmentError,
-    _reviewers_for_tier,
     assert_zero_errors,
     compose_script,
     derive_review_tier,
@@ -644,15 +643,18 @@ def test_compose_script_composes_a_parallel_review_phase_for_multiple_reviewers(
     assert script.count("agentType: 'coordinator:staff-reviewer'") == 1
 
 
-def test_reviewers_for_tier_refuses_a_staged_schema_version_2_fragment():
-    """A v2 fragment maps a tier to ``{"stages": [...]}``. ``list()`` over that
-    mapping yields its KEYS — ``['stages']`` — which would compose a review
-    phase dispatching a nonexistent ``agentType: 'stages'``. This emitter
-    consumes the flat shape only; the staged shape needs gate/abort composition
-    it has no concept of, so it must refuse rather than emit nonsense."""
+def test_compose_script_composes_a_staged_gate_fragment_without_suppressing_the_test_phase():
+    """A staged (schema_version >= 2) fragment used to be refused outright —
+    that stopgap (8d7d057f) comes out with this chunk: `compose_script` now
+    routes a staged fragment through `review_mint.roster.parse_stages` /
+    `review_mint.compose.compose` like any other, and a `gate: true` stage's
+    verdict must never suppress the terminal test phase for this
+    post-execution caller (GATE POLICY, C4's body)."""
+    waves = _two_wave_fixture()
     staged = {
         "schema": "review-roster-fragment",
-        "schema_version": 2,
+        "schema_version": 3,
+        "blocking_verdicts": {"coordinator:prior-art-checker": "BLOCKED-SURFACE-TO-PM"},
         "tiers": {
             "standard": {
                 "stages": [
@@ -663,11 +665,23 @@ def test_reviewers_for_tier_refuses_a_staged_schema_version_2_fragment():
         },
     }
 
-    with pytest.raises(ReviewRosterFragmentError) as excinfo:
-        _reviewers_for_tier(staged, "standard")
+    script = compose_script(
+        waves,
+        name="wf",
+        description="staged fragment",
+        review_tier="standard",
+        review_roster_fragment=staged,
+    )
 
-    assert "flat reviewer list" in str(excinfo.value)
-    assert "2" in str(excinfo.value)
+    phase_titles = _extract_phase_titles(script)
+    assert "Scoped test run" in phase_titles
+    assert phase_titles.index("Scoped test run") == len(phase_titles) - 1
+    assert "review:coordinator:prior-art-checker" in script
+    assert "review:coordinator:code-reviewer" in script
+    # A gate stage's structured schema is present, but no early-return branch
+    # is ever spliced for this post-execution caller.
+    assert "sidecar_path" in script
+    assert "return" not in script
 
 
 def test_review_calls_carry_no_model_key_so_the_agent_definition_pins_the_tier():
@@ -883,6 +897,37 @@ def test_wave_over_threshold_batches_carry_disjoint_rows_in_order():
 def test_wave_over_threshold_script_passes_run_checks():
     waves = [_large_wave(12)]
     script = compose_script(waves, name="wf", description="round trip")
+
+    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
+    assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# compose_script — commit prompt carries the wave's captured executor
+# results as pathspec provenance (git-commit-agent.md § Pathspec provenance)
+# ---------------------------------------------------------------------------
+
+
+def test_compose_script_binds_each_waves_executor_results_and_threads_them():
+    """Each wave's `agent()`/`parallel()` call must bind a results variable,
+    and the immediately-following commit phase must reference that same
+    variable via `JSON.stringify` -- never a wave-scoped commit prompt that
+    states only the pathspec (git-commit-agent.md refuses that shape)."""
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "const wave1Results = await agent(" in script
+    assert "const wave2Results = await agent(" in script
+    assert "JSON.stringify(wave1Results, null, 2)" in script
+    assert "JSON.stringify(wave2Results, null, 2)" in script
+
+
+def test_compose_script_commit_prompt_states_provenance_and_passes_run_checks():
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "Pathspec provenance" in script
+    assert "touched-files set" in script
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []

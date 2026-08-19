@@ -145,6 +145,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.reconcile.commit_reality import _git as _reality_git
 
 logger = logging.getLogger(__name__)
@@ -1568,9 +1569,16 @@ async def _append_session_handler(
     DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
     """
     plan_path: str = params.get("plan_path", "")
-    session_id: str = params.get(
-        "session_id", os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    )
+    # Caller-supplied session_id still wins (this op's documented contract).
+    # The FALLBACK, however, must not be a raw os.environ read: under warm
+    # serving this handler runs inside a long-lived server whose environment
+    # names whoever spawned it, so the row was stamped with a stranger's
+    # authorship. `resolve_current_session_id` reads the per-request identity
+    # `warm.entry_seam.per_request_state` binds, and falls through to the same
+    # env ladder on the cold path.
+    session_id: str = params.get("session_id") or (
+        resolve_current_session_id() or ""
+    ).strip()
     status: str = params.get("status", "working")
     created_at: Optional[str] = params.get("created_at") or None
 

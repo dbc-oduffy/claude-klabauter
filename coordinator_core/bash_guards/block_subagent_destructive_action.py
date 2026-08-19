@@ -3126,6 +3126,45 @@ def _ps_resolve_head_verb(tokens: List[str]) -> tuple:
     return _ps_normalize_verb_token(verb_tok).lower(), tokens[1:]
 
 
+def _evaluate_legacy_powershell_verbs(text):
+    """Parse-failure fallback for the non-git PowerShell verb classifier
+    (AC3 / Conventions (a)) -- the twin of `_evaluate_legacy_powershell_git`.
+
+    Found by the slice-B partitioned review and confirmed by execution:
+    `Remove-Item -Recurse -Force ./state` DENIES, and the same command with
+    `&> out.txt` appended -- a shape `_dialect.py`'s own docstring records as
+    confirmed ``has_error=True`` -- tokenized to ``None`` and therefore
+    ALLOWED. Widening ``MATCHERS`` to ``COMMAND_TOOL_NAMES`` is what made that
+    path reachable for real PowerShell-tool traffic, so the fallback has to
+    exist for the widen to be safe.
+
+    Strips here-string bodies and quoted spans via C2's
+    `strip_powershell_prose_noise` before scanning, so hazard-documenting
+    prose naming ``Remove-Item -Recurse -Force`` does not read as an issued
+    command, and reuses this module's own verb/flag predicates rather than
+    inventing a second classifier.
+    """
+    stripped = strip_powershell_prose_noise(text)
+    for raw_segment in _PS_LEGACY_SEPARATOR_RE.split(stripped):
+        seg = raw_segment.strip()
+        if not seg:
+            continue
+        tokens = [_ps_normalize_verb_token(tok) for tok in seg.split()]
+        if not tokens:
+            continue
+        head, rest = _ps_resolve_head_verb(tokens)
+        if not head:
+            continue
+        if head in _PS_REMOVE_VERBS:
+            if _ps_has_flag_prefix(rest, ("-r", "-fo"), frozenset({"/s", "/f"})):
+                return "PowerShell remove-item (recursive or force delete)"
+        elif head in _PS_ICACLS_VERBS:
+            return "PowerShell icacls (permission modification)"
+        elif head in _PS_STOP_PROCESS_VERBS:
+            return "PowerShell stop-process (process termination)"
+    return None
+
+
 def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
     """Return a deny_kind label for the first PowerShell-dialect destructive
     verb found in ``cmd_norm``, or ``None`` if none is found (either
@@ -3152,7 +3191,7 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
         cmd_norm, Dialect.POWERSHELL, guard_name="block_subagent_destructive_action"
     )
     if segments is None:
-        return None
+        return _evaluate_legacy_powershell_verbs(cmd_norm)
 
     for tokens, pipe_before in segments:
         if not tokens:

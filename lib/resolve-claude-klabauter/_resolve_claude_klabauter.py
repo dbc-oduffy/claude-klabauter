@@ -56,6 +56,32 @@ updating that wrapper's short-circuit in the SAME change — see
 ``coordinator_core/tests/test_claude_klabauter_root_two_tier.py``'s cross-entrypoint
 agreement test (fixture: ``repos.claude_klabauter`` absent) for the
 mechanical backstop that catches drift here.
+
+C7 naming-retirement note
+(docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C7,
+docs/reference/engine-vs-locator-resolver-routing.md): C7 decided the fate
+of the publish-time ``_resolve_claude_klabauter_root`` -> ``_resolve_claude_klabauter_root``
+rename transform is to KEEP it, not retire it — it still functions as a
+useful tripwire (a symbol that exists only post-publish, so a caller
+accidentally importing the pre-publish name fails loud instead of silently
+resolving the wrong tree). C7 also bucketed every caller of the
+``_resolve_claude_klabauter``-symbol family across the tree by priority order into a
+routing table (the doc above) rather than hand-triaging each one.
+
+Naming note: this module's ``_resolve_claude_klabauter_root(ml_dir)`` above and
+``coordinator/bin/lib/cc_invoke.py``'s module-level ``_resolve_claude_klabauter_root()``
+are UNRELATED functions that happen to share a name — this one resolves
+``repos.claude_klabauter`` (the SOURCE TREE / claude-klabauter repo location, the exact
+"dangerous name" collision the PM's naming ruling calls out), cc_invoke's
+resolves the ENGINE (dispatch axis, delegated through the DR-132/stamp
+gate). This one is already the "source-tree resolver, confined to a named
+narrow seam" C7's body asks for in substance — underscore-private, and its
+only declared exception consumer is ``coordinator_core.claude_klabauter_root``'s
+path-load (see the Review note above) — but is NOT renamed to say so in
+this pass: that consumer path-loads it BY THIS NAME, so a rename here
+requires updating that consumer in the same change, and
+``coordinator_core/claude_klabauter_root.py`` is outside this chunk's ``writes:``
+scope. Left as a named exception, not a silent skip.
 """
 from __future__ import annotations
 
@@ -534,6 +560,33 @@ def _is_claude_klabauter_source_tree(ml_dir: Path) -> Optional[bool]:
         return None
 
 
+#: C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md): "an
+#: engine root is a stamped build. No stamp, no engine." This module cannot
+#: import ``coordinator_core.warm.engine_root`` (the C2 shared predicate) —
+#: its own module docstring requires it stay import-independent of
+#: ``coordinator_core``, since it is installed standalone into a bare
+#: ``<settings-home>/bin/`` with only the stdlib importable. The predicate
+#: is therefore replicated inline here rather than imported: "readable and
+#: non-empty" at ``<root>/coordinator_core/_engine_stamp``, mirroring
+#: ``coordinator_core.warm.skew.ENGINE_STAMP_FILENAME`` /
+#: ``_engine_stamp_path`` byte-for-byte in shape. Keep the two in sync by
+#: hand if the stamp filename or location ever changes.
+_ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
+
+
+def _is_stamped_engine_root(root_path: Path) -> bool:
+    """True iff *root_path* carries a valid engine build stamp.
+
+    Standalone twin of ``coordinator_core.warm.engine_root.is_engine_root``
+    — see ``_ENGINE_STAMP_RELATIVE_PARTS`` above for why this cannot import
+    that module instead. Never raises."""
+    stamp_path = root_path.joinpath(*_ENGINE_STAMP_RELATIVE_PARTS)
+    try:
+        return len(stamp_path.read_bytes()) > 0
+    except OSError:
+        return False
+
+
 def _resolve_published_engine(ml_dir: Path) -> Optional[str]:
     """The published-engine seam — resolves the published engine mirror
     (``repos.claude_klabauter``), the coordinator-engine distribution a
@@ -541,10 +594,15 @@ def _resolve_published_engine(ml_dir: Path) -> Optional[str]:
     working checkout.
 
     "Registered and usable" iff the key resolves to a value, that path
-    exists as a directory, AND ``<root>/coordinator_core`` exists — guards
-    the half-installed-clone case, where a root got registered before its
-    clone finished. Mirrors DoE's ``_resolve_published_engine``. Fail-open,
-    never raises."""
+    exists as a directory, ``<root>/coordinator_core`` exists (guards the
+    half-installed-clone case, where a root got registered before its clone
+    finished), AND the root carries a valid engine build stamp (C5: "an
+    engine root is a stamped build. No stamp, no engine." —
+    ``_is_stamped_engine_root`` above). An unstamped tree is no longer
+    "usable" here at all, regardless of directory shape — this is the
+    published-engine half of C5's fail-closed rule; the live-working-tree
+    leg (``_resolve_claude_klabauter_root``) is deliberately untouched by this check.
+    Fail-open, never raises."""
     try:
         root = _registry_value(ml_dir, "repos.claude_klabauter")
         if not root:
@@ -554,17 +612,32 @@ def _resolve_published_engine(ml_dir: Path) -> Optional[str]:
             return None
         if not (root_path / "coordinator_core").is_dir():
             return None
+        if not _is_stamped_engine_root(root_path):
+            return None
         return root
     except Exception:
         return None
 
 
 def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
-    """Resolve the engine root AND say which class of thing answered —
-    DR-132's two-tier ladder, mirroring DoE's
-    ``_engine_root.py::resolve_claude_klabauter_root_with_class`` step order exactly.
-    The NET effect is live-tree preference; do not "simplify" this into a
-    live-tree-first ladder or invert it to prefer the published engine.
+    """Resolve the engine root AND say which class of thing answered — this
+    is the DISPATCH axis: "which engine executes?".
+
+    C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md, see
+    docs/reference/engine-root-resolution.md and the C10 decision record):
+    **the ladder now prefers the published, STAMPED engine over the live
+    working tree on dispatch.** This REVERSES the prior rule recorded here
+    (DR-132's live-tree preference, "do not simplify this into a
+    live-tree-first ladder or invert it to prefer the published engine") —
+    that prohibition is superseded, not merely violated; see DR-132's/
+    DR-328's supersede notes and the new decision record. The rule is now:
+    an unstamped tree is never a legitimate answer to "which engine
+    executes" — ``_resolve_published_engine`` denies an unstamped published
+    root outright (C5), and C4 already removed the live-tree ref-based
+    fallback from ``compute_client_token``. The LOCATOR axis ("where is the
+    claude-klabauter repo?") is unaffected — ``resolve_claude_klabauter_bin_dir()`` below stays
+    single-tier, live-tree-only, deliberately un-flipped; see its own
+    docstring and DR-326.
 
     Returns ``(root, resolution_class)`` where the class is one of
     ``RESOLUTION_RESOLVED_ENGINE``, ``RESOLUTION_LIVE_WORKING_TREE``, or
@@ -915,22 +988,30 @@ def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
     target as `python target_path`, not target_path directly, so the exec
     bit is never required.
 
-    C4b — per-target existence gate on the published-engine rung. Root
-    resolution now goes through `resolve_claude_klabauter_root_with_class()` (C3's
-    two-tier ladder) rather than the single-tier `resolve_claude_klabauter_bin_dir()`,
-    so this function can see WHICH class answered. A directory-level
-    sentinel probe (`resolve_claude_klabauter_bin_dir`'s `archive-stamp-cli` check)
-    passes against the published mirror even though the claude-klabauter-vs-published
-    forwarder sets are NOT nested (C4a's oracle: 20 names live-tree-only, 5
-    published-only on this tree) — the gap is per-target, so the gate must
-    be too. When the resolved class is `resolved-engine` and *target* is
-    absent under that root's `coordinator/bin/`, falls back to the live
-    working tree (via the same single-tier ladder `resolve_claude_klabauter_bin_dir`
-    uses) and execs the target from there if it exists; only if that ALSO
-    misses does the 127 path fire, naming both roots tried. When the
-    resolved class is `live-working-tree`, behaviour is byte-identical to
-    before this chunk — no fallback probe, no new I/O — this class already
-    IS the live tree, so there is nowhere else to fall back to.
+    C4b (RETIRED by C13) — per-target existence gate on the published-engine
+    rung. Root resolution goes through `resolve_claude_klabauter_root_with_class()`
+    (C3's two-tier ladder) rather than the single-tier
+    `resolve_claude_klabauter_bin_dir()`, so this function can see WHICH class
+    answered. A directory-level sentinel probe (`resolve_claude_klabauter_bin_dir`'s
+    `archive-stamp-cli` check) passes against the published mirror even
+    though the claude-klabauter-vs-published forwarder sets were NOT nested when C4b
+    landed (C4a's oracle: 20 names live-tree-only, 5 published-only on that
+    tree) — the gap was per-target, so C4b's gate fell back to the live
+    working tree (via the single-tier `resolve_claude_klabauter_bin_dir`) and exec'd
+    the target from there when it existed, only failing loud (127, naming
+    both roots tried) if that ALSO missed.
+
+    C13 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C13):
+    that fallback is REMOVED. C13 first closed the measured per-name gap
+    (published-engine `coordinator/bin/` allowlist vs. the installed-name ->
+    on-disk-target map `_derive_agent_helper_target_map` resolves against —
+    see `setup/publish-targets.portable`'s `claude-klabauter-coordinator-bin`
+    row) — once the published set carries every name the live tree does, a
+    missing target under a resolved published-engine root is no longer "a
+    known gap the live tree covers", it is a genuinely broken install. A
+    missing *target* under EITHER resolution class now fails loud (127)
+    naming only the ONE root actually tried — there is no second root to
+    silently reach into any more.
     """
     if argv is None:
         argv = sys.argv[1:]
@@ -972,38 +1053,16 @@ def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
     # (TOCTOU) — that narrower window is accepted, not closed, and the
     # `except OSError` handler on the POSIX leg remains its backstop.
     if not os.path.isfile(target_path) or not os.access(target_path, os.R_OK):
-        fallback_target_path = None
-        live_bin_dir_desc = None
-        if resolution_class == RESOLUTION_RESOLVED_ENGINE:
-            try:
-                live_bin_dir = resolve_claude_klabauter_bin_dir()
-                live_bin_dir_desc = live_bin_dir
-                candidate = live_bin_dir + "/" + target
-                if os.path.isfile(candidate) and os.access(candidate, os.R_OK):
-                    fallback_target_path = candidate
-            except ClaudeKlabauterResolutionError:
-                live_bin_dir_desc = "unresolvable live working tree"
-
-        if fallback_target_path is not None:
-            target_path = fallback_target_path
-            # live_bin_dir is always "<root>/coordinator/bin" (_validate_bin_dir's
-            # own composition) — strip the fixed suffix rather than re-resolving
-            # the root via a second ladder call.
-            target_claude_klabauter_root = live_bin_dir[: -len("/coordinator/bin")]
-        elif resolution_class == RESOLUTION_RESOLVED_ENGINE:
-            sys.stderr.write(
-                f"ERROR: coordinator helper '{target}' is missing under both the "
-                f"resolved published engine ('{bin_dir}') and the live working "
-                f"tree ('{live_bin_dir_desc}') — re-run coordinator:install to "
-                "repair the plugin tree\n"
-            )
-            sys.exit(127)
-        else:
-            sys.stderr.write(
-                f"ERROR: coordinator helper '{target_path}' is missing — "
-                "re-run coordinator:install to repair the plugin tree\n"
-            )
-            sys.exit(127)
+        # C13: no live-tree fallback — the resolved root (whichever class
+        # answered) is the only root tried; a missing target here fails
+        # loud rather than silently reaching a second tree. See exec_cli's
+        # own docstring, "C4b (RETIRED by C13)".
+        sys.stderr.write(
+            f"ERROR: coordinator helper '{target_path}' is missing under the "
+            f"resolved {resolution_class} root ('{claude_klabauter_root}') — run "
+            "python3 <engine-clone>/scripts/setup.py to repair the plugin tree\n"
+        )
+        sys.exit(127)
 
     if os.name == "nt":
         sys.exit(_run_target_in_process(target_path, argv, target_claude_klabauter_root))
@@ -1013,7 +1072,7 @@ def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
     except OSError as exc:
         sys.stderr.write(
             f"ERROR: coordinator helper '{target_path}' is missing or not "
-            f"executable ({exc.strerror}) — re-run coordinator:install to "
-            "repair the plugin tree\n"
+            f"executable ({exc.strerror}) — run python3 "
+            "<engine-clone>/scripts/setup.py to repair the plugin tree\n"
         )
         sys.exit(127)

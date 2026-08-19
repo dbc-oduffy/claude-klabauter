@@ -1351,6 +1351,59 @@ def _execute_directives(
     )
 
 
+def _warn_if_spinoff_mint_self_claimed(root: Path, committed_artifact_path: str) -> None:
+    """C10 (docs/plans/2026-08-19-batons-unify-into-one-successor.md § C10):
+    asserts, rather than special-cases, why authoring a spinoff can never
+    trip `pickup_assemble.compute_baton_unification_verdict`'s unification
+    routing -- that routing triggers on ADOPTING a CLAIMED artifact (see its
+    own docstring, § (a) "held set"), and this module never calls into
+    `pickup_assemble` at all (`apply()` mints via `_execute_directives`'s
+    closed `_CLI_DISPATCH` and commits via `_scoped_commit` -- no adopt call
+    site exists in this file). The discriminator is therefore the CLAIM, not
+    the mint: a freshly-authored spinoff is provably never claimed by its own
+    author, so there is nothing a held-set read could ever pick up.
+
+    This assertion PROVES that property on every spinoff apply() run rather
+    than asserting it once in prose -- a future change that stamped
+    `status: claimed`/`claimed_by` onto a spinoff's OWN mint (as opposed to
+    the origin baton `handoff.author_fork` self-resolves the author's
+    existing claim FROM, which this never touches) would silently open the
+    exact unification-on-mint hole this chunk exists to keep shut. Raises
+    `AssertionError` -- a genuine invariant violation, not a business
+    refusal apply_base's own exit-code vocabulary should model.
+
+    Best-effort read: an unreadable/missing file or absent frontmatter
+    declines silently (nothing to assert about a file this run did not
+    successfully commit)."""
+    target = root / committed_artifact_path
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError:
+        return
+    split = split_frontmatter(text)
+    if split is None:
+        return
+    status = read_fm_field_unquoted(split.fm_text, "status")
+    claimed_by = read_fm_field_unquoted(split.fm_text, "claimed_by")
+    if status == "claimed" or claimed_by:
+        # OBSERVABLE, NOT FATAL, and deliberately not a bare `assert`.
+        # Two reasons, both about where this runs: it fires AFTER the mint has
+        # been committed, so raising would destroy the report of a mutation
+        # that already landed on disk — the operator would be told the run
+        # failed while the artifact sits there committed. And a bare `assert`
+        # is stripped under `python -O`, so an invariant that only holds when
+        # assertions are enabled is not an invariant. The real drift guard for
+        # this property is structural and lives in the tests: this module
+        # imports none of the unification surface, so it cannot reach it.
+        print(
+            f"baton-assemble apply: spinoff mint at {committed_artifact_path!r} "
+            f"landed self-claimed (status={status!r}, claimed_by={claimed_by!r}); "
+            "a spinoff's own mint must never claim itself. Release the claim "
+            "before adopting it.",
+            file=sys.stderr,
+        )
+
+
 def _resolve_explicit_session_id(session_id: Optional[str]) -> Optional[str]:
     return apply_base.resolve_explicit_session_id(session_id, env_read_order=_SESSION_ENV_READ_ORDER)
 
@@ -1779,6 +1832,9 @@ def apply(
         # "this run committed nothing" and "this report does not say" the same
         # read, which is the ambiguity this field exists to remove.
         report["commits"] = commits
+
+        if kind == "spinoff" and exit_code == APPLY_EXIT_OK:
+            _warn_if_spinoff_mint_self_claimed(root, committed_artifact_path)
 
         return _finalize_report(exit_code, report)
 

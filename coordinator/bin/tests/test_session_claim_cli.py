@@ -279,6 +279,62 @@ def test_clear_claim_if_dead_bogus_basename_with_md_suffix_hints_extension_trap(
     assert "'.md' extension" in err
 
 
+# ---------------------------------------------------------------------------
+# release-artifact reaches the SAME silence by a different door:
+# `claims.release_artifact`'s not-the-holder and claim-already-absent legs are
+# documented NO-OP SUCCESS, so a wrong claim key is exit 0 with nothing
+# written and nothing said. The field report that motivated these tests was
+# exactly that -- `release-artifact handoff <slug>` run twice, with and
+# without `.md`, both exiting silently. Same note, same extension hint.
+# ---------------------------------------------------------------------------
+
+def test_release_artifact_bogus_basename_emits_not_found_note_exit_0(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    (tmp_path / "handoff-claims" / "the-real-handoff").mkdir(parents=True)
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+    stub_import_module(_StubClaims(release_artifact=lambda *a, **k: True))
+
+    rc = _cli.main(["release-artifact", "handoff", "bogus-basename"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "release-artifact" in err
+    assert "no claim at" in err
+    assert "'handoff'" in err
+    assert "'bogus-basename'" in err
+
+
+def test_release_artifact_bogus_basename_with_md_suffix_hints_extension_trap(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+    stub_import_module(_StubClaims(release_artifact=lambda *a, **k: True))
+
+    rc = _cli.main(["release-artifact", "handoff", "some-handoff.md"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no claim at" in err
+    assert "'.md' extension" in err
+
+
+def test_release_artifact_existing_claim_dir_emits_no_not_found_note(
+    stub_import_module, stub_import_core_module, tmp_path, capsys
+):
+    """Negative spec: the note fires on a MISSING claim dir only. A real
+    release against a present claim must stay quiet -- otherwise the note
+    becomes noise on the success path and stops carrying signal."""
+    (tmp_path / "handoff-claims" / "real-handoff").mkdir(parents=True)
+    stub_import_core_module(_StubCore(sessions_dir=lambda cwd=None: str(tmp_path)))
+    stub_import_module(_StubClaims(release_artifact=lambda *a, **k: True))
+
+    rc = _cli.main(["release-artifact", "handoff", "real-handoff"])
+
+    assert rc == 0
+    assert "no claim at" not in capsys.readouterr().err
+
+
 def test_clear_claim_if_dead_correct_basename_live_holder_refuses_no_not_found_note(
     stub_import_module, stub_import_core_module, tmp_path, capsys
 ):
@@ -344,7 +400,7 @@ def test_clear_claim_if_dead_core_import_failure_skips_precheck_not_transport_fa
     """A resolution failure in the best-effort precheck (e.g. core module
     unimportable) must never surface as _TRANSPORT_FAIL or change the
     delegated result -- it is diagnostic-only, per
-    `_clear_claim_lookup_dir`'s own contract."""
+    `_claim_lookup_dir`'s own contract."""
 
     def _raise_import_error():
         raise ImportError("coordinator_core.session.core not importable in test")

@@ -3061,7 +3061,15 @@ def _measure_session_review_scale_inputs(
                 commit_slices_out.append(
                     {
                         "sha": sha,
-                        "sha_range": f"{sha}^..{sha}",
+                        # `~1`, never `^`: these slices are consumed by passing
+                        # them back as `--sha-range` argv to the trail-write CLI,
+                        # and cmd.exe eats a literal `^` in argv on Windows --
+                        # collapsing `<sha>^..<sha>` to `<sha>..<sha>`, an empty
+                        # range the op rejects with a bare `ValueError` that names
+                        # neither the caret nor the shell. The two spellings are
+                        # equivalent to git; only one survives the documented
+                        # consumer path on a first-class platform.
+                        "sha_range": f"{sha}~1..{sha}",
                         "diff_loc": _accumulate_code_loc_numstat(per_sha_text.get(sha, "")),
                     }
                 )

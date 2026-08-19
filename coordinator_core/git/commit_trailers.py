@@ -471,21 +471,17 @@ def _resolve_deliverable_id_from_paths(
     `test_commit_trailers.py`'s pickup-tier-unchanged coverage).
 
     Genuinely ambiguous input -- two or more of `paths` carry DIFFERENT
-    non-empty `deliverable_id` values -- is NOT guessed at. Raises
-    `DivergentDeliverableIdError`, the same fail-loud posture
-    `coordinator_core.ops.deliverable_carry.resolve_deliverable_and_initiative`
-    already established for its own plan-vs-predecessor divergent join (see
-    that class's docstring for the DR-207 DD#1 earliest-artifact-wins
-    reasoning this function does not attempt to apply either, for the same
-    reason: no timestamp/provenance ordering is available from a bare path
-    list). Reused rather than forked per that module's own negative-spec
-    ("do not fork a second copy of ... DivergentDeliverableIdError
-    anywhere else").
+    non-empty `deliverable_id` values -- is NOT guessed at, and per
+    producer-contract § 3 (omit-rather-than-guess is the contract every
+    tier in this ladder honors, not an exception one tier gets to opt out
+    of) this tier OMITS: it returns `""` and lets the session tiers below
+    it run exactly as they did before this tier existed, same as the
+    empty/no-match case above. No trailer is stamped from a divergent
+    pathspec; nothing raises.
     """
     if not paths:
         return ""
 
-    from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
     from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 
     equivalence_map = load_equivalence_map(Path(cwd))
@@ -501,7 +497,7 @@ def _resolve_deliverable_id_from_paths(
     # covering the same commit is now the SAME distinct value here, not a
     # false "differing" refusal. Canonicalization is confined to this
     # equality check: `found` itself keeps the raw per-path values
-    # (unchanged in the raised message below), AND the value this function
+    # (unchanged), AND the value this function
     # returns on the collapse-to-one path is also always a RAW value that
     # some staged artifact actually carries -- never the synthesized
     # canonical winner. Returning the canonical value here would stamp a
@@ -521,15 +517,10 @@ def _resolve_deliverable_id_from_paths(
         winning_path = min(found)
         return found[winning_path]
 
-    conflict_desc = ", ".join(f"{p!r} -> {v!r}" for p, v in sorted(found.items()))
-    raise DivergentDeliverableIdError(
-        "compute_missing_trailer_args: this commit's pathspec names artifacts "
-        f"with DIFFERING deliverable_id values ({conflict_desc}) -- refusing to "
-        "guess which trailer applies. Split this commit so each deliverable's "
-        "artifact(s) land in their own commit, or pass an explicit resolution "
-        "upstream; see _resolve_deliverable_id_from_paths's own docstring for "
-        "why an earliest-artifact tiebreak is not attempted here."
-    )
+    # Producer-contract § 3: omit, don't guess -- a divergent pathspec is
+    # the same "cannot resolve" case as an empty/no-match one, not a
+    # separate fail-loud posture. See this function's own docstring.
+    return ""
 
 
 def _resolve_deliverable_id(
@@ -553,9 +544,8 @@ def _resolve_deliverable_id(
     `_resolve_deliverable_id_from_claimed_plan`), the same-session
     plan-execute-without-a-handoff door -- itself also gated by the same
     ambiguity predicate. Never fabricates a value; every lookup in the
-    cascade is omit-rather-than-guess (tier 0's divergent-artifact case is
-    the one exception -- it raises rather than omits, see that tier's own
-    docstring). Tiers 1/1a stay verbatim parity with the hook's
+    cascade is omit-rather-than-guess, including tier 0's divergent-artifact
+    case (see that tier's own docstring). Tiers 1/1a stay verbatim parity with the hook's
     `_resolve_deliverable_id()` (2026-07-27 cross-repo-fallback mirror);
     tier 3 is shared with both mirrors; tier 0, the scope-match tier, and
     the ambiguity gate are new to this engine module only -- `paths` is an
@@ -679,7 +669,7 @@ def compute_missing_trailer_args(
     should treat an empty list as "no `interpret-trailers` call needed",
     never as an error (mirrors the hook's own idempotent-and-silent
     contract: it NEVER blocks a commit and NEVER stamps a guessed value).
-    The one exception is a genuinely ambiguous `paths` set -- see `paths`
+    A genuinely ambiguous `paths` set omits the same way -- see `paths`
     below and `_resolve_deliverable_id_from_paths`'s docstring.
 
     Session-Id and Deliverable-Id have INDEPENDENT idempotency checks (a
@@ -694,10 +684,9 @@ def compute_missing_trailer_args(
     updated to pass its own pathspec sees no behaviour change. When given,
     it feeds the new artifact-first tier (tier 0) ahead of every session
     tier -- see `_resolve_deliverable_id_from_paths` for the multi-baton-
-    session defect this closes and the fail-loud posture on a genuinely
-    divergent pathspec (`DivergentDeliverableIdError`, propagated
-    uncaught -- a caller that wants to catch and downgrade it to a
-    non-raising failure must do so itself).
+    session defect this closes and the omit-rather-than-guess posture on a
+    genuinely divergent pathspec (returns `""`, same as no match; nothing
+    raises).
 
     `session_id_override` (state/bug-backlog/2026-08-18-scoped-git-commit-
     stamps-a-foreign-session-id-8d21f0c4e7b9.yaml): the invoking session's

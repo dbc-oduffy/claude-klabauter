@@ -13,6 +13,18 @@ Spec backlink: docs/plans/2026-05-19-coordinator-installer-redesign-implementati
 CLI contract (unchanged from the bash oracle):
   render-template.sh <template-path> [-o <output-path>] [--guard-sentinel <token>] [KEY=VALUE]...
 
+Batch in-place contract (this module only -- no bash oracle to port, added to
+give a many-file caller one spawn instead of one-per-file):
+  render-template.sh --in-place <path> [<path>...] [KEY=VALUE]...
+
+Renders every listed path in place (each path is both template input and -o
+output, matching how coordinator_core.ops.render_template_tree's tree-walk
+always calls -o == the input path). Paths are the leading run of arguments
+that contain no "=" and do not start with "-"; the first KEY=VALUE-shaped or
+flag-shaped argument ends the path list, exactly as bare positional paths
+never contain "=" at any other call site in this repo. --guard-sentinel and
+stdout output are single-file-only and not accepted with --in-place.
+
 Exit codes:
   0  All {{KEY}} tokens were substituted; output written successfully.
   1  One or more {{KEY}} tokens remain unsubstituted after render, OR
@@ -21,6 +33,14 @@ Exit codes:
   3  --guard-sentinel refused to overwrite an existing non-empty output
      file that lacks the sentinel (never-clobber guard) — distinct from
      1 so callers can branch on refusal vs. a generic failure.
+
+--in-place batch mode does not collapse per-file outcomes into one
+pass/fail: every path is attempted (a failure on one path does not skip
+the rest), each failure is printed with that path's own diagnostic
+(`{_PROG}: {path}: {message}`), and the process exit code is the
+highest-severity code across all paths (3 beats 1 beats 0) so a caller
+that only checks rc still learns SOMETHING failed, while stderr carries
+which path(s) and why.
 
 Never-clobber guard (opt-in, off by default): pass --guard-sentinel <token>
 alongside -o to refuse clobbering a hand-authored output file. Before the
@@ -64,6 +84,35 @@ from coordinator_core.session.declared_writes import declare_write
 _PROG = "render-template"  # literal program-name prefix, matches bash oracle's stderr prefix
 _TOKEN_RE = re.compile(r"\{\{([^}]+)\}\}")
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _parse_in_place_args(rest: List[str]) -> Tuple[Optional[List[str]], Optional[List[Tuple[str, str]]], Optional[str]]:
+    """Parse the args following --in-place. Returns (paths, kv_pairs, error_message).
+
+    Paths are the leading run of arguments with no "=" and no leading "-";
+    the first KEY=VALUE-shaped argument ends the path list (see module
+    docstring's Batch in-place contract).
+    """
+    i = 0
+    paths: List[str] = []
+    while i < len(rest) and "=" not in rest[i] and not rest[i].startswith("-"):
+        paths.append(rest[i])
+        i += 1
+
+    if not paths:
+        return None, None, "--in-place requires at least one path"
+
+    kv_pairs: List[Tuple[str, str]] = []
+    while i < len(rest):
+        arg = rest[i]
+        if "=" in arg:
+            key, _, value = arg.partition("=")
+            kv_pairs.append((key, value))
+            i += 1
+        else:
+            return None, None, f"unexpected argument: {arg}"
+
+    return paths, kv_pairs, None
 
 
 def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional[List[Tuple[str, str]]], Optional[str], Optional[str]]:
@@ -160,8 +209,61 @@ def render(template_path: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[Optiona
     return rendered, 0, None
 
 
+def _render_and_write_in_place(path: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[int, Optional[str]]:
+    """Render `path` and atomically overwrite it in place. Returns (rc, error_message)."""
+    rendered, rc, err = render(path, kv_pairs)
+    if err is not None:
+        return rc, err
+
+    assert rendered is not None
+    tmp_path = f"{path}.render-template.tmp.{os.getpid()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(rendered)
+        os.replace(tmp_path, path)
+        # DR-276: declared AFTER the atomic replace lands, never before.
+        declare_write(path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            print(f"skip: _render_and_write_in_place: os.unlink(tmp_path) failed: {sys.exc_info()[1]}", file=sys.stderr)
+            pass
+        return 1, f"failed to write output: {exc}"
+
+    return 0, None
+
+
+def _main_in_place(rest: List[str]) -> int:
+    """--in-place batch entry: render every listed path in place, one process, N files.
+
+    Every path is attempted regardless of earlier failures (per-file error
+    attribution, never a collapsed pass/fail -- see module docstring). The
+    returned rc is the worst severity seen (3 beats 1 beats 0).
+    """
+    paths, kv_pairs, err = _parse_in_place_args(rest)
+    if err is not None:
+        print(f"{_PROG}: {err}", file=sys.stderr)
+        return 1
+
+    assert paths is not None
+    assert kv_pairs is not None
+
+    worst_rc = 0
+    for path in paths:
+        rc, err = _render_and_write_in_place(path, kv_pairs)
+        if err is not None:
+            print(f"{_PROG}: {path}: {err}", file=sys.stderr)
+        worst_rc = max(worst_rc, rc)
+
+    return worst_rc
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: arg parse, render, write (stdout or -o path), return rc."""
+    if argv and argv[0] == "--in-place":
+        return _main_in_place(argv[1:])
+
     template_path, output_path, kv_pairs, guard_sentinel, err = _parse_args(argv)
     if err is not None:
         if template_path is None and kv_pairs is None and output_path is None and argv == []:

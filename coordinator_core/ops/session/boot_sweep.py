@@ -287,6 +287,16 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.wire_paths import rel_id
 
+# C5 (docs/plans/2026-08-19-the-engine-stops-paying-a-network-push-on-every-
+# commit.md § C5): per-family cost attribution via the existing composition-
+# span instrument — see _emit_family_span below. NOT CompositionBudget (this
+# sweep has no invocation-count budget to enforce, only a durable "which
+# family holds the time" row to write) — a direct record_composition_span
+# call per family, at the existing phase boundaries this handler already has.
+from coordinator_core.composition_budget import new_composition_id as _new_composition_id
+from coordinator_core.contract.apply_base import resolve_explicit_session_id as _resolve_explicit_session_id
+from coordinator_core.telemetry.op_latency import record_composition_span as _record_composition_span
+
 _LOG = logging.getLogger(__name__)
 
 # Mode token for per-family internal callables (fleet ops use "already-terminal" exclusively).
@@ -466,6 +476,67 @@ def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None)
     except OSError:
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Per-family cost attribution (C5, docs/plans/2026-08-19-the-engine-stops-
+# paying-a-network-push-on-every-commit.md § C5)
+# ---------------------------------------------------------------------------
+
+
+def _emit_family_span(
+    name: str,
+    *,
+    t_start_epoch: float,
+    elapsed_secs: float,
+    invocation_count: int,
+    failed_count: int,
+    repo_root: Path,
+) -> None:
+    """Write one `kind="composition"` row attributing one boot_sweep family's
+    own cost, via the existing `op_latency.record_composition_span` writer —
+    no new sink, no new field (AC5, plan anti-scope "Do not build new
+    instrumentation").
+
+    `name` is namespaced `"boot_sweep.<family>"` so the sink's existing
+    per-composition-name grouping (e.g. `pairing_summary`/`cost_census`)
+    separates each family's rows from every other composition already
+    writing through this same writer (`ceremony.scoped_git_commit`'s C2
+    push/pre-push split, etc) without needing a new reader.
+
+    `invocation_count` is each family's own processed-item count (archived +
+    skipped + failed, or the family's own equivalent) — a proxy for the
+    per-item git-mv/commit spawns the module docstring's "Prime suspects"
+    names as the likely cost driver, not a literal `CompositionBudget`
+    invocation tally (this sweep runs no `CompositionBudget` — see the
+    module-level import comment above).
+
+    `outcome` is derived, not threaded from the caller: `"partial_mutation"`
+    when this family reported any per-item failures, `"success"` otherwise —
+    the same two-way split `flush_composition_record`'s callers make, minus
+    `"directive_failed"` (no family here fails-before-mutating; each block
+    already ran to completion by the time this is called).
+
+    One fresh `composition_id` per call (`new_composition_id()`) — each
+    family's span is its own composition, not a shared one; two families
+    sharing an id would make C4's per-composition cross-check undecidable
+    for both (mirrors `flush_composition_record`'s own per-call minting).
+
+    Never raises: `record_composition_span` is already a never-raising,
+    fail-open writer (see its own docstring) — this wrapper adds no
+    validation of its own that could turn a telemetry miss into a boot
+    failure.
+    """
+    _record_composition_span(
+        composition_id=_new_composition_id(),
+        name=name,
+        invocation_count=invocation_count,
+        elapsed_secs=elapsed_secs,
+        outcome="partial_mutation" if failed_count else "success",
+        t_start=t_start_epoch,
+        repo_root=repo_root,
+        sid=_resolve_explicit_session_id(None),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1667,6 +1738,44 @@ async def _sweep_consumed_handoffs(
     """
     warnings: List[dict] = []
 
+    # C5 span accounting (docs/plans/2026-08-19-the-engine-stops-paying-a-
+    # network-push-on-every-commit.md § C5): this function is the shared leg
+    # session.boot_sweep AND session.sweep_consumed_handoffs both run — see
+    # module docstring / this function's own docstring, "boot_sweep._sweep_
+    # consumed_handoffs DIRECTLY" — so the spans live HERE, not in _handler,
+    # to cover both call paths in one instrumentation site (chunk body §
+    # "this chunk's spans cover both call paths"). _fn_t0/_fn_mono0 anchor
+    # the whole function's start; _stranded_elapsed is subtracted from the
+    # function's total elapsed at return time (below) so the stranded-
+    # supersede drain — its own family, timed and emitted separately at its
+    # own call site — is not double-counted into the consumed-handoffs span.
+    _fn_t0 = time.time()
+    _fn_mono0 = time.monotonic()
+    _stranded_elapsed = 0.0
+
+    def _emit_consumed_span(archived: list, skipped: list, failed: list) -> None:
+        """Emit this function's own "boot_sweep.consumed_handoffs" span at
+        whichever of this function's three return points is actually taken
+        (dry_run early exit, empty-filtered_ids early exit, or the full
+        archival return) — a closure so all three call sites share one
+        elapsed/invocation-count derivation instead of three hand-copies.
+        Reads `_stranded_elapsed` from the enclosing scope at CALL time
+        (late-bound closure read, no `nonlocal` needed — this function never
+        assigns it), so it always sees whatever the stranded-drain branch
+        above set it to, including the common case where that branch never
+        ran (dry_run or a call with `dry_run=False` that still short-
+        circuited before this point — `_stranded_elapsed` stays its 0.0
+        initial value in either case).
+        """
+        _emit_family_span(
+            "boot_sweep.consumed_handoffs",
+            t_start_epoch=_fn_t0,
+            elapsed_secs=max(0.0, (time.monotonic() - _fn_mono0) - _stranded_elapsed),
+            invocation_count=len(archived) + len(skipped) + len(failed),
+            failed_count=len(failed),
+            repo_root=git_root_worktree,
+        )
+
     if dag_incomplete:
         # --- Tier 2 (behaviour change -- PM sign-off required) ---
         # dag_index (built by the caller with the scan_errors out-param) could
@@ -1752,11 +1861,29 @@ async def _sweep_consumed_handoffs(
     # this op's dry_run contract does not define.
     stranded_extra_paths: List[str] = []
     if not dry_run:
+        # C5 span: timed separately from the rest of this function's own
+        # work — the stranded-supersede drain is its own family (chunk body
+        # "four archival families plus the stranded-supersede scan"), not
+        # folded into the consumed-handoffs span this function emits at
+        # return. _stranded_elapsed is subtracted from the function's total
+        # elapsed there so the two spans sum to this function's real cost
+        # without double-counting.
+        _stranded_mono0 = time.monotonic()
+        _stranded_t0 = time.time()
         stranded_extra_paths, stranded_warnings = await _drain_stranded_predecessors(
             state_worktree, git_root_worktree, common_dir, dag_index,
             dag_incomplete=dag_incomplete,
         )
         warnings.extend(stranded_warnings)
+        _stranded_elapsed = time.monotonic() - _stranded_mono0
+        _emit_family_span(
+            "boot_sweep.stranded_supersede",
+            t_start_epoch=_stranded_t0,
+            elapsed_secs=_stranded_elapsed,
+            invocation_count=len(stranded_extra_paths),
+            failed_count=0,
+            repo_root=git_root_worktree,
+        )
 
     # T1: enumerate terminal consumed handoffs via per-family internal.
     # state_worktree: handoffs live in state/handoffs/ under the STATE repo.
@@ -2009,10 +2136,14 @@ async def _sweep_consumed_handoffs(
             for cid in filtered_ids
             if cid in cand_by_id and cid not in dest_conflict_ids
         ]
+        _dry_run_skipped = (
+            recency_skipped + awaiting_adjudication_skipped + dest_conflict_skipped
+            + heir_retained_skipped
+        )
+        _emit_consumed_span(would_archive, _dry_run_skipped, [])
         return (
             would_archive,
-            recency_skipped + awaiting_adjudication_skipped + dest_conflict_skipped
-            + heir_retained_skipped,
+            _dry_run_skipped,
             [],
             warnings,
         )
@@ -2042,9 +2173,11 @@ async def _sweep_consumed_handoffs(
                 state_worktree, git_root_worktree, [],
                 extra_state_paths=stranded_extra_paths,
             )
+        _empty_skipped = recency_skipped + awaiting_adjudication_skipped + heir_retained_skipped
+        _emit_consumed_span([], _empty_skipped, [])
         return (
             [],
-            recency_skipped + awaiting_adjudication_skipped + heir_retained_skipped,
+            _empty_skipped,
             [],
             warnings,
         )
@@ -2198,6 +2331,7 @@ async def _sweep_consumed_handoffs(
             extra_state_paths=stranded_extra_paths,
         )
 
+    _emit_consumed_span(acted, skipped, failed)
     return acted, skipped, failed, warnings
 
 
@@ -2334,6 +2468,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # --- Sweep 2: terminal-plans ---
     # Plans live in GIT_ROOT/docs/plans/ — always worktree (GIT_ROOT).
+    # C5 span (docs/plans/2026-08-19-the-engine-stops-paying-a-network-push-
+    # on-every-commit.md § C5): timed at this existing phase boundary, one
+    # of "four archival families plus the stranded-supersede scan".
+    _plans_mono0 = time.monotonic()
+    _plans_t0 = time.time()
     plans_dir = worktree / "docs" / "plans"
     if plans_dir.is_dir():
         # _handle_preview_plans is async (T1 dirty-tree + claim-liveness guards
@@ -2349,6 +2488,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             plans_archived, plans_skipped, plans_failed = [], [], []
     else:
         plans_archived, plans_skipped, plans_failed = [], [], []
+    _emit_family_span(
+        "boot_sweep.terminal_plans",
+        t_start_epoch=_plans_t0,
+        elapsed_secs=time.monotonic() - _plans_mono0,
+        invocation_count=len(plans_archived) + len(plans_skipped) + len(plans_failed),
+        failed_count=len(plans_failed),
+        repo_root=worktree,
+    )
 
     # --- Sweep 9: terminal-sizings (DR-293) ---
     # Sizing-objects live in GIT_ROOT/state/sizings/ — always worktree (GIT_ROOT),
@@ -2378,6 +2525,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Shipped handoffs live in state/handoffs/ under the STATE repo (AC7).
     # archive_shipped_handoffs.py:33-34: "operates against _STATE_REPO".
     # state_worktree routes the scan and archival to the correct repo.
+    # C5 span: one of "four archival families plus the stranded-supersede
+    # scan" (docs/plans/2026-08-19-the-engine-stops-paying-a-network-push-
+    # on-every-commit.md § C5).
+    _shipped_mono0 = time.monotonic()
+    _shipped_t0 = time.time()
     shipped_scan_errors: List[str] = []
     shipped_candidates = await _scan_shipped(
         state_worktree, scan_errors=shipped_scan_errors, common_dir=common_dir
@@ -2401,11 +2553,32 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         shipped_failed: List[dict] = shipped_act.get("failed", [])
     else:
         shipped_archived, shipped_skipped, shipped_failed = [], [], []
+    _emit_family_span(
+        "boot_sweep.shipped_handoffs",
+        t_start_epoch=_shipped_t0,
+        elapsed_secs=time.monotonic() - _shipped_mono0,
+        invocation_count=len(shipped_archived) + len(shipped_skipped) + len(shipped_failed),
+        failed_count=len(shipped_failed),
+        repo_root=state_worktree,
+    )
 
     # --- Sweep 4: actioned-memos ---
     # Memos live in GIT_ROOT/cross-repo/ — always worktree (GIT_ROOT).
+    # C5 span: last of the "four archival families" (module docstring
+    # families 1/2/3/4 — consumed-handoffs, terminal-plans, shipped-handoffs,
+    # actioned-memos).
+    _memos_mono0 = time.monotonic()
+    _memos_t0 = time.time()
     memos_archived, memos_skipped, memos_failed = (
         await archive_actioned_memos_internal(worktree, common_dir)
+    )
+    _emit_family_span(
+        "boot_sweep.actioned_memos",
+        t_start_epoch=_memos_t0,
+        elapsed_secs=time.monotonic() - _memos_mono0,
+        invocation_count=len(memos_archived) + len(memos_skipped) + len(memos_failed),
+        failed_count=len(memos_failed),
+        repo_root=worktree,
     )
 
     # --- Sweep 5: unintegrated-findings-reap ---
