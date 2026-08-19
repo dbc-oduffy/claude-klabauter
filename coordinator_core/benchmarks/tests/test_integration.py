@@ -25,8 +25,8 @@ Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C11
 
 from __future__ import annotations
 
-from coordinator_core.benchmarks import harness
-from coordinator_core.benchmarks.record import ConformanceRecord, Tolerance
+from coordinator_core.benchmarks import baseline_store, harness
+from coordinator_core.benchmarks.record import ConformanceRecord, Tolerance, compose_machine_id
 
 _INTEGRATION_N = 3
 """Small timed-sample count -- keeps this test's runtime modest (each sample
@@ -95,3 +95,32 @@ def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> No
     assert record.timestamp
     assert record.runner_isolation_mode == "shared"
     assert record.schema_version == 2
+
+
+def test_harness_run_stamps_machine_and_survives_baseline_store_query(tmp_path):
+    """C9 non-vacuity: harness.run() (not __main__.py, not refresh.py) must
+    itself stamp `machine` -- baseline_store.query() (C3) drops any record
+    whose `machine` is None unconditionally, so a record harness.run()
+    forgot to stamp would round-trip through to_json()/append()/query() and
+    silently vanish, exactly the "CLI writes to a store that discards
+    everything it writes" defect C9 exists to fix. Revert C9's stamp (the
+    `dataclasses.replace(record, ambient_after=..., ambient_delta=...)` pass
+    plus the `machine=`/`ambient_before=` kwargs on the ConformanceRecord
+    construction in harness.run()) and this fails: `machine` reads None and
+    `queried` comes back empty.
+    """
+    records = harness.run(ops=["ping"], n=1, warmup=1, floor_n=1)
+    record = records[0]
+
+    assert record.machine is not None
+    assert record.machine == compose_machine_id()
+    assert isinstance(record.ambient_before, dict)
+    assert isinstance(record.ambient_after, dict)
+    assert isinstance(record.ambient_delta, dict)
+
+    store_path = tmp_path / "isolated-store.jsonl"
+    baseline_store.append(record, path=store_path)
+
+    queried = list(baseline_store.query(op="ping", path=store_path))
+    assert len(queried) == 1
+    assert queried[0].machine == record.machine

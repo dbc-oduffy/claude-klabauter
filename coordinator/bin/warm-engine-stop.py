@@ -135,8 +135,8 @@ _STOP_REQUEST_TOKEN = "warm-engine-stop-requested-0000"
 def _read_line_with_deadline(fh, deadline_secs: float) -> "bytes | None":
     """One bounded `readline()`, run on a daemon thread so a wedged server
     never blocks this process past `deadline_secs` -- the same shape
-    `warm.client._read_line_with_deadline` uses, kept local rather than
-    imported since that function is private to its module."""
+    `warm.client._PendingRead` uses, kept local rather than imported since
+    that class is private to its module."""
     import threading
 
     result: dict = {}

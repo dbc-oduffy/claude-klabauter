@@ -61,7 +61,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 MANIFEST_KEY = "x-effective-delivery"
 SUPPORTED_VERSIONS = frozenset({1})
@@ -102,7 +102,11 @@ class HookDeliveryManifest:
     carriers: Mapping[str, Tuple[ManifestGuard, ...]] = field(default_factory=dict)
     direct: Tuple[ManifestGuard, ...] = ()
     retired: Tuple[RetiredGuard, ...] = ()
-    script_index: Mapping[str, str] = field(default_factory=dict)
+    # A script tail key maps to ALL guard ids delivered under it, not one.
+    # The contract's tail key is the last two path segments, so a fan-in
+    # module hosting N distinct guards normalizes N ids onto one key by
+    # design (`bash_guards/dispatch_checks.py`, 16 guards).
+    script_index: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
     unaccounted: Tuple[str, ...] = ()
     detail: str = ""
 
@@ -241,15 +245,29 @@ def read_hook_delivery_manifest(
         return _empty("malformed", "retired field is not a list")
 
     carriers: Dict[str, Tuple[ManifestGuard, ...]] = {}
-    script_index: Dict[str, str] = {}
-    # Review: coordinator:code-reviewer — a genuine duplicate script tail
-    # key across guard entries used to be silent last-write-wins; now
-    # degrades to `malformed` with the colliding key named.
-    duplicate_script_key: Optional[str] = None
+    script_index: Dict[str, List[str]] = {}
+    # A repeated script tail key is NOT a defect: the contract's tail key is
+    # the last two path segments, so a fan-in module hosting N distinct
+    # guards collapses N ids onto one key by construction, and a guard
+    # delivered by two paths (a direct registration plus a carrier's carry)
+    # is a real, declarable shape that must not be hidden by dropping either
+    # side. What IS a defect is the same guard id declared twice within ONE
+    # delivery surface — a double-registration the sender can act on.
+    duplicate_within_surface: Optional[Tuple[str, str]] = None
+    ids_by_surface: Dict[str, Set[str]] = {}
+
+    def _note(surface: str, guard: ManifestGuard) -> Optional[Tuple[str, str]]:
+        seen = ids_by_surface.setdefault(surface, set())
+        collision = (surface, guard.id) if guard.id in seen else None
+        seen.add(guard.id)
+        bucket = script_index.setdefault(guard.script, [])
+        if guard.id not in bucket:
+            bucket.append(guard.id)
+        return collision
 
     for carrier_key_raw, carrier_body in carriers_raw.items():
         carrier_key, key_violated = _sanitize_tail_key(carrier_key_raw)
-        if key_violated or not isinstance(carrier_body, dict):
+        if key_violated or carrier_key is None or not isinstance(carrier_body, dict):
             continue
         guards_raw = carrier_body.get("guards", [])
         if not isinstance(guards_raw, list):
@@ -265,10 +283,10 @@ def read_hook_delivery_manifest(
                 )
             if guard is None:
                 continue
-            if duplicate_script_key is None and guard.script in script_index:
-                duplicate_script_key = guard.script
+            collision = _note(carrier_key, guard)
+            if duplicate_within_surface is None and collision is not None:
+                duplicate_within_surface = collision
             guards.append(guard)
-            script_index[guard.script] = guard.id
         carriers[carrier_key] = tuple(guards)
 
     direct = []
@@ -282,16 +300,18 @@ def read_hook_delivery_manifest(
             )
         if guard is None:
             continue
-        if duplicate_script_key is None and guard.script in script_index:
-            duplicate_script_key = guard.script
+        collision = _note("direct", guard)
+        if duplicate_within_surface is None and collision is not None:
+            duplicate_within_surface = collision
         direct.append(guard)
-        script_index[guard.script] = guard.id
     direct_t = tuple(direct)
 
-    if duplicate_script_key is not None:
+    if duplicate_within_surface is not None:
+        surface, guard_id = duplicate_within_surface
+        where = "direct" if surface == "direct" else f"carrier {surface!r}"
         return _empty(
             "malformed",
-            f"script {duplicate_script_key!r} appears more than once across carriers/direct guards",
+            f"guard id {guard_id!r} is declared more than once within {where}",
         )
 
     retired = []
@@ -303,18 +323,24 @@ def read_hook_delivery_manifest(
     retired_t = tuple(retired)
 
     retired_scripts = {r.script for r in retired_t}
-    # Review: coordinator:code-reviewer — the contract requires each
-    # script-shaped command to appear in exactly one of carriers/direct/
-    # retired; a script that's both live (script_index) and retired
-    # degrades to `malformed` rather than silently coexisting.
-    live_and_retired_overlap = set(script_index) & retired_scripts
+    # The contract requires each GUARD to appear in exactly one of
+    # carriers/direct/retired; a guard both live and retired degrades to
+    # `malformed` rather than silently coexisting. Keyed on the guard id,
+    # not the script tail key: a fan-in module can legitimately host a
+    # retired guard alongside live ones under the one key, and keying on
+    # the key would call that a contradiction when it is the normal case.
+    live_ids = {guard_id for ids in script_index.values() for guard_id in ids}
+    live_and_retired_overlap = live_ids & {r.id for r in retired_t}
     if live_and_retired_overlap:
         offending = sorted(live_and_retired_overlap)[0]
         return _empty(
             "malformed",
-            f"script {offending!r} appears in both a live guard entry and retired",
+            f"guard id {offending!r} appears in both a live guard entry and retired",
         )
 
+    frozen_index: Dict[str, Tuple[str, ...]] = {
+        key: tuple(ids) for key, ids in script_index.items()
+    }
     accounted = set(script_index) | set(carriers) | retired_scripts
     unaccounted = tuple(
         key for key in declared_script_keys if key not in accounted
@@ -326,7 +352,7 @@ def read_hook_delivery_manifest(
             carriers=carriers,
             direct=direct_t,
             retired=retired_t,
-            script_index=script_index,
+            script_index=frozen_index,
             unaccounted=unaccounted,
             detail=f"hooks.json declares {unaccounted[0]!r}, unaccounted for by the manifest",
         )
@@ -336,7 +362,7 @@ def read_hook_delivery_manifest(
         carriers=carriers,
         direct=direct_t,
         retired=retired_t,
-        script_index=script_index,
+        script_index=frozen_index,
         unaccounted=(),
         detail="",
     )

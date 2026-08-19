@@ -340,22 +340,66 @@ def main(argv: list[str]) -> int:
     main_ref = _main_ref()
     head_sha = _rev_parse("HEAD")
 
+    # Pre-resolve each branch's tip sha (same _tip_sha_for call, same
+    # per-branch count/order as before — just hoisted ahead of the
+    # severity loop so its results can seed one batched author/committer
+    # read below instead of two `git log -1 ...` spawns per branch).
+    branch_tip_sha: dict[str, str | None] = {
+        branch: _tip_sha_for(branch) for branch in sorted(seen_branches)
+    }
+
+    # Batch author-email + committer-date for every distinct resolved tip
+    # sha in one `git log --no-walk` call (amplification hitlist T2
+    # g2-ops-b). `--no-walk` yields exactly one line per named commit
+    # (never its ancestry) using the identical `%ae`/`%ct` format already
+    # used per-branch, so a batch hit is byte-identical to today's
+    # single-item call — no `%(authoremail)` angle-bracket reformatting to
+    # account for. On a whole-command failure this falls back to today's
+    # per-branch `_git` calls unchanged (never blanks every branch from
+    # one bad exit code); a branch whose sha is merely absent from a
+    # *successful* batch (or has an unparseable field) keeps the exact
+    # pre-existing per-item defaults (`""` / `now`).
+    distinct_shas = sorted({sha for sha in branch_tip_sha.values() if sha})
+    tip_meta: dict[str, tuple[str, str]] = {}
+    batch_ok = False
+    if distinct_shas:
+        meta_res = _git(["log", "--no-walk", "--format=%H%x1f%ae%x1f%ct", *distinct_shas])
+        if meta_res.returncode == 0:
+            batch_ok = True
+            for line in meta_res.stdout.splitlines():
+                parts = line.split("\x1f")
+                if len(parts) != 3:
+                    continue
+                sha, author_email, committer_ts = parts
+                tip_meta[sha] = (author_email, committer_ts)
+
     for branch in sorted(seen_branches):
-        tip_sha = _tip_sha_for(branch)
+        tip_sha = branch_tip_sha.get(branch)
         if tip_sha is None:
             continue
 
         if user_email:
-            author_res = _git(["log", "-1", "--format=%ae", tip_sha])
-            tip_author = author_res.stdout.strip() if author_res.returncode == 0 else ""
+            if batch_ok:
+                meta = tip_meta.get(tip_sha)
+                tip_author = meta[0] if meta else ""
+            else:
+                author_res = _git(["log", "-1", "--format=%ae", tip_sha])
+                tip_author = author_res.stdout.strip() if author_res.returncode == 0 else ""
             if tip_author != user_email:
                 continue
 
-        ct_res = _git(["log", "-1", "--format=%ct", tip_sha])
-        try:
-            tip_ct = int(ct_res.stdout.strip()) if ct_res.returncode == 0 else now
-        except ValueError:
-            tip_ct = now
+        if batch_ok:
+            meta = tip_meta.get(tip_sha)
+            try:
+                tip_ct = int(meta[1]) if meta else now
+            except (ValueError, TypeError):
+                tip_ct = now
+        else:
+            ct_res = _git(["log", "-1", "--format=%ct", tip_sha])
+            try:
+                tip_ct = int(ct_res.stdout.strip()) if ct_res.returncode == 0 else now
+            except ValueError:
+                tip_ct = now
         age_secs = now - tip_ct
 
         if age_secs > max_age_secs:

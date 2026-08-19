@@ -1502,129 +1502,6 @@ def _prefix_hits_chain_set(base: str, chain_dag_sha_set: set[str]) -> bool:
     return any(sha.startswith(base) for sha in chain_dag_sha_set)
 
 
-#: A plain two-dot `A..B` range, hex-only (full or abbreviated, >=7 chars)
-#: on both sides -- the generalization of `_SINGLE_COMMIT_RANGE_RE` to every
-#: range shape, not just the single-commit spelling (Half 1,
-#: state/handoffs/2026-08-18-wsc-brightline-gate-per-record-git-spawn.md).
-#: `(?!\.)` after the two literal dots rejects a three-dot `A...B` symmetric-
-#: difference range -- that shape's semantics differ (see `_range_provably_
-#: excludes_chain_shas`'s docstring) and is deliberately left to the
-#: resolver, never reasoned about here. A symbolic ref on either side (a
-#: bare `HEAD`, a branch name) also fails this match and falls through --
-#: this module reasons only about literal hex endpoints.
-_TWO_DOT_RANGE_RE = re.compile(
-    r"^(?P<a>[0-9a-fA-F]{7,40})\.\.(?!\.)(?P<b>[0-9a-fA-F]{7,40})$"
-)
-
-
-def _two_dot_range_endpoints(sha_range: str) -> Optional[tuple[str, str]]:
-    """Return `(a, b)`, both lowercased, for a plain two-dot `A..B` range
-    with hex-only endpoints on both sides -- or `None` for any other shape
-    (three-dot `...`, a symbolic ref on either side, or the single-commit
-    `<sha>^..<sha>`/`<sha>~1..<sha>` spelling `_single_commit_range_base`
-    already owns). Deliberately narrow, mirroring that function's own
-    posture: only the range shape this module can reason about without
-    calling git is recognised here; every other shape is the resolver's
-    job."""
-    match = _TWO_DOT_RANGE_RE.match(sha_range)
-    if match is None:
-        return None
-    return match.group("a").lower(), match.group("b").lower()
-
-
-def _endpoint_provably_absent_from(endpoint: str, descendants: AbstractSet[str]) -> bool:
-    """Whether `endpoint` (full or abbreviated hex, already lowercased) can
-    be PROVEN absent from `descendants` without knowing which real commit
-    an abbreviated `endpoint` denotes.
-
-    Full-length: exact membership test -- exhaustive by definition.
-
-    Abbreviated: a prefix-miss test, mirroring `_prefix_hits_chain_set`'s
-    own reasoning (that helper proves the same direction -- "could this
-    prefix be a member" -- and this is its negation). If no sha in
-    `descendants` starts with `endpoint`, then whatever real commit
-    `endpoint` actually resolves to cannot be a member either: were it a
-    member, ITS OWN full hash would appear in `descendants` and would, by
-    construction, start with `endpoint`. This holds regardless of whether
-    `endpoint`'s prefix is otherwise ambiguous elsewhere in the repository
-    -- the absence proof needs no uniqueness assumption. The converse (a
-    prefix HIT proves membership) does NOT hold without one -- see
-    `_endpoint_provably_present_in`, which is deliberately one-directional
-    for exactly this reason."""
-    if len(endpoint) == 40:
-        return endpoint not in descendants
-    return not any(sha.startswith(endpoint) for sha in descendants)
-
-
-def _endpoint_provably_present_in(endpoint: str, descendants: AbstractSet[str]) -> bool:
-    """Whether `endpoint` (full or abbreviated hex, already lowercased) can
-    be PROVEN present in `descendants`.
-
-    Full-length only: exact membership test. An abbreviated endpoint is
-    NEVER treated as provably present here, even on a unique prefix hit --
-    a prefix match within `descendants` does not rule out `endpoint`'s true
-    referent being a DIFFERENT commit elsewhere in the repository that
-    happens to share the same prefix (unlike the absence direction in
-    `_endpoint_provably_absent_from`, presence needs the match to BE the
-    real referent, which a prefix alone cannot guarantee without repo-wide
-    uniqueness this function does not assume). A caller that hits this
-    uncertainty must fall through to the resolver, per this module's
-    fail-safe-toward-the-resolver posture -- never guess."""
-    if len(endpoint) != 40:
-        return False
-    return endpoint in descendants
-
-
-def _range_provably_excludes_chain_shas(
-    range_a: str,
-    range_b: str,
-    chain_dag_sha_set: set[str],
-    chain_descendants: Mapping[str, AbstractSet[str]],
-) -> bool:
-    """True iff, for EVERY sha in `chain_dag_sha_set`, it is PROVABLE (never
-    merely likely) that the sha is not a member of `shas(range_a..range_b)`
-    -- i.e. `_record_membership_shas`'s membership test would fail for
-    every one of them without ever calling `resolve_range_shas`.
-
-    `S ∈ shas(A..B) ⟺ B ∈ desc(S) ∧ A ∉ desc(S)` (`shas(A..B)` is every
-    commit reachable from B but not from A, so S is one of them exactly
-    when S is an ancestor of B -- B descends from S -- and S is NOT an
-    ancestor of A). The negation this function proves per S is therefore
-    `B ∉ desc(S) ∨ A ∈ desc(S)` -- either B provably does not descend from
-    S, or A provably does (in which case S is excluded from `shas(A..B)`
-    regardless of B, since A's own presence in the exclusion set already
-    rules S out).
-
-    Requires an entry in `chain_descendants` for EVERY member of
-    `chain_dag_sha_set`, not merely every key `chain_descendants` happens to
-    carry -- a chain sha this dict has no entry for is treated exactly like
-    one this function could not settle (returns `False`), because a partial
-    descendant map cannot be told apart, from inside this function, from
-    "this sha's descendants are genuinely unknown". The caller
-    (`_resolve_chain_descendants` in `wsc-coverage-gate-runner.py`) already
-    enforces this by resolving all-or-nothing, but this function does not
-    trust that invariant blindly.
-
-    Returns `False` (fall through, never returns `True` on doubt) the
-    instant a single chain sha cannot be settled -- whether because it is
-    genuinely NOT ruled out (the record may really intersect the chain) or
-    because an abbreviated endpoint leaves the answer merely uncertain. This
-    function only ever proves absence; it never asserts presence, so a
-    `False` return carries no information beyond "the resolver must decide
-    this one" -- the identical fail-safe posture `_single_commit_range_
-    base`'s own short-circuit already takes."""
-    for chain_sha in chain_dag_sha_set:
-        descendants = chain_descendants.get(chain_sha)
-        if descendants is None:
-            return False
-        if _endpoint_provably_absent_from(range_b, descendants):
-            continue
-        if _endpoint_provably_present_in(range_a, descendants):
-            continue
-        return False
-    return True
-
-
 def _record_membership_shas(
     record: Mapping[str, Any],
     resolve_range_shas: Callable[[str], Any],
@@ -1634,7 +1511,6 @@ def _record_membership_shas(
     attested_shas: Optional[Callable[[Mapping[str, Any]], Any]] = None,
     chain_planning_sha_set: Optional[set[str]] = None,
     chain_window: Optional[ChainAttributionWindow] = None,
-    chain_descendants: Optional[Mapping[str, AbstractSet[str]]] = None,
 ) -> Optional[set[str]]:
     """Resolve one trail record's contribution to the chain-membership
     union, or `None` if this record contributes nothing.
@@ -1766,27 +1642,7 @@ def _record_membership_shas(
     via `git log`) always emit full 40-char lowercase hex, so no
     abbreviated-prefix matching is needed here (contrast the retired
     `_sha_matches` helper this replaces, which existed only to bridge
-    abbreviated-vs-full SHA spellings the tip-comparison path could see).
-
-    `chain_descendants`, optional, is `{chain_dag_sha: frozenset-of-its-
-    descendant-shas}` — Half 1's generalization of the single-commit
-    short-circuit above to every plain two-dot `A..B` range (state/handoffs/
-    2026-08-18-wsc-brightline-gate-per-record-git-spawn.md). Engaged only
-    when the range is NOT a single-commit range (that shortcut, above, has
-    already fully decided those) and matches `_two_dot_range_endpoints`'s
-    narrow shape; any other range shape (three-dot, a symbolic ref, an
-    endpoint under 7 hex chars) is untouched and falls through to the
-    resolver exactly as before this parameter existed.
-    `_range_provably_excludes_chain_shas` proves, from `chain_descendants`
-    alone and zero further git spawns, that the record's resolved range
-    cannot share a single commit with `chain_dag_sha_set` — the same
-    `raw & chain_dag_sha_set` test the resolver-backed path performs a few
-    lines below, decided in advance for the cases where it is provable. Any
-    doubt (an unresolved chain sha, an abbreviated endpoint the helper
-    cannot settle) falls through to the resolver, never to a skip -- see
-    that function's own docstring for the full soundness argument. `None`
-    (the default) skips this entirely: every existing caller that omits it
-    sees byte-identical behavior to before this parameter existed."""
+    abbreviated-vs-full SHA spellings the tip-comparison path could see)."""
     scope_kind = record.get("scope_kind")
     if scope_kind in _NON_CODE_SCOPE_KINDS:
         return None
@@ -1815,25 +1671,6 @@ def _record_membership_shas(
         _base = _single_commit_range_base(sha_range)
         if _base is not None and not _prefix_hits_chain_set(_base, chain_dag_sha_set):
             return None
-    elif chain_descendants is not None:
-        # Half 1 (state/handoffs/2026-08-18-wsc-brightline-gate-per-record-
-        # git-spawn.md): the single-commit short-circuit above generalized
-        # to every plain two-dot range. Only reached when the range is NOT
-        # a single-commit spelling (the `elif` above) -- that case is
-        # already fully decided. Same posture as the single-commit skip:
-        # the only records this declines to resolve are ones the
-        # `raw & chain_dag_sha_set` test three lines below would have
-        # discarded anyway, proven from precomputed descendant sets rather
-        # than a fresh spawn. See `_range_provably_excludes_chain_shas`'s
-        # own docstring for the soundness argument and its fail-through
-        # posture on any doubt.
-        _endpoints = _two_dot_range_endpoints(sha_range)
-        if _endpoints is not None:
-            _range_a, _range_b = _endpoints
-            if _range_provably_excludes_chain_shas(
-                _range_a, _range_b, chain_dag_sha_set, chain_descendants,
-            ):
-                return None
     try:
         raw = {str(s).lower() for s in resolve_range_shas(sha_range)}
     except Exception:  # noqa: BLE001 - a broken resolver must reject, never crash
@@ -1980,7 +1817,6 @@ def _collect_discharging_range_shas(
     attested_shas: Optional[Callable[[Mapping[str, Any]], Any]] = None,
     chain_planning_shas: Optional[Iterable[str]] = None,
     chain_window: Optional[ChainAttributionWindow] = None,
-    chain_descendants: Optional[Mapping[str, AbstractSet[str]]] = None,
 ) -> set[str]:
     """The union's raw coverage set: every code-obligation sha named by a
     trail record's resolved range, restricted to records this module trusts
@@ -2066,16 +1902,7 @@ def _collect_discharging_range_shas(
     its foreign-session narrowing) and stays a per-record spawn; see this
     chunk's body in the governing plan for why a window cannot answer it
     without `chain_attribution.CommitAttribution` carrying parent-sha
-    ancestry data it does not have.
-
-    `chain_descendants`, optional, is threaded straight through to
-    `_record_membership_shas` — Half 1 (state/handoffs/2026-08-18-wsc-
-    brightline-gate-per-record-git-spawn.md), the mapping of each chain-DAG
-    sha to its precomputed descendant set that lets a NON-single-commit
-    two-dot record be declined before ever calling `resolve_range_shas`,
-    generalizing the existing single-commit short-circuit. `None` (the
-    default) sees byte-identical behavior to before this parameter existed:
-    every record takes the resolver-backed path exactly as it always has."""
+    ancestry data it does not have."""
     chain_dag_sha_set = {str(s).lower() for s in chain_dag_shas}
     chain_code_sha_set = {str(s).lower() for s in chain_code_shas}
     chain_planning_sha_set = (
@@ -2137,7 +1964,6 @@ def _collect_discharging_range_shas(
             attested_shas=attested_shas,
             chain_planning_sha_set=chain_planning_sha_set,
             chain_window=resolved_window,
-            chain_descendants=chain_descendants,
         )
         if membership is None:
             continue
@@ -2154,7 +1980,6 @@ def chain_partition_uncovered_shas(
     attested_shas: Optional[Callable[[Mapping[str, Any]], Any]] = None,
     chain_planning_shas: Optional[Iterable[str]] = None,
     chain_window: Optional[ChainAttributionWindow] = None,
-    chain_descendants: Optional[Mapping[str, AbstractSet[str]]] = None,
 ) -> list[str]:
     """The union's diagnostic sibling: which `chain_code_shas` entries no
     discharging trail record's resolved range names, in input order.
@@ -2198,16 +2023,7 @@ def chain_partition_uncovered_shas(
     byte-identical behavior to before this parameter existed — this is a
     trailing optional addition to a pinned signature (Seam 2 above), the
     same amendment shape `attested_shas`/`chain_planning_shas` already used;
-    it does not alter arity for any existing positional or keyword call.
-
-    `chain_descendants`, optional, is threaded straight through to
-    `_collect_discharging_range_shas` / `_record_membership_shas` — Half 1
-    (state/handoffs/2026-08-18-wsc-brightline-gate-per-record-git-spawn.md),
-    the precomputed `{chain_dag_sha: descendant-sha-set}` mapping that
-    inverts the per-record membership loop's dominant cost (one `git
-    rev-list` per chain-DAG sha instead of one per surviving trail record).
-    `None` (the default) sees byte-identical behavior to before this
-    parameter existed."""
+    it does not alter arity for any existing positional or keyword call."""
     if chain_code_shas is None or chain_dag_shas is None or resolve_range_shas is None:
         return []
     chain_code_shas = list(chain_code_shas)
@@ -2217,7 +2033,6 @@ def chain_partition_uncovered_shas(
         attested_shas=attested_shas,
         chain_planning_shas=chain_planning_shas,
         chain_window=chain_window,
-        chain_descendants=chain_descendants,
     )
     return [sha for sha in chain_code_shas if str(sha).lower() not in covered]
 
@@ -2438,7 +2253,6 @@ def chain_partition_verdict_discharged(
     attested_shas: Optional[Callable[[Mapping[str, Any]], Any]] = None,
     chain_planning_shas: Optional[Iterable[str]] = None,
     chain_window: Optional[ChainAttributionWindow] = None,
-    chain_descendants: Optional[Mapping[str, AbstractSet[str]]] = None,
 ) -> bool:
     """True iff `chain_code_shas` is a non-empty set AND every sha in it is
     named by the resolved, within-chain-membership range of at least one
@@ -2568,14 +2382,6 @@ def chain_partition_verdict_discharged(
     docs/plans/2026-08-15-composition-invocation-budgets.md) accelerating
     the `narrow_foreign_shas` fan-out. `None` (the default) sees
     byte-identical behavior to before this parameter existed.
-
-    `chain_descendants`, optional, is threaded straight through to
-    `chain_partition_uncovered_shas` — Half 1 (state/handoffs/2026-08-18-
-    wsc-brightline-gate-per-record-git-spawn.md), the precomputed
-    `{chain_dag_sha: descendant-sha-set}` mapping that lets a record whose
-    range provably cannot intersect `chain_dag_shas` be declined before
-    ever calling `resolve_range_shas`. `None` (the default) sees
-    byte-identical behavior to before this parameter existed.
     """
     if chain_code_shas is None or chain_dag_shas is None or resolve_range_shas is None:
         return False
@@ -2588,7 +2394,6 @@ def chain_partition_verdict_discharged(
         attested_shas=attested_shas,
         chain_planning_shas=chain_planning_shas,
         chain_window=chain_window,
-        chain_descendants=chain_descendants,
     )
     return not uncovered
 

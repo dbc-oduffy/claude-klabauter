@@ -3,11 +3,11 @@ coordinator_core.telemetry.composition_record -- durable per-composition span ad
 
 Chunk C1 (docs/plans/2026-08-18-arm-the-composition-budget.md): wires
 `coordinator_core.composition_budget.CompositionBudget`'s injectable `on_count`
-callback to a durable sink, as a PURE RECORDER -- both fleet ceilings
-(`composition_budget.FLEET_AGGREGATE_ELAPSED_BUDGET`,
-`composition_budget.FLEET_MAX_INVOCATIONS`) start at `None`, so a budget built
-by `make_fleet_budget()` observes every composition and bounds nothing. C5
-arms the ceilings later, from this recorder's own data.
+callback to a durable sink. C1 shipped this as a PURE RECORDER with both fleet
+ceilings (`composition_budget.FLEET_AGGREGATE_ELAPSED_BUDGET`,
+`composition_budget.FLEET_MAX_INVOCATIONS`) at `None`; C5 armed them from this
+recorder's own data (1200.0s / 110). The recording path is unchanged by that --
+a budget still observes every composition; it now also bounds one.
 
 WHY THIS MODULE, NOT `composition_budget.py` ITSELF (§ that module's own
 DEPENDENCY-FREE LEAF section): `composition_budget.py` imports only
@@ -67,6 +67,7 @@ from typing import Optional
 
 from coordinator_core import composition_budget as _composition_budget
 from coordinator_core.composition_budget import SKIP_AND_SURFACE, CompositionBudget
+from coordinator_core.contract.apply_base import resolve_explicit_session_id
 from coordinator_core.telemetry.op_latency import record_composition_span
 
 #: Every outcome `flush_composition_record` accepts -- see that function and
@@ -105,8 +106,9 @@ def make_fleet_budget(composition_name: str) -> CompositionBudget:
       (composer-local; `identity_resolver` stays unwired here -- reserved for
       the PM per `composition_budget.py`'s own docstring).
     - `aggregate_elapsed_budget` / `max_invocations` read from the two fleet
-      constants in `composition_budget.py`, both `None` today (pure
-      recorder; C5 arms them).
+      constants in `composition_budget.py`, armed at C5. This function is
+      their sole reader, which is what arms all 8 compositions across both
+      lineages at one posture.
     - `disposition=SKIP_AND_SURFACE` -- the module default, NOT
       parameterised here; a test wanting fail-loud constructs its own
       `CompositionBudget` directly.
@@ -163,29 +165,6 @@ def flush_composition_record(
         print(f"composition-record: flush skipped ({exc})", file=sys.stderr)
 
 
-def _resolve_sid() -> Optional[str]:
-    """This session's id, or `None` when nothing is set.
-
-    Precedence `COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID` >
-    `CLAUDE_CODE_SESSION_ID`, matching
-    `baton_assemble/__init__.py`'s copy and `ops/handoff_correct_body.py`'s
-    gate. Those two record that duplicating this small env-resolution helper
-    (rather than importing one) is the established shape on this path; this is
-    the third copy and follows it. If the precedence chain ever changes,
-    update all three -- they must never independently drift.
-
-    Returns `None` rather than a placeholder sentinel: an unattributable row
-    must stay visibly unattributed, never carry a value a reader could join on
-    by accident.
-    """
-    return (
-        os.environ.get("COORDINATOR_SESSION_ID")
-        or os.environ.get("CLAUDE_SESSION_ID")
-        or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        or None
-    )
-
-
 def _flush_or_raise(
     budget: CompositionBudget,
     outcome: str,
@@ -237,6 +216,18 @@ def _flush_or_raise(
     class of defect as the missing `t_start` fixed earlier in this function,
     and found the same way -- by reading the sink rather than the writer.
 
+    Resolution reuses `contract/apply_base.py :: resolve_explicit_session_id`
+    rather than re-deriving the chain here. That helper already owns
+    `SESSION_ENV_READ_ORDER` (`COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID` >
+    `CLAUDE_CODE_SESSION_ID`) and is already imported by 5 of the 8 pinned
+    `flush_composition_record` call sites, so this adds no import edge the
+    lineage did not already carry -- both `apply_halt` ceremonies import
+    `apply_base` too, and a cold import of either module measures the same.
+    An earlier revision hand-copied the chain and cited
+    `ops/handoff_correct_body.py` as precedent for duplicating it; that module
+    in fact IMPORTS its copy, so the cited precedent argued the opposite of
+    what it was cited for.
+
     NEGATIVE-SPEC: an explicitly passed `sid=None` is NOT preserved as null.
     A caller wanting an unattributed row must not call this function. Tests
     pass an explicit sid; nothing in the repo depends on a null sid column.
@@ -268,5 +259,5 @@ def _flush_or_raise(
         outcome=outcome,
         t_start=float(t_start),
         repo_root=repo_root if repo_root is not None else Path(os.getcwd()),
-        sid=sid if sid is not None else _resolve_sid(),
+        sid=resolve_explicit_session_id(sid),
     )

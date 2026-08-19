@@ -9,6 +9,16 @@ distribution summary, resolves the op's budget (`budget.resolve_budget`),
 evaluates a verdict (`gate.evaluate`), and assembles a `ConformanceRecord`
 (`record.py`) per op. `run()` is the entrypoint C7's CLI runner drives.
 
+Machine/ambient identity (C9): every record `run()` produces is stamped with
+`machine` (`record.compose_machine_id()`) and the `ambient_before`/
+`ambient_after`/`ambient_delta` trio (`ambient_sampler.take_sample()`, C2's
+in-process contract), sampled once per run -- not per op -- both OUTSIDE the
+timed measurement window. This is the single stamping site; callers
+(`__main__.py`, `baselines/refresh.py`) no longer post-process records to add
+these fields. `ambient_sampler.take_sample()` never raises -- a failed
+ambient read degrades that field to null, it never perturbs or aborts a
+measurement.
+
 Fixture lifetime: `run()` owns materializing ONE synthetic fixture repo (via
 `op_fixtures.materialize_fixture_repo`) for the whole sweep -- worktree-scoped
 ops in the target set all share that single materialized repo, matching
@@ -34,6 +44,7 @@ Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C6
 
 from __future__ import annotations
 
+import dataclasses
 import statistics
 import subprocess
 import sys
@@ -43,11 +54,18 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.authz.classification import OP_CLASSIFICATION
+from coordinator_core.benchmarks import ambient_sampler
 from coordinator_core.benchmarks import budget as budget_mod
 from coordinator_core.benchmarks import floor as floor_mod
 from coordinator_core.benchmarks import gate as gate_mod
 from coordinator_core.benchmarks import op_fixtures
-from coordinator_core.benchmarks.record import FLOOR_SCOPE_RUN, ConformanceRecord, Tolerance
+from coordinator_core.benchmarks.record import (
+    FLOOR_SCOPE_RUN,
+    ConformanceRecord,
+    Tolerance,
+    compose_machine_id,
+    compute_ambient_delta,
+)
 from coordinator_core.benchmarks.timer import (
     SUBPROCESS_CREATIONFLAGS,
     SUBPROCESS_TIMEOUT_S,
@@ -167,6 +185,13 @@ def run(
     code_sha = _capture_code_sha()
     run_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).isoformat()
+    machine = compose_machine_id()
+
+    # C2's in-process ambient contract (never raises; every field degrades to
+    # null independently on failure): one sample at run start, one at run
+    # end, both OUTSIDE the timed measurement window below -- a failed
+    # psutil.cpu_percent(interval=0.3) read must never perturb a timing.
+    ambient_before = ambient_sampler.take_sample()
 
     floor_stats = floor_mod.measure_floor(floor_n)
     cold_start_floor_ms = floor_stats["cold_start_floor_ms"]
@@ -252,6 +277,8 @@ def run(
                 code_sha=code_sha,
                 timestamp=timestamp,
                 runner_isolation_mode=runner_isolation_mode,
+                machine=machine,
+                ambient_before=ambient_before,
             )
             records.append(record)
     finally:
@@ -260,7 +287,15 @@ def run(
 
             shutil.rmtree(worktree_root, ignore_errors=True)
 
-    return records
+    # Taken OUTSIDE the timed window, once for the whole run (matching
+    # ambient_before) -- never per op.
+    ambient_after = ambient_sampler.take_sample()
+    ambient_delta = compute_ambient_delta(ambient_before, ambient_after)
+
+    return [
+        dataclasses.replace(record, ambient_after=ambient_after, ambient_delta=ambient_delta)
+        for record in records
+    ]
 
 
 if __name__ == "__main__":  # pragma: no cover

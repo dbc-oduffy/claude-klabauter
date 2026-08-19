@@ -581,11 +581,10 @@ def main(argv):
     if os.path.isfile(legacy_daily_summary):
         files_to_commit.append(legacy_daily_summary)
 
-    for f in files_to_commit:
-        subprocess.run(
-            ["git", "-C", coordinator_root, "add", "--", f],
-            capture_output=True, text=True,
-        )
+    subprocess.run(
+        ["git", "-C", coordinator_root, "add", "--", *files_to_commit],
+        capture_output=True, text=True,
+    )
 
     # Frozen intended set: step9's own outputs, UNIONED with whatever was already
     # staged BEFORE step9 ran (the 2.6/4.5 pre-stage contract) -- never "whatever

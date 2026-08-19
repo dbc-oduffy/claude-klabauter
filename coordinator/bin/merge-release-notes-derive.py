@@ -79,7 +79,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 _BIN_DIR = Path(__file__).resolve().parent
 _LIB_DIR = str(_BIN_DIR / "lib")
@@ -191,10 +191,26 @@ def _tag_date(tag: str, sha: Optional[str], merge_date: str) -> str:
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else merge_date
 
 
+def _tag_ancestor_shas(tag: str) -> Set[str]:
+    """Single `git rev-list <tag>` in place of a per-commit `merge-base
+    --is-ancestor` spawn -- "c is an ancestor of tag" is equivalent to "c is
+    in tag's rev-list", so `_contains_all` can check the whole commits list
+    against one spawn's output. A tag that fails to resolve yields an empty
+    set, same as every per-commit ancestor check failing did before."""
+    r = _git("rev-list", tag)
+    if r.returncode != 0:
+        return set()
+    return {line.strip() for line in r.stdout.splitlines() if line.strip()}
+
+
 def _contains_all(tag: str, commits: List[str]) -> bool:
-    return all(
-        _git("merge-base", "--is-ancestor", c, tag).returncode == 0 for c in commits
-    )
+    # Membership is by PREFIX, not equality: completion-log `commits:` entries
+    # carry abbreviated shas (8 chars today) while `git rev-list` emits full
+    # 40-char ones, so equality would be False for every real entry and silently
+    # collapse every lookup to the release-tag-cut fallback -- no exception, no
+    # failing test. `merge-base --is-ancestor` resolved the abbreviation itself.
+    ancestors = _tag_ancestor_shas(tag)
+    return all(any(a.startswith(c) for a in ancestors) for c in commits)
 
 
 def _parse_commits(text: str) -> List[str]:

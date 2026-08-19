@@ -15,7 +15,9 @@ restated here — see _manifest_probes()'s negative spec for why.
 
 DELETED from code AND manifest (no entries, no stubs):
   claude-klabauter.core.uds.ping, claude-klabauter.shim.handshake, claude-klabauter.shim.harness_env,
-  claude-klabauter.uds.socket_dir, claude-klabauter.health.mcp_exposed
+  claude-klabauter.uds.socket_dir, claude-klabauter.health.mcp_exposed, claude-klabauter.coverage.seam
+  (K-001, 2026-08-16, see state/kill-ledger.md — its sole referent,
+  coordinator_core/ops/coverage_gate.py::run_coverage_gate, was removed)
 
 Manifest clusters post-C5: registry, install, dispatch
   (ipc and coordinator clusters are gone — their probes were deleted)
@@ -111,7 +113,7 @@ class TestDoctorProbeSelectors:
     def test_selector_triage_returns_exactly_the_triage_flagged_ids(self) -> None:
         """--triage returns exactly the probe ids the manifest flags triage=true.
 
-        Probes carrying triage=false (claude-klabauter.registry.key, claude-klabauter.coverage.seam,
+        Probes carrying triage=false (claude-klabauter.registry.key,
         claude-klabauter.strategic.draft_staleness at time of writing) must be excluded.
         """
         if not _BIN_PROBE.exists():
@@ -155,7 +157,7 @@ class TestDoctorProbeSelectors:
         )
 
         # Must NOT include probes from other clusters.
-        non_registry = {"claude-klabauter.core.import", "claude-klabauter.coverage.seam",
+        non_registry = {"claude-klabauter.core.import",
                         "claude-klabauter.resident.debris", "claude-klabauter.worktree.bloat",
                         "claude-klabauter.version.sanity", "claude-klabauter.invoke.smoke",
                         "claude-klabauter.schema.vendor_drift"}
@@ -167,7 +169,7 @@ class TestDoctorProbeSelectors:
     def test_selector_cluster_install_returns_install_probes(self) -> None:
         """--cluster install returns only install-cluster probes.
 
-        Install cluster: claude-klabauter.core.import, claude-klabauter.coverage.seam,
+        Install cluster: claude-klabauter.core.import,
         claude-klabauter.resident.debris, claude-klabauter.worktree.bloat, claude-klabauter.version.sanity,
         claude-klabauter.strategic.draft_staleness, claude-klabauter.schema.vendor_drift.
         """
@@ -185,7 +187,6 @@ class TestDoctorProbeSelectors:
 
         expected_install = {
             "claude-klabauter.core.import",
-            "claude-klabauter.coverage.seam",
             "claude-klabauter.resident.debris",
             "claude-klabauter.worktree.bloat",
             "claude-klabauter.version.sanity",
@@ -229,7 +230,6 @@ class TestDoctorProbeSelectors:
             "claude-klabauter.root.resolve",
             "claude-klabauter.registry.key",
             "claude-klabauter.core.import",
-            "claude-klabauter.coverage.seam",
             "claude-klabauter.resident.debris",
             "claude-klabauter.worktree.bloat",
             "claude-klabauter.version.sanity",
@@ -423,7 +423,6 @@ class TestDoctorProbeSelectors:
             "claude-klabauter.root.resolve":    "registry",
             "claude-klabauter.registry.key":    "registry",
             "claude-klabauter.core.import":     "install",
-            "claude-klabauter.coverage.seam":   "install",
             "claude-klabauter.resident.debris": "install",
             "claude-klabauter.version.sanity":  "install",
             "claude-klabauter.invoke.smoke":    "dispatch",
@@ -438,39 +437,6 @@ class TestDoctorProbeSelectors:
     # -----------------------------------------------------------------------
     # Per-probe --probe selector tests for C1b probes
     # -----------------------------------------------------------------------
-
-    def test_coverage_seam_probe_selector(self) -> None:
-        """--probe claude-klabauter.coverage.seam returns exactly that one probe."""
-        if not _BIN_PROBE.exists():
-            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
-
-        result = _run("--probe", "claude-klabauter.coverage.seam")
-
-        assert result.returncode == 0, (
-            f"--probe claude-klabauter.coverage.seam exited {result.returncode}; "
-            f"stderr: {result.stderr[:400]}"
-        )
-
-        envelope = json.loads(result.stdout)
-        probe_ids = [p["probe"] for p in envelope["probes"]]
-        assert len(probe_ids) == 1, (
-            f"Expected exactly 1 probe, got {probe_ids}"
-        )
-        assert probe_ids[0] == "claude-klabauter.coverage.seam"
-
-    def test_coverage_seam_not_in_triage(self) -> None:
-        """claude-klabauter.coverage.seam is triage=false — must NOT appear in --triage output."""
-        if not _BIN_PROBE.exists():
-            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
-
-        result = _run("--triage")
-
-        assert result.returncode == 0
-        envelope = json.loads(result.stdout)
-        probe_ids = {p["probe"] for p in envelope["probes"]}
-        assert "claude-klabauter.coverage.seam" not in probe_ids, (
-            "claude-klabauter.coverage.seam has triage=false and must not appear in --triage output"
-        )
 
     def test_resident_debris_probe_selector(self) -> None:
         """--probe claude-klabauter.resident.debris returns exactly that one probe."""

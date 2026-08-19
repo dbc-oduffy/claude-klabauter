@@ -129,8 +129,24 @@ def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[s
     remote = len(args) > 2 and args[2] == "origin"
     current = _current_branch(repo_root)
     shas = _unique_commit_shas(repo_root, current, ref)
-    for sha in shas:
-        proc = _run_git(["cherry-pick", sha], repo_root)
+    # One `git cherry-pick` invocation carrying every sha (in the same
+    # oldest-first order `_unique_commit_shas` already returns) instead of
+    # one spawn per commit — git applies a multi-commit cherry-pick
+    # sequentially and stops at the first conflict/failure exactly like the
+    # former per-sha loop did, so `_fail` still reports the same failure at
+    # the same point. Guarded empty: `git cherry-pick` with no arguments is
+    # a usage error, not a no-op.
+    if shas:
+        proc = _run_git(["cherry-pick", *shas], repo_root)
+        if proc.returncode != 0:
+            # A multi-commit cherry-pick that stops leaves a `.git/sequencer`
+            # directory the former one-sha-per-spawn form never created, and a
+            # repo left mid-sequence refuses the next cherry-pick in ANY session
+            # sharing this tree. `--quit` clears the sequencer while keeping the
+            # commits already applied, which is exactly the state the per-sha
+            # loop left behind. `--abort` would roll those back and is NOT the
+            # equivalent.
+            _run_git(["cherry-pick", "--quit"], repo_root)
         _fail("cherry-pick", proc)
     delete_detail = _delete_branch(name, remote, repo_root)
     return {"cli": "cherry-pick-and-delete", "commits": shas, **delete_detail}

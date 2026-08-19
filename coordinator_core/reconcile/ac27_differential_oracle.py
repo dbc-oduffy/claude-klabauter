@@ -87,7 +87,10 @@ if str(_THIS_REPO_ROOT) not in sys.path:
 
 from coordinator_core.dag import _parse_frontmatter  # noqa: E402
 from coordinator_core.machine_resolver import registry_get  # noqa: E402
-from coordinator_core.ops.ceremony.git_native import cat_file_batch  # noqa: E402
+from coordinator_core.ops.ceremony.git_native import (  # noqa: E402
+    cat_file_batch,
+    cat_file_batch_objects,
+)
 from coordinator_core.ops.handoff_reconcile import (  # noqa: E402
     _AWAITING_GATE_STATE,
     _collect_all_handoffs_for_gate_index,
@@ -206,9 +209,22 @@ def _check_transitive_import_isolation(
     full import graph) -- see that tuple's docstring.
     """
     warnings: List[str] = []
-    for rel_path in _GATE_EVAL_TRANSITIVE_IMPORT_PATHS:
-        pre_source = _git_show_blob(claude_klabauter_root, pre_sha, rel_path)
-        post_source = _git_show_blob(claude_klabauter_root, post_sha, rel_path)
+    # ONE `git cat-file --batch` feed for every (sha, path) pair this check
+    # needs, via `cat_file_batch_objects` — the same promoted primitive
+    # `_gated_batons_for_repo_at_ref` uses below — instead of one `git show`
+    # spawn per path per sha. Each `<rev>:<path>` spec resolves independently
+    # (no set-algebra hazard, per that helper's own docstring), so batching
+    # here changes no comparison outcome: a missing/unreadable blob still
+    # resolves to None on its own slot, exactly like `_git_show_blob`'s
+    # returncode-!=-0 -> None contract.
+    objects = [f"{pre_sha}:{p}" for p in _GATE_EVAL_TRANSITIVE_IMPORT_PATHS] + [
+        f"{post_sha}:{p}" for p in _GATE_EVAL_TRANSITIVE_IMPORT_PATHS
+    ]
+    resolved = cat_file_batch_objects(claude_klabauter_root, objects)
+    n = len(_GATE_EVAL_TRANSITIVE_IMPORT_PATHS)
+    for i, rel_path in enumerate(_GATE_EVAL_TRANSITIVE_IMPORT_PATHS):
+        pre_source = resolved.get(objects[i])
+        post_source = resolved.get(objects[n + i])
         if pre_source != post_source:
             warnings.append(
                 f"{rel_path} differs between {pre_sha} and {post_sha} -- "

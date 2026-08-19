@@ -322,4 +322,9 @@ def params_json_for(op: str, worktree_root: Path) -> str:
     of reading ``COMPUTE_ONLY_FIXTURES[op]["params_json"]`` directly.
     """
     template = COMPUTE_ONLY_FIXTURES[op]["params_json"]
-    return template.replace(_WORKTREE_TOKEN, str(worktree_root))
+    # Windows-safe: str(worktree_root) yields backslash-separated paths, and a
+    # plain str.replace splices those raw backslashes into a JSON string
+    # literal, producing invalid escapes (e.g. `\U`, `\A`) that break the
+    # child process's JSON parse. as_posix() is forward-slash and therefore
+    # valid unescaped JSON content; Windows path APIs accept forward slashes.
+    return template.replace(_WORKTREE_TOKEN, worktree_root.as_posix())

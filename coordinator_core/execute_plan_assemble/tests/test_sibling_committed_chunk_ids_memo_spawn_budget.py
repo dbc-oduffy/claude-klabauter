@@ -108,3 +108,71 @@ def test_second_call_with_identical_inputs_spawns_no_additional_git(tmp_path) ->
         "second_call_identical_inputs (and its _rationale) together with "
         "this test if the change is intentional" % (second_spawns, budgeted)
     )
+
+
+def test_first_call_with_one_sibling_spawn_count_matches_budget(tmp_path) -> None:
+    """The op's FIRST-call shape, which the memo-hit shape above cannot
+    express.
+
+    `second_call_identical_inputs: 0` was this op's only budgeted shape, and
+    a shape that spawns nothing by construction can never make any spawn site
+    visible to a counter -- so
+    `coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py` had
+    `close_out_and_stamp.py::_run_git` permanently red under this op, not
+    because a fixture forgot a precondition but because the op had no shape in
+    which its own scan runs. This is that shape: one sibling repo named by the
+    plan's `scope:`, actually resolved, actually scanned.
+
+    `_resolve_sibling_repo_root` is stubbed to a real temp repo. That stub
+    replaces MACHINE-REGISTRY RESOLUTION, not the measured work -- the
+    per-sibling git fan-out it gates runs for real against a real repo, and
+    every spawn counted below is one `_committed_chunk_ids` genuinely issued.
+    The stub is required rather than incidental: the suite's autouse home
+    quarantine nulls `registry_get`, so an unstubbed sibling id resolves to
+    None and is skipped before any git call.
+    """
+    coas._SIBLING_COMMITTED_MEMO.clear()
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _init_repo(home)
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    _init_repo(sibling)
+
+    plan_text = (
+        "---\ndeliverable_id: d-1\nscope:\n  - project-sibling: some/path.py\n---\n\nbody\n"
+    )
+    assert coas._plan_sibling_repo_ids(plan_text, home) == ["project-sibling"], (
+        "fixture did not parse a sibling out of `scope:` -- this test would "
+        "then measure the no-sibling shape the memo-hit test already covers"
+    )
+
+    orig_resolve = coas._resolve_sibling_repo_root
+    coas._resolve_sibling_repo_root = lambda _repo_id: (sibling, None)
+    try:
+        result, first_spawns = _count_git_calls(
+            lambda: coas._sibling_committed_chunk_ids(plan_text, _DLV, ["C1"], home)
+        )
+    finally:
+        coas._resolve_sibling_repo_root = orig_resolve
+
+    _committed, skipped = result
+    assert skipped == [], (
+        "the sibling was skipped (%r), so its scan never ran and this test is "
+        "measuring a resolution failure rather than the fan-out" % (skipped,)
+    )
+    assert first_spawns > 0, (
+        "first call spawned nothing -- the whole point of this shape is that "
+        "the scan runs, so a zero here means the fixture short-circuited"
+    )
+
+    budgeted = _manifest_spawn_budget()["first_call_one_sibling"]
+    assert first_spawns == budgeted, (
+        "_sibling_committed_chunk_ids first-call (one sibling) spawn count is "
+        "%d, manifest budgets %d -- update budget-manifest.json's "
+        "execute_plan_assemble.sibling_committed_chunk_ids_memo."
+        "spawn_count_budget.first_call_one_sibling (and its _rationale) "
+        "together with this test if the change is intentional"
+        % (first_spawns, budgeted)
+    )

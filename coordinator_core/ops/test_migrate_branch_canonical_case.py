@@ -148,7 +148,11 @@ def test_mixed_case_branch_with_existing_canonical_sibling_is_skipped_not_delete
     _git(repo, "pack-refs", "--all")
     sha = _git(repo, "rev-parse", "work/dup").stdout.strip()
     packed_refs = repo / ".git" / "packed-refs"
-    with packed_refs.open("a") as f:
+    # newline="" — text-mode append translates "\n" to "\r\n" on Windows, and the
+    # CR lands inside the ref name: git then reports `ignoring ref with broken
+    # name refs/heads/work/DUP`, the sibling never exists, and this test's SKIP
+    # assertion fails against a run that correctly found nothing to skip.
+    with packed_refs.open("a", newline="") as f:
         f.write(f"{sha} refs/heads/work/DUP\n")
 
     rc, out, err = _run(repo, [], monkeypatch, capsys)

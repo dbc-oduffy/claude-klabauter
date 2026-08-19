@@ -471,6 +471,31 @@ def _machine_local_get(key: str) -> str | None:
     return result.stdout.strip()
 
 
+def _machine_local_dump_repos() -> dict[str, str]:
+    """Resolve every repos.* key in one machine-local process (the batch
+    counterpart to enumerate-then-get). `dump --prefix repos` shares
+    resolve_one with `get`, so a batched value is byte-identical to what a
+    per-key `get` would print — see _machine_local.py::cmd_dump docstring.
+    Returns {} on any spawn/parse failure; callers already tolerate an
+    empty/partial paths table.
+    """
+    impl = _machine_local_impl()
+    try:
+        result = subprocess.run(
+            [sys.executable, impl, "dump", "--prefix", "repos", "--format", "json"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return {}
+    if not result.stdout.strip():
+        return {}
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str) and v}
+
+
 def _machine_local_repos_keys() -> list[str]:
     """Return all repos.* keys from the machine-local registry."""
     impl = _machine_local_impl()
@@ -959,9 +984,7 @@ def _mint_plan_id(slug: str) -> str:
 def _resolve_from_repo() -> str:
     """Identify the from_repo for the scaffolded document from cwd context."""
     root = _current_repo_root()
-    keys = _machine_local_repos_keys()
-    paths = {k: _machine_local_get(k) for k in keys}
-    paths_dict = {k: v for k, v in paths.items() if v}
+    paths_dict = _machine_local_dump_repos()
     # Ensure repos.doe_claude is present so the central-identity path-match in
     # em_id_for_root fires even when the machine-local keys enumeration omits it.
     paths_dict.setdefault("repos.doe_claude", _machine_local_get("repos.doe_claude"))

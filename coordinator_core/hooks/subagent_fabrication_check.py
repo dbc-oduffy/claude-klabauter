@@ -168,16 +168,20 @@ def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
     return counts
 
 
-def _git_porcelain_for_path(worktree_root: str, path: str) -> str | None:
-    """Return `git status --porcelain -- <path>` stdout, or None on any failure.
+def _git_porcelain_for_paths(worktree_root: str, paths: list[str]) -> str | None:
+    """Return `git status --porcelain -- <paths...>` stdout, or None on any failure.
 
     None (never an exception) on: git not on PATH, non-zero exit, timeout, or
     any other OSError — callers treat None as "could not verify", which fails
-    the whole check open (see _targets_changed).
+    the whole check open (see _targets_changed). One `git status` invocation
+    covering every target path (git accepts multiple pathspecs natively)
+    instead of one spawn per path — the probe is a single atomic git call
+    either way, so a probe failure still means "could not verify any of
+    these", the same fail-open meaning the per-path loop produced.
     """
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--", path],
+            ["git", "status", "--porcelain", "--", *paths],
             cwd=worktree_root,
             capture_output=True,
             text=True,
@@ -195,20 +199,17 @@ def _targets_changed(worktree_root: str, target_paths: list[str]) -> bool | None
     """True iff ANY target path shows dirty/untracked status right now.
 
     None (never False-by-default) if the git-status probe could not be
-    completed for even ONE target — a probe failure must never be silently
-    read as "clean", which is the direction that would let this detector
-    fire a false fabrication signal. False only when every target was
-    successfully probed and every probe came back empty.
+    completed — a probe failure must never be silently read as "clean",
+    which is the direction that would let this detector fire a false
+    fabrication signal. False only when the probe succeeded and came back
+    empty for every target.
     """
     if not target_paths:
         return None
-    for path in target_paths:
-        porcelain = _git_porcelain_for_path(worktree_root, path)
-        if porcelain is None:
-            return None
-        if porcelain.strip():
-            return True
-    return False
+    porcelain = _git_porcelain_for_paths(worktree_root, target_paths)
+    if porcelain is None:
+        return None
+    return bool(porcelain.strip())
 
 
 def verify_target_clean(repo_root: str, target_paths: list[str]) -> str:

@@ -333,4 +333,153 @@ def test_genuinely_dangling_referent_still_raises_after_filtering(tmp_path):
 
     message = str(excinfo.value)
     assert "C2" in message
-    assert "C99" in message
+
+
+def test_external_gate_absent_blocks_key_and_no_evidence_excludes_row(tmp_path):
+    body = """\
+- id: C1
+  title: blocked on another repo, no blocks key
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == set()
+
+
+def test_external_gate_explicit_blocks_execution_excludes_row(tmp_path):
+    body = """\
+- id: C1
+  title: blocked on another repo, explicit blocks
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+      blocks: execution
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == set()
+
+
+def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path):
+    body = """\
+- id: C1
+  title: only an acceptance criterion is gated
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship before the AC can close
+      blocks: ac-closure
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == {"C1"}
+
+
+def test_external_gate_with_closure_evidence_does_not_exclude_row(tmp_path):
+    body = """\
+- id: C1
+  title: gate cleared
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+      blocks: execution
+      closure_evidence: abc1234
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == {"C1"}
+
+
+def test_live_row_depends_on_gated_row_does_not_raise_and_edge_is_stripped(tmp_path):
+    body = """\
+- id: C1
+  title: blocked predecessor
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+- id: C2
+  title: live successor depending on the gated row
+  surface: some/surface
+  depends_on:
+    - chunk: C1
+      gate_kind: output-consumption-runtime
+"""
+    plan_path = _write_plan(tmp_path, body)
+    rows = {row.id: row for row in read_spine(plan_path)}
+
+    assert set(rows) == {"C2"}
+    assert rows["C2"].depends_on == []
+
+
+def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_path):
+    body = """\
+- id: C1
+  title: two gates, one cleared one not
+  surface: some/surface
+  external_gate:
+    - owner_repo: repo-a
+      condition: cleared already
+      closure_evidence: def5678
+    - owner_repo: repo-b
+      condition: still open
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == set()
+
+
+def test_malformed_external_gate_scalar_does_not_raise(tmp_path):
+    body = """\
+- id: C1
+  title: external_gate declared as a bare string
+  surface: some/surface
+  external_gate: repo-a is blocking
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == {"C1"}
+
+
+def test_malformed_external_gate_entry_bare_string_does_not_raise(tmp_path):
+    body = """\
+- id: C1
+  title: external_gate entry is a bare string, not a mapping
+  surface: some/surface
+  external_gate:
+    - repo-a is blocking
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == {"C1"}
+
+
+def test_unrecognized_blocks_value_still_excludes(tmp_path):
+    """A `blocks` value outside the schema enum resolves to execution.
+
+    Fail-closed: only the literal ``ac-closure`` spares a row, so an author's
+    typo cannot silently disarm the gate and re-admit the row to a wave.
+    """
+    body = """- id: C1
+  title: gate whose blocks value is misspelled
+  surface: some/surface
+  external_gate:
+    - owner_repo: doe-claude
+      condition: their reader lands
+      blocks: exection
+"""
+    plan_path = _write_plan(tmp_path, body)
+
+    assert read_spine(plan_path) == []

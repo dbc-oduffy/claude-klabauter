@@ -30,6 +30,7 @@ Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -109,6 +110,34 @@ def machine_local_get(key: str) -> str | None:
     return result.stdout.strip()
 
 
+def machine_local_dump_repos() -> dict[str, str]:
+    """Resolve every repos.* key in one machine-local process (the batch
+    counterpart to enumerate-then-get). `dump --prefix repos` shares
+    resolve_one with `get`, so a batched value is byte-identical to what a
+    per-key `get` would print — see _machine_local.py::cmd_dump docstring.
+    Returns {} on any spawn/parse failure; callers already tolerate an
+    empty/partial paths table.
+    """
+    impl = machine_local_impl()
+    python = resolve_python()
+    try:
+        result = subprocess.run(
+            [python, impl, "dump", "--prefix", "repos", "--format", "json"],
+            capture_output=True,
+            text=True,
+            creationflags=_NO_WINDOW,
+        )
+    except OSError:
+        return {}
+    if not result.stdout.strip():
+        return {}
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str) and v}
+
+
 def machine_local_repos_keys() -> list[str]:
     """Return all repos.* keys from the machine-local registry."""
     impl = machine_local_impl()
@@ -185,8 +214,7 @@ def resolve_from_repo(root: str | None = None) -> str:
                 verdict.get("message", "cli_shared: repo-identity MISMATCH"),
                 file=sys.stderr,
             )
-    keys = machine_local_repos_keys()
-    paths = {k: machine_local_get(k) for k in keys}
+    paths = machine_local_dump_repos()
     paths.setdefault("repos.doe_claude", machine_local_get("repos.doe_claude"))
     return em_id_for_root(root, {k: v for k, v in paths.items() if v})
 

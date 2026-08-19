@@ -828,16 +828,29 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
         print("[setup]   Declined -- no exclusions applied.")
         return
 
-    for t in targets:
-        rc = _run(
-            [ps, "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Add-MpPreference -ExclusionProcess $env:EXCL_PATH"],
-            env={**os.environ, "EXCL_PATH": t},
-        )
-        if rc == 0:
+    # One Add-MpPreference call for every target, not one spawn per target --
+    # -ExclusionProcess natively takes a list (break_glass.py's own remediation
+    # text at check_defender_exclusions() already assembles a comma-joined
+    # multi-path invocation), and the cmdlet has no per-path try/reversal to
+    # preserve: it is a single preference-list write, so a targets-array call
+    # is not an isolation-contract change, only a spawn-count one. Paths are
+    # newline-joined into the env var and split back into a PowerShell array
+    # rather than comma-joined inline, since a path could itself contain a
+    # comma.
+    rc = _run(
+        [
+            ps, "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+            "Add-MpPreference -ExclusionProcess ($env:EXCL_PATHS -split \"`n\")",
+        ],
+        env={**os.environ, "EXCL_PATHS": "\n".join(targets)},
+    )
+    if rc == 0:
+        for t in targets:
             print(f"[setup]   Excluded: {t}")
-        else:
+    else:
+        for t in targets:
             print(f"WARN: failed to add Defender exclusion for {t} (non-fatal)", file=sys.stderr)
-            orch.failed = True
+        orch.failed = True
 
 
 def _install_claude_doe_wrapper(

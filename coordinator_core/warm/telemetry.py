@@ -48,15 +48,17 @@ on-disk flush target; wiring each call site is a follow-up chunk's job,
 the same scope split `warm.breadcrumb`'s own docstring already
 documents for its own storage/decision-vs-wiring split.
 
-ON-DISK SHAPE: `state/warm/telemetry.jsonl`, one JSON line appended per
+ON-DISK SHAPE: `<svc dir>/telemetry.jsonl`, one JSON line appended per
 `flush()` -- an APPEND log, not a latest-snapshot file like
 `warm.breadcrumb`'s `warm.json`, because the thing worth reading back is
 a HISTORY of server lives (C27's soak explicitly reads "served-invocation
 count per server life" across many short lives), not only the most
-recent one. `svc_dir()` reuses the exact `<engine_root>/state/warm/`
-resolution `warm.breadcrumb.svc_dir` already establishes as this
-package's precedent for a resident-engine concern's on-disk home, rather
-than inventing a second directory convention.
+recent one. `svc_dir()` reuses the exact resolution
+`warm.breadcrumb.svc_dir` already establishes as this package's
+precedent for a resident-engine concern's on-disk home, rather than
+inventing a second directory convention -- so this log follows that
+function wherever it resolves, and moved out of the engine clone with it
+on 2026-08-19.
 
 NEGATIVE-SPEC:
   - Does NOT decide WHEN a server exits or WHY -- that is each trigger's
@@ -115,7 +117,7 @@ TELEMETRY_FILENAME = "telemetry.jsonl"
 
 
 def telemetry_path(engine_root: Optional[Path] = None) -> Path:
-    """`<svc dir>/telemetry.jsonl` for `engine_root` -- same `state/warm/`
+    """`<svc dir>/telemetry.jsonl` for `engine_root` -- the same
     directory `warm.breadcrumb.svc_dir` resolves, see module docstring's
     "ON-DISK SHAPE"."""
     return svc_dir(engine_root) / TELEMETRY_FILENAME

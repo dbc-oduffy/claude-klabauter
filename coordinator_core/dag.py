@@ -1762,7 +1762,22 @@ def referenced_by(
         raw_edges = handoff_edges(meta, edge_kinds)
 
         for raw_ref in raw_edges:
-            resolved_ref = resolve_target(raw_ref, node_handoff_dir, repo_root, id_index=id_index)
+            # NEGATIVE SPEC — tier 3 is off here by construction, not by oversight.
+            # This loop's next branch collapses `None` and `'git-history'` onto one
+            # handling path, and tier 3 can only ever return the sentinel (never a
+            # disk path), so asking it changes no outcome this function can observe
+            # while costing one `git log --all` spawn per (node, edge) pair over the
+            # caller's whole scan set. Do NOT re-enable it to "resolve more refs": a
+            # live-membership test needs a disk path on both sides, which tier 3 by
+            # definition cannot supply. Same grounds as `emit/priority_resolve.py ::
+            # _build_parent_map` and `pickup_assemble :: _resolve_lineage_artifact_path`.
+            resolved_ref = resolve_target(
+                raw_ref,
+                node_handoff_dir,
+                repo_root,
+                id_index=id_index,
+                include_history_tier=False,
+            )
             if resolved_ref is None or resolved_ref == 'git-history':
                 # Unresolvable, or tier-3-only (no disk path to compare against
                 # abs_target — a live-membership test needs a disk path on both

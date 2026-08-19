@@ -48,19 +48,27 @@ didn't name:
      Enforced once here rather than in every id-keyed consumer.
 
 A fifth behaviour, not one of the four fail-loud ones above but load-bearing:
-``read_spine`` excludes non-dispatchable rows (closed ``disposition`` values
-and ``deferred: true``) from its returned list entirely, per
-DoE-claude's ``skills/execute-plan/SKILL.md`` § Chunk-SET derivation. A row
-already shipped (``disposition: coded``) or explicitly deferred must never
-reach the dispatch-emit pipeline and re-run as a live
-``coordinator:executor`` call. ``depends_on`` referent resolution (AC6)
-still runs against the FULL row-id set, before this filter — a live row
-legitimately depends on a shipped row, and that edge is satisfied, not
-dangling. Once filtering happens, any surviving row's ``depends_on`` edge
-pointing at a filtered-out row is stripped (the edge is satisfied; leaving
-it would either crash ``wave_map._predecessors`` or wrongly delay the
-wave). An edge that resolves to nothing at all is still a hard
-``DanglingDependencyError`` — filtering never softens that check.
+``read_spine`` excludes non-dispatchable rows (closed ``disposition``
+values, ``deferred: true``, and an uncleared ``external_gate`` entry that
+blocks execution) from its returned list entirely, per DoE-claude's
+``skills/execute-plan/SKILL.md`` § Chunk-SET derivation. A row already
+shipped (``disposition: coded``), explicitly deferred, or still waiting on
+a cross-repo blocker must never reach the dispatch-emit pipeline and re-run
+(or first-run) as a live ``coordinator:executor`` call. An
+``external_gate`` entry excludes its row only when it is BOTH uncleared (no
+``closure_evidence``, or an empty one) AND its ``blocks`` resolves to
+``execution`` — the default when ``blocks`` is absent, per
+plan-tasks.schema.json. ``blocks: ac-closure`` never excludes the row: that
+gate holds only a named acceptance criterion open, not the row's execution,
+and conflating the two stalls an executable chunk. ``depends_on`` referent
+resolution (AC6) still runs against the FULL row-id set, before this
+filter — a live row legitimately depends on a shipped/gated row, and that
+edge is satisfied, not dangling. Once filtering happens, any surviving
+row's ``depends_on`` edge pointing at a filtered-out row is stripped (the
+edge is satisfied; leaving it would either crash
+``wave_map._predecessors`` or wrongly delay the wave). An edge that
+resolves to nothing at all is still a hard ``DanglingDependencyError`` —
+filtering never softens that check.
 
 Negative-spec:
   - Does NOT validate rows against the full plan-tasks schema (required
@@ -105,6 +113,44 @@ UNDECLARED = _Undeclared()
 # schema defaults to `open`) is the only dispatchable state. Named once here
 # so the filter site never re-spells the literals.
 NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
+
+# external_gate literals per coordinator_core/frontmatter/schemas/
+# plan-tasks.schema.json (external-cross-repo-gate, 1.8.0). Named once here
+# so _has_uncleared_execution_gate never re-spells them.
+_GATE_BLOCKS_AC_CLOSURE = "ac-closure"
+_GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
+
+
+def _has_uncleared_execution_gate(raw: dict) -> bool:
+    """True if `raw`'s ``external_gate`` carries an entry that is both
+    uncleared (no ``closure_evidence``, or an empty one) and blocks
+    ``execution`` (the default when ``blocks`` is absent or None).
+
+    ``blocks: ac-closure`` entries never count here — that gate holds only
+    a named acceptance criterion open, not the row's execution.
+
+    Tolerant of malformed shapes, matching this module's read posture for
+    every field but its four fail-loud ones: a non-list ``external_gate``,
+    or a non-dict entry within it, is skipped rather than raised on. A
+    well-formed uncleared-execution entry elsewhere in the same (partially
+    malformed) list still excludes the row — malformed neighbors never mask
+    a real gate.
+    """
+    external_gate = raw.get("external_gate")
+    if not isinstance(external_gate, list):
+        return False
+    for entry in external_gate:
+        if not isinstance(entry, dict):
+            continue
+        closure_evidence = entry.get(_GATE_CLOSURE_EVIDENCE_KEY)
+        if closure_evidence:
+            continue
+        # Fail closed: only the literal ac-closure spares a row. An absent,
+        # None, or unrecognized `blocks` resolves to execution, so a typo
+        # cannot silently disarm the gate.
+        if entry.get("blocks") != _GATE_BLOCKS_AC_CLOSURE:
+            return True
+    return False
 
 
 class SpineReadError(ValueError):
@@ -178,8 +224,12 @@ def read_spine(plan_path) -> list[EmitterRow]:
     plan-tasks.schema.json).
 
     Rows whose ``disposition`` is closed (see
-    ``NON_DISPATCHABLE_DISPOSITIONS``) or whose ``deferred`` is ``true`` are
-    excluded from the returned list — they are not dispatchable. depends_on
+    ``NON_DISPATCHABLE_DISPOSITIONS``), whose ``deferred`` is ``true``, or
+    which carry an uncleared ``external_gate`` entry blocking ``execution``
+    (see ``_has_uncleared_execution_gate``) are excluded from the returned
+    list — they are not dispatchable. An ``external_gate`` entry with
+    ``blocks: ac-closure`` does NOT exclude its row — that row executes
+    normally; only a named acceptance criterion stays open. depends_on
     referent resolution runs against the full row-id set before this
     exclusion, so an edge onto an excluded row is satisfied, not dangling;
     that edge is then stripped from the surviving row's ``depends_on``.
@@ -257,15 +307,20 @@ def read_spine(plan_path) -> list[EmitterRow]:
             )
         )
 
-    # Non-dispatchable exclusion: closed disposition or deferred: true.
-    # Computed after depends_on referent resolution against the full row-id
-    # set above, so a live row's edge onto a shipped/deferred row is already
+    # Non-dispatchable exclusion: closed disposition, deferred: true, or an
+    # uncleared execution-blocking external_gate. Computed after depends_on
+    # referent resolution against the full row-id set above, so a live
+    # row's edge onto a shipped/deferred/gated row is already
     # known-satisfied rather than dangling.
     excluded_ids: set[str] = set()
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
-        if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True:
+        if (
+            disposition in NON_DISPATCHABLE_DISPOSITIONS
+            or deferred is True
+            or _has_uncleared_execution_gate(raw)
+        ):
             # raw.get("id") cannot be None here: the id presence/uniqueness
             # loop above already required every raw["id"] to be a non-empty
             # string before this loop runs. Keep the two loops in that

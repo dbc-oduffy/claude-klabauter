@@ -97,6 +97,7 @@ import argparse
 import glob
 import os
 import subprocess
+from pathlib import Path as _Path
 import sys
 import tempfile
 import time
@@ -203,12 +204,34 @@ def _write_pathspec_file(paths: list) -> str:
     return pathspec_path
 
 
-def _is_tracked(repo_root: str, rel_path: str) -> bool:
+def _tracked_paths(repo_root: str, rel_paths: list, under: str = "state/subagent-share") -> set:
+    """Batched tracked-check: one `git ls-files` spawn scoped to `under`
+    (the whole reap subtree) instead of one `--error-unmatch` probe per
+    file. `git ls-files` has no `--pathspec-from-file` support (verified
+    live — `error: unknown option`, unlike `git rm`/`git commit`), so an
+    argv-list `-- <paths>` would still hit the ~32KB Windows `CreateProcess`
+    ceiling at reap-population scale (§ `_write_pathspec_file`). Naming the
+    single directory instead keeps this to one fixed-size spawn regardless
+    of candidate count — every path this script ever reaps lives under
+    `under` by construction (it is `share_dir`, relative to `repo_root`).
+
+    `git ls-files` always echoes matches in POSIX (forward-slash) form even
+    when fed a backslash-separated pathspec on Windows — a raw string
+    comparison against a Windows `os.path.relpath` value silently matches
+    nothing. Both legs go through `.as_posix()` before comparing; the
+    returned set keeps the caller's original (possibly backslash) strings
+    so callers need no format awareness."""
+    if not rel_paths:
+        return set()
     result = subprocess.run(
-        ["git", "ls-files", "--error-unmatch", "--", rel_path],
+        ["git", "ls-files", "--", _Path(under).as_posix()],
         cwd=repo_root, capture_output=True, text=True, check=False, **no_console_creationflags(),
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        return set()
+    tracked_posix = {line for line in result.stdout.splitlines() if line}
+    posix_by_orig = {rel: _Path(rel).as_posix() for rel in rel_paths}
+    return {rel for rel, posix in posix_by_orig.items() if posix in tracked_posix}
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -299,11 +322,14 @@ def main(argv: Optional[list] = None) -> int:
             print(f"{preserved_too_young} sidecar(s) retained (younger than {age_floor_days}-day age floor)")
         return 0
 
+    rel_by_file = {f: os.path.relpath(f, repo_root) for f in to_reap}
+    tracked_rels = _tracked_paths(
+        repo_root, list(rel_by_file.values()), under=os.path.relpath(share_dir, repo_root)
+    )
     tracked_to_reap = []
     untracked_to_reap = []
     for f in to_reap:
-        rel = os.path.relpath(f, repo_root)
-        if _is_tracked(repo_root, rel):
+        if rel_by_file[f] in tracked_rels:
             tracked_to_reap.append(f)
         else:
             untracked_to_reap.append(f)

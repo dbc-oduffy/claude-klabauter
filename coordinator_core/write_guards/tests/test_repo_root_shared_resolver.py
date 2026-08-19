@@ -113,20 +113,22 @@ class TestSharedResolver:
         assert first == second == third
         assert spawn_calls == []
 
-    def test_spawn_fallback_memoizes_across_repeat_calls_for_same_cwd(
+    def test_walk_failure_resolves_to_none_without_ever_spawning(
         self, scratch_repo, monkeypatch
     ):
-        """Pins the "no duplicate spawn" guarantee the prior version of this
-        test claimed to cover but didn't: forces `_walk_for_dot_git` to find
-        nothing (as if no `.git` entry were discoverable), so every one of
-        three same-cwd resolutions WOULD spawn if `_spawn_cached`'s memo
-        were broken. Asserts only one spawn actually happens.
+        """`show_toplevel` is walk-only as of 2026-08-19, so a failed walk
+        resolves to None and spawns NOTHING -- forced here by stubbing
+        `_walk_for_dot_git` to find nothing, the shape that previously took
+        the spawn fallback.
 
-        Review finding (coordinatorcode-reviewer-a0de0949.md, P3): the prior
-        version's own docstring admitted the walk always succeeds for an
-        ordinary repo, so its `spawn_calls == []` assertion was trivially
-        true regardless of whether memoization worked -- no regression in
-        `_spawn_cached` would have been caught.
+        This replaces a test that pinned the fallback's memoization ("only
+        one spawn across three same-cwd resolutions"). That fallback is gone:
+        measured, its every reachable outcome was either a failure the walk
+        already established or, with `GIT_DIR` set, git reporting the CWD as
+        the toplevel -- a wrong answer. Zero spawns is the stronger property
+        for THIS caller in particular: write guards run on the Bash/Write hot
+        path, where a per-call subprocess is the cost that matters and a
+        confidently wrong repo root is the correctness risk that matters.
         """
         monkeypatch.setattr(_git_repo_root, "_walk_for_dot_git", lambda start: None)
 
@@ -143,9 +145,8 @@ class TestSharedResolver:
         second = _repo_root.resolve_repo_root(str(scratch_repo))
         third = _repo_root.resolve_repo_root(str(scratch_repo))
 
-        assert first == second == third
-        assert first is not None  # the spawn fallback DID resolve a root
-        assert len(spawn_calls) == 1
+        assert first == second == third is None
+        assert spawn_calls == []
 
 
 class TestMigratedGuardVerdictsUnchanged:

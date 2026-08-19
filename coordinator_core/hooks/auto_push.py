@@ -381,6 +381,29 @@ def _run_git(repo_root: str | None, args: list[str]) -> str | None:
     return result.stdout.strip()
 
 
+def _resolve_repo_root() -> str | None:
+    """The enclosing worktree root, WITHOUT a `git rev-parse --show-toplevel` spawn
+    in the ordinary case.
+
+    `coordinator_core.git.repo_root.show_toplevel` walks parent directories for a
+    `.git` entry and spawns only when the walk finds none -- same answer, same
+    `None`-on-failure contract, and it memoizes. This module runs once per commit
+    on the hot path, so a subprocess to learn something the filesystem already
+    says is pure cost; that helper is already the convention at dozens of call
+    sites in this tree, and eacbba04a migrated the harvest-deferrals path to it
+    for exactly this reason.
+
+    Falls back to the original spawn if the helper cannot be imported: this is a
+    post-commit hook whose first duty is never to block a commit, so an import
+    failure must degrade, not raise.
+    """
+    try:
+        from coordinator_core.git.repo_root import show_toplevel
+    except Exception:
+        return _run_git(None, ["rev-parse", "--show-toplevel"])
+    return show_toplevel()
+
+
 def resolve_branch(repo_root: str | None) -> str | None:
     """Resolve the current branch name, canonicalizing its case.
 
@@ -1390,8 +1413,15 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
             return
 
     windows_bash = is_windows_bash()
-    remote_url = _run_git(repo_root, ["remote", "get-url", "origin"]) or ""
-    ssh_remote = is_ssh_remote(remote_url)
+    # `git remote get-url origin` used to run here to derive `ssh_remote`. NOTHING
+    # consumes that flag any more, on any path: the 2026-08-06 no-shell-spawns
+    # ruling deleted the PowerShell transport, and both `push_once` and
+    # `route_label` now open with `del windows_bash, ssh_remote` -- the latter
+    # returning the constant "direct push". So the probe was one git subprocess
+    # per push, on the commit hot path, feeding a value that could not reach any
+    # output. Removed rather than left as an unread computation; the seams and
+    # signatures around it are unchanged, since they are still test surface.
+    ssh_remote = False
     route = route_label(windows_bash, ssh_remote)
     local_sha = _run_git(repo_root, ["rev-parse", branch])
 
@@ -1824,7 +1854,7 @@ def main(argv: list[str] | None = None) -> int:
             # path and a per-commit line on the hot path is noise, not signal.
             return 0
 
-        repo_root = args.repo_root or _run_git(None, ["rev-parse", "--show-toplevel"])
+        repo_root = args.repo_root or _resolve_repo_root()
         if not repo_root:
             return 0
 
@@ -1864,7 +1894,14 @@ def main(argv: list[str] | None = None) -> int:
             provenance = "module=<unresolved> interp=<unknown> python=<unknown>"
         print(f"coordinator-auto-push: internal error [{provenance}]: {exc}", file=sys.stderr)
         try:
-            repo_root_fallback = _run_git(None, ["rev-parse", "--show-toplevel"])
+            # Deliberately NOT `_resolve_repo_root()`: this is the cold error
+            # path, reached once per failure, so it has no spawn to save --
+            # and the walk resolves from the process cwd, whereas this handler
+            # must name the repo the hook actually fired for, which the caller
+            # may have supplied explicitly.
+            repo_root_fallback = args.repo_root or _run_git(
+                None, ["rev-parse", "--show-toplevel"]
+            )
             if repo_root_fallback:
                 log_failure(
                     repo_root_fallback,

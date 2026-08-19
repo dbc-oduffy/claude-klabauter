@@ -48,7 +48,7 @@ import logging
 import re
 from datetime import date
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from coordinator_core.ops.fleet._common import _make_git_env, rel_id, rm_and_commit
 
@@ -174,6 +174,69 @@ async def _is_tracked(worktree_root: Path, path: Path) -> str:
     return "indeterminate"
 
 
+async def _is_tracked_batch(worktree_root: Path, paths: List[Path]) -> Dict[Path, str]:
+    """Batched form of `_is_tracked` -- one `git ls-files --error-unmatch`
+    spawn covering every path in `paths`, rather than one spawn per path.
+
+    `git ls-files --error-unmatch` evaluates every named pathspec even when
+    some are unmatched -- an unmatched entry only ever adds an extra stderr
+    line, it never short-circuits the rest (measured live: identical stdout
+    whether the unmatched entry is first, middle, or last;
+    docs/plans/2026-08-19-burn-down-the-amplification-hitlist.md). So a
+    single call's stdout is exactly the tracked subset of `paths`.
+
+    Returns {path: tri-state}, same tri-state contract as `_is_tracked`:
+      "tracked"       -- rc==0, OR rc==1 and path's git-relative form is in
+                         stdout
+      "untracked"     -- rc==1 and path's git-relative form is absent from
+                         stdout
+      "indeterminate" -- any other rc (fatal git error, e.g. index-lock
+                         contention) -- fails CLOSED for EVERY path in the
+                         batch. This is strictly MORE conservative than the
+                         per-item form (which would only mark the paths it
+                         individually probed), never less -- callers must
+                         still route this to failed[], never to a raw
+                         unlink() (Review: code-reviewer -- A1).
+
+    `paths` may be absolute or relative to `worktree_root`; git prints
+    matched entries relative to `cwd` regardless of how the pathspec was
+    supplied (verified live), so matching is done against each path's form
+    relative to `worktree_root`, not the raw pathspec string.
+
+    Empty `paths` returns {} without spawning.
+    """
+    if not paths:
+        return {}
+    rels: List[str] = []
+    for p in paths:
+        try:
+            rels.append(p.relative_to(worktree_root).as_posix())
+        except ValueError:
+            rels.append(str(p))
+    proc = await asyncio.create_subprocess_exec(
+        "git", "ls-files", "--error-unmatch", "--", *rels,
+        cwd=str(worktree_root),
+        env=_make_git_env(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, stderr = await proc.communicate()
+    if proc.returncode == 0:
+        return {p: "tracked" for p in paths}
+    if proc.returncode == 1:
+        tracked_rels = set(out.decode(errors="replace").splitlines())
+        return {
+            p: ("tracked" if rel in tracked_rels else "untracked")
+            for p, rel in zip(paths, rels)
+        }
+    err_msg = stderr.decode(errors="replace").strip()
+    _LOG.error(
+        "_is_tracked_batch: indeterminate git ls-files result for %d paths (rc=%d): %s",
+        len(paths), proc.returncode, err_msg,
+    )
+    return {p: "indeterminate" for p in paths}
+
+
 async def reap_findings(
     worktree_root: Path,
     paths: List[Path],
@@ -236,14 +299,14 @@ async def reap_findings(
     untracked_survivors: List[Path] = []
     failed: List[dict] = []
 
-    # Review: code-reviewer — A6: fan the partition-loop tracked-checks out
-    # concurrently rather than awaiting one-at-a-time; classification is
-    # independent per-path so ordering is preserved by zipping back onto
-    # `survivors`.
-    statuses = await asyncio.gather(
-        *(_is_tracked(worktree_root, path) for path in survivors)
-    )
-    for path, status in zip(survivors, statuses):
+    # amplification hitlist (2026-08-19): one batched `git ls-files
+    # --error-unmatch` spawn for the whole partition, replacing N
+    # concurrently-gathered per-path spawns; classification is independent
+    # per-path so `_is_tracked_batch`'s dict lookup preserves the same
+    # per-path result as the old gather+zip form.
+    status_map = await _is_tracked_batch(worktree_root, survivors)
+    for path in survivors:
+        status = status_map[path]
         rel = rel_id(path, worktree_root)
         if status == "tracked":
             tracked_survivors.append(path)
@@ -265,7 +328,13 @@ async def reap_findings(
         rel = rel_id(path, worktree_root)
         # A3: re-verify tracked-status immediately before unlink — narrows
         # the TOCTOU window between partition-time classification and
-        # act-time unlink on the shared worktree.
+        # act-time unlink on the shared worktree. Deliberately NOT hoisted
+        # into `_is_tracked_batch` (amplification hitlist, 2026-08-19):
+        # batching this recheck ahead of the loop would widen the window
+        # for every survivor after the first, the same property that keeps
+        # distill_apply_disposal.py's L1283 equivalent unbatched — see this
+        # chunk's findings.md for the discrepancy against the assigning
+        # brief, which had classified this site as batchable.
         recheck = await _is_tracked(worktree_root, path)
         if recheck != "untracked":
             failed.append({

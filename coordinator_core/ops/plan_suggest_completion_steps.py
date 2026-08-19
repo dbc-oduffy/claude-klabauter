@@ -164,9 +164,8 @@ _GIT_TIMEOUT_SECS = 15
 _EXECUTION_IMMINENT_STATUSES = frozenset({APPROVED_STATUS, EXECUTING_STATUS})
 
 #: A review-trail record with this verdict is an OPEN loop, not a discharged
-#: review (mirrors coverage.py's `_SPEC_DISPATCH_NON_QUALIFYING_VERDICTS`
-#: treatment of "pending" — a record `freeze-review-diff.py` writes before
-#: any reviewer has run does not attest that one has). "waived" is NOT
+#: review — a record `freeze-review-diff.py` writes before
+#: any reviewer has run does not attest that one has. "waived" is NOT
 #: excluded here: a `reviewer: waived` record carries its own justification
 #: (review_trail_write.py's evidence-floor gate) and is a legitimate,
 #: deliberate discharge of the review step, not an open loop.
@@ -276,9 +275,7 @@ def _plans_with_review_trail_coverage(
     touching commits.
 
     A malformed/unreadable record is silently skipped (fail-closed — it
-    simply cannot supply coverage), mirroring
-    `coverage._spec_dispatch_qualifying_code_review_shas`'s identical
-    posture toward the same corpus.
+    simply cannot supply coverage).
 
     Collects `state/review-trail/*.json` and `archive/review-trail/*.json`
     directly under the EXPLICIT `repo_root` — deliberately NOT

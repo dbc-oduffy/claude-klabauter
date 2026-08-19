@@ -7,10 +7,11 @@ that used to live here — a thin wrapper over review-coverage-gate.py's
 VERDICT line — is removed. It gated nothing irreversible (WARN on the last
 40 closes, COVERED zero times, every one closing clean) and had decayed to
 printing an advisory offer nobody acted on differently than if it printed
-nothing. `coordinator_core/ops/coverage_gate.py::run_coverage_gate` survives
-elsewhere as chain-ancestry-waiver-mint plumbing for `wsc-coverage-gate-
-runner.py`'s `brightline-gate` subcommand — that is a distinct caller from
-this file's former subcommand and is unaffected by this removal.
+nothing. `coordinator_core/ops/coverage_gate.py` (which defined
+`run_coverage_gate`) was deleted by the same kill; `wsc-coverage-gate-
+runner.py`'s `brightline-gate` subcommand is a distinct caller and is
+unaffected by this removal, but it no longer goes through `run_coverage_gate`
+— that function no longer exists anywhere in the tree.
 
 Subcommands (argv[1] selects):
 

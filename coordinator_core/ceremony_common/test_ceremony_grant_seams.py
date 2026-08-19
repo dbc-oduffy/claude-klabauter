@@ -204,6 +204,53 @@ def test_the_compensator_uses_the_same_guard_as_the_handback():
     assert seen == [["revoke", "--only-ceremony", "merging-to-main"]]
 
 
+def test_a_failed_handback_is_not_reported_as_a_successful_compensation():
+    """`apply_base._run_compensators` reads a compensator's return against a
+    bool contract: only a literal `False` is a non-success, and any other
+    value -- a `(code, message)` tuple included -- records `succeeded: True`.
+    Returning `run_grant_directive`'s raw tuple therefore reported a grant as
+    handed back when the revoke had failed, on the one path this compensator
+    exists to make honest. Non-zero must reach the caller as a raise (which
+    `_run_compensators` records with an `error`), never as a value it reads
+    as success."""
+    from coordinator_core.merge_assemble import apply as merge_apply
+    from coordinator_core.session import grant_directive
+
+    original = grant_directive.run_grant_directive
+    try:
+        grant_directive.run_grant_directive = lambda args: (1, "revoke: session id unresolvable")
+        with pytest.raises(RuntimeError) as excinfo:
+            merge_apply._COMPENSATORS["d_grant_write"](
+                {"id": "d_grant_write"}, Path("."), None
+            )
+    finally:
+        grant_directive.run_grant_directive = original
+
+    assert "session id unresolvable" in str(excinfo.value), (
+        "the compensator must carry the underlying diagnostic, not just a code"
+    )
+
+
+def test_a_successful_handback_compensation_returns_the_success_sentinel():
+    """The success path must return `None`, not `True` and not the tuple:
+    `_run_compensators` documents `None` as success for every compensator
+    registered today, and a tuple is exactly the value whose truthiness
+    masked a failure."""
+    from coordinator_core.merge_assemble import apply as merge_apply
+    from coordinator_core.session import grant_directive
+
+    original = grant_directive.run_grant_directive
+    try:
+        grant_directive.run_grant_directive = lambda args: (0, "")
+        result = merge_apply._COMPENSATORS["d_grant_write"](
+            {"id": "d_grant_write"}, Path("."), None
+        )
+    finally:
+        grant_directive.run_grant_directive = original
+
+    assert result is None
+
+
 def test_workweek_reaches_its_handback_even_after_a_failed_directive():
     """Workweek needs no compensator: its apply loop records a failure and
     CONTINUES, so the handback still dispatches. This pins that, so a future

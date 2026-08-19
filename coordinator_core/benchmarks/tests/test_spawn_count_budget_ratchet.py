@@ -105,6 +105,60 @@ _SPAWN_COUNT_HIGH_WATER = {
                 "for this key."
             ),
         },
+        "pending_drain_superseded": {
+            "ceiling": 23,
+            "reason": (
+                "New shape first measured 2026-08-19 (opro-03 C6): a due "
+                "pending-push record draining into a superseded "
+                "non-fast-forward push. Enters at its measured value, not a "
+                "raise -- it budgets a path no prior shape reached."
+            ),
+        },
+        # The three `op_total_*` marks below entered the manifest on
+        # 2026-08-19 (opro-03 C6, 46bab79e52ca) without a row here, which
+        # left `test_spawn_count_high_water_table_covers_every_override` red
+        # -- the completeness pin doing exactly its job, on a module the fast
+        # tier does not run. They are the WHOLE-OP `subprocess.run` counts,
+        # deliberately larger than the same shape's seam figure: the seam
+        # (`git_native._git`) is routing-narrow and cannot observe the push
+        # drain, claim release, `git/divergence.py`, or `git/repo_root.py`.
+        # Each enters at its measured value; none is a raise of an existing
+        # mark, because no `op_total_*` mark existed before.
+        "op_total_green_path": {
+            "ceiling": 23,
+            "reason": (
+                "Entered 2026-08-19 at its first measured value (opro-03 "
+                "C6). Whole-op count against green_path's seam figure of 17; "
+                "the gap is the six spawns the seam is structurally unable "
+                "to see."
+            ),
+        },
+        "op_total_directory_pathspec_expansion": {
+            "ceiling": 24,
+            "reason": (
+                "Entered 2026-08-19 at its first measured value (opro-03 "
+                "C6). green_path's whole-op figure plus the one extra "
+                "pathspec-scoped `git status --porcelain` that shape adds."
+            ),
+        },
+        "op_total_push_raced_path": {
+            "ceiling": 28,
+            "reason": (
+                "Entered 2026-08-19 at its first measured value (opro-03 "
+                "C6). Whole-op count against push_raced_path's seam figure "
+                "of 20."
+            ),
+        },
+        "op_total_pending_drain_superseded": {
+            "ceiling": 39,
+            "reason": (
+                "Entered 2026-08-19 at its first measured value (opro-03 "
+                "C6). The largest whole-op figure of the four shapes because "
+                "this is the only one whose drain actually pushes: it pays "
+                "`push_once`, the `_is_superseded` fetch and ancestor test, "
+                "and the cockpit-contract publish leg on top of the commit."
+            ),
+        },
     },
     "changelog.cited_in_range_count": {
         "n_tokens": {"ceiling": 1, "reason": _BASELINE_REASON},
@@ -162,6 +216,19 @@ _SPAWN_COUNT_HIGH_WATER = {
             "reason": (
                 "Floor of 0: a memoized second call with identical inputs "
                 "returns the cached result without spawning again."
+            ),
+        },
+        "first_call_one_sibling": {
+            "ceiling": 3,
+            "reason": (
+                "New shape first measured 2026-08-19 (opro-03 C6), entering "
+                "at its measured value. This op's only prior shape was the "
+                "memo hit at 0, and a shape that spawns nothing by "
+                "construction can never make a spawn site visible to a "
+                "counter -- which is why `close_out_and_stamp.py::_run_git` "
+                "sat permanently red on the uncounted-spawn gate. The 3 is "
+                "one merge-base range resolution plus two "
+                "`_deliverable_log_records` queries against the sibling."
             ),
         },
     },

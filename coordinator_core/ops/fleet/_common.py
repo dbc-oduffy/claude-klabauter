@@ -613,6 +613,25 @@ def validate_params(
     return (mode, dry_run, candidate_ids)
 
 
+def _emit_warm_diagnostic(text: str) -> None:
+    """Forward one diagnostic line to the warm per-request sink, if one is bound.
+
+    Function-local import and fail-open by construction: this helper runs on the
+    refusal path of every fleet op, including in a cold spawn where nothing has
+    bound a sink and where `coordinator_core.warm` has no reason to be imported
+    at module scope.  A failure here must never convert a well-formed refusal
+    into an exception — the reason is already on stderr by the time this is
+    called, so the worst case is that a warm caller falls back to today's
+    behaviour rather than losing anything it has today.
+    """
+    try:
+        from coordinator_core.warm.entry_seam import emit_diagnostic
+
+        emit_diagnostic(text)
+    except Exception:  # noqa: BLE001 — diagnostics never fail the op
+        pass
+
+
 def _setup_error(mode, dry_run, reason: str) -> dict:
     """Internal: log reason to stderr and return the exit_code:1 standard-echoed envelope.
 
@@ -627,6 +646,13 @@ def _setup_error(mode, dry_run, reason: str) -> dict:
     (`_fatal_stderr`'s JSON error envelope is the nonzero-exit path only), so this
     is a diagnostic addition, not a wire change.
 
+    Reaching THIS process's stderr is ALSO not enough under the warm engine, where
+    "this process" is the SERVER, not the caller's child — the reason lands on the
+    server's stderr and the caller reads an empty stream.  `entry_seam.emit_diagnostic`
+    below is the warm half of the same channel: the server binds a per-request sink
+    and returns what it collected on the response frame.  The stderr write stays
+    unconditional and is what a cold caller reads; neither replaces the other.
+
     Reaching THIS process's stderr is where claude-klabauter's guarantee stops.  A setup error
     is a JSON-RPC *success* response, so `invoke._exit_code_for_response` exits the
     process 0 while the envelope says exit_code:1 — a consumer that spawns this
@@ -636,6 +662,7 @@ def _setup_error(mode, dry_run, reason: str) -> dict:
     """
     _LOG.error("fleet op setup error: %s", reason)
     print(f"fleet op setup error: {reason}", file=sys.stderr, flush=True)
+    _emit_warm_diagnostic(f"fleet op setup error: {reason}")
     return {
         "exit_code": 1,
         "mode": mode,

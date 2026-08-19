@@ -25,10 +25,12 @@ conflate a field filter with a file; this module keeps them apart:
 - `baselines/tracked-<machine>.jsonl` -- the curated, TRACKED baseline: one
   line per op, overwritten wholesale only by a deliberate refresh action
   (see `write_tracked_baseline()`), never appended to by an ordinary
-  benchmark run. This is the file git tracks -- negated back in via
-  `!benchmarks/baselines/tracked-*.jsonl` in `coordinator_core/.gitignore`
-  -- and the one a future gate consumer (qsub-03) should read as "the
-  baseline", not the runs history.
+  benchmark run. This is the file git tracks -- and it needs NO negation to
+  do so: `coordinator_core/.gitignore` excludes only `benchmarks/baselines/runs/`,
+  and this file lives outside that, directly under `baselines/`. A `!` negation
+  would in fact be inert here, because git does not descend into an excluded
+  directory (see that file's own comment). It is the one a future gate consumer
+  (qsub-03) should read as "the baseline", not the runs history.
 
 Refresh discipline (C1 section 4): refresh is keyed to the AMBIENT BAND the
 box was under when measured, NOT a bare staleness/age cap -- an age check

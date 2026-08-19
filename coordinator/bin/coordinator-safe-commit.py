@@ -672,6 +672,17 @@ def _git_reset_unstage(path: str) -> None:
     subprocess.run(["git", "reset", "-q", "HEAD", "--", path], check=False)
 
 
+def _git_reset_unstage_many(paths: List[str]) -> None:
+    """Batched form of `_git_reset_unstage`: one `git reset -q HEAD --
+    <paths...>` spawn for the whole exclusion set instead of one per path.
+    `check=False` either way -- a pathspec git can't resolve is silently
+    skipped by git itself, same as a single bad path was silently ignored
+    per-call before."""
+    if not paths:
+        return
+    subprocess.run(["git", "reset", "-q", "HEAD", "--", *paths], check=False)
+
+
 def _git_diff_cached_is_empty() -> bool:
     result = subprocess.run(
         ["git", "diff", "--cached", "--quiet"], capture_output=True, check=False
@@ -1364,9 +1375,9 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
                 continue
             if staged_path in own_set:
                 continue  # own wins — do NOT subtract
-            _git_reset_unstage(staged_path)
             subtracted_count += 1
             excluded_paths.append(staged_path)
+        _git_reset_unstage_many(excluded_paths)
 
         if subtracted_count > 0 and not session_id:
             # Review: code-reviewer — Finding 1 (P2): own_set is empty here

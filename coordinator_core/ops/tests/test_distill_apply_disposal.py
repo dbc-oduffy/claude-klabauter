@@ -84,6 +84,7 @@ from coordinator_core.ops.distill_apply_disposal import (
     verify_stamp_and_throttle,
     write_apply_receipt,
 )
+from coordinator_core.ops.fleet._findings_reap import _is_tracked_batch
 from coordinator_core.ops.distill_stamp_disposal import (
     DisposalStampError,
     load_disposal_manifest,
@@ -181,6 +182,63 @@ def _manifest(rows: list[dict], run_id: str = "2026-07-23-01h00", mass_throttle:
 def _stamped(manifest: dict, *, note: str = "approved") -> dict:
     sha = _schema.compute_manifest_sha(manifest)
     return _schema.apply_stamp(manifest, by="pm", at="2026-07-23T10:00:00Z", sha=sha, note=note)
+
+
+# ---------------------------------------------------------------------------
+# _is_tracked_batch — amplification hitlist (2026-08-19): the batched
+# callee behind apply_disposal_manifest's and _write_denormalizations'
+# partition-time tracked-status probes. Asserts the SAME tri-state contract
+# as the per-item `_is_tracked`, from ONE spawn covering a mixed batch.
+# ---------------------------------------------------------------------------
+
+
+@_requires_rg
+def test_is_tracked_batch_returns_all_three_states(tmp_path: Path):
+    _init_repo_with_commits(tmp_path)
+    tracked_abs = tmp_path / "archive" / "handoffs" / "eligible.md"
+
+    untracked_abs = tmp_path / "archive" / "handoffs" / "never-added.md"
+    untracked_abs.write_text("body\n", encoding="utf-8")
+
+    result = _run(_is_tracked_batch(tmp_path, [tracked_abs, untracked_abs]))
+
+    assert result == {tracked_abs: "tracked", untracked_abs: "untracked"}
+
+
+def test_is_tracked_batch_empty_input_returns_empty_dict_no_spawn(tmp_path: Path):
+    result = _run(_is_tracked_batch(tmp_path, []))
+    assert result == {}
+
+
+def test_is_tracked_batch_nonzero_nonone_rc_is_indeterminate_for_every_path(
+    tmp_path: Path, monkeypatch
+):
+    """A returncode outside {0, 1} (e.g. a fatal git error) must mark EVERY
+    path in the batch indeterminate, never silently downgrade to
+    untracked -- the same fail-closed contract as the per-item `_is_tracked`
+    (Review: code-reviewer A1), just applied batch-wide rather than
+    per-path."""
+    _init_repo_with_commits(tmp_path)
+    tracked_abs = tmp_path / "archive" / "handoffs" / "eligible.md"
+    untracked_abs = tmp_path / "archive" / "handoffs" / "never-added.md"
+    untracked_abs.write_text("body\n", encoding="utf-8")
+
+    class _FakeProc:
+        returncode = 128
+
+        async def communicate(self):
+            return b"", b"fatal: index file corrupt"
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", _fake_create_subprocess_exec
+    )
+
+    result = _run(_is_tracked_batch(tmp_path, [tracked_abs, untracked_abs]))
+
+    assert result == {tracked_abs: "indeterminate", untracked_abs: "indeterminate"}
 
 
 # ---------------------------------------------------------------------------

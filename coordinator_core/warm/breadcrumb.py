@@ -42,22 +42,18 @@ call site is a follow-up chunk's job, exactly as `warm.server`'s own
 docstring already flags ("breadcrumb -> C18, not yet landed ...
 `_ctx_shutdown` below is a documented no-op pending that chunk").
 
-SVC DIR RESOLUTION -- `<engine_root>/state/warm/`. No prior chunk defines
-"svc dir"; this module picks `state/warm/` because `state/` is this
-repo's own documented load-bearing substrate for exactly this shape of
-artifact (`state/doctor-last-run.json`, `state/housekeeping-liveness.json`
-are existing single-file, per-machine, gitignored precedents living
-directly under `state/`; `state/subagent-share/`, `state/peer-notices/`
-are existing precedents for a whole SUBDIRECTORY scoped to one concern --
-`state/warm/` follows the latter shape since a resident-engine concern
-plausibly grows more than one file). `engine_root` defaults to THIS
+SVC DIR RESOLUTION -- a user-local, per-clone runtime directory OUTSIDE
+the engine clone, keyed by a hash of the resolved clone path. NOT
+`<engine_root>/state/warm/`, which is what this resolved until
+2026-08-19; `svc_dir` below carries the PM ruling that moved it and the
+rationale the original resolution was reasoning from. `engine_root` defaults to THIS
 module's own resolved clone root (`Path(__file__).resolve().parents[2]`,
 the same computation `election._default_engine_clone` / `client.
 _engine_clone_root` / `skew._default_engine_clone` each keep as a local
 copy per this package's convention) -- so on the klabauter box, running
-this module's functions from the klabauter clone resolves `state/warm/`
-under the KLABAUTER clone, never under whatever repo happens to be the
-caller's cwd. `warm-engine-stop.py` relies on exactly this: it is a
+this module's functions from the klabauter clone resolves the
+KLABAUTER clone's own runtime directory, never one keyed to whatever
+repo happens to be the caller's cwd. `warm-engine-stop.py` relies on exactly this: it is a
 runnable script shipped inside each clone, and resolves the breadcrumb
 of the clone IT WAS INVOKED FROM.
 

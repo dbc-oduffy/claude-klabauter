@@ -184,7 +184,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _BIN_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BIN_DIR.parent.parent
@@ -711,14 +711,25 @@ def _filter_commit_pathspec(
             "is unreliable for this pathspec and must not proceed silently."
         )
 
+    survivors = [
+        (abs_path, tag, resolved_rel)
+        for (abs_path, (tag, resolved_rel)), rel_path in zip(entries, rel_paths)
+        if rel_path not in ignored
+    ]
+    gitignored_dropped = len(entries) - len(survivors)
+
+    # One batched `git ls-files --error-unmatch` probe for every deletion-
+    # intent still in play, instead of one spawn per row (§
+    # `_dest_paths_exist`) -- same per-path verdict, one subprocess.
+    delete_candidates = [
+        resolved_rel for _, tag, resolved_rel in survivors if tag in ("DELETE", "REMOVE")
+    ]
+    exists_at_dest = _dest_paths_exist(str(dest_root), delete_candidates)
+
     kept: List[str] = []
-    gitignored_dropped = 0
     absent_deletion_dropped = 0
-    for (abs_path, (tag, resolved_rel)), rel_path in zip(entries, rel_paths):
-        if rel_path in ignored:
-            gitignored_dropped += 1
-            continue
-        if tag in ("DELETE", "REMOVE") and not _dest_path_exists(str(dest_root), resolved_rel):
+    for abs_path, tag, resolved_rel in survivors:
+        if tag in ("DELETE", "REMOVE") and not exists_at_dest[resolved_rel]:
             absent_deletion_dropped += 1
             continue
         if repo_root:
@@ -794,13 +805,43 @@ def _dest_path_exists(dest: str, rel: str) -> bool:
     dest missing, etc.) is an undetermined probe, not a confirmed absence,
     and this returns `True` so the caller does not drop a path it could not
     actually verify is gone."""
-    abs_path = Path(dest) / rel
-    if abs_path.exists() or abs_path.is_symlink():
-        return True
-    tracked = _run(["git", "-C", dest, "ls-files", "--error-unmatch", "--", rel])
-    if tracked.returncode == 1:
-        return False
-    return True
+    return _dest_paths_exist(dest, [rel])[rel]
+
+
+def _dest_paths_exist(dest: str, rels: List[str]) -> Dict[str, bool]:
+    """Batched form of `_dest_path_exists` -- one `git ls-files
+    --error-unmatch` spawn for every `rel` still needing a git probe
+    (absent from the worktree/symlink check), rather than one spawn per
+    deletion-intent row. `git ls-files --error-unmatch` evaluates every
+    named pathspec even when some are unmatched (an unmatched entry only
+    ever adds an extra stderr line -- verified live, it never
+    short-circuits the rest), so a single call's stdout is exactly the
+    subset of `rels` still tracked in the index; everything else asked
+    about is confirmed gone from both worktree and index.
+
+    Fails OPEN exactly like the per-item form: a returncode outside
+    `{0, 1}` (not a git repo, dest missing, etc.) is an undetermined probe,
+    and every `rel` in that batch resolves to `True` (kept) rather than
+    being silently dropped."""
+    result: Dict[str, bool] = {}
+    to_probe: List[str] = []
+    for rel in rels:
+        abs_path = Path(dest) / rel
+        if abs_path.exists() or abs_path.is_symlink():
+            result[rel] = True
+        else:
+            to_probe.append(rel)
+    if not to_probe:
+        return result
+    probe = _run(["git", "-C", dest, "ls-files", "--error-unmatch", "--"] + to_probe)
+    if probe.returncode not in (0, 1):
+        for rel in to_probe:
+            result[rel] = True
+        return result
+    tracked = set(probe.stdout.splitlines())
+    for rel in to_probe:
+        result[rel] = rel in tracked
+    return result
 
 
 # ---------------------------------------------------------------------------

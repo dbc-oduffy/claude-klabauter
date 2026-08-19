@@ -326,9 +326,21 @@ def _git_add(entry_path: str) -> None:
     `git add -- "$_ENTRY" 2>/dev/null || true` (staging failure here is
     never fatal to the sweep; Step 9 re-verifies what actually staged).
     """
+    _git_add_many([entry_path])
+
+
+def _git_add_many(entry_paths: list[str]) -> None:
+    """Batched form of `_git_add` — one `git add -- <entries...>` spawn for
+    every reconciled entry in the sweep instead of one per entry. Still
+    best-effort: the return code was never checked per-entry either (Step 9
+    re-verifies what actually staged), so collapsing N single-file adds into
+    one multi-pathspec add changes nothing observable.
+    """
+    if not entry_paths:
+        return
     try:
         subprocess.run(
-            ["git", "add", "--", entry_path],
+            ["git", "add", "--", *entry_paths],
             capture_output=True,
             **_no_console_kw(),
         )
@@ -370,6 +382,7 @@ def run_completion_reconcile(
 
     n_entries = 0
     n_commits = 0
+    to_git_add: list[str] = []
 
     for entry_path in _iter_month_entries(archive_root, year_month):
         try:
@@ -412,9 +425,12 @@ def run_completion_reconcile(
         appended = int(m.group(1)) if m else 0
         if appended > 0:
             if git_add:
-                _git_add(entry_path)
+                to_git_add.append(entry_path)
             n_entries += 1
             n_commits += appended
+
+    if to_git_add:
+        _git_add_many(to_git_add)
 
     if n_entries > 0:
         print(f"Completion reconcile: {n_entries} entr(ies) folded {n_commits} commit(s)", file=out)

@@ -1083,7 +1083,7 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
                 if manifest.state == "ok" and tail_key in manifest.carriers:
                     guard_ids = {g.id for g in manifest.carriers[tail_key]}
                 elif manifest.state == "ok" and tail_key in manifest.script_index:
-                    guard_ids = {manifest.script_index[tail_key]}
+                    guard_ids = set(manifest.script_index[tail_key])
                 else:
                     guard_ids = {tail_key}
                 for guard_id in guard_ids:

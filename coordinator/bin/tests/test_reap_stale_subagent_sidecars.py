@@ -160,12 +160,10 @@ def test_tracked_reap_exercises_argv_over_32kb_regime(git_repo, monkeypatch):
     _git(["commit", "-q", "-m", "seed sidecars"], git_repo)
 
     _patch_common(mod, git_repo, dead_session_id=dead_session)
-    # _is_tracked spawns one `git ls-files` per candidate (a pre-existing,
-    # separately-scoped N+1 -- not this fix's target). Stub it so this
-    # test's runtime is dominated by the ONE pathspec-file git rm/commit
-    # call under test, not 900 individual tracked-checks.
-    monkeypatch.setattr(mod, "_is_tracked", lambda repo_root, rel_path: True)
-
+    # Tracked-classification is no longer stubbed: it is one `git ls-files`
+    # scoped to the reap subtree, not one probe per candidate, so the real
+    # call runs here without dominating the runtime of the pathspec-file
+    # git rm/commit under test.
     rc = mod.main(["--age-floor-days", "0"])
     assert rc == 0
 

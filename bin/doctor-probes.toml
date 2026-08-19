@@ -21,7 +21,7 @@
 #   cluster          — Symptom group (claude-klabauter-domain enum):
 #                        registry = CLAUDE_KLABAUTER_ROOT resolution and machine-local key health
 #                        install  = coordinator_core import, engine bootstrap, and
-#                                   command-type health (version, coverage seam, debris)
+#                                   command-type health (version, debris)
 #                        dispatch = command-type entrypoint smoke (spawn-per-call path)
 #   weight           — Resource cost (NOT latency):
 #                        cheap    = file reads / env checks; no subprocess, no network
@@ -133,7 +133,7 @@ remediation = "Run python3 scripts/setup.py to write the install-class engine.ta
 
 # ---------------------------------------------------------------------------
 # Cluster: install — coordinator_core import, engine bootstrap, and
-#                    command-type health (version, coverage seam, debris)
+#                    command-type health (version, debris)
 # ---------------------------------------------------------------------------
 
 [[probe]]
@@ -228,23 +228,6 @@ body = "bin/claude-klabauter-doctor-probe.py:_run_probe_entrypoints_path_resolve
 required = false
 severity_if_fail = "degraded"
 remediation = "Re-run scripts/setup.py from claude-klabauter -- its bin-forwarder step re-lands the entrypoints. Then open a NEW shell/session before re-checking: a PATH write only takes effect in a shell started after it."
-
-[[probe]]
-id = "claude-klabauter.coverage.seam"
-cluster = "install"
-weight = "cheap"
-interactivity = "assert"
-fix = "none (verify state/coverage/ is writable; if gate-result.json is present and malformed, remove it and re-run the coverage gate)"
-symptom_keywords = ["coverage seam unwritable", "gate-result.json malformed", "coverage artifact invalid", "state/coverage missing", "coverage seam schema error"]
-# triage=false: the coverage seam is an output artifact seam, not a prerequisite for
-# basic engine health. Running it on every `--triage` run of the probe script would surface
-# advisory noise on machines that have not yet executed the coverage gate.
-# PASS when absent — no coverage artifact yet is not a fault.
-triage = false
-body = "bin/claude-klabauter-doctor-probe.py:_run_probe_coverage_seam"
-required = true
-severity_if_fail = "degraded"
-remediation = "Check state/coverage/ directory is writable; if gate-result.json is present and schema-invalid, remove it and re-run the coverage gate (python3 -m coordinator_core.invoke coverage_gate '{}')"
 
 [[probe]]
 id = "claude-klabauter.resident.debris"
@@ -564,3 +547,32 @@ body = "bin/claude-klabauter-doctor-probe.py:_run_probe_launch_chain"
 required = false
 severity_if_fail = "degraded"
 remediation = "Re-render the shim: python3 <engine-clone>/coordinator/bin/gen-claude-doe-shim.py --shell powershell --template <doe-root>/coordinator/templates/shell/claude-doe-shim.ps1.tmpl (use --shell bash and the .sh.tmpl on POSIX). Then open a NEW shell -- an already-open one holds the old profile."
+
+# ---------------------------------------------------------------------------
+# THIS PROBE IS THE CADENCE, same rationale as claude-klabauter.schema.vendor_drift and its
+# siblings above: triage=true because /workday-start's consumer
+# (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
+# state/doctor-last-run.json, and only --triage and full runs write that sentinel.
+#
+# K-006 (state/kill-ledger.md): hooks.session_heartbeat -- the sole discharge of the
+# F0 hazard (a session whose stable_pid capture misses reads DEAD on the Layer-2
+# recency path while still alive, becoming reap-eligible) -- was deregistered
+# 2026-08-16. That was ruled safe ONLY because the stable_pid miss rate is currently
+# 0%; this probe is the regression net for that 0%, previously completely unwatched.
+# Threshold: ANY single miss alerts (not a rate -- see
+# coordinator_core/session/stable_pid_watch.py module docstring for why). weight =
+# "cheap": one directory listing plus one meta.json read per session dir, no
+# subprocess -- triage = true is permissible under the stated invariant.
+# ---------------------------------------------------------------------------
+[[probe]]
+id = "claude-klabauter.session.stable_pid_miss"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (investigate the session-init capture path, coordinator_core/session/core.py::init, for the named session(s))"
+symptom_keywords = ["stable_pid missing", "stable_pid capture miss", "F0 hazard", "K-006", "session reads dead while alive", "heartbeat deregistered", "session_heartbeat removed", "Layer-1 disarmed", "reap-eligible while alive"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_stable_pid_miss"
+required = false
+severity_if_fail = "degraded"
+remediation = "ADVISORY, never gating -- this probe is required=false and cannot break an install. One or more sessions are missing stable_pid capture (or its birth-instant witness) -- the F0 hazard K-006 ruled safe-to-deregister-heartbeat-because-0%% is live again. The probe's `detail`/`data.misses` names the affected session(s) and reason (`empty` or `no_witness`); investigate coordinator_core/session/core.py::init before assuming this is transient."

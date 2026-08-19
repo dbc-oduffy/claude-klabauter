@@ -347,6 +347,126 @@ def test_run_dispatch_opens_per_request_state(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Pending-listener pool (problem 3 of docs/problems/2026-08-19-the-warm-
+# engine-serves-one-caller-at-a-t.md): `_accept_and_replenish` posts one
+# replacement per accept, so steady state was exactly ONE pending listener
+# regardless of demand. `_start_pending_listener_pool` posts N at boot
+# instead of one, letting that same one-for-one replenish invariant sustain
+# a constant pool of N rather than a pool of one.
+# ---------------------------------------------------------------------------
+
+
+def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
+    """`_start_pending_listener_pool` must start exactly `pool_size` accept
+    chains -- one bound to the caller-supplied `first_handle` (election's
+    own instance) and `pool_size - 1` bound to freshly created instances --
+    each on its own thread, never serialized behind one another."""
+    created_handles: list[int] = []
+
+    def _fake_create(name, sid):
+        created_handles.append(len(created_handles) + 100)
+        return created_handles[-1]
+
+    monkeypatch.setattr(server, "_create_pipe_instance", _fake_create)
+
+    started_with: list[int] = []
+    started_lock = threading.Lock()
+    release = threading.Event()
+
+    def _fake_accept_and_replenish(self, handle):
+        with started_lock:
+            started_with.append(handle)
+        release.wait(timeout=5)  # hold the thread open, like a real blocked ConnectNamedPipe
+
+    monkeypatch.setattr(server._ServerContext, "_accept_and_replenish", _fake_accept_and_replenish)
+
+    ctx = server._ServerContext(name="pipe-x", sid="sid-x", version_state=_FakeVersionState())
+    ctx._start_pending_listener_pool(1, pool_size=5)
+
+    deadline = time.monotonic() + 5
+    while len(started_with) < 5 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    release.set()
+
+    assert sorted(started_with) == sorted([1] + created_handles)
+    assert len(created_handles) == 4  # pool_size - 1 freshly created instances
+    assert len(set(started_with)) == 5  # five DISTINCT chains, not one replayed
+
+
+def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch):
+    """A `_create_pipe_instance` failure partway through boot must not
+    raise past `_start_pending_listener_pool` -- a smaller-than-intended
+    pool degrades toward today's one-listener behaviour rather than
+    killing a server that can otherwise serve (module docstring's own
+    best-effort contract for this step)."""
+    calls = {"n": 0}
+
+    def _fake_create(name, sid):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated CreateNamedPipe failure")
+        return calls["n"] + 100
+
+    monkeypatch.setattr(server, "_create_pipe_instance", _fake_create)
+
+    started_with: list[int] = []
+    release = threading.Event()
+
+    def _fake_accept_and_replenish(self, handle):
+        started_with.append(handle)
+        release.wait(timeout=5)
+
+    monkeypatch.setattr(server._ServerContext, "_accept_and_replenish", _fake_accept_and_replenish)
+
+    ctx = server._ServerContext(name="pipe-x", sid="sid-x", version_state=_FakeVersionState())
+    ctx._start_pending_listener_pool(1, pool_size=4)  # 3 creation attempts, 1 fails
+
+    deadline = time.monotonic() + 5
+    while len(started_with) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    release.set()
+
+    assert len(started_with) == 3  # first_handle + 2 of the 3 creation attempts (one failed)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows-only")
+def test_pool_serves_more_than_one_simultaneous_connection(monkeypatch, tmp_path):
+    """The refutation criterion problem 3 names directly: showing MORE THAN
+    ONE instance outstanding in steady state. Runs a real `_ServerContext`
+    against real Windows named pipes (own pipe name, isolated from any live
+    server on this box) and proves two clients can hold an open connection
+    to it AT THE SAME TIME -- impossible with the pre-fix single pending
+    listener, where the second opener would see `FileNotFoundError` while
+    the first connection is being handled.
+    """
+    import uuid
+    from coordinator_core.warm import election
+
+    monkeypatch.setattr(lifecycle, "reset_shutdown_guard_for_test", lifecycle.reset_shutdown_guard_for_test)
+    sid = election.current_user_sid()
+    name = election.pipe_name(uuid.uuid4().hex, user_sid=sid)
+    first_handle = election.elect(name, user_sid=sid)
+
+    ctx = server._ServerContext(name=name, sid=sid, version_state=_FakeVersionState())
+    # Small pool -- just enough to prove ">1 outstanding", not a full 30.
+    ctx._start_pending_listener_pool(first_handle, pool_size=3)
+
+    # Give the accept threads a moment to post their ConnectNamedPipe calls.
+    time.sleep(0.2)
+
+    opened = []
+    try:
+        for _ in range(2):
+            opened.append(open(name, "r+b"))
+    finally:
+        ctx.close_listener()
+        for fh in opened:
+            fh.close()
+
+    assert len(opened) == 2  # both opens succeeded -- more than one instance was listening
+
+
+# ---------------------------------------------------------------------------
 # Idle-demotion / breadcrumb wiring (C30 gap: idle.py and breadcrumb.py had
 # no production call site -- see the module docstring's "idle demotion" /
 # "breadcrumb" ownership notes).

@@ -616,6 +616,48 @@ class TestRefusalReporting:
         assert "REFUSED" not in line
         assert "nothing to commit" in line
 
+    def test_benign_noop_with_reconcile_decline_carries_no_suffix(self, render):
+        """Reviewer finding (slice 3, e90bfacf0): the landed-despite-failure
+        reconcile runs on EVERY commit-failure return, not only the timeout
+        shape it was written for -- so the ordinary already-committed no-op,
+        the single commonest outcome of this CLI, always declines with
+        `no-candidate` and used to carry a `[reconcile declined: ...]` suffix
+        unconditionally. The quiet branch's whole purpose is to render the
+        benign outcome without crying wolf; a decline there is expected and
+        information-free, so it must not appear here. The regression guard
+        for the finding.
+        """
+        line = render(
+            {
+                "committed": False,
+                "commit_failed": True,
+                "diagnostics": ["exit_code=1"],
+                "reconcile_decline": "no-candidate",
+            }
+        )
+        assert "REFUSED" not in line
+        assert "nothing to commit" in line
+        assert "reconcile declined" not in line
+
+    def test_genuine_refusal_with_reconcile_decline_still_shows_it(self, render):
+        """The counterpart to the regression guard above: a REAL refusal is
+        already loud, and the operator is already being asked to look, so a
+        decline reason there is still genuinely informative and must survive.
+        """
+        line = render(
+            {
+                "committed": False,
+                "commit_failed": True,
+                "diagnostics": [
+                    "commit_scoped: directory pathspec 'pkg/' rejected -- a "
+                    "directory matches whatever is inside it AT COMMIT TIME"
+                ],
+                "reconcile_decline": "no-candidate",
+            }
+        )
+        assert "REFUSED" in line
+        assert "reconcile declined: no-candidate" in line
+
     def test_engine_supplied_empty_commit_set_reason_is_preserved(self, render):
         line = render(
             {"committed": False, "commit_failed": False, "reason": "empty-commit-set"}

@@ -23,6 +23,18 @@ all); every call after it is warm.
 THE ANTI-STORM TABLE (verbatim intent from the plan body -- this table IS
 the chunk, not a detail):
     FileNotFoundError (errno 2)      -- THE ONLY SPAWN TRIGGER, then cold.
+                                         Also what a genuinely-absent pipe
+                                         AND a momentarily pool-starved one
+                                         (fewer listening instances than
+                                         simultaneous openers) both surface
+                                         as -- see `warm.server`'s
+                                         `PENDING_LISTENER_POOL_SIZE`
+                                         (problem 3 of the 2026-08-19
+                                         concurrency problem set), which
+                                         closes the pool-starved case at
+                                         its source rather than asking this
+                                         table to tell the two apart after
+                                         the fact.
     OSError winerror == 231          -- ERROR_PIPE_BUSY: server up, go cold
                                          this call, never spawn. Verified
                                          live on this box 2026-08-15: does
@@ -37,6 +49,20 @@ the chunk, not a detail):
                                          pipe" and re-triggers the ~49-
                                          process spawn storm this table
                                          exists to prevent.
+    OSError errno == EINVAL (22),
+    winerror != 231                  -- a second, distinct contended-pipe
+                                         outcome measured under 16-way
+                                         concurrency (~8% of failed opens,
+                                         docs/research/warm-engine-premise/
+                                         warm-under-concurrency.md), never
+                                         reproduced with a winerror of 231.
+                                         Treated the same as ERROR_PIPE_BUSY
+                                         -- server up, contended, go cold
+                                         this call, never spawn -- rather
+                                         than falling through to Backstop 2,
+                                         which used to print a diagnostic to
+                                         stderr on this exact hot path for
+                                         every occurrence (problem 4).
     PermissionError (winerror 5)     -- someone else's pipe. Never spawn.
     BrokenPipeError mid-request      -- one re-open, then cold.
     well-formed JSON-RPC response,
@@ -104,6 +130,7 @@ Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C15
 
 from __future__ import annotations
 
+import errno
 import json
 import sys
 import threading
@@ -125,6 +152,48 @@ __all__ = [
 ERROR_PIPE_BUSY = 231
 ENGINE_SKEW = -32001
 READ_DEADLINE_SECS = 2.0
+
+#: Read deadline for a MUTATING op whose request has already been DELIVERED to
+#: the server. `READ_DEADLINE_SECS` above is a liveness probe sized for "is the
+#: server wedged" -- 2s is far below how long a real mutation takes on this box
+#: (a `git commit` with the Python pre-commit hook in the path, at the stated
+#: load norm of 50-70 concurrent sessions, routinely exceeds it). Applying the
+#: liveness probe's deadline to a delivered mutation is what made the client
+#: abandon a request the server was still EXECUTING and re-run it cold --
+#: see `_MUTATION_INDETERMINATE_MESSAGE` for the incident.
+#:
+#: A slow op is not a wedged server -- BUT this wait also runs inside the
+#: CALLER's own subprocess kill ceiling (`cc_invoke.py::_op_timeout_ceiling`,
+#: `max(FLOOR=10, engine_budget(op) + MARGIN=10)`), and a flat 120s here blew
+#: past that ceiling for every mutating op except `ceremony.scoped_git_commit`
+#: (the only entry in `ipc.py::_OP_TIMEOUT_OVERRIDES`, at 150s): every other
+#: op resolves to `ipc.DISPATCH_TIMEOUT_SECS` = 30s, giving the caller a ~40s
+#: ceiling, so this client was killed by its own parent long before a flat
+#: 120s wait could ever return the `WARM_DISPATCH_INDETERMINATE` envelope --
+#: the exact protection this deadline exists to guarantee, silently absent
+#: everywhere it was not the incident's own op (WARN, coordinator-code-reviewer
+#: sidecar dcf219af, SLICE 1). `_mutation_deadline_for` below derives the real
+#: wait per-op from `ipc._timeout_for` -- the same source of truth the
+#: caller's own ceiling is derived from -- so the wait stays inside that
+#: ceiling for every op, not just the one this incident concerned. This
+#: constant is now only the fail-safe floor: 30.0 mirrors `ipc`'s own
+#: `DISPATCH_TIMEOUT_SECS` default, so it can never itself outlive an
+#: un-derivable op's caller ceiling.
+MUTATION_READ_DEADLINE_SECS = 30.0
+
+#: Frozen at import time, never reassigned -- the yardstick `_mutation_deadline_for`
+#: compares `MUTATION_READ_DEADLINE_SECS` against to tell "nobody touched the
+#: constant, derive per-op" from "something (a test, an operator) explicitly
+#: overrode it, honor that override verbatim." Without this, a monkeypatched
+#: `MUTATION_READ_DEADLINE_SECS` would be silently ignored once the per-op
+#: derivation is in place -- it is not consulted at all when derivation
+#: succeeds.
+_MUTATION_READ_DEADLINE_DEFAULT = MUTATION_READ_DEADLINE_SECS
+
+#: JSON-RPC error code for "your mutation was delivered and its outcome is
+#: unknown". Distinct from INTERNAL_ERROR so a caller can tell "the op failed"
+#: from "the op may well have SUCCEEDED and we cannot see the answer".
+WARM_DISPATCH_INDETERMINATE = -32004
 SERVER_ENTRY_SCRIPT = "coordinator_core/warm/server.py"
 
 _spawned_this_process = False
@@ -250,33 +319,136 @@ def _open_pipe(pipe: str):
     return open(pipe, "r+b")
 
 
-def _read_line_with_deadline(fh, deadline_secs: float) -> Optional[bytes]:
-    """Read one newline-terminated frame from `fh`, abandoning the read if
-    it has not completed within `deadline_secs` (the "read-deadline
-    expiry" table row). Runs the blocking `readline()` in a daemon thread
-    so a wedged server never blocks this process past the deadline -- on
-    expiry that thread is simply abandoned (never joined again), and dies
-    with the process. Returns None on expiry, the same signal every other
-    "go cold" exit of this module uses. Re-raises an `OSError` the read
-    itself hit (e.g. `BrokenPipeError` mid-response) so the caller's
-    existing broken-pipe handling covers it too.
+#: Sentinel distinguishing "the deadline expired" from "the server sent an
+#: empty frame". The old `Optional[bytes]` return conflated them, which was
+#: harmless while both went cold and is not once they diverge.
+_TIMED_OUT = object()
+
+
+class _PendingRead:
+    """One `readline()` running in a daemon thread, waitable MORE THAN ONCE.
+
+    Runs the blocking read off this thread so a wedged server never blocks
+    this process past a deadline -- on final expiry the thread is simply
+    abandoned (never joined again) and dies with the process.
+
+    Waitable more than once because the two questions this module asks have
+    different deadlines and only the FIRST is answerable up front: "is the
+    server alive?" (`READ_DEADLINE_SECS`) and, when the answer to that is "no
+    idea" for a mutation already delivered, "is it still working?"
+    (`MUTATION_READ_DEADLINE_SECS`). Re-joining the same thread continues the
+    SAME read -- re-issuing it would mean re-sending the request, which for a
+    mutation is the very double-execution this class exists to prevent.
     """
-    result: dict[str, Any] = {}
 
-    def _read() -> None:
+    def __init__(self, fh: Any) -> None:
+        self._result: dict[str, Any] = {}
+        self._thread = threading.Thread(target=self._run, args=(fh,), daemon=True)
+        self._thread.start()
+
+    def _run(self, fh: Any) -> None:
         try:
-            result["line"] = fh.readline()
+            self._result["line"] = fh.readline()
         except OSError as exc:
-            result["exc"] = exc
+            self._result["exc"] = exc
 
-    reader = threading.Thread(target=_read, daemon=True)
-    reader.start()
-    reader.join(deadline_secs)
-    if reader.is_alive():
-        return None
-    if "exc" in result:
-        raise result["exc"]
-    return result.get("line")
+    def wait(self, deadline_secs: float) -> Any:
+        """The frame, or `_TIMED_OUT`. Re-raises an `OSError` the read itself
+        hit (e.g. `BrokenPipeError` mid-response) so the caller's own
+        broken-pipe handling covers it."""
+        self._thread.join(deadline_secs)
+        if self._thread.is_alive():
+            return _TIMED_OUT
+        if "exc" in self._result:
+            raise self._result["exc"]
+        return self._result.get("line")
+
+
+def _op_may_mutate(method: Any) -> bool:
+    """True unless the named op is affirmatively classified COMPUTE_ONLY.
+
+    FAIL-CLOSED: an unknown op, an unimportable classification table, anything
+    unexpected -- all answer True, because the cost of being wrong in that
+    direction is one honest error, and the cost of being wrong in the other is
+    a mutation executed twice.
+
+    Imported lazily and ONLY from the post-delivery failure branches, never on
+    the happy path: this module is on every invocation's cold-start preamble
+    and is import-budget-guarded, and the classification table is neither
+    small nor free.
+    """
+    try:
+        from coordinator_core.authz.classification import OpClass, classify
+
+        return classify(method) is not OpClass.COMPUTE_ONLY
+    except Exception:  # noqa: BLE001 -- fail closed, see docstring
+        return True
+
+
+def _mutation_deadline_for(method: Any) -> float:
+    """The mutation read deadline for `method`, derived from the same source
+    of truth the CALLER's own kill ceiling comes from: `cc_invoke.py::
+    _op_timeout_ceiling` sizes that ceiling as `engine_budget(op) + MARGIN`,
+    and `engine_budget` is `ipc._timeout_for`. Deriving from the identical
+    function keeps this wait inside the caller's ceiling for every mutating
+    op, not just `ceremony.scoped_git_commit` -- see
+    `MUTATION_READ_DEADLINE_SECS`'s own comment for the gap this closes.
+
+    Honors an explicit override first: if `MUTATION_READ_DEADLINE_SECS` no
+    longer equals `_MUTATION_READ_DEADLINE_DEFAULT`, something (a test, an
+    operator) deliberately set it, and that value wins verbatim -- this is
+    also what keeps the existing monkeypatch-based tests pinning real
+    behaviour rather than requiring them to reach into `ipc` as well.
+
+    Imported lazily and ONLY from the post-delivery expiry path, matching
+    `_op_may_mutate`'s own lazy-on-failure-path-only pattern above: this
+    module is on every invocation's cold-start preamble and is
+    import-budget-guarded, and `ipc` is neither small nor free. Falls back
+    to `MUTATION_READ_DEADLINE_SECS` on any import or lookup failure --
+    fail safe toward the honest floor, never an unbounded or unresolved
+    wait.
+    """
+    if MUTATION_READ_DEADLINE_SECS != _MUTATION_READ_DEADLINE_DEFAULT:
+        return MUTATION_READ_DEADLINE_SECS
+    try:
+        from coordinator_core.ipc import _timeout_for
+
+        return _timeout_for(method)
+    except Exception:
+        return MUTATION_READ_DEADLINE_SECS
+
+
+_MUTATION_INDETERMINATE_MESSAGE = (
+    "warm dispatch indeterminate: this MUTATING op's request was delivered to "
+    "the warm engine, which did not answer in time. The op may have COMPLETED "
+    "-- a slow op is not a hung one, and the engine does not stop when this "
+    "client stops waiting. Reconcile against real state (e.g. `git log`) "
+    "before re-running; re-running blind is how a duplicate commit happens. "
+    "Deliberately NOT retried and NOT re-run cold here: a delivered mutation "
+    "re-executed is exactly the double-execution this refusal prevents "
+    "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
+    "d4c7d9dc8e14.yaml)."
+)
+
+
+def _indeterminate_envelope(msg: dict, detail: str) -> dict:
+    """A JSON-RPC error envelope for a delivered-but-unanswered mutation.
+
+    Returned rather than raised, and returned rather than `None`, because both
+    alternatives are wrong in the same direction: `None` is this module's
+    "go cold" signal, which re-runs the op, and a raise is swallowed by
+    `try_warm_dispatch`'s Backstop 2 into that same `None`. An envelope reaches
+    `coordinator_core.invoke.__main__` as THE response, so the cold path is
+    skipped and the caller's existing error ladder surfaces this text.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {
+            "code": WARM_DISPATCH_INDETERMINATE,
+            "message": f"{_MUTATION_INDETERMINATE_MESSAGE} ({detail})",
+        },
+    }
 
 
 def try_warm_dispatch(msg: dict) -> Optional[dict]:
@@ -332,13 +504,60 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
         except OSError as exc:
             if getattr(exc, "winerror", None) == ERROR_PIPE_BUSY:
                 return None
+            if exc.errno == errno.EINVAL:
+                # A second, distinct contended-pipe outcome -- see the
+                # module docstring's anti-storm table row for this branch
+                # (problem 4 of the 2026-08-19 concurrency problem set).
+                # Never a named winerror==231 case (that branch above would
+                # already have caught it), but empirically just as much
+                # "server up, contended" as ERROR_PIPE_BUSY is -- go cold,
+                # never spawn, and never fall through to Backstop 2's
+                # generic stderr write for a classified outcome.
+                return None
             raise
 
+        # THE INVARIANT THIS BLOCK EXISTS TO HOLD: once a MUTATING request has
+        # been DELIVERED, this client never re-sends it and never goes cold.
+        # Every "go cold" exit below re-runs the op in a fresh cold spawn, and
+        # every `continue` re-sends it -- both of which are correct only while
+        # the server cannot have executed the request. After a successful
+        # flush that is no longer true, and treating it as true is the
+        # 2026-08-19 defect: a `git commit` outran the 2s liveness deadline,
+        # the client went cold, the cold engine committed nothing (the paths
+        # were already committed by the warm server, still finishing), and the
+        # operator was told "no commit landed" about a commit that exists --
+        # under a DIFFERENT Commit-Token, because the second execution minted
+        # its own. Evidence: peer session 30008a4b, e527554b8/b330d767d.
+        #
+        # `delivered` is set only after `flush()` returns: a write that fails
+        # part-way leaves a partial frame, which the server cannot parse as a
+        # request and therefore never dispatches -- safe to re-open.
+        delivered = False
         try:
             fh.write(payload)
             fh.flush()
-            line = _read_line_with_deadline(fh, READ_DEADLINE_SECS)
+            delivered = True
+            pending = _PendingRead(fh)
+            line = pending.wait(READ_DEADLINE_SECS)
+            if line is _TIMED_OUT:
+                # The liveness probe expired. For a compute-only op that is the
+                # table's own "wedged server -> go cold" row, unchanged. For a
+                # mutation it asks the wrong question: the server is not wedged,
+                # it is WORKING. Keep waiting on the SAME read (never a second
+                # request) up to the mutation's own deadline.
+                if not _op_may_mutate(msg.get("method")):
+                    return None
+                mutation_deadline = _mutation_deadline_for(msg.get("method"))
+                line = pending.wait(
+                    max(0.0, mutation_deadline - READ_DEADLINE_SECS)
+                )
+                if line is _TIMED_OUT:
+                    return _indeterminate_envelope(
+                        msg, f"no response within {mutation_deadline}s"
+                    )
         except BrokenPipeError:
+            if delivered and _op_may_mutate(msg.get("method")):
+                return _indeterminate_envelope(msg, "pipe broke after delivery")
             if attempt == 0:
                 continue  # the table's one re-open
             return None
@@ -348,18 +567,69 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
             except OSError:
                 pass
 
+        # From here on the server ANSWERED -- bytes came back -- but the answer
+        # is unusable. Bytes back means it read and dispatched the request, so
+        # for a mutation the work may well have been performed and re-running
+        # it cold could double-execute. These collapse onto the honest refusal.
+        # The zero-byte case is deliberately NOT one of them; see its own
+        # branch below for the evidence that separates them.
+        def _cold_or_indeterminate(detail: str):
+            if _op_may_mutate(msg.get("method")):
+                return _indeterminate_envelope(msg, detail)
+            return None
+
         if not line or not line.strip():
+            # EOF with NOT ONE BYTE back. This is the one post-delivery shape
+            # that goes cold even for a mutation, and the distinction is
+            # evidence, not convenience: every other shape here has the server
+            # demonstrably ENGAGED with this request (it answered slowly, or it
+            # answered with something), whereas a zero-byte close is what a
+            # server that never serviced the connection at all looks like.
+            # That is the common case on this box, not a corner: the warm
+            # server keeps a single pending listener
+            # (docs/problems/2026-08-19-the-warm-engine-serves-one-caller-at-a-
+            # t.md), so under the stated load norm a connection routinely dies
+            # unserviced. `flush()` returning proves the bytes left THIS
+            # process into the pipe buffer -- it never proved the server read
+            # them, and treating it as proof is what made a large-pathspec
+            # commit fail outright here instead of taking the cold path it has
+            # always taken (caught by
+            # `test_large_pathspec_round_trips_end_to_end`).
+            #
+            # Never-worse check, which is what settles it: a server that read,
+            # dispatched, and died before answering ALSO produces this shape,
+            # and for that one going cold can double-execute. But that was
+            # equally true before this change -- cold is what it already did --
+            # so this branch is the pre-existing behaviour preserved, not a
+            # hole this change opens. The defect this change exists to close
+            # (a WORKING server outrunning a 2s liveness probe) lands on the
+            # deadline branch above, which stays strict.
             return None
 
         try:
             response = json.loads(line)
         except json.JSONDecodeError:
-            return None
+            return _cold_or_indeterminate("malformed response frame")
         if not isinstance(response, dict) or "jsonrpc" not in response:
-            return None
+            return _cold_or_indeterminate("response is not a JSON-RPC envelope")
+
+        # Re-emit the op's diagnostics on THIS process's stderr, which is where
+        # a cold spawn would have put them and therefore the only stream the
+        # caller reads. Popped, not passed through: nothing downstream may see
+        # a response shape that differs between warm and cold. See
+        # `warm.entry_seam`'s DIAGNOSTIC-axis note.
+        op_stderr = response.pop("_stderr", None)
+        if isinstance(op_stderr, str) and op_stderr.strip():
+            print(op_stderr, file=sys.stderr, flush=True)
 
         error = response.get("error")
         if isinstance(error, dict) and error.get("code") == ENGINE_SKEW:
+            # The ONE post-delivery cold fallback that stays safe for a
+            # mutation, and it is safe by the server's own construction, not by
+            # assumption: `server.py::_serve_one` performs its skew check and
+            # returns BEFORE it calls `dispatch(msg)`. A skewed server has
+            # provably not executed the op, so re-running it cold cannot
+            # duplicate anything.
             return None
         return response
 

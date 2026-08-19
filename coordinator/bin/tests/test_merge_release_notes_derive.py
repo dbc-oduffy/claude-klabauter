@@ -282,3 +282,49 @@ def argparse_namespace():
     import argparse
 
     return argparse.Namespace()
+
+
+class TestContainsAllAbbreviatedShas:
+    """`commits:` entries in a completion-log carry ABBREVIATED shas (8 chars);
+    `git rev-list` emits full 40-char ones. Equality membership silently returns
+    False for every real entry, collapsing tag resolution to the release-tag-cut
+    fallback with no exception and no other failing test. Regression guard for
+    the batched form of `_contains_all` (one `rev-list` per tag replacing a
+    per-commit `merge-base --is-ancestor` spawn).
+    """
+
+    def _stub_rev_list(self, monkeypatch, shas):
+        def _fake_git(*args):
+            assert args[0] == "rev-list", args
+            return subprocess.CompletedProcess(
+                args=list(args), returncode=0, stdout="\n".join(shas) + "\n", stderr=""
+            )
+
+        monkeypatch.setattr(_mod, "_git", _fake_git)
+
+    def test_abbreviated_commit_matches_full_ancestor_sha(self, monkeypatch):
+        full = "1389e207ab34cd56ef78901234567890abcdef12"
+        self._stub_rev_list(monkeypatch, [full, "f" * 40])
+        assert _mod._contains_all("v1.0.0", [full[:8]]) is True
+
+    def test_full_commit_still_matches(self, monkeypatch):
+        full = "1389e207ab34cd56ef78901234567890abcdef12"
+        self._stub_rev_list(monkeypatch, [full])
+        assert _mod._contains_all("v1.0.0", [full]) is True
+
+    def test_absent_commit_does_not_match(self, monkeypatch):
+        self._stub_rev_list(monkeypatch, ["1389e207ab34cd56ef78901234567890abcdef12"])
+        assert _mod._contains_all("v1.0.0", ["deadbeef"]) is False
+
+    def test_all_must_be_present(self, monkeypatch):
+        self._stub_rev_list(monkeypatch, ["1389e207ab34cd56ef78901234567890abcdef12"])
+        assert _mod._contains_all("v1.0.0", ["1389e207", "deadbeef"]) is False
+
+    def test_unresolvable_tag_yields_no_match(self, monkeypatch):
+        def _fake_git(*args):
+            return subprocess.CompletedProcess(
+                args=list(args), returncode=128, stdout="", stderr="bad revision"
+            )
+
+        monkeypatch.setattr(_mod, "_git", _fake_git)
+        assert _mod._contains_all("v9.9.9", ["1389e207"]) is False

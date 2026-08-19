@@ -351,7 +351,7 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "<dynamic>",
         0,
     ): _Legitimation(
-        # `ceremony.scoped_git_commit`'s counting seam itself. `_count_op_git_calls` substitutes
+        # `ceremony.scoped_git_commit`'s counting seam itself. `_count_op_spawns_both_ways` substitutes
         # the FUNCTION OBJECT `git_native._git` before invoking the op -- every call to
         # `git_native._git(...)`, whatever `_invoke`'s own body does internally, routes through the
         # substituted name first. This is not a call INTO the seam that the seam then hides from
@@ -376,6 +376,54 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         counter=_SEAM,
         counted_by="coordinator/tests/test_reap_integrated_review_findings_spawn_budget.py",
         executed="Seam substitution; the file's only spawn site, exercised by `per_reap_call=1`.",
+    ),
+    # The three `ceremony.scoped_git_commit` bypasses that C6 closed. Each was a REAL bypass of
+    # that op's `git_native._git` seam -- none of them route through it -- and none became counted
+    # by being rerouted. What changed is the COUNTER: `test_commit_e2e_spawn_budget.py` now also
+    # counts via the `subprocess.run` module attribute, scoped to the op invocation, against new
+    # `op_total_*` manifest keys (23/24/28 vs the seam's 17/18/20). The seam counter is
+    # routing-narrow by construction and could never have seen these; the global counter is
+    # routing-agnostic and does. Rerouting them through `git_native._git` was the alternative and
+    # was NOT taken: `auto_push` is a hook with callers outside this pipeline, so that would change
+    # their behaviour to buy a measurement.
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/session/scope.py",
+        "_git_run",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at scope.py:420 during the op invocation, "
+        "reached from `_handler`'s own `release_committed_claims`/`release_phantom_claims` calls. "
+        "Counted by `op_total_green_path` and siblings (exact equality).",
+    ),
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/hooks/auto_push.py",
+        "_run_git",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at auto_push.py:360 during the op "
+        "invocation, reached via `run_commit_pipeline` -> `_drain_pending_push_after_sync` -> "
+        "`drain_pending_push`. Its three `auto_push` siblings (`push_once`, `_is_ancestor`, "
+        "`_invoke_cockpit_publish`) were measured NOT to execute and stay red.",
+    ),
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/git/divergence.py",
+        "_run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at divergence.py:53 during the op "
+        "invocation, reached from `run_commit_pipeline`'s `diverging_paths` call.",
     ),
     (
         "changelog.cited_in_range_count",
@@ -450,6 +498,91 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "counter of `test_multiple_committed_rows_spawn_exactly_two_git_calls` "
         "(`assert spawns == budgeted`).",
     ),
+    # The three CONDITIONAL-PATH `auto_push` bypasses C6 closed with a fixture, not a reroute
+    # (`test_commit_e2e_spawn_budget.py::test_pending_drain_superseded_path_spawn_count_matches_
+    # budget`, opro-03 C6, 2026-08-19). All three sit inside `run_push_with_retry`'s
+    # non-fast-forward/superseded early return, reached only when the pending-push drain fires
+    # AFTER a due record names a branch that is itself non-fast-forward-superseded against
+    # origin -- a precondition no prior fixture here carried. `pending_drain_superseded`'s own
+    # fixture plants that precondition on a SECOND, synthetic branch (`work/pending`) the op
+    # never touches, so the op's own commit still lands cleanly on `work/main` and triggers the
+    # drain, while `work/pending`'s divergence is what the drain's own push then resolves via
+    # `_is_superseded`. Counted by `op_total_pending_drain_superseded` (39), never by the
+    # `pending_drain_superseded` seam figure (23) -- none of the three route through
+    # `git_native._git` (see that key's own manifest rationale).
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/hooks/auto_push.py",
+        "push_once",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-19: `test_pending_drain_superseded_path_spawn_count_matches_"
+        "budget`'s fixture plants a due pending-push record naming a non-fast-forward-superseded "
+        "branch; `run_push_with_retry`'s retry loop calls `push_once` unconditionally as its "
+        "first attempt (the rejected non-fast-forward push that then routes into "
+        "`_is_superseded`). Counted by `op_total_pending_drain_superseded` (exact equality).",
+    ),
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/hooks/auto_push.py",
+        "_is_ancestor",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-19: same fixture, DIRECTLY observed (not inferred from the "
+        "spawn count) via a `monkeypatch.setattr(auto_push, \"_is_ancestor\", wrapper)` call "
+        "counter asserted `>= 1` -- `_is_superseded`'s own call, deciding the local (schema-"
+        "commit) sha is an ancestor of the freshly fetched `refs/remotes/origin/work/pending`, "
+        "which is what drives the early-return branch these three sites share. Counted by "
+        "`op_total_pending_drain_superseded` (exact equality).",
+    ),
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/hooks/auto_push.py",
+        "_invoke_cockpit_publish",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-19: same fixture, DIRECTLY observed via a "
+        "`monkeypatch.setattr(auto_push, \"_invoke_cockpit_publish\", wrapper)` call counter "
+        "asserted `>= 1` -- the fixture plants `.github/scripts/publish_cockpit_contract.py` on "
+        "the checked-out branch's working tree and a schema-touching commit on the synthetic "
+        "branch, so `_maybe_publish_cockpit_contract`'s `_schema_touched` check (against the "
+        "empty-tree fallback base, no prior `refs/remotes/origin/work/pending`) resolves True on "
+        "the superseded early-return's own success leg. Counted by "
+        "`op_total_pending_drain_superseded` (exact equality).",
+    ),
+    (
+        "execute_plan_assemble.sibling_committed_chunk_ids_memo",
+        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
+        "_run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        # Was red for want of a SHAPE, not a fixture precondition -- this op's only budgeted shape
+        # was `second_call_identical_inputs: 0`, the memo hit, which spawns nothing by
+        # construction, so no counter of it could ever see any site. The first-call shape added
+        # 2026-08-19 is what makes the op's own scan run at all. Note the counter here is the
+        # module attribute `coas.subprocess.run`, which is routing-narrow by construction: it sees
+        # this site precisely because the site spawns THROUGH that module's `subprocess`, and it
+        # is why `repo_root.py::_spawn_rev_parse` stays red under this same op rather than riding
+        # in on the same shape.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/execute_plan_assemble/tests/"
+        "test_sibling_committed_chunk_ids_memo_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded under a stack-recording `subprocess.run` "
+        "wrapper, 3 of 3 spawns attributed to `close_out_and_stamp.py::_run_git` "
+        "(`_chunk_evidence_log_range`'s merge-base plus two `_deliverable_log_records` "
+        "queries), under the exact-equality counter of "
+        "`test_first_call_with_one_sibling_spawn_count_matches_budget`.",
+    ),
     (
         "ops.discover_working_repos",
         "coordinator_core/ops/discover_working_repos.py",
@@ -479,19 +612,23 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
 _UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {
     (
         "execute_plan_assemble.sibling_committed_chunk_ids_memo",
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py::_run_git",
-    ): "Its budget is `second_call_identical_inputs=0` -- the asserting test measures the MEMO-HIT "
-    "path, which by construction spawns nothing. Zero spawns were origin-recorded for this test.",
-    (
-        "execute_plan_assemble.sibling_committed_chunk_ids_memo",
         "coordinator_core/git/repo_root.py::_spawn_rev_parse",
-    ): "Same memo-hit fixture; no spawn of any kind executes under the counter.",
+    ): "Same bare-repo-only `git_common_dir` fallback as the ceremony entry above. Measured "
+    "2026-08-19 under BOTH of this op's shapes -- the memo hit, and the first-call shape with a "
+    "real sibling repo, and again with a sibling directory having no `.git` anywhere up to the "
+    "root: 3 of 3 spawns came from `close_out_and_stamp::_run_git` and this site executed in "
+    "none of them. Adding further shapes to this op will not reach it.",
     (
-        "bin.coordinator_harvest_deferrals_dedup_scan_root_resolution",
+        "ceremony.scoped_git_commit",
         "coordinator_core/git/repo_root.py::_spawn_rev_parse",
-    ): "`show_toplevel` walks for the ordinary case and spawns only when the walk finds no `.git` "
-    "entry; the fixture's tree has one, so `_spawn_rev_parse` never runs. This is the same fact "
-    "the manifest's own rationale records when it lowered that budget from 3 to 2.",
+    ): "Reachable via `git_common_dir`'s spawn fallback, NOT `show_toplevel`'s -- the latter was "
+    "deleted 2026-08-19 once measured to have no case in which it returned a right answer the "
+    "walk had not already produced. `git_common_dir`'s fallback is different and is KEPT: "
+    "`git rev-parse --git-common-dir` answers rc=0 in a BARE repo, where the walk finds no "
+    "`.git` and has nothing to report. That is the condition under which this site is live -- "
+    "and it is mutually exclusive with this op's own precondition, since `scoped_git_commit` "
+    "commits into a worktree and a bare repo has none. Not a fixture omission: no fixture for "
+    "THIS op can be in a bare repo and still be this op.",
 }
 
 
@@ -947,7 +1084,7 @@ def test_plant_mechanism_drift_is_detected(tmp_path, monkeypatch):
 def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
     """The C-13 gate. For each of the nine live budgeted entrypoints, every `spawn_policy`-
     detected spawn site whose enclosing function is transitively reachable from that entrypoint
-    must carry a `_LEGITIMIZED_SITES` entry for THAT op. Still EXPECTED RED, at 10 of the original
+    must carry a `_LEGITIMIZED_SITES` entry for THAT op. Still EXPECTED RED, at 2 of the original
     18 (module docstring, "THIS GATE'S OPERATIONAL DEFINITION"); this is deliberate, not a bug in
     the gate.
 
@@ -959,22 +1096,57 @@ def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
     marker comes off and the gate becomes standing -- that removal is the definition of C6 being
     done, and it must not be done by populating `_LEGITIMIZED_SITES` wholesale to buy a green.
 
-    THE 10 THAT REMAIN are two populations, and conflating them is the main way the next pass on
-    this file goes wrong:
+    THE 2 THAT REMAIN, and how the previous 9 left. The `ceremony.scoped_git_commit` bypasses
+    were SEVEN: three were closed 2026-08-19 (opro-03 C6, first pass) by giving their op a
+    counter that could SEE them -- `test_commit_e2e_spawn_budget.py` counts via the
+    `subprocess.run` module attribute against `op_total_*` keys. The remaining THREE were
+    CONDITIONAL-PATH (`push_once`, `_is_ancestor`, `_invoke_cockpit_publish`) -- reachable,
+    spawning via `subprocess.run`, and counted the moment they ran, but no fixture took their
+    branch. C6's second pass (`test_pending_drain_superseded_path_spawn_count_matches_budget`)
+    closed all three the same way as the first: NOT by rerouting them through `git_native._git`
+    (`auto_push` is a hook with callers outside this pipeline, so that would change their
+    behaviour to buy a measurement) but by giving the op's existing `op_total_*` counter a
+    fixture that actually reaches the non-fast-forward/superseded branch -- a due pending-push
+    record naming a second, synthetic branch engineered non-fast-forward-superseded against
+    origin, with a planted cockpit-publish script and a schema-touching commit. All seven bypasses
+    are now counted by `op_total_*` keys (23/24/28/39) alongside the seam's 17/18/20/23; none was
+    legitimized on the strength of the counter alone -- each `executed` leg cites a DIRECT call
+    counter (`monkeypatch.setattr` wrapper, asserted `>= 1`), not an inference from the spawn
+    total matching.
 
-      - SEVEN are real `ceremony.scoped_git_commit` bypasses (`auto_push` x4, `session/scope.py`,
-        `git/divergence.py`, `git/repo_root.py`). That op's counter wraps `git_native._git` and
-        none of these route through it. They want a design pass, not seven edits: `auto_push`'s
-        push/retry/publish leg is a subsystem, reached via `_handler` -> `run_commit_pipeline` ->
-        `_drain_pending_push_after_sync`, plus `_handler`'s own claim-release calls. Note that
-        `green_path: 17` would not move if they grew -- that fixture configures no remote, so the
-        drain never runs. Counting them means giving the drain a budget of its own or extending
-        this op's shapes to cover it; raising a budget to make a count pass stays forbidden.
-      - THREE are measured-unreached (`_UNCOUNTED_MEASURED_UNREACHED`): reachable, and under an
-        exact-equality global counter, but that counter's fixture never runs them. They are
-        discharged by giving the asserting test a fixture that reaches the site -- NOT by
-        legitimizing them on the strength of the counter alone, which is precisely the leg-3
-        failure the operational definition exists to name.
+    `sibling_committed_chunk_ids_memo`'s `_run_git` left the list the same day, and by a third
+    route worth naming separately: not a fixture precondition and not a counter change, but a
+    missing SHAPE. That op's only budgeted shape was `second_call_identical_inputs: 0`, the memo
+    hit, which spawns nothing by construction -- and a shape that spawns nothing can never make
+    any site visible to any counter, so the site was undischargeable while that was the op's only
+    shape. `first_call_one_sibling` is the shape in which the op's own scan actually runs.
+
+    THE 2 SURVIVORS are ONE SITE: `repo_root::_spawn_rev_parse`, under two ops. The third
+    instance (`bin.coordinator_harvest_deferrals_dedup_scan_root_resolution`) left the list by
+    DELETION rather than by counting -- it reached the site only through `show_toplevel`'s spawn
+    fallback, and that fallback is gone. Measured 2026-08-19, every reachable outcome of it was
+    either a failure the walk had already established or, with `GIT_DIR` set, git reporting the
+    CWD as the toplevel: an actively wrong answer for a caller asking which worktree it is in.
+    The bare-repo and ceiling-directory cases it was justified by cannot be answered by that form
+    at all. Removing a spawn beats counting one, and that is the disposition to reach for first.
+
+    The two that remain reach the site through `git_common_dir`'s fallback instead, which is NOT
+    the same call and is deliberately kept: `git rev-parse --git-common-dir` answers rc=0 in a
+    BARE repo, where the walk finds no `.git` and has nothing to report. So the site is live
+    under a real, nameable condition -- and that condition is mutually exclusive with both ops'
+    own preconditions. `ceremony.scoped_git_commit` commits into a worktree, and a bare repo has
+    none; `sibling_committed_chunk_ids_memo` was measured across all three of its shapes (memo
+    hit, first-call with a real sibling, first-call with a sibling having no `.git` up to the
+    root) with the site executing in none.
+
+    THE OPEN QUESTION these two pose, recorded rather than resolved by a disposition invented to
+    absorb it: if an op's own precondition negates a site's, no fixture for that op can reach it,
+    and the gate's premise -- every reachable spawn site must be visible to that op's counter --
+    is not satisfiable for the pair. The honest resolution is a change to the gate's CONTRACT
+    (a disposition that requires naming both mutually-exclusive preconditions, so the claim stays
+    falsifiable by anyone who produces a reaching fixture), not a fixture and not an exemption.
+    Do not clear these two by legitimizing on the strength of a counter alone -- that is
+    precisely the leg-3 failure the operational definition exists to name.
 
     The four tests around this one are NOT `designed_red` and gate normally: the entrypoint
     registry must resolve, no exemption may name a dead op or drift off its counter's spawn

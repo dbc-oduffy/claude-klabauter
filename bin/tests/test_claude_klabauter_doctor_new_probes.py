@@ -7,7 +7,6 @@ function calls (no subprocess) — loads bin/claude-klabauter-doctor-probe.py as
 via importlib for fast, isolated, monkeypatched execution.
 
 Probes under test:
-  claude-klabauter.coverage.seam   — state/coverage/ writable; gate-result.json schema-valid if present
   claude-klabauter.resident.debris — detects stale daemon paths; INFO on found, PASS on absent, NEVER DEGRADED
   claude-klabauter.worktree.bloat  — detects large untracked/tracked files via filesystem walk; INFO on
                             found, PASS on absent, NEVER DEGRADED
@@ -28,7 +27,6 @@ Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C6
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -93,121 +91,6 @@ def _is_parseable_probe_result(r: object) -> bool:
         and isinstance(r.probe, str) and len(r.probe) > 0  # type: ignore[union-attr]
         and isinstance(r.status, str) and len(r.status) > 0  # type: ignore[union-attr]
     )
-
-
-# ---------------------------------------------------------------------------
-# claude-klabauter.coverage.seam tests
-# ---------------------------------------------------------------------------
-
-
-class TestCoverageSeamProbe:
-    """_run_probe_coverage_seam() — three distinct paths: absent / valid / malformed.
-
-    Purpose: Lock the coverage-seam probe behavior so future changes that break
-    the healthy-absent or malformed-JSON paths are caught immediately.
-    """
-
-    def test_coverage_seam_dir_absent_is_pass(self, tmp_path: Path) -> None:
-        """PASS when the state/ tree is entirely absent (fresh install, no coverage run).
-
-        An absent coverage seam is "not yet run" — never a fault. The probe walks up to
-        the nearest existing writable ancestor (tmp_path here) and PASSes; it must not
-        require state/ to pre-exist, and must not crash. (F6 + slice-A F4 reconciled: the
-        probe checks the nearest existing ancestor, not the absent parent literally.)
-        """
-        mod = _require_module()
-
-        # tmp_path is a fresh empty writable directory — no state/ tree at all.
-        result = mod._run_probe_coverage_seam(tmp_path)
-
-        assert _is_parseable_probe_result(result), (
-            "probe must always return a parseable _ProbeResult (state/ tree entirely absent)"
-        )
-        assert result.probe == "claude-klabauter.coverage.seam"
-        assert result.status == mod._PASS, (
-            f"absent state/ tree is not-yet-run (PASS), got {result.status!r}"
-        )
-
-    def test_coverage_seam_absent_is_pass(self, tmp_path: Path) -> None:
-        """PASS when state/coverage/ exists but gate-result.json is absent.
-
-        'No coverage artifact yet' is not a fault per spec.
-        """
-        mod = _require_module()
-
-        # Provide a CLAUDE_KLABAUTER_ROOT with an empty state/coverage/ dir.
-        coverage_dir = tmp_path / "state" / "coverage"
-        coverage_dir.mkdir(parents=True)
-
-        result = mod._run_probe_coverage_seam(tmp_path)
-
-        assert _is_parseable_probe_result(result), (
-            "probe must always return a parseable _ProbeResult"
-        )
-        assert result.probe == "claude-klabauter.coverage.seam"
-        assert result.status == mod._PASS, (
-            f"Expected PASS when gate-result.json absent (not yet run), got {result.status!r}"
-        )
-        assert not result.skipped
-
-    def test_coverage_seam_valid_json_is_pass(self, tmp_path: Path) -> None:
-        """PASS when gate-result.json is present and contains valid JSON."""
-        mod = _require_module()
-
-        coverage_dir = tmp_path / "state" / "coverage"
-        coverage_dir.mkdir(parents=True)
-        gate_file = coverage_dir / "gate-result.json"
-        gate_file.write_text(json.dumps({"ok": True, "ts": "2026-07-06T00:00:00Z"}))
-
-        result = mod._run_probe_coverage_seam(tmp_path)
-
-        assert _is_parseable_probe_result(result)
-        assert result.probe == "claude-klabauter.coverage.seam"
-        assert result.status == mod._PASS, (
-            f"Expected PASS when gate-result.json is valid JSON, got {result.status!r}"
-        )
-
-    def test_coverage_seam_malformed_json_is_broken(self, tmp_path: Path) -> None:
-        """BROKEN when gate-result.json exists but is not valid JSON.
-
-        Probe-authoring invariant: emit a parseable _ProbeResult, not a bare crash.
-        """
-        mod = _require_module()
-
-        coverage_dir = tmp_path / "state" / "coverage"
-        coverage_dir.mkdir(parents=True)
-        gate_file = coverage_dir / "gate-result.json"
-        gate_file.write_text("{not valid json<<<")
-
-        result = mod._run_probe_coverage_seam(tmp_path)
-
-        assert _is_parseable_probe_result(result), (
-            "malformed gate-result.json must produce a parseable _ProbeResult, not a crash"
-        )
-        assert result.probe == "claude-klabauter.coverage.seam"
-        assert result.status == mod._BROKEN, (
-            f"Expected BROKEN when gate-result.json is malformed, got {result.status!r}"
-        )
-        assert isinstance(result.remediation, str) and len(result.remediation) > 0, (
-            "BROKEN result must include a non-empty remediation"
-        )
-
-    def test_coverage_seam_none_root_is_broken(self) -> None:
-        """BROKEN (not a crash) when claude_klabauter_root is None.
-
-        Probe-authoring invariant applies even when CLAUDE_KLABAUTER_ROOT is unresolved.
-        """
-        mod = _require_module()
-
-        result = mod._run_probe_coverage_seam(None)
-
-        assert _is_parseable_probe_result(result), (
-            "None claude_klabauter_root must produce a parseable _ProbeResult, not a crash"
-        )
-        assert result.probe == "claude-klabauter.coverage.seam"
-        assert result.status == mod._BROKEN, (
-            f"Expected BROKEN when claude_klabauter_root is None, got {result.status!r}"
-        )
 
 
 # ---------------------------------------------------------------------------

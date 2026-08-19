@@ -38,15 +38,17 @@ already resolved (e.g. a repo was just created under that path), it must
 call `clear_memo()` explicitly -- this module never invalidates on its own.
 
 Non-spawning parent-walk vs spawn, honestly per form:
-  - `show_toplevel()` -- WALKS (no spawn) for the ordinary case: climbs
-    `cwd` looking for a `.git` entry (dir OR file -- submodules and
-    `--separate-git-dir` clones use a `.git` FILE, which the walk still
-    recognizes as "found", matching git's own behavior of accepting either
-    shape at the boundary). Falls back to a SPAWN only if no `.git` entry
-    is found on the walk up to `cwd.anchor` -- git's own toplevel discovery
-    additionally consults `GIT_DIR`/ceiling directories and bare-repo
-    ancestor markers this module does not attempt to replicate walking, so
-    the spawn fallback is the ground truth of last resort.
+  - `show_toplevel()` -- WALKS, and ONLY walks. Climbs `cwd` looking for a
+    `.git` entry (dir OR file -- submodules and `--separate-git-dir` clones
+    use a `.git` FILE, which the walk still recognizes as "found", matching
+    git's own behavior of accepting either shape at the boundary). Returns
+    None when the walk finds nothing; it never spawns. It DID have a spawn
+    fallback, justified as "the ground truth of last resort" for the
+    `GIT_DIR`/ceiling-directory/bare-repo cases the walk does not
+    replicate. Measured 2026-08-19, that fallback had no case in which it
+    returned a right answer the walk had not already produced -- see the
+    function's own docstring for the four-way probe. Deleted rather than
+    budgeted.
   - `git_dir()` -- WALKS. Delegates the `.git`-is-a-file indirection
     (submodule / `--separate-git-dir`) to
     `coordinator_core.git.git_dir.resolve_git_dir`, which returns the
@@ -72,26 +74,42 @@ Non-spawning parent-walk vs spawn, honestly per form:
   - `is_inside_work_tree()` -- SPAWNS, deliberately never derived from
     "did `show_toplevel()` return a value". See its own docstring.
 
-Negative caching: a failed resolution (no `.git` found by the walk, or a
-spawn that fails -- not a repo, git missing, timeout, non-zero exit) is
-NEVER memoized, in `_memo` or `_spawn_memo`. Only a successful resolution
-is cached, and `None` is reserved EXCLUSIVELY for "failed" -- a successful
-spawn that legitimately emits empty stdout (`--show-prefix` at the
-toplevel itself) is memoized as the empty string, never coerced to `None`.
-`_spawn_rev_parse` returns `(succeeded, value)` precisely so this
-distinction survives the boundary into `_spawn_cached`, which branches on
-`succeeded` (not on `value is None`) to decide whether to memoize -- a
-prior version of this module collapsed a successful empty result to
-`None` before that boundary, which made `show_prefix()` (and
+Negative caching: a failed WALK (no `.git` found) is NEVER memoized in
+`_memo`, and a failed SPAWN is never memoized in `_spawn_memo`. Only a
+successful resolution is cached there, and `None` is reserved EXCLUSIVELY
+for "failed" -- a successful spawn that legitimately emits empty stdout
+(`--show-prefix` at the toplevel itself) is memoized as the empty string,
+never coerced to `None`. `_spawn_rev_parse` returns `(outcome, value)`
+precisely so this distinction survives the boundary into `_spawn_cached`,
+which branches on the OUTCOME (not on `value is None`) to decide whether to
+memoize -- a prior version of this module collapsed a successful empty
+result to `None` before that boundary, which made `show_prefix()` (and
 `absolute_git_dir()`) indistinguishable between "you are at the repo
 root" and "resolution failed", so a caller's `if prefix is None: bail`
-silently bailed at the repo root. A "not found" outcome is not repo
+silently bailed at the repo root. A "not found" WALK outcome is not repo
 identity, it is the absence of one at this moment, and can flip to
 present later in the same process (e.g. a caller resolves before `git
 init` has run at that cwd) -- caching it would permanently poison that
-key for the rest of the process. Each failed call re-walks/re-spawns; a
-call after the repo starts existing resolves correctly instead of being
-served a stale `None`.
+key for the rest of the process. Each failed walk re-walks; a call after
+the repo starts existing resolves correctly instead of being served a
+stale `None`.
+
+One failure IS cached, in `_spawn_negative_memo`, and the two conditions
+it is gated on are what separate it from the hazard above rather than an
+exception to it. First, the outcome must be `_SPAWN_NOT_A_REPOSITORY`
+(exit 128) and not `_SPAWN_TRANSIENT_FAILURE` -- the earlier text named
+"timeout" alongside "not a repo" as one undifferentiated failure, and on
+this box (50-70 concurrent agents; `docs/wiki/machine-load-norm.md`) a
+timeout is transient by construction, so collapsing the two is precisely
+why nothing could be cached. Second, the form must be in
+`_WALK_BACKED_FORMS`, whose spawn is reachable only after the walk has
+already failed: a `git init` at that cwd is therefore answered by the
+re-walk and never consults this memo at all. The key carries
+`_git_env_key()` so the one remaining input that can flip the answer --
+`GIT_DIR` -- cannot be changed mid-process behind a stale entry. What this
+buys: without it, the ordinary not-a-repo case spawns `git` on EVERY call
+at that cwd (`_spawn_memo` stores successes only) to be told what the walk
+established one line earlier.
 
 `cwd=None` decision: resolved to the process's CURRENT absolute cwd (via
 `Path.cwd()`) at call time and keyed on THAT resolved value, same as any
@@ -114,10 +132,21 @@ Negative-spec:
     - Does NOT cache across DIFFERENT cwds -- the memo key is the resolved
       absolute cwd; `session.core.git_root`'s "cwd can legitimately change
       mid-process" correctness property is preserved by construction.
-    - Does NOT cache a failed resolution (`None`) at any cwd, in either
-      `_memo` or `_spawn_memo` -- see "Negative caching" above. A future
-      "simplify by caching whatever the walk/spawn returned, including
-      None" change would reintroduce this exact bug.
+    - Does NOT cache a failed resolution (`None`) at any cwd in `_memo` or
+      `_spawn_memo` -- see "Negative caching" above. A future "simplify by
+      caching whatever the walk/spawn returned, including None" change
+      would reintroduce this exact bug.
+    - Does NOT cache a TRANSIENT spawn failure (timeout, `OSError`, any
+      non-zero exit other than 128) anywhere, and does NOT cache a
+      not-a-repository failure for a form outside `_WALK_BACKED_FORMS`.
+      `_spawn_negative_memo` is narrow on BOTH axes deliberately;
+      "simplify by caching every failure the same way" collapses the
+      distinction that makes the narrow case safe.
+    - Does NOT drop `_git_env_key()` from the negative-memo key. `GIT_DIR`
+      is the measured discriminator between exit 128 and exit 0 at a cwd
+      with no `.git` (see that function's docstring); keying without it
+      would serve a stale "not a repository" to a caller that has since
+      set it.
     - Does NOT key `cwd=None` on the literal string `"None"` or otherwise
       collapse it to one shared entry -- it resolves to the process's
       actual current cwd at call time and keys on that, per "cwd=None
@@ -165,6 +194,41 @@ _memo: Dict[str, _MemoEntry] = {}
 # at all, so the type is `str`, not `Optional[str]`.
 _spawn_memo: Dict[Tuple[str, str], str] = {}
 
+# `_spawn_rev_parse` outcomes. Plain module-level strings rather than an
+# `enum`: this module is on `coordinator_core.ipc`'s cold-start path and is
+# measured against a module-count ceiling in
+# `coordinator_core/benchmarks/import-budget-manifest.json`, so it does not
+# import `enum` for three constants.
+_SPAWN_OK = "ok"
+_SPAWN_NOT_A_REPOSITORY = "not-a-repository"
+_SPAWN_TRANSIENT_FAILURE = "transient-failure"
+
+# `git rev-parse`'s exit code for "not a git repository" -- the one failure
+# this module treats as a deterministic property of (cwd, GIT_DIR,
+# GIT_WORK_TREE) rather than as a moment's bad luck.
+_GIT_NOT_A_REPOSITORY_RC = 128
+
+# The forms whose spawn is REACHED ONLY WHEN THE WALK ALREADY FAILED. This
+# set is the precondition that makes negative caching safe, and it is why
+# `--show-prefix`, `--absolute-git-dir` and `--is-inside-work-tree` are
+# absent from it: those spawn unconditionally, so a cached
+# not-a-repository answer for them WOULD survive a `git init` at the same
+# cwd and poison the key -- exactly the hazard the module docstring's
+# "Negative caching" section names. For the three forms below the hazard
+# cannot occur: reaching `_spawn_cached` at all requires
+# `_walk_for_dot_git` to have found nothing, walk failure is deliberately
+# never memoized, so a post-`git init` call re-walks, finds `.git`, and
+# returns before consulting any memo.
+_WALK_BACKED_FORMS = frozenset({"git-dir", "git-common-dir"})
+
+# (resolved-cwd, form, git-env-key) for a walk-backed form measured to be
+# deterministically not-a-repository. Membership means "the spawn was run
+# and answered 128"; the entry suppresses a RE-spawn that cannot answer
+# differently. Keyed with the git env discriminator because that is the one
+# input, short of the `.git` the walk already rules out, that can flip the
+# answer -- see `_git_env_key`.
+_spawn_negative_memo: set = set()
+
 
 def clear_memo() -> None:
     """Drop every memoized resolution. Not called automatically -- see the
@@ -174,6 +238,7 @@ def clear_memo() -> None:
     """
     _memo.clear()
     _spawn_memo.clear()
+    _spawn_negative_memo.clear()
 
 
 def _resolve_cwd(cwd: Optional[str]) -> str:
@@ -199,20 +264,33 @@ def _walk_for_dot_git(start: Path) -> Optional[Path]:
         current = current.parent
 
 
-def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
-    """Returns `(succeeded, value)`. `succeeded` is False only for an
-    actual resolution failure (spawn error, timeout, non-zero exit) --
-    distinct from a SUCCESSFUL spawn that legitimately emits empty stdout
-    (e.g. `--show-prefix` at the toplevel itself), which is `(True, "")`
-    and DOES get memoized. `value` is `None` iff `succeeded` is False --
-    a successful empty result is the empty string, never `None`, so a
-    caller (or `_spawn_cached`) can tell "you are at the repo root" apart
-    from "resolution failed" by checking `succeeded`/`value is None`
-    directly, without the two collapsing into the same `None` at the
-    public API boundary. Collapsing "succeeded with empty output" into
+def _spawn_rev_parse(args: list, cwd: str) -> Tuple[str, Optional[str]]:
+    """Returns `(outcome, value)`, where `outcome` is one of `_SPAWN_OK`,
+    `_SPAWN_NOT_A_REPOSITORY`, or `_SPAWN_TRANSIENT_FAILURE`.
+
+    `_SPAWN_OK` covers a SUCCESSFUL spawn that legitimately emits empty
+    stdout (e.g. `--show-prefix` at the toplevel itself), which is
+    `(_SPAWN_OK, "")` and DOES get memoized. `value` is `None` iff the
+    outcome is not `_SPAWN_OK` -- a successful empty result is the empty
+    string, never `None`, so a caller (or `_spawn_cached`) can tell "you
+    are at the repo root" apart from "resolution failed" by checking the
+    outcome directly, without the two collapsing into the same `None` at
+    the public API boundary. Collapsing "succeeded with empty output" into
     "failed" would either wrongly cache a real failure or wrongly refuse to
     cache a legitimate empty-string result -- see module docstring's
     "Negative caching" section.
+
+    The two failure outcomes are kept APART rather than collapsed into one
+    `False`, because they have opposite cache semantics and this module
+    used to conflate them: `git rev-parse` exits 128 for "not a git
+    repository", which is a DETERMINISTIC property of `cwd` plus the
+    ambient `GIT_DIR`/`GIT_WORK_TREE`, whereas a timeout or an `OSError`
+    is transient by construction on a box running 50-70 concurrent agents
+    (`docs/wiki/machine-load-norm.md`). Caching the former is safe under
+    the conditions `_spawn_cached` enforces; caching the latter would make
+    one loaded moment permanent for the rest of the process. Any other
+    non-zero exit is treated as transient -- the conservative direction,
+    since only 128 is documented as the not-a-repository signal.
     """
     # Function-local: this is the spawn FALLBACK — the walk answers the ordinary
     # case without it, so on the common path `subprocess` and its ~10 transitive
@@ -233,10 +311,12 @@ def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False, None
+        return _SPAWN_TRANSIENT_FAILURE, None
+    if result.returncode == _GIT_NOT_A_REPOSITORY_RC:
+        return _SPAWN_NOT_A_REPOSITORY, None
     if result.returncode != 0:
-        return False, None
-    return True, result.stdout.strip()
+        return _SPAWN_TRANSIENT_FAILURE, None
+    return _SPAWN_OK, result.stdout.strip()
 
 
 def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
@@ -260,30 +340,84 @@ def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
     return resolved, entry
 
 
+def _git_env_key() -> str:
+    """The ambient git-environment inputs that can change a spawn's answer
+    at a cwd whose walk found no `.git`.
+
+    Measured 2026-08-19, four env combinations, in a temp dir with no
+    `.git` anywhere up to the root: bare `git rev-parse --show-toplevel`
+    exits 128; with `GIT_DIR` set it exits 0 (returning cwd, since the work
+    tree defaults to it); with `GIT_WORK_TREE` alone it still exits 128;
+    with both it exits 0 returning the work tree. `GIT_DIR` is the sole
+    discriminator for SUCCESS, and `GIT_WORK_TREE` changes the VALUE once
+    `GIT_DIR` is set -- so both belong in the key even though only one of
+    them can flip a failure into a success.
+    """
+    return "\x00".join(
+        (os.environ.get("GIT_DIR", ""), os.environ.get("GIT_WORK_TREE", ""))
+    )
+
+
 def _spawn_cached(resolved: str, form: str, args: list) -> Optional[str]:
     key = (resolved, form)
     if key in _spawn_memo:
         return _spawn_memo[key]
-    succeeded, value = _spawn_rev_parse(args, resolved)
-    if succeeded:
-        # See "Negative caching" in the module docstring -- a failed spawn
-        # (not a repo, git missing, timeout) must be retried on the next
-        # call rather than served a memoized `None` forever. A SUCCESSFUL
-        # spawn with empty output (e.g. `--show-prefix` at the toplevel) is
-        # still memoized here.
+    negative_key = (resolved, form, _git_env_key())
+    if form in _WALK_BACKED_FORMS and negative_key in _spawn_negative_memo:
+        return None
+    outcome, value = _spawn_rev_parse(args, resolved)
+    if outcome == _SPAWN_OK:
+        # See "Negative caching" in the module docstring -- a TRANSIENT
+        # failure (git missing, timeout, unexpected non-zero exit) must be
+        # retried on the next call rather than served a memoized `None`
+        # forever. A SUCCESSFUL spawn with empty output (e.g.
+        # `--show-prefix` at the toplevel) is still memoized here.
         _spawn_memo[key] = value
+    elif outcome == _SPAWN_NOT_A_REPOSITORY and form in _WALK_BACKED_FORMS:
+        # The one cacheable failure, under the one precondition that makes
+        # it cacheable -- see `_WALK_BACKED_FORMS`. Without this, the
+        # ordinary not-a-repo case re-spawns `git` on EVERY call at that
+        # cwd to learn what the walk one line earlier already established,
+        # because `_spawn_memo` stores successes only.
+        _spawn_negative_memo.add(negative_key)
     return value
 
 
 def show_toplevel(cwd: Optional[str] = None) -> Optional[str]:
     """Mirror `git rev-parse --show-toplevel`: the enclosing repo's
-    worktree root, or None. Walks for the ordinary case, spawns only when
-    the walk finds no `.git` entry -- see module docstring.
+    worktree root, or None. WALKS ONLY -- never spawns, on any path.
+
+    This form had a spawn fallback for a walk that found no `.git`, on the
+    stated rationale that git's own discovery additionally consults
+    `GIT_DIR`, ceiling directories and bare-repo ancestor markers. Measured
+    2026-08-19, that rationale does not survive contact with the binary:
+
+      - no `.git` on the walk and no env: exit 128. The spawn costs a
+        subprocess to learn what the walk established one line earlier.
+      - bare repo: exit 128, "this operation must be run in a work tree".
+        A bare repo has no toplevel to report, so the bare-repo marker case
+        the fallback was justified by cannot be answered by this form at
+        all (`--git-dir`/`--git-common-dir` DO answer there, which is why
+        those two keep their fallbacks).
+      - `GIT_WORK_TREE` alone: exit 128. Not a discriminator.
+      - `GIT_DIR` set: exit 0 -- and the answer is WRONG. Git reports the
+        CWD as the toplevel, because the work tree defaults to cwd when
+        `GIT_DIR` is given. With `GIT_DIR` pointing at an unrelated repo,
+        this returned a directory that is in no worktree of that repo as if
+        it were that repo's root.
+
+    So every reachable outcome was either a failure the walk already knew
+    or an actively wrong answer, and hooks are exactly where `GIT_DIR` is
+    set. Ceiling directories cannot rescue it either -- they only RESTRICT
+    discovery, so they can never turn a failed walk into a success.
+
+    Negative-spec: do NOT reintroduce a spawn fallback here. It is not a
+    cost/benefit tradeoff that could be re-decided under a different budget;
+    the fallback had no case in which it returned a right answer the walk
+    had not already produced.
     """
-    resolved, entry = _memo_entry(cwd)
-    if entry[0] is not None:
-        return entry[0]
-    return _spawn_cached(resolved, "show-toplevel", ["--show-toplevel"])
+    _resolved, entry = _memo_entry(cwd)
+    return entry[0]
 
 
 def git_dir(cwd: Optional[str] = None) -> Optional[str]:

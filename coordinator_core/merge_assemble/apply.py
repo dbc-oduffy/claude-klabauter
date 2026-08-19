@@ -230,10 +230,27 @@ def _compensate_grant_write(
     `/workweek-complete` -> `/merging-to-main` nesting) that the abort
     happened to leave live. Idempotent by construction: revoking an absent
     grant is success, so this running after a handback that already fired
-    is a no-op, not a second effect."""
+    is a no-op, not a second effect.
+
+    Returns `None` on success, and RAISES on a non-zero exit rather than
+    returning the raw `(code, message)` tuple. `apply_base._run_compensators`
+    reads the return value against a bool contract: only a literal `False`
+    is a non-success, and every other value — a 2-tuple included — records
+    `succeeded: True`. Handing it the tuple therefore reported the grant as
+    handed back on the abort path even when `revoke_tier_u_grant` had not
+    handed it back, which is the one lie this compensator exists to prevent.
+    A raise (recorded as `succeeded: False` with `error`) is the honest
+    signal over an explicit `False`: neither an unresolvable session id nor
+    a malformed argv is the "I ran and deliberately chose not to act"
+    that `declined: True` asserts."""
     from coordinator_core.session.grant_directive import run_grant_directive
 
-    return run_grant_directive(["revoke", "--only-ceremony", _CEREMONY_NAME])
+    code, message = run_grant_directive(["revoke", "--only-ceremony", _CEREMONY_NAME])
+    if code != 0:
+        raise RuntimeError(
+            f"grant handback compensation did not complete (exit {code}): {message}"
+        )
+    return None
 
 
 #: Per-directive-id compensators, fired in reverse landing order by

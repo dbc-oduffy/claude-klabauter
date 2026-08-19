@@ -116,7 +116,7 @@ from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
 from coordinator_core.warm.entry_seam import per_request_state
 
-__all__ = ["InFlightCounter", "main"]
+__all__ = ["InFlightCounter", "PENDING_LISTENER_POOL_SIZE", "main"]
 
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
@@ -132,6 +132,36 @@ _IDLE_WATCHDOG_POLL_SECS = 5.0
 _ERROR_PIPE_CONNECTED = 535
 
 _PIPE_BUFFER_BYTES = 65536
+
+# PENDING LISTENER POOL SIZE -- problem 3 of docs/problems/2026-08-19-the-
+# warm-engine-serves-one-caller-at-a-t.md: `_accept_and_replenish` posts
+# exactly one replacement per accepted connection, so a server that starts
+# with a single pending instance stays at exactly one pending instance for
+# its whole life, regardless of demand. `PIPE_UNLIMITED_INSTANCES` is
+# already passed at both creation sites (this module and `election.py`) --
+# the transport permits a pool, the accept chain just never asked for one.
+#
+# Formula, inputs named (per `docs/wiki/cost-budgets-and-the-kill-
+# disposition.md`'s "derive the bound, don't fit a constant to what the
+# code got away with"): `docs/wiki/machine-load-norm.md` already carries a
+# standing design assumption for exactly this question -- "estimate lock
+# hold time as though 30 callers are queued" -- sized against the same
+# 50-70-average/24-floor load norm this server runs under. A pending
+# listener is a structurally identical bet: how many simultaneous
+# contenders should one shared, short-lived resource be built to absorb
+# without degrading into false-absence errors. Reusing that number rather
+# than deriving a second one keeps the fleet's concurrency assumptions in
+# one place instead of two that can drift apart.
+#
+# Cost per pending instance, so the tradeoff stays legible: one blocked OS
+# thread (parked in a synchronous `ConnectNamedPipe` syscall -- see module
+# docstring's "TRANSPORT MODEL") plus one named-pipe kernel object with a
+# `_PIPE_BUFFER_BYTES` (64 KiB) read+write buffer. 30 of each is a few MB
+# of thread-stack reservation and ~2 MB of pipe buffer, paid only while a
+# server is resident and reclaimed in full by `os._exit(0)` on shutdown --
+# cheap against the alternative this row exists to close: contention being
+# misread as "no server" and converted into spawns (problem 2).
+PENDING_LISTENER_POOL_SIZE = 30
 
 
 class InFlightCounter:
@@ -254,8 +284,21 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
 
     from coordinator_core.ipc import dispatch_message
 
-    with per_request_state(session_id=session_id):
-        return asyncio.run(dispatch_message(msg))
+    diagnostics: list = []
+    with per_request_state(session_id=session_id, diagnostics=diagnostics):
+        response = asyncio.run(dispatch_message(msg))
+
+    # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
+    # wire envelope is frozen (contract §2.1) and a setup error is defined to
+    # carry no reason field inside it. `_stderr` is a sibling of `result`,
+    # popped by `warm.client` before the response reaches any consumer, so
+    # nothing downstream of the client can observe a shape a cold spawn lacks.
+    # Without this the reason dies on the SERVER's stderr and a warm-served
+    # refusal is mute — see `entry_seam`'s DIAGNOSTIC-axis note for the report
+    # that found it.
+    if diagnostics and isinstance(response, dict):
+        response = {**response, "_stderr": "\n".join(diagnostics)}
+    return response
 
 
 def _serve_line(
@@ -574,19 +617,58 @@ class _ServerContext:
             self._idle_tick()
 
     def serve_forever(self, first_handle: int) -> None:
-        """Kick off the self-replenishing accept chain and the idle
-        watchdog, each on its own thread, and block for the life of the
-        process.
+        """Kick off `PENDING_LISTENER_POOL_SIZE` independent self-
+        replenishing accept chains -- `first_handle` (election's own
+        instance) plus `PENDING_LISTENER_POOL_SIZE - 1` further instances
+        created here -- and the idle watchdog, each on its own thread, then
+        block for the life of the process.
+
+        Each chain already replenishes itself one-for-one on every accept
+        (`_accept_and_replenish`'s own docstring); the only change this row
+        makes is starting with N chains instead of one, which is what turns
+        "exactly one pending listener, always" into "exactly
+        `PENDING_LISTENER_POOL_SIZE` pending listeners, always" (problem 3).
+        Boot-time pool creation is best-effort: a `_create_pipe_instance`
+        failure here shrinks the pool by one and is logged, never raised --
+        a smaller-than-intended pool degrades toward today's one-listener
+        behaviour rather than killing a server that can otherwise serve.
 
         A drain triggered from any connection thread OR the idle watchdog
         ends the whole process via `os._exit(0)` (`warm.lifecycle`), which
         is the only thing that ever wakes this wait -- no separate
         interrupt mechanism is needed (module docstring's "TRANSPORT
-        MODEL").
+        MODEL"). Pool instances still blocked in `_connect_pipe` at that
+        point are never joined or cancelled -- same as the single pending
+        instance today -- `os._exit(0)` reclaims every open handle at the
+        OS level regardless (`_ctx_shutdown`'s own docstring), and none of
+        them are counted in `InFlightCounter`, so a pool of unconnected
+        listeners can never stall the drain wait.
         """
-        threading.Thread(target=self._accept_and_replenish, args=(first_handle,), daemon=True).start()
+        self._start_pending_listener_pool(first_handle)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
         self._stopped.wait()
+
+    def _start_pending_listener_pool(
+        self, first_handle: int, *, pool_size: int = PENDING_LISTENER_POOL_SIZE
+    ) -> None:
+        """Start `first_handle`'s accept chain plus `pool_size - 1` further
+        ones, each on its own daemon thread. Split out of `serve_forever`
+        so this boot-time pool-creation step is exercisable in isolation
+        (`test_server_loop.py`) without also driving the idle watchdog or
+        blocking on `self._stopped.wait()`. See `serve_forever`'s own
+        docstring for the invariant this establishes and the shutdown
+        interaction.
+        """
+        threading.Thread(target=self._accept_and_replenish, args=(first_handle,), daemon=True).start()
+        for _ in range(pool_size - 1):
+            try:
+                extra_handle = _create_pipe_instance(self.name, self.sid)
+            except OSError as exc:
+                print(f"[warm-server] failed to create pool instance at boot: {exc!r}", file=sys.stderr)
+                continue
+            threading.Thread(
+                target=self._accept_and_replenish, args=(extra_handle,), daemon=True
+            ).start()
 
     def _accept_and_replenish(self, handle: int) -> None:
         """Block for a connection on `handle`, then -- BEFORE handling that

@@ -154,7 +154,7 @@ from coordinator_core.ops.fleet._common import (
     _update_index_with_retry,
     main_worktree_root,
 )
-from coordinator_core.ops.fleet._findings_reap import _is_tracked
+from coordinator_core.ops.fleet._findings_reap import _is_tracked, _is_tracked_batch
 from coordinator_core.ops.fleet.migrate_handoff_vocabulary import (
     _HEIR_EDGE_KINDS,
     _insert_raw_line_after,
@@ -736,6 +736,11 @@ async def _write_denormalizations(
     for entry in denorm_writes:
         by_parent.setdefault(entry["parent"], []).append(entry)
 
+    # Pass 1 — read, parse, and compute each parent's to_add set. No git
+    # spawn here; the tracked-status probe is deferred to a single batched
+    # call below (amplification hitlist, 2026-08-19) instead of one spawn
+    # per parent.
+    prepared: list[dict[str, Any]] = []
     for parent_rel, entries in by_parent.items():
         parent_abs = worktree_root / parent_rel
         try:
@@ -764,7 +769,31 @@ async def _write_denormalizations(
         if not to_add:
             continue  # Idempotent — every entry already present on disk.
 
-        status = await _is_tracked(worktree_root, parent_abs)
+        prepared.append({
+            "parent_rel": parent_rel,
+            "parent_abs": parent_abs,
+            "split": split,
+            "existing": existing,
+            "to_add": to_add,
+        })
+
+    status_map = await _is_tracked_batch(
+        worktree_root, [item["parent_abs"] for item in prepared]
+    )
+
+    # Pass 2 — write. `status` here only routes the write into the
+    # tracked/untracked return list for the caller's commit; it is NOT a
+    # delete guard, so hoisting the probe out of the per-parent loop does
+    # not widen any destructive-action TOCTOU window (unlike the
+    # recheck-immediately-before-unlink sites this chunk leaves alone).
+    for item in prepared:
+        parent_rel = item["parent_rel"]
+        parent_abs = item["parent_abs"]
+        split = item["split"]
+        existing = item["existing"]
+        to_add = item["to_add"]
+
+        status = status_map[parent_abs]
         if status not in ("tracked", "untracked"):
             failed.append({
                 "path": parent_rel,
@@ -1257,10 +1286,11 @@ async def apply_disposal_manifest(
     untracked_rows: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
 
-    statuses = await asyncio.gather(
-        *(_is_tracked(worktree_root, worktree_root / row["path"]) for row in plan.survivors)
+    status_map = await _is_tracked_batch(
+        worktree_root, [worktree_root / row["path"] for row in plan.survivors]
     )
-    for row, status in zip(plan.survivors, statuses):
+    for row in plan.survivors:
+        status = status_map[worktree_root / row["path"]]
         if status == "tracked":
             tracked_rows.append(row)
         elif status == "untracked":
@@ -1280,6 +1310,12 @@ async def apply_disposal_manifest(
     confirmed_untracked_rows: list[dict[str, Any]] = []
     for row in untracked_rows:
         abs_path = worktree_root / row["path"]
+        # Deliberately left per-item, NOT hoisted into `_is_tracked_batch`
+        # (amplification hitlist, 2026-08-19): this recheck exists to
+        # narrow the TOCTOU window immediately before THIS row's unlink;
+        # batching it ahead of the loop would widen that window for every
+        # row after the first, trading a real safety property for a spawn
+        # count -- a legitimate REFUSAL, not a missed batching opportunity.
         recheck = await _is_tracked(worktree_root, abs_path)
         if recheck != "untracked":
             failed.append({

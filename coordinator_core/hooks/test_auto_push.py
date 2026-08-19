@@ -49,6 +49,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.hooks import auto_push  # noqa: E402
+from coordinator_core.git.git_dir import resolve_git_common_dir  # noqa: E402
+
+# The ACTUAL repo this test file lives in -- never a fixture's tmp_path.
+# `push-failures.log` there is a real, append-only forensic record read by
+# operators and by the Stop-time mid-session tripwire
+# (`runtime-tripwire-em-check.py::_check_push_failures`, DoE-claude); a test
+# that manufactures rows in it degrades that signal for every consumer, on
+# every suite run (2026-08-19 incident: a fabricated "2 push failure(s)"
+# diverted a live session that had none). Every test in this module must
+# pass `--repo-root`/an explicit repo_root pointing at `tmp_path`, never let
+# a fallback resolve against the real cwd -- this autouse fixture is the
+# regression guard for that invariant, independent of any individual test's
+# own tmp_path assertions.
+_REAL_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REAL_GIT_COMMON_DIR = resolve_git_common_dir(_REAL_REPO_ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_push_failures_log():
+    """Fail loudly if a test in this module wrote to the REAL repo's
+    push-failures.log or dropped a push-stderr-*.log sidecar there, instead
+    of staying inside its own tmp_path-scoped git common dir."""
+    log_path = _REAL_GIT_COMMON_DIR / "push-failures.log"
+    before_size = log_path.stat().st_size if log_path.exists() else None
+    before_sidecars = set(_REAL_GIT_COMMON_DIR.glob("push-stderr-*.log"))
+
+    yield
+
+    after_size = log_path.stat().st_size if log_path.exists() else None
+    assert after_size == before_size, (
+        f"test wrote to the REAL repo's push-failures.log "
+        f"({log_path}) -- it must target tmp_path instead"
+    )
+    after_sidecars = set(_REAL_GIT_COMMON_DIR.glob("push-stderr-*.log"))
+    new_sidecars = after_sidecars - before_sidecars
+    assert not new_sidecars, (
+        f"test dropped push-stderr-*.log sidecar(s) in the REAL repo's git "
+        f"dir instead of tmp_path: {sorted(p.name for p in new_sidecars)}"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -405,9 +405,12 @@ def _resolve_claude_klabauter_root() -> str:
     Resolution order (mirrors coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root,
     the native port of coordinator-claude-klabauter-root.sh):
       Rung 1:   CLAUDE_KLABAUTER_ROOT already set in environment → fast-path return.
-      Rung 1.5: <settings-home>/machine-local/.claude-klabauter-root pointer file → cheap
-                direct file read, no subprocess spawn (docs/plans/2026-07-14-
-                claude-klabauter-windows-portability.md § C1).
+      Rung 1.5: machine-local pointer files → cheap direct file reads, no
+                subprocess spawn (docs/plans/2026-07-14-claude-klabauter-windows-
+                portability.md § C1). `.claude-klabauter-root` is consulted
+                FIRST and wins outright (DR-326: all engine dispatch goes to the
+                published build); `.claude-klabauter-root` answers only on a box with no
+                published mirror installed.
       Rung 2+:  native resolver. coordinator_core.claude_klabauter_root lives INSIDE the
                 engine checkout this function is trying to locate, so it can't
                 be imported before a candidate path is known (the bootstrap
@@ -427,16 +430,27 @@ def _resolve_claude_klabauter_root() -> str:
                 logic (plan § C5).
 
       PUBLISHED-ENGINE GATE COVERAGE, stated honestly: only Rung 2+ reaches
-      the gate above. Rungs 1 (env), 1.5 (pointer file), and 3
+      the gate above. Rungs 1 (env), 1.5 (pointer files), and 3
       (self-location) all return BEFORE the oracle is ever consulted, so a
-      value resolved on any of those rungs is gate-BLIND — same as before
-      this change. Rung 1.5 in particular is the exact defect commit
-      0fdfb61d6 fixed inside `coordinator_claude_klabauter_root_with_class()` itself
-      (the pointer file pre-empting the DR-132 gate on every installed
-      machine) — that fix lives in the two-tier wrapper this rung now calls
-      into via Rung 2+, but does NOT retroactively gate Rungs 1/1.5/3 here,
-      which remain plain reads/self-location with no subprocess and no gate
-      walk, by design (HARD CONSTRAINT: no new subprocess on rungs 1/1.5/3).
+      value resolved on any of those rungs is gate-BLIND.
+
+      Rung 1.5 USED to be the live end of that blindness, and was the exact
+      defect commit 0fdfb61d6 fixed inside `coordinator_claude_klabauter_root_with_class()`
+      itself — the pointer file pre-empting the DR-132 gate on every installed
+      machine. That fix landed in the two-tier wrapper but did NOT reach this
+      rung, so on a dual-boot box `cc_invoke` answered `X:/claude-klabauter` from
+      every cwd, INCLUDING one where the gate itself would have said
+      `claude-klabauter` (measured 2026-08-19, all four caller locations). Every
+      engine invocation on such a box therefore ran the live working tree, whose
+      warm generation token rotates on any commit by any session — the moving
+      target DR-326 exists to stop.
+
+      Resolved WITHOUT breaking the constraint that caused it: the published
+      pointer is one more plain `open()`, so rungs 1/1.5/3 still spawn no
+      subprocess and still walk no gate. They are no longer gate-blind in the
+      direction that mattered, because the answer they now give is the one the
+      gate would have given (HARD CONSTRAINT preserved: no new subprocess on
+      rungs 1/1.5/3).
       Rung 3 (NEW, TERMINAL): self-location from THIS module's own ``__file__``,
                 via the existing ``_walk_up_to_checkout`` helper — reached only
                 when rungs 1, 1.5, and 2 have all missed, immediately before the
@@ -489,14 +503,36 @@ def _resolve_claude_klabauter_root() -> str:
         os.environ.get("CLAUDE_HOME") or os.path.expanduser("~"),
         ".coordinator-claude-settings",
     )
-    _pointer_path = os.path.join(_settings_home, "machine-local", ".claude-klabauter-root")
-    try:
-        with open(_pointer_path, "r", encoding="utf-8") as _f:
-            _pointer_val = _f.read().strip()
-        if _pointer_val:
-            return _pointer_val
-    except OSError:
-        pass  # Pointer absent/unreadable — fall through to the bash resolver.
+    _ml_pointer_dir = os.path.join(_settings_home, "machine-local")
+
+    def _read_pointer(name: str) -> str:
+        """Plain read of a machine-local pointer file; "" when absent or empty.
+
+        HARD CONSTRAINT (this function's own docstring, rungs 1/1.5/3): no
+        subprocess. This stays a bare `open()` for that reason.
+        """
+        try:
+            with open(os.path.join(_ml_pointer_dir, name), "r", encoding="utf-8") as _f:
+                return _f.read().strip()
+        except OSError:
+            return ""
+
+    # DR-326: engine dispatch resolves to the PUBLISHED build, never to the live
+    # working tree. The live tree is reachable here only via Rung 1's explicit
+    # CLAUDE_KLABAUTER_ROOT, which is what "claude-klabauter holds live processes only for testing"
+    # means in practice. `.claude-klabauter-root` is written by the same install
+    # pass that registers the mirror, so its presence IS the dual-boot signal —
+    # and reading it costs one more `open()`, honouring the no-subprocess bound
+    # that made this rung gate-blind in the first place.
+    _published_pointer_val = _read_pointer(".claude-klabauter-root")
+    if _published_pointer_val and os.path.isdir(_published_pointer_val):
+        return _published_pointer_val
+
+    # Single-tree box (no published mirror installed): the live tree is the only
+    # engine there is, and this rung keeps its pre-DR-326 behaviour byte-identical.
+    _pointer_val = _read_pointer(".claude-klabauter-root")
+    if _pointer_val:
+        return _pointer_val
 
     # Rung 2+: native bootstrap — locate a candidate root via the machine-local
     # registry (no bash), then delegate to coordinator_core.claude_klabauter_root itself

@@ -16,8 +16,6 @@ Checks — seven ProbeResult objects, in dependency order:
                          registered.  Skipped as advisory when coordinator-claude is not
                          installed (machine-local absent → key not needed).
   claude-klabauter.core.import     REQUIRED — import coordinator_core succeeds from CLAUDE_KLABAUTER_ROOT.
-  claude-klabauter.coverage.seam   REQUIRED — state/coverage/ parent is writable; gate-result.json
-                         valid JSON when present.
   claude-klabauter.resident.debris REQUIRED — detects stale paths from the retired daemon (INFO
                          when found; PASS when absent).
   claude-klabauter.version.sanity  REQUIRED — coordinator_core version helper resolves; retired
@@ -973,138 +971,6 @@ def _run_probe_entrypoints_path_resolved(claude_klabauter_root: Path | None) -> 
         required=False,
         data=data,
     )
-
-
-# ---------------------------------------------------------------------------
-# Probe 4: coverage seam
-# ---------------------------------------------------------------------------
-
-
-def _run_probe_coverage_seam(claude_klabauter_root: Path | None) -> _ProbeResult:
-    """Probe claude-klabauter.coverage.seam — REQUIRED.
-
-    Checks that state/coverage/ is writable. If gate-result.json is present,
-    validates it is schema-valid JSON. PASS when absent — no coverage artifact
-    yet is not a fault.
-
-    Probe-authoring invariant: wraps all logic so unexpected exceptions become
-    a BROKEN verdict, never an unhandled crash.
-
-    Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
-    """
-    try:
-        if claude_klabauter_root is None:
-            return _ProbeResult(
-                probe="claude-klabauter.coverage.seam",
-                status=_BROKEN,
-                detail="Cannot check coverage seam — CLAUDE_KLABAUTER_ROOT unresolved.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
-            )
-
-        coverage_dir = claude_klabauter_root / "state" / "coverage"
-        gate_file = coverage_dir / "gate-result.json"
-
-        # Verify state/coverage/ write access. Probes are read-only diagnostics;
-        # directory creation is the coverage gate op's job, not the probe's.
-        if coverage_dir.exists():
-            if not os.access(str(coverage_dir), os.W_OK):
-                return _ProbeResult(
-                    probe="claude-klabauter.coverage.seam",
-                    status=_BROKEN,
-                    detail=(
-                        f"state/coverage/ exists but is not writable: {str(coverage_dir)!r}"
-                    ),
-                    remediation="Fix permissions: chmod u+w state/coverage/",
-                )
-        else:
-            # Directory absent — state/coverage/ will be created by the coverage gate
-            # op on first run. Check write-access on the nearest EXISTING ancestor:
-            # on a fresh checkout state/ itself may be absent, and an absent seam is
-            # "not yet run" (PASS), never a fault. Only a non-writable existing ancestor
-            # (which would block creation) is BROKEN.
-            _ancestor = coverage_dir.parent
-            while not _ancestor.exists() and _ancestor != _ancestor.parent:
-                _ancestor = _ancestor.parent
-            if not os.access(str(_ancestor), os.W_OK):
-                return _ProbeResult(
-                    probe="claude-klabauter.coverage.seam",
-                    status=_BROKEN,
-                    detail=(
-                        f"state/coverage/ absent and nearest existing ancestor "
-                        f"{str(_ancestor)!r} is not writable — the coverage gate op "
-                        "could not create the seam."
-                    ),
-                    remediation=(
-                        "Fix permissions on the working tree so the coverage gate op "
-                        "can create state/coverage/ on first run."
-                    ),
-                )
-
-        # gate-result.json present → validate it is schema-valid JSON.
-        if gate_file.exists():
-            try:
-                content = gate_file.read_text(encoding="utf-8")
-                json.loads(content)
-            except json.JSONDecodeError as exc:
-                return _ProbeResult(
-                    probe="claude-klabauter.coverage.seam",
-                    status=_BROKEN,
-                    detail=(
-                        f"gate-result.json present but not valid JSON: {exc} "
-                        f"(path: {str(gate_file)!r})"
-                    ),
-                    remediation=(
-                        "Remove the malformed artifact: rm state/coverage/gate-result.json — "
-                        "then re-run the coverage gate: "
-                        "python3 -m coordinator_core.invoke coverage_gate '{}'"
-                    ),
-                )
-            except OSError as exc:
-                return _ProbeResult(
-                    probe="claude-klabauter.coverage.seam",
-                    status=_BROKEN,
-                    detail=f"gate-result.json present but unreadable: {exc}",
-                    remediation=(
-                        "Check file permissions on state/coverage/gate-result.json. "
-                        "Remove if corrupted: rm state/coverage/gate-result.json"
-                    ),
-                )
-            return _ProbeResult(
-                probe="claude-klabauter.coverage.seam",
-                status=_PASS,
-                detail=(
-                    f"state/coverage/ writable; gate-result.json present and "
-                    f"schema-valid JSON at {str(gate_file)!r}."
-                ),
-                remediation="—",
-                data={"coverage_dir": str(coverage_dir), "gate_result_present": True},
-            )
-
-        # gate-result.json absent — PASS (not yet run is not a fault).
-        _seam_state = (
-            "state/coverage/ writable"
-            if coverage_dir.exists()
-            else f"state/coverage/ absent (parent {str(coverage_dir.parent)!r} writable)"
-        )
-        return _ProbeResult(
-            probe="claude-klabauter.coverage.seam",
-            status=_PASS,
-            detail=(
-                f"{_seam_state}; gate-result.json absent "
-                "(not yet run — not a fault)."
-            ),
-            remediation="—",
-            data={"coverage_dir": str(coverage_dir), "gate_result_present": False},
-        )
-    except Exception as exc:
-        return _ProbeResult(
-            probe="claude-klabauter.coverage.seam",
-            status=_BROKEN,
-            detail=(
-                f"Unexpected error in coverage seam probe: {type(exc).__name__}: {exc}"
-            ),
-            remediation="Re-run the probe after investigating the error.",
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -2413,6 +2279,145 @@ def _run_probe_commitments_recheck(claude_klabauter_root: Path | None) -> _Probe
         )
 
 
+_STABLE_PID_MISS_PROBE = "claude-klabauter.session.stable_pid_miss"
+
+
+def _run_probe_stable_pid_miss(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.session.stable_pid_miss — OPTIONAL (required=False); never gating.
+
+    Cadence surface for the K-006 F0 hazard (state/kill-ledger.md): a session whose
+    ``stable_pid`` capture misses AND which runs only Bash/PowerShell for 30 minutes
+    reads DEAD on the Layer-2 recency path in
+    ``coordinator_core/session/liveness.py::session_live``, making it takeover- and
+    reap-eligible while still alive. ``hooks.session_heartbeat`` — the sole discharge
+    of that hazard — was deregistered 2026-08-16 (both DoE-side hook registrations).
+    Deregistration is ruled safe ONLY because the miss rate is currently 0% (10/10
+    live + 354/354 archived sessions since 2026-08-10); the newest known miss is
+    2026-08-08 at 64%. That 0% was, before this probe, completely unwatched.
+
+    Delegates the whole scan to coordinator_core.session.stable_pid_watch
+    .scan_stable_pid_misses, which mirrors session_live's own Layer-1 fall-through
+    logic exactly (see that module's docstring) rather than re-deriving it — a
+    ``stable_pid`` that is empty, OR present with BOTH ``stable_pid_lstart`` and
+    ``stable_pid_start_epoch`` absent, is a miss.
+
+    Threshold: ANY single miss alerts — not a rate, deliberately (see
+    stable_pid_watch's module docstring for why a percentage threshold has no
+    justifiable denominator here).
+
+    Verdict mapping:
+      MISS  -> DEGRADED (sentinel AMBER + the named session(s)/reason(s)) — F0 is
+               live again; someone must investigate why capture regressed.
+      CLEAN -> PASS.
+      EMPTY -> SKIP (required=False) — no coordinator-sessions dir, or no session
+               records in it (fresh install / CI); not applicable, not a fault.
+
+    Negative-spec:
+      - NEVER BROKEN and never required=True — this is a regression-net nudge, not a
+        broken install, and must never fail --step-zero.
+      - Does NOT restore the heartbeat, write last_activity, or mutate any session
+        state — read-only, matching stable_pid_watch's own contract.
+      - Does NOT hard-depend on coordinator_core being importable: an ImportError
+        degrades to SKIP (the probe must stay parseable on a broken tree).
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions become a SKIP
+    verdict (not a crash), matching the optional-probe contract.
+
+    Spec backlink: state/kill-ledger.md § K-006;
+    coordinator_core/session/stable_pid_watch.py module docstring.
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_STABLE_PID_MISS_PROBE,
+                status=_INFO,
+                detail="Cannot check stable_pid capture — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=False,
+                skipped=True,
+            )
+
+        root_str = str(claude_klabauter_root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+
+        try:
+            from coordinator_core.session.stable_pid_watch import (  # type: ignore[import]
+                STATUS_CLEAN,
+                STATUS_EMPTY,
+                STATUS_MISS,
+                scan_stable_pid_misses,
+            )
+        except Exception as exc:
+            return _ProbeResult(
+                probe=_STABLE_PID_MISS_PROBE,
+                status=_INFO,
+                detail=(
+                    "Cannot import coordinator_core.session.stable_pid_watch "
+                    f"from {root_str!r}: {type(exc).__name__}: {exc}"
+                ),
+                remediation="See claude-klabauter.core.import probe — the engine tree is not importable.",
+                required=False,
+                skipped=True,
+            )
+
+        report = scan_stable_pid_misses()
+        status_str = str(report.get("status") or "")
+        summary = str(report.get("summary") or "")
+        data = {
+            "status": status_str,
+            "checked": report.get("checked"),
+            "misses": report.get("misses") or [],
+        }
+
+        if status_str == STATUS_EMPTY:
+            return _ProbeResult(
+                probe=_STABLE_PID_MISS_PROBE,
+                status=_INFO,
+                detail=summary,
+                remediation="—",
+                required=False,
+                skipped=True,
+                data=data,
+            )
+
+        if status_str == STATUS_MISS:
+            return _ProbeResult(
+                probe=_STABLE_PID_MISS_PROBE,
+                status=_DEGRADED,
+                detail=summary,
+                remediation=(
+                    "One or more sessions are missing stable_pid capture — the F0 hazard "
+                    "K-006 ruled safe-to-deregister-heartbeat-because-0%% is live again. "
+                    "Investigate the session-init capture path "
+                    "(coordinator_core/session/core.py::init) for the named session(s) "
+                    "before assuming this is transient."
+                ),
+                required=False,
+                data=data,
+            )
+
+        return _ProbeResult(
+            probe=_STABLE_PID_MISS_PROBE,
+            status=_PASS,
+            detail=summary,
+            remediation="—",
+            required=False,
+            data=data,
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_STABLE_PID_MISS_PROBE,
+            status=_INFO,
+            detail=(
+                f"Unexpected error in stable_pid miss probe: {type(exc).__name__}: {exc}"
+            ),
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Probe 9: claude-klabauter-root pointer presence (Windows-portability, DEC-2)
 # ---------------------------------------------------------------------------
@@ -3273,7 +3278,6 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_dialect_guard_armed(claude_klabauter_root))
     results.append(_run_probe_settings_home_complete(claude_klabauter_root))
     results.append(_run_probe_entrypoints_path_resolved(claude_klabauter_root))
-    results.append(_run_probe_coverage_seam(claude_klabauter_root))
     results.append(_run_probe_resident_debris(claude_klabauter_root))
     results.append(_run_probe_worktree_bloat(claude_klabauter_root))
     results.append(_run_probe_version_sanity(claude_klabauter_root))
@@ -3282,6 +3286,7 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_vendored_schema_drift(claude_klabauter_root))
     results.append(_run_probe_generator_output_staleness(claude_klabauter_root))
     results.append(_run_probe_commitments_recheck(claude_klabauter_root))
+    results.append(_run_probe_stable_pid_miss(claude_klabauter_root))
     results.append(_run_probe_root_pointer(claude_klabauter_root))
     results.append(_run_probe_engine_target_rollout())
     results.append(_run_probe_invoke_latency(claude_klabauter_root))

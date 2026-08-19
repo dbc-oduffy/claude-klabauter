@@ -72,17 +72,88 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 from typing import Any, Iterator, List, Optional
 
 from coordinator_core.session.core import session_identity_override
 from coordinator_core.session.declared_writes import collecting
 
-__all__ = ["per_request_state", "reentrant_dispatch"]
+__all__ = [
+    "per_request_state",
+    "reentrant_dispatch",
+    "emit_diagnostic",
+    "collecting_diagnostics",
+]
+
+
+# ---------------------------------------------------------------------------
+# Per-request DIAGNOSTIC axis (2026-08-19).
+#
+# WHY THIS EXISTS. A fleet setup error returns the FROZEN exit_code:1 envelope,
+# which carries no reason field by contract (§2.1), so `ops/fleet/_common.py
+# :: _setup_error`'s write to the op process's stderr is the ONLY diagnostic
+# channel such a refusal has — that helper's own docstring says as much, and
+# `ops/fleet/tests/test_setup_error_stderr_channel.py` pins both halves.
+#
+# That guarantee holds for a COLD spawn, where the op process IS the caller's
+# child and its stderr is the caller's pipe. Under the warm engine it does not:
+# the op runs inside the SERVER process, so the reason lands on the server's
+# stderr and the caller sees `refused (exit_code=1, failed=0)` with the reason
+# nowhere. Same op, same refusal, same caller code — served warm it is mute.
+# Reported by doe-claude-em (cross-repo/inbox/2026-08-19-doe-claude-em-warm-
+# engine-seam-async-declined.md), who diagnosed it as the CLI forwarder failing
+# to read stderr on the rc==0 path; the forwarder is correct and does read it
+# (`coordinator/bin/lib/cc_invoke.py :: route_mutation`'s `_stderr_sink`) —
+# there was simply nothing on that stream to read.
+#
+# The fix is an explicit per-request sink rather than capturing `sys.stderr`:
+# connections are served on their own OS threads, so redirecting the process-
+# global stream would interleave one caller's diagnostics into another's frame.
+# A ContextVar is bound per dispatch and is invisible to every other request.
+#
+# Cold path is untouched: nothing binds the sink, `emit_diagnostic` is a no-op,
+# and `_setup_error` keeps writing to stderr exactly as before.
+# ---------------------------------------------------------------------------
+_DIAGNOSTICS: contextvars.ContextVar[Optional[List[str]]] = contextvars.ContextVar(
+    "coordinator_core_op_diagnostics", default=None
+)
+
+
+def emit_diagnostic(text: str) -> None:
+    """Record one diagnostic line for the request currently in scope.
+
+    A no-op unless a caller has opened `collecting_diagnostics()` — which only
+    the warm server does. Producers call this IN ADDITION to their existing
+    stderr write, never instead of it: the stderr write is what a cold spawn's
+    caller reads, and this is what a warm caller reads. Neither replaces the
+    other, and a producer that emits only here would go silent cold.
+    """
+    sink = _DIAGNOSTICS.get()
+    if sink is not None:
+        sink.append(text)
+
+
+@contextlib.contextmanager
+def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[str]]:
+    """Bind a diagnostic sink for the duration of the block, Token/reset-scoped.
+
+    Same discipline as `collecting()`: bound via `.set()`'s Token and unwound in
+    a `finally`, so nesting is safe and a request cannot inherit a stale sink.
+    """
+    sink: List[str] = [] if into is None else into
+    token = _DIAGNOSTICS.set(sink)
+    try:
+        yield sink
+    finally:
+        _DIAGNOSTICS.reset(token)
 
 
 @contextlib.contextmanager
 def per_request_state(
-    into: Optional[List[str]] = None, *, session_id: Optional[str] = None
+    into: Optional[List[str]] = None,
+    *,
+    session_id: Optional[str] = None,
+    diagnostics: Optional[List[str]] = None,
 ) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
 
@@ -108,10 +179,19 @@ def per_request_state(
     (`session_identity_override`'s own fail-safe gate), so every existing
     caller of this function (none of which pass `session_id` today) is
     byte-for-byte unaffected.
+
+    `diagnostics`, when given, is the list `emit_diagnostic()` calls append to
+    for the duration of the block — the third axis (see the DIAGNOSTIC-axis
+    note above). Omitted/`None` binds no sink, so `emit_diagnostic` stays a
+    no-op and a caller that does not ask for diagnostics is unaffected.
     """
     with session_identity_override(session_id):
         with collecting(into) as declared:
-            yield declared
+            if diagnostics is None:
+                yield declared
+            else:
+                with collecting_diagnostics(diagnostics):
+                    yield declared
 
 
 def reentrant_dispatch(

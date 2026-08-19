@@ -61,7 +61,7 @@ def test_ok_round_trip():
             tool_names=("Bash",),
         ),
     )
-    assert result.script_index["scripts/check-claude-md-size.py"] == "check_claude_md_size"
+    assert result.script_index["scripts/check-claude-md-size.py"] == ("check_claude_md_size",)
 
 
 def test_absent_no_key():
@@ -276,7 +276,12 @@ def test_tool_names_missing_or_malformed_is_malformed():
     assert result.state == "malformed"
 
 
-def test_duplicate_script_tail_key_across_guards_is_malformed():
+def test_dual_delivered_guard_is_ok_not_malformed():
+    """A guard delivered by BOTH a direct registration and a carrier's
+    carry is a real, declarable shape — the sender cannot drop either side
+    without hiding a live delivery path. Reported by doe-claude-e6
+    2026-08-19: `runtime-tripwire-em-check.py` and
+    `watchdog-undischarged-next-move.py` are each delivered twice."""
     hooks_json = _manifest_block(
         direct=[
             {
@@ -288,11 +293,63 @@ def test_duplicate_script_tail_key_across_guards_is_malformed():
     )
     result = read_hook_delivery_manifest(hooks_json, [])
 
+    assert result.state == "ok"
+    assert result.script_index["scripts/check-claude-md-size.py"] == (
+        "check_claude_md_size",
+    )
+
+
+def test_fan_in_module_hosting_many_guards_is_ok_not_malformed():
+    """The contract's script key is the last two path segments, so N
+    distinct guards living in one module normalize onto one key BY DESIGN.
+    Reported by doe-claude-e6 2026-08-19: sixteen engine-plane guards live
+    in `bash_guards/dispatch_checks.py`, and reading that as `malformed`
+    discarded their whole block — the detector went fully blind."""
+    hooks_json = _manifest_block(
+        carriers={
+            "scripts/preuse-write-dispatch.py": {
+                "guards": [
+                    {
+                        "id": f"dispatch_check_{n}",
+                        "script": "bash_guards/dispatch_checks.py",
+                        "tool_names": ["Bash"],
+                    }
+                    for n in range(16)
+                ]
+            }
+        }
+    )
+    result = read_hook_delivery_manifest(hooks_json, [])
+
+    assert result.state == "ok"
+    assert len(result.script_index["bash_guards/dispatch_checks.py"]) == 16
+
+
+def test_duplicate_guard_id_within_one_surface_is_malformed():
+    """The residual real defect the duplicate check exists to catch: one
+    guard id declared twice inside a SINGLE delivery surface."""
+    hooks_json = _manifest_block(
+        direct=[
+            {
+                "id": "runtime_tripwire_em_check",
+                "script": "scripts/runtime-tripwire-em-check.py",
+                "tool_names": ["Bash"],
+            },
+            {
+                "id": "runtime_tripwire_em_check",
+                "script": "scripts/runtime-tripwire-em-check.py",
+                "tool_names": ["Bash"],
+            },
+        ]
+    )
+    result = read_hook_delivery_manifest(hooks_json, [])
+
     assert result.state == "malformed"
-    assert "check-claude-md-size.py" in result.detail
+    assert "runtime_tripwire_em_check" in result.detail
+    assert "direct" in result.detail
 
 
-def test_script_in_both_live_and_retired_is_malformed():
+def test_guard_id_in_both_live_and_retired_is_malformed():
     hooks_json = _manifest_block(
         retired=[
             {
@@ -305,7 +362,35 @@ def test_script_in_both_live_and_retired_is_malformed():
     result = read_hook_delivery_manifest(hooks_json, [])
 
     assert result.state == "malformed"
-    assert "check-claude-md-size.py" in result.detail
+    assert "check_claude_md_size" in result.detail
+
+
+def test_retired_guard_sharing_a_fan_in_module_with_live_guards_is_ok():
+    """Keying the live/retired contradiction on the script tail key would
+    call the normal fan-in case a contradiction; it is keyed on guard id."""
+    hooks_json = _manifest_block(
+        carriers={
+            "scripts/preuse-write-dispatch.py": {
+                "guards": [
+                    {
+                        "id": "dispatch_check_live",
+                        "script": "bash_guards/dispatch_checks.py",
+                        "tool_names": ["Bash"],
+                    }
+                ]
+            }
+        },
+        retired=[
+            {
+                "id": "dispatch_check_retired",
+                "script": "bash_guards/dispatch_checks.py",
+                "reason": "stood down by PM ruling",
+            }
+        ],
+    )
+    result = read_hook_delivery_manifest(hooks_json, [])
+
+    assert result.state == "ok"
 
 
 def test_retired_guard_accounts_for_declared_script():
