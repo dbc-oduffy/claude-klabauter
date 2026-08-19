@@ -371,6 +371,7 @@ def brief(
 
     worktree_entries = list_worktrees(run_git, repo_root)
     worktrees_report: list[dict[str, Any]] = []
+    branch_names_set = {b["name"] for b in branch_entries}
     for wt in worktree_entries:
         branch_name = wt.get("branch")
         wt_path = wt["path"]
@@ -381,11 +382,19 @@ def brief(
             worktrees_report.append({**wt, "category": "current"})
             continue
 
-        author = tip_author(run_git, repo_root, branch_name if branch_name in {b["name"] for b in branch_entries} else wt_path)
+        author = tip_author(run_git, repo_root, branch_name if branch_name in branch_names_set else wt_path)
         if author != my_email:
             worktrees_report.append({**wt, "tip_author": author, "category": "others"})
             continue
 
+        # `branch_reachable` and `worktree_is_dirty` stay per-item here.
+        # `branch_reachable`'s only batch-capable primitive
+        # (`git branch --merged <target>`) is a different argv shape than
+        # `test_consolidate_assemble.py`'s fixture `run_git` recognizes, and
+        # that file is outside this chunk's scope. `worktree_is_dirty` has
+        # no batch form at all: `git status --porcelain` reads one working
+        # directory's state, and each worktree is its own separate tree — no
+        # single git invocation reports every worktree's dirty state at once.
         reachable = branch_reachable(run_git, repo_root, branch_name, main_branch or current)
         dirty_probe = worktree_is_dirty(run_git, wt_path)
         # DR-319 posture, applied at the call site: a degraded probe is

@@ -876,14 +876,25 @@ def _render(result: dict) -> str:
     # would cry wolf on the most common outcome there is. The discriminator is
     # whether a diagnostic actually EXPLAINS anything — a refusal carries prose
     # naming its cause, a benign no-op carries only the exit code.
+    # The engine ran its landed-despite-failure reconcile here and could not
+    # confirm a commit. On the benign no-op that is expected noise, but on the
+    # 2026-08-19 defect shape (a commit that landed while `commit_scoped()`
+    # reported failure) it is the ONLY thing on this branch that says the
+    # quiet "nothing to commit" below may be wrong. Rendered as a bare
+    # suffix, no advice attached: the operator's next move is `git log`, and
+    # a renderer that guessed which of the two cases it was would be the same
+    # collapse the REFUSED branch above exists to undo.
+    decline = result.get("reconcile_decline")
+    decline_note = " [reconcile declined: %s]" % decline if decline else ""
     explanatory = _explanatory_diagnostics(result)
     if explanatory:
-        return "REFUSED — no commit landed: %s%s" % (
+        return "REFUSED — no commit landed: %s%s%s" % (
             "; ".join(explanatory),
             declined_note,
+            decline_note,
         )
     reason = result.get("reason") or "nothing to commit"
-    return "no commit landed: %s%s" % (reason, declined_note)
+    return "no commit landed: %s%s%s" % (reason, declined_note, decline_note)
 
 
 def main(argv: list[str]) -> int:

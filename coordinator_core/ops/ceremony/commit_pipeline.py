@@ -1353,6 +1353,24 @@ class CommitOutcome:
             without a `commit_pipeline.py` change; wiring that surfacing is
             explicitly out of THIS chunk's scope (its `writes:` names only
             `commit_pipeline.py` and its own test file).
+        reconcile_decline -- populated ONLY on the `landed=False` commit-
+            failure return: the `ReconcileProbe.decline` tag (suffixed with
+            the range actually searched) explaining why
+            `_reconcile_landed_despite_failure` did not name a landed commit
+            on a path where one may nonetheless exist. "" everywhere else,
+            including every success return and every pre-commit refusal --
+            those never ran a reconcile, and an empty string must not be read
+            as "the reconcile found nothing".
+
+            Diagnostic-only, never a predicate: no consumer may derive
+            `committed` from it. It exists because "the reconcile declined"
+            and "the reconcile never ran" render identically at the operator's
+            end (`committed: false`), which is exactly what cost the
+            2026-08-19 investigation a session to separate -- see
+            `ReconcileProbe`'s own docstring. Surfaced to the caller by
+            `scoped_git_commit.py::_handler` on the uncommitted branch, where
+            it sits next to the `empty-commit-set` reason it most often
+            contradicts.
     """
 
     exit_code: int
@@ -1363,6 +1381,7 @@ class CommitOutcome:
     reason: str = ""
     unprovenanced_paths: Tuple[str, ...] = ()
     stdout_diagnostic: str = ""
+    reconcile_decline: str = ""
 
 
 def _write_commit_message_tempfile(
@@ -1452,14 +1471,60 @@ def _classify_commit_scoped_failure_reason(result: "git_native.GitResult") -> st
     return _REASON_COMMIT_FAILURE
 
 
+#: Commits searched backwards from HEAD when `commit()` has no `pre_sha` to
+#: bound the range with -- i.e. when the pre-commit `git rev-parse HEAD` itself
+#: failed, which at this repo's load norm (CLAUDE.md, 50-70 concurrent LLM
+#: sessions) is a timeout, not a broken repo. Declining the reconcile there
+#: silences it exactly when the box is loaded enough to need it. The window is
+#: a BOUND, not a correctness input: the `Commit-Token:` search key is
+#: collision-free by construction (see `_reconcile_landed_despite_failure`'s
+#: own SAFETY paragraph), so a match inside the window is ours no matter how
+#: wide the window is, and a peer's commit can never match however many of
+#: theirs it spans. Sized to cover the peer traffic one slow commit can sit
+#: behind on a shared branch, not tuned.
+_RECONCILE_FALLBACK_WINDOW_COMMITS = 200
+
+
+@dataclass(frozen=True)
+class ReconcileProbe:
+    """Why `_reconcile_landed_despite_failure` answered as it did.
+
+    Exists because the reconcile's silence is indistinguishable from its
+    absence at the operator's end: both render as `committed: false` over a
+    commit that exists. A live occurrence (2026-08-19, four instances across
+    two sessions in one day) cost a whole session to narrow to "the reconcile
+    did not execute" and still could not say WHY, because the function's
+    `Optional[str]` return threw away every decline reason on the way out.
+    This type is that reason, carried to the response so the NEXT occurrence
+    self-diagnoses instead of costing another investigation.
+
+    Fields:
+        sha -- the reconciled commit sha, or `None` on every decline.
+        decline -- "" when `sha` is set; otherwise a short machine-readable
+            tag naming which precondition answered: `"log-grep-raised"`,
+            `"log-grep-failed"`, `"no-candidate"` (the search ran and matched
+            nothing -- the genuinely-did-not-land shape, and also what a
+            commit still being written would look like), or
+            `"ambiguous-candidates:<n>"`.
+        range_spec -- the revision range actually searched (`"<pre>..HEAD"`,
+            or `"-n <N> HEAD"` on the fallback window), so a reader can tell
+            a bounded-range search from a fallback one without re-deriving it.
+    """
+
+    sha: Optional[str] = None
+    decline: str = ""
+    range_spec: str = ""
+
+
 def _reconcile_landed_despite_failure(
     root: Path,
     token_trailer: str,
     pre_sha: Optional[str],
     commit_paths: Sequence[str],
-) -> Optional[str]:
+) -> ReconcileProbe:
     """The sha this call's own commit landed under DESPITE `commit_scoped()`
-    reporting failure, or `None` when nothing of ours is in `pre_sha..HEAD`.
+    reporting failure, as a `ReconcileProbe` whose `sha` is `None` -- with a
+    `decline` tag naming why -- when nothing of ours is found.
 
     Exists because a reported failure is not proof no commit was created, and
     on this machine the common case is not a crash but a CLOCK. `git_native.
@@ -1499,21 +1564,32 @@ def _reconcile_landed_despite_failure(
     HEAD moves under concurrent peers, and adopting whatever sits there is
     precisely the misattribution the token search exists to prevent.
 
-    Returns `None` -- leaving the caller's failure return untouched -- on
-    every uncertain shape: no `pre_sha` to bound the range, a failed `git
-    log`, or a zero/ambiguous candidate count. Never raises; a reconcile that
-    cannot answer must degrade to today's behaviour, since wrongly claiming a
-    commit landed is worse than the reporting defect it repairs.
+    Returns a probe with `sha=None` -- leaving the caller's failure return
+    untouched -- on every uncertain shape: a failed `git log`, or a
+    zero/ambiguous candidate count. Never raises; a reconcile that cannot
+    answer must degrade to today's behaviour, since wrongly claiming a commit
+    landed is worse than the reporting defect it repairs. It no longer
+    declines merely for want of `pre_sha`, which is the one decline the
+    2026-08-19 investigation could not rule out and the one that fires
+    precisely under the load that produces the defect -- a missing `pre_sha`
+    means the pre-commit `git rev-parse HEAD` itself timed out, not that
+    there is no history. That case searches a bounded window back from HEAD
+    instead (`_RECONCILE_FALLBACK_WINDOW_COMMITS`); the token bound is what
+    makes the answer safe, the range only ever makes it cheaper.
 
     Cost: one `git log` on the FAILURE path only. The success path never
     reaches this, so the hot path is unchanged."""
-    if not pre_sha:
-        return None
+    if pre_sha:
+        range_spec = f"{pre_sha}..HEAD"
+        range_args = [range_spec]
+    else:
+        range_spec = f"-n {_RECONCILE_FALLBACK_WINDOW_COMMITS} HEAD"
+        range_args = ["-n", str(_RECONCILE_FALLBACK_WINDOW_COMMITS), "HEAD"]
     extra_args = [
         "--fixed-strings",
         "--format=%H",
         "--full-history",
-        f"{pre_sha}..HEAD",
+        *range_args,
     ]
     # Same one-chunk argv bound as the success path's own search, and the
     # same reasoning: this call's commit touched every path in `commit_
@@ -1524,13 +1600,17 @@ def _reconcile_landed_despite_failure(
     try:
         match_result = git_native.log_grep(root, token_trailer, extra_args=extra_args)
     except Exception:
-        return None
+        return ReconcileProbe(decline="log-grep-raised", range_spec=range_spec)
     if not match_result.ok:
-        return None
+        return ReconcileProbe(decline="log-grep-failed", range_spec=range_spec)
     candidates = [line for line in match_result.stdout.splitlines() if line]
+    if not candidates:
+        return ReconcileProbe(decline="no-candidate", range_spec=range_spec)
     if len(candidates) != 1:
-        return None
-    return candidates[0]
+        return ReconcileProbe(
+            decline=f"ambiguous-candidates:{len(candidates)}", range_spec=range_spec
+        )
+    return ReconcileProbe(sha=candidates[0], range_spec=range_spec)
 
 
 def commit(
@@ -1804,9 +1884,10 @@ def commit(
             # why this is safe against adopting a peer's commit, and for the
             # live incident (26ce6a671) it closes. Runs on the failure path
             # only, so the hot path is untouched.
-            reconciled_sha = _reconcile_landed_despite_failure(
+            reconcile = _reconcile_landed_despite_failure(
                 root, token_trailer, pre_sha, commit_paths
             )
+            reconciled_sha = reconcile.sha
             if reconciled_sha is not None:
                 return CommitOutcome(
                     exit_code=0,
@@ -1824,6 +1905,10 @@ def commit(
                     unprovenanced_paths=unprovenanced_paths,
                     stdout_diagnostic=condense_git_diagnostic(result.stdout),
                 )
+            # `stderr` stays EXACTLY the bare `exit_code=N` shape two
+            # downstream consumers match on (see this branch's own comment
+            # above and `stdout_diagnostic`'s docstring) -- the decline rides
+            # its own additive field for the same reason, never folded in.
             return CommitOutcome(
                 exit_code=result.returncode or 1,
                 stderr=(
@@ -1833,6 +1918,24 @@ def commit(
                 reason=_classify_commit_scoped_failure_reason(result),
                 unprovenanced_paths=unprovenanced_paths,
                 stdout_diagnostic=condense_git_diagnostic(result.stdout),
+                # The token is on the wire, not just the range. It is the
+                # single datum that separates the two remaining theories for a
+                # `no-candidate` decline over a commit that demonstrably
+                # landed: if the landed commit carries THIS token, one call
+                # both minted it and failed to find it (so the range is
+                # wrong); if it carries a different one, a SECOND execution
+                # minted a fresh token and searched for a commit only the
+                # first ever made. `git log -1 --format=%B` on the commit
+                # answers it in one step -- see the 2026-08-19 live
+                # observation in this defect's own bug-backlog entry, where
+                # the searched range began at a commit that POSTDATES the
+                # landed one by six seconds.
+                reconcile_decline=(
+                    f"{reconcile.decline} (searched {reconcile.range_spec}"
+                    f", {token_trailer})"
+                    if reconcile.decline
+                    else ""
+                ),
             )
 
         stdout = result.stdout.strip()

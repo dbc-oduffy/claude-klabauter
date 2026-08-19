@@ -172,6 +172,10 @@ from percolate.targets import (  # noqa: E402  (path setup must precede this imp
 # lazy `coordinator_core.percolate.*` imports below exist to guard.
 from coordinator_core import directive_cli_arity  # noqa: E402
 from coordinator_core.git.repo_root import git_dir as _resolve_git_dir  # noqa: E402
+from coordinator_core.git.git_dir import (  # noqa: E402
+    resolve_git_dir as _native_resolve_git_dir,
+    resolve_git_common_dir as _native_resolve_git_common_dir,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -2825,9 +2829,24 @@ def dispatch_end_of_run_argv_parity_gate(
             continue
 
         ok = False
+        # Batch ALL failing pairings' origin lookups for this `repo_root`
+        # into ONE `git status --porcelain` spawn (docs/plans/2026-08-19-
+        # burn-down-the-amplification-hitlist.md C5) instead of one spawn
+        # per pairing via `_argv_parity_pairing_origin` — every pairing
+        # below shares the SAME `repo_root`, so their per-file `git status`
+        # pathspecs fold into a single multi-pathspec call exactly like
+        # `_git_ls_tree_entries_files` folds multiple allowlist entries
+        # into one `ls-tree` call per root. `_argv_parity_pairing_origin`
+        # itself is left in place (its per-pairing contract is unchanged,
+        # only this hot loop stops calling it) as it is still the single-
+        # pairing primitive `test_publish_argv_parity_gate.py` may exercise
+        # directly.
+        origin_by_module = _argv_parity_pairing_origin_batch(
+            repo_root, [pairing.module for pairing, _, _ in failing]
+        )
         lines = []
         for pairing, new_unaccepted, new_undeclared_required in failing:
-            origin = _argv_parity_pairing_origin(repo_root, pairing.module)
+            origin = origin_by_module.get(pairing.module, "unknown-origin")
             if new_unaccepted:
                 lines.append(
                     f"    {pairing.module} ({origin}) -> {pairing.cli!r}: emits "
@@ -2878,6 +2897,76 @@ def _argv_parity_pairing_origin(repo_root: Path, rel_module: str) -> str:
     if module_path.exists():
         return "published-by-this-round"
     return "unknown-origin"
+
+
+def _porcelain_touched_paths(stdout: str) -> "set[str]":
+    """Extracts every path `git status --porcelain` reports as touched —
+    both sides of a rename/copy line (`XY old -> new`) as well as the
+    ordinary `XY path` form — used by `_argv_parity_pairing_origin_batch`
+    to attribute a single multi-pathspec `git status` call's output back to
+    the individual rel_module path(s) that produced it."""
+    paths: "set[str]" = set()
+    for line in stdout.splitlines():
+        if len(line) < 4:
+            continue
+        rest = line[3:]
+        if " -> " in rest:
+            old, new = rest.split(" -> ", 1)
+            paths.add(old)
+            paths.add(new)
+        else:
+            paths.add(rest)
+    return paths
+
+
+def _argv_parity_pairing_origin_batch(
+    repo_root: Path, rel_modules: "list[str]"
+) -> "dict[str, str]":
+    """Batched sibling of `_argv_parity_pairing_origin` — issues ONE `git
+    -C <repo_root> status --porcelain -- <rel_module1> <rel_module2> ...`
+    spawn covering every failing pairing's `module` path for this
+    `repo_root`, instead of one spawn per pairing
+    (docs/plans/2026-08-19-burn-down-the-amplification-hitlist.md C5).
+    Every rel_module here shares the same `repo_root` (the outer loop
+    variable at the call site), so — unlike `_git_head`'s per-row callers,
+    which each name a DIFFERENT repo root and so cannot share a spawn —
+    this is exactly the pathspec-shaped batching `_git_ls_tree_entries_files`
+    already applies one level up (multiple entries, one shared `-C` root).
+
+    Preserves `_argv_parity_pairing_origin`'s per-entry verdict exactly:
+    a `git` spawn failure or non-zero exit maps every `rel_module` to
+    `"unknown-origin"` (same fail-closed shape as the per-item function's
+    `OSError`/non-zero-returncode branches); otherwise each `rel_module`
+    is independently classified by whether IT (not some other batched
+    entry) appears in the porcelain output (`_porcelain_touched_paths`),
+    falling back to `module_path.exists()` exactly as the per-item version
+    does. Returns `{}` for an empty `rel_modules`.
+    """
+    if not rel_modules:
+        return {}
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "status", "--porcelain", "--", *rel_modules],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:  # noqa: BLE001 - diagnostic aid only, never fatal
+        return {rel_module: "unknown-origin" for rel_module in rel_modules}
+    if result.returncode != 0:
+        return {rel_module: "unknown-origin" for rel_module in rel_modules}
+
+    touched = _porcelain_touched_paths(result.stdout)
+    origins: "dict[str, str]" = {}
+    for rel_module in rel_modules:
+        if rel_module in touched:
+            origins[rel_module] = "destination-only (locally modified in the mirror working tree)"
+        elif (repo_root / Path(rel_module)).exists():
+            origins[rel_module] = "published-by-this-round"
+        else:
+            origins[rel_module] = "unknown-origin"
+    return origins
 
 
 _UNSCANNED_EXCEPTIONS_PATH = Path(__file__).resolve().parent / "percolate-published-unscanned-exceptions.yaml"
@@ -5849,18 +5938,74 @@ def _is_git_repo(path: Path) -> bool:
 
 
 def _git_head(path: Path) -> str:
+    """Native (non-spawning) resolution of `git -C <path> rev-parse HEAD` —
+    replaces a prior `subprocess.run` that made this a per-item spawn at
+    every call site iterating over rows/repos
+    (`docs/plans/2026-08-19-burn-down-the-amplification-hitlist.md` C5).
+    Unlike `_argv_parity_pairing_origin`/`_git_ls_tree_entries_files` (which
+    batch several entries into ONE spawn against a SHARED `-C <root>`), this
+    function's callers each pass a DIFFERENT repo root per call (one row's
+    `target.dest_dir` per invocation), so there is no shared `git` argv to
+    fold multiple calls into — the only way to collapse the per-item spawn
+    is to stop spawning at all. `coordinator_core.git.git_dir` exists for
+    exactly this shape (its own docstring: "must stay cheap and
+    Windows-safe... a cold subprocess per call is exactly the shape
+    CLAUDE.md's Runtime conventions calls break-class") and already handles
+    the worktree/submodule `.git`-is-a-file indirection this function must
+    not silently mishandle.
+
+    Resolves HEAD by reading `<gitdir>/HEAD` directly:
+      - A detached HEAD (`<sha>`, no `ref: ` prefix) is returned as-is.
+      - A symbolic HEAD (`ref: refs/heads/<branch>`) is resolved against
+        the repo's COMMON dir (never the private per-worktree gitdir —
+        refs live in the common dir) as a loose ref file first, falling
+        back to a `packed-refs` scan if no loose ref file exists (an
+        unpacked-but-referenced branch is the exceptional case, not the
+        rule, so the loose-file read is tried first).
+
+    Returns `""` on ANY resolution failure — missing `.git`, empty/
+    unparseable `HEAD`, a `ref:` pointer with no loose file and no
+    matching `packed-refs` entry, or any `OSError` reading these files —
+    the exact same fail-closed shape the replaced `subprocess.run` path
+    had for a non-zero/missing-git exit, never a raise.
+    """
     try:
-        result = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        gitdir = _native_resolve_git_dir(path)
+        head_text = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
     except OSError:
         return ""
-    if result.returncode != 0:
+    if not head_text:
         return ""
-    return result.stdout.strip()
+    if not head_text.startswith("ref:"):
+        return head_text
+
+    ref = head_text[len("ref:"):].strip()
+    if not ref:
+        return ""
+
+    try:
+        common_dir = _native_resolve_git_common_dir(path)
+    except OSError:
+        return ""
+
+    try:
+        loose = (common_dir / ref).read_text(encoding="utf-8").strip()
+        if loose:
+            return loose
+    except OSError:
+        pass
+
+    try:
+        packed = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for line in packed.splitlines():
+        if not line or line[0] in "#^":
+            continue
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and parts[1].strip() == ref:
+            return parts[0].strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------

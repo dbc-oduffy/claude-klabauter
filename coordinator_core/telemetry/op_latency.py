@@ -69,6 +69,29 @@ Negative-spec (hard-won):
       written by the single old code path, which only ever recorded finished
       invocations). A reader must never treat a missing ``"kind"`` as
       ``"started"``.
+    - Never restore an early ``return`` on a falsy ``repo_root`` in
+      ``_write_entry``. A None ``repo_root`` means the JSON-RPC envelope
+      carried no ``_origin_worktree`` (see ``ipc.resolve_request_repo``) — it
+      does NOT mean the invocation happened outside a repo, and dropping the
+      row on that condition makes the op invisible rather than making the
+      instrument cheaper. Measured case: ``hooks.postuse_advisory_dispatch``
+      fires on every PostToolUse ``Write|Edit|MultiEdit|NotebookEdit|Agent``
+      and recorded ZERO rows in 85 hours under the old drop-on-None behavior
+      — absent from every ranking built on this ledger while plausibly the
+      single largest engine consumer. An instrument with a silent blind spot
+      cannot support the kill disposition's budget rule
+      (docs/wiki/cost-budgets-and-the-kill-disposition.md: measurement
+      answers "does this fit"). ``_write_entry`` now falls back to
+      ``Path.cwd()`` instead and stamps ``repo_key_source`` so the row is
+      still written, just flagged as lower-confidence attribution — see
+      ``repo_key_source`` below.
+    - ``repo_key_source`` (``"envelope"`` or ``"cwd"``): every row carries
+      this field. ``"envelope"`` means ``repo_key`` came from the caller's
+      ``_origin_worktree``; ``"cwd"`` means the envelope carried none and the
+      sink was resolved from the process working directory instead — the
+      row is real, but the repo attribution is inferred, not asserted by the
+      caller. Analysis joining rows across repos should treat
+      ``cwd``-sourced rows as lower-confidence attribution.
 
     - Pairing reader staleness (C2 / AC3): ``pairing_summary``'s
       ``staleness_cutoff_secs`` default (see that function) is derived from
@@ -139,8 +162,25 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
         if os.environ.get(_DISABLE_ENV) == "1":
             return
 
+        key_source = "envelope"
         if repo_root is None:
-            return
+            # A None repo_root means the JSON-RPC envelope carried no
+            # `_origin_worktree` (see ipc.resolve_request_repo) — it does NOT mean
+            # the invocation happened outside a repo. Dropping the row here made
+            # every such op invisible to this instrument: `hooks.postuse_advisory_dispatch`
+            # fires on every PostToolUse Write|Edit|MultiEdit|NotebookEdit|Agent and
+            # recorded ZERO rows in 85 hours, so it was absent from every ranking
+            # built on this ledger while plausibly being the single largest consumer.
+            # A blind instrument cannot support the kill disposition's budget rule
+            # (docs/wiki/cost-budgets-and-the-kill-disposition.md: measurement answers
+            # "does this fit"), so fall back to the process cwd rather than dropping.
+            # Zero-spawn: git_common_dir resolves by pure-Python upward walk and is
+            # lru_cached — see its docstring's "hot path may treat this as zero-spawn".
+            try:
+                repo_root = Path.cwd()
+            except OSError:
+                return
+            key_source = "cwd"
 
         from coordinator_core.lifecycle import git_common_dir
 
@@ -152,6 +192,7 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
         sink = _sink_path(common_dir)
         entry = dict(entry)
         entry["repo_key"] = str(common_dir)
+        entry["repo_key_source"] = key_source
 
         line = json.dumps(entry, separators=(",", ":")) + "\n"
         encoded = line.encode("utf-8")
@@ -204,7 +245,8 @@ def record_op_latency(
     Record shape:
         {"op": str, "t_start": float epoch, "elapsed_ms": float,
          "outcome": "ok"|"error"|"timeout", "pid": int, "sid": str|null,
-         "repo_key": str|null, "kind": "complete", "corr_id": str|null}
+         "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
+         "kind": "complete", "corr_id": str|null}
 
     ``outcome`` "timeout" means the CALLING side gave up waiting — it does NOT
     mean the op handler stopped running (see module docstring negative-spec).
@@ -250,7 +292,8 @@ def record_op_started(
 
     Record shape:
         {"op": str, "t_start": float epoch, "pid": int, "sid": str|null,
-         "repo_key": str|null, "kind": "started", "corr_id": str}
+         "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
+         "kind": "started", "corr_id": str}
 
     Written at the ``coordinator_core.ipc.dispatch_message`` wrapper's entry,
     BEFORE ``_dispatch_message_impl`` is awaited — so it is already durable

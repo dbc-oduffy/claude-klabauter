@@ -7,19 +7,47 @@ shells to `sort -u` as a *sanctioned* carve-out (`test_no_bash_dependency.py`), 
 prohibition would either delete a ruled-on carve-out or accrete an exemption list to survive it.
 A legitimate spawn is fine; an UNCOUNTED one is not.
 
-THIS GATE'S OPERATIONAL DEFINITION OF "COUNTED": an enumerated, inline-sentinel-keyed entry in
-`_LEGITIMIZED_SITES` below, added only once a site is proven to route through its op's counter
-(C6's job) or is a carve-out whose counting is explicitly wired. NOTHING is pre-populated. A
-reachable bare-subprocess call that merely happens to fall under a companion test's *global*
-`subprocess.run` monkeypatch is NOT treated as "counted" by this gate -- that visibility is a
-test-time accident of how that one companion test happens to patch, not a structural guarantee a
-future refactor preserves (see `ceremony.scoped_git_commit`'s own counter, which patches
-`git_native._git` by function-OBJECT substitution -- narrow by construction, and the one shape a
-global-patch accident cannot be assumed to generalize to). This is the plan's own instruction,
-read literally: "each survivor names why it is legitimate AND how it is counted" -- today, none
-of the ten confirmed-reachable sites the C-08 audit found do the second half, so this gate is
-EXPECTED to be red on arrival. Tuning `_LEGITIMIZED_SITES` to make it pass without C6 actually
-routing or sanctioning a site is exactly the failure this plan's anti-scope names.
+THIS GATE'S OPERATIONAL DEFINITION OF "COUNTED" (revised 2026-08-19; see "WHAT CHANGED AND WHY"
+below for the superseded text and the measurement that retired it). A site is counted when it
+carries a `_LEGITIMIZED_SITES` entry proving all THREE of:
+
+  1. MECHANISM -- the counter observes the way this site actually reaches the process boundary.
+     For a `_SEAM` counter (function-OBJECT substitution) this holds by construction. For a
+     `_GLOBAL_SUBPROCESS_RUN` counter it holds only while the site spawns via `subprocess.run`,
+     and that precondition is ENFORCED, not assumed: `test_legitimized_site_mechanism_pins_hold`.
+  2. ASSERTION -- an existing test checks the resulting figure by EXACT EQUALITY against a
+     manifest budget. A bound, a range, or a `<=` does not qualify: a new spawn must FAIL
+     something, not fit under something.
+  3. EXECUTION -- the asserting test's counter was MEASURED to actually run this site. Static
+     reachability does not establish this and neither do (1) and (2).
+
+NOTHING is pre-populated, and tuning `_LEGITIMIZED_SITES` to buy a green without earning all three
+legs is exactly the failure this plan's anti-scope names.
+
+Leg 3 is the one that does the real work, and it cuts BOTH ways. `ceremony.scoped_git_commit`'s
+`green_path: 17` is not a miscount -- its fixture configures no remote, so the whole
+`_drain_pending_push_after_sync` -> `auto_push` leg never runs. That path could grow without bound
+and the budget would never move. Conversely, of the nine sites that were reachable-and-under-an-
+exact-equality-global-counter, SIX were measured to execute under it (legitimized below) and THREE
+were measured not to (`_UNCOUNTED_MEASURED_UNREACHED`, still red). "Reachable and under a counter"
+reads as counted right up until the measurement is taken; taking it is leg 3.
+
+WHAT CHANGED AND WHY (the C6 contract decision, opro-03). This gate previously refused a global
+`subprocess.run` counter outright, on the grounds that such visibility is "a test-time accident of
+how that one companion test happens to patch, not a structural guarantee a future refactor
+preserves." The REASONING was right and the CONCLUSION did not follow. The two counter shapes have
+complementary holes, not a hierarchy (see `_SEAM` / `_GLOBAL_SUBPROCESS_RUN`): a function-object
+seam is mechanism-robust and routing-narrow, a global patch is routing-robust and mechanism-narrow.
+Ranking them by patch width picks the wrong axis -- and it is the SEAM shape's hole, not the global
+one's, that produced this gate's seven open `ceremony.scoped_git_commit` bypasses. The right move
+was therefore to ENFORCE the global shape's precondition rather than to keep refusing the shape.
+Note what that enforcement had to close: `spawn_policy.site_key` is
+`(path, enclosing, argv0, ordinal)` with no mechanism component, so a `subprocess.run` -> `Popen`
+edit at a legitimized site keeps the key byte-identical and the exemption would have silently
+outlived the counter. The old text named that fragility and then left it unmeasured and unfixed;
+`_MECHANISM_PIN` fixes it. Measurement backing all of this: 2026-08-19, every flagged site's spawn
+callee derived from the AST (13 of 13 are `subprocess.run`), and every companion test re-run under
+a stack-recording `subprocess.run` wrapper to see which sites actually execute.
 
 REUSE FROM `spawn_policy`, UNMODIFIED (pinned API, `tasks/shell-spawn-regrowth-gate/
 PINNED-API.md`): `sites_in_source`, `is_test_tree_site`, `DEFAULT_EXCLUDE`, `SpawnParseError`,
@@ -132,13 +160,16 @@ WHAT THIS GATE DELIBERATELY DOES NOT CATCH (negative spec):
     uses will still be reported; narrowing that is left to a future pass, matching this module's
     stated false-negative-over-false-positive preference in the other direction (it would rather
     over-report a site than silently drop one whose gating it cannot prove).
-  - Whether a flagged site is ACTUALLY invisible to its op's counter at runtime -- this gate does
-    not read or execute any companion test's patch target. It answers a structural reachability
-    question and lets `_LEGITIMIZED_SITES` carry the human judgment call (mirroring
-    `test_no_unbatched_per_item_git_spawn.py`'s own `_EXEMPT_SITES` model) for a site once C6 has
-    made it legitimately-and-provably counted. Until then, a global-`subprocess.run`-patched
-    companion test's incidental coverage is NOT treated as "counted" -- see "THIS GATE'S
-    OPERATIONAL DEFINITION" above for why.
+  - Leg 3 (EXECUTION) of its own definition of counted. This gate does not run any companion test,
+    so it cannot see whether that test's counter reaches a legitimized site; the `executed` field
+    records a measurement taken OUT of band and cited, not one re-derived on each run. A fixture
+    that stops exercising a legitimized site therefore leaves a stale-but-passing exemption behind,
+    which is the same defect class as `green_path: 17` and is NOT closed here. Legs 1 and 2 are
+    checked (`test_legitimized_site_mechanism_pins_hold` enforces the mechanism pin; the exact-
+    equality requirement is carried by the asserting tests themselves). Closing leg 3 mechanically
+    means re-running each companion test under a stack-recording `subprocess.run` wrapper and
+    asserting each legitimized site appears -- a `cadence`/`spawns_process` job, deliberately left
+    to its own chunk rather than smuggled into this file's fast-tier surface.
   - The `coverage.diagnose_open_review_loop_dag_mode` manifest row. Its subject
     (`coverage._diagnose_open_review_loop`) is unreachable dead code (EM-verified addendum,
     `state/audits/2026-08-19-opro-03-c08-budgeted-op-spawn-trace.md`) with no registered op and no
@@ -163,6 +194,13 @@ comment escape hatch, matching that module's own stance: a structural exemption 
 opt out of by comment would let this class regrow behind a comment, the inverse of what this gate
 exists to end.
 
+Each VALUE is a `_Legitimation` naming the three legs above -- `counter`, `counted_by`,
+`executed`. That shape is load-bearing, not documentation: because `site_key` carries no mechanism
+component, an exemption recorded as a bare key cannot express WHAT it depends on and therefore
+cannot be invalidated when that thing changes. Recording the counter shape is what lets
+`test_legitimized_site_mechanism_pins_hold` fail the moment a `_GLOBAL_SUBPROCESS_RUN` site stops
+spawning via `subprocess.run`.
+
 RE-ENTRANCY. This file's own path (`coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_
 path.py`) is excluded from every real scan by the REUSED `is_test_tree_site` (a `test_*` basename,
 same rule that excludes every other gate module in this tree) -- inherited, not re-derived; this
@@ -175,6 +213,8 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import sys
+import typing
 
 import pytest
 
@@ -237,45 +277,221 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
 }
 
+#: The two counter shapes a legitimation may rest on. Each names what it guarantees AND the hole
+#: it leaves; neither dominates the other, which is why the exemption model records which one an
+#: entry depends on instead of privileging one (module docstring, "THIS GATE'S OPERATIONAL
+#: DEFINITION").
+#:
+#: `SEAM` -- the companion test substitutes a FUNCTION OBJECT (`git_native._git = _wrapper`).
+#: Mechanism-agnostic: whatever the seam's body spawns with, the call routes through the
+#: substituted name first, so a `subprocess.run` -> `Popen` refactor inside it stays counted.
+#: Routing-narrow: a caller that reaches the process boundary WITHOUT going through the seam is
+#: invisible. That hole is not hypothetical -- it is precisely this gate's seven open
+#: `ceremony.scoped_git_commit` bypasses.
+#:
+#: `GLOBAL_SUBPROCESS_RUN` -- the companion test substitutes the module attribute
+#: (`subprocess.run = _wrapper`). The mirror image: routing-agnostic (a new spawn ANYWHERE in the
+#: op's reached set is counted, however it was reached), mechanism-narrow (a `Popen`,
+#: `os.posix_spawn`, or `asyncio.create_subprocess_exec` call is invisible). The mechanism hole is
+#: what `_MECHANISM_PIN` closes below; the routing strength is what makes this shape admissible at
+#: all, and the reason the pre-2026-08-19 text's blanket refusal of it was wrong.
+_SEAM = "seam"
+_GLOBAL_SUBPROCESS_RUN = "global-subprocess-run"
+
+#: For a `_GLOBAL_SUBPROCESS_RUN` legitimation, the dotted spawn callee the counter patches. Every
+#: spawn call in the legitimized site's enclosing function must be exactly this
+#: (`test_legitimized_site_mechanism_pins_hold`) -- that assertion is what converts "a global patch
+#: happens to see this call" into an ENFORCED precondition, and it is the whole reason this gate
+#: can now admit the shape it previously refused. `spawn_policy.site_key` is
+#: `(path, enclosing, argv0, ordinal)` and carries no mechanism component, so a
+#: `subprocess.run` -> `subprocess.Popen` edit at a legitimized site keeps the identical key: the
+#: exemption would silently outlive the counter that justified it. The pin is checked against the
+#: enclosing function's FULL callee set rather than one ordinal-matched call, so both an in-place
+#: mechanism swap and an added second spawn of a different mechanism fail it.
+_MECHANISM_PIN = "subprocess.run"
+
+
+class _Legitimation(typing.NamedTuple):
+    """Why one site is counted, in the three parts a legitimation must prove. `counter` is the
+    mechanism (above). `counted_by` is the asserting test -- required to make an exact-equality
+    assertion against a manifest figure, never a bound or a range. `executed` records that the
+    asserting test's counter was MEASURED to actually run this site, which is the leg neither the
+    mechanism nor the assertion shape establishes and the one this gate cannot check statically
+    (see "WHAT THIS GATE DELIBERATELY DOES NOT CATCH")."""
+
+    counter: str
+    counted_by: str
+    executed: str
+
+
 #: Sites PROVEN legitimately counted -- see module docstring's "EXEMPTION MODEL". C6's worklist
-#: (opro-03, `docs/plans/2026-08-19-every-budgeted-op-counts-its-own-spawns.md`) drains this set
-#: one entry at a time, each earning its place by ROUTING evidence, not by a companion test's
-#: incidental visibility. Do NOT add an entry here because a companion test's global
-#: `subprocess.run` patch happens to also see the call -- that is not this gate's definition of
-#: counted (module docstring, "THIS GATE'S OPERATIONAL DEFINITION"); the two entries below were
-#: each checked against that bar and hold up. 13 of 15 distinct sites remain unlegitimized (16 of
-#: 18 (op, site) pairs) -- see `state/subagent-share/7a4959ac-9247-439f-b7e2-d462e0608725/
-#: coordinatorexecutor-3400b29c.md` for the full per-site drain evidence, run 2026-08-19.
-_LEGITIMIZED_SITES: set[tuple[str, str, str, int]] = {
+#: (opro-03, `docs/plans/2026-08-19-every-budgeted-op-counts-its-own-spawns.md`) drains this
+#: mapping one entry at a time. An entry earns its place by satisfying all three legs of
+#: `_Legitimation`, NOT by a companion test's incidental visibility: the distinction between the
+#: two is the `executed` leg, and it is a measurement, never an inference from static
+#: reachability. Nine of the sites on this gate's live-tree list were statically reachable AND
+#: under an exact-equality global counter; six of them were measured to actually execute under
+#: that counter and are legitimized here, and three were measured NOT to (see
+#: `_UNCOUNTED_MEASURED_UNREACHED`) and stay red. `green_path: 17` is the same defect in the other
+#: direction -- reachable, budgeted, and never run by its own fixture.
+#: Keyed on `(op_key, *site_key)`, NOT on `site_key` alone. Counting is a property of an (op,
+#: site) PAIR, because the counter belongs to an op: one physical call site can sit on two
+#: budgeted ops' reachable sets and be genuinely counted under one while invisible under the
+#: other. `close_out_and_stamp.py::_run_git` is exactly that -- measured executing under
+#: `dispatch_ledger_delivered`'s exact-equality counter, and never reached under
+#: `sibling_committed_chunk_ids_memo`'s memo-hit fixture. A site-keyed register cannot express
+#: that difference and must resolve it in one direction or the other: refusing both leaves a
+#: correctly-counted site permanently undischargeable, and admitting both silently exempts a site
+#: nothing counts. Op-keying is what lets each pair carry its own verdict.
+_LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
     (
+        "ceremony.scoped_git_commit",
         "coordinator_core/ops/ceremony/git_native.py",
         "_git._invoke",
         "<dynamic>",
         0,
+    ): _Legitimation(
+        # `ceremony.scoped_git_commit`'s counting seam itself. `_count_op_git_calls` substitutes
+        # the FUNCTION OBJECT `git_native._git` before invoking the op -- every call to
+        # `git_native._git(...)`, whatever `_invoke`'s own body does internally, routes through the
+        # substituted name first. This is not a call INTO the seam that the seam then hides from
+        # the counter; it IS the seam, so it is counted by construction. Budget shape:
+        # `overrides["ceremony.scoped_git_commit"].spawn_count_budget.green_path` (and siblings).
+        counter=_SEAM,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Seam substitution; every counted spawn on the op's green path routes through it.",
     ),
-    # `ceremony.scoped_git_commit`'s counting seam itself. `test_commit_e2e_spawn_budget.py::
-    # _count_op_git_calls` substitutes the FUNCTION OBJECT `git_native._git` (`git_native._git =
-    # _wrapper`, not a `subprocess.run` module-attribute patch) before invoking the op -- every
-    # call to `git_native._git(...)`, whatever `_invoke`'s own body does internally, routes
-    # through the substituted name first. This is not a call INTO the seam that the seam then
-    # hides from the counter; it IS the seam, so it is counted by construction. Budget shape:
-    # `overrides["ceremony.scoped_git_commit"].spawn_count_budget.green_path` (and siblings) in
-    # `budget-manifest.json`.
     (
+        "bin.reap_integrated_review_findings.tracked_untracked_split",
         "coordinator/bin/reap-integrated-review-findings.py",
         "_git",
         "git",
         0,
+    ): _Legitimation(
+        # `bin.reap_integrated_review_findings.tracked_untracked_split`'s sole spawn seam. The
+        # companion substitutes the module's own FUNCTION OBJECT (`mod._git = _counting_git`).
+        # `spawn_policy.sites_in_source` finds exactly one spawn site in this whole file (`_git`),
+        # and every git operation the module makes (`ls-files`, `rm`, `commit`) routes through it,
+        # so wrapping the name wraps the site. Budget shape: that key's `per_reap_call`.
+        counter=_SEAM,
+        counted_by="coordinator/tests/test_reap_integrated_review_findings_spawn_budget.py",
+        executed="Seam substitution; the file's only spawn site, exercised by `per_reap_call=1`.",
     ),
-    # `bin.reap_integrated_review_findings.tracked_untracked_split`'s sole spawn seam.
-    # `coordinator/tests/test_reap_integrated_review_findings_spawn_budget.py` substitutes the
-    # module's own FUNCTION OBJECT (`mod._git = _counting_git`, wrapping `orig_git = mod._git`),
-    # narrow by construction like the seam above -- not a `subprocess.run` module-attribute
-    # patch. `spawn_policy.sites_in_source` finds exactly one spawn site in this whole file
-    # (`_git`), and every git operation the module makes (`ls-files`, `rm`, `commit`) routes
-    # through it, so wrapping the name wraps the site. Budget shape:
-    # `overrides["bin.reap_integrated_review_findings.tracked_untracked_split"].spawn_count_budget.
-    # per_reap_call` in `budget-manifest.json`.
+    (
+        "changelog.cited_in_range_count",
+        "coordinator_core/ops/changelog_ops.py",
+        "_batch_resolve_commits",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/test_changelog_cited_in_range_spawn_bound.py",
+        executed="Measured 2026-08-19: origin-recorded at changelog_ops.py:1984 under the "
+        "counter of `test_cited_in_range_count_spawns_once_regardless_of_token_count` "
+        "(`assert n == 1`).",
+    ),
+    (
+        "percolate.functional_identifier_output_drift_in_tree",
+        "coordinator_core/percolate/store.py",
+        "_git_commit_epoch_times_batch",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/percolate/tests/"
+        "test_functional_identifier_output_drift_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at store.py:2021 under the counter of "
+        "`test_dest_publish_time_batches_to_one_spawn_regardless_of_file_count` "
+        "(`assert n == budgeted`, budgeted read from the manifest).",
+    ),
+    (
+        "bin.workday_complete_step2_5_dirty_tree.classify_main_pass",
+        "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py",
+        "_run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/test_workday_complete_step2_5_dirty_tree_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at "
+        "workday_complete_step2_5_dirty_tree.py:267 under the counter of "
+        "`test_classify_main_pass_spawns_exactly_two_git_calls_for_several_dirty_paths` "
+        "(`assert calls[\"n\"] == budgeted`).",
+    ),
+    (
+        "execute_plan_assemble.dispatch_ledger_delivered",
+        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
+        "_run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        # The SAME physical site is deliberately NOT legitimized under
+        # `execute_plan_assemble.sibling_committed_chunk_ids_memo` -- that op's fixture never
+        # reaches it. See `_UNCOUNTED_MEASURED_UNREACHED`, and the op-keying note above for why
+        # the register has to be able to say that.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/execute_plan_assemble/tests/"
+        "test_dispatch_ledger_delivered_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at close_out_and_stamp.py:611 under the "
+        "counter of `test_multiple_committed_rows_spawn_exactly_two_git_calls` "
+        "(`assert spawns == budgeted`).",
+    ),
+    (
+        "execute_plan_assemble.dispatch_ledger_delivered",
+        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
+        "_batch_git_cat_file_check",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/execute_plan_assemble/tests/"
+        "test_dispatch_ledger_delivered_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at close_out_and_stamp.py:2633 under the "
+        "counter of `test_multiple_committed_rows_spawn_exactly_two_git_calls` "
+        "(`assert spawns == budgeted`).",
+    ),
+    (
+        "ops.discover_working_repos",
+        "coordinator_core/ops/discover_working_repos.py",
+        "_sort_unique",
+        "sort",
+        0,
+    ): _Legitimation(
+        # The `sort -u` shell-out is a SANCTIONED carve-out (`test_no_bash_dependency.py`), kept
+        # for byte-parity with the bash oracle. This gate's property is that it be COUNTED, not
+        # that it be removed -- see the module docstring's opening paragraph, and the anti-scope
+        # note on `_sort_unique` in the opro-03 plan.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/test_discover_working_repos_whole_op_spawn_budget.py",
+        executed="Measured 2026-08-19: origin-recorded at discover_working_repos.py:138 under all "
+        "three whole-op counters, which assert exact equality against `call_count` AND "
+        "cross-check the manifest's own `op_total_*` value (3/3/0, nothing stubbed).",
+    ),
+}
+
+#: Sites this gate keeps RED that a static reading would wrongly clear: each is transitively
+#: reachable from a budgeted entrypoint AND its op's companion test uses an exact-equality global
+#: `subprocess.run` counter -- but the site was MEASURED (2026-08-19, same instrument as the
+#: `executed` legs above) never to run under that counter, so a new spawn added here moves no
+#: assertion. Recorded rather than silently omitted, because "reachable and under a counter" is
+#: exactly the shape that reads as counted until the measurement is taken. Not consumed by any
+#: assertion -- this is the negative half of the drain evidence.
+_UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {
+    (
+        "execute_plan_assemble.sibling_committed_chunk_ids_memo",
+        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py::_run_git",
+    ): "Its budget is `second_call_identical_inputs=0` -- the asserting test measures the MEMO-HIT "
+    "path, which by construction spawns nothing. Zero spawns were origin-recorded for this test.",
+    (
+        "execute_plan_assemble.sibling_committed_chunk_ids_memo",
+        "coordinator_core/git/repo_root.py::_spawn_rev_parse",
+    ): "Same memo-hit fixture; no spawn of any kind executes under the counter.",
+    (
+        "bin.coordinator_harvest_deferrals_dedup_scan_root_resolution",
+        "coordinator_core/git/repo_root.py::_spawn_rev_parse",
+    ): "`show_toplevel` walks for the ordinary case and spawns only when the walk finds no `.git` "
+    "entry; the fixture's tree has one, so `_spawn_rev_parse` never runs. This is the same fact "
+    "the manifest's own rationale records when it lowered that budget from 3 to 2.",
 }
 
 
@@ -477,11 +693,12 @@ def _reachable_functions(
 def _on_path_spawn_sites(
     reached_funcs: set[tuple[str, str]],
     spawn_sites_by_file: dict[str, list],
-    exempt: set[tuple[str, str, str, int]],
+    exempt: typing.Container[tuple[str, str, str, int]],
 ) -> list:
     """Every `spawn_policy` site whose own top-level enclosing function is in `reached_funcs`,
     minus `_LEGITIMIZED_SITES`. Function granularity, not whole-file -- see module docstring's
-    "FUNCTION GRANULARITY" section for why."""
+    "FUNCTION GRANULARITY" section for why. `exempt` is membership-tested only, so the live
+    `_LEGITIMIZED_SITES` mapping and the planted fixtures' bare key sets both satisfy it."""
     reached_names_by_file: dict[str, set[str]] = {}
     for relpath, name in reached_funcs:
         reached_names_by_file.setdefault(relpath, set()).add(name)
@@ -562,27 +779,207 @@ def test_budgeted_entrypoints_resolve_to_live_functions():
         + "\n".join(missing)
     )
 
+    orphaned = sorted(
+        f"  {key[0]} -- {key[1]}::{key[2]}"
+        for key in _LEGITIMIZED_SITES
+        if key[0] not in _BUDGETED_ENTRYPOINTS
+    )
+    assert not orphaned, (
+        "legitimized site(s) name an op that is not a live budgeted entrypoint. An exemption "
+        "whose op key no longer matches is dead weight that suppresses nothing today and would "
+        "silently start suppressing if the key were ever reused:\n" + "\n".join(orphaned)
+    )
+
+
+#: Dotted spawn callees `spawn_policy.detect` recognises, as they appear in a call's own AST. The
+#: mechanism pin is checked against this set rather than against `subprocess.run` alone so that a
+#: swap to any OTHER recognised mechanism is reported as a mechanism change (an unrecognised
+#: callee is not a spawn site at all, so the site would leave the gate's input entirely and the
+#: stale-entry half of `test_legitimized_site_mechanism_pins_hold` catches it instead).
+_RECOGNISED_SPAWN_CALLEES = frozenset(
+    {
+        "subprocess.run",
+        "subprocess.Popen",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "os.system",
+        "os.execv",
+        "os.posix_spawn",
+        "os.posix_spawnp",
+        "asyncio.create_subprocess_exec",
+        "asyncio.create_subprocess_shell",
+    }
+)
+
+
+def _dotted_callee(node: ast.expr) -> str:
+    """`ast.Attribute`/`ast.Name` chain -> its dotted source text; `""` for anything else (a call
+    on a subscript, a call result, a lambda). Not a resolver -- it reads the call as written, which
+    is exactly what a mechanism pin needs to compare against."""
+    if isinstance(node, ast.Attribute):
+        base = _dotted_callee(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return ""
+
+
+def _spawn_callees_in_function(relpath: str, top_enclosing: str) -> set[str]:
+    """Every recognised spawn callee, as written, inside one top-level function."""
+    tree = ast.parse((_REPO_ROOT / relpath).read_text(encoding="utf-8"))
+    out: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != top_enclosing:
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                callee = _dotted_callee(sub.func)
+                if callee in _RECOGNISED_SPAWN_CALLEES:
+                    out.add(callee)
+    return out
+
+
+def test_legitimized_site_mechanism_pins_hold():
+    """The assertion that makes a `_GLOBAL_SUBPROCESS_RUN` legitimation structural rather than
+    incidental -- and the reason this gate can admit a counter shape its pre-2026-08-19 text
+    refused outright.
+
+    That counter sees a call only because it substitutes the `subprocess.run` module attribute.
+    `spawn_policy.site_key` is `(path, enclosing, argv0, ordinal)` and carries NO mechanism
+    component, so editing a legitimized site from `subprocess.run` to `subprocess.Popen` (or
+    `os.posix_spawn`, or `asyncio.create_subprocess_exec` -- every one of them a site
+    `spawn_policy.detect` still recognises, so the site does not disappear) keeps the key
+    byte-identical: the exemption would silently outlive the counter that earned it, and the op's
+    budget would stop counting a spawn while still claiming to. THAT, not the width of the patch,
+    is the real defect in resting on a global counter, and pinning the mechanism is what closes it.
+
+    Checked against the enclosing function's FULL callee set, not one ordinal-matched call, so an
+    added second spawn of a different mechanism fails too. Also fails on a stale entry whose site
+    no longer spawns at all -- an exemption for a site that has gone is an exemption that can
+    silently start covering a future one that reuses the name.
+
+    `_SEAM` entries are deliberately exempt from the pin: a function-OBJECT substitution wraps the
+    name, so it keeps counting whatever the body spawns with. Their hole is routing, not mechanism,
+    and no static pin addresses it -- the seven open `ceremony.scoped_git_commit` bypasses are that
+    hole, and they are on the gate's red list rather than papered over here."""
+    drifted: list[str] = []
+    for (_op_key, relpath, enclosing, _argv0, _ordinal), leg in _LEGITIMIZED_SITES.items():
+        if leg.counter != _GLOBAL_SUBPROCESS_RUN:
+            continue
+        found = _spawn_callees_in_function(relpath, enclosing.split(".")[0])
+        if not found:
+            drifted.append(
+                f"  {relpath}::{enclosing} -- legitimized against a global "
+                f"`{_MECHANISM_PIN}` counter, but no recognised spawn call remains in that "
+                f"function. Stale exemption: remove it, or re-earn it for whatever replaced it."
+            )
+        elif found != {_MECHANISM_PIN}:
+            drifted.append(
+                f"  {relpath}::{enclosing} -- legitimized against a global `{_MECHANISM_PIN}` "
+                f"counter, but this function now spawns via {sorted(found)}. That counter does "
+                f"not see those, so the site is no longer counted while its exemption says it is. "
+                f"Route it back through `{_MECHANISM_PIN}`, or re-legitimize it against a counter "
+                f"that actually observes the new mechanism ({leg.counted_by})."
+            )
+    assert not drifted, (
+        f"{len(drifted)} legitimized site(s) drifted off the spawn mechanism their counter "
+        "patches:\n" + "\n".join(drifted)
+    )
+
+
+def test_plant_mechanism_drift_is_detected(tmp_path, monkeypatch):
+    """The planted counterpart to `test_legitimized_site_mechanism_pins_hold` -- that test scans
+    the live tree and passes today, which on its own proves only that nothing has drifted YET, not
+    that drift would be caught. Plants each way a legitimized site can slip out from under a global
+    `subprocess.run` counter and asserts the helper reports it.
+
+    Mirrors this module's existing planted RED/GREEN fixture: a gate whose red path is never
+    exercised is a gate nobody knows is wired up."""
+    fixture = tmp_path / "planted.py"
+    monkeypatch.setattr(sys.modules[__name__], "_REPO_ROOT", tmp_path)
+
+    fixture.write_text(
+        "import subprocess\n"
+        "def _sole_seam():\n"
+        "    return subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    assert _spawn_callees_in_function("planted.py", "_sole_seam") == {_MECHANISM_PIN}, (
+        "baseline: an unmodified `subprocess.run` site must read as exactly the pinned mechanism, "
+        "or every assertion below is vacuous"
+    )
+
+    fixture.write_text(
+        "import subprocess\n"
+        "def _sole_seam():\n"
+        "    return subprocess.Popen(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    swapped = _spawn_callees_in_function("planted.py", "_sole_seam")
+    assert swapped == {"subprocess.Popen"}, swapped
+    assert swapped != {_MECHANISM_PIN}, (
+        "an in-place mechanism swap must be visible -- `spawn_policy.site_key` is unchanged by it, "
+        "so this helper is the only thing standing between the swap and a silently-stale exemption"
+    )
+
+    fixture.write_text(
+        "import subprocess\n"
+        "def _sole_seam():\n"
+        "    subprocess.run(['git', 'status'])\n"
+        "    return subprocess.Popen(['git', 'log'])\n",
+        encoding="utf-8",
+    )
+    added = _spawn_callees_in_function("planted.py", "_sole_seam")
+    assert added == {_MECHANISM_PIN, "subprocess.Popen"} and added != {_MECHANISM_PIN}, added
+
+    fixture.write_text(
+        "def _sole_seam():\n    return None\n",
+        encoding="utf-8",
+    )
+    assert _spawn_callees_in_function("planted.py", "_sole_seam") == set(), (
+        "a site that stopped spawning must read empty, so the stale-exemption branch fires"
+    )
+
 
 @pytest.mark.designed_red
 def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
     """The C-13 gate. For each of the nine live budgeted entrypoints, every `spawn_policy`-
     detected spawn site whose enclosing function is transitively reachable from that entrypoint
-    must carry a `_LEGITIMIZED_SITES` entry. EXPECTED RED on arrival -- 18 reachable sites exist
-    with none legitimized yet (module docstring, "THIS GATE'S OPERATIONAL DEFINITION"); this is
-    deliberate, not a bug in the gate.
+    must carry a `_LEGITIMIZED_SITES` entry for THAT op. Still EXPECTED RED, at 10 of the original
+    18 (module docstring, "THIS GATE'S OPERATIONAL DEFINITION"); this is deliberate, not a bug in
+    the gate.
 
     `designed_red` BY EM DECISION, not by the authoring agent: this lands as a standing,
     non-gating worklist rather than a tier-breaking failure, exactly as
     `test_no_unbatched_per_item_git_spawn.py` split its own collector (G1) from its assertions
-    (G2) across waves. The 18 sites are opro-03 C6's work-list; each one leaves this list by
-    being routed through its op's counter or by earning a `_LEGITIMIZED_SITES` entry that says
-    how it IS counted. When the list empties, this marker comes off and the gate becomes
-    standing -- that removal is the definition of C6 being done, and it must not be done by
-    populating `_LEGITIMIZED_SITES` wholesale to buy a green.
+    (G2) across waves. Each site leaves this list by being routed through its op's counter or by
+    earning a `_LEGITIMIZED_SITES` entry that says how it IS counted. When the list empties, this
+    marker comes off and the gate becomes standing -- that removal is the definition of C6 being
+    done, and it must not be done by populating `_LEGITIMIZED_SITES` wholesale to buy a green.
 
-    The three tests around this one are NOT `designed_red` and gate normally: the entrypoint
-    registry must resolve, and the planted-fixture RED/GREEN pair must hold. Those are what
-    prove this module still works while its live-tree list is non-empty."""
+    THE 10 THAT REMAIN are two populations, and conflating them is the main way the next pass on
+    this file goes wrong:
+
+      - SEVEN are real `ceremony.scoped_git_commit` bypasses (`auto_push` x4, `session/scope.py`,
+        `git/divergence.py`, `git/repo_root.py`). That op's counter wraps `git_native._git` and
+        none of these route through it. They want a design pass, not seven edits: `auto_push`'s
+        push/retry/publish leg is a subsystem, reached via `_handler` -> `run_commit_pipeline` ->
+        `_drain_pending_push_after_sync`, plus `_handler`'s own claim-release calls. Note that
+        `green_path: 17` would not move if they grew -- that fixture configures no remote, so the
+        drain never runs. Counting them means giving the drain a budget of its own or extending
+        this op's shapes to cover it; raising a budget to make a count pass stays forbidden.
+      - THREE are measured-unreached (`_UNCOUNTED_MEASURED_UNREACHED`): reachable, and under an
+        exact-equality global counter, but that counter's fixture never runs them. They are
+        discharged by giving the asserting test a fixture that reaches the site -- NOT by
+        legitimizing them on the strength of the counter alone, which is precisely the leg-3
+        failure the operational definition exists to name.
+
+    The four tests around this one are NOT `designed_red` and gate normally: the entrypoint
+    registry must resolve, no exemption may name a dead op or drift off its counter's spawn
+    mechanism, and the planted-fixture RED/GREEN pair must hold. Those are what prove this module
+    still works while its live-tree list is non-empty."""
     (
         index,
         spawn_sites_by_file,
@@ -601,7 +998,10 @@ def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
             func_aliases_by_file,
             local_aliases_by_file,
         )
-        for site in _on_path_spawn_sites(reached, spawn_sites_by_file, _LEGITIMIZED_SITES):
+        exempt_here = {
+            key[1:] for key in _LEGITIMIZED_SITES if key[0] == op_key
+        }
+        for site in _on_path_spawn_sites(reached, spawn_sites_by_file, exempt_here):
             all_violations.append((op_key, site))
 
     assert not all_violations, (

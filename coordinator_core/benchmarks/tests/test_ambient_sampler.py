@@ -39,7 +39,7 @@ def test_take_sample_shape():
         "t", "live_sessions", "claude_procs", "cpu_pct", "ram_free_mb", "ram_total_mb",
     }
     assert isinstance(sample["t"], float)
-    assert isinstance(sample["live_sessions"], int)
+    assert sample["live_sessions"] is None or isinstance(sample["live_sessions"], int)
     assert sample["claude_procs"] is None or isinstance(sample["claude_procs"], int)
     assert sample["cpu_pct"] is None or isinstance(sample["cpu_pct"], float)
     assert sample["ram_free_mb"] is None or isinstance(sample["ram_free_mb"], float)

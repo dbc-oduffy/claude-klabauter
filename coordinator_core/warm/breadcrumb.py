@@ -73,7 +73,9 @@ Negative-spec:
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -109,13 +111,68 @@ def _default_engine_clone() -> Path:
 
 
 def svc_dir(engine_root: Optional[Path] = None) -> Path:
-    """The breadcrumb's containing directory: `<engine_root>/state/warm/`.
+    """The breadcrumb's containing directory: a per-user, per-clone runtime
+    directory OUTSIDE the engine clone.
 
-    `engine_root` defaults to this module's own resolved clone root --
-    see module docstring's "SVC DIR RESOLUTION".
+    NOT `<engine_root>/state/warm/`, which is what this resolved until
+    2026-08-19. PM ruling that day: **`state/` is for active repos, and must
+    not exist in a publish mirror.** The engine runs out of the klabauter
+    publish clone, so writing runtime state under its `state/` put a
+    directory there that a publish repo is not supposed to have at all.
+
+    It also broke publishing to that clone. The publish round's end-of-run
+    unscanned-published check walks the FILESYSTEM, not git, so a gitignored
+    `state/warm/warm.json` is invisible to `git status` and fatal to the
+    round: all nine rows synced and the round still refused
+    (`state/warm/warm.json is published but was never visited by any row's
+    content-transform sweep`). Stopping the server cleared it, which made
+    "stop the engine before publishing to it" an unwritten operator
+    precondition discovered by tripping over it.
+
+    The original rationale was sound for the repo it reasoned about --
+    `state/` IS this repo's documented substrate for per-machine, gitignored
+    single-file artifacts (`state/doctor-last-run.json`,
+    `state/housekeeping-liveness.json`) and for concern-scoped
+    subdirectories (`state/subagent-share/`, `state/peer-notices/`). What it
+    missed is that the warm engine is the one component that runs from a
+    PUBLISH clone rather than an active one, where none of those precedents
+    apply.
+
+    PER-CLONE KEYING IS PRESERVED, which is the property the old resolution
+    actually bought. The directory is keyed by a hash of the resolved clone
+    path, in the same derivation `election.pipe_name` already uses to keep
+    two clones' pipes distinct -- so the klabauter clone and a live working
+    tree still get separate breadcrumbs and separate telemetry, and
+    `warm-engine-stop.py` (which passes its own containing clone's root)
+    still resolves exactly the directory its clone's server writes.
+
+    Per-USER isolation comes from the base directory being user-local
+    (`%LOCALAPPDATA%`), matching `pipe_name`'s own SID scoping. The base is
+    deliberately a LOCAL app-data path, never a synced or settings-home one:
+    a resident server's breadcrumb describes a pid on THIS machine and must
+    never follow the user to another (see the cross-machine-sync hazard the
+    coordinator settings root exists to avoid).
+
+    `engine_root` defaults to this module's own resolved clone root, exactly
+    as before.
     """
     root = Path(engine_root) if engine_root is not None else _default_engine_clone()
-    return root / "state" / "warm"
+    clone_hash = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    return _runtime_base() / "coordinator" / "warm" / clone_hash
+
+
+def _runtime_base() -> Path:
+    """User-local, non-synced base for warm runtime state.
+
+    `%LOCALAPPDATA%` on Windows (the warm engine is Windows-only --
+    `server.main` refuses to start elsewhere), falling back to
+    `~/.cache` so this module stays importable and testable on any
+    platform rather than raising at import or resolution time.
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local)
+    return Path.home() / ".cache"
 
 
 def breadcrumb_path(engine_root: Optional[Path] = None) -> Path:

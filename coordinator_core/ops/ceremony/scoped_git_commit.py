@@ -954,6 +954,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         kill (doe-claude-em memo, 2026-07-30).
 
         Conditionally present (only when "committed" is False):
+          "reconcile_decline": str,  # present iff the commit step's landed-
+                                     # despite-failure reconcile RAN and
+                                     # declined -- "<tag> (searched <range>)".
+                                     # Diagnostic only, never a predicate: it
+                                     # says why the reconcile could not
+                                     # confirm a landed commit, which is the
+                                     # one thing that can contradict a benign
+                                     # "empty-commit-set" reason on this
+                                     # branch. Absent -- never "" -- when no
+                                     # reconcile ran.
           "commit_failed": bool,       # True iff a gate or the commit step
                                         # itself failed; False for a benign
                                         # no-op (already-committed/empty pathspec)
@@ -1451,6 +1461,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # reason once `_classify_uncommitted` has already reclassified
             # it as benign.
             response["reason"] = result.reason
+        # The one key that can contradict the `empty-commit-set` reason just
+        # above. That reason is derived from a CLEAN `git status` -- and a
+        # tree is equally clean when the pathspec was already committed
+        # (benign) and when this call's own commit landed while `commit_
+        # scoped()` reported failure (the 2026-08-19 defect: a landed commit
+        # reported as not landed). `commit_pipeline._reconcile_landed_despite_
+        # failure` exists to separate those two, and when it declines, this
+        # tag names WHICH precondition declined -- so the next live occurrence
+        # arrives self-diagnosed rather than costing another session's
+        # investigation. Present only when a reconcile actually ran and
+        # declined; absent (not empty) otherwise, keeping every other
+        # uncommitted response byte-identical.
+        _reconcile_decline = getattr(
+            getattr(result, "commit", None), "reconcile_decline", ""
+        )
+        if _reconcile_decline:
+            response["reconcile_decline"] = _reconcile_decline
     # C-01/C-03: the pipeline derives `integrity_breach` from `push_status ==
     # PUSH_STATUS_FAILED`, and with one publisher per commit that predicate is
     # no longer racy -- so this is a straight carry-through, not a correction.

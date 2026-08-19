@@ -233,6 +233,13 @@ def _latest_record_for(op_key: str):
     return latest
 
 
+_HIGH_LOAD_LIVE_SESSIONS_THRESHOLD = 45
+"""C1's measured bands: live_sessions < 20 / 20-45 / > 45. Only the ">45"
+boundary matters here — a record measured above it is in a band C1 never
+benchmarked, so gate.py's raw 'fail' cannot be trusted standalone (see
+`_verdict_for_op`'s load-skew downgrade)."""
+
+
 def _verdict_for_op(op_key: str, op_class: Optional[OpClass]) -> tuple[str, str]:
     """Return (sub_verdict, detail) for one mapped op.
 
@@ -241,6 +248,16 @@ def _verdict_for_op(op_key: str, op_class: Optional[OpClass]) -> tuple[str, str]
     `_check_latency` below (gate.py's own tri-state ('pass'/'fail'/
     'advisory') is reused verbatim for the COMPUTE_ONLY case; MUTATING and
     "never benchmarked" are this module's additions, both non-gating).
+
+    Load-skew downgrade (C4, single-record rule): a raw gate.py 'fail' is
+    downgraded to 'advisory' when THIS record's own ambient band — read off
+    its own `ambient_before.live_sessions` (the in-process sample taken at
+    measurement start, closest to the timed window) — is unknown (null) or
+    is the high-load band C1 never measured (`live_sessions > 45`). There is
+    no baseline record to compare against here; this reads only the one
+    record already fetched above, per DR-296's fail-quiet swimlane. gate.py
+    itself is not touched — the model lives in this caller, not in the
+    verdict arithmetic (see module docstring, C4).
     """
     if op_class is OpClass.MUTATING:
         return (
@@ -269,11 +286,28 @@ def _verdict_for_op(op_key: str, op_class: Optional[OpClass]) -> tuple[str, str]
         sample_count=record.sample_count,
         min_gating_sample_count=min_gating_sample_count,
     )
+
+    load_skew_reason: Optional[str] = None
+    if sub_verdict == "fail":
+        ambient_before = record.ambient_before or {}
+        live_sessions = ambient_before.get("live_sessions")
+        if live_sessions is None:
+            load_skew_reason = "ambient live_sessions unknown at measurement time"
+        elif live_sessions > _HIGH_LOAD_LIVE_SESSIONS_THRESHOLD:
+            load_skew_reason = (
+                f"ambient live_sessions={live_sessions} is above the high-load "
+                f"band ({_HIGH_LOAD_LIVE_SESSIONS_THRESHOLD}) C1 never measured"
+            )
+        if load_skew_reason is not None:
+            sub_verdict = "advisory"
+
     detail = (
         f"{op_key}: {sub_verdict} ({record.gating_statistic}="
         f"{record.gating_statistic_value:.2f}ms vs target={record.target_ms}ms, "
         f"n={record.sample_count}, code_sha={record.code_sha[:12]})"
     )
+    if load_skew_reason is not None:
+        detail += f" [downgraded from fail: {load_skew_reason}]"
     return (sub_verdict, detail)
 
 

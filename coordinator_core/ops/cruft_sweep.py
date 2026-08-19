@@ -484,6 +484,48 @@ def _delete_path(target: Path) -> bool:
     return not target.exists()
 
 
+def _delete_paths_batch(targets: Sequence[Path]) -> dict:
+    """Batched replacement for a per-item `_delete_path` loop: one `rm -rf`
+    subprocess call removing every target, rather than one call per target.
+
+    Preserves `_delete_path`'s own contract (see its docstring) applied to
+    N targets instead of 1: success is decided by post-hoc existence, never
+    by the subprocess's aggregate returncode or by whether it raised. A
+    per-target failure inside the batch (permission-denied, one bad path)
+    does NOT abort the remaining targets -- `rm -rf a b c` is coreutils'
+    own per-item-isolating primitive, continuing past one target's failure
+    to attempt the rest, and a timeout-killed process still leaves whatever
+    it already removed removed. So every target's disposition is read off
+    its own `exists()` check below, exactly like the single-item helper,
+    never inferred from the batch call's exit status.
+
+    Timeout is `_DELETE_TIMEOUT_SECS * len(targets)`, preserving the
+    per-target 60s floor the single-item helper gives every delete -- a
+    flat 60s ceiling on N targets would starve a large, legitimately-slow
+    batch of the budget any one of its members would individually have had.
+
+    Returns {str(target): confirmed_gone_bool} for every entry in `targets`.
+    """
+    if not targets:
+        return {}
+    if len(targets) == 1:
+        # Single-target call: delegate to the single-item primitive rather
+        # than constructing a one-element batch argv -- identical outcome,
+        # identical stderr message on failure, and keeps `_delete_path`
+        # itself as the seam a caller/test mocks for the N==1 case.
+        return {str(targets[0]): _delete_path(targets[0])}
+    try:
+        subprocess.run(
+            ["rm", "-rf"] + [str(t) for t in targets],
+            timeout=_DELETE_TIMEOUT_SECS * len(targets),
+            capture_output=True,
+            **no_console_creationflags(),
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        print(f"_delete_paths_batch: rm -rf failed for {len(targets)} target(s): {sys.exc_info()[1]}", file=sys.stderr)
+    return {str(t): not t.exists() for t in targets}
+
+
 def _delete_file(target: Path) -> bool:
     """Best-effort file delete. Returns True iff `target` is confirmed gone
     afterward.
@@ -1001,6 +1043,13 @@ def sweep_harness(
     wd_uuid_bail = False
     wd_uuid_cnt = 0
 
+    # uuid_dir deletion is deferred into one batched call across every
+    # repo_dir (after the whole projects_root walk below), not per-item and
+    # not even per-repo_dir. uuid dirs are always direct, non-nested
+    # children of repo_dir (never nested in each other, even across repos),
+    # so deferring the delete cannot change which candidates the watchdog
+    # or the blocklist gate would otherwise have seen.
+    uuid_candidates: List[Tuple[Path, str, int, int, int]] = []  # dir, name, mtime, age_sec, size_bytes
     if projects_root.is_dir():
         for repo_dir in sorted(p for p in projects_root.iterdir() if p.is_dir()):
             if wd_uuid_bail:
@@ -1035,27 +1084,8 @@ def sweep_harness(
                                    "skip", "predecessor uuid in active handoff", emit_fn=emit_fn)
                     continue
 
-                size_bytes = _dir_size_bytes(uuid_dir)
-
-                # BEHAVIOUR CHANGE (2026-07-22): only count/log as pruned once
-                # the delete is confirmed — a failed rm no longer inflates the
-                # reported reclaimed bytes/items.
-                if apply:
-                    if not _delete_path(uuid_dir):
-                        _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {uuid_dir}", quiet=quiet)
-                        if json_mode:
-                            emit_jsonl("harness", str(uuid_dir), dir_name, size_bytes, mtime,
-                                       "prune-failed", f"projects dir mtime {age_sec}s > threshold {threshold_sec}s; delete did not confirm removal",
-                                       emit_fn=emit_fn)
-                        continue
-
-                total_bytes += size_bytes
-                pruned_dirs += 1
-
-                if json_mode:
-                    emit_jsonl("harness", str(uuid_dir), dir_name, size_bytes, mtime,
-                               "auto-prune", f"projects dir mtime {age_sec}s > threshold {threshold_sec}s",
-                               emit_fn=emit_fn)
+                # size_bytes captured now, before any delete.
+                uuid_candidates.append((uuid_dir, dir_name, mtime, age_sec, _dir_size_bytes(uuid_dir)))
 
             if not wd_uuid_bail:
                 for jsonl_file in sorted(repo_dir.glob("*.jsonl")):
@@ -1095,8 +1125,34 @@ def sweep_harness(
                                    "auto-prune", f"transcript mtime {age_sec}s > threshold {threshold_sec}s",
                                    emit_fn=emit_fn)
 
+    uuid_delete_results = _delete_paths_batch([c[0] for c in uuid_candidates]) if apply else {}
+
+    # BEHAVIOUR CHANGE (2026-07-22): only count/log as pruned once
+    # the delete is confirmed — a failed rm no longer inflates the
+    # reported reclaimed bytes/items.
+    for uuid_dir, dir_name, mtime, age_sec, size_bytes in uuid_candidates:
+        if apply:
+            if not uuid_delete_results.get(str(uuid_dir), False):
+                _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {uuid_dir}", quiet=quiet)
+                if json_mode:
+                    emit_jsonl("harness", str(uuid_dir), dir_name, size_bytes, mtime,
+                               "prune-failed", f"projects dir mtime {age_sec}s > threshold {threshold_sec}s; delete did not confirm removal",
+                               emit_fn=emit_fn)
+                continue
+
+        total_bytes += size_bytes
+        pruned_dirs += 1
+
+        if json_mode:
+            emit_jsonl("harness", str(uuid_dir), dir_name, size_bytes, mtime,
+                       "auto-prune", f"projects dir mtime {age_sec}s > threshold {threshold_sec}s",
+                       emit_fn=emit_fn)
+
+    # fh_dir deletion likewise deferred into one batched call below --
+    # fh_dirs are direct, non-nested children of file_history_root.
     wd2 = _Watchdog(watchdog_ceiling_secs)
     wd_fh_cnt = 0
+    fh_candidates: List[Tuple[Path, str, int, int, int]] = []  # dir, name, mtime, age_sec, size_bytes
     if file_history_root.is_dir():
         for fh_dir in sorted(p for p in file_history_root.iterdir() if p.is_dir()):
             if not wd2.check():
@@ -1125,24 +1181,27 @@ def sweep_harness(
                                "skip", "predecessor uuid in active handoff", emit_fn=emit_fn)
                 continue
 
-            size_bytes = _dir_size_bytes(fh_dir)
+            fh_candidates.append((fh_dir, dir_name, mtime, age_sec, _dir_size_bytes(fh_dir)))
 
-            if apply:
-                if not _delete_path(fh_dir):
-                    _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {fh_dir}", quiet=quiet)
-                    if json_mode:
-                        emit_jsonl("harness", str(fh_dir), dir_name, size_bytes, mtime,
-                                   "prune-failed", f"file-history dir mtime {age_sec}s > threshold {threshold_sec}s; delete did not confirm removal",
-                                   emit_fn=emit_fn)
-                    continue
+    fh_delete_results = _delete_paths_batch([c[0] for c in fh_candidates]) if apply else {}
 
-            total_bytes += size_bytes
-            pruned_fh_dirs += 1
+    for fh_dir, dir_name, mtime, age_sec, size_bytes in fh_candidates:
+        if apply:
+            if not fh_delete_results.get(str(fh_dir), False):
+                _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {fh_dir}", quiet=quiet)
+                if json_mode:
+                    emit_jsonl("harness", str(fh_dir), dir_name, size_bytes, mtime,
+                               "prune-failed", f"file-history dir mtime {age_sec}s > threshold {threshold_sec}s; delete did not confirm removal",
+                               emit_fn=emit_fn)
+                continue
 
-            if json_mode:
-                emit_jsonl("harness", str(fh_dir), dir_name, size_bytes, mtime,
-                           "auto-prune", f"file-history dir mtime {age_sec}s > threshold {threshold_sec}s",
-                           emit_fn=emit_fn)
+        total_bytes += size_bytes
+        pruned_fh_dirs += 1
+
+        if json_mode:
+            emit_jsonl("harness", str(fh_dir), dir_name, size_bytes, mtime,
+                       "auto-prune", f"file-history dir mtime {age_sec}s > threshold {threshold_sec}s",
+                       emit_fn=emit_fn)
 
     total_items = pruned_dirs + pruned_jsonl + pruned_fh_dirs
     total_mb = total_bytes // 1048576
@@ -1384,6 +1443,11 @@ def sweep_subagent_sandbox_files(
     total_bytes = 0
     reaped_items = 0
 
+    # Evaluation (mtime gate) is unchanged; only the delete itself is
+    # deferred into one batched call below -- these files are flat siblings
+    # in sandbox_dir (no nesting), so deferring the delete cannot change
+    # which files are ever considered a candidate.
+    candidates: List[Tuple[Path, str, int, int, int]] = []  # path, name, mtime, age_sec, size_bytes
     for file_path in sorted(sandbox_dir.glob("*.md")):
         if not file_path.is_file():
             continue
@@ -1402,11 +1466,17 @@ def sweep_subagent_sandbox_files(
                            "skip", f"mtime {age_sec}s <= 86400s (mtime-floor)", emit_fn=emit_fn)
             continue
 
-        size_bytes = _file_size(file_path)
+        # size_bytes captured now, before any delete -- a post-delete stat
+        # on a confirmed-gone file would read back 0, corrupting the total.
+        candidates.append((file_path, file_name, mtime, age_sec, _file_size(file_path)))
 
+    delete_results = _delete_paths_batch([c[0] for c in candidates]) if apply else {}
+
+    for file_path, file_name, mtime, age_sec, size_bytes in candidates:
         if apply:
-            # subprocess rm w/ 60s cap, matches oracle's cs_timeout rm -f
-            if not _delete_path(file_path):
+            # one batched rm -rf w/ N*60s cap (see _delete_paths_batch) --
+            # matches oracle's per-file cs_timeout rm -f floor, batched.
+            if not delete_results.get(str(file_path), False):
                 _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {file_path}", quiet=quiet)
                 if json_mode:
                     emit_jsonl("scratch", str(file_path), file_name, size_bytes, mtime,
@@ -1476,6 +1546,12 @@ def sweep_orphans(
     wd_bail = False
     wd_cnt = 0
 
+    # Evaluation (name/fingerprint gates) is unchanged; only the delete
+    # itself is deferred into one batched call below. Candidates here are
+    # always top-level children of a parent_root (never nested in each
+    # other, even across roots), so deferring the delete cannot change
+    # which children are considered.
+    candidates: List[Tuple[Path, str, int, int]] = []  # child_path, name, size_bytes, mtime
     for root in parent_roots:
         if wd_bail:
             continue
@@ -1523,22 +1599,27 @@ def sweep_orphans(
                                emit_fn=emit_fn)
                 continue
 
-            if apply:
-                if not _delete_path(child_path):
-                    _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {child_path}", quiet=quiet)
-                    if json_mode:
-                        emit_jsonl("orphans", str(child_path), child_name, size_bytes, mtime,
-                                   "prune-failed", "name in orphan cruft list; sonnet-fingerprint contents confirmed; delete did not confirm removal",
-                                   emit_fn=emit_fn)
-                    continue
+            candidates.append((child_path, child_name, size_bytes, mtime))
 
-            total_bytes += size_bytes
-            pruned_items += 1
+    delete_results = _delete_paths_batch([c[0] for c in candidates]) if apply else {}
 
-            if json_mode:
-                emit_jsonl("orphans", str(child_path), child_name, size_bytes, mtime,
-                           "auto-prune", "name in orphan cruft list; sonnet-fingerprint contents confirmed",
-                           emit_fn=emit_fn)
+    for child_path, child_name, size_bytes, mtime in candidates:
+        if apply:
+            if not delete_results.get(str(child_path), False):
+                _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {child_path}", quiet=quiet)
+                if json_mode:
+                    emit_jsonl("orphans", str(child_path), child_name, size_bytes, mtime,
+                               "prune-failed", "name in orphan cruft list; sonnet-fingerprint contents confirmed; delete did not confirm removal",
+                               emit_fn=emit_fn)
+                continue
+
+        total_bytes += size_bytes
+        pruned_items += 1
+
+        if json_mode:
+            emit_jsonl("orphans", str(child_path), child_name, size_bytes, mtime,
+                       "auto-prune", "name in orphan cruft list; sonnet-fingerprint contents confirmed",
+                       emit_fn=emit_fn)
 
     total_mb = total_bytes // 1048576
     if not json_mode and not quiet:
@@ -1633,6 +1714,12 @@ def sweep_empty_toplevel_dirs(
     ]
     ignored_names = _batch_git_ignored_names(repo_root, ignore_candidate_names)
 
+    # Evaluation (empty-subtree scan, mtime gate) is unchanged; only the
+    # delete itself is deferred into one batched call below. Depth-1-only
+    # scope (module docstring) means no candidate here can ever be a
+    # descendant of another -- unlike sweep_scratch's nested-dir case,
+    # deferring the delete cannot change which children are considered.
+    candidates: List[Tuple[Path, str, int, int]] = []  # child, name, max_mtime, age_sec
     for child in children:
         if not wd.check():
             _banner(
@@ -1664,8 +1751,13 @@ def sweep_empty_toplevel_dirs(
                            emit_fn=emit_fn)
             continue
 
+        candidates.append((child, name, max_mtime, age_sec))
+
+    delete_results = _delete_paths_batch([c[0] for c in candidates]) if apply else {}
+
+    for child, name, max_mtime, age_sec in candidates:
         if apply:
-            if not _delete_path(child):
+            if not delete_results.get(str(child), False):
                 _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {child}", quiet=quiet)
                 if json_mode:
                     emit_jsonl("empty-dirs", str(child), name, 0, max_mtime,

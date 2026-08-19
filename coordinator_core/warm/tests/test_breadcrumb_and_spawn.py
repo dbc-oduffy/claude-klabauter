@@ -41,9 +41,32 @@ _spec.loader.exec_module(stop_mod)
 # ---------------------------------------------------------------------------
 
 
-def test_svc_dir_and_breadcrumb_path_under_state_warm(tmp_path: Path) -> None:
-    assert breadcrumb.svc_dir(tmp_path) == tmp_path / "state" / "warm"
-    assert breadcrumb.breadcrumb_path(tmp_path) == tmp_path / "state" / "warm" / "warm.json"
+def test_svc_dir_lives_outside_the_engine_clone(tmp_path: Path) -> None:
+    """PM ruling 2026-08-19: `state/` is for active repos and must not exist
+    in a publish mirror. The warm engine runs from the klabauter publish
+    clone, so its runtime state moved OUT of `<clone>/state/warm/` — which
+    had also made the mirror unpublishable, the end-of-run
+    unscanned-published check walking the filesystem rather than git."""
+    resolved = breadcrumb.svc_dir(tmp_path)
+    assert tmp_path not in resolved.parents and resolved != tmp_path, (
+        f"warm runtime state resolved inside the engine clone: {resolved}"
+    )
+    assert "state" not in resolved.parts[len(resolved.parts) - 3 :], (
+        f"warm runtime state must not land under a `state/` segment: {resolved}"
+    )
+    assert breadcrumb.breadcrumb_path(tmp_path) == resolved / "warm.json"
+
+
+def test_svc_dir_is_deterministic_and_per_clone(tmp_path: Path) -> None:
+    """Per-clone keying is the property the old in-clone path actually
+    bought, and `warm-engine-stop.py` depends on it: it passes its OWN
+    containing clone's root and must resolve exactly the directory that
+    clone's server writes."""
+    a, b = tmp_path / "clone-a", tmp_path / "clone-b"
+    a.mkdir()
+    b.mkdir()
+    assert breadcrumb.svc_dir(a) == breadcrumb.svc_dir(a)
+    assert breadcrumb.svc_dir(a) != breadcrumb.svc_dir(b)
 
 
 def test_read_breadcrumb_missing_returns_none(tmp_path: Path) -> None:

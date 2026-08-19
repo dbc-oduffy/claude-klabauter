@@ -5107,7 +5107,9 @@ def test_reconcile_recovers_the_sha_of_a_commit_that_landed_despite_failure(tmp_
     found = commit_pipeline_mod._reconcile_landed_despite_failure(
         repo, f"Commit-Token: {token}", pre_sha, ["notes/alpha.md"]
     )
-    assert found == landed_sha
+    assert found.sha == landed_sha
+    assert found.decline == ""
+    assert found.range_spec == f"{pre_sha}..HEAD"
 
 
 def test_reconcile_never_adopts_a_peer_commit_in_the_same_window(tmp_path):
@@ -5126,7 +5128,8 @@ def test_reconcile_never_adopts_a_peer_commit_in_the_same_window(tmp_path):
     found = commit_pipeline_mod._reconcile_landed_despite_failure(
         repo, "Commit-Token: ourtokenbbbbbbbbbbbbbbbbbbbbbbbb", pre_sha, ["notes/peer.md"]
     )
-    assert found is None
+    assert found.sha is None
+    assert found.decline == "no-candidate"
 
 
 def test_reconcile_returns_none_when_nothing_landed(tmp_path):
@@ -5141,23 +5144,80 @@ def test_reconcile_returns_none_when_nothing_landed(tmp_path):
     found = commit_pipeline_mod._reconcile_landed_despite_failure(
         repo, "Commit-Token: ourtokencccccccccccccccccccccc", pre_sha, ["README.md"]
     )
-    assert found is None
+    assert found.sha is None
+    assert found.decline == "no-candidate"
 
 
-def test_reconcile_declines_without_a_pre_sha_to_bound_the_range(tmp_path):
-    """No `pre_sha` means no bounded range, so there is no safe search to
-    run -- degrade to today's behaviour rather than widen to all of history,
-    where a token match could predate this call entirely."""
+def test_reconcile_falls_back_to_a_bounded_window_without_a_pre_sha(tmp_path):
+    """A missing `pre_sha` is a TIMED-OUT `git rev-parse HEAD`, not an absence
+    of history -- and it fires under exactly the load that produces the defect
+    the reconcile repairs, so declining there silences it when it is most
+    needed (2026-08-19 investigation, suspect 1). The bounded window back from
+    HEAD replaces the bounded range; the token, not the range, is what makes
+    the match safe."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
     token = "dddddddddddddddddddddddddddddddd"
-    _seed_commit_with_token(repo, token, "notes/alpha.md")
+    landed_sha = _seed_commit_with_token(repo, token, "notes/alpha.md")
 
-    assert commit_pipeline_mod._reconcile_landed_despite_failure(
+    found = commit_pipeline_mod._reconcile_landed_despite_failure(
         repo, f"Commit-Token: {token}", None, ["notes/alpha.md"]
-    ) is None
+    )
+    assert found.sha == landed_sha
+    assert found.decline == ""
+    assert found.range_spec == (
+        f"-n {commit_pipeline_mod._RECONCILE_FALLBACK_WINDOW_COMMITS} HEAD"
+    )
+
+
+def test_reconcile_fallback_window_still_never_adopts_a_peer_commit(tmp_path):
+    """The safety property must survive the widening: with no `pre_sha` at all,
+    a peer's commit sitting in the fallback window carries a different token, so
+    the search still finds nothing. Widening the RANGE never widens what counts
+    as ours."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_commit_with_token(repo, "peertokeneeeeeeeeeeeeeeeeeeeeeee", "notes/peer.md")
+
+    found = commit_pipeline_mod._reconcile_landed_despite_failure(
+        repo, "Commit-Token: ourtokenffffffffffffffffffffffff", None, ["notes/peer.md"]
+    )
+    assert found.sha is None
+    assert found.decline == "no-candidate"
+
+
+def test_reconcile_decline_reaches_the_commit_outcome(tmp_path, monkeypatch):
+    """The instrumentation, end to end: when `commit_scoped()` reports failure
+    and the reconcile cannot confirm a landed commit, the WHY rides out on
+    `CommitOutcome.reconcile_decline` instead of being discarded. Without this,
+    "the reconcile declined" and "the reconcile never ran" are indistinguishable
+    at the operator's end -- the exact ambiguity that cost the 2026-08-19
+    investigation a session."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "docs/nothing.md", "content\n")
+
+    def _reports_timeout_without_committing(*args, **kwargs):
+        return commit_pipeline_mod.git_native.GitResult(
+            returncode=-1,
+            stdout="",
+            stderr="git commit -F ...: timed out after 30s (TimeoutExpired)",
+        )
+
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native, "commit_scoped", _reports_timeout_without_committing
+    )
+    outcome = commit_pipeline_mod.commit(
+        repo, message="subject", commit_paths=["docs/nothing.md"]
+    )
+    assert outcome.landed is False
+    assert outcome.reconcile_decline.startswith("no-candidate (searched ")
 
 
 def test_commit_reports_landed_when_a_timed_out_git_commit_actually_landed(

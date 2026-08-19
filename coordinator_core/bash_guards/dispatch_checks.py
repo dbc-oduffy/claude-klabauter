@@ -1011,6 +1011,85 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
     return result.returncode, result.stdout
 
 
+def _batch_show_index_blobs(paths: List[str], cwd: Optional[str]) -> Dict[str, Optional[str]]:
+    """Batched replacement for a per-file `git show :<path>` index-blob read
+    (used by `check_validate_commit`'s CLAUDE.md-budget check). ONE
+    `git cat-file --batch` feed (stdin, byte mode) resolves every path's
+    staged content instead of one `git show` spawn per file -- the same
+    amplification shape `cat_file_batch`/`cat_file_batch_objects`
+    (`coordinator_core.ops.ceremony.git_native`) close elsewhere, reimplemented
+    locally because THIS module's `_run_git` runs `subprocess.run(...,
+    encoding="utf-8", errors="replace")` -- text mode -- while `cat-file
+    --batch`'s per-record `size` field is a BYTE count; decoding first would
+    desync every slice after the first multi-byte character or CRLF. Also
+    honors this module's git-probe budget (`_git_probe_budget_spent`), which
+    the ceremony helper has no reason to know about.
+
+    Reconciliation: every requested path is bound to an explicit slot by
+    walking `paths` in order -- resolved -> blob text (utf-8, errors=
+    "replace", matching `_run_git`'s own decode policy), missing/truncated/
+    malformed -> None. Absence from git's output is never read as "resolved".
+
+    Returns `{}` for empty `paths`, spawning no subprocess.
+    """
+    if not paths:
+        return {}
+    if _git_probe_budget_spent():
+        print(
+            "bash_guards.dispatch_checks: git probe budget (%.1fs) spent; "
+            "declining `git cat-file --batch` unspawned -- claudemd-budget "
+            "reads for this dispatch fall back to skipped (fail-open)."
+            % _GIT_PROBE_BUDGET_SECONDS,
+            file=sys.stderr,
+        )
+        return {p: None for p in paths}
+    stdin_bytes = ("\n".join(":%s" % p for p in paths) + "\n").encode("utf-8")
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            input=stdin_bytes,
+            capture_output=True,
+            cwd=cwd,
+            timeout=2.0,
+            creationflags=_CREATIONFLAGS,
+        )
+    except subprocess.TimeoutExpired:
+        return {p: None for p in paths}
+    except OSError:
+        return {p: None for p in paths}
+    stdout = proc.stdout
+    results: Dict[str, Optional[str]] = {}
+    pos = 0
+    for p in paths:
+        nl = stdout.find(b"\n", pos)
+        if nl == -1:
+            # stdout ran out relative to the requested set -- every
+            # remaining path is unresolved; never guess at a partial record.
+            results[p] = None
+            continue
+        header = stdout[pos:nl]
+        pos = nl + 1
+        if header.endswith(b" missing"):
+            results[p] = None
+            continue
+        parts = header.split(b" ")
+        if len(parts) != 3:
+            results[p] = None
+            continue
+        _sha, _type, size_field = parts
+        try:
+            size = int(size_field)
+        except ValueError:
+            results[p] = None
+            continue
+        content = stdout[pos:pos + size]
+        pos += size
+        if stdout[pos:pos + 1] == b"\n":
+            pos += 1
+        results[p] = content.decode("utf-8", errors="replace")
+    return results
+
+
 def _override(name: str) -> bool:
     """Inline-per-call env read -- NEVER hoist to module scope (F2, recipe
     Sec(e) "module-level namespace collisions"). Every call site in this file
@@ -3461,6 +3540,21 @@ def _check_destructive_git_revert_full(
             )
         return _status_porcelain_cache[cwd]
 
+    # Sibling memo for the `rev-parse --show-toplevel` probe a few hundred
+    # lines below, same shape as `_status_porcelain_cache` immediately
+    # above: `git_cwd` is loop-invariant across every segment sharing one
+    # `-C <dir>` (or none), and the repo root cannot change mid-dispatch, so
+    # re-resolving it on segment 2..N of a chained revert command is pure
+    # repeated work. Unlike the porcelain probe this call carries no
+    # `extra_env`, so it is safe to route through `_run_git`'s plain
+    # (cwd,)-only shape rather than needing its own env-pinned spawn.
+    _toplevel_cache: Dict[Optional[str], Tuple[int, str]] = {}
+
+    def _memo_show_toplevel(cwd: Optional[str]) -> Tuple[int, str]:
+        if cwd not in _toplevel_cache:
+            _toplevel_cache[cwd] = _run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
+        return _toplevel_cache[cwd]
+
     for seg in _split_segments(cmd):
         if not seg.strip():
             continue
@@ -3648,7 +3742,7 @@ def _check_destructive_git_revert_full(
         if not affected:
             continue
 
-        rc_root, out_root = _run_git(["rev-parse", "--show-toplevel"], cwd=git_cwd)
+        rc_root, out_root = _memo_show_toplevel(git_cwd)
         repo_root = out_root.strip() if rc_root == 0 else ""
 
         deny_paths: List[Tuple[str, str]] = []
@@ -5383,9 +5477,10 @@ def check_validate_commit(
 
     hard_violation = ""
     soft_names = ""
+    _claudemd_blobs = _batch_show_index_blobs(claudemd_files, _cwd)
     for cf in claudemd_files:
-        rc_s, blob = _run_git(["show", ":%s" % cf], _cwd)
-        if rc_s != 0 or not blob:
+        blob = _claudemd_blobs.get(cf)
+        if not blob:
             continue
         size = len(blob)
         token_note = ""
@@ -5446,24 +5541,46 @@ def check_validate_commit(
         f for f in staged
         if re.match(r"^(tasks/plans|%s|docs/plans)/.*\.md$" % re.escape(handoffs_prefix), f)
     ]
+    # Batched replacement for a per-file `git diff --cached -U0 -- <path>`
+    # spawn: ONE `git diff --cached -U0 --` call carries every surviving
+    # frontmatter path, and the combined patch is split back into per-file
+    # sections on its own `diff --git a/<path> b/<path>` header lines (no
+    # rename in play here -- every path is a staged, tracked frontmatter
+    # file, so the a/- and b/-side names are always identical). The header
+    # lookup is an exact-string dict keyed off the KNOWN target paths rather
+    # than a regex over the header line, so a path containing regex
+    # metacharacters can never mis-tokenize.
     frontmatter_mutations: List[str] = []
+    _frontmatter_diff_targets: List[str] = []
     for f in frontmatter_files:
         _f_abs = os.path.join(_cwd, f) if _cwd else f
         if not os.path.isfile(_f_abs):
             continue
-        _rc_d, diff_out = _run_git(["diff", "--cached", "-U0", "--", f], _cwd)
-        if not diff_out:
-            continue
-        sensitive = [
-            line for line in diff_out.splitlines()
-            if re.match(
-                r"^[+-](status|deployment_state|consumed_by|claimed_by|shipped_in|predecessor|kind):",
-                line,
-            )
-            and not line.startswith("+++") and not line.startswith("---")
-        ]
-        if sensitive:
-            frontmatter_mutations.append(f)
+        _frontmatter_diff_targets.append(f)
+
+    if _frontmatter_diff_targets:
+        _rc_d, diff_out = _run_git(
+            ["diff", "--cached", "-U0", "--", *_frontmatter_diff_targets], _cwd
+        )
+        if diff_out:
+            _diff_headers = {
+                "diff --git a/%s b/%s" % (p, p): p for p in _frontmatter_diff_targets
+            }
+            _current_file: Optional[str] = None
+            for line in diff_out.splitlines():
+                if line in _diff_headers:
+                    _current_file = _diff_headers[line]
+                    continue
+                if _current_file is None:
+                    continue
+                if line.startswith("+++") or line.startswith("---"):
+                    continue
+                if re.match(
+                    r"^[+-](status|deployment_state|consumed_by|claimed_by|shipped_in|predecessor|kind):",
+                    line,
+                ):
+                    if _current_file not in frontmatter_mutations:
+                        frontmatter_mutations.append(_current_file)
 
     if frontmatter_mutations:
         subject = _extract_commit_subject(command)

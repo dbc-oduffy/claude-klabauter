@@ -94,4 +94,4 @@ def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> No
     assert record.code_sha and len(record.code_sha) == 40
     assert record.timestamp
     assert record.runner_isolation_mode == "shared"
-    assert record.schema_version == 1
+    assert record.schema_version == 2

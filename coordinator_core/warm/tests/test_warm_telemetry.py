@@ -97,9 +97,15 @@ def test_record_invocation_is_thread_safe_under_concurrency():
     assert t.served_count() == 50
 
 
-def test_telemetry_path_lives_under_state_warm(tmp_path):
+def test_telemetry_path_lives_in_the_clone_s_runtime_dir(tmp_path):
+    """Telemetry follows `breadcrumb.svc_dir` wherever it resolves — the two
+    are deliberately one seam, so the 2026-08-19 move out of the engine
+    clone carried both files rather than splitting them."""
+    from coordinator_core.warm.breadcrumb import svc_dir
+
     path = telemetry.telemetry_path(tmp_path)
-    assert path == tmp_path / "state" / "warm" / telemetry.TELEMETRY_FILENAME
+    assert path == svc_dir(tmp_path) / telemetry.TELEMETRY_FILENAME
+    assert tmp_path not in path.parents
 
 
 def test_flush_appends_one_json_line_with_snapshot_fields(tmp_path):
