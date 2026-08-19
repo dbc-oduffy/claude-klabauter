@@ -133,13 +133,23 @@ def _iter_private_index_sources():
             continue
 
 
+#: Substrings that name a private-index path variable. Both spellings are
+#: listed deliberately: matching only "idx" would let a future rename of
+#: `idx_path` to the arguably more idiomatic `index_path` drop that seam out of
+#: this walk's view entirely — producing no offender line and no failure, just
+#: silence. Widen this set rather than narrowing it.
+_INDEX_VAR_HINTS = ("idx", "index")
+
+
 def _is_index_unlink(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
     if getattr(node.func, "attr", "") != "unlink":
         return False
     return any(
-        isinstance(a, ast.Name) and "idx" in a.id.lower() for a in node.args
+        isinstance(a, ast.Name)
+        and any(h in a.id.lower() for h in _INDEX_VAR_HINTS)
+        for a in node.args
     )
 
 
@@ -197,6 +207,25 @@ def _index_cleanup_finallys():
     automatically — which is the intended behaviour, not a bug. This mirrors how
     `test_pathspec_less_commit_seams_are_guarded.py` scopes out the two
     real-index bootstrap seams.
+
+    That exclusion is EVIDENCED, not assumed — a 2026-08-19 review challenged it
+    on the theory that a missing index would make git treat every pathspec'd
+    path as staged-deleted, thereby deleting tracked parent files rather than
+    committing nothing. Probed directly on git 2.55.0.windows.4 against
+    throwaway repos, both legs:
+
+    - `git commit -- <paths>` with `GIT_INDEX_FILE` naming an ABSENT file, one
+      pathspec'd path edited in the worktree: rc=0, the edit committed
+      correctly, no path deleted.
+    - The same with a path `git rm`-ed into the private index first (distill's
+      actual reaped shape), then the index deleted before the commit: rc=0, the
+      reaped path deleted as intended, the edited path updated, and an
+      unrelated tracked bystander left untouched.
+
+    The reason is the FORWARD-B property itself: WITH a pathspec git reads the
+    WORKTREE for those paths rather than the index, so a lost index is simply
+    not consulted. The same property that makes a pathspec unusable on the
+    fleet seams is what makes its absence harmless here.
     """
     for path, tree in _iter_private_index_sources():
         for fn in ast.walk(tree):
@@ -215,11 +244,14 @@ def _index_cleanup_finallys():
                 ]
                 if not unlinks:
                     continue
+                # Only a BARE top-level `finally:` statement counts. A kill
+                # nested in a branch would still satisfy a line-number
+                # comparison while providing no runtime guarantee, because
+                # ast.walk finds calls regardless of control flow.
                 kills = [
-                    n.lineno
+                    stmt.value.lineno
                     for stmt in node.finalbody
-                    for n in ast.walk(stmt)
-                    if _is_kill_call(n) and hasattr(n, "lineno")
+                    if isinstance(stmt, ast.Expr) and _is_kill_call(stmt.value)
                 ]
                 yield (
                     path,

@@ -42,6 +42,26 @@ from pathlib import Path
 ENGINE_ROOT = Path(__file__).resolve().parents[4]
 GUARD_NAME = "_empty_private_index_breach"
 
+#: Every name an empty-tree refusal answers to. The class this test polices is
+#: "pathspec-less commit from a private index", NOT "commit seams in one
+#: module" — and the engine already fixed that class twice, independently:
+#: fleet's `_empty_private_index_breach` and ceremony/git_native.py's
+#: `_empty_private_index_refusal` (its own EMPTY_TREE_SHA, its own docstring
+#: citing the fleet fix by name). Pinning a single name meant ceremony's seams
+#: could regress with this test still green — the same call-site-shaped
+#: blindness the 2026-08-10 point-fix had. Add a name here when a third
+#: implementation appears; better still, converge them.
+GUARD_NAMES = frozenset({
+    "_empty_private_index_breach",
+    "_empty_private_index_refusal",
+})
+
+#: Porcelain `git commit` is not the only way to write a tree from a private
+#: index — `git commit-tree` plumbing does the same thing, and ceremony's two
+#: seams use exactly that. Matching only the literal "commit" left them
+#: invisible to this walk: not reported unguarded, simply never examined.
+COMMIT_ARGV_HEADS = ("commit", "commit-tree")
+
 def _iter_engine_sources():
     for path in sorted((ENGINE_ROOT / "coordinator_core").rglob("*.py")):
         if "tests" in path.parts or path.name.startswith("test_"):
@@ -93,15 +113,15 @@ def _commit_seams():
                 continue
             body_calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
             guarded = any(
-                (getattr(c.func, "id", "") == GUARD_NAME
-                 or getattr(c.func, "attr", "") == GUARD_NAME)
+                (getattr(c.func, "id", "") in GUARD_NAMES
+                 or getattr(c.func, "attr", "") in GUARD_NAMES)
                 for c in body_calls
             )
             for call in body_calls:
                 if not _is_subprocess_exec(call):
                     continue
                 lits = _arg_literals(call)
-                if "commit" not in lits:
+                if not any(head in lits for head in COMMIT_ARGV_HEADS):
                     continue
                 has_pathspec = any(
                     lit == "--" or lit.startswith("--pathspec-from-file")

@@ -229,6 +229,28 @@ from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolv
 _PUSH_RETRY_CLASSES = frozenset({"non-fast-forward"})
 _PUSH_MAX_RETRIES = 3
 
+#: Matches `git_native._git()`'s own synthesized `TimeoutExpired` stderr
+#: ("git push ...: timed out after {timeout}s (...)") -- the ONE reason
+#: string that means the push's true outcome was never observed at all,
+#: as opposed to every other reason string here, which is git itself
+#: reporting a result. `classify_error()` has no bucket for this (it
+#: classifies real git stderr, and this text is synthesized by the
+#: subprocess wrapper on a kill, not emitted by git) so it falls through
+#: to "unknown" and is treated as a confirmed failure unless checked for
+#: separately -- see `push_with_retry`'s own use of this pattern.
+_PUSH_TIMEOUT_RE = re.compile(r"timed out after \d")
+
+
+def _is_indeterminate_push_result(result: "git_native.GitResult") -> bool:
+    """True iff *result* is a subprocess timeout, not an observed git failure.
+
+    `returncode == -1` alone is not enough -- `_git()` also returns -1 for an
+    `OSError` (git not on PATH), which IS a definite, observed failure, just
+    not one git itself reported. Only the timeout text names a result that
+    was never observed.
+    """
+    return result.returncode == -1 and bool(_PUSH_TIMEOUT_RE.search(result.stderr or ""))
+
 
 # ---------------------------------------------------------------------------
 # Tolerant explicit-stage
@@ -1430,6 +1452,87 @@ def _classify_commit_scoped_failure_reason(result: "git_native.GitResult") -> st
     return _REASON_COMMIT_FAILURE
 
 
+def _reconcile_landed_despite_failure(
+    root: Path,
+    token_trailer: str,
+    pre_sha: Optional[str],
+    commit_paths: Sequence[str],
+) -> Optional[str]:
+    """The sha this call's own commit landed under DESPITE `commit_scoped()`
+    reporting failure, or `None` when nothing of ours is in `pre_sha..HEAD`.
+
+    Exists because a reported failure is not proof no commit was created, and
+    on this machine the common case is not a crash but a CLOCK. `git_native.
+    _git` synthesizes `GitResult(returncode=-1)` for `subprocess.
+    TimeoutExpired`, so a `git commit` that merely ran LONG -- entirely
+    ordinary at this repo's stated load norm of 50-70 concurrent LLM
+    sessions, with a Python pre-commit hook in the path -- returns
+    `result.ok == False` while git itself goes on to create the commit. The
+    timeout kills the wrapper, never the work: project CLAUDE.md § Load norm
+    states it outright ("A timeout here is a slow op, not a hung one -- and
+    it does NOT stop the engine, so reconcile before retrying"). This
+    function is that reconcile, performed once at the seam instead of left
+    to every operator.
+
+    Downstream damage when it is skipped: `landed=False` reaches
+    `scoped_git_commit`'s `committed` predicate as False, which falls through
+    to `_classify_uncommitted`, which probes `git status`, finds the tree
+    clean BECAUSE the commit landed, and reports the benign
+    `reason="empty-commit-set"`. The operator is told "no commit landed"
+    about a commit that exists -- and the natural next move, re-running, is
+    how a duplicate commit or a swept peer file happens on a shared branch.
+    Live incident: peer session 1021e7bf, 26ce6a671 (2026-08-19), reported
+    against a tree that already carried the earlier W3/W3b predicate fixes --
+    those widened what counts as landed, but could not help a
+    `CommitOutcome` that says `landed=False` in the first place, which is why
+    the repair belongs HERE and not one layer up.
+
+    SAFETY -- why this cannot adopt a peer's commit on a shared branch. The
+    search key is this call's own `Commit-Token:` trailer, whose match
+    `_FULL_SHA_RE`'s own docstring already establishes as collision-free by
+    construction: no peer can author this exact token string. That is the
+    same key, over the same `pre_sha..HEAD` range, with the same
+    `--full-history` merge-pruning guard, that the SUCCESS path one screen
+    down already uses to name its sha -- deliberately reused rather than
+    re-derived, so both paths agree on what "this call's commit" means. A
+    bare `rev-parse HEAD` fallback is NOT used and must never be added here:
+    HEAD moves under concurrent peers, and adopting whatever sits there is
+    precisely the misattribution the token search exists to prevent.
+
+    Returns `None` -- leaving the caller's failure return untouched -- on
+    every uncertain shape: no `pre_sha` to bound the range, a failed `git
+    log`, or a zero/ambiguous candidate count. Never raises; a reconcile that
+    cannot answer must degrade to today's behaviour, since wrongly claiming a
+    commit landed is worse than the reporting defect it repairs.
+
+    Cost: one `git log` on the FAILURE path only. The success path never
+    reaches this, so the hot path is unchanged."""
+    if not pre_sha:
+        return None
+    extra_args = [
+        "--fixed-strings",
+        "--format=%H",
+        "--full-history",
+        f"{pre_sha}..HEAD",
+    ]
+    # Same one-chunk argv bound as the success path's own search, and the
+    # same reasoning: this call's commit touched every path in `commit_
+    # paths`, so it touched every path in any non-empty subset too.
+    chunks = _chunk_paths(list(commit_paths)) if commit_paths else []
+    if chunks and chunks[0]:
+        extra_args += ["--", *chunks[0]]
+    try:
+        match_result = git_native.log_grep(root, token_trailer, extra_args=extra_args)
+    except Exception:
+        return None
+    if not match_result.ok:
+        return None
+    candidates = [line for line in match_result.stdout.splitlines() if line]
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
 def commit(
     worktree_root: Union[str, Path],
     *,
@@ -1694,6 +1797,33 @@ def commit(
             # stdout_diagnostic`'s own docstring for why: `stderr` stays
             # exactly bare `exit_code=N` here on purpose, the matched shape
             # both downstream consumers key off).
+            # A reported failure is not proof no commit was created -- a
+            # merely SLOW `git commit` times out in `git_native._git` (which
+            # synthesizes returncode=-1) while git goes on to land it. Ask
+            # before concluding; see `_reconcile_landed_despite_failure` for
+            # why this is safe against adopting a peer's commit, and for the
+            # live incident (26ce6a671) it closes. Runs on the failure path
+            # only, so the hot path is untouched.
+            reconciled_sha = _reconcile_landed_despite_failure(
+                root, token_trailer, pre_sha, commit_paths
+            )
+            if reconciled_sha is not None:
+                return CommitOutcome(
+                    exit_code=0,
+                    committed_sha=reconciled_sha,
+                    landed=True,
+                    stderr=(
+                        "commit: git reported failure "
+                        f"(exit_code={result.returncode}) but this call's own "
+                        f"Commit-Token names {reconciled_sha} in {pre_sha}..HEAD "
+                        "-- the commit LANDED and is reported as landed. Most "
+                        "often a slow commit that outran its timeout under load; "
+                        "do NOT re-run. "
+                        f"{condense_git_diagnostic(result.stderr) or ''}"
+                    )[:500],
+                    unprovenanced_paths=unprovenanced_paths,
+                    stdout_diagnostic=condense_git_diagnostic(result.stdout),
+                )
             return CommitOutcome(
                 exit_code=result.returncode or 1,
                 stderr=(
@@ -1937,8 +2067,24 @@ class PushOutcome:
             as a decline, not a silent proceed-to-push, because a push leg
             that cannot name its own branch is exactly the case the policy
             gate exists to catch. Otherwise empty.
-        failed -- non-empty only on a genuine push failure (rejected after
-            exhausting retries, or a fetch/rebase step itself failed).
+        failed -- non-empty only on a genuine, OBSERVED push failure (git
+            itself reported a reject after exhausting retries, or a
+            fetch/rebase retry step itself failed with a real result).
+            Mutually exclusive with `unconfirmed` -- exactly one of the two
+            is non-empty on a non-landed, non-declined, non-no-remote
+            outcome.
+        unconfirmed -- non-empty ONLY when the push's true outcome was never
+            observed at all -- the git subprocess itself timed out
+            (`_is_indeterminate_push_result`), not merely rejected. This is
+            NOT a softened `failed`: the commit may already be on the
+            remote (the transport leg can outlive the killed parent, see
+            `state/bug-backlog/2026-08-19-push-retry-reports-push-failed-
+            on-a-subp-4400dc2697d0.yaml`), so reporting it as a confirmed
+            failure invites a re-push/amend/force-push that is more
+            dangerous than the uncertainty itself. A GENUINE git-reported
+            reject (non-fast-forward after retries exhausted, permission
+            denied, and the rest of `classify_error`'s ladder) still lands
+            in `failed`, never here.
         message -- the verbatim `branch_gate()` skip message on a
             `push:branch-policy` decline, carried unaltered so a later
             consumer can print exactly what `branch_gate` produced without
@@ -1970,6 +2116,7 @@ class PushOutcome:
     acted: List[str] = field(default_factory=list)
     skipped: List[str] = field(default_factory=list)
     failed: List[str] = field(default_factory=list)
+    unconfirmed: List[str] = field(default_factory=list)
     message: Optional[str] = None
     pushed_range: Optional[str] = None
     pushed_count: Optional[int] = None
@@ -2001,6 +2148,10 @@ class PushOutcome:
 #                               "not-attempted" never does)
 #                                                                | "deferred" (under the
 #                                                                  async push_mode contract)
+#   "unconfirmed" (new, FIX-I)| PUSH_STATE_UNCONFIRMED           | no counterpart today
+#                               -- the push subprocess itself timed out, so its
+#                               true outcome was never observed. Distinct from
+#                               "not-attempted": a push WAS attempted here.
 #
 # `wsc_tail.py`'s `"unknown_resumed"` (any resumed/crash-recovered pass) has
 # NO counterpart in this canonical set -- it is preserved as its own member
@@ -2015,6 +2166,11 @@ PUSH_STATUS_FAILED = "push-failed"
 PUSH_STATUS_DECLINED = "declined"
 PUSH_STATUS_NO_REMOTE = "no-remote"
 PUSH_STATUS_NOT_ATTEMPTED = "not-attempted"
+#: FIX-I (2026-08-19): the push subprocess timed out -- its true outcome was
+#: never observed, distinct from `PUSH_STATUS_FAILED` (git itself reported a
+#: reject). See `PushOutcome.unconfirmed`'s docstring for why this must not
+#: collapse into `push-failed`.
+PUSH_STATUS_UNCONFIRMED = "unconfirmed"
 
 
 def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
@@ -2029,8 +2185,17 @@ def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
 
     Rule: `push:branch-policy` or `push:branch-unresolvable` in `skipped` ->
     `declined`; `push:no-remote` in `skipped` -> `no-remote`; `acted ==
-    ["push"]` -> `pushed`; non-empty `failed` -> `push-failed`; push never
-    reached (outcome is `None`) -> `not-attempted`.
+    ["push"]` -> `pushed`; non-empty `unconfirmed` -> `unconfirmed` (checked
+    BEFORE `failed` -- see below); non-empty `failed` -> `push-failed`; push
+    never reached (outcome is `None`) -> `not-attempted`.
+
+    `unconfirmed` is checked before `failed` on purpose, though
+    `PushOutcome`'s own docstring documents the two fields as mutually
+    exclusive (`push_with_retry` never populates both on the same outcome):
+    ordering the indeterminate check first means a future caller that
+    accidentally sets both never has the indeterminate case silently lost
+    to the failure branch -- the direction of error this fix exists to
+    close, so the safer of two equally-cheap orderings is deliberate here.
     """
     if push_outcome is None:
         return PUSH_STATUS_NOT_ATTEMPTED
@@ -2040,6 +2205,8 @@ def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
         return PUSH_STATUS_DECLINED
     if "push:no-remote" in push_outcome.skipped:
         return PUSH_STATUS_NO_REMOTE
+    if push_outcome.unconfirmed:
+        return PUSH_STATUS_UNCONFIRMED
     if push_outcome.failed:
         return PUSH_STATUS_FAILED
     if "push" in push_outcome.acted:
@@ -2232,8 +2399,14 @@ def push_with_retry(
     On a rejected push, fetches the remote, rebases this session's own
     commit range onto the updated ref (never a bare rebase on the shared
     branch), and re-pushes. If the rebase itself refuses, or retries are
-    exhausted while still rejected, returns a hard non-zero failure -- never
-    a silent skip that lets the caller believe the push landed.
+    exhausted while still rejected, returns a hard non-zero failure (in
+    `PushOutcome.failed`) -- never a silent skip that lets the caller believe
+    the push landed. FIX-I (2026-08-19): a push subprocess TIMEOUT is
+    reported distinctly, in `PushOutcome.unconfirmed` instead -- it is never
+    retryable (a timeout reason never matches `_PUSH_RETRY_CLASSES`) and its
+    true outcome was never observed, so it must not collapse into the same
+    `failed` bucket as a genuine, git-reported reject. See `PushOutcome`'s
+    own docstring for the full reasoning.
 
     C3b (AC7): on a landed push, resolves what was actually pushed --
     `PushOutcome.pushed_range`/`pushed_count` -- from the upstream tip
@@ -2316,6 +2489,13 @@ def push_with_retry(
     upstream_ref: Optional[str] = None
     last_reason = ""
     last_exit_code = 1
+    # True only when the LAST thing that happened was a push subprocess
+    # timeout (`_is_indeterminate_push_result`) -- never set by a fetch/
+    # rebase failure, which are always definite, observed results reached
+    # only after a genuine git-reported reject already put a push attempt
+    # through the retry loop (a timeout is never retryable, see below, so
+    # control cannot reach the fetch/rebase branches with this still True).
+    last_indeterminate = False
 
     for attempt in range(_PUSH_MAX_RETRIES):
         push_result = git_native.push(root)
@@ -2337,6 +2517,13 @@ def push_with_retry(
         reason = condense_git_diagnostic(push_result.stderr) or f"exit_code={push_result.returncode}"
         last_reason = reason
         last_exit_code = push_result.returncode or 1
+        # The one place `unconfirmed` can ever become True: this push
+        # attempt's own outcome was never observed. A timeout reason never
+        # matches `_PUSH_RETRY_CLASSES` (it isn't a git-reported reject at
+        # all), so `_is_push_reject` is already False for it and this
+        # breaks immediately below -- the flag never survives into the
+        # fetch/rebase branches.
+        last_indeterminate = _is_indeterminate_push_result(push_result)
 
         if not _is_push_reject(reason) or attempt == _PUSH_MAX_RETRIES - 1:
             break
@@ -2372,6 +2559,8 @@ def push_with_retry(
             last_exit_code = rebase_exit_code
             break
 
+    if last_indeterminate:
+        return PushOutcome(exit_code=last_exit_code, unconfirmed=[f"git push: {last_reason}"])
     return PushOutcome(exit_code=last_exit_code, failed=[f"git push: {last_reason}"])
 
 
@@ -2424,7 +2613,12 @@ def derive_pushed_tristate(push_outcome: Optional[PushOutcome]) -> Optional[bool
                     site never constructs a `PushOutcome` and sets `pushed`
                     to `None` directly, without going through this
                     function, for the same "nothing to push, no invariant
-                    violated" reason.
+                    violated" reason;
+                (d) the push subprocess timed out and its true outcome was
+                    never observed (`push_status == "unconfirmed"`, FIX-I)
+                    -- deliberately NOT `False`: a timeout is not an
+                    observed failure, so it must not read as one here
+                    either.
               This amends the prior docstring, which named ONLY (a) --
               `None` was already double-booked with (c) before this plan
               touched the contract, and (b) is the meaning this plan adds

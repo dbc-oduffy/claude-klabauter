@@ -1043,7 +1043,24 @@ def _reconcile_dest_discard(dest: str, dirty_status: str) -> Tuple[bool, str]:
     directly — `_dest_ahead_count` collapses no-upstream and probe-failure
     into the same `None`.
 
-    NEVER touches the source repo — every git invocation here is `-C dest`.
+    THE CLEAN RUNS AT THE REPO TOPLEVEL, NOT AT `dest`. `dest` is one ROW's
+    destination (e.g. `<mirror>/coordinator_core`), but `_dest_dirty_status`
+    probes `git status`, which is repo-WIDE — so the residue this function is
+    handed routinely includes paths under OTHER rows' dests. `git clean -fd`
+    removes untracked files only from its own cwd down, so cleaning at `dest`
+    silently left every one of those paths in place while the audit message
+    counted them as discarded. The next round then found them already
+    present, classified them UPDATE-or-unchanged rather than NEW (the
+    mirror sync's NEW-when-absent-from-dest rule), never named them in the
+    commit pathspec, and left them untracked on disk indefinitely — the
+    present-but-untracked failure this repo has now paid for twice. Observed
+    2026-08-19: 187 files, among them `coordinator/bin/warm-engine-stop.py`,
+    the warm engine's only operator stop hatch. `reset --hard` was always
+    repo-wide; this makes the clean match it, so the status probe, the
+    clean, and the audit message all describe one set instead of three.
+
+    NEVER touches the source repo — every git invocation here is `-C dest`
+    or `-C <dest's own resolved toplevel>`, never a source-derived path.
     Returns `(ok, message)`: `message` is either the refusal reason (`ok`
     False) or an audit report naming the reset HEAD, any ahead-of-remote
     commit count (or the no-upstream state), and every discarded path,
@@ -1071,7 +1088,17 @@ def _reconcile_dest_discard(dest: str, dirty_status: str) -> Tuple[bool, str]:
     reset = _run(["git", "-C", dest, "reset", "--hard", "HEAD"])
     if reset.returncode != 0:
         return False, f"git reset --hard HEAD failed:\n{reset.stderr.strip()}"
-    clean = _run(["git", "-C", dest, "clean", "-fd"])
+    toplevel_result = _run(
+        ["git", "-C", dest, "--no-optional-locks", "rev-parse", "--show-toplevel"]
+    )
+    if toplevel_result.returncode != 0:
+        return False, (
+            "could not resolve dest's repository toplevel — refusing to clean "
+            "from a subdirectory, which would leave other rows' residue in "
+            "place while reporting it discarded."
+        )
+    clean_root = toplevel_result.stdout.strip() or dest
+    clean = _run(["git", "-C", clean_root, "clean", "-fd"])
     if clean.returncode != 0:
         return False, f"git clean -fd failed:\n{clean.stderr.strip()}"
 

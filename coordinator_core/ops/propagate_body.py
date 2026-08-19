@@ -384,6 +384,64 @@ def _git_operation_in_progress(worktree: Path) -> Optional[str]:
     return None
 
 
+#: git's canonical empty tree — what `git write-tree` emits for an index of
+#: zero entries, which is what a MISSING `GIT_INDEX_FILE` silently produces.
+EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _empty_private_index_refusal(
+    tree_sha: str,
+    *,
+    root: Path,
+    caller: str,
+) -> Optional[str]:
+    """Refuse a private-index tree that would delete every tracked file.
+
+    Returns None when `tree_sha` is safe to hand to `commit-tree`, or a reason
+    string the caller returns through its existing `(None, error)` failure
+    path.
+
+    WHY THIS EXISTS — `git write-tree` against a MISSING `GIT_INDEX_FILE`
+    returns `EMPTY_TREE_SHA` with **rc=0 and empty stderr** (verified on git
+    2.55.0.windows.4); only a zero-BYTE index fails loud. The returncode check
+    above this call is therefore blind to it by construction. `_commit_delivery`
+    then hands that sha to `commit-tree` and moves HEAD to it with `update-ref`,
+    naming no pathspec at any point — so an unnoticed empty tree deletes the
+    whole repo, exactly as `fbfbd061d` did on 2026-08-18 (26,264 files, shared
+    pushed branch).
+
+    The `update-ref` CAS on `old_head` does NOT protect against this: it
+    guards against a concurrent HEAD move, not against a well-formed commit
+    whose tree happens to be empty.
+
+    This is the third independent implementation of the same refusal
+    (`fleet/_common.py :: _empty_private_index_breach`,
+    `ceremony/git_native.py :: _empty_private_index_refusal`). It is named to
+    match the latter so the class guard
+    (`ops/fleet/tests/test_pathspec_less_commit_seams_are_guarded.py`)
+    recognises it; converging the three is worth doing and is not this
+    change.
+
+    NEGATIVE-SPEC: do NOT "fix" a failure here by giving the seam a pathspec.
+    That makes git read the WORKTREE for those paths instead of the private
+    index, reintroducing the peer-staging absorption hazard this function's
+    caller was built to close (see `_commit_delivery`'s docstring, 2026-08-07).
+    """
+    if tree_sha != EMPTY_TREE_SHA:
+        return None
+    _LOG.error(
+        "%s: REFUSED — private index resolves to git's empty tree (%s); "
+        "committing it would delete every tracked file in %s.",
+        caller, EMPTY_TREE_SHA, root,
+    )
+    return (
+        "empty-private-index: git write-tree returned git's canonical EMPTY "
+        "TREE (%s), meaning the private index holds zero entries — committing "
+        "it with no pathspec would delete every tracked file in %s. Refused "
+        "by %s; nothing was committed." % (EMPTY_TREE_SHA, root, caller)
+    )
+
+
 def _commit_delivery(
     worktree: Path, rel_path: str, slug: str, summary: str,
 ) -> "Tuple[Optional[str], Optional[str]]":
@@ -435,6 +493,13 @@ def _commit_delivery(
         if write_tree_result.returncode != 0:
             return None, f"git write-tree failed: {write_tree_result.stderr.strip()}"
         tree_sha = write_tree_result.stdout.strip()
+
+        # MUST precede commit-tree: this seam writes the tree straight to HEAD
+        # via update-ref with no pathspec anywhere, so an empty tree here
+        # deletes every tracked file. See `_empty_private_index_refusal`.
+        breach = _empty_private_index_refusal(tree_sha, root=worktree, caller="_commit_delivery")
+        if breach is not None:
+            return None, breach
     finally:
         try:
             temp_index.unlink()

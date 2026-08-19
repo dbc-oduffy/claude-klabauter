@@ -374,7 +374,22 @@ def _kill_orphaned_commit(
 
     Cancellation at any OTHER await in these seams is already harmless: the
     `finally:` unlinks and the coroutine exits before a commit is ever spawned.
-    The commit's own await is the only window this needs to cover.
+    The commit's own await is the window this covers.
+
+    PRECISION, so a later reader does not over-trust this:
+
+    - The reason to avoid `await proc.wait()` here is not only that a cancelled
+      task may re-raise; a second await inside the `finally:` can equally just
+      BLOCK for the same multi-second hook duration that caused the timeout in
+      the first place. Either way the unlink is delayed or skipped, so the kill
+      must be synchronous.
+    - One narrower window is NOT covered: a cancellation landing inside
+      `await create_subprocess_exec(...)` itself, before it returns, leaves the
+      holder at `None` while the OS may already have forked the child. That
+      child is unreachable from here. The window is fork/exec setup (µs) against
+      the hook's multi-second hold, so it is not where a `wait_for` timeout
+      realistically lands — but it is not zero, and `_empty_private_index_breach`
+      is the defence that still stands behind it.
     """
     if proc is None or proc.returncode is not None:
         return

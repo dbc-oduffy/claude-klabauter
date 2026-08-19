@@ -31,11 +31,22 @@ import re
 # Canonical Session Ledger block, shared verbatim by every ledger-owing handoff author.
 # The comment's one-line grammar MUST stay the format ``parse_session_ledgers`` reads
 # (``_ONELINE_RE``) — do not fork this literal per-kind or per-caller.
+#
+# The `Nd / No` legend lines are load-bearing, not decoration. `_ONELINE_RE` binds those
+# fields as ``(?P<agent_dispatches>\d+)d`` / ``(?P<opus_dispatches>\d+)o`` — integer
+# COUNTS. Without the legend the token reads naturally as "N days", and on 2026-08-19 two
+# consecutive sessions on one chain both wrote durations (`0.3d`, `0.05d`); `\d+` rejects
+# them, every row failed to parse, and the chain reported `chain_sessions_with_ledger:
+# "0 of 1"` with zero LoE while looking perfectly well-formed to a reader. Do not trim
+# these lines back to the bare format string.
 SESSION_LEDGER_BLOCK_LINES: list[str] = [
     "## Session Ledger",
     "",
     "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
     "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+    "<!-- N is an integer COUNT of dispatches, NOT a duration: Nd = agent dispatches, -->",
+    "<!-- No = opus dispatches. e.g. `3d / 1o`. A row written as days (`0.3d`) does not -->",
+    "<!-- parse, and a chain whose rows do not parse silently renders as ZERO effort. -->",
     "",
 ]
 

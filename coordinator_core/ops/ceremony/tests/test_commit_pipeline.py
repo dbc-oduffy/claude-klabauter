@@ -3104,6 +3104,72 @@ def test_push_with_retry_gh013_fails_loud_without_fetch_or_rebase(tmp_path, monk
     assert outcome.exit_code != 0
     assert fetch_calls == []
     assert rebase_calls == []
+    # Direction 1 of 2 (FIX-I): a GENUINE, git-reported reject must still
+    # report as a confirmed failure, never softened into "unconfirmed" --
+    # getting this direction backwards is worse than the bug being fixed.
+    assert outcome.failed
+    assert outcome.unconfirmed == []
+    assert commit_pipeline_mod.derive_push_status(outcome) == commit_pipeline_mod.PUSH_STATUS_FAILED
+
+
+def test_push_with_retry_subprocess_timeout_reports_unconfirmed_not_failed(tmp_path, monkeypatch):
+    """Direction 2 of 2 (FIX-I, state/bug-backlog/2026-08-19-push-retry-
+    reports-push-failed-on-a-subp-4400dc2697d0.yaml): a push subprocess
+    TIMEOUT is not an observed git failure -- the true outcome was never
+    seen, and the transport child can outlive the killed parent and land
+    the commit anyway. This must resolve to `unconfirmed`, never
+    `push-failed` -- reporting a confirmed failure here is the false
+    certainty that invites a dangerous re-push/amend/force-push.
+
+    `git_native._git()`'s own `TimeoutExpired` handler is what actually
+    produces this shape (`returncode=-1`, synthesized "timed out after Ns"
+    stderr) -- mocked here at the `git_native.push` seam so the test does
+    not have to wait out a real 120s timeout.
+    """
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
+    )
+    timeout_stderr = "git push: timed out after 120s (Command '['git', 'push']' timed out after 120 seconds)"
+    monkeypatch.setattr(
+        git_native, "push", lambda *a, **kw: GitResult(returncode=-1, stdout="", stderr=timeout_stderr)
+    )
+    fetch_calls = []
+    monkeypatch.setattr(
+        git_native, "fetch", lambda *a, **kw: fetch_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code != 0
+    assert fetch_calls == []  # a timeout is never retryable -- see _is_push_reject
+    assert outcome.unconfirmed
+    assert outcome.failed == []
+    assert commit_pipeline_mod.derive_push_status(outcome) == commit_pipeline_mod.PUSH_STATUS_UNCONFIRMED
+
+
+def test_is_indeterminate_push_result_distinguishes_timeout_from_oserror():
+    """`returncode == -1` alone is ambiguous -- `_git()` also synthesizes it
+    for an `OSError` (git not on PATH), which IS a definite, observed
+    failure. Only the timeout text names an unobserved outcome.
+    """
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    timeout_result = GitResult(returncode=-1, stdout="", stderr="git push: timed out after 120s (...)")
+    oserror_result = GitResult(returncode=-1, stdout="", stderr="git push: FileNotFoundError — [Errno 2] ...")
+    real_reject = GitResult(returncode=1, stdout="", stderr="! [rejected] non-fast-forward")
+
+    assert commit_pipeline_mod._is_indeterminate_push_result(timeout_result) is True
+    assert commit_pipeline_mod._is_indeterminate_push_result(oserror_result) is False
+    assert commit_pipeline_mod._is_indeterminate_push_result(real_reject) is False
 
 
 # ---------------------------------------------------------------------------
@@ -5006,3 +5072,178 @@ def test_stage_patch_covered_path_commits_despite_unattributable_worktree_edit(t
 
     # The peer's hunk is untouched: neither swept into the commit nor reverted.
     assert "PEER" in (repo / "shared.py").read_text(encoding="utf-8")
+
+
+# --- W3c: a timed-out `git commit` that actually landed -----------------
+# The two predicate fixes (W3/W3b, scoped_git_commit.py) widened what counts
+# as landed, but could not help a `CommitOutcome` that says `landed=False` in
+# the first place. `_reconcile_landed_despite_failure` is that repair, and
+# these pin both halves of it: it must recover OUR commit, and it must never
+# adopt anyone else's. Live incident: 26ce6a671 (peer 1021e7bf, 2026-08-19).
+
+
+def _seed_commit_with_token(repo: Path, token: str, rel_path: str) -> str:
+    """Lands a real commit carrying `Commit-Token: <token>` and returns its
+    sha -- the shape `_reconcile_landed_despite_failure` searches for."""
+    _seed_file(repo, rel_path, "content\n")
+    _git(["add", "--", rel_path], repo)
+    _git(["commit", "-q", "-m", f"subject\n\nCommit-Token: {token}"], repo)
+    return _rev_parse_head(repo)
+
+
+def test_reconcile_recovers_the_sha_of_a_commit_that_landed_despite_failure(tmp_path):
+    """The repair: `git commit` reported failure (a timeout synthesizes
+    `returncode=-1` in `git_native._git`) but the commit is really in
+    `pre_sha..HEAD` under this call's own token, so the reconcile names it."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    pre_sha = _rev_parse_head(repo)
+
+    token = "ff4eeab2dc164987a6012ace2f05597e"
+    landed_sha = _seed_commit_with_token(repo, token, "notes/alpha.md")
+
+    found = commit_pipeline_mod._reconcile_landed_despite_failure(
+        repo, f"Commit-Token: {token}", pre_sha, ["notes/alpha.md"]
+    )
+    assert found == landed_sha
+
+
+def test_reconcile_never_adopts_a_peer_commit_in_the_same_window(tmp_path):
+    """The safety property, and the one that matters on a shared branch: a
+    peer commit landing in the SAME `pre_sha..HEAD` window carries a
+    different token, so the reconcile must return None rather than claim it.
+    Adopting it would report someone else's work as this call's own."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    pre_sha = _rev_parse_head(repo)
+
+    _seed_commit_with_token(repo, "peertokenaaaaaaaaaaaaaaaaaaaaaaa", "notes/peer.md")
+
+    found = commit_pipeline_mod._reconcile_landed_despite_failure(
+        repo, "Commit-Token: ourtokenbbbbbbbbbbbbbbbbbbbbbbbb", pre_sha, ["notes/peer.md"]
+    )
+    assert found is None
+
+
+def test_reconcile_returns_none_when_nothing_landed(tmp_path):
+    """A genuine failure stays a failure -- the ordinary case, and the one
+    that must not regress into a phantom success."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    pre_sha = _rev_parse_head(repo)
+
+    found = commit_pipeline_mod._reconcile_landed_despite_failure(
+        repo, "Commit-Token: ourtokencccccccccccccccccccccc", pre_sha, ["README.md"]
+    )
+    assert found is None
+
+
+def test_reconcile_declines_without_a_pre_sha_to_bound_the_range(tmp_path):
+    """No `pre_sha` means no bounded range, so there is no safe search to
+    run -- degrade to today's behaviour rather than widen to all of history,
+    where a token match could predate this call entirely."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    token = "dddddddddddddddddddddddddddddddd"
+    _seed_commit_with_token(repo, token, "notes/alpha.md")
+
+    assert commit_pipeline_mod._reconcile_landed_despite_failure(
+        repo, f"Commit-Token: {token}", None, ["notes/alpha.md"]
+    ) is None
+
+
+def test_commit_reports_landed_when_a_timed_out_git_commit_actually_landed(
+    tmp_path, monkeypatch
+):
+    """The wiring, not just the helper: `commit()`'s own failure branch must
+    CONSULT the reconcile before concluding nothing landed.
+
+    Simulates the live shape exactly -- `git_native.commit_scoped` does the
+    real work (a commit really lands, carrying this call's token) and then
+    reports the timeout shape `git_native._git` synthesizes for
+    `subprocess.TimeoutExpired`: `returncode=-1`, which is `ok == False`. The
+    timeout kills the wrapper, never the work.
+
+    Mechanism check: removing the `_reconcile_landed_despite_failure` call
+    from that branch makes this return `landed=False` with `committed_sha
+    None`, failing the first two assertions -- which is precisely the state
+    that reaches `scoped_git_commit` as `committed: False` and gets rendered
+    to the operator as "no commit landed".
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "docs/slow.md", "content\n")
+
+    real_commit_scoped = commit_pipeline_mod.git_native.commit_scoped
+
+    def _lands_then_reports_timeout(*args, **kwargs):
+        real_result = real_commit_scoped(*args, **kwargs)
+        assert real_result.ok, (
+            "fixture assumption broken: the underlying commit must really "
+            f"land before this wrapper re-reports it as timed out: {real_result.stderr}"
+        )
+        return commit_pipeline_mod.git_native.GitResult(
+            returncode=-1,
+            stdout="",
+            stderr="git commit -F ...: timed out after 30s (TimeoutExpired)",
+        )
+
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native, "commit_scoped", _lands_then_reports_timeout
+    )
+
+    head_before = _rev_parse_head(repo)
+    outcome = commit(repo, message="chore: slow commit\n", commit_paths=["docs/slow.md"])
+    head_after = _rev_parse_head(repo)
+
+    # The commit really did land -- the fixture is honest about that.
+    assert head_after != head_before
+
+    assert outcome.landed is True, (
+        "a commit that landed must never be reported as not landed -- this is "
+        "the defect the reconcile exists to close"
+    )
+    assert outcome.committed_sha == head_after
+    assert outcome.exit_code == 0
+    # The operator is told not to re-run, since re-running is how a duplicate
+    # commit or a swept peer file happens on a shared branch.
+    assert "do NOT re-run" in (outcome.stderr or "")
+
+
+def test_commit_still_reports_failure_when_nothing_landed(tmp_path, monkeypatch):
+    """Negative half of the wiring: a genuine failure, where no commit was
+    created at all, must still report `landed=False`. The reconcile must not
+    convert real failures into phantom successes."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "docs/never.md", "content\n")
+
+    def _fails_without_committing(*args, **kwargs):
+        return commit_pipeline_mod.git_native.GitResult(
+            returncode=-1,
+            stdout="",
+            stderr="git commit -F ...: timed out after 30s (TimeoutExpired)",
+        )
+
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native, "commit_scoped", _fails_without_committing
+    )
+
+    head_before = _rev_parse_head(repo)
+    outcome = commit(repo, message="chore: never lands\n", commit_paths=["docs/never.md"])
+
+    assert _rev_parse_head(repo) == head_before
+    assert outcome.landed is False
+    assert outcome.committed_sha is None
