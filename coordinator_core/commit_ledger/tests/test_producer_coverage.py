@@ -197,3 +197,50 @@ def test_producers_never_import_commit_ledger_at_module_level():
             "partially-initialized-module cycle that de-registers this "
             "producer's op."
         )
+
+
+def test_apply_base_never_imports_coordinator_core_ops_at_module_level():
+    """`contract/apply_base.py` must not import anything under
+    `coordinator_core.ops` at module level.
+
+    A second, distinct edge from the `commit_ledger` one above, and the guard
+    above would not have caught it: `coordinator_core.ops`'s package import is
+    EAGER, and `ops/session/boot_sweep.py` name-imports back out of
+    `apply_base` (`from ...apply_base import resolve_explicit_session_id`). A
+    name-import cannot tolerate a partially-initialized module, so any process
+    that imports `apply_base` before `coordinator_core.ops` loses
+    `session.boot_sweep` and `session.sweep_consumed_handoffs` from the
+    registry.
+
+    Measured on this tree 2026-08-19: `import coordinator_core.contract.
+    apply_base` then `import coordinator_core.ops` registered 257 ops instead
+    of 259, at exit 0, with the failure visible only as a log line -- nothing
+    treats under-registration as a process-level failure. C11 introduced this
+    edge (pre-C11 `apply_base.py` had no `coordinator_core.ops` import at all)
+    and it is fixed by keeping the import inside `_ledger_kind_and_weight`.
+    """
+    import ast
+
+    rel = "contract/apply_base.py"
+    tree = ast.parse((_CORE / rel).read_text(encoding="utf-8"))
+    offenders = [
+        node.module
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").startswith("coordinator_core.ops")
+    ]
+    offenders += [
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name.startswith("coordinator_core.ops")
+    ]
+    assert not offenders, (
+        f"{rel}: module-level coordinator_core.ops import(s) {offenders} -- "
+        "these must be function-local. coordinator_core.ops imports eagerly "
+        "and boot_sweep name-imports back out of this module, so a "
+        "module-level import here de-registers session.boot_sweep and "
+        "session.sweep_consumed_handoffs for any process importing this "
+        "module first."
+    )

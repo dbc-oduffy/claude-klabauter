@@ -593,7 +593,7 @@ def perform_archive_files(
     if should_rewrite_header:
         header_path.write_text(
             _HEADER_TEMPLATE.format(version=version, merge_sha=merge_sha, released_date=released_date),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
         actions.append(f"rewrote {header_path}")
 

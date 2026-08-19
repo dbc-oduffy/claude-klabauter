@@ -1465,7 +1465,16 @@ def _write_memo_file(target_path: Path, content: str) -> None:
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(target_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    # newline="\n" is load-bearing: this write lands in the RECEIVER's working
+    # tree, and Python text mode translates "\n" to "\r\n" on a Windows host --
+    # so without it every delivered memo arrives CRLF no matter what the
+    # receiver's .gitattributes declares. Neither side gets a signal: their
+    # core.autocrlf=true normalizes CRLF back out on the way into the index, so
+    # the damage is working-tree-only and `git status` stays clean on both ends.
+    # Reported by example-cockpit-repo-em 2026-08-19 after observing it on a real
+    # Windows host; unobservable in principle from macOS.
+    # Negative-spec: do NOT drop newline= -- this write crosses into a sibling repo.
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
 
 
@@ -2250,7 +2259,15 @@ def _stamp_sender_outbox_sent(
             _portable_delivered_to_form(receiver_repo_path, delivered_path),
             after_key="sent_at",
         )
-        outbox_path.write_text(_rebuild_frontmatter(split, fm), encoding="utf-8")
+        # newline="\n": Path.write_text is text mode, so on a Windows host this
+        # rewrites the whole outbox draft with CRLF terminators. This is the
+        # instance example-cockpit-repo-em caught in the wild (2026-08-19) -- their
+        # state/memo-outbox/sent/goal-append-citation-correction.md carried 56
+        # CRLF sequences against their own `*.md text eol=lf`. Invisible to git
+        # on both sides: core.autocrlf=true normalizes it back out of the index.
+        outbox_path.write_text(
+            _rebuild_frontmatter(split, fm), encoding="utf-8", newline="\n"
+        )
         return True
     except (ValueError, OSError) as exc:
         _LOG.warning(

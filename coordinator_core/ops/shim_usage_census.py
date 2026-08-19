@@ -110,7 +110,7 @@ def record_invocation(
         line = json.dumps({"name": name, "ts": ts}, separators=(",", ":")) + "\n"
         path = _series_path(root)
         os.makedirs(path.parent, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except Exception:
         # Negative-spec: a census write must never break the shim it

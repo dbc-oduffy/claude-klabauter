@@ -440,7 +440,7 @@ def _write_manifest_tsv(chunks: dict[str, list[str]], out_path: Path) -> None:
     for chunk_name, files in chunks.items():
         for f in files:
             lines.append(f"{chunk_name}\t{f}")
-    out_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    out_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n")
 
 
 def _cmd_chunk(args: argparse.Namespace) -> int:

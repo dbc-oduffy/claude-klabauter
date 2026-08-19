@@ -207,8 +207,8 @@ def freeze_diff(
     diff_path = diffs_dir / f"{slice_id}.diff"
     sha_path = diffs_dir / f"{slice_id}.head.sha"
 
-    diff_path.write_text(diff_result.stdout, encoding="utf-8")
-    sha_path.write_text(head_sha + "\n", encoding="utf-8")
+    diff_path.write_text(diff_result.stdout, encoding="utf-8", newline="\n")
+    sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")
     declare_write(diff_path)
     declare_write(sha_path)
 

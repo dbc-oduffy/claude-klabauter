@@ -1094,6 +1094,181 @@ def resolve_live_session_ids() -> FrozenSet[str]:
     return live_session_ids()
 
 
+# ---------------------------------------------------------------------------
+# Abandonment predicate — additive, separate from the liveness verdict
+# ---------------------------------------------------------------------------
+
+#: Abandonment window in seconds (C1, docs/research/2026-08-19-abandonment-
+#: signal-census.md § Conclusion): `30*60` stands as the value, but — unlike
+#: `_THIRTY_MIN` above — it is measured against the FRESHEST of the OR-
+#: combined signal set in ``session_abandoned`` below, never against
+#: `last_activity` alone. Kept as its own named constant (not a reuse of
+#: `_THIRTY_MIN`) so the two meanings ("Layer-2 liveness recency" vs.
+#: "abandonment silence window") can move independently if a future
+#: measurement ever separates them, even though they share a value today.
+_ABANDONMENT_WINDOW_SEC = 30 * 60
+
+
+def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
+    """Abandonment predicate — additive, separate from every liveness verdict
+    in this module (C2, docs/plans/2026-08-19-abandonment-is-its-own-
+    verdict.md). Answers "is this claim/scope takeable", never "is this
+    process alive" — a call site that uses it for the latter is a defect
+    (Anti-scope). It NEVER issues a DEAD verdict and does not modify, call
+    into a mutating path of, or change the return value of ``session_live``,
+    ``_verdict_for_sdir``, ``live_session_ids``, ``live_session_verdicts`` or
+    ``session_verdict`` — see ``TestAC1CharacterizationUnchanged`` in
+    ``test_liveness.py``, the tripwire protecting the 2026-08-11 ruling.
+
+    Per AC2's reframed bar (docs/research/2026-08-19-abandonment-signal-
+    census.md): abandonment requires the ABSENCE of any positive activity
+    signal, read from a source a working session cannot fail to write, across
+    the measured window (``_ABANDONMENT_WINDOW_SEC``) -- the primary gate.
+    The census's OR-combined signal set for a meta-carrying session dir is
+    ``last_activity`` (meta.json), ``touched.txt`` mtime (dominant writer:
+    ``hooks.track_touched_files``, PostToolUse Edit/Write/MultiEdit/
+    NotebookEdit -- independent of ``last_activity`` on its dominant path;
+    the minority ``scope.py::touch()`` overlap is a real caveat, not a
+    disqualifier), and ``dispatched-agents.txt`` mtime (``hooks.
+    track_dispatched_agents``, PostToolUse:Agent -- never touches
+    meta.json). The FRESHEST of whichever of these are present must be
+    OLDER than the window for the primary gate to fire at all; a session
+    fresh on ANY one of them reads NOT-abandoned outright.
+
+    The >= 2 independent stale signals rule (C1's census) survives beneath
+    that bar as a belt-and-braces FLOOR, not the primary safety argument:
+    even once the freshest-signal gate fires, at least two of the PRESENT
+    candidate signals must independently be stale past the window. A fixture
+    carrying a stale ``last_activity`` and nothing else (no ``touched.txt``,
+    no ``dispatched-agents.txt``) has exactly one candidate -- the freshest-
+    signal gate fires (there is nothing fresher), but the floor never reaches
+    two, so this reads NOT-abandoned. Named negative-spec test:
+    ``test_session_abandoned_stale_last_activity_alone_is_not_abandoned``.
+
+    Meta-less sid (no ``meta.json`` in the session dir at all -- C1's
+    "Meta-less sid, decided" finding): there is no ``last_activity`` and no
+    heartbeat/scope-touch writer reaches this dir, so ``touched.txt`` mtime
+    (or, absent that, ``_dir_recency_fallback_epoch``'s directory-mtime
+    fallback) is the ONLY avoidance-independent recency evidence available,
+    and stands alone through the SAME window -- the >= 2 floor cannot apply
+    when only one candidate can ever exist for this population, and C1's
+    corpus measurement found it overwhelmingly ancient in practice, not a
+    live-corpus edge case.
+
+    No sdir at all (empty/unknown sid, or the sessions dir/this sid's dir
+    does not exist) -> False, not True: absent evidence is never dispositive
+    of abandonment, mirroring this module's fail-open-toward-"do not act"
+    bias on thin evidence (module docstring; AC2's own citation of
+    DoE-claude's 2026-08-19 absence-is-not-death lesson).
+
+    Deliberately does NOT consult the transcript
+    (``~/.claude/projects/*/<sid>.jsonl``) -- C1's census named it
+    confirming-only (its absence must never count as a stale signal, and its
+    cross-machine-synced resolution via HOME/USERPROFILE makes it an
+    unreliable disqualifier), so wiring it in here would only ever be able to
+    turn an abandoned verdict back to not-abandoned, never the reverse; left
+    for a follow-up rather than added speculatively against a predicate this
+    row must keep minimal and auditable.
+
+    ``_layer1_disabled()`` (the Layer 1 rollback lever) is untouched by this
+    function -- it gates ``session_live``'s Layer 1 arm only and has no
+    reachable effect here, matching ``_verdict_for_sdir``'s own documented
+    rollback-lever scope.
+    """
+    if not sid:
+        return False
+    sdir = core.session_dir(sid, cwd)
+    if not sdir or not Path(sdir).is_dir():
+        return False
+
+    sdir_path = Path(sdir)
+    now_epoch = core.now_epoch()
+
+    def _file_mtime_epoch(name: str) -> Optional[int]:
+        p = sdir_path / name
+        try:
+            if not p.is_file():
+                return None
+        except OSError:
+            return None
+        try:
+            return core.mtime_epoch(str(p))
+        except OSError:
+            return None
+
+    touched_epoch = _file_mtime_epoch("touched.txt")
+    meta_present = (sdir_path / "meta.json").is_file()
+
+    if not meta_present:
+        # Meta-less sid (C1's "Meta-less sid, decided"): touched.txt alone,
+        # or the directory-mtime fallback -- through the same window, no
+        # >= 2 floor (there is structurally only ever one candidate here).
+        if touched_epoch is not None:
+            source_epoch = touched_epoch
+        else:
+            # Review: coordinator:code-reviewer P2 sibling trap
+            # (coordinatorcode-reviewer-1da5144e.md) —
+            # `_dir_recency_fallback_epoch` returns 0 ONLY on a TOCTOU
+            # directory-stat failure (its own docstring), which is
+            # unreadable/absent evidence, not a genuinely ancient
+            # timestamp. Letting a `0` read as epoch-0 would score it
+            # maximally stale and fire ABANDONED on no real evidence at
+            # all — fail toward NOT-abandoned instead, same bias as the
+            # no-candidates arm below.
+            fallback_epoch = _dir_recency_fallback_epoch(sdir)
+            if not fallback_epoch:
+                return False
+            source_epoch = fallback_epoch
+        elapsed = now_epoch - source_epoch
+        if elapsed < 0:
+            elapsed = 0
+        return elapsed >= _ABANDONMENT_WINDOW_SEC
+
+    # Meta-carrying sid: OR-combine the three candidate signals, primary gate
+    # on the freshest, belt-and-braces floor on >= 2 independently stale.
+    candidates: list[tuple[str, int]] = []
+
+    # Review: coordinator:code-reviewer P2 (coordinatorcode-reviewer-
+    # 1da5144e.md) — `core.iso_to_epoch` returns 0 on BOTH empty input and
+    # parse failure. `last_iso` is already known non-empty here, so a `0`
+    # epoch can only mean a corrupted-but-present value (e.g.
+    # "not-a-timestamp"), never legitimate absence — do not let that
+    # unparseable value count as a (maximally stale) candidate; treat it as
+    # no evidence at all, same bias as every other absent-evidence arm in
+    # this function.
+    last_iso = core.read_meta_field(sdir, "last_activity")
+    if last_iso:
+        last_activity_epoch = core.iso_to_epoch(last_iso)
+        if last_activity_epoch:
+            candidates.append(("last_activity", last_activity_epoch))
+    if touched_epoch is not None:
+        candidates.append(("touched.txt", touched_epoch))
+    dispatched_epoch = _file_mtime_epoch("dispatched-agents.txt")
+    if dispatched_epoch is not None:
+        candidates.append(("dispatched-agents.txt", dispatched_epoch))
+
+    if not candidates:
+        # No positive-activity evidence at all -- absence is not dispositive
+        # (AC2); fail toward NOT-abandoned, same bias as the no-sdir arm.
+        return False
+
+    def _elapsed(epoch: int) -> int:
+        e = now_epoch - epoch
+        return e if e > 0 else 0
+
+    freshest_elapsed = min(_elapsed(epoch) for _name, epoch in candidates)
+    if freshest_elapsed < _ABANDONMENT_WINDOW_SEC:
+        # A positive activity signal within the window -- not abandoned,
+        # regardless of how many other candidates are also stale.
+        return False
+
+    stale_count = sum(
+        1 for _name, epoch in candidates
+        if _elapsed(epoch) >= _ABANDONMENT_WINDOW_SEC
+    )
+    return stale_count >= 2
+
+
 def active_sessions(cwd: Optional[str] = None) -> list:
     """Port of ``cs_active_sessions``.
 

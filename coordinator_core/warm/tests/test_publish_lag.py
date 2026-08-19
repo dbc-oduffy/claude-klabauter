@@ -130,7 +130,18 @@ def test_publish_lag_below_threshold_minutes_stays_silent(tmp_path, monkeypatch)
     assert skew.publish_lag_message(lag) is None
 
 
-def test_publish_lag_never_raises_on_unexpected_exception(tmp_path, monkeypatch):
+def test_publish_lag_absorbs_an_ordinary_spawn_oserror(tmp_path, monkeypatch):
+    """Renamed from `..._never_raises_on_unexpected_exception`: `OSError`
+    ("git not found") is the ordinary, expected spawn-failure shape, not
+    the unexpected one -- and it is caught by the same bare
+    `except Exception` this module's outer handler now uses regardless of
+    type. `test_publish_lag_absorbs_a_non_oserror_exception` below is the
+    test that actually exercises the "unexpected" claim (a `ValueError`,
+    previously uncaught). Kept as a separate case rather than folded in:
+    a real git-not-found spawn failure and a corrupt-stamp `ValueError`
+    are different scenarios worth pinning independently, even though both
+    now resolve through the same except clause.
+    """
     _write_stamp(tmp_path)
 
     def fake_run(cmd, **kwargs):
@@ -159,3 +170,86 @@ def test_publish_lag_at_most_two_git_calls_total(tmp_path, monkeypatch):
     monkeypatch.setattr(skew.subprocess, "run", fake_run)
     skew.publish_lag(tmp_path, tmp_path)
     assert call_count <= 2
+
+
+# ---------------------------------------------------------------------------
+# Regression: the oldest-commit call must not use `--reverse ... -1`
+# ---------------------------------------------------------------------------
+
+
+def test_publish_lag_takes_the_oldest_unpublished_commit_not_the_newest(tmp_path, monkeypatch):
+    """git applies a commit limit BEFORE `--reverse`, so `--reverse -1` yields
+    the NEWEST commit. That pins age_minutes near zero on an active branch and
+    silently holds the advisory below its threshold forever -- the signal is
+    disabled while every field still looks populated. Caught live: 97 commits
+    unpublished reported as 0.4 minutes old.
+    """
+    _write_stamp(tmp_path, "stamped")
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        if "rev-list" in cmd:
+            return SimpleNamespace(returncode=0, stdout="3\n")
+        # newest first, exactly as `git log` orders it
+        return SimpleNamespace(
+            returncode=0,
+            stdout="2026-08-19T22:00:00+01:00\n"
+                   "2026-08-19T21:00:00+01:00\n"
+                   "2026-08-19T19:41:03+01:00\n",
+        )
+
+    monkeypatch.setattr(skew.subprocess, "run", fake_run)
+    lag = skew.publish_lag(tmp_path, tmp_path)
+
+    assert lag is not None
+    assert lag.oldest_unpublished_iso == "2026-08-19T19:41:03+01:00"
+    assert lag.age_minutes > 60
+
+    log_cmd = next(c for c in seen if "log" in c)
+    assert "--reverse" not in log_cmd, "`--reverse` with a limit returns the newest commit"
+    assert "-1" not in log_cmd, "a commit limit here silently selects the newest commit"
+    assert len(seen) == 2, "at most two bounded git calls (amplification gate)"
+
+
+def test_publish_lag_absorbs_a_non_oserror_exception(tmp_path, monkeypatch):
+    """The docstring promises "any unexpected exception" returns None. The
+    original test injected OSError -- a type already caught by name -- so it
+    passed without covering the claim. A ValueError is the honest probe, and
+    UnicodeDecodeError (a ValueError subclass) is the real-world case: a
+    stamp file carrying invalid UTF-8.
+    """
+    _write_stamp(tmp_path, "stamped")
+
+    def boom(*a, **k):
+        raise ValueError("not an OSError")
+
+    monkeypatch.setattr(skew.subprocess, "run", boom)
+    assert skew.publish_lag(tmp_path, tmp_path) is None
+
+
+def test_read_engine_stamp_sha_absorbs_invalid_utf8(tmp_path):
+    stamp = tmp_path / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
+    stamp.parent.mkdir(parents=True)
+    stamp.write_bytes(b"sha:\xff\xfe not utf-8\n")
+    assert skew.read_engine_stamp_sha(tmp_path) is None
+
+
+def test_publish_lag_message_scope_sentence_differs_by_site():
+    """The shared sentence was false at close-out: nothing is executing
+    there. Both sites must still carry one fact and one runnable
+    alternative (guard-messaging.md § Register).
+    """
+    lag = skew.PublishLag(
+        stamp_sha="abc",
+        engine_commits_behind=5,
+        oldest_unpublished_iso="2026-08-19T19:41:03+01:00",
+        age_minutes=180.0,
+    )
+    fire = skew.publish_lag_message(lag, site="fire")
+    close = skew.publish_lag_message(lag, site="close-out")
+    assert "This run executes" in fire
+    assert "This run executes" not in close
+    for msg in (fire, close):
+        assert "5 commit(s)" in msg
+        assert "percolate-round.py claude-klabauter" in msg

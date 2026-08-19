@@ -132,7 +132,7 @@ def _sync_plugin(name: str, source_dir: Path, cache_dir: Path) -> str:
     shutil.copytree(src, cache_target, dirs_exist_ok=True)
 
     if orphaned_at is not None:
-        orphaned_at_path.write_text(orphaned_at)
+        orphaned_at_path.write_text(orphaned_at, newline="\n")
 
     file_count = sum(1 for p in cache_target.rglob("*") if p.is_file())
     lines.append(f"  SYNC: {name} ({version}) — {file_count} files")

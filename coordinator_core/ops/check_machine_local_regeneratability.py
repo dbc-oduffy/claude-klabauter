@@ -22,6 +22,39 @@ Exit codes (parity-critical — the DoE trampoline forwards this verbatim):
     0 — always. This is an offer-shaped observer; it never blocks a caller,
         regardless of parse errors, missing HOME, or missing machine-local CLI.
 
+SUPERSEDED 2026-08-19 — Check 1 no longer iterates ``COORDINATOR_OWNED_KEYS``.
+    It derives its key set from the registry instead (``_declared_owned_keys``),
+    because a hardcoded key literal cannot survive publication: percolation
+    depersonalizes sibling-repo codenames, so the PUBLISHED engine compared
+    ``repos.example_retrieval_repo`` against an operator registry that says
+    ``repos.example_retrieval_repo``. Every renamed literal missed, and Check 1 degenerated
+    twice over — a WARN per renamed key on every ceremony, AND no ability to
+    detect a genuinely unclassified key, since it already reported those keys as
+    unclassified unconditionally. Observed live: 7 of 14 literals renamed, a
+    PARTIAL mismatch, which is why it read as ordinary findings rather than as an
+    obviously broken comparison. The list itself is retained below as the bash
+    parity artifact it is; it is no longer load-bearing for Check 1, so the
+    verbatim-reproduction rule below governs provenance only and no longer
+    governs what the observer checks. See ``_declared_owned_keys``.
+
+    What moved with it: Check 1 now answers "is every DECLARED coordinator-owned
+    key classified?" and no longer claims to answer "does every key that should
+    exist exist?" — the second question needs a list of things that are absent,
+    which nothing derivable from the registry can supply.
+
+    UNCOVERED, and deliberately named rather than handed off: no other check
+    currently owns that absent-key question. An earlier revision of this note
+    claimed ``docs/install/agent-install-manifest.json`` already owned it; a
+    reviewer checked, and it does not — the manifest names one specific key in
+    prose inside a doctor script, not a systematic required-key enumeration.
+    Coverage here is therefore NARROWER than the pre-percolation intent, not
+    equal to it. What makes that acceptable rather than a silent regression:
+    post-percolation the hardcoded list answered neither question, so nothing
+    that was actually working was given up — but closing this properly needs a
+    publish-proof declaration of required keys, which does not exist yet. Do not
+    re-add a hardcoded literal list to close it; that is the defect this
+    supersession removed.
+
 Negative-spec (do NOT "fix" while porting):
     - The bash oracle's ``COORDINATOR_OWNED_KEYS`` list is reproduced verbatim
       (13 keys, post the 2026-06-30 F5 reconciliation — no ``repos.coordinator_claude``,
@@ -97,6 +130,11 @@ _PROG = "check-machine-local-regeneratability"
 # plus the two named family-prefix arms in FAMILY_PREFIX_ENTRIES below (plugin.mirrors
 # is a per-plugin namespace set via `machine-local set`); every other key requires an
 # exact match.
+# PROVENANCE ONLY — not load-bearing. Check 1 derives its key set from the
+# registry via `_declared_owned_keys`; see this module's docstring § SUPERSEDED
+# for why a hardcoded literal list cannot survive publication. Retained as the
+# bash parity artifact, so the verbatim-reproduction rule below governs this
+# list's fidelity to its oracle, NOT what the observer checks.
 COORDINATOR_OWNED_KEYS: List[str] = [
     "coordinator.python",
     "plugin.mirrors",
@@ -258,6 +296,82 @@ def _flat_nondict_keys_from_file(path: Path) -> List[str]:
     return [k for k, v in data.items() if not isinstance(v, dict)]
 
 
+#: Namespaces whose declared keys this observer holds to the classification
+#: requirement. NAMESPACES, not key literals, because a namespace survives
+#: percolation and a codename does not — see `_declared_owned_keys`.
+COORDINATOR_OWNED_NAMESPACES: List[str] = [
+    "coordinator",
+    "plugin",
+    "publish",
+    "repos",
+]
+
+
+def _declared_owned_keys(ml_dir: Path) -> List[str]:
+    """Coordinator-owned keys actually DECLARED in the tracked registry files —
+    the dotted top-level table names (``repos.example-sim-repo``, ``publish.targets``)
+    whose first segment is a coordinator-owned namespace.
+
+    Derived rather than hardcoded, because a hardcoded key list cannot survive
+    publication. Percolation depersonalizes sibling-repo codenames, so the
+    PUBLISHED engine carries ``repos.example_retrieval_repo`` where the
+    operator's real machine-local registry says ``repos.example_retrieval_repo``. Every
+    renamed literal then misses, and check 1 degenerates twice over: it emits a
+    WARN per renamed key on every ceremony, and it can no longer detect a
+    genuinely unclassified key, because it already reports those keys as
+    unclassified unconditionally. Observed live 2026-08-19: 7 of the 14
+    literals were renamed, so the mismatch was partial — which is why it read
+    as ordinary findings for as long as it did, rather than as an obviously
+    broken comparison. The NAMESPACE half of each key (``repos.``,
+    ``publish.``) is a generic English word that percolation leaves alone, so
+    deriving keys from it is stable on both sides of the transform.
+
+    Negative-spec: this answers "is every DECLARED coordinator-owned key
+    classified?", NOT "does every key that should exist exist?". A key missing
+    from the registry outright is an install-surface question, owned by
+    ``docs/install/agent-install-manifest.json`` and its own checks — not
+    recoverable here, because an absent key leaves nothing to enumerate. The
+    prior hardcoded list nominally covered that second question and, post-
+    percolation, actually answered neither.
+
+    ``engine.working_repos`` is deliberately absent from
+    ``COORDINATOR_OWNED_NAMESPACES``: that namespace is DoE-authored (see this
+    module's own docstring), and claude-klabauter supplies only the family-prefix match
+    arm for it, never the key."""
+    declared: set[str] = set()
+    for toml_file in _tracked_toml_files(ml_dir):
+        data = _parse_toml_file(toml_file, emit_errors=False)
+        if data is None:
+            continue
+        for key, value in data.items():
+            key = str(key)
+            head, _, tail = key.partition(".")
+            if head not in COORDINATOR_OWNED_NAMESPACES:
+                continue
+            # Both TOML spellings of the same declaration. `["repos.example-sim-repo"]`
+            # (quoted) parses to a flat dotted top-level key; `[repos.example-sim-repo]`
+            # (bare) parses to a NESTED table under `repos`. The machine-local
+            # registry uses the quoted form today, but the classification this
+            # observer checks is a property of the declaration, not of which
+            # spelling the file happens to use — reading only one shape makes
+            # the check silently blind to a registry written the other way.
+            if tail:
+                declared.add(key)
+            elif isinstance(value, dict):
+                # Only sub-tables are declarations. A bare `[repos]` table can
+                # also carry namespace-level scalars (`[repos]` + `default = "x"`),
+                # and admitting those would invent a `repos.default` key that was
+                # never declared -- then report it unclassified forever, which is
+                # the fabricated-finding half of the defect this function fixes,
+                # rebuilt from the other side.
+                declared.update(
+                    f"{head}.{sub}"
+                    for sub, sub_value in value.items()
+                    if isinstance(sub_value, dict)
+                )
+    return sorted(declared)
+
+
 def _tracked_toml_files(ml_dir: Path) -> List[Path]:
     if not ml_dir.is_dir():
         return []
@@ -354,7 +468,7 @@ def main(argv: List[str]) -> int:
     # ------------------------------------------------------------------
     findings = 0
 
-    for canon_key in COORDINATOR_OWNED_KEYS:
+    for canon_key in _declared_owned_keys(ml_dir):
         found = False
         for regen_key in regen_table:
             if _key_matches_regen_entry(canon_key, regen_key):

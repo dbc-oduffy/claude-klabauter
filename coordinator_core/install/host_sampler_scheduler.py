@@ -223,7 +223,7 @@ def register_host_sampler_task(
     try:
         fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="host-sampler-task-")
         os.close(fd)
-        Path(xml_path).write_text(task_xml, encoding="utf-16")
+        Path(xml_path).write_text(task_xml, encoding="utf-16", newline="\n")
 
         proc = _run_schtasks(
             "/Create",

@@ -331,7 +331,7 @@ def _cmd_autonomous_sentinel(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return 1
-        _sentinel_path(session_id).write_text(f"{mode}\n", encoding="utf-8")
+        _sentinel_path(session_id).write_text(f"{mode}\n", encoding="utf-8", newline="\n")
         print(str(_sentinel_path(session_id)))
         return 0
 

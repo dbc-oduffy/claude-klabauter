@@ -157,7 +157,7 @@ def _append_record_sync(store_path: str, entry: dict) -> None:
         return
     try:
         line = json.dumps(entry, separators=(",", ":")) + "\n"
-        with open(store_path, "a", encoding="utf-8") as fh:
+        with open(store_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except OSError as exc:
         print(f"subagent_zero_tool_use: cannot write {store_path}: {exc}", file=sys.stderr)

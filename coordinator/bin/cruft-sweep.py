@@ -868,7 +868,7 @@ def _write_run_marker(cfg: "SweepConfig", totals: "Totals", total_bytes: int) ->
         except OSError:
             pass
     try:
-        with open(cfg.log_path, "a", encoding="utf-8") as f:
+        with open(cfg.log_path, "a", encoding="utf-8", newline="\n") as f:
             f.write(
                 f"| {ts} | run-marker | {total_bytes} bytes | "
                 f"{total_items} items |\n"

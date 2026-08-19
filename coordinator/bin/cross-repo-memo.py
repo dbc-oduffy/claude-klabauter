@@ -1870,7 +1870,13 @@ def _write_file(path: str, content: str, receiver_path: str) -> None:
             f"Choose a distinct --topic or remove the existing file."
         ) from None
 
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    # newline="\n" is load-bearing: Python text mode translates "\n" to "\r\n" on a
+    # Windows host, so this write lands CRLF in the RECEIVER's tree no matter what
+    # their .gitattributes declares. Only the receiver can observe it -- their
+    # core.autocrlf=true normalizes CRLF back out on the way into the index, so the
+    # damage is working-tree-only and invisible to git status here.
+    # Negative-spec: do NOT drop newline= -- this write crosses into a sibling repo.
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
 
 

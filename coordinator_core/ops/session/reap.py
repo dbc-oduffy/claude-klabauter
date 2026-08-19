@@ -80,7 +80,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
-from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
 from coordinator_core.ops.fleet._common import (
     _CLAIM_SUBDIRS,
@@ -89,6 +89,7 @@ from coordinator_core.ops.fleet._common import (
     check_repo_root,
 )
 from coordinator_core.session.claims import reconcile_dead_handoff_claim_frontmatter
+from coordinator_core.session.liveness import session_abandoned
 
 _LOG = logging.getLogger(__name__)
 
@@ -210,6 +211,7 @@ def _reap_stale_sessions(
     sessions_dir: Path,
     live_sids: frozenset,
     liveness_error: Optional[str],
+    cwd: Optional[str] = None,
 ) -> Tuple[List[str], List[dict], List[dict]]:
     """Sync: move stale session dirs (last_activity > 24h) to .archive/.
 
@@ -218,9 +220,19 @@ def _reap_stale_sessions(
     liveness_error: when non-None, resolve_live_session_ids failed before this call —
     all sessions are deferred (fail-closed-to-keep), no reaping occurs.
 
-    Stale criterion: last_activity > 24h AND sid NOT in live_sids.
+    Stale criterion: last_activity > 24h AND (sid NOT in live_sids OR the
+    live-witness session is independently abandoned per
+    ``session.liveness.session_abandoned`` — C5, docs/plans/2026-08-19-
+    abandonment-is-its-own-verdict.md). A live-witness session that is NOT
+    abandoned still short-circuits here exactly as before this change: the
+    liveness skip is untouched for the ordinary live case, and only an
+    abandoned live-witness session is let past it so the existing 24h check
+    (below) can do its job — ``session_abandoned`` is itself fail-closed
+    toward NOT-abandoned on thin/absent evidence (see its own docstring), so
+    this can only ever narrow the liveness skip, never widen reaping beyond
+    what the 24h check already gates.
     Unknown timestamp (epoch=0) → defer (fail-closed-to-keep).
-    Live session (in live_sids) → keep.
+    Live, non-abandoned session (in live_sids) → keep.
     Archive dest already exists → skip (per-record idempotency).
     """
     reaped: List[str] = []
@@ -250,9 +262,13 @@ def _reap_stale_sessions(
         if sid.startswith("."):
             continue  # skip .archive, .agents, .last-reap sentinel
 
-        # Liveness check: if the session registry says this sid is live, keep it.
-        if sid in live_sids:
-            continue  # live session — keep
+        # Liveness check: if the session registry says this sid is live, keep it
+        # — UNLESS that live witness is itself abandoned (C5): abandonment is a
+        # second, independent release condition, mirroring compute_scope's (C4)
+        # `live_ids is not None and other_id not in live_ids` + `session_abandoned`
+        # widening. This does not remove the skip for the ordinary live case.
+        if sid in live_sids and not session_abandoned(sid, cwd):
+            continue  # live, not abandoned — keep
 
         # Read meta.json to get last_activity.
         meta = _read_meta_json(sdir)
@@ -813,8 +829,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             exc,
         )
 
+    # cwd for session_abandoned's own sessions_dir(cwd) re-derivation: the main
+    # worktree root, via the canonical common_dir->worktree helper (never a bare
+    # .parent — main_worktree_root's own negative-spec).
+    worktree_cwd = str(main_worktree_root(common_dir))
+
     reaped_sessions, deferred_sessions, failed_sessions = await asyncio.to_thread(
-        _reap_stale_sessions, sessions_dir, live_sids, liveness_error
+        _reap_stale_sessions, sessions_dir, live_sids, liveness_error, worktree_cwd
     )
 
     # --- Sub-reap (ii): stale agent dirs ---

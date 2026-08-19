@@ -477,7 +477,7 @@ def provision_subagent_sidecar(
         rel_path = f"state/subagent-share/{sanitized_session_id}/{sanitized_provision_key}.subagent-sidecar.md"
         doc_path = session_dir / f"{sanitized_provision_key}.subagent-sidecar.md"
         try:
-            with open(doc_path, "x", encoding="utf-8") as handle:
+            with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
                 handle.write(doc_text)
             # Claim attribution: the DISPATCHING session (payload["session_id"],
             # raw -- never agent_id, never the sanitized directory leaf) owns
@@ -495,7 +495,7 @@ def provision_subagent_sidecar(
     nonce = secrets.token_hex(4)
     doc_path = session_dir / f"{sanitized_label}-sidecar-{nonce}.md"
     try:
-        with open(doc_path, "x", encoding="utf-8") as handle:
+        with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
         session_scope.touch_written_path(
             str(session_id),
@@ -507,7 +507,7 @@ def provision_subagent_sidecar(
         # to main()'s blanket except -- fail-open, never brick the spawn.
         nonce = secrets.token_hex(4)
         doc_path = session_dir / f"{sanitized_label}-sidecar-{nonce}.md"
-        with open(doc_path, "x", encoding="utf-8") as handle:
+        with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
         session_scope.touch_written_path(
             str(session_id),

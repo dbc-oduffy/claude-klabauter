@@ -45,10 +45,12 @@ Run: pytest coordinator/bin/tests/test_cc_invoke_published_engine_rung.py -q
 """
 from __future__ import annotations
 
+import contextlib
 import inspect
 import os
 import sys
 import types
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -394,3 +396,125 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
 
         self.assertEqual(resolved, "/deliberate/test/tree")
         mock_run.assert_not_called()
+
+
+class TestGateEntryPointByShape(unittest.TestCase):
+    """`_gate_entry_point_by_shape` -- resolving a candidate whose engine-root
+    module is spelled differently from this tree's.
+
+    The publish transform renames the module and its entry point together
+    (`claude_klabauter_root.py` -> `claude_klabauter_root.py`,
+    `coordinator_claude_klabauter_root_with_class` ->
+    `coordinator_claude_klabauter_root_with_class`), so `_delegate_to_gate`'s
+    direct import of THIS tree's spelling cannot succeed against a candidate
+    spelled the other way. Rung 1 hands it exactly such a candidate on a
+    DR-326 box, where dispatch resolves to the published build by design.
+
+    Backlink:
+    state/bug-backlog/2026-08-19-cc-invoke-validates-a-candidate-root-by-a-c41f7a3e28b9.yaml
+    """
+
+    @staticmethod
+    def _make_candidate(root, module_basename, token):
+        pkg = root / "coordinator_core"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / (module_basename + ".py")).write_text(
+            "def coordinator_" + token + "_root_with_class():\n"
+            "    return ('resolved-from-" + token + "', 'resolved-engine')\n",
+            encoding="utf-8",
+        )
+        return pkg
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _candidate_on_path(root):
+        """Put `root` first on sys.path with NO ambient `coordinator_core` binding.
+
+        `_gate_entry_point_by_shape` imports `coordinator_core.<module>`, which
+        resolves through whatever `coordinator_core` is already in sys.modules.
+        Under pytest that is the real repo package, whose `__path__` has no
+        transformed twin -- so without this the test asserts ambient import
+        state rather than the helper, and passes or fails by collection order.
+        (Review: rev-D flagged exactly this sys.modules collision surface.)
+        """
+        saved = {k: v for k, v in sys.modules.items()
+                 if k == "coordinator_core" or k.startswith("coordinator_core.")}
+        for k in saved:
+            del sys.modules[k]
+        sys.path.insert(0, str(root))
+        try:
+            yield
+        finally:
+            try:
+                sys.path.remove(str(root))
+            except ValueError:
+                pass
+            for k in [k for k in sys.modules
+                      if k == "coordinator_core" or k.startswith("coordinator_core.")]:
+                del sys.modules[k]
+            sys.modules.update(saved)
+
+    def test_finds_entry_point_under_a_transformed_module_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_candidate(root, "claude_klabauter_root", "claude_klabauter")
+            with self._candidate_on_path(root):
+                found = _mod._gate_entry_point_by_shape(str(root))
+            self.assertIsNotNone(found)
+            self.assertEqual(
+                found(), ("resolved-from-claude_klabauter", "resolved-engine")
+            )
+
+    def test_returns_none_when_candidate_has_no_engine_root_module(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "coordinator_core"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            # A decoy that MENTIONS the suffix without defining an entry point.
+            # `coordinator_core/state_root.py` really does this in-tree, which
+            # is why the scan matches a `def` line, not a bare substring.
+            (pkg / "state_root.py").write_text(
+                "# see coordinator_claude_klabauter_root_with_class for the gated ladder\n",
+                encoding="utf-8",
+            )
+            self.assertIsNone(_mod._gate_entry_point_by_shape(str(root)))
+
+    def test_returns_none_for_a_path_that_is_not_a_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(_mod._gate_entry_point_by_shape(tmp))
+        self.assertIsNone(_mod._gate_entry_point_by_shape("/no/such/path/at/all"))
+
+    def test_matched_module_that_raises_on_import_returns_none(self):
+        # A candidate matching by SHAPE but broken on import (syntax error
+        # mid-publish, a failing module-level side effect, a partial checkout)
+        # must fail CLEAN -- the caller then raises the one RuntimeError naming
+        # the candidate. Letting an arbitrary exception escape would surface as
+        # an unrelated traceback on the commit hot path. (Review: rev-D.)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "coordinator_core"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "claude_klabauter_root.py").write_text(
+                "raise RuntimeError('module-level boom')\n"
+                "def coordinator_claude_klabauter_root_with_class():\n"
+                "    return ('x', 'y')\n",
+                encoding="utf-8",
+            )
+            with self._candidate_on_path(root):
+                self.assertIsNone(_mod._gate_entry_point_by_shape(str(root)))
+
+    def test_scan_adds_no_subprocess(self):
+        # The rungs-1/1.5/3 no-subprocess bound covers this fallback too:
+        # directory listing, plain reads, one import.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_candidate(root, "claude_klabauter_root", "claude_klabauter")
+            with self._candidate_on_path(root):
+                with unittest.mock.patch("subprocess.run") as mock_run:
+                    with unittest.mock.patch("subprocess.Popen") as mock_popen:
+                        _mod._gate_entry_point_by_shape(str(root))
+            mock_run.assert_not_called()
+            mock_popen.assert_not_called()

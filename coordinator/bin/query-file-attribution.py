@@ -1,24 +1,49 @@
 """
 query-file-attribution.py — Read-only CLI for session→file attribution queries.
 
-Purpose: Answer two reverse-lookup queries derived from Claude Code transcripts:
+Purpose: Answer three reverse-lookup queries derived from Claude Code transcripts:
   --session <id>   → which files that session touched (with edited/read/referenced counts)
   --file <path>    → which sessions touched that file (with counts)
+  --all            → every derived attribution row for the resolved project
 
 Thin CLI wrapper over derive-file-attribution.py (importlib-loaded from the same bin/).
 Queries transcripts directly — does NOT read state/file-attribution-ledger/ shards.
 Output is JSON by default; --format table for human-readable tabular output.
 
+Path identity contract (DR-339): the machine-local absolute path is emitted as
+`file_path_local` — deliberately renamed from the old `file_path` key, with NO
+compatibility alias, so a consumer still reading `file_path` fails loudly rather
+than silently joining on an unportable, machine-local value. `file_path_local`
+is NOT joinable across the fleet: no row carries a machine identifier, so the
+same string from two different boxes is indistinguishable.
+
+Every row additionally carries a portable path identity:
+  - `path_class`      — one of `in-tree`, `sibling-repo`, `ephemeral`, `external`.
+  - `file_path_repo`  — the owner-qualified slug (via the canonical producer) of
+                         the repo the path belongs to; `null` exactly when
+                         `path_class` is `ephemeral` or `external`.
+  - `file_path_rel`   — POSIX-separated, relative to `file_path_repo`'s own root
+                         (this repo's root for `in-tree`, the sibling repo's root
+                         for `sibling-repo`); `null` exactly when `file_path_repo`
+                         is `null`. `(file_path_repo, file_path_rel)` is always
+                         both-null or both-populated — never one without the other.
+
 CLI:
     python3 query-file-attribution.py --session <id> [--project <root>]
     python3 query-file-attribution.py --file <path>  [--project <root>]
     python3 query-file-attribution.py --session <id> --file <path>  [--project <root>]
+    python3 query-file-attribution.py --all  [--project <root>]
+
+--all is mutually exclusive with --session/--file — rejected at argparse-level
+validation, never silently ignored in favour of one over the other.
 
 Spec backlink: pln-ccos-6-rehome-attribution-python-9966da § C2
 Spec backlink: pln-three-query-trampolines-and-th-309bf9 § C5 (owner-qualified repo slug)
+Spec backlink: pln-attribution-paths-become-porta-92395a § C1 (portable path identity)
 Replaces:      plugins/coordinator-claude/coordinator/bin/query-file-attribution.mjs
 
-`repo` is stamped via the canonical producer
+`repo` (the row's emitting-session repo) and `file_path_repo` (a path's owning
+repo, `in-tree` or `sibling-repo`) are both stamped via the canonical producer
 (`coordinator_core.ops.emit.context.resolve_repo_name`), never a second
 `git remote` parser here. `--project` MUST name a repo root, not a
 subdirectory — checked via `coordinator_core.git.repo_root.show_toplevel`
@@ -26,6 +51,12 @@ subdirectory — checked via `coordinator_core.git.repo_root.show_toplevel`
 stamped as-is, not rejected. `coordinator_root_path` is left at
 `derive-file-attribution.aggregate`'s own default (`"."`) rather than passed
 as an absolute path.
+
+Sibling-repo detection walks each distinct directory prefix up to a `.git`
+marker via `show_toplevel` (walk-only, never spawns, internally memoised by
+directory) and resolves each distinct repo root's slug via `resolve_repo_name`
+at most once, cached locally per `--all`/`--session`/`--file` invocation — not
+once per row. A `git` subprocess per row is a defect (AC6), not a slow path.
 
 --file matching: accepts an absolute path or a path relative to --project (or
 cwd if --project is unset), either separator style ('/' or '\\'), matched
@@ -43,10 +74,21 @@ Negative-spec:
     invariant is respected; unknown rows with null file_path are absent from output.
   - --file matching is whole-path equality after resolution only — never a
     suffix/endswith match (would falsely match ingest.ts against vendor/ingest.ts).
-  - Do NOT case-canonicalise the repo slug — casing is producer-authoritative
-    (resolve_repo_name's own return value), stamped as-is.
+  - Do NOT case-canonicalise a repo slug (`repo` or `file_path_repo`) — casing is
+    producer-authoritative (resolve_repo_name's own return value), stamped as-is.
   - Do NOT touch derive-file-attribution.py's _derive_handoff_id or _repo_name —
     both are out of scope for this CLI (see pln-three-query-trampolines-and-th-309bf9 § C5).
+  - Do NOT keep a `file_path` alias for `file_path_local` — the rename IS the
+    notification mechanism (DR-339). A silent alias would leave a consumer
+    indefinitely joining on an unportable value.
+  - Do NOT spawn a `git rev-parse`/`git remote` subprocess per row — resolve
+    candidate repo roots and their slugs once, reused across all rows (AC6).
+  - Do NOT attempt to make `ephemeral` rows portable — a dead scratchpad file
+    has no portable identity; `path_class: ephemeral` with both repo/rel null
+    IS the answer, not a gap to fill.
+  - `file_path_rel` is null-on-unresolvable, never best-effort: a path that does
+    not resolve under its `file_path_repo`'s root (different drive, or outside
+    via '..') emits `null` rather than a guessed or truncated relative form.
 """
 
 import argparse
@@ -54,7 +96,8 @@ import importlib.util
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+import tempfile
+from typing import Any, Dict, List, Optional, Tuple
 
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib')
 if _LIB_DIR not in sys.path:
@@ -94,6 +137,132 @@ def _load_derive_module():
 
 
 # ---------------------------------------------------------------------------
+# Path identity — classifier + annotation (DR-339 / AC1-AC6, AC8)
+# ---------------------------------------------------------------------------
+
+def _ephemeral_prefixes(transcript_dir: str) -> List[str]:
+    """Absolute, normalised prefixes marking a path as `ephemeral`: the
+    platform temp directory (also covers Claude Code's per-session scratchpad,
+    which always lives under it) and the resolved transcript directory itself.
+    """
+    raw = [tempfile.gettempdir(), transcript_dir]
+    return [os.path.normcase(os.path.normpath(os.path.abspath(p))) for p in raw]
+
+
+def _is_ephemeral(candidate: str, ephemeral_prefixes: List[str]) -> bool:
+    """True when *candidate* (already absolute + normpath'd) is under one of
+    *ephemeral_prefixes* — an exact match or a path strictly beneath it."""
+    norm = os.path.normcase(candidate)
+    for prefix in ephemeral_prefixes:
+        if norm == prefix or norm.startswith(prefix + os.sep):
+            return True
+    return False
+
+
+def _relative_within(candidate: str, root: str) -> Optional[str]:
+    """POSIX-separated path of *candidate* relative to *root*, or None when it
+    does not resolve under *root* (different drive, or outside via '..').
+
+    os.path.relpath raises ValueError on a Windows cross-drive pair, which is
+    caught explicitly — a bare '..'-prefix string test alone would miss that.
+    """
+    try:
+        rel = os.path.relpath(candidate, root)
+    except ValueError:
+        return None
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return None
+    return rel.replace('\\', '/')
+
+
+def _resolve_repo_name_cached(repo_root: str, cache: Dict[str, str]) -> str:
+    """Memoised `resolve_repo_name` — one `git remote get-url origin`
+    subprocess per distinct repo root for the whole run, not per row (AC6)."""
+    from coordinator_core.ops.emit.context import resolve_repo_name
+
+    key = os.path.abspath(repo_root)
+    cached = cache.get(key)
+    if cached is None:
+        cached = resolve_repo_name(key)
+        cache[key] = cached
+    return cached
+
+
+def _classify_path(
+    file_path: Optional[str],
+    project_root: str,
+    project_repo_name: str,
+    ephemeral_prefixes: List[str],
+    show_toplevel,
+    repo_name_cache: Dict[str, str],
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """Classify *file_path* into `(path_class, file_path_repo, file_path_rel)`.
+
+      - under the resolved project root          -> in-tree,      this repo's slug,  relative POSIX
+      - under another repo root                   -> sibling-repo, that repo's slug,  relative POSIX
+                                                       (relative to THAT repo's root)
+      - under a temp/scratchpad or transcript dir -> ephemeral,    null,              null
+      - anything else                              -> external,    null,              null
+
+    project_root is expected already absolute (main() applies os.path.abspath).
+    A relative file_path is joined onto project_root first; an absolute one is
+    used as-is. Sibling-repo detection walks up from the path's own directory
+    via show_toplevel (walk-only, never spawns, internally memoised by
+    directory) — repo_name_cache memoises the one-per-root slug resolution.
+    """
+    if not file_path:
+        return ('external', None, None)
+
+    candidate = file_path if os.path.isabs(file_path) else os.path.join(project_root, file_path)
+    candidate = os.path.normpath(candidate)
+
+    # in-tree and sibling-repo are checked before ephemeral: a path under a
+    # real repo root has a real portable identity regardless of where that
+    # repo itself happens to live (e.g. a repo cloned under a temp
+    # directory) — that is more specific than "scratch", not overridden by it.
+    in_tree_rel = _relative_within(candidate, project_root)
+    if in_tree_rel is not None:
+        return ('in-tree', project_repo_name, in_tree_rel)
+
+    probe_dir = candidate if os.path.isdir(candidate) else os.path.dirname(candidate)
+    sibling_root = show_toplevel(cwd=probe_dir) if probe_dir else None
+    if sibling_root:
+        sibling_rel = _relative_within(candidate, sibling_root)
+        if sibling_rel is not None:
+            sibling_repo_name = _resolve_repo_name_cached(sibling_root, repo_name_cache)
+            return ('sibling-repo', sibling_repo_name, sibling_rel)
+
+    if _is_ephemeral(candidate, ephemeral_prefixes):
+        return ('ephemeral', None, None)
+
+    return ('external', None, None)
+
+
+def _annotate_path_identity(
+    records: List[Dict[str, Any]],
+    project_root: str,
+    project_repo_name: str,
+    ephemeral_prefixes: List[str],
+    show_toplevel,
+) -> List[Dict[str, Any]]:
+    """Rename `file_path` -> `file_path_local` (no alias, AC5) and add the
+    additive `path_class` / `file_path_repo` / `file_path_rel` fields, in place.
+    """
+    repo_name_cache: Dict[str, str] = {}
+    for r in records:
+        raw_path = r.pop('file_path', None)
+        r['file_path_local'] = raw_path
+        path_class, file_path_repo, file_path_rel = _classify_path(
+            raw_path, project_root, project_repo_name, ephemeral_prefixes,
+            show_toplevel, repo_name_cache,
+        )
+        r['path_class'] = path_class
+        r['file_path_repo'] = file_path_repo
+        r['file_path_rel'] = file_path_rel
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Query helpers
 # ---------------------------------------------------------------------------
 
@@ -122,9 +291,17 @@ def _resolved_forms(p: str, project_root: str) -> List[str]:
 def query_by_session(
     records: List[Dict[str, Any]], session_id: str
 ) -> List[Dict[str, Any]]:
-    """Return aggregate records for the given session_id, sorted by file_path."""
+    """Return aggregate records for the given session_id, sorted by file_path_local."""
     matches = [r for r in records if r.get('session_id') == session_id]
-    return sorted(matches, key=lambda r: r.get('file_path', '') or '')
+    return sorted(matches, key=lambda r: r.get('file_path_local', '') or '')
+
+
+def query_all(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return every aggregate record, sorted by (session_id, file_path_local)."""
+    return sorted(
+        records,
+        key=lambda r: (r.get('session_id', '') or '', r.get('file_path_local', '') or ''),
+    )
 
 
 def query_by_file(
@@ -132,15 +309,15 @@ def query_by_file(
 ) -> List[Dict[str, Any]]:
     """Return aggregate records for the given file_path, sorted by session_id.
 
-    Matches when the query arg and the stored record path agree after
-    resolution against project_root in either direction — handles both an
-    absolute record with a relative query arg, and a relative record (e.g.
-    from a Bash-redirect row) with an absolute query arg.
+    Matches when the query arg and the stored record path (`file_path_local`)
+    agree after resolution against project_root in either direction — handles
+    both an absolute record with a relative query arg, and a relative record
+    (e.g. from a Bash-redirect row) with an absolute query arg.
     """
     query_forms = set(_resolved_forms(file_path, project_root))
     matches = []
     for r in records:
-        record_path = r.get('file_path', '') or ''
+        record_path = r.get('file_path_local', '') or ''
         if not record_path:
             continue
         record_forms = set(_resolved_forms(record_path, project_root))
@@ -166,13 +343,13 @@ def _fmt_table_session(records: List[Dict[str, Any]], session_id: str) -> str:
     # Review: code-reviewer (F10) — compute column width dynamically so realistic
     # file paths (e.g. plugins/coordinator-claude/.../derive-file-attribution.py at
     # 67 chars) don't overflow the hardcoded 55-char column and misalign the table.
-    col_width = max(max(len(r.get('file_path', '') or '') for r in records), 30)
+    col_width = max(max(len(r.get('file_path_local', '') or '') for r in records), 30)
     col_width = min(col_width, 80)
-    header = f'{"file_path":<{col_width}} {"edited":>6} {"read":>5} {"ref":>5}  last_op     completeness'
+    header = f'{"file_path_local":<{col_width}} {"edited":>6} {"read":>5} {"ref":>5}  last_op     completeness'
     lines.append(header)
     lines.append('-' * len(header))
     for r in records:
-        fp = r.get('file_path') or ''
+        fp = r.get('file_path_local') or ''
         lines.append(
             f'{fp:<{col_width}} '
             f'{r.get("edited_count", 0):>6} '
@@ -201,6 +378,25 @@ def _fmt_table_file(records: List[Dict[str, Any]], file_path: str) -> str:
             f'{r.get("referenced_count", 0):>5}  '
             f'{(r.get("last_operation") or "-"):<11} '
             f'{r.get("completeness") or "-"}'
+        )
+    return '\n'.join(lines)
+
+
+def _fmt_table_all(records: List[Dict[str, Any]]) -> str:
+    """Human-readable table for an --all query (rows = every attribution)."""
+    lines = [f'found: {len(records)} record(s)', '']
+    if not records:
+        return '\n'.join(lines)
+    header = f'{"session_id":<45} {"file_path_local":<50} {"edited":>6} {"read":>5} {"ref":>5}'
+    lines.append(header)
+    lines.append('-' * len(header))
+    for r in records:
+        lines.append(
+            f'{(r.get("session_id") or ""):<45} '
+            f'{(r.get("file_path_local") or ""):<50} '
+            f'{r.get("edited_count", 0):>6} '
+            f'{r.get("read_count", 0):>5} '
+            f'{r.get("referenced_count", 0):>5}'
         )
     return '\n'.join(lines)
 
@@ -298,6 +494,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='Query: which sessions touched this file path.',
     )
     parser.add_argument(
+        '--all', action='store_true',
+        help='Query: every derived attribution row for the resolved project. '
+             'Mutually exclusive with --session/--file.',
+    )
+    parser.add_argument(
         '--project', metavar='ROOT',
         default=None,
         help='Project root path for transcript discovery (default: cwd). '
@@ -320,9 +521,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Validate: --all is mutually exclusive with --session/--file (argparse-
+    # level rejection, AC2 — never silent precedence of one mode over another).
+    if args.all and (args.session is not None or args.file is not None):
+        parser.error('--all cannot be combined with --session/--file')
+
     # Validate: at least one query mode required.
-    if args.session is None and args.file is None:
-        parser.error('specify --session <id>, --file <path>, or both')
+    if args.session is None and args.file is None and not args.all:
+        parser.error('specify --session <id>, --file <path>, --all, or a combination of --session/--file')
 
     # Review: code-reviewer (F4) — load derive module lazily so --help and
     # argument-validation failures don't trigger importlib load or sys.exit(1).
@@ -367,9 +573,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         transcript_dir=transcript_dir,
     )
 
+    # _resolve_repo_name_or_exit() already imported coordinator_core.git.repo_root
+    # (via resolve_claude_klabauter_root_or_exit's sys.path setup) — import once here,
+    # reused across every row instead of a per-row import/subprocess (AC6).
+    from coordinator_core.git.repo_root import show_toplevel
+
+    ephemeral_prefixes = _ephemeral_prefixes(transcript_dir)
+    _annotate_path_identity(all_records, project_root, repo_name, ephemeral_prefixes, show_toplevel)
+
     # Execute queries and collect results.
     total_matches = 0
     outputs: List[str] = []
+
+    if args.all:
+        all_out_records = query_all(all_records)
+        total_matches += len(all_out_records)
+        if args.format == 'json':
+            outputs.append(_fmt_json(all_out_records))
+        else:
+            outputs.append(_fmt_table_all(all_out_records))
 
     if args.session is not None:
         session_records = query_by_session(all_records, args.session)

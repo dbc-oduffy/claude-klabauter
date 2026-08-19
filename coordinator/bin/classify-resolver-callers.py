@@ -206,7 +206,7 @@ def main(argv=None) -> int:
     else:
         rendered = render_markdown(table)
         if args.out:
-            Path(args.out).write_text(rendered, encoding="utf-8")
+            Path(args.out).write_text(rendered, encoding="utf-8", newline="\n")
             print(f"wrote routing table to {args.out}", file=sys.stderr)
         else:
             print(rendered)

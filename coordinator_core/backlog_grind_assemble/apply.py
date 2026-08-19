@@ -51,7 +51,14 @@ table's whole point) to this surface: a future edit that adds a
 directive-shaped flag to `main_apply` — "for convenience", to unblock one
 caller — punches through that property and must not land. If a caller
 needs a new verb, it is added to `_CLI_DISPATCH` by hand, in this file,
-reviewed as such; it is never accepted as untrusted CLI input.
+reviewed as such; it is never accepted as untrusted CLI input. The same
+never-caller-spellable rule binds an op-named form exactly as it binds
+this `cli`-named one (docs/plans/2026-08-19-directives-name-an-op-not-a-
+cli.md § C6): today none of this table's eight verbs migrates (see the
+discriminator decision comment above `_CLI_DISPATCH` below), but were one
+ever to, `--wave-path` would still only ever select AMONG engine-chosen
+verbs by `--granularity` — never accept a caller-supplied `op` name any
+more than it accepts a caller-supplied `cli` name today.
 
 The directive/args-shape reconciliation this module performs
 (`_prepare_directives_for_dispatch`), and why it exists
@@ -706,6 +713,26 @@ def _dispatch_unify_batons(args: list[str], repo_root: Path) -> dict[str, Any]:
     }
 
 
+#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
+#: live against `coordinator_core.authz.registration_quad._live_registry()`
+#: this chunk: NONE of this table's eight verbs (`commit-per-item`,
+#: `commit-per-wave`, `checkout-and-backlog-note`, `tier-u-grant-cli`,
+#: `spinoff-handoff-template`, `executor-dispatch-prompt-template`,
+#: `dispatch-haiku-verifier`, `unify-batons`) resolve to a registered op, so
+#: ALL EIGHT stay `cli`-named — none migrate to `op`. No new op is minted
+#: to force a migration (out of scope by name). Every one is either raw
+#: `git` plumbing, an in-process call into an existing non-op Python
+#: primitive (`write_tier_u_grant`, `unify_run_batons`), or a pass-through
+#: report builder (`dispatch-haiku-verifier` never executes anything
+#: itself) — never `bash`/`sh`, so `docs/reference/shell-out-carve-outs.md`
+#: (scoped to interpreter/shell spawns) does not apply, and none is a
+#: `CONSUMES_MANIFEST`-driven script module in the completion-family sense,
+#: so no `CONSUMES_MANIFEST` entry applies either. Consequently
+#: `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/dispatchable.py) gains
+#: NO `"backlog_grind_assemble"` entry from this chunk (C1's "ship it EMPTY
+#: except for entries actually migrated" — zero migrated here).
+#:
 #: THE closed dispatch table (AC3). Every key is a literal string written
 #: here by hand — this dict is never mutated at runtime and never
 #: consulted via anything but a plain `dict.get`/`in` on a

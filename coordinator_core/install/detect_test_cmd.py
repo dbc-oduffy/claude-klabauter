@@ -343,7 +343,7 @@ def upsert_frontmatter_key(file: Path, key: str, value: str) -> None:
     """
     if not file.is_file():
         content = f"---\n{key}: {value}\n---\n"
-        file.write_text(content, encoding="utf-8")
+        file.write_text(content, encoding="utf-8", newline="\n")
         return
 
     try:
@@ -378,7 +378,7 @@ def upsert_frontmatter_key(file: Path, key: str, value: str) -> None:
     )
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(new_text)
         if original_mode is not None:
             os.chmod(tmp_path, original_mode)

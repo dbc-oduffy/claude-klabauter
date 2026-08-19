@@ -78,9 +78,9 @@ def _run_smoke(repo: Path) -> int:
     # HEAD-1 baseline — three fixture files exist and are committed
     fixture_dir = repo / "fixture"
     fixture_dir.mkdir(parents=True, exist_ok=True)
-    (fixture_dir / "scratch-a.md").write_text("scratch a\n")
-    (fixture_dir / "scratch-b.md").write_text("scratch b\n")
-    (fixture_dir / "kept-doc.md").write_text("kept doc\n")
+    (fixture_dir / "scratch-a.md").write_text("scratch a\n", newline="\n")
+    (fixture_dir / "scratch-b.md").write_text("scratch b\n", newline="\n")
+    (fixture_dir / "kept-doc.md").write_text("kept doc\n", newline="\n")
     git(repo, "add", "fixture/")
     git(repo, "commit", "-q", "-m", "baseline")
 
@@ -129,7 +129,7 @@ def _run_smoke(repo: Path) -> int:
     # staged for deletion (the "sibling" deletions from the baseline setup
     # above). We add fixture/new-doc.md as a staged addition (our session's
     # "inside" path).
-    (fixture_dir / "new-doc.md").write_text("new doc\n")
+    (fixture_dir / "new-doc.md").write_text("new doc\n", newline="\n")
     git(repo, "add", "--", "fixture/new-doc.md")
 
     # Fixture 6: false-positive fix — sibling deletions (scratch-a, scratch-b)

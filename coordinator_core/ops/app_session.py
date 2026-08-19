@@ -197,7 +197,7 @@ def _write_handle(repo_root: str, key: str, handle: dict) -> None:
     d = _handle_dir(repo_root)
     d.mkdir(parents=True, exist_ok=True)
     tmp = _handle_path(repo_root, key).with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(handle, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(handle, indent=2), encoding="utf-8", newline="\n")
     tmp.replace(_handle_path(repo_root, key))
 
 

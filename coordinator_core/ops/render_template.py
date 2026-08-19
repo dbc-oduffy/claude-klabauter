@@ -218,7 +218,7 @@ def _render_and_write_in_place(path: str, kv_pairs: List[Tuple[str, str]]) -> Tu
     assert rendered is not None
     tmp_path = f"{path}.render-template.tmp.{os.getpid()}"
     try:
-        with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape") as f:
+        with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape", newline="\n") as f:
             f.write(rendered)
         os.replace(tmp_path, path)
         # DR-276: declared AFTER the atomic replace lands, never before.
@@ -314,7 +314,7 @@ def main(argv: List[str]) -> int:
 
         tmp_path = f"{output_path}.render-template.tmp.{os.getpid()}"
         try:
-            with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape") as f:
+            with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape", newline="\n") as f:
                 f.write(rendered)
             os.replace(tmp_path, output_path)
             # DR-276: declared AFTER the atomic replace lands, never before —

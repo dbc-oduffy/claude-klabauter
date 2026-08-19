@@ -372,7 +372,7 @@ def _write_repo_identity_advisory_log(
         if not log_dir.is_dir():
             return
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_dir / "repo-identity-gate.log", "a", encoding="utf-8") as fh:
+        with open(log_dir / "repo-identity-gate.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(
                 f"{ts} | gates.repo_identity | verdict={gate_result['verdict']} | "
                 f"{gate_result['message']}\n"

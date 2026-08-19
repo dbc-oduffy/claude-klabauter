@@ -273,7 +273,7 @@ def _ensure_session_dir(
     # Write started_at
     started_at_path = os.path.join(session_dir, "started_at")
     if not os.path.exists(started_at_path):
-        with open(started_at_path, "w", encoding="utf-8") as fh:
+        with open(started_at_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(now_iso + "\n")
 
     # Write head_at_start (git HEAD sha; fall back to "unknown" on any error)
@@ -288,7 +288,7 @@ def _ensure_session_dir(
             ).decode("utf-8", errors="replace").strip()
         except Exception:
             head = "unknown"
-        with open(head_at_start_path, "w", encoding="utf-8") as fh:
+        with open(head_at_start_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(head + "\n")
 
     # Write meta.json (minimal fields — mirrors the bash printf format exactly)
@@ -310,7 +310,7 @@ def _ensure_session_dir(
             "last_activity": now_iso,
             "goal": "",
         }
-        with open(meta_path, "w", encoding="utf-8") as fh:
+        with open(meta_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(meta, separators=(",", ":")) + "\n")
 
 
@@ -393,7 +393,7 @@ def _append(target_file: str, entry: str) -> None:
     (``scope.format_touch_event(...)``), not a bare path.
     """
     try:
-        with open(target_file, "a", encoding="utf-8") as fh:
+        with open(target_file, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(entry + "\n")
     except Exception:
         # Silent-failure: never raise from a bookkeeping hook.

@@ -507,9 +507,9 @@ def main(argv: List[str]) -> int:
     coordinator_local_path = os.path.join(target, "coordinator.local.md")
     readme_path = os.path.join(target, "README.md")
     try:
-        with open(coordinator_local_path, "w", encoding="utf-8") as fh:
+        with open(coordinator_local_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(f"---\nproject_type: {coordinator_project_type}\n---\n")
-        with open(readme_path, "w", encoding="utf-8") as fh:
+        with open(readme_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(f"# {project_name}\n")
     except OSError as exc:
         print(f"{_PROG}: writing seed files failed: {exc}", file=sys.stderr)

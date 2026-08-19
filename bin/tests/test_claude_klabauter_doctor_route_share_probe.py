@@ -1,6 +1,6 @@
 """
 bin.tests.test_claude_klabauter_doctor_route_share_probe — Unit tests for
-Claude-klabauter.warm.route_share (C6).
+Claude-klabauter.warm.route_share (C6, re-pinned by C2).
 
 Covers `_run_probe_warm_route_share` — TRANSLATES
 `coordinator_core.telemetry.engine_report.route_distribution`'s verdict into
@@ -11,14 +11,35 @@ existing loader pattern in test_claude_klabauter_doctor_generation_probe.py — 
 module key, so this file's module instance never collides with a sibling
 test file's in sys.modules.
 
+RE-PIN (C2, docs/plans/2026-08-19-a-windowed-coverage-refusal.md): this
+fixture used to pin a SINGLE unwindowed `route_distribution` call over
+whatever `iter_sink_entries` yielded, so refusal fired purely off "today's
+~0.257% route coverage" (DR-328) — a function of log age, not of routing.
+It now pins the EXPANDING 1h -> 6h -> 24h window (D1) and the absolute
+row-count floor `_ROUTE_MIN_COMPLETE_ROWS` (D3): refusal fires only when the
+widest (24h) window still holds too few complete rows, or when a window
+diluted by an unstamped writer keeps coverage under the reader's floor —
+never merely because the corpus is old. A fully-stamped, above-minimum
+window now PASSES regardless of how old the log is.
+
 Covered:
-  AC5  — "cannot tell" at today's coverage: skipped=True + required=True,
-         never PASS and never FAIL.
+  AC2  — the probe reads the sink once and computes a windowed verdict over
+         the expanding window, widening only while row count is under the
+         minimum; the effective window is reported in `data`.
+  AC3  — refusal fires only when the 24h horizon still holds too few
+         complete rows, or on a window diluted by an unstamped writer; PASS
+         is reachable on an above-minimum, fully-stamped window regardless
+         of log age; an untimestamped, routeless row survives every window
+         without sinking the verdict.
+  AC4  — `data["all_time"]` is populated and differs from the windowed
+         figure.
+  AC5  — "cannot tell" at genuinely thin coverage: skipped=True +
+         required=True, never PASS and never FAIL.
   AC5b — this probe never uses `_INFO`; and the emitted envelope's `overall`
          field (via `_build_envelope_via_module`, never
          `_local_reduce_overall` called directly) is DEGRADED, never PASS,
-         for an otherwise-all-PASS probe set that includes this probe at
-         today's coverage.
+         for an otherwise-all-PASS probe set that includes this probe at a
+         refusing shape.
   AC13 — the reader's own "ok"/"degraded"/"unknown" verdict lands in
          `data["reader_verdict"]`, never in `_ProbeResult.status`.
   AC6  — re-run of test_selector_default_returns_every_manifest_probe lives
@@ -26,13 +47,14 @@ Covered:
          not here — the manifest addition self-registers via that test's
          own `_IMPLEMENTED_IDS` derivation.
 
-Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C6.
+Spec backlink: docs/plans/2026-08-19-a-windowed-coverage-refusal.md § C2.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Optional
@@ -102,9 +124,11 @@ class TestWarmRouteShareProbe:
     def test_unknown_verdict_at_low_coverage_is_skipped_never_pass_never_fail(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC5/AC13 — real today's-coverage-shaped corpus (no rotated sink files
-        on tmp_path, so iter_sink_entries yields nothing and route_distribution's
-        verdict is "unknown")."""
+        """AC3/AC5/AC13 — empty corpus (no rotated sink files on tmp_path, so
+        iter_sink_entries yields nothing): even the widest (24h) window holds
+        0 complete rows, under `_ROUTE_MIN_COMPLETE_ROWS`, so the reader's
+        verdict is "unknown" regardless of the (also empty) `all_time`
+        figure."""
         mod = _require_module()
 
         result = mod._run_probe_warm_route_share(tmp_path)
@@ -116,6 +140,205 @@ class TestWarmRouteShareProbe:
         assert result.required is True
         assert result.data is not None
         assert result.data["reader_verdict"] == "unknown"
+        assert result.data["effective_window_secs"] == mod._ROUTE_COVERAGE_WINDOWS_SECS[-1]
+
+    def _make_entry(self, *, t_start, route) -> dict:
+        entry: dict = {"kind": "complete"}
+        if t_start is not None:
+            entry["t_start"] = t_start
+        if route is not None:
+            entry["route"] = route
+        return entry
+
+    def test_refusal_fires_only_when_24h_horizon_still_thin(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC3 — a window whose 24h horizon holds fewer than
+        `_ROUTE_MIN_COMPLETE_ROWS` complete rows refuses a verdict."""
+        mod = _require_module()
+
+        from coordinator_core.telemetry import engine_report
+
+        now = time.time()
+        min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
+        thin_entries = [
+            self._make_entry(t_start=now - 100, route="warm_server")
+            for _ in range(min_rows - 1)
+        ]
+        monkeypatch.setattr(
+            engine_report,
+            "iter_sink_entries",
+            lambda **kw: iter(thin_entries),
+        )
+
+        result = mod._run_probe_warm_route_share(tmp_path)
+
+        assert result.data["reader_verdict"] == "unknown"
+        assert result.data["effective_window_secs"] == mod._ROUTE_COVERAGE_WINDOWS_SECS[-1]
+        assert result.status != mod._PASS
+        assert result.skipped is True
+        assert result.required is True
+
+    def test_widens_from_1h_to_6h_to_24h_and_reports_effective_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC2/AC3 — enough rows exist to clear the minimum only once the
+        window widens to 6h; the reported `effective_window_secs` matches
+        the horizon that actually supplied the verdict, and `data`'s
+        `route_distribution` figure reflects that (not the widest) window."""
+        mod = _require_module()
+
+        from coordinator_core.telemetry import engine_report
+
+        now = time.time()
+        min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
+        # Too few rows inside 1h; enough once widened to 6h.
+        entries = [
+            self._make_entry(t_start=now - 1800, route="warm_server")
+            for _ in range(min_rows - 10)
+        ] + [
+            self._make_entry(t_start=now - 7200, route="warm_server")
+            for _ in range(20)
+        ]
+        monkeypatch.setattr(
+            engine_report,
+            "iter_sink_entries",
+            lambda **kw: iter(entries),
+        )
+
+        result = mod._run_probe_warm_route_share(tmp_path)
+
+        assert result.data["effective_window_secs"] == 21600  # 6h
+        assert result.data["route_distribution"]["complete"] == min_rows + 10
+        assert result.status == mod._PASS
+
+    def test_refusal_fires_on_window_diluted_by_unstamped_writer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC3 — a window above the row-count minimum but whose rows are
+        mostly unstamped (`route is None`) still refuses a verdict, because
+        coverage over that window is below the reader's own floor. This is
+        NOT the row-count refusal — it is the coverage-floor refusal."""
+        mod = _require_module()
+
+        from coordinator_core.telemetry import engine_report
+
+        now = time.time()
+        min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
+        # Well above the row-count minimum, but almost entirely unstamped —
+        # coverage is far below the reader's floor.
+        entries = [
+            self._make_entry(t_start=now - 100, route=None)
+            for _ in range(min_rows * 4)
+        ] + [
+            self._make_entry(t_start=now - 100, route="warm_server")
+            for _ in range(2)
+        ]
+        monkeypatch.setattr(
+            engine_report,
+            "iter_sink_entries",
+            lambda **kw: iter(entries),
+        )
+
+        result = mod._run_probe_warm_route_share(tmp_path)
+
+        assert result.data["route_distribution"]["complete"] >= min_rows
+        assert result.data["reader_verdict"] == "unknown"
+        assert "coverage" in result.data["route_distribution"]["verdict_reason"]
+        assert result.status != mod._PASS
+        assert result.skipped is True
+
+    def test_pass_on_fully_stamped_above_minimum_window_regardless_of_log_age(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC3 — the refusal is NOT a function of the age of the log: a
+        fully-stamped window above the minimum row count PASSES even though
+        every row sits near the 24h edge of the widest horizon."""
+        mod = _require_module()
+
+        from coordinator_core.telemetry import engine_report
+
+        now = time.time()
+        min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
+        old_but_fully_stamped = [
+            self._make_entry(t_start=now - 80000, route="warm_server")
+            for _ in range(min_rows + 5)
+        ]
+        monkeypatch.setattr(
+            engine_report,
+            "iter_sink_entries",
+            lambda **kw: iter(old_but_fully_stamped),
+        )
+
+        result = mod._run_probe_warm_route_share(tmp_path)
+
+        assert result.status == mod._PASS
+        assert result.data["effective_window_secs"] == mod._ROUTE_COVERAGE_WINDOWS_SECS[-1]
+
+    def test_untimestamped_routeless_row_survives_every_window_without_sinking_verdict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC3 — a row with no `t_start` and no `route` is kept by
+        `iter_sink_entries`'s own `since` rule (numeric-`t_start` rows only
+        are filtered) at every horizon, but — being unstamped — it counts
+        toward `complete`/`unstamped`, never toward `by_route`, so it cannot
+        degrade an otherwise-healthy window's verdict."""
+        mod = _require_module()
+
+        from coordinator_core.telemetry import engine_report
+
+        now = time.time()
+        min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
+        healthy = [
+            self._make_entry(t_start=now - 100, route="warm_server")
+            for _ in range(min_rows + 5)
+        ]
+        timestampless_routeless = [self._make_entry(t_start=None, route=None)]
+        monkeypatch.setattr(
+            engine_report,
+            "iter_sink_entries",
+            lambda **kw: iter(healthy + timestampless_routeless),
+        )
+
+        result = mod._run_probe_warm_route_share(tmp_path)
+
+        assert result.status == mod._PASS
+        # The untimestamped row is counted (survives every window) but does
+        # not sink coverage below the floor.
+        assert result.data["route_distribution"]["complete"] == min_rows + 6
+        assert result.data["route_distribution"]["unstamped"] == 1
+
+    def test_all_time_is_populated_and_differs_from_windowed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC4 — `data["all_time"]` is populated and differs from the
+        windowed figure when old, out-of-window rows exist alongside a
+        healthy recent window."""
+        mod = _require_module()
+
+        from coordinator_core.telemetry import engine_report
+
+        now = time.time()
+        min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
+        recent = [
+            self._make_entry(t_start=now - 100, route="warm_server")
+            for _ in range(min_rows + 5)
+        ]
+        ancient = [
+            self._make_entry(t_start=now - 1_000_000, route="in_process")
+            for _ in range(min_rows + 5)
+        ]
+        monkeypatch.setattr(
+            engine_report,
+            "iter_sink_entries",
+            lambda **kw: iter(recent + ancient),
+        )
+
+        result = mod._run_probe_warm_route_share(tmp_path)
+
+        assert result.data["all_time"] is not None
+        assert result.data["all_time"]["complete"] == len(recent) + len(ancient)
+        assert result.data["all_time"]["complete"] != result.data["route_distribution"]["complete"]
 
     def test_ok_verdict_is_pass_and_reader_verdict_never_in_status(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

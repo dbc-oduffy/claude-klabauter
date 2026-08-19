@@ -283,7 +283,7 @@ def _write_meta(path: Path, *, pid: int, owner: str, cmd: str) -> None:
         "cmd": cmd,
     }
     tmp_path = path / f".{_META_FILENAME}.{uuid.uuid4().hex}.tmp"
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     os.replace(str(tmp_path), str(path / _META_FILENAME))
 
 

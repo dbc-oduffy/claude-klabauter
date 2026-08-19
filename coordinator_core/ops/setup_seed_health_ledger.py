@@ -171,7 +171,7 @@ def seed_health_ledger(repo_root: str) -> int:
     print(f"[health-ledger] seeding state/health-ledger.md in {repo_root}")
 
     try:
-        with open(ledger_path, "w", encoding="utf-8") as fh:
+        with open(ledger_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(_LEDGER_TEMPLATE)
     except OSError:
         print(f"setup-seed-health-ledger: failed to write {ledger_path}", file=sys.stderr)

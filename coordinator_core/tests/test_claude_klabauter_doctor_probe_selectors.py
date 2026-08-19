@@ -88,15 +88,25 @@ _IMPLEMENTED_IDS = frozenset(p["id"] for p in _manifest_probes())
 _TRIAGE_IDS = frozenset(p["id"] for p in _manifest_probes() if p.get("triage") is True)
 
 
-#: Wall-clock ceiling for one shelled doctor run. NOT a performance
-#: assertion: `run_probes()` always exercises the full probe set (the
-#: selector is a post-run filter), and that full set measured 45.7s on
-#: this box BEFORE any warm probe existed, against a 50-70 concurrent
-#: session load. A 60s cap left ~30% headroom over a pre-existing cost
-#: and turned ordinary load into a red suite. The doctor's own runtime
-#: is tracked as its own backlog item; this constant only stops that
-#: cost from being reported here as a selector-logic failure.
-_CLI_TIMEOUT_SECS = 300
+#: Wall-clock ceiling for ONE shelled doctor run. NOT a performance assertion.
+#:
+#: The ceiling is per-invocation, so it is set by the longest SINGLE run this
+#: file makes — a full default run or --step-zero, both of which still exercise
+#: every probe. The selector became a pre-run gate on 2026-08-19
+#: (docs/plans/2026-08-19-the-selector-gates-before-the-run.md), which is why the
+#: SUITE dropped from 15m34s to 9m26s: the ~20 shelled runs are mostly scalpel
+#: runs now (--probe claude-klabauter.warm.generation: 47.3s before, 0.07s of probe work
+#: after). It did NOT shorten the full run, and this constant is about the full run.
+#:
+#: Measured 2026-08-19 on this box under its ordinary 50-70 concurrent-session
+#: load (600 processes at measurement time): a full suite is 41-53s wall,
+#: per-probe attribution in docs/research/2026-08-19-doctor-per-probe-cost-profile.md.
+#: 300s was set when a 60s cap was turning that pre-existing cost into ten
+#: TimeoutExpired failures with no logic defect behind them; it was never justified
+#: by a measurement. 180s is ~3.4x the worst measured full run — enough headroom for
+#: a loaded box, tight enough that the next cost regression surfaces here instead of
+#: hiding under the cap. It goes DOWN as cost drops, never up.
+_CLI_TIMEOUT_SECS = 180
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:

@@ -196,7 +196,7 @@ def write_tier_u_grant(
     except OSError:
         return False
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(record, fh)
             fh.write("\n")
         os.replace(tmp_name, grant_file)

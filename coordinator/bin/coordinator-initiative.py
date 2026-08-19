@@ -289,7 +289,7 @@ def _cmd_create(args: list[str]) -> int:
     else:
         lines.append("target_date: null\n")
 
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.writelines(lines)
     os.replace(tmp, target)
     print(target)
@@ -374,7 +374,7 @@ def _attach_one(artifact_path: str, initiative_id: str, initiatives_dir: str) ->
         ]
 
     tmp = f"{artifact_path}.tmp.{os.getpid()}"
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(new_content)
     os.replace(tmp, artifact_path)
     return True, [f"attached: {artifact_path} -> initiative: {initiative_id}"], []

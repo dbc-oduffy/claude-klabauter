@@ -178,7 +178,12 @@ def latency_percentiles(entries: Iterable[dict]) -> dict:
 _COVERAGE_FLOOR = 0.05
 
 
-def route_distribution(entries: Iterable[dict], *, coverage_floor: float = _COVERAGE_FLOOR) -> dict:
+def route_distribution(
+    entries: Iterable[dict],
+    *,
+    coverage_floor: float = _COVERAGE_FLOOR,
+    min_complete_rows: int = 0,
+) -> dict:
     """Route distribution over `entries`, refusing a verdict coverage can't
     support (DR-328).
 
@@ -192,10 +197,22 @@ def route_distribution(entries: Iterable[dict], *, coverage_floor: float = _COVE
     Only rows treated as "complete" (an absent `kind` is `"complete"`, per
     `op_latency`'s backward-reading rule) contribute to any count here.
 
-    When `coverage` (routed / complete) is below `coverage_floor`,
-    `warm_share_of_routed` is still reported, but `verdict` is `"unknown"`
-    with the coverage figure named in `verdict_reason` — a share computed
-    over thin coverage is a function of log age, not of routing.
+    `min_complete_rows` (default `0`, load-bearing — every existing caller
+    keeps today's behaviour exactly; the policy choice of what floor to set
+    lives in the instrument, not here) is an absolute row-count minimum
+    checked BEFORE the coverage floor: "too few rows to judge" subsumes
+    "coverage over too few rows", and reporting the ratio reason on a
+    tiny window is the less honest of the two. When `complete <
+    min_complete_rows`, `verdict` is `"unknown"` with a `verdict_reason`
+    DISTINCT from the coverage-floor refusal, naming the row count and the
+    minimum, so an operator reading the envelope can tell which refusal
+    fired.
+
+    Otherwise, when `coverage` (routed / complete) is below
+    `coverage_floor`, `warm_share_of_routed` is still reported, but
+    `verdict` is `"unknown"` with the coverage figure named in
+    `verdict_reason` — a share computed over thin coverage is a function
+    of log age, not of routing.
 
     `"degraded"` is RESERVED for a future share-threshold check and is
     never emitted by this function.
@@ -222,7 +239,14 @@ def route_distribution(entries: Iterable[dict], *, coverage_floor: float = _COVE
     else:
         warm_share_of_routed = None
 
-    if coverage < coverage_floor:
+    if complete < min_complete_rows:
+        verdict = "unknown"
+        verdict_reason = (
+            f"only {complete} complete row(s), below the "
+            f"min_complete_rows={min_complete_rows} minimum — too few rows "
+            "to judge, regardless of coverage"
+        )
+    elif coverage < coverage_floor:
         verdict = "unknown"
         verdict_reason = (
             f"coverage {coverage:.4%} ({routed}/{complete}) is below the "

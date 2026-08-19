@@ -2433,6 +2433,173 @@ class TestComputeScopeLiveness:
         skipped_paths = {p for p, _owner in result.skipped}
         assert "shared.py" not in skipped_paths
 
+    def test_abandoned_live_peer_claim_releases(self, tmp_path, monkeypatch):
+        """C4/AC6 — abandonment is a SECOND, independent release condition
+        from liveness. `live_session_ids` is stubbed to report the peer
+        LIVE (so the pre-existing liveness gate alone would still contest
+        this path) -- the release must come from the real, unmocked
+        `liveness.session_abandoned` finding the peer's positive-activity
+        signals genuinely stale, not from a doctored `last_activity` alone
+        (`session_abandoned`'s >= 2 independently-stale-signal floor):
+        both `last_activity` (meta.json) and the `touched.txt` mtime are
+        pushed outside `_ABANDONMENT_WINDOW_SEC`."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("abandoned-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("abandoned-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "abandoned-peer"}),
+        )
+
+        peer_sdir = _sdir(repo, "abandoned-peer")
+        stale_epoch = (
+            core.now_epoch() - scope.liveness._ABANDONMENT_WINDOW_SEC - 3600
+        )
+        core.update_meta_field(
+            str(peer_sdir), "last_activity", "2000-01-01T00:00:00Z"
+        )
+        peer_touched = peer_sdir / "touched.txt"
+        os.utime(str(peer_touched), (stale_epoch, stale_epoch))
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" in result.my_scope
+        skipped_paths = {p for p, _owner in result.skipped}
+        assert "shared.py" not in skipped_paths
+
+    def test_live_recently_active_peer_claim_still_withheld(
+        self, tmp_path, monkeypatch
+    ):
+        """C4/AC5 — the direction that matters most: a live, recently-
+        active peer's claim must still be withheld, asserted explicitly
+        rather than inferred from AC6's release test (a predicate that
+        released everything would satisfy AC6 alone, but not this one)."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("live-peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "live-peer") in result.skipped
+
+    def test_undetermined_liveness_abandoned_peer_claim_still_withheld(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: coordinator:code-reviewer P1 (coordinatorcode-reviewer-
+        1da5144e.md), Step 3 site. `live_ids is None` (undetermined
+        liveness) must NEVER reach `session_abandoned` — a peer whose dir
+        reads abandoned while liveness itself could not be resolved must
+        still be treated as contested, not released. `live_session_ids` is
+        stubbed to an EMPTY frozenset while a real peer session dir exists
+        on disk -- the same indeterminacy shape
+        `test_attribution_indeterminate_liveness_renders_undetermined_not_
+        live` uses -- so `compute_scope` disables liveness gating
+        (`live_ids = None`) for this call. The peer's own signals (real,
+        unmocked `session_abandoned`) are pushed genuinely stale, exactly
+        as `test_abandoned_live_peer_claim_releases` does for the
+        determined-liveness case -- the ONLY difference here is that
+        liveness itself is undetermined, which must withhold the claim
+        regardless."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset()
+        )
+
+        peer_sdir = _sdir(repo, "peer")
+        stale_epoch = (
+            core.now_epoch() - scope.liveness._ABANDONMENT_WINDOW_SEC - 3600
+        )
+        core.update_meta_field(
+            str(peer_sdir), "last_activity", "2000-01-01T00:00:00Z"
+        )
+        peer_touched = peer_sdir / "touched.txt"
+        os.utime(str(peer_touched), (stale_epoch, stale_epoch))
+
+        # Sanity: the peer really does read abandoned in isolation -- the
+        # test is pinning that an UNDETERMINED live_ids still withholds it.
+        assert scope.liveness.session_abandoned("peer", cwd=str(repo)) is True
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "peer") in result.skipped
+
+    def test_undetermined_liveness_abandoned_peer_agent_claim_still_withheld(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: coordinator:code-reviewer P1 (coordinatorcode-reviewer-
+        1da5144e.md), Step 3b site -- the sub-agent-claim twin of the test
+        above, keyed on the back-pointed owning `em_sid` rather than a
+        direct session claim. Same shape: `live_session_ids` stubbed empty
+        while the owning EM session's own dir exists on disk (indeterminate
+        liveness -> `live_ids = None`), and the EM session's OWN signals
+        (not the agent dir's) pushed genuinely stale via the real,
+        unmocked `session_abandoned`. The claim must still be withheld."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-xyz"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        (agent_dir / "touched.txt").write_text(
+            "coordinator/agent_owned.py\n", encoding="utf-8"
+        )
+        (repo / "coordinator").mkdir()
+        (repo / "coordinator" / "agent_owned.py").write_text("z")
+
+        monkeypatch.setattr(
+            scope.liveness, "live_session_ids", lambda cwd=None: frozenset()
+        )
+
+        em_sdir = _sdir(repo, "em-owner")
+        # Give the EM session its own touched.txt (session_abandoned's
+        # meta-carrying branch needs >= 2 independently stale signals) --
+        # unrelated to the agent dir's separate touched.txt above.
+        scope.touch("em-owner", "unrelated.py", cwd=str(repo))
+        stale_epoch = (
+            core.now_epoch() - scope.liveness._ABANDONMENT_WINDOW_SEC - 3600
+        )
+        core.update_meta_field(
+            str(em_sdir), "last_activity", "2000-01-01T00:00:00Z"
+        )
+        em_touched = em_sdir / "touched.txt"
+        os.utime(str(em_touched), (stale_epoch, stale_epoch))
+
+        assert (
+            scope.liveness.session_abandoned("em-owner", cwd=str(repo)) is True
+        )
+
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "coordinator/agent_owned.py" not in result.my_scope
+        assert (
+            "coordinator/agent_owned.py",
+            "em-owner",
+        ) in result.skipped
+
 
 class TestAttribution:
     """C2: pin C1's ``ScopeResult.attribution`` sidecar (``dict[str,

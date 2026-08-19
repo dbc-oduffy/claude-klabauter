@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -447,3 +448,87 @@ def test_skill_anchor_links_unavailable_when_unresolved_word_present_but_uncount
     result = udg._gate_skill_anchor_links(tmp_path, tmp_path, {"cli": str(cli)})
     assert result.verdict == udg.GateVerdict.UNAVAILABLE
     assert result.verdict != udg.GateVerdict.CLEAN
+
+
+# ---------------------------------------------------------------------------
+# (n) Windows extensionless-CLI exec resolution — `_windows_exec_argv`
+# precedence (P1: CreateProcess does not honour a shebang; the fix mirrors
+# the .cmd/.ps1/.py launcher-shim shape gen-launcher-shim.py already
+# generates for every bin/ entrypoint). Monkeypatches `udg.sys.platform` so
+# the branch is exercised deterministically regardless of the host OS this
+# suite happens to run on.
+# ---------------------------------------------------------------------------
+
+
+def test_windows_exec_argv_cmd_sibling_wins_over_bare_extensionless_file(tmp_path):
+    cli = tmp_path / "verify-something"
+    _write_fake_cli(cli, 0)  # bare file with a python shebang — must lose to .cmd
+    cmd_sibling = tmp_path / "verify-something.cmd"
+    cmd_sibling.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+    argv = udg._windows_exec_argv(cli, ["--flag"])
+    assert argv == [str(cmd_sibling), "--flag"]
+
+
+def test_windows_exec_argv_ps1_sibling_used_when_no_cmd_sibling(tmp_path):
+    cli = tmp_path / "verify-something"
+    ps1_sibling = tmp_path / "verify-something.ps1"
+    ps1_sibling.write_text("exit 0\n", encoding="utf-8")
+    argv = udg._windows_exec_argv(cli, ["x"])
+    if argv is None:
+        pytest.skip("no powershell/pwsh on PATH to resolve the .ps1 sibling")
+    assert argv[-2:] == [str(ps1_sibling), "x"]
+
+
+def test_windows_exec_argv_py_sibling_used_when_no_cmd_or_ps1(tmp_path):
+    cli = tmp_path / "verify-something"
+    py_sibling = tmp_path / "verify-something.py"
+    py_sibling.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    argv = udg._windows_exec_argv(cli, [])
+    assert argv == [sys.executable, str(py_sibling)]
+
+
+def test_windows_exec_argv_python_shebang_falls_back_to_sys_executable(tmp_path):
+    cli = tmp_path / "verify-something"
+    _write_fake_cli(cli, 0)  # no .cmd/.ps1/.py sibling — only the shebang read remains
+    argv = udg._windows_exec_argv(cli, [])
+    assert argv == [sys.executable, str(cli)]
+
+
+def test_windows_exec_argv_non_python_shebang_stays_unavailable(tmp_path):
+    cli = tmp_path / "verify-something"
+    cli.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    argv = udg._windows_exec_argv(cli, [])
+    assert argv is None
+
+
+def test_run_non_python_shebang_extensionless_cli_is_unavailable_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    cli = tmp_path / "verify-something"
+    cli.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    proc = udg._run(cli, [])
+    assert proc is None
+
+
+def test_run_posix_argv_unchanged_by_the_windows_branch(tmp_path, monkeypatch):
+    """POSIX behaviour must stay byte-identical: the extensionless CLI is
+    still handed to subprocess.run() directly, with no launcher-shim
+    resolution in between — regardless of which OS actually runs this test."""
+    monkeypatch.setattr(udg.sys, "platform", "linux")
+    cli = tmp_path / "verify-something"
+    _write_fake_cli(cli, 0, stdout="posix-direct")
+    captured: dict[str, list[str]] = {}
+    orig_subprocess_run = udg.subprocess.run
+
+    def _spy(argv, **kwargs):
+        captured["argv"] = argv
+        if sys.platform != "win32":
+            return orig_subprocess_run(argv, **kwargs)
+        # The real host is Windows and cannot direct-exec a shebang file —
+        # fabricate a result so this asserts argv shape only, not execution.
+        import subprocess as _subprocess
+
+        return _subprocess.CompletedProcess(argv, 0, "posix-direct", "")
+
+    monkeypatch.setattr(udg.subprocess, "run", _spy)
+    udg._run(cli, ["--x"])
+    assert captured["argv"] == [str(cli), "--x"]

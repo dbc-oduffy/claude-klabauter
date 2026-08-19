@@ -259,7 +259,7 @@ def main(argv: list[str]) -> int:
     # op's raw response — POSIX text-file hygiene, not a bug.
     if out_path:
         try:
-            with open(out_path, "w", encoding="utf-8") as f:
+            with open(out_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(script_text + "\n")
         except OSError as exc:
             print(f"{_PROG}: failed to write to --out path: {out_path} ({exc})", file=sys.stderr)

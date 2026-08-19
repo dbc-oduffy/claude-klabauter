@@ -322,7 +322,7 @@ def _write_audit(audit_path: Path, verdicts: List[Verdict], applied: bool) -> No
         lines.append("(none)")
     lines.append("")
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -350,7 +350,7 @@ def main(argv: list[str]) -> int:
     # Upgrade path: exec-bit gate present but illegal-path gate absent.
     # ------------------------------------------------------------------
     if os.path.isfile(hook_path) and _GATE_MARKER in existing:
-        with open(hook_path, "a", encoding="utf-8") as fh:
+        with open(hook_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(_APPEND_TEMPLATE.replace("__OVERRIDE_DOC_POINTER__", OVERRIDE_KEYS_DOC_DISPLAY))
         # DR-276: declared AFTER the write lands, at the FINAL destination.
         declare_write(hook_path)
@@ -379,7 +379,7 @@ def main(argv: list[str]) -> int:
     hook_body = _FRESH_HOOK_TEMPLATE.format(expected_repo_root=canonical_expected).replace(
         "__OVERRIDE_DOC_POINTER__", OVERRIDE_KEYS_DOC_DISPLAY
     )
-    with open(hook_path, "w", encoding="utf-8") as fh:
+    with open(hook_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(hook_body)
     os.chmod(hook_path, 0o755)
     # DR-276: declared AFTER the write lands, at the FINAL destination.

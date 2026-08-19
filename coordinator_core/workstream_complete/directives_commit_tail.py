@@ -1433,7 +1433,7 @@ def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
         return None
     if lag is None:
         return None
-    return _skew.publish_lag_message(lag)
+    return _skew.publish_lag_message(lag, site="close-out")
 
 
 # ---------------------------------------------------------------------------

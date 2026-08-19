@@ -543,7 +543,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.out is not None:
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(payload, encoding="utf-8")
+        out_path.write_text(payload, encoding="utf-8", newline="\n")
 
     print(payload)
     return 0 if not result["aborted"] else 1

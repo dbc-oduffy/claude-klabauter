@@ -719,7 +719,7 @@ def _record_homebrew_removal(
     )
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+        log_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"  [ADVISORY] could not write Homebrew-removal record to {log_path}: {exc}", file=sys.stderr)
 
@@ -3292,7 +3292,7 @@ def ensure_percolate_identity(settings_home_path: Path, repo_root: Path) -> tupl
         return target, "exists"
     hints = _derive_identity_hints(repo_root)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(_percolate_identity_template(hints), encoding="utf-8")
+    target.write_text(_percolate_identity_template(hints), encoding="utf-8", newline="\n")
     return target, "created"
 
 

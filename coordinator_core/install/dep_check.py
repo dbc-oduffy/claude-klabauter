@@ -524,7 +524,7 @@ def visited_set_init(session_id: str, co_dir: Optional[Path] = None, *, now: Opt
     visited_file = directory / f"chain-walk-{session_id}.json"
     started_at = datetime.datetime.utcnow().isoformat() + "Z"
     data = {"session_id": session_id, "started_at": started_at, "visited": []}
-    with open(visited_file, "w", encoding="utf-8") as fh:
+    with open(visited_file, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh)
     resolution_journal.record_resolution(
         "dep-check",
@@ -573,7 +573,7 @@ def visited_set_append(session_id: str, dep_id: str, co_dir: Optional[Path] = No
 
     fd, tmp_path = tempfile.mkstemp(dir=str(visited_file.parent), suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as tmp:
             json.dump(data, tmp)
         os.replace(tmp_path, visited_file)
     except BaseException:

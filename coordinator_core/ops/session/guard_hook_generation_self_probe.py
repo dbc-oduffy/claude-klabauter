@@ -190,7 +190,7 @@ def _atomic_write_text(path: Path, content: str) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(content)
             os.replace(tmp_name, path)
         except OSError:
@@ -451,7 +451,7 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
                 "to a real, existing coordinator content root on this "
                 "machine (re-run the installer or /coordinator:setup), then "
                 "delete this marker.\n",
-                encoding="utf-8",
+                encoding="utf-8", newline="\n",
             )
         except OSError:
             print(

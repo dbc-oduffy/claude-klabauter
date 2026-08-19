@@ -154,7 +154,7 @@ def write_tokens(repo_root: Path) -> None:
         try:
             if hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)  # POSIX user-only mode; os.fchmod is absent on Windows
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", newline="\n") as f:
                 f.write(value)
             os.replace(tmp, path)
         except Exception:

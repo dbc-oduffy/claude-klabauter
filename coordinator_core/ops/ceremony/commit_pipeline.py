@@ -1432,7 +1432,7 @@ def _write_commit_message_tempfile(
         prefix="COMMIT_EDITMSG.workstream-complete.", dir=str(common_dir)
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(message)
     except BaseException:
         try:

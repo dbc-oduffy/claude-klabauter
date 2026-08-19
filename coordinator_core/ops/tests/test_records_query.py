@@ -2612,3 +2612,235 @@ class TestArchiveCoverageOptIn:
         assert _ARCHIVE_GLOB_FOR_TYPE["handoff"] == _TYPE_TO_GLOB["handoff-archived"]
         assert _ARCHIVE_GLOB_FOR_TYPE["cross-repo-memo"] == _TYPE_TO_GLOB["archived-memo"]
         assert _ARCHIVE_GLOB_FOR_TYPE["plan"] == "archive/specs/**/*.md"
+
+
+def _write_memo(
+    memos_dir: Path,
+    filename: str,
+    *,
+    from_repo: str = "example-cockpit-repo",
+    to_repo: str = "claude-klabauter",
+    title: str = "example memo",
+    body: str = "Memo body content.",
+) -> Path:
+    """Write a minimal cross-repo-memo .md file (from+to required — the
+    ``_load_record`` memo-shape guard)."""
+    memos_dir.mkdir(parents=True, exist_ok=True)
+    path = memos_dir / filename
+    content = dedent(f"""\
+        ---
+        from: {from_repo}
+        to: {to_repo}
+        title: "{title}"
+        ---
+        {body}
+    """)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+class TestArchivedBoolean:
+    """AC6/AC7: ``archived`` is an origin-derived boolean, never a
+    substring/prefix test against the emitted ``path``.
+
+    Anti-scope regression (AC7): a LIVE cross-repo-memo whose slug contains
+    the word "archive" — the exact shape cockpit's own memo about this gap
+    has — must come back ``archived: false``. A ``'archive' in path`` or
+    ``path.startswith(...)`` implementation would get this wrong; the origin
+    flag threaded from ``_collect_type_records`` gets it right by construction.
+    """
+
+    @pytest.fixture()
+    def tmp_repo_with_memo_archive(self, tmp_path: Path):
+        worktree = tmp_path / "repo"
+        git_dir = _make_git_repo(worktree)
+
+        _write_memo(
+            worktree / "cross-repo" / "inbox",
+            "2026-08-15-example-cockpit-repo-em-memo-query-surface-missing-archived-and-body.md",
+            title="query surface missing archived and body",
+        )
+        _write_memo(
+            worktree / "cross-repo" / "inbox",
+            "2026-08-16-some-other-live-memo.md",
+            title="unrelated live memo",
+        )
+        _write_memo(
+            worktree / "cross-repo" / "archive",
+            "2026-07-01-old-memo.md",
+            title="old archived memo",
+        )
+        return git_dir, worktree
+
+    def test_live_memo_with_archive_in_slug_is_archived_false(
+        self, tmp_repo_with_memo_archive,
+    ):
+        """The central anti-scope case: substring/prefix tests against
+        ``path`` get this record wrong; the origin flag gets it right."""
+        git_dir, worktree = tmp_repo_with_memo_archive
+        records = _collect_type_records(worktree, "cross-repo-memo", include_archived=True)
+        target = next(
+            r for r in records
+            if "missing-archived-and-body" in r["path"]
+        )
+        assert target["frontmatter"]["archived"] is False
+
+    def test_archive_glob_collected_memo_is_archived_true(
+        self, tmp_repo_with_memo_archive,
+    ):
+        git_dir, worktree = tmp_repo_with_memo_archive
+        records = _collect_type_records(worktree, "cross-repo-memo", include_archived=True)
+        target = next(r for r in records if "old-memo" in r["path"])
+        assert target["frontmatter"]["archived"] is True
+
+    def test_ordinary_live_memo_is_archived_false(self, tmp_repo_with_memo_archive):
+        git_dir, worktree = tmp_repo_with_memo_archive
+        records = _collect_type_records(worktree, "cross-repo-memo", include_archived=True)
+        target = next(r for r in records if "some-other-live-memo" in r["path"])
+        assert target["frontmatter"]["archived"] is False
+
+    def test_default_include_archived_off_all_present_records_are_live(
+        self, tmp_repo_with_memo_archive,
+    ):
+        """Without ``include_archived``, only live memos are collected at
+        all — and every one of them still carries ``archived: false``
+        (the field is always present, not conditional on the opt-in)."""
+        git_dir, worktree = tmp_repo_with_memo_archive
+        records = _collect_type_records(worktree, "cross-repo-memo")
+        assert len(records) == 2
+        assert all(r["frontmatter"]["archived"] is False for r in records)
+
+    def test_archived_injected_for_every_type_with_archive_glob(self, tmp_path: Path):
+        """AC6/AC7 apply type-agnostically — not special-cased to
+        cross-repo-memo. Spot-check ``handoff`` (also in
+        ``_ARCHIVE_GLOB_FOR_TYPE``)."""
+        worktree = tmp_path / "repo"
+        _make_git_repo(worktree)
+        _write_handoff(worktree / "state" / "handoffs", "live.md", roadmap_id="r1")
+        archive_dir = worktree / "archive" / "handoffs" / "2026-07"
+        archive_dir.mkdir(parents=True)
+        _write_handoff(archive_dir, "archived.md", roadmap_id="r2")
+
+        records = _collect_type_records(worktree, "handoff", include_archived=True)
+        by_name = {Path(r["path"]).name: r for r in records}
+        assert by_name["live.md"]["frontmatter"]["archived"] is False
+        assert by_name["archived.md"]["frontmatter"]["archived"] is True
+
+    def test_no_path_substring_test_used_for_archived(self):
+        """Grep-style regression: the source implements ``archived`` via a
+        parameter threaded through ``_load_record``, not a substring/prefix
+        test against the emitted ``path`` string. This test asserts the
+        BEHAVIOUR that would break under such an implementation (see
+        ``test_live_memo_with_archive_in_slug_is_archived_false`` above) —
+        this test itself documents the anti-scope contract by name for a
+        future diff-grep."""
+        import inspect
+
+        src = inspect.getsource(_load_record)
+        assert "'archive' in" not in src
+        assert '"archive" in' not in src
+        assert "path.startswith" not in src
+
+
+class TestIncludeBodyProjection:
+    """AC8/AC9: opt-in ``body`` projection, off by default; ``null`` (not
+    ``''``) for the ``.yaml`` whole-file branch; rejected for synthetic
+    types."""
+
+    def test_default_no_body_key(self, tmp_path: Path):
+        d = tmp_path / "cross-repo" / "inbox"
+        _write_memo(d, "2026-08-01-memo.md", body="The actual memo text.")
+        files = _collect_files(tmp_path, "cross-repo-memo")
+        record = _load_record(files[0], tmp_path, "cross-repo-memo")
+        assert record is not None
+        assert "body" not in record["frontmatter"]
+
+    def test_include_body_true_projects_md_body(self, tmp_path: Path):
+        d = tmp_path / "cross-repo" / "inbox"
+        _write_memo(d, "2026-08-01-memo.md", body="The actual memo text.")
+        files = _collect_files(tmp_path, "cross-repo-memo")
+        record = _load_record(files[0], tmp_path, "cross-repo-memo", include_body=True)
+        assert record is not None
+        assert record["frontmatter"]["body"].strip() == "The actual memo text."
+
+    def test_include_body_yaml_branch_is_null_not_empty_string(self, tmp_path: Path):
+        d = tmp_path / "state" / "goals"
+        d.mkdir(parents=True)
+        (d / "2026-07-10-example.yaml").write_text(
+            dedent("""\
+                schema: goal
+                id: "goal-example"
+                title: "example"
+                status: active
+                created: 2026-07-10
+                """),
+            encoding="utf-8",
+        )
+        files = _collect_files(tmp_path, "goal")
+        record = _load_record(files[0], tmp_path, "goal", include_body=True)
+        assert record is not None
+        assert record["frontmatter"]["body"] is None
+
+    def test_handler_default_off_no_body_key(self, tmp_path: Path):
+        worktree = tmp_path / "repo"
+        git_dir = _make_git_repo(worktree)
+        _write_memo(worktree / "cross-repo" / "inbox", "2026-08-01-memo.md")
+        result = _run(
+            _handler(
+                params={"type": "cross-repo-memo", "format": "json"},
+                repo_root=git_dir,
+            )
+        )
+        assert all("body" not in r["frontmatter"] for r in result["records"])
+
+    def test_handler_include_body_true_projects_body(self, tmp_path: Path):
+        worktree = tmp_path / "repo"
+        git_dir = _make_git_repo(worktree)
+        _write_memo(
+            worktree / "cross-repo" / "inbox", "2026-08-01-memo.md",
+            body="Handler-projected body.",
+        )
+        result = _run(
+            _handler(
+                params={
+                    "type": "cross-repo-memo", "format": "json", "include_body": True,
+                },
+                repo_root=git_dir,
+            )
+        )
+        bodies = [r["frontmatter"]["body"] for r in result["records"]]
+        assert any("Handler-projected body." in (b or "") for b in bodies)
+
+    def test_include_body_rejected_for_synthetic_type(self, tmp_path: Path, capsys):
+        worktree = tmp_path / "repo"
+        git_dir = _make_git_repo(worktree)
+        (worktree / "state" / "handoffs").mkdir(parents=True)
+        (worktree / "state" / "handoffs" / "2026-08-01.md").write_text(
+            "field: value\n", encoding="utf-8",
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            _run(
+                _handler(
+                    params={
+                        "type": "handoff-ledger", "format": "json", "include_body": True,
+                    },
+                    repo_root=git_dir,
+                )
+            )
+        assert excinfo.value.code != 0
+        stderr = capsys.readouterr().err
+        assert "include_body" in stderr
+        assert "handoff-ledger" in stderr
+
+    def test_include_body_is_a_known_param_key(self, tmp_path: Path, capsys):
+        """``include_body`` must not trip the unknown-param-key guard."""
+        git_dir = _make_git_repo(tmp_path / "repo")
+        result = _run(
+            _handler(
+                params={
+                    "type": "cross-repo-memo", "format": "json", "include_body": False,
+                },
+                repo_root=git_dir,
+            )
+        )
+        assert result["records"] == []

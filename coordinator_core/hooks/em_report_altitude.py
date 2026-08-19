@@ -297,7 +297,7 @@ def _mark_fired(payload: dict) -> None:
         return
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("1")
     except OSError:
         pass

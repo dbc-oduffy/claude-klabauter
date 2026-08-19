@@ -27,7 +27,7 @@ def test_compute_publish_lag_advisory_returns_message_when_above_threshold(monke
     monkeypatch.setattr(_tail._skew, "publish_lag", lambda engine_root, source_root: sentinel_lag)
     monkeypatch.setattr(
         _tail._skew, "publish_lag_message",
-        lambda lag: "Engine lag: 2 commit(s) touching engine code are unpublished (oldest 1.0h)." if lag is sentinel_lag else None,
+        lambda lag, **kw: "Engine lag: 2 commit(s) touching engine code are unpublished (oldest 1.0h)." if lag is sentinel_lag else None,
     )
     message = _tail.compute_publish_lag_advisory(Path("/repo"))
     assert message is not None

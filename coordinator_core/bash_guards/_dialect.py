@@ -330,7 +330,7 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
             f"reason={reason!r} remedy='/coordinator:install rebuilds the venv'\n"
         )
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
         _LOGGED_PARSER_UNAVAILABLE = True
     except Exception:  # noqa: BLE001 -- observability must never raise into a guard

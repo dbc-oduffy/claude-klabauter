@@ -680,7 +680,7 @@ def update_meta_field(sdir: str, field: str, value) -> bool:
             prefix="meta.json.", dir=str(meta_path.parent)
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 json.dump(data, fh, indent=2)
                 fh.write("\n")
             os.replace(tmp_name, meta_path)
@@ -749,7 +749,7 @@ def update_meta_fields(sdir: str, fields: "Mapping[str, object]") -> bool:
             prefix="meta.json.", dir=str(meta_path.parent)
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 json.dump(data, fh, indent=2)
                 fh.write("\n")
             os.replace(tmp_name, meta_path)
@@ -1211,7 +1211,7 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
 
     started_at = sdir / "started_at"
     if not started_at.is_file():
-        started_at.write_text(now_iso(), encoding="utf-8")
+        started_at.write_text(now_iso(), encoding="utf-8", newline="\n")
 
     head_at_start = sdir / "head_at_start"
     if not head_at_start.is_file():
@@ -1232,7 +1232,7 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
             head_sha = head.stdout.strip() if head.returncode == 0 else "unknown"
         except (OSError, subprocess.TimeoutExpired):
             head_sha = "unknown"
-        head_at_start.write_text(head_sha or "unknown", encoding="utf-8")
+        head_at_start.write_text(head_sha or "unknown", encoding="utf-8", newline="\n")
 
     touched = sdir / "touched.txt"
     if not touched.is_file():
@@ -1450,6 +1450,6 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
                 data["stable_pid_lstart"] = stable_pid_lstart
             if stable_pid_start_epoch:
                 data["stable_pid_start_epoch"] = stable_pid_start_epoch
-        meta_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        meta_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
 
     return True

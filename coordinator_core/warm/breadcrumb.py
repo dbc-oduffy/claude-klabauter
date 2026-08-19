@@ -212,7 +212,7 @@ def write_breadcrumb(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with locked_write.held_lock(path, holder_label="warm.breadcrumb"):
-        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8", newline="\n")
 
 
 def read_breadcrumb(engine_root: Optional[Path] = None) -> Optional[dict]:

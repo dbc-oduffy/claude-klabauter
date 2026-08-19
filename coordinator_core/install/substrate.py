@@ -1249,7 +1249,7 @@ exec_cli("{target}")
             f"install-substrate: check failed: {dst.name} is {status} at {dst} "
             f"(would write forwarder)"
         )
-    dst.write_text(content, encoding="utf-8")
+    dst.write_text(content, encoding="utf-8", newline="\n")
     dst.chmod(dst.stat().st_mode | 0o111)
 
 
@@ -1532,7 +1532,7 @@ py -3 "%~dp0{name}" %*
             f"install-substrate: check failed: {dst.name} is {status} at {dst} "
             f"(would write forwarder)"
         )
-    dst.write_text(content, encoding="utf-8")
+    dst.write_text(content, encoding="utf-8", newline="\n")
 
 
 def _agent_ps1_dest_name(cmd_dest_name: str) -> str:
@@ -1670,7 +1670,7 @@ exit 127
             f"install-substrate: check failed: {dst.name} is {status} at {dst} "
             f"(would write forwarder)"
         )
-    dst.write_text(content, encoding="utf-8")
+    dst.write_text(content, encoding="utf-8", newline="\n")
 
 
 # Names already installed by ml_family/ch_family/the coordinator-settings-home
@@ -2175,7 +2175,7 @@ def _register_hardware_concern(registry_live: Path) -> None:
 
     tmp = registry_live.with_suffix(registry_live.suffix + f".tmp.{os.getpid()}")
     try:
-        tmp.write_text(new_content, encoding="utf-8")
+        tmp.write_text(new_content, encoding="utf-8", newline="\n")
         os.replace(tmp, registry_live)
     except OSError as exc:
         if tmp.exists():
@@ -2961,7 +2961,7 @@ def _read_bin_manifest(bin_dst: Path) -> "frozenset[str]":
 def _write_bin_manifest(bin_dst: Path, names: "frozenset[str]") -> None:
     manifest_path = bin_dst / _BIN_MANIFEST_FILENAME
     manifest_path.write_text(
-        json.dumps({"names": sorted(names)}, indent=2) + "\n", encoding="utf-8"
+        json.dumps({"names": sorted(names)}, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
 
 
@@ -3214,7 +3214,7 @@ def _write_ps1_policy_status(bin_dst: Path, verdict: "PolicyGateVerdict") -> Non
         ),
     }
     try:
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"[install-substrate] WARNING: could not write {path}: {exc}", file=sys.stderr)
 

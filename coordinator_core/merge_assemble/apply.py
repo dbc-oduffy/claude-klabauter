@@ -264,6 +264,31 @@ _COMPENSATORS: dict[str, Any] = {
 }
 
 
+#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
+#: live against `coordinator_core.authz.registration_quad._live_registry()`
+#: this chunk: NONE of merge's eight verbs (`node-ceremony-gate`,
+#: `merge-recovery-and-tag-cut`, `merge-gate-and-pr`, `portability-sweep`,
+#: `check-no-illegal-paths`, `merge-release-notes-derive`,
+#: `orphan-branch-sweep`, `tier-u-grant`) resolve to a registered op, so ALL
+#: EIGHT stay `cli`-named — none migrate to `op`. No new op is minted to
+#: force a migration (out of scope by name). `orphan-branch-sweep` is the
+#: one name that LOOKS closest to a registered surface — its own bin script
+#: composes four registered `git_branch.*` ops internally
+#: (`coordinator_core/ops/orphan_branch_sweep.py`), but the DIRECTIVE this
+#: table dispatches names the SCRIPT, never one of those four op keys
+#: directly, so the discriminator's answer is unchanged: not a registered
+#: op under this literal name. `node-ceremony-gate` spawns `node --test`
+#: (a genuinely external program) and the rest spawn an existing
+#: `coordinator/bin/*.py` script via `sys.executable` — never `bash`/`sh`,
+#: so `docs/reference/shell-out-carve-outs.md` (scoped to interpreter/shell
+#: spawns) does not apply to any of the eight, and none is a
+#: `CONSUMES_MANIFEST`-driven script module in the completion-family sense,
+#: so no `CONSUMES_MANIFEST` entry applies either. Consequently
+#: `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/dispatchable.py) gains
+#: NO `"merge_assemble"` entry from this chunk (C1's "ship it EMPTY except
+#: for entries actually migrated" — zero migrated here).
+#:
 #: THE closed dispatch table — every key is a literal string written here
 #: by hand, matching `merge_assemble.build_directives`'s `cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {

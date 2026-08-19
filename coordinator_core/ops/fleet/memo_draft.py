@@ -632,7 +632,7 @@ def _write_draft_file(target_path: Path, content: str) -> None:
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(target_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
 
 

@@ -407,7 +407,7 @@ def run_migration(
     manifest_path = resolved_backup_dir / "drop-manifest.json"
     manifest_path.write_text(
         json.dumps(report.drop_manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
 
     return report

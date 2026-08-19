@@ -293,7 +293,7 @@ def _flip_entry(
                 continue
         out.append(line)
 
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.writelines(out)
     return f"{path}: released_in={resolved_tag}"
 

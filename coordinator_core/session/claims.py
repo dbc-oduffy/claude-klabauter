@@ -375,7 +375,7 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
             return
 
         try:
-            with open(touched, "a", encoding="utf-8") as fh:
+            with open(touched, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(scope.format_touch_event("T", entry) + "\n")
         except OSError:
             return  # silent-failure contract — never block the caller
@@ -468,10 +468,10 @@ def _write_claim_meta(claim_dir: Path, sid: str, stage: str = CLAIM_STAGE_APPLY)
     """Write the ``pid`` / ``session_id`` / ``claimed_at`` / ``stage`` metadata
     files into a freshly-mkdir'd claim dir. ``pid`` is ``os.getpid()`` — the
     CALLER's pid, which MUST be long-lived (see module negative-spec)."""
-    (claim_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
-    (claim_dir / "session_id").write_text(f"{sid}\n", encoding="utf-8")
-    (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8")
-    (claim_dir / "stage").write_text(f"{stage}\n", encoding="utf-8")
+    (claim_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
+    (claim_dir / "session_id").write_text(f"{sid}\n", encoding="utf-8", newline="\n")
+    (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8", newline="\n")
+    (claim_dir / "stage").write_text(f"{stage}\n", encoding="utf-8", newline="\n")
 
 
 def claim_stage(claim_dir: Union[str, Path]) -> str:
@@ -838,7 +838,7 @@ def touch_brief_claim(
     if claim_stage(claim_dir) != CLAIM_STAGE_BRIEF:
         return False
     try:
-        (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8", newline="\n")
     except OSError:
         return False
     return True
@@ -890,7 +890,7 @@ def promote_claim_stage(
     if claim_stage(claim_dir) == CLAIM_STAGE_APPLY:
         return True
     try:
-        (claim_dir / "stage").write_text(f"{CLAIM_STAGE_APPLY}\n", encoding="utf-8")
+        (claim_dir / "stage").write_text(f"{CLAIM_STAGE_APPLY}\n", encoding="utf-8", newline="\n")
     except OSError:
         return False
     return True
@@ -928,7 +928,7 @@ def mark_claim_stamped(claim_dir: Union[str, Path]) -> bool:
     if not claim_dir.is_dir():
         return False
     try:
-        (claim_dir / "stamped").write_text(f"{core.now_iso()}\n", encoding="utf-8")
+        (claim_dir / "stamped").write_text(f"{core.now_iso()}\n", encoding="utf-8", newline="\n")
     except OSError:
         return False
     return True
@@ -1363,7 +1363,7 @@ def _release_path_claim_everywhere(
         if last_verb != "T" or last_raw is None:
             continue
         try:
-            with open(touched_path, "a", encoding="utf-8") as fh:
+            with open(touched_path, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(scope.format_touch_event("R", last_raw) + "\n")
         except OSError:
             continue

@@ -930,7 +930,7 @@ def sync_repo_cut(dest_dir: Path, dry_run: bool) -> bool:
     _run_git(dest_dir, "init", "-q")
     _run_git(dest_dir, "config", "core.autocrlf", "true")
     _run_git(dest_dir, "config", "core.safecrlf", "false")
-    (dest_dir / ".gitattributes").write_text("* text=auto\n", encoding="utf-8")
+    (dest_dir / ".gitattributes").write_text("* text=auto\n", encoding="utf-8", newline="\n")
     _run_git(dest_dir, "add", ".gitattributes")
     _run_git(dest_dir, "commit", "-m", "repo-cut: bootstrap .gitattributes")
     return True

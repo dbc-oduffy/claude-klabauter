@@ -195,6 +195,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -2965,6 +2966,67 @@ def _count_lines(path: Path) -> Optional[int]:
         return None
 
 
+# Files an untracked-directory walk may enumerate before the measurement stops
+# counting exactly and starts reporting a floor. Deliberately high: the only
+# untracked directories that can reach here are ones `git status` reports, so
+# gitignored trees (node_modules/, .venv/, build output) are already excluded
+# upstream and a real work-product directory does not approach this.
+_UNTRACKED_WALK_BUDGET = 5000
+
+
+def _expand_untracked(
+    root: Path, rel_path: str, budget: Optional[list[int]] = None
+) -> Optional[list[str]]:
+    """The untracked FILES a single untracked path contributes, relative to
+    `root`. `[rel_path]` for an ordinary file; for a DIRECTORY, every file
+    beneath it, because `git status --porcelain` collapses a wholly-untracked
+    directory to one trailing-slash entry and the callers that feed this
+    measurement pass those entries straight through. `None` when the walk
+    itself fails, which the caller must propagate like any other measurement
+    failure — `OSError` covers the reachable modes (permission denied on a
+    subdirectory mid-walk, and the TOCTOU where the path is removed between
+    the `is_dir()` test and the walk).
+
+    Symlinked subdirectories are NOT followed (`os.walk(followlinks=False)`,
+    stated rather than inherited: `Path.rglob`'s symlink behaviour is
+    CPython-version-sensitive, and this function exists to survive unusual
+    working-tree shapes). A symlink loop therefore terminates instead of
+    walking forever.
+
+    ``budget`` is a single-element mutable counter shared across one
+    measurement's whole untracked list, so several large sibling directories
+    compound against ONE bound rather than each getting a fresh one. When it
+    is exhausted the walk stops early and returns what it found; the caller
+    detects the shortfall off the counter and fails toward MORE review (see
+    `_measure_session_review_scale_inputs`).
+
+    Negative-spec: a directory must never reach `_count_lines`. Opening one
+    raises `OSError` (`IsADirectoryError` on POSIX, `PermissionError` on
+    Windows), which that helper converts to `None` — collapsing the WHOLE
+    four-tuple to unresolved, so one peer's untracked scratch directory in the
+    dirty set silently erases this session's own brightline and pushes the
+    verdict toward reviewing LESS. That is the precise failure direction
+    `_measure_session_review_scale_inputs`'s own negative-spec forbids.
+    Observed live 2026-08-19 on a strang-03 close, against a peer's
+    `state/dispatch-briefs/<brief>/`."""
+    target = root / rel_path
+    try:
+        if not target.is_dir():
+            return [rel_path]
+        members: list[str] = []
+        for dirpath, _dirnames, filenames in os.walk(target, followlinks=False):
+            for filename in sorted(filenames):
+                if budget is not None and budget[0] <= 0:
+                    return members
+                members.append((Path(dirpath) / filename).relative_to(root).as_posix())
+                if budget is not None:
+                    budget[0] -= 1
+        members.sort()
+    except OSError:
+        return None
+    return members
+
+
 def _measure_session_review_scale_inputs(
     root: Path,
     session_start_time: Any,
@@ -2999,6 +3061,11 @@ def _measure_session_review_scale_inputs(
       --numstat`, per-commit. A `base..HEAD` range is wrong here for the
       same reason a time window is: on a shared branch it spans every peer
       commit interleaved between base and HEAD.
+    - An untracked path that is a DIRECTORY is expanded to the files beneath
+      it (`_expand_untracked`) before any line counting: `git status
+      --porcelain` reports a wholly-untracked directory as one entry, and
+      counting that entry as if it were a file collapses the whole
+      measurement to unresolved.
     - UNCOMMITTED work is `git diff --numstat HEAD` restricted to the paths
       `directives_memo_lifecycle.classify_session_authored_files` marks
       session-authored (itself fed the Step 3.0 case-(b) exclusion set from
@@ -3108,14 +3175,28 @@ def _measure_session_review_scale_inputs(
             return None, None, None, None
         gross_loc += _accumulate_numstat(dirty, surfaces)
         code_loc += _accumulate_code_loc_numstat(dirty)
+    walk_budget = [_UNTRACKED_WALK_BUDGET]
     for rel_path in untracked:
-        added = _count_lines(root / rel_path)
-        if added is None:
+        members = _expand_untracked(root, rel_path, budget=walk_budget)
+        if members is None:
             return None, None, None, None
-        gross_loc += added
-        if not _is_noise_path(rel_path):
-            code_loc += added
-        surfaces.add(classify_surface(rel_path))
+        for member in members:
+            added = _count_lines(root / member)
+            if added is None:
+                return None, None, None, None
+            gross_loc += added
+            if not _is_noise_path(member):
+                code_loc += added
+            surfaces.add(classify_surface(member))
+    if walk_budget[0] <= 0:
+        # An untracked tree too large to enumerate exactly IS a big diff, so
+        # the exhausted budget resolves the brightline rather than defeating
+        # it: the counted LOC is a floor, and it is raised to the row-4
+        # threshold so `decide_review_scale` trips instead of reading the
+        # truncation as a small diff. Returning `None` here would restore the
+        # exact fails-toward-less-review collapse this walk exists to remove.
+        gross_loc = max(gross_loc, directives_review._BRIGHTLINE_LOC)
+        code_loc = max(code_loc, directives_review._BRIGHTLINE_LOC)
 
     return gross_loc, code_loc, commit_count, len(surfaces)
 

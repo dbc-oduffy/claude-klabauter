@@ -599,7 +599,7 @@ def run(
     one-rerun operation rather than a hand-applied diff."""
     pairs = collect_specs(sources_path)
     content = render_requirements_in(pairs)
-    requirements_in_path.write_text(content, encoding="utf-8")
+    requirements_in_path.write_text(content, encoding="utf-8", newline="\n")
     return requirements_in_path
 
 
@@ -757,7 +757,7 @@ def generate_lock(
 
     with tempfile.TemporaryDirectory(prefix="fleet-env-lock-") as tmp_dir:
         project_dir = Path(tmp_dir)
-        (project_dir / "pyproject.toml").write_text(pyproject_text, encoding="utf-8")
+        (project_dir / "pyproject.toml").write_text(pyproject_text, encoding="utf-8", newline="\n")
         argv = [
             uv_executable,
             "lock",
@@ -799,7 +799,7 @@ def generate_lock(
             lock_data = tomllib.load(fh)
 
     packages = lock_data.get("package", [])
-    lock_path.write_text(lock_text, encoding="utf-8")
+    lock_path.write_text(lock_text, encoding="utf-8", newline="\n")
     return {
         "lock_path": lock_path,
         "package_count": len(packages),

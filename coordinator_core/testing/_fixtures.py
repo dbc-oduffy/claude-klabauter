@@ -56,7 +56,7 @@ class FixtureTree:
 
 def _write(path: Path, content: str = "") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, newline="\n")
     return path
 
 

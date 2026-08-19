@@ -137,6 +137,6 @@ def emit_strategic_feed(ctx: EmitContext) -> dict:
 
     out_path = Path(ctx.central_state_root) / OUTPUT_NAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(feed, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    out_path.write_text(json.dumps(feed, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
 
     return {"status": "emitted", "emitted": 1, "out": str(out_path)}

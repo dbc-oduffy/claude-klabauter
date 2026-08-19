@@ -1708,7 +1708,7 @@ def touch(
                     break
 
         try:
-            with open(touched, "a", encoding="utf-8") as fh:
+            with open(touched, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(format_touch_event("T", fpath) + "\n")
         except OSError as exc:
             # fail-open — touch() must never block a tool call on a write
@@ -2450,7 +2450,7 @@ def _release_from_touched_file(
         return  # AC10 — no empty write, don't churn touched.txt's mtime
 
     try:
-        with open(touched_path, "a", encoding="utf-8") as fh:
+        with open(touched_path, "a", encoding="utf-8", newline="\n") as fh:
             for raw_path in to_release:
                 fh.write(format_touch_event("R", raw_path, when) + "\n")
     except OSError:
@@ -2897,7 +2897,7 @@ def release_phantom_claims(sid: str, cwd: Optional[str] = None) -> None:
 
     when = datetime.now(timezone.utc)
     try:
-        with open(touched_path, "a", encoding="utf-8") as fh:
+        with open(touched_path, "a", encoding="utf-8", newline="\n") as fh:
             for raw_path in to_release:
                 fh.write(format_touch_event("R", raw_path, when) + "\n")
     except OSError:
@@ -3630,7 +3630,31 @@ def compute_scope(
                 # above): a dead peer's touch record does not contest at
                 # all. Its read-failure handling above is unchanged by this
                 # — an unreadable claim set is never assumed dead.
-                if live_ids is not None and other_id not in live_ids:
+                #
+                # Abandonment is a SECOND, INDEPENDENT release condition
+                # (C4, docs/plans/2026-08-19-abandonment-is-its-own-
+                # verdict.md): `live_ids is None` (undetermined liveness)
+                # MUST stay "contested" — the abandonment check below is
+                # only ever reached once `live_ids is not None`, so it can
+                # only WIDEN release for a peer already positively
+                # liveness-classified as live (`other_id in live_ids`); it
+                # never substitutes for the fail-closed UNKNOWN-liveness
+                # degrade. `liveness.session_abandoned` is itself
+                # fail-closed toward NOT-abandoned on thin/absent evidence
+                # — see its own docstring — so this cannot widen release on
+                # indeterminate abandonment evidence either.
+                # Review: coordinator:code-reviewer P1 (coordinatorcode-
+                # reviewer-1da5144e.md) — the prior `live_ids is not None
+                # and other_id not in live_ids: continue` / unconditional
+                # `session_abandoned(...)`: continue` two-statement form let
+                # an UNDETERMINED (`live_ids is None`) peer be released
+                # through the unconditional abandonment check; folded into
+                # one condition so `live_ids is None` never reaches
+                # `session_abandoned` at all.
+                if live_ids is not None and (
+                    other_id not in live_ids
+                    or liveness.session_abandoned(other_id, cwd)
+                ):
                     continue
                 # PEER-facing projection (P3): gate `other_owner` population
                 # through `project_peer_claims` before the existing AC8
@@ -4050,7 +4074,16 @@ def compute_scope(
             # above), keyed on the back-pointed em_sid: a dead owning EM
             # session's sub-agent claim does not contest at all. Unreadable
             # handling below is unchanged by this.
-            if live_ids is not None and em_sid not in live_ids:
+            #
+            # Abandonment is a second, independent release condition (C4,
+            # same rationale as Step 3's twin gate above) — keyed on the
+            # same back-pointed em_sid. Folded into one condition, same as
+            # Step 3, so `live_ids is None` (undetermined) can never reach
+            # `session_abandoned` (Review: coordinator:code-reviewer P1,
+            # coordinatorcode-reviewer-1da5144e.md).
+            if live_ids is not None and (
+                em_sid not in live_ids or liveness.session_abandoned(em_sid, cwd)
+            ):
                 continue
 
             agent_touched = agent_dir / "touched.txt"

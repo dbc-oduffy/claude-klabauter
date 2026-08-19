@@ -108,7 +108,7 @@ def record_failure(
             "remediation": "",
         }
         marker_path = _dir / f"{hook_name or 'unknown'}.json"
-        marker_path.write_text(json.dumps(marker) + "\n", encoding="utf-8")
+        marker_path.write_text(json.dumps(marker) + "\n", encoding="utf-8", newline="\n")
     except Exception:
         # Best-effort — a failure to RECORD a failure must never raise into the caller.
         pass

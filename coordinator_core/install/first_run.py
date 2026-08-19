@@ -77,13 +77,13 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.install._shared import env_overlay
-from coordinator_core.launchable import resolve_launchable
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
+from coordinator_core.machine_resolver import registry_set
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -347,21 +347,37 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     that file's own header), so the subprocess hop was pure indirection with
     no logic on the other end to preserve; calling the module directly
     drops one more bash-spawn with no behavior change to the discovered-repo
-    output. ``machine-local`` remains a real, separate CLI binary (not a
-    claude-klabauter module) and is still invoked as a subprocess below -- but it now
-    lives in claude-klabauter's own ``coordinator/bin/`` (the b644d5a9 executable-
-    surface relocation moved it out of the DoE-claude ``CLAUDE_PLUGIN_ROOT``
-    entirely), so it is resolved off ``coordinator_claude_klabauter_root()``, never
-    ``plugin_root``.
+    output.
 
-    Missing-CLI tolerance is deliberate, not a gap: this step seeds the
-    registry with OTHER discovered sibling repos (a convenience so a fresh
-    machine doesn't have to hand-register every working repo), not the
-    load-bearing ``repos.claude_klabauter`` entry itself -- that registration
-    is scripts/setup.py's own job (see its module docstring, responsibility
-    3). A fresh install's later steps (ensure-venv, platform-localize) do
-    not read anything this step writes, so warn-and-continue is the correct
-    posture here, same as the retired oracle's own prompt-and-skip gate.
+    Registration is now an in-process write via
+    ``coordinator_core.machine_resolver.registry_set`` -- NOT a
+    ``machine-local`` CLI subprocess. ``coordinator/bin/machine-local`` (and
+    its ``.cmd``/``.ps1`` Windows twins) were deleted in ``3bd2738f4``
+    (2026-08-14, "C5: delete the three dead bareword forwarders and their
+    Windows twins") as unreachable dead code; this function used to guard on
+    that binary's existence before spawning it, so from that date forward
+    the guard always failed and this step silently never seeded anything.
+    See ``registry_set``'s own docstring for the write contract and why the
+    fix is a genuine in-process write rather than resurrecting the deleted
+    forwarder. (An earlier iteration of this fix routed through
+    ``coordinator/bin/lib/coordinator_registry.py`` instead -- reverted:
+    that module lives in ``coordinator/bin/lib/``, which is not on
+    ``coordinator_core``'s import path, and reaching sideways into a sibling
+    tree via a ``sys.path`` hack is exactly the fragile cross-tree coupling
+    ``coordinator_core.data_root``'s own docstring documents avoiding for
+    the same DR-047 boundary reason -- ``machine_resolver.py`` is the
+    coordinator_core-native home for registry I/O and already owns
+    ``registry_get``/``registry_dir``.)
+
+    Missing-registry-directory tolerance is deliberate, not a gap: this step
+    seeds the registry with OTHER discovered sibling repos (a convenience so
+    a fresh machine doesn't have to hand-register every working repo), not
+    the load-bearing ``repos.claude_klabauter`` entry itself -- that
+    registration is scripts/setup.py's own job (see its module docstring,
+    responsibility 3). A fresh install's later steps (ensure-venv,
+    platform-localize) do not read anything this step writes, so
+    warn-and-continue is the correct posture here, same as the retired
+    oracle's own prompt-and-skip gate.
     """
     print("[post-toolchain] Seeding machine-local registry...")
 
@@ -373,21 +389,6 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
         print("  Register repos manually later: machine-local set repos.<name> <path>")
         # Discovery precondition (CLAUDE_KLABAUTER_ROOT) unresolvable — resolved to
         # nothing this run, not "we never got there".
-        _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, ())
-        return
-
-    # `is_executable` passes the bare extension-less name on Windows because a
-    # PATHEXT sibling (`machine-local.cmd`) is delivered alongside it — but the
-    # bare file is not what CreateProcess can launch (WinError 193), so the argv
-    # must name the sibling. `resolve_launchable` is that mapping.
-    machine_local_bin = claude_klabauter_root / "coordinator" / "bin" / "machine-local"
-    machine_local_argv = resolve_launchable(str(machine_local_bin))
-
-    if not is_executable(machine_local_bin):
-        print(f"[post-toolchain] WARNING: machine-local CLI not found/executable at {machine_local_bin}", file=sys.stderr)
-        print("  Register repos manually later: machine-local set repos.<name> <path>")
-        # The machine-local CLI (a required tool, not merely a discovered
-        # input) is absent — resolved to nothing this run.
         _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, ())
         return
 
@@ -427,15 +428,12 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
         registry_key = f"{_ML_REPOS_KEY_PREFIX}{repo_key}"
         print(f"[post-toolchain] Registering {registry_key} = {repo_path}")
         try:
-            set_proc = _run([*machine_local_argv, "set", registry_key, repo_path], timeout=30)
-            if set_proc.returncode != 0:
-                print(f"[post-toolchain] WARNING: failed to register {registry_key} — skipping.", file=sys.stderr)
-                continue
-        except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-            print(f"[post-toolchain] WARNING: failed to register {registry_key} — skipping.", file=sys.stderr)
+            registry_set(registry_key, repo_path)
+        except (ValueError, OSError) as exc:
+            print(f"[post-toolchain] WARNING: failed to register {registry_key}: {exc} — skipping.", file=sys.stderr)
             continue
-        # Only a genuinely-succeeded `machine-local set` call is journaled
-        # — a failed/timed-out registration performed no write to record.
+        # Only a genuinely-succeeded registry write is journaled — a failed
+        # registration performed no write to record.
         registered.append(WriteSurfaceEntry(kind="machine-local-key", key=registry_key))
 
     if not found_any:
@@ -490,14 +488,29 @@ _KLABAUTER_MIRROR_PATH_REGISTRY_KEY = "publish.mirrors.claude_klabauter.path"
 _KLABAUTER_MIRROR_ROW_NAME = "claude-klabauter-bin"
 
 
-def _resolve_machine_local_argv(claude_klabauter_root: Path) -> Optional[List[str]]:
-    """Same resolution `_seed_machine_local_registry` uses: `machine-local`
-    now lives in claude-klabauter's own `coordinator/bin/`, never `plugin_root` (see
-    that function's docstring)."""
-    machine_local_bin = claude_klabauter_root / "coordinator" / "bin" / "machine-local"
-    if not is_executable(machine_local_bin):
-        return None
-    return resolve_launchable(str(machine_local_bin))
+def _register_engine_key(key: str, value: str) -> bool:
+    """Write one engine-provisioning registry key in-process. Returns False
+    (with a printed WARNING) on a refused or failed write, matching the
+    warn-and-continue contract every caller here already had.
+
+    Negative spec: this used to be `_run([*machine_local_argv, "set", ...])`
+    behind a `_resolve_machine_local_argv` guard on
+    `<claude_klabauter_root>/coordinator/bin/machine-local` — a binary deleted in
+    `3bd2738f4` (2026-08-14). From that date the guard could never pass, so
+    `provision_stamped_engine` warn-and-returned False on every box and the
+    fresh-clone-reaches-a-stamped-engine path never ran. Same defect class,
+    and the same remedy, as `_seed_machine_local_registry`'s Step 3 restore
+    — see `machine_resolver.registry_set`'s docstring for why the fix is an
+    in-process write and NOT a resurrected forwarder. Both keys written here
+    (`repos.*`, `publish.mirrors.*.path`) are flat root-namespace keys, which
+    is exactly that function's declared scope.
+    """
+    try:
+        registry_set(key, value)
+    except (ValueError, OSError) as exc:
+        print(f"[first-run] WARNING: failed to register {key}: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLISH_TIMEOUT) -> bool:
@@ -517,20 +530,6 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
     from coordinator_core._settings_home import settings_home
     from coordinator_core.warm import skew
 
-    machine_local_argv = _resolve_machine_local_argv(claude_klabauter_root)
-    if machine_local_argv is None:
-        print(
-            "[first-run] WARNING: machine-local CLI not found — cannot provision or "
-            "register a stamped engine root.",
-            file=sys.stderr,
-        )
-        print(
-            "  Remediation: once machine-local is installed, run: "
-            "python coordinator/bin/publish.py claude-klabauter-bin",
-            file=sys.stderr,
-        )
-        return False
-
     registered = registry_get(_KLABAUTER_MIRROR_REGISTRY_KEY)
     dest = Path(registered) if registered else None
     if dest is None or not dest.is_dir():
@@ -539,7 +538,7 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
     stamp_path = dest / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
     if stamp_path.is_file():
         # Already stamped — just make sure the registry agrees (idempotent).
-        _run([*machine_local_argv, "set", _KLABAUTER_MIRROR_REGISTRY_KEY, str(dest)], timeout=30)
+        _register_engine_key(_KLABAUTER_MIRROR_REGISTRY_KEY, str(dest))
         return True
 
     dest.mkdir(parents=True, exist_ok=True)
@@ -562,11 +561,7 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
             print(f"[first-run] WARNING: git init of engine-build directory failed: {exc}", file=sys.stderr)
             return False
 
-    set_proc = _run(
-        [*machine_local_argv, "set", _KLABAUTER_MIRROR_PATH_REGISTRY_KEY, str(dest)], timeout=30,
-        capture_output=True, text=True,
-    )
-    if set_proc.returncode != 0:
+    if not _register_engine_key(_KLABAUTER_MIRROR_PATH_REGISTRY_KEY, str(dest)):
         print(f"[first-run] WARNING: failed to register {_KLABAUTER_MIRROR_PATH_REGISTRY_KEY} — skipping engine provisioning.", file=sys.stderr)
         return False
 
@@ -609,8 +604,7 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
         )
         return False
 
-    reg_proc = _run([*machine_local_argv, "set", _KLABAUTER_MIRROR_REGISTRY_KEY, str(dest)], timeout=30)
-    if reg_proc.returncode != 0:
+    if not _register_engine_key(_KLABAUTER_MIRROR_REGISTRY_KEY, str(dest)):
         print(f"[first-run] WARNING: failed to register {_KLABAUTER_MIRROR_REGISTRY_KEY} after a successful publish round.", file=sys.stderr)
         return False
 

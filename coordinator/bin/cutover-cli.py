@@ -302,7 +302,7 @@ def _cmd_confirm_consumer(rest: list[str]) -> int:
     new_text = rebuild(split, new_fm_text)
 
     try:
-        with open(record_path, "w", encoding="utf-8") as fh:
+        with open(record_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(new_text)
     except OSError as exc:
         print(f"cutover-cli: confirm-consumer: cannot write {record_path}: {exc}", file=sys.stderr)

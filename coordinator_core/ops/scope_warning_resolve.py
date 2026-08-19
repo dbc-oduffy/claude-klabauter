@@ -176,7 +176,7 @@ def resolve(
         prefix=os.path.basename(log_file) + ".tmp.", dir=directory
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(new_content)
         os.replace(tmp_path, log_file)
     except BaseException:

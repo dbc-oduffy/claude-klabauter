@@ -595,30 +595,49 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # concurrent session's uncommitted work, and ran once that landed and the file went clean.
     # Re-derived at disposition: the two REGROWTH keys the plan predicted from
     # `_commit_published_dests` are NOT observed, though the function is present at HEAD.
-    # 2026-08-19 (wave 4) -- # class: structural-floor. One spawn per DISTINCT target is the
-    # minimum however the loop is arranged, so relocating the call only moves the flag. Three
-    # shapes recur: N distinct WORKTREE ROOTS (no git invocation spans multiple `-C` roots);
-    # N distinct EXECUTABLES (independently-authored sibling scripts, drop-in health legs,
-    # per-plugin `reverse_drift_cmd`, detached spawns whose own docstring forbids in-process
-    # conversion) where no shared batch target exists at all; and N calls to a SINGLE-ITEM
-    # CALLEE that accepts exactly one subject per invocation (`git mv` one src/dst pair,
-    # `git config` one key=value, `git branch -m` one ref, `npm view` one package, and the
-    # one-file-in/one-file-out sibling CLIs). Where a batch form does exist for part of a row
-    # it was rejected on a MEASURED ground, not a budgetary one: `configure_git`'s
-    # `--get-regexp` could batch the read side, but the paired set stays N either way, so
-    # total spawn count is unchanged; `distill_apply_disposal`'s key spans five sites, three
-    # of them per-item reverts isolating an already-failed path, so batching the two hot-path
-    # calls would not clear the key. `_batched_git_mv_into_dir` is this wave's own residual:
-    # it IS the byte-budget chunking idiom, so its spawn count is O(argv_bytes / cap) and
-    # never O(items) -- the loop the collector sees iterates BATCHES, not entries, and
-    # discriminator 7 misses it only because the loop target is a `Path` list rather than a
-    # raw argv splice.
-    ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'worktree_is_dirty'),
-    ('coordinator_core/install/first_run.py', '_seed_machine_local_registry', '_run'),
-    ('coordinator_core/ops/fleet/_common.py', 'archive_and_commit', 'create_subprocess_exec'),
+    # 2026-08-19 (wave 4) -- # class: structural-floor. N distinct EXECUTABLES, so no shared
+    # batch target exists at all. `_run_legs` iterates DROP-IN HEALTH LEGS -- independently
+    # authored programs discovered at runtime, each with its own argument surface -- and the
+    # argv it builds comes wholly from the loop target. There is no callee to ask about its
+    # arity (discriminator 8 is blind here because argv0 is not a helper parameter), and no
+    # batch form to measure, because a batch would have to span programs that share nothing.
+    # Relocating the call only moves the flag.
+    #
+    # NOT owed an oracle for the same reason: an oracle measures a claim about a callee's
+    # argument surface, and this row's claim is that there IS no single callee. The honest
+    # remaining move is the hand-rolled-parser rearchitecture named in the successor handoff --
+    # give the legs a uniform argument surface and ONE oracle covers them -- not a bespoke
+    # oracle per leg.
     ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
-    ('coordinator_core/ops/updatedocs_gates.py', '_gate_queue_prune_sweep', '_run'),
-    ('coordinator_core/ops/workweek_reverse_drift_gate.py', 'run_gate', 'run'),
+    # RETIRED 2026-08-19 -- `_common.py::archive_and_commit::create_subprocess_exec` and
+    # `updatedocs_gates.py::_gate_queue_prune_sweep::_run` stood here under the same
+    # `structural-floor` block. Both are now `_ORACLE_CLAIMS` entries: the first's "M + C" floor
+    # and the second's batched/override split are both MEASURED, each with a fails-when-inverted
+    # leg, so neither claim can rot into a description. This is the block shrinking the way it is
+    # supposed to -- a rationale stretched over three sites now covers the one it was written for.
+    # RETIRED 2026-08-19 -- `install/first_run.py::_seed_machine_local_registry::_run` stood here
+    # as "N distinct EXECUTABLES". The site is GONE, not decided by any discriminator: commit
+    # `9d7f1472a` ("install: first-run seeds the machine-local registry again, in-process")
+    # removed the function's last `_run(...)` call entirely -- it now writes the machine-local
+    # registry in-process via `registry_set()` (`coordinator_core/machine_resolver.py`). The
+    # function itself still exists; the spawn does not.
+    #
+    # RETIRED 2026-08-19 -- `consolidate_assemble/__init__.py::brief::worktree_is_dirty` stood
+    # here as "N distinct WORKTREE ROOTS". True, and decidable: `worktree_is_dirty` does not
+    # itself spawn -- it calls its own injected `run_git` parameter, which the marked call site
+    # binds through `brief`'s own `run_git = run_git or default_run_git` seam, one hop up.
+    # Discriminator 12 leg B already reads a resolved helper's scope param; it declined only
+    # because the spawn lived behind that one further injected-runner hop, invisible to it.
+    # `_root_scoped_through_injected_runner` follows the hop and re-derives `default_run_git`'s
+    # scope param the normal way before trusting it. Measured: exactly this key, zero collateral.
+    #
+    # RETIRED 2026-08-19 -- `workweek_reverse_drift_gate.py::run_gate::run` stood here as "N
+    # distinct EXECUTABLES". True, and decidable: `argv = shlex.split(cmd)` is a bare `Call` RHS
+    # `_argv0_expr` always declined, so the one-hop binding `_loop_argv0_bindings` builds for the
+    # call site's bare `Name` argv was never recorded. `shlex.split` is a closed, provably
+    # input-derived exception to the no-`Call` rule (see `_shlex_split_subject_expr`); the
+    # predicate itself (`_argv0_varies_with_loop_target`) already asked the right question.
+    # Measured: exactly this key, zero collateral.
     # RETIRED 2026-08-19 -- `percolate/engine.py::run_entrypoint_gate::_run_one_entrypoint` stood
     # here as "N distinct EXECUTABLES". True, and already decidable: the helper spells it
     # `script_path = root / rel` then `[interpreter, str(script_path), "--help"]`, which is the
@@ -1084,13 +1103,52 @@ def _program_identity_varies_with_loop_target(
     return bool(_names_in(identity) & tainted)
 
 
+def _shlex_split_subject_expr(value: ast.expr) -> ast.expr | None:
+    """The STRING being tokenized, for `shlex.split(X)` -- and ONLY that call, not `Call` in
+    general.
+
+    `_argv0_expr` declines every `Call` RHS on purpose (see its own docstring): a repo-defined
+    resolver like `build_argv(item)` can hold a CONSTANT argv0 inside its body no matter what
+    `item` is, and treating any `Call` as argv0-transparent would suppress that real
+    amplification site. `shlex.split` is a closed, one-name exception to that rule, not a
+    widening of it -- it is a stdlib function with no internal branch that could produce a
+    fixed argv[0] regardless of its input: every element of its output, INCLUDING position 0,
+    is carved directly out of `X`. So if `X` is loop-tainted, argv[0] of the split result is
+    provably tainted too, by construction rather than by guessing.
+
+    `workweek_reverse_drift_gate.run_gate` is the measured site this exists for: `argv =
+    shlex.split(cmd)` then `subprocess.run(argv, ...)`, where `cmd` is built from the loop row.
+    Before this, `_argv0_expr(value, bindings)` saw a bare `Call` node and returned `None` --
+    the binding was never recorded, so the downstream `Name` lookup at the call site had
+    nothing to resolve through. This is the binding-CAPTURE gap named in
+    `state/audits/2026-08-19-amplification-register-remaining-fourteen-dispositions.md`; the
+    predicate at the call site (`_argv0_varies_with_loop_target`) already asked the right
+    question and was declining only because the extraction never reached it.
+
+    Deliberately just `shlex.split` -- not `str.split`/`str.rsplit` (an arbitrary attribute
+    call on an arbitrary object, not provably a plain string tokenizer by shape alone) and not
+    any other `Call`. Widening past this one name re-opens the `build_argv(item)` hole."""
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "split"
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id == "shlex"
+        and value.args
+        and not any(isinstance(a, ast.Starred) for a in value.args)
+    ):
+        return value.args[0]
+    return None
+
+
 def _loop_argv0_bindings(loop: ast.AST) -> dict[str, ast.expr]:
     """Name -> its resolved `argv0` expression, for every single-target `ast.Assign`/
-    `ast.AnnAssign` in `loop`'s subtree whose RHS itself resolves via `_argv0_expr` -- the
-    one-hop intermediate-variable idiom (`dry_argv = [resolved] + list(dry_run_argv)`) that a
+    `ast.AnnAssign` in `loop`'s subtree whose RHS itself resolves via `_argv0_expr`, OR via
+    `_shlex_split_subject_expr` when `_argv0_expr` declines -- the one-hop intermediate-variable
+    idiom (`dry_argv = [resolved] + list(dry_run_argv)`, or `argv = shlex.split(cmd)`) that a
     call site passing the bare `Name` (`subprocess.run(dry_argv, ...)`) needs resolved before
-    `_argv0_expr` can see a List/BinOp shape at all. Threaded through as `bindings` so a chain
-    of two such assignments resolves transitively; real sites only ever use one hop."""
+    either extractor can see a shape at all. Threaded through as `bindings` so a chain of two
+    such assignments resolves transitively; real sites only ever use one hop."""
     bindings: dict[str, ast.expr] = {}
     for node in ast.walk(loop):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -1102,6 +1160,8 @@ def _loop_argv0_bindings(loop: ast.AST) -> dict[str, ast.expr]:
         if len(targets) != 1 or not isinstance(targets[0], ast.Name):
             continue
         head = _argv0_expr(value, bindings)
+        if head is None:
+            head = _shlex_split_subject_expr(value)
         if head is not None:
             bindings[targets[0].id] = head
     return bindings
@@ -2325,6 +2385,158 @@ def _helper_spawn_scope_params(
     return out
 
 
+def _own_param_runner_invocation(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[str, ast.Call] | None:
+    """The first call in `fn`'s body whose CALLEE is one of `fn`'s OWN parameters and whose name
+    is runner-shaped -- `fn` invoking an injected runner directly, distinct from route d's own
+    `_find_injected_runner_name`, which looks for a runner-shaped name PASSED as an ARGUMENT at
+    some other call. `worktree_is_dirty`'s `run_git([...], Path(worktree_path))` is the measured
+    shape: the parameter IS the callee. First match only, no chaining -- one hop, matching every
+    other route's discipline in this module."""
+    params = set(_func_params(fn))
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        name = node.func.id
+        if name not in params:
+            continue
+        if name in _RUNNER_KWARG_NAMES or name.lower().startswith(_RUNNER_NAME_PREFIXES):
+            return name, node
+    return None
+
+
+def _one_hop_or_default_fallback(name: str, enclosing_fn: ast.AST | None) -> ast.expr | None:
+    """`Y` in a top-level `<name> = <name> or Y` statement in `enclosing_fn`'s own body -- the
+    "parameter or production default" seam this repo spells that way
+    (`consolidate_assemble.brief`'s `run_git = run_git or default_run_git`), distinct from route
+    f's bare-`Name` SIGNATURE default because the fallback lives in a body statement, not the
+    `def` line.
+
+    Restricted to `enclosing_fn.body`'s own TOP-LEVEL statements -- not `ast.walk`, and
+    deliberately so: a same-shaped reassignment sitting inside the per-item loop would be a
+    different, per-iteration rebinding this one-hop resolution must not reach past."""
+    if enclosing_fn is None or not hasattr(enclosing_fn, "body"):
+        return None
+    for stmt in enclosing_fn.body:
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        target = stmt.targets[0]
+        if not (isinstance(target, ast.Name) and target.id == name):
+            continue
+        value = stmt.value
+        if not (isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or)):
+            continue
+        others = [v for v in value.values if not (isinstance(v, ast.Name) and v.id == name)]
+        if len(others) == 1 and isinstance(others[0], ast.Name):
+            return others[0]
+    return None
+
+
+def _resolve_named_git_scope_param(
+    name: str,
+    index: _FuncIndex,
+    relpath: str,
+    spawn_linenos_by_file: dict[str, set[int]],
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, set[str]] | None:
+    """Resolves a bare function NAME (route d/g's own by-name discipline: same-module preferred,
+    else any indexed definition) and confirms it is a real git-prepending spawner by RE-DERIVING
+    its own scope params (`_helper_spawn_scope_params`, unmodified) -- never assumed from the
+    name alone. `None` when nothing resolves or nothing actually scopes on a literal `git`
+    argv0."""
+    candidates = [k for k in index.funcs_by_name.get(name, []) if k[0] == relpath] or list(
+        index.funcs_by_name.get(name, [])
+    )
+    for tgt_relpath, tgt_name in candidates:
+        fn = index.func_defs.get((tgt_relpath, tgt_name))
+        if fn is None:
+            continue
+        scope_params = _helper_spawn_scope_params(fn, spawn_linenos_by_file.get(tgt_relpath, set()))
+        if scope_params:
+            return fn, scope_params
+    return None
+
+
+def _root_scoped_through_injected_runner(
+    call: ast.Call,
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    index: _FuncIndex,
+    relpath: str,
+    tainted: frozenset[str],
+    spawn_linenos_by_file: dict[str, set[int]],
+    enclosing_fn: ast.AST | None,
+) -> bool:
+    """Discriminator 12, LEG B's ROUTE-D EXTENSION -- the resolved callee `fn` does not itself
+    directly spawn (`_helper_spawn_scope_params(fn, ...)` found nothing), because the spawn
+    lives inside a runner `fn` receives as a PARAMETER and calls directly
+    (`consolidate_assemble.worktree_is_dirty`'s `run_git(["--no-optional-locks", "status",
+    "--porcelain"], Path(worktree_path))`). The `elts[0] == "git"` guard that leg B's normal
+    path relies on cannot fire here because `fn`'s own argv never spells `git` -- the runner
+    prepends it -- so this leg proves the same fact a different way: resolve WHAT the runner
+    actually is, and read ITS confirmed scope param instead of guessing from `fn`'s argv.
+
+    Three hops, none skippable:
+      1. `_own_param_runner_invocation(fn)` -- `fn` calls one of its OWN parameters directly,
+         under the same runner-name heuristic route d already trusts.
+      2. `_arg_expr_for_param(call, fn, param)` -- what THIS call site supplies for that
+         parameter (`run_git`, a bare `Name` in `brief`'s own scope) -- then
+         `_one_hop_or_default_fallback` follows the ONE-HOP `run_git = run_git or
+         default_run_git` seam that binds it, in the CALL's own enclosing function (`brief`),
+         never the resolved callee's.
+      3. `_resolve_named_git_scope_param` resolves that fallback NAME to a real definition
+         (`default_run_git`) and RE-DERIVES its scope param the normal way -- so nothing here
+         is trusted on the strength of a name alone; a same-named function that does NOT scope
+         on a literal `git` argv0 fails this leg identically to leg B's original path.
+
+    Only once all three confirm does this read the inner call's OWN second positional argument
+    (`Path(worktree_path)`) as the scope -- the `RunGit` calling convention's own shape
+    (`Callable[[list[str], Path], ...]`), not an argv flag -- and apply the SAME precision
+    constraint every other leg of discriminator 12 applies: the tainted name reaching that
+    scope slot must reach nothing else this call passes."""
+    if not tainted:
+        return False
+    found = _own_param_runner_invocation(fn)
+    if found is None:
+        return False
+    param, inner_call = found
+    if len(inner_call.args) < 2 or any(isinstance(a, ast.Starred) for a in inner_call.args[:2]):
+        return False
+    runner_arg = _arg_expr_for_param(call, fn, param)
+    if not isinstance(runner_arg, ast.Name):
+        return False
+    fallback = _one_hop_or_default_fallback(runner_arg.id, enclosing_fn)
+    if fallback is None:
+        return False
+    resolved = _resolve_named_git_scope_param(fallback.id, index, relpath, spawn_linenos_by_file)
+    if resolved is None:
+        return False
+    resolved_fn, resolved_scope_params = resolved
+    #: The inner call's own 2nd-positional-argument PARAMETER, at the RESOLVED runner's own
+    #: definition, must be one of the params that definition's re-derived scope check actually
+    #: confirmed -- not merely "some param scopes somewhere". Ties the position this call fills
+    #: to the position the resolved runner proved is its scope slot.
+    resolved_positional = _func_positional_params(resolved_fn)
+    if len(resolved_positional) < 2 or resolved_positional[1] not in resolved_scope_params:
+        return False
+
+    #: The inner call's own scope argument (`Path(worktree_path)`), traced back to which of
+    #: `fn`'s OWN parameters it references, then to what THIS call supplies for that parameter
+    #: -- `worktree_path` -> `wt_path`. Declines (empty set, or a param `_arg_expr_for_param`
+    #: cannot resolve) rather than guessing.
+    inner_scope_param = next(
+        iter(_names_in_through_assignments(inner_call.args[1], fn) & set(_func_params(fn))), None
+    )
+    scope_at_call = (
+        _arg_expr_for_param(call, fn, inner_scope_param) if inner_scope_param else None
+    )
+    if scope_at_call is None or not (_names_in(scope_at_call) & tainted):
+        return False
+    others = [
+        arg for arg in call.args if arg is not scope_at_call and not isinstance(arg, ast.Starred)
+    ] + [kw.value for kw in call.keywords if kw.value is not scope_at_call]
+    return _only_tainted_in(scope_at_call, others, tainted)
+
+
 def _root_scoped_through_helper(
     call: ast.Call,
     callee: str,
@@ -2332,10 +2544,15 @@ def _root_scoped_through_helper(
     relpath: str,
     tainted: frozenset[str],
     spawn_linenos_by_file: dict[str, set[int]],
+    enclosing_fn: ast.AST | None = None,
 ) -> bool:
     """Discriminator 12, LEG B -- routes b/c, the same fact reached through one helper hop.
     Mirrors `_argv0_varies_through_helper` step for step, reading the scope slot instead of the
-    program slot, and under the same one-hop, no-fallback discipline."""
+    program slot, and under the same one-hop, no-fallback discipline.
+
+    `enclosing_fn` is optional and used only by `_root_scoped_through_injected_runner`, this
+    leg's own route-d extension -- see that function's docstring for what it resolves and why
+    the ordinary path above cannot see it."""
     if not tainted:
         return False
     for tgt_relpath, tgt_name in _resolve_callee_def(index, relpath, callee):
@@ -2380,6 +2597,10 @@ def _root_scoped_through_helper(
             ]
             if _only_tainted_in(supplied, others, tainted):
                 return True
+        if not scope_params and _root_scoped_through_injected_runner(
+            call, fn, index, relpath, tainted, spawn_linenos_by_file, enclosing_fn
+        ):
+            return True
     return False
 
 
@@ -3104,6 +3325,7 @@ def find_unbatched_per_item_spawns(
                     relpath,
                     loop_visitor.call_loop_taint.get(key, frozenset()),
                     spawn_linenos_by_file,
+                    _enclosing_fn,
                 )
             ):
                 continue
@@ -3623,6 +3845,29 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
         "cadence",
     ),
+    # --- the spawn FLOOR is a measured constant, not a per-item cost (cadence tier) ---
+    #: `archive_and_commit`'s loop issues one `git mv` per move because git mv takes one src/dst
+    #: pair, and the surrounding ceremony contributes a fixed constant on top. Prose could assert
+    #: "M + C"; only the oracle pins what C actually is, and it ships an explicit
+    #: fails-when-a-per-move-spawn-regresses leg so the claim cannot rot into a description.
+    (
+        "coordinator_core/ops/fleet/_common.py",
+        "archive_and_commit",
+        "create_subprocess_exec",
+    ): (
+        "test_archive_and_commit_spawn_floor::test_mixed_batch_spawns_exactly_m_plus_six",
+        "cadence",
+    ),
+    # --- batched default, per-item OVERRIDE seam, and the split is the property (fast tier) ---
+    #: The default callee already carries N queue files in ONE spawn; what the collector counts is
+    #: the operator-supplied override CLI, which is an arbitrary third-party program with no batch
+    #: contract to assume. The oracle pins BOTH arms -- collapsing the override arm loses the
+    #: per-queue failure attribution, and per-item-ising the default arm is the amplification this
+    #: gate exists to catch -- and each arm ships its own fails-when-inverted leg.
+    ("coordinator_core/ops/updatedocs_gates.py", "_gate_queue_prune_sweep", "_run"): (
+        "test_queue_prune_sweep_spawn_split::test_override_cli_issues_one_spawn_per_queue_file",
+        "fast",
+    ),
 }
 
 
@@ -4046,10 +4291,14 @@ _DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
     "_argv0_varies_with_loop_target": (
         "test_discriminator_varying_argv0_invariant_argv0_still_flagged",
         "test_discriminator_varying_argv0_unpacked_constant_argv0_still_flagged",
+        "test_discriminator_argv_binding_declines_shlex_split_of_a_non_tainted_command",
+        "test_discriminator_argv_binding_declines_a_non_shlex_call_rhs",
     ),
     "_program_identity_varies_with_loop_target": (
         "test_discriminator_program_identity_declines_behind_an_interpreter_flag",
         "test_discriminator_program_identity_declines_a_varying_value_argument",
+        "test_discriminator_argv_binding_declines_shlex_split_of_a_non_tainted_command",
+        "test_discriminator_argv_binding_declines_a_non_shlex_call_rhs",
     ),
     "_argv0_varies_through_helper": (
         "test_discriminator_argv0_through_helper_declines_a_constant_program",
@@ -4097,6 +4346,8 @@ _DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
     "_root_scoped_through_helper": (
         "test_discriminator_root_scoped_declines_when_a_pathspec_also_varies",
         "test_discriminator_root_scoped_declines_a_non_git_program",
+        "test_discriminator_root_scoped_injected_runner_declines_a_non_git_program",
+        "test_discriminator_root_scoped_injected_runner_declines_when_a_pathspec_also_varies",
     ),
     "_is_chunking_stride_iterable": ("test_discriminator_unit_stride_range_still_flagged",),
     "_is_constant_literal_iterable": (
@@ -4965,6 +5216,69 @@ def test_discriminator_program_identity_declines_a_varying_value_argument(tmp_pa
     assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
 
 
+def test_discriminator_argv_binding_resolves_through_shlex_split_not_flagged(tmp_path):
+    """Binding-capture widening for discriminator 6/11 (`_shlex_split_subject_expr`, measured
+    2026-08-19 against `workweek_reverse_drift_gate.run_gate`). `argv = shlex.split(cmd)` is a
+    bare `Call` RHS -- `_argv0_expr` alone leaves it unresolved, so the call site passing the
+    bare `Name` `argv` had nothing to resolve through and read as invariant. With `cmd`
+    loop-tainted, argv[0] of the split result is provably tainted too."""
+    fixture = tmp_path / "disc_shlex_split_binding.py"
+    fixture.write_text(
+        "import shlex\n"
+        "import subprocess\n"
+        "\n"
+        "def run_all(rows):\n"
+        "    for row in rows:\n"
+        "        plugin, source_path, cmd = row.split('|', 2)\n"
+        "        argv = shlex.split(cmd)\n"
+        "        subprocess.run(argv, cwd=source_path)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_argv_binding_declines_shlex_split_of_a_non_tainted_command(tmp_path):
+    """Declining half: the `shlex.split` SUBJECT is a constant, not loop-tainted, so argv[0]
+    does not vary and the site is genuinely batchable -- stays flagged. Proves the widening does
+    not treat every `shlex.split` result as immune regardless of what it splits."""
+    fixture = tmp_path / "disc_shlex_split_binding_constant.py"
+    fixture.write_text(
+        "import shlex\n"
+        "import subprocess\n"
+        "\n"
+        "def run_all(paths):\n"
+        "    for path in paths:\n"
+        "        argv = shlex.split('git status --porcelain')\n"
+        "        subprocess.run(argv, cwd=path)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
+
+
+def test_discriminator_argv_binding_declines_a_non_shlex_call_rhs(tmp_path):
+    """The other declining half, and the one the widening exists to guard against: an arbitrary
+    function call assigned to the argv name (`build_argv(item)`) must NOT be treated as
+    argv0-transparent even though `item` is loop-tainted -- a repo-defined resolver can return a
+    fixed argv0 regardless of its input. Only `shlex.split` earns this treatment; any other
+    `Call` RHS still declines to bind, and the site stays flagged."""
+    fixture = tmp_path / "disc_shlex_split_binding_other_call.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def build_argv(item):\n"
+        "    return ['git', 'show', item]\n"
+        "\n"
+        "def run_all(items):\n"
+        "    for item in items:\n"
+        "        argv = build_argv(item)\n"
+        "        subprocess.run(argv)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
+
+
 def test_discriminator_argv_splice_resolves_a_one_hop_local_binding(tmp_path):
     """Discriminator 7's one-hop binding resolution: the chunker builds argv as its own
     statement and passes the local, which is how the idiom is actually spelled in this tree.
@@ -5528,6 +5842,118 @@ def test_discriminator_root_scoped_declines_a_non_git_program(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [site.enclosing for site in violations] == ["check"]
+
+
+def _write_route_d_injected_runner_bare_name_collision(tmp_path):
+    """Route d resolves `_find_injected_runner_name`'s result BY BARE NAME, repo-wide
+    (`runner_name in index.direct_spawn_funcs`), mirroring route f's own documented imprecision
+    -- never by tracing what the argument at this call site actually, eventually binds to. The
+    real site (`consolidate_assemble.brief`'s `worktree_is_dirty(run_git, wt_path)`) is reached
+    on route d-injected only because the UNRELATED `coordinator_core/ops/emit/sections/_shared.py
+    :: run_git` -- a genuine direct git spawner sharing nothing but a name -- exists elsewhere in
+    the same scanned tree. A single-file fixture with no such same-named function never resolves
+    to route d at all: `route` stays `None` and the call is never a candidate violation, so a
+    fixture asserting `== []` pins nothing (true whether or not the discriminator-12 leg
+    suppresses it) and a fixture expecting a decline can never see one (nothing was ever flagged
+    to decline). This companion file supplies that same-named, unrelated collision so route d
+    actually fires here, matching the real tree's own resolution path."""
+    (tmp_path / "_shared.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def run_git(repo_root, *args):\n"
+        "    return subprocess.run(['git', *args], cwd=str(repo_root))\n",
+        encoding="utf-8",
+    )
+
+
+def test_discriminator_root_scoped_through_injected_runner_not_flagged(tmp_path):
+    """Discriminator 12, leg B's route-d extension (`_root_scoped_through_injected_runner`,
+    measured 2026-08-19 against `consolidate_assemble.brief`'s real
+    `worktree_is_dirty(run_git, wt_path)` shape). `worktree_is_dirty` does not itself contain a
+    recognized spawn call -- it calls its OWN parameter `run_git` -- and that parameter's real
+    binding (`default_run_git`, resolved through the `run_git = run_git or default_run_git`
+    seam in `brief`, the marked call's OWN enclosing function) DOES scope on a literal `git`
+    argv0 via its `cwd` parameter. The `RunGit` calling convention's 2nd positional argument
+    (`worktree_path`, filled at the marked call by `wt_path`) is the scope.
+
+    `_write_route_d_injected_runner_bare_name_collision` supplies the unrelated same-named
+    `run_git` spawner route d needs to resolve to before this leg is ever consulted -- without
+    it, this call is never a candidate violation on route d and this assertion pins nothing."""
+    _write_route_d_injected_runner_bare_name_collision(tmp_path)
+    fixture = tmp_path / "disc_root_scoped_injected_runner.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def default_run_git(args, cwd):\n"
+        "    return subprocess.run(['git', *args], cwd=str(cwd))\n"
+        "\n"
+        "def worktree_is_dirty(run_git, worktree_path):\n"
+        "    return run_git(['status', '--porcelain'], worktree_path)\n"
+        "\n"
+        "def brief(worktree_paths, run_git=None):\n"
+        "    run_git = run_git or default_run_git\n"
+        "    for wt_path in worktree_paths:\n"
+        "        worktree_is_dirty(run_git, wt_path)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_root_scoped_injected_runner_declines_a_non_git_program(tmp_path):
+    """Declining half: the resolved runner (`default_run_program`) does not scope on a literal
+    `git` argv0 -- `_resolve_named_git_scope_param` re-derives its scope params the normal way
+    and finds none, so this leg must not guess from the runner-shaped NAME alone. Stays
+    flagged. `_write_route_d_injected_runner_bare_name_collision` supplies the same-named
+    `run_git` spawner elsewhere in the tree so the marked call actually reaches route d (and
+    hence this leg) at all -- see that helper's docstring."""
+    _write_route_d_injected_runner_bare_name_collision(tmp_path)
+    fixture = tmp_path / "disc_root_scoped_injected_runner_non_git.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def default_run_program(args, cwd):\n"
+        "    return subprocess.run(['make', *args], cwd=str(cwd))\n"
+        "\n"
+        "def worktree_is_dirty(run_git, worktree_path):\n"
+        "    return run_git(['status', '--porcelain'], worktree_path)\n"
+        "\n"
+        "def brief(worktree_paths, run_git=None):\n"
+        "    run_git = run_git or default_run_program\n"
+        "    for wt_path in worktree_paths:\n"
+        "        worktree_is_dirty(run_git, wt_path)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("brief", "worktree_is_dirty")]
+
+
+def test_discriminator_root_scoped_injected_runner_declines_when_a_pathspec_also_varies(tmp_path):
+    """Discriminator 12's precision constraint, applied to the injected-runner leg: the tainted
+    name filling the scope slot (`wt_path`) must fill nothing else this call passes. Here a
+    second tainted value (`pathspec`) co-varies with it and rides into the runner's own argv --
+    a genuinely batchable-within-the-precision-sense dimension the suppressor must not silence.
+    Stays flagged. `_write_route_d_injected_runner_bare_name_collision` supplies the same-named
+    `run_git` spawner elsewhere in the tree so the marked call actually reaches route d (and
+    hence this leg) at all -- see that helper's docstring."""
+    _write_route_d_injected_runner_bare_name_collision(tmp_path)
+    fixture = tmp_path / "disc_root_scoped_injected_runner_pathspec.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def default_run_git(args, cwd):\n"
+        "    return subprocess.run(['git', *args], cwd=str(cwd))\n"
+        "\n"
+        "def worktree_is_dirty(run_git, worktree_path, pathspec):\n"
+        "    return run_git(['status', pathspec], worktree_path)\n"
+        "\n"
+        "def brief(entries, run_git=None):\n"
+        "    run_git = run_git or default_run_git\n"
+        "    for wt_path, pathspec in entries:\n"
+        "        worktree_is_dirty(run_git, wt_path, pathspec)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [(site.enclosing, site.callee) for site in violations] == [("brief", "worktree_is_dirty")]
 
 
 def test_discriminator_argv0_through_helper_looks_past_a_fixed_interpreter(tmp_path):

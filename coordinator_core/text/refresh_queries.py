@@ -553,7 +553,7 @@ def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResu
 
     if changed_count > 0:
         if not check_mode:
-            with open(file_path, "w", encoding="utf-8") as f:
+            with open(file_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(working)
             # Register this write with the active coordinator session's
             # touched.txt (parity with the oracle's lib/coordinator_session.js

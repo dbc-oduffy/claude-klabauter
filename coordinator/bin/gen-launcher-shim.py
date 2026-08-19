@@ -972,7 +972,7 @@ def generate(
 
     if whoami_bootstrap:
         bootstrap_path = out / base
-        bootstrap_path.write_text(render_whoami_bootstrap(name), encoding="utf-8")
+        bootstrap_path.write_text(render_whoami_bootstrap(name), encoding="utf-8", newline="\n")
         _chmod_executable(bootstrap_path)
         written.append(bootstrap_path)
         declare_write(bootstrap_path)

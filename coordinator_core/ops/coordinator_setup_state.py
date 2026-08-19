@@ -228,7 +228,7 @@ def _atomic_write(target: str, content: str) -> None:
     parent = os.path.dirname(target)
     fd, tmp_path = tempfile.mkstemp(prefix=os.path.basename(target) + ".", dir=parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         os.replace(tmp_path, target)
         # DR-276: declared AFTER the write lands, never before — the contract

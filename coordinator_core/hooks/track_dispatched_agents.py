@@ -180,7 +180,7 @@ def _write_backpointer_sync(em_backpointer: str, session_id: str) -> None:
     # Bash source used $$ (per-process PID); in-engine all invocations share the PID.
     tmp = em_backpointer + f".tmp.{os.getpid()}.{threading.get_ident()}"
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(session_id + "\n")  # mirrors `echo "$SESSION_ID" > "$TMP_BP"`
         os.replace(tmp, em_backpointer)  # atomic rename
     except OSError as exc:
@@ -303,7 +303,7 @@ def _process_dispatched_sync(
         try:
             # Review: code-reviewer — F4 (nit): use context manager; bare open().close()
             # relies on CPython refcount for resource release (ResourceWarning in linters).
-            with open(dispatched, "a", encoding="utf-8"):
+            with open(dispatched, "a", encoding="utf-8", newline="\n"):
                 pass
         except OSError as exc:
             print(f"track_dispatched_agents: cannot create {dispatched}: {exc}", file=sys.stderr)
@@ -346,7 +346,7 @@ def _process_dispatched_sync(
         # but defence-in-depth and pattern consistency warrant the thread-id suffix.
         tmp = dispatched + f".tmp.{os.getpid()}.{threading.get_ident()}"
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
                 fh.writelines(lines)
             os.replace(tmp, dispatched)  # atomic rename
         except OSError as exc:
@@ -362,7 +362,7 @@ def _process_dispatched_sync(
     epoch = int(time.time())
     row = f"{agent_id}\t{model}\t{subagent_type}\t{epoch}\n"
     try:
-        with open(dispatched, "a", encoding="utf-8") as fh:
+        with open(dispatched, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(row)
     except OSError as exc:
         print(f"track_dispatched_agents: cannot append to {dispatched}: {exc}", file=sys.stderr)

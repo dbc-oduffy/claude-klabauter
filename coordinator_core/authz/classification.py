@@ -348,7 +348,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers any plan.
     #   D2-4 (act-time re-verify): archive_plans.py:333 re-reads status at T3
     #         (D1 terminality re-verify); archive_plans.py:340 live-reference guard at T3.
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in archive_plans.py:48.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in archive_plans.py:48.
     "fleet.archive_completed_plans": OpClass.MUTATING,
     # fleet.handoffs_for_plan — COMPUTE_ONLY: pure read, the "which handoffs did this
     # plan mint, live and archived" aggregation, built entirely on two unmodified
@@ -384,7 +385,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers any handoff.
     #   D2-4 (act-time re-verify): archive_handoffs.py:287 — _is_terminal() re-checks
     #         status, reverse_membership, and live session claim at T3 (D1 re-verify).
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in archive_handoffs.py:35.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in archive_handoffs.py:35.
     "fleet.archive_completed_handoffs": OpClass.MUTATING,
     # fleet.prune_closed_bugs — MUTATING: git-mv closed bug-backlog YAML entries from
     # state/bug-backlog/ into archive/bug-backlog/YYYY-MM/.
@@ -408,7 +410,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers any bug entry.
     #   D2-4 (act-time re-verify): prune_bugs.py:208-215 — re-reads status at T3 (D1);
     #         non-closed status → skipped "drifted-open".
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in prune_bugs.py:34.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in prune_bugs.py:34.
     "fleet.prune_closed_bugs": OpClass.MUTATING,
     # fleet.aggregate_capability_index — MUTATING, same single-derived-feed-file shape
     # as strategic.emit: it reads every registered sibling's authored capability
@@ -808,7 +811,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers the handoff.
     #   D2-4 (act-time re-verify): the archival internal re-checks deployment_state +
     #         shipped_in reachability at act time (graceful skip when shipped_in absent).
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in handoff_ship_archive.py.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in handoff_ship_archive.py.
     # Authority: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.ship_and_archive": OpClass.MUTATING,
@@ -1139,7 +1143,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-3 (git-reversible): state/ is git-tracked; git revert recovers any entry.
     #   D2-4 (NO terminality-re-verify): additive-create has no terminality concept;
     #         DR-211's act-time-terminality-re-verify does NOT apply here — explicitly excluded.
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in queue_append.py module docstring.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in queue_append.py module docstring.
     # Authority: docs/decisions/DR-213-queue-write-substrate-carveout.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "queue.append": OpClass.MUTATING,
@@ -1184,7 +1189,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-3 (git-reversible): state/ is git-tracked; git revert recovers any entry.
     #   D2-4 (NO terminality-re-verify): additive-create has no terminality concept;
     #         DR-211's act-time-terminality-re-verify does NOT apply here — explicitly excluded.
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in queue_promote.py module docstring.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in queue_promote.py module docstring.
     # Authority: docs/decisions/DR-213-queue-write-substrate-carveout.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "queue.promote": OpClass.MUTATING,
@@ -1434,7 +1440,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "deliverable.fork_detect": OpClass.COMPUTE_ONLY,
     # memo.send — MUTATING: writes one schema-valid memo file (non-committing dirty file)
     # into the cross-repo/inbox/ of a registry-enumerated receiver repo. The receiver's
-    # session-init sweep archives it. UDS-only, no HTTP surface (Q-c HARD negative-spec).
+    # session-init sweep archives it. No remote route: DR-215 retired the UDS/HTTP transport
+    # outright, so there is no network surface to reach this op from (Q-c HARD negative-spec).
     # Strongest crossing in the strang-0x sequence (cross-repo, not merely cross-tree-within-
     # own-repo); the full D2 seven-bound set applies (DR-214-send-class-cross-tree-write-
     # boundary.md § D2). This op does NOT use _common.archive_and_commit — non-committing
@@ -1457,14 +1464,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-2 (registry-enumerated receiver): target inbox is registry-derived, never wire-derived.
     #   D2-3 (non-committing): engine writes one dirty file; receiver's sweep archives it.
     #   D2-4 (fail-loud on collision): read-before-write → refuse; no silent clobber.
-    #   D2-5 (UDS-only): no HTTP route; gate 6 of dispatch.py enforces 403 for ALL MUTATING ops.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright, so there is
+    #     no network surface to reach any op from -- the only caller path is the local
+    #     spawn-per-call entrypoint `python -m coordinator_core.invoke`.
     #   D2-6 (schema-valid emission): correct to:/from:/status:open/kind: frontmatter.
     #   D2-7 (B3 gitignore delivery guard): engine runs git check-ignore before writing.
     # Authority: docs/decisions/DR-214-send-class-cross-tree-write-boundary.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Negative-spec:
-    #   - NOT accessible over HTTP (UDS-only; gate 6 of dispatch.py enforces 403 for ALL
-    #     MUTATING ops — memo.send inherits this by classification, no extra gate needed).
+    #   - NOT reachable over any network transport: DR-215 removed the UDS/HTTP surface
+    #     entirely, so this holds by absence of a route, not by a per-op refusal.
     #   - NO legacy direct-write fallback (Q-c HARD; single write path; refuse when down).
     # Spec backlink: pln-strang-03-cross-repo-memo-send-40d84e § C3
     "memo.send": OpClass.MUTATING,
@@ -1949,7 +1958,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The receipt, the landed git commits, and any stamped shipped_in/
     #      deployment_state are read by subsequent EM sessions and fleet sweeps.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT accessible over HTTP (MUTATING → gate 6 of dispatch.py enforces 403).
+    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
+    # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "ceremony.wsc_tail": OpClass.MUTATING,
     # ceremony.post_commit_tail — MUTATING: the C3a (docs/plans/2026-07-23-wsc-tail-
     # slim-down.md § C3a) extraction of wsc_tail's steps 5c/5d (post-commit
@@ -1976,7 +1986,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed follow-up commits and any stamped shipped_in/deployment_state
     #      are read by subsequent EM sessions and fleet sweeps.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT accessible over HTTP (MUTATING → gate 6 of dispatch.py enforces 403).
+    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
+    # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "ceremony.post_commit_tail": OpClass.MUTATING,
     # ceremony.session_instructions — COMPUTE_ONLY: EM-facing instruction-set render op.
     # Renders branch_resolution's already-computed node classification into a pruned,
@@ -2032,7 +2043,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-2 (commutative): git-mv order does not change final archive/ contents.
     #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers any handoff.
     #   D2-4 (act-time re-verify): handler re-checks deployment_state + shipped_in at act time.
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in archive_shipped_handoffs.py.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in archive_shipped_handoffs.py.
     "fleet.archive_shipped_handoffs": OpClass.MUTATING,
     # fleet.archive_terminal_sizings — MUTATING: git-mv terminal sizing objects into
     # archive/sizings/YYYY-MM/, via the shared archive_and_commit batch path
@@ -2059,7 +2071,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-2 (commutative): git-mv order does not change final archive/ contents.
     #   D2-3 (git-reversible): cross-repo/archive/ is git-tracked; git revert recovers any memo.
     #   D2-4 (act-time re-verify): handler re-checks status:actioned at act time.
-    #   D2-5 (UDS-only): no HTTP route added; negative-spec in archive_actioned_memos.py.
+    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
+    #     no HTTP route was ever added, negative-spec in archive_actioned_memos.py.
     "fleet.archive_actioned_memos": OpClass.MUTATING,
     # fleet.backfill_dispositionless_memos (C5,
     # docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md) — MUTATING:
@@ -2268,7 +2281,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      All git commits and file mutations are observable by any git client after return.
     # Authority: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C1b / AC5
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT accessible over HTTP (MUTATING → gate 6 of dispatch.py enforces 403).
+    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
+    # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "session.boot_sweep": OpClass.MUTATING,
     # session.sweep_consumed_handoffs — MUTATING (Class A+B): the consumed-handoff leg of
     # session.boot_sweep, isolated as a single-family on-demand command (C21). It calls
@@ -2292,7 +2306,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # since the live path plainly mutates.
     # Authority: docs/plans/2026-07-23-wsc-tail-slim-down.md § C21
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT accessible over HTTP (MUTATING → gate 6 of dispatch.py enforces 403).
+    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
+    # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "session.sweep_consumed_handoffs": OpClass.MUTATING,
     # session.scope_report — COMPUTE_ONLY: the op's own module docstring names it
     # a "read-only session-scope reporter" — reports THIS session's own scope, no
@@ -3469,6 +3484,46 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   write-ops in this package family use; see op.py module docstring.
     # Spec: docs/plans/2026-08-12-emitter-turns-a-spine-into-one-workflow.md § C5
     "dispatch.emit": OpClass.MUTATING,
+    # workflow.fire — MUTATING: spawns one detached `claude -p` child per emitted
+    # workflow script and writes the fire registry record that IS the run handle
+    # (ops/workflow_fire/op.py -> fire.py::fire_workflow).
+    # DR-208 five-question affirmation (citing ops/workflow_fire/fire.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      _write_record(...) persists the registry record under
+    #      <git-common-dir>/coordinator-sessions/workflow-fires/<fire_id>.json, plus
+    #      the cap lock (_acquire_cap_lock) and the child's log file.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only its own registry directory; no rag interaction. Dual-write
+    #      ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The record, the cap lock, and the spawned child's log are all created.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The registry is common-dir-scoped and shared by every session on the
+    #      repo — the live-fire concurrency cap is counted over that population.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      A detached OS process survives the call, and its record is readable by
+    #      any other session.
+    # Classified MUTATING per DR-208 § "Default: MUTATING until affirmed otherwise";
+    # no COMPUTE_ONLY affirmation is possible for a handler that spawns and writes.
+    # Spec: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md § C4
+    "workflow.fire": OpClass.MUTATING,
+    # workflow.fire_status — MUTATING: the REFRESHING read. It re-reads a record by
+    # fire_id and, whenever the refreshed state differs, writes it back
+    # (fire.py::fire_status -> _write_record) — the record is not written when the
+    # child exits, so this op is what durably records a run's terminal state.
+    # DR-208 five-question affirmation (citing ops/workflow_fire/fire.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      _write_record(path, refreshed) rewrites the registry record in place.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Same _write_record path as above.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The record it rewrites is common-dir-scoped, shared fleet-wide.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The refreshed state is what every later reader sees.
+    # A read-shaped NAME is not a read-only handler — the refresh is the point.
+    # Spec: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md § C4
+    "workflow.fire_status": OpClass.MUTATING,
     # review.mint_workflow — MUTATING: writes the composed gated-review
     # Workflow .mjs script text to a caller-named path (ops/review_mint/op.py).
     # The only handler in this plan's surface that touches disk; roster.py

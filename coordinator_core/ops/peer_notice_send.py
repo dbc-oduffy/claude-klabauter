@@ -218,7 +218,7 @@ def _peer_notice_send(params: Dict[str, Any], repo_root: Optional[Path] = None) 
     # code-reviewer, P3 un-atomic-write finding).
     tmp_path = target_dir / f".{notice_id}.json.tmp"
     try:
-        tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         tmp_path.replace(notice_path)
     except Exception:
         # A partial write_text (e.g. disk full) or a failed replace must not

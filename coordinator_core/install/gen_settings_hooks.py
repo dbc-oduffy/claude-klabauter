@@ -442,7 +442,7 @@ def _create_positive_marker(marker: Path, *, reason: str) -> None:
         f"# Created: {reason}\n"
         f"# Delete this file to disable generation (or create "
         f"{marker.parent / '.coordinator-hooks-disabled'} for the same effect).\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
 
 

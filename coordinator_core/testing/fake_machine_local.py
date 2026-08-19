@@ -60,7 +60,7 @@ def write_fake_executable(bin_dir, name: str, python_body: str) -> Path:
     bin_dir.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
         py_path = bin_dir / f"{name}.py"
-        py_path.write_text(python_body, encoding="utf-8")
+        py_path.write_text(python_body, encoding="utf-8", newline="\n")
         cmd_path = bin_dir / f"{name}.cmd"
         # NOTE: this writes *file content* for a .cmd launcher that a fake test
         # binary runs under -- it is not itself a subprocess.run/Popen call, so
@@ -68,11 +68,11 @@ def write_fake_executable(bin_dir, name: str, python_body: str) -> Path:
         # satisfy the naive text-pattern PreToolUse scanner.
         cmd_path.write_text(  # popup-intentional-last-resort
             f'@echo off\r\n"{sys.executable}" "{py_path}" %*\r\n',
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
         return cmd_path
     script = bin_dir / name
-    script.write_text("#!/usr/bin/env python3\n" + python_body, encoding="utf-8")
+    script.write_text("#!/usr/bin/env python3\n" + python_body, encoding="utf-8", newline="\n")
     st = script.stat()
     script.chmod(st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return script

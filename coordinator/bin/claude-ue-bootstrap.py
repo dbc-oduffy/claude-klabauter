@@ -66,7 +66,7 @@ def bootstrap(project_dir: str) -> tuple[bool, str]:
     if not settings_path.exists():
         payload = {"enabledPlugins": dict(ENABLED_PLUGINS)}
         tmp_path = settings_path.with_name(settings_path.name + ".tmp")
-        tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
         tmp_path.replace(settings_path)
         return True, f"wrote UE override to {settings_path}"
 
@@ -77,7 +77,7 @@ def bootstrap(project_dir: str) -> tuple[bool, str]:
     existing.setdefault("enabledPlugins", {})
     existing["enabledPlugins"].update(ENABLED_PLUGINS)
     tmp_path = settings_path.with_name(settings_path.name + ".tmp")
-    tmp_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    tmp_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8", newline="\n")
     tmp_path.replace(settings_path)
     return True, f"merged UE override into {settings_path}"
 

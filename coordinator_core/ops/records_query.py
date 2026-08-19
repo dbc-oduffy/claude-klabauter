@@ -64,6 +64,15 @@ Grammar surface (post-T4d-g1c EXTEND):
     injected onto every record's frontmatter as ``fm['liveness']`` BEFORE
     since/older-than/where filtering (same ordering as query-records.js:1401-1406),
     so ``--where liveness=BLOCKED`` composes correctly.
+  - ``archived`` (``fm['archived']``, always present) is the collection-origin
+    boolean threaded through ``_collect_type_records`` -> ``_load_record``,
+    true exactly for records collected from ``_ARCHIVE_GLOB_FOR_TYPE``'s glob
+    — never derived from the emitted ``path`` string (see ``_load_record``'s
+    docstring negative-spec). ``include_body`` (opt-in param, default off)
+    additionally projects ``fm['body']`` — post-frontmatter text for ``.md``
+    records, ``null`` for ``.yaml`` whole-file records — and is rejected for
+    the synthetic types (``handoff-ledger``, ``research-claim``), which have
+    no body to project.
 
 Negative-spec:
   - ``_TYPE_TO_GLOB`` covers 22 query-records.js record types (widened from
@@ -1576,6 +1585,7 @@ def _apply_plan_filename_filter(files: list[Path]) -> list[Path]:
 
 def _load_record(
     fpath: Path, worktree_root: Path, record_type: str,
+    *, archived: bool = False, include_body: bool = False,
 ) -> Optional[dict]:
     """Read+parse one candidate file into a ``{"path", "frontmatter"}`` record.
 
@@ -1590,6 +1600,36 @@ def _load_record(
     avoiding the silently-diverging-copy risk the ceremony module's own
     docstring warns against for the ``--where``/consumed-marker helpers it
     already reuses from here.
+
+    ``archived`` (default ``False``, keyword-only): the COLLECTION ORIGIN, set
+    by the caller — ``_collect_type_records`` passes ``True`` only for files it
+    walked off ``_ARCHIVE_GLOB_FOR_TYPE``'s glob, never inferred here from
+    ``fpath`` or the emitted ``path`` string. Injected onto
+    ``fm['archived']`` the same way ``fm['liveness']`` is injected below.
+    Negative-spec: do NOT replace this parameter with a substring/prefix test
+    against the emitted path — that form is already wrong for live records
+    whose slug merely contains the word "archive" (e.g. a live cross-repo-memo
+    titled about the archived-ness gap itself).
+
+    ``include_body`` (default ``False``, keyword-only, OPT-IN): when true and
+    this is a ``.md``-branch record, projects the already-parsed post-
+    frontmatter body onto ``fm['body']``. The ``.yaml`` whole-file branch has
+    no body text to project — ``fm['body']`` is set to ``None`` there so a
+    consumer can tell "no body exists" apart from "body was empty", rather
+    than an empty string collapsing both cases.
+
+    The projection is an unconditional assignment, so a record whose real
+    on-disk frontmatter carries its own ``body:`` key has that value replaced
+    by the post-frontmatter text — the same silent-overwrite the ``liveness``
+    injection below already accepts, and deliberately the same shape rather
+    than a second, divergent convention. No record type in either corpus
+    declares ``body:`` in frontmatter (verified across all 1756 collected
+    ``cross-repo-memo`` records, live plus archived, 2026-08-19), so the
+    collision is contract-prevented, not merely unobserved: a schema adding a
+    frontmatter ``body:`` field would have to reconcile with this projection
+    first. Reviewer WARN, 2026-08-19 slice C1C2 — recorded, not fixed, because
+    diverging from the ``liveness`` precedent for a collision no corpus
+    produces buys nothing.
 
     Negative-spec (parser choice): both branches below parse through
     ``coordinator_core.frontmatter.schema_validate`` — ``parse_yaml`` for the
@@ -1625,6 +1665,8 @@ def _load_record(
             return None
         if not isinstance(fm, dict) or not fm:
             return None  # empty/non-mapping file — silent skip (not corruption)
+        if include_body:
+            fm['body'] = None  # no post-frontmatter text in the whole-file .yaml branch
     else:
         try:
             text = fpath.read_text(encoding='utf-8')
@@ -1645,6 +1687,8 @@ def _load_record(
         if fm is None:
             return None
         body = parsed['body']
+        if include_body:
+            fm['body'] = body
 
     # cross-repo-memo memo-shape guard: skip files whose frontmatter lacks the
     # expected memo fields (from + to) — port of query-records.js's queryRecords guard
@@ -1665,6 +1709,12 @@ def _load_record(
     # Inject synthetic liveness field so --where liveness= and --format json
     # both work without special-casing the filter/format layers.
     fm['liveness'] = liveness(fm, record_type)
+
+    # Inject the collection-origin `archived` boolean — set by the caller from
+    # which segment (_collect_files vs _ARCHIVE_GLOB_FOR_TYPE's glob) walked
+    # this file, never re-derived here from fpath/path. See this function's
+    # docstring negative-spec.
+    fm['archived'] = archived
 
     rel_path = rel_id(fpath, worktree_root)
     return {'path': rel_path, 'frontmatter': fm}
@@ -1714,7 +1764,8 @@ def _apply_since_where_filters(
 
 
 def _collect_type_records(
-    worktree_root: Path, record_type: str, *, include_archived: bool = False,
+    worktree_root: Path, record_type: str, *,
+    include_archived: bool = False, include_body: bool = False,
 ) -> list[dict]:
     """Collect every record of one type — no since/older-than/where/sort/limit applied.
 
@@ -1736,6 +1787,14 @@ def _collect_type_records(
     live ``record_type``, so the default-off path is byte-identical to
     pre-existing behaviour: this parameter only ever ADDS files on top of
     what ``_collect_files(worktree_root, record_type)`` already returns.
+
+    The live and archive candidate lists are loaded through separate
+    ``_load_record`` calls (``archived=False`` / ``archived=True``) so each
+    record's ``fm['archived']`` reflects which segment actually collected it —
+    the origin flag, never a post-hoc test against the emitted ``path``.
+
+    ``include_body`` (default ``False``, OPT-IN): threaded straight through to
+    every ``_load_record`` call this function makes.
     """
     if record_type == 'handoff-ledger':
         return _collect_handoff_ledger_records(worktree_root)
@@ -1746,17 +1805,27 @@ def _collect_type_records(
     if record_type == 'plan':
         candidates = _apply_plan_filename_filter(candidates)
 
+    archive_candidates: list[Path] = []
     if include_archived:
         archive_glob = _ARCHIVE_GLOB_FOR_TYPE.get(record_type)
         if archive_glob is not None:
-            archive_files = _walk_glob_segments(worktree_root, archive_glob.split('/'))
+            archive_candidates = _walk_glob_segments(worktree_root, archive_glob.split('/'))
             if record_type == 'plan':
-                archive_files = _apply_plan_filename_filter(archive_files)
-            candidates = [*candidates, *archive_files]
+                archive_candidates = _apply_plan_filename_filter(archive_candidates)
 
     results: list[dict] = []
     for fpath in candidates:
-        rec = _load_record(fpath, worktree_root, record_type)
+        rec = _load_record(
+            fpath, worktree_root, record_type,
+            archived=False, include_body=include_body,
+        )
+        if rec is not None:
+            results.append(rec)
+    for fpath in archive_candidates:
+        rec = _load_record(
+            fpath, worktree_root, record_type,
+            archived=True, include_body=include_body,
+        )
         if rec is not None:
             results.append(rec)
     return results
@@ -1860,7 +1929,7 @@ def _format_output(results: list[dict], fmt: str, *, record_type: Optional[str])
 _KNOWN_PARAM_KEYS = frozenset(
     {
         "type", "where", "since", "older_than", "sort", "format", "limit",
-        "unattached", "include_archived",
+        "unattached", "include_archived", "include_body",
     }
 )
 
@@ -1919,6 +1988,25 @@ def _handler(
                      extend the ``--unattached``-without-``type`` union lens)
                      — every existing caller that omits this param sees
                      EXACTLY today's result set, unchanged.
+        include_body: bool (optional, default false) — OPT-IN body
+                     projection. Every ``fm['archived']``-bearing record type
+                     (every type with a ``.md`` ``_load_record`` branch) gains
+                     ``frontmatter['body']``: the post-frontmatter text for
+                     the ``.md`` branch, or ``null`` for the ``.yaml``
+                     whole-file branch (which has no body text — ``null``
+                     distinguishes "no body exists" from "body was empty").
+                     Rejected (non-zero exit) for the synthetic types
+                     (``handoff-ledger``, ``research-claim``), which never
+                     route through ``_load_record`` and so have no body to
+                     project. Default OFF, scoped to the single-``type``
+                     path only — same "existing callers see byte-identical
+                     output" contract as ``include_archived``.
+
+    Every record's frontmatter also carries an injected ``archived`` boolean
+    (``fm['archived']``), true exactly when the record was collected from
+    ``_ARCHIVE_GLOB_FOR_TYPE``'s glob rather than the live one — set from the
+    collection origin ``_collect_type_records`` threads into ``_load_record``,
+    never re-derived from the emitted ``path`` string.
 
     Returns:
         ``format=paths``: ``{"records": <newline-joined repo-relative paths>}``
@@ -1977,6 +2065,7 @@ def _handler(
     limit: int = int(params.get('limit', 50))
     unattached: bool = bool(params.get('unattached'))
     include_archived: bool = bool(params.get('include_archived'))
+    include_body: bool = bool(params.get('include_body'))
 
     # ---- Multi-type --unattached union lens: type absent, unattached=true ---
     # Dispatch mirrors query-records.js's `opts.unattached && !opts.type` gate
@@ -2019,6 +2108,19 @@ def _handler(
         )
         sys.exit(1)
 
+    # `include_body` has no effect on the synthetic types: neither
+    # `_collect_handoff_ledger_records` nor `_collect_research_claim_records`
+    # routes through `_load_record` (they build frontmatter dicts directly —
+    # see `_SYNTHETIC_TYPES`), so there is no post-frontmatter body to
+    # project. Fail loud rather than silently ignoring the flag — same
+    # rationale as the unknown-param-key guard above.
+    if include_body and record_type in _SYNTHETIC_TYPES:
+        sys.stderr.write(
+            f'records.query: include_body is not supported for type {record_type!r} '
+            f'(synthetic record type — no post-frontmatter body exists).\n'
+        )
+        sys.exit(1)
+
     if repo_root is None:
         _LOG.warning(
             'records.query: repo_root absent — returning empty payload for type=%r',
@@ -2052,7 +2154,8 @@ def _handler(
     # now tell "scan failed" apart from "zero records exist".
     try:
         results = _collect_type_records(
-            worktree_root, record_type, include_archived=include_archived,
+            worktree_root, record_type,
+            include_archived=include_archived, include_body=include_body,
         )
     except _RecordsCollectError as exc:
         payload = _empty_payload(fmt)

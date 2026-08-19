@@ -152,6 +152,7 @@ NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "w
 # so _has_uncleared_execution_gate never re-spells them.
 _GATE_BLOCKS_AC_CLOSURE = "ac-closure"
 _GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
+_GATE_CLEARED_KEY = "cleared"
 
 
 def _has_uncleared_execution_gate(raw: dict) -> bool:
@@ -161,6 +162,25 @@ def _has_uncleared_execution_gate(raw: dict) -> bool:
 
     ``blocks: ac-closure`` entries never count here — that gate holds only
     a named acceptance criterion open, not the row's execution.
+
+    ``cleared: false`` is an explicit negative that OVERRIDES a truthy
+    ``closure_evidence``, per plan-tasks.schema.json 1.9.0's own wording:
+    the flag asserts whether the gate IS discharged, while
+    ``closure_evidence`` only names how that was or will be verified. Until
+    this was read, an author who wrote a status note into ``closure_evidence``
+    and set ``cleared: false`` to say "not actually discharged" got the gate
+    silently disarmed anyway — the schema promised an override the reader did
+    not implement. Found against sat-06 C4, a row that writes into a sibling
+    repo's tree, where the disarm would have scheduled a cross-tree write on a
+    DR that is still `status: proposed`.
+
+    Only the ``false`` half is honoured here. ``cleared: true`` clears a gate
+    that names no evidence at all, which WIDENS what a wave admits, and this
+    reader is deliberately kept behaviourally in sync with DoE-claude's
+    ``_uncleared_execution_gate`` (see the schema's own x-bump-note: the 1.9.0
+    bump was "the additive half only ... retiring presence-as-cleared is a
+    separate, joint two-repo bump"). Widening is that joint bump's business,
+    not this fix's; refusing to admit is always safe unilaterally.
 
     Tolerant of malformed shapes, matching this module's read posture for
     every field but its four fail-loud ones: a non-list ``external_gate``,
@@ -176,7 +196,11 @@ def _has_uncleared_execution_gate(raw: dict) -> bool:
         if not isinstance(entry, dict):
             continue
         closure_evidence = entry.get(_GATE_CLOSURE_EVIDENCE_KEY)
-        if closure_evidence:
+        # `cleared: false` is the explicit negative and outranks evidence;
+        # only the literal False counts, so a malformed value cannot disarm
+        # the override any more than it can disarm the gate.
+        cleared_is_explicit_negative = entry.get(_GATE_CLEARED_KEY) is False
+        if closure_evidence and not cleared_is_explicit_negative:
             continue
         # Fail closed: only the literal ac-closure spares a row. An absent,
         # None, or unrecognized `blocks` resolves to execution, so a typo

@@ -87,12 +87,12 @@ def append_row(
 
     if not log_path.exists():
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(f"## Run {run_id}\n{row_text}\n", encoding="utf-8")
+        log_path.write_text(f"## Run {run_id}\n{row_text}\n", encoding="utf-8", newline="\n")
         return LogAppendResult(row_text=row_text, header_opened=True)
 
     original_text = log_path.read_text(encoding="utf-8")
     new_text, header_opened = _insert_row_text(original_text, row_text, run_id)
-    log_path.write_text(new_text, encoding="utf-8")
+    log_path.write_text(new_text, encoding="utf-8", newline="\n")
     return LogAppendResult(row_text=row_text, header_opened=header_opened)
 
 
@@ -141,7 +141,7 @@ def append_rows(
         text, header_opened = _insert_row_text(text, row_text, run_id)
         results.append(LogAppendResult(row_text=row_text, header_opened=header_opened))
 
-    log_path.write_text(text, encoding="utf-8")
+    log_path.write_text(text, encoding="utf-8", newline="\n")
     return results
 
 

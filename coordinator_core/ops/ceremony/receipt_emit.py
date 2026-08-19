@@ -412,7 +412,7 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
         suffix=".json",
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(data, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         os.replace(tmp_str, str(path))

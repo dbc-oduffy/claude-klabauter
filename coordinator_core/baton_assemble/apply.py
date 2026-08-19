@@ -889,9 +889,42 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     return {"cli": "handoff.supersede_predecessor", "args": args, "result": result}
 
 
+#: C5 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C5 / § The discriminator for the mixed end state) -- checked
+#: live against `coordinator_core.authz.registration_quad._live_registry()`
+#: this chunk, and confirmed rather than re-derived (the plan's own body
+#: names this as measured finding of record):
+#:
+#:   handoff.stamp_phase           -> REGISTERED op -- migrates (op-named)
+#:   handoff.author_fork           -> REGISTERED op -- migrates (op-named)
+#:   handoff.supersede_predecessor -> NOT REGISTERED -- stays cli-named
+#:
+#: The other four verbs (`coordinator-doc-new`, `lint-frontmatter`,
+#: `session-claim-cli`, `handoff-carry-gate`) are genuinely external-program /
+#: non-op shapes (each spawns its own `bin/` CLI, or -- `handoff-carry-gate`
+#: -- calls a deliberately-unregistered in-process function) and stay
+#: cli-named; none is on `docs/reference/shell-out-carve-outs.md` or a
+#: `CONSUMES_MANIFEST` because none needed to be -- they were never op-shaped
+#: names to begin with. No new op is minted to force a migration (out of
+#: scope by name).
+#:
+#: MIGRATION MECHANICS: this dict's SHAPE does not change -- both a `cli`-
+#: resolved and an `op`-resolved directive share the one closed table below,
+#: since `apply_base.resolve_cli`/`resolve_op` both do a plain `dict.get` on
+#: it. What changes is which KEY a directive carries into
+#: `apply_base.execute_directives` (`"cli"` vs `"op"`), decided by
+#: `_migrate_op_named_directives` below -- deliberately NOT by editing
+#: `_build_directives` in `baton_assemble/__init__.py` (out of this chunk's
+#: `writes:` scope, and the BREAK-CLASS emission-position constraint forbids
+#: touching where/how a directive is EMITTED). `_migrate_op_named_directives`
+#: rewrites the two migrated verbs' `"cli"` key to `"op"` on the directive
+#: list `apply()` already reads out of `brief()`'s decision object, changing
+#: only how each verb RESOLVES.
+#:
 #: THE closed dispatch table -- every key is a literal string written here
 #: by hand; this dict is never mutated at runtime and never consulted via
-#: anything but a plain `dict.get`/`in` on a `directives[].cli` value.
+#: anything but a plain `dict.get`/`in` on a `directives[].cli`/`directives[].op`
+#: value.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "coordinator-doc-new": _dispatch_coordinator_doc_new,
     "lint-frontmatter": _dispatch_lint_frontmatter,
@@ -901,6 +934,44 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "handoff.supersede_predecessor": _dispatch_handoff_supersede_predecessor,
     "handoff-carry-gate": _dispatch_handoff_carry_gate,
 }
+
+#: The op-named subset of `_CLI_DISPATCH` per the C5 discriminator decision
+#: above -- the SAME two names `ASSEMBLER_DISPATCHABLE["baton_assemble"]`
+#: allowlists (coordinator_core/authz/dispatchable.py). Kept as one literal
+#: frozenset, hand-written, so `_migrate_op_named_directives` and the authz
+#: allowlist can never silently diverge on which verbs are op-named -- a test
+#: pins the two against each other (see
+#: baton_assemble/tests/test_apply_op_dispatch.py).
+_OP_MIGRATED_VERBS: frozenset[str] = frozenset({
+    "handoff.stamp_phase",
+    "handoff.author_fork",
+})
+
+
+def _migrate_op_named_directives(
+    directives: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Rewrites each directive whose `cli` name is in `_OP_MIGRATED_VERBS` to
+    carry an `op` key instead (same value, same `args`) -- the one seam this
+    chunk uses to migrate a verb from `cli`-named to `op`-named WITHOUT
+    editing `_build_directives` (see the C5 discriminator comment above
+    `_CLI_DISPATCH`). Every other directive passes through unchanged.
+
+    Returns a NEW list of NEW dicts for any directive it rewrites -- never
+    mutates a directive dict `brief()`'s decision object still owns, since
+    that object may be read again by this same `apply()` call (e.g. the
+    malformed-envelope fallback reads `artifact_meta`/`lineage_meta` off the
+    same `decision` mapping `directives` was pulled from)."""
+    migrated: list[dict[str, Any]] = []
+    for directive in directives:
+        cli_name = directive.get("cli")
+        if cli_name in _OP_MIGRATED_VERBS:
+            rewritten = dict(directive)
+            rewritten["op"] = rewritten.pop("cli")
+            migrated.append(rewritten)
+        else:
+            migrated.append(directive)
+    return migrated
 
 
 def _resolve_cli(cli_name: str) -> Callable[[list[str], Path], dict[str, Any]]:
@@ -1339,7 +1410,14 @@ def _execute_directives(
     and its optional `compensators` parameter to `_D1_COMPENSATORS`.
     `composition_budget` passes straight through -- threaded in from
     `apply()`'s own construction so the budget's lifetime is the apply
-    run's, not this wrapper's."""
+    run's, not this wrapper's.
+
+    `assembler_name="baton_assemble"` is passed unconditionally (C5) -- the
+    identity `apply_base.resolve_op`/`assert_dispatchable` key
+    `ASSEMBLER_DISPATCHABLE`'s default-deny lookup on for any directive
+    `_migrate_op_named_directives` rewrote to carry an `op` key. Harmless for
+    a run with no `op`-keyed directive at all (every `cli`-keyed directive
+    still resolves via `resolve_cli`, which never consults `assembler_name`)."""
     return apply_base.execute_directives(
         directives,
         judgment_points,
@@ -1348,6 +1426,7 @@ def _execute_directives(
         decisions=decisions,
         compensators=_D1_COMPENSATORS,
         composition_budget=composition_budget,
+        assembler_name="baton_assemble",
     )
 
 
@@ -1721,7 +1800,11 @@ def apply(
             return _finalize_report(APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc)})
 
         decision = brief_result.decision_object
-        directives = decision.get("directives", [])
+        # C5: rewrites the two op-shaped verbs (`handoff.stamp_phase`,
+        # `handoff.author_fork`) from `cli`- to `op`-keyed directives --
+        # see the discriminator comment above `_CLI_DISPATCH` for why this
+        # happens here rather than in `_build_directives`.
+        directives = _migrate_op_named_directives(decision.get("directives", []))
         judgment_points = decision.get("judgment_points", [])
         # `brief()` normalizes a bare-slug `artifact_path` (see
         # `baton_assemble._normalize_artifact_path`) and threads the resolved

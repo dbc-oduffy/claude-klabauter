@@ -228,6 +228,24 @@ def _dispatch_fetch_prune(args: list[str], repo_root: Path) -> dict[str, Any]:
     return {"cli": "fetch-prune"}
 
 
+#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
+#: live against `coordinator_core.authz.registration_quad._live_registry()`
+#: this chunk: NONE of consolidate's six verbs (`delete-only`,
+#: `cherry-pick-and-delete`, `merge-and-delete`, `worktree-remove`,
+#: `worktree-prune`, `fetch-prune`) resolve to a registered op, so ALL SIX
+#: stay `cli`-named — none migrate to `op`. No new op is minted to force a
+#: migration (out of scope by name). Every one of the six is a `git`
+#: plumbing call the module's own `_run_git` makes directly off a
+#: hardcoded `["git", ...]` argv — never `bash`/`sh`, so
+#: `docs/reference/shell-out-carve-outs.md` (scoped to interpreter/shell
+#: spawns) does not apply — and none is a `CONSUMES_MANIFEST`-driven script
+#: module in the completion-family sense, so no `CONSUMES_MANIFEST` entry
+#: applies either. Consequently `ASSEMBLER_DISPATCHABLE`
+#: (coordinator_core/authz/dispatchable.py) gains NO `"consolidate_assemble"`
+#: entry from this chunk (C1's "ship it EMPTY except for entries actually
+#: migrated" — zero migrated here).
+#:
 #: THE closed dispatch table — every key is a literal string written here
 #: by hand, matching `consolidate_assemble.brief`'s `directives[].cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {

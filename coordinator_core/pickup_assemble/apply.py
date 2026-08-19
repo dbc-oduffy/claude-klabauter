@@ -550,6 +550,24 @@ def _dispatch_coordinator_tasks_mirror(args: list[str], repo_root: Path) -> dict
     return {"cli": "coordinator-tasks-mirror", "verb": "init", "basename": basename}
 
 
+#: C4 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
+#: a-cli.md § C4/§ The discriminator for the mixed end state) — checked live
+#: against `coordinator_core.ipc._REGISTRY` this chunk: NONE of the three
+#: verbs below (`session-claim-cli`, `archive-stamp-cli`,
+#: `coordinator-tasks-mirror`) resolve to a registered op, so ALL THREE stay
+#: `cli`-named — none migrate to `op`. No new op is minted to force a
+#: migration (out of scope by name). None is a genuinely external-program
+#: spawn resolved directly off the directive (`archive-stamp-cli`'s composed
+#: primitives reach `git` several layers down, inside `archive_stamp.py`'s
+#: own `_run_git`, never off `directives[].args` — see this module's own
+#: docstring negative-spec) and none is a `CONSUMES_MANIFEST`-driven script
+#: module in the completion-family sense (`coordinator-tasks-mirror` loads
+#: one fixed, hand-pinned script path, not a manifest-enumerated set) — so
+#: neither `docs/reference/shell-out-carve-outs.md` nor a `CONSUMES_MANIFEST`
+#: entry applies to any of the three. Consequently `ASSEMBLER_DISPATCHABLE`
+#: gains NO `"pickup_assemble"` entry from this chunk (C1's "ship it EMPTY
+#: except for entries actually migrated" — zero migrated here).
+#:
 #: THE closed dispatch table (AC9e). Every key is a literal string written
 #: here by hand — this dict is never mutated at runtime and never consulted
 #: via anything but a plain `dict.get`/`in` on a `directives[].cli` value.

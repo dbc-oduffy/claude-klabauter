@@ -183,7 +183,7 @@ def _acquire_lock(lock_path: str, stream: IO[str] = sys.stderr) -> Tuple[bool, i
         print(f"skip: _acquire_lock: fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644) failed: {sys.exc_info()[1]}", file=sys.stderr)
         pass
     else:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", newline="\n") as fh:
             fh.write(f"{my_pid}\n")
         return True, 0
 
@@ -214,7 +214,7 @@ def _acquire_lock(lock_path: str, stream: IO[str] = sys.stderr) -> Tuple[bool, i
         f"{_PROG}: removing stale lockfile (PID {held_pid_raw or 'unknown'} no longer running).",
         file=stream,
     )
-    with open(lock_path, "w", encoding="utf-8") as fh:
+    with open(lock_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(f"{my_pid}\n")
     return True, 0
 
@@ -297,7 +297,7 @@ def _attach_batch(
     """
     tmp_fd, pairs_file = tempfile.mkstemp(suffix=".tsv", prefix="backfill-initiative-fk-pairs-")
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as fh:
             for _, artifact_path, initiative_id in pairs:
                 fh.write(f"{artifact_path}\t{initiative_id}\n")
 

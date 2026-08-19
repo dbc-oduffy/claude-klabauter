@@ -204,7 +204,7 @@ def _store(path: Path, head: str, head_ts: int, queried: set[str], resolved: dic
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 json.dump(payload, fh)
             os.replace(tmp_name, path)
         except BaseException:

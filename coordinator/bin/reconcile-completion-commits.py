@@ -376,7 +376,7 @@ def _atomic_write(path: str, content: str) -> None:
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp_path = tempfile.mkstemp(prefix=".reconcile-tmp-", dir=directory)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         os.replace(tmp_path, path)
     except BaseException:

@@ -359,7 +359,7 @@ def _write_block_to_file(rc_path: Path, begin: str, end: str, body: str, check_o
     try:
         rc_path.parent.mkdir(parents=True, exist_ok=True)
         separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
-        rc_path.write_text(f"{existing_text}{separator}{desired_block}\n", encoding="utf-8")
+        rc_path.write_text(f"{existing_text}{separator}{desired_block}\n", encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"[shell-rc-guard] ERROR: failed to write {label} guard block to {rc_path}: {exc}", file=sys.stderr)
         return {"rc_path": str(rc_path), "already_present": False, "modified": False, "stale_present": stale_present}

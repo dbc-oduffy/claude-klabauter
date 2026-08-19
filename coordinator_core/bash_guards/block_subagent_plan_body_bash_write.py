@@ -214,7 +214,7 @@ def _write_block_log(git_root: Optional[str], session_id: str, agent_id: str) ->
         log_dir = Path(git_root) / ".git" / "coordinator-sessions" / session_id
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_dir / "plan-body-bash-write-block.log", "a", encoding="utf-8") as fh:
+        with open(log_dir / "plan-body-bash-write-block.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{ts} | DENY | agent_id={agent_id} | bash-command-plan-write\n")
     except OSError as exc:
         # Best-effort audit log only -- never flips the ALLOW/DENY decision

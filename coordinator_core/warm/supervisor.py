@@ -175,7 +175,7 @@ def write_discovery(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with locked_write.held_lock(path, holder_label="warm.supervisor"):
-        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8", newline="\n")
 
 
 def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:

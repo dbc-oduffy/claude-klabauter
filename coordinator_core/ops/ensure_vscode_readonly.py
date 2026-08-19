@@ -163,7 +163,7 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
 
     if had_comments:
         try:
-            settings_path.with_name(settings_path.name + ".bak").write_text(raw, encoding="utf-8")
+            settings_path.with_name(settings_path.name + ".bak").write_text(raw, encoding="utf-8", newline="\n")
         except OSError:
             print(f"skip: _merge_settings: settings_path.with_name(settings_path.name + \".bak\").write_text(raw, e failed: {sys.exc_info()[1]}", file=sys.stderr)
             pass
@@ -177,7 +177,7 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
     out_str = json.dumps(obj, indent=2) + "\n"
     tmp = settings_path.with_name(f"{settings_path.name}.tmp.{os.getpid()}")
     try:
-        tmp.write_text(out_str, encoding="utf-8")
+        tmp.write_text(out_str, encoding="utf-8", newline="\n")
         tmp.replace(settings_path)
         # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended surface.

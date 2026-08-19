@@ -853,7 +853,7 @@ def build_allowlisted_source(
         composed = _compose_percolate_ignore(entry_roots, stderr=stderr)
         if composed:
             (tmp_src / ".percolate-ignore").write_text(
-                "\n".join(composed) + "\n", encoding="utf-8"
+                "\n".join(composed) + "\n", encoding="utf-8", newline="\n"
             )
     else:
         # Single-source: preserve today's tolerant behaviour exactly.

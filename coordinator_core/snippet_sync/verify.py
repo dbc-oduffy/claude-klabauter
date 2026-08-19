@@ -925,7 +925,7 @@ def _rewrite_block(
     updated_rest = _replace_block(rest, begin, end, body)
     if updated_rest is None:
         return False  # markers absent — caller already gated on MISSING_END/has_begin
-    path.write_text(prefix + updated_rest, encoding="utf-8")
+    path.write_text(prefix + updated_rest, encoding="utf-8", newline="\n")
     return True
 
 
@@ -962,7 +962,7 @@ def _insert_block(path: Path, name: str, begin: str, end: str, body: str) -> Non
                 break
         out = lines[:insert_before] + [block] + lines[insert_before:]
 
-    path.write_text("".join(out), encoding="utf-8")
+    path.write_text("".join(out), encoding="utf-8", newline="\n")
 
 
 def _claim_if_session(path: str, *, cs_lib: Optional[Path] = None) -> None:
@@ -1310,7 +1310,7 @@ def run(
                 text, shell_begin, shell_end, fence_norm, fence_body, fix=is_fix
             )
             if is_fix and updated != text:
-                p.write_text(updated, encoding="utf-8")
+                p.write_text(updated, encoding="utf-8", newline="\n")
                 _claim_if_session(raw, cs_lib=cs_lib)
                 text = updated
             missing_end = counts["missing_end"] > 0

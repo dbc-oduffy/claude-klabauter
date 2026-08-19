@@ -604,7 +604,7 @@ def _append_log_row(log_path: Optional[Path], class_label: str, total_bytes: int
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"| {ts} | {class_label} | {total_bytes} bytes | {total_items} items |\n")
         declare_write(log_path)
     except OSError:

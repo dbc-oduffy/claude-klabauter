@@ -581,19 +581,6 @@ def test_run_post_toolchain_preflight_failure_is_non_fatal(tmp_path, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def _make_executable(path: Path, body: str = "#!/bin/sh\n") -> None:
-    path.write_text(body)
-    path.chmod(0o755)
-    if os.name == "nt":
-        # An extensionless shebang file with POSIX exec bits set is inert
-        # on Windows -- `win_portability.is_executable` (which this
-        # module's own machine-local-CLI probe uses) only recognizes a
-        # PATHEXT-suffixed sibling for an extensionless path. Without this,
-        # every test below silently falls onto the "not found/executable"
-        # WARNING branch regardless of what it's actually exercising.
-        path.with_name(path.name + ".exe").write_bytes(b"")
-
-
 def test_seed_registry_missing_claude_klabauter_root_warns_and_returns(monkeypatch, capsys):
     """CLAUDE_KLABAUTER_ROOT unresolvable -> WARNING + manual-registration hint
     (never a raised exception -- Step 3 is a convenience, not load-bearing;
@@ -611,29 +598,12 @@ def test_seed_registry_missing_claude_klabauter_root_warns_and_returns(monkeypat
     assert "cannot resolve CLAUDE_KLABAUTER_ROOT to locate machine-local" in err
 
 
-def test_seed_registry_machine_local_missing_warns_and_returns(monkeypatch, tmp_path, capsys):
-    """machine-local CLI absent/non-executable at
-    <claude_klabauter_root>/coordinator/bin/machine-local -> WARNING + manual-
-    registration hint. Discovery is now an in-process call (no external
-    discover-working-repos.sh file/gate to set up)."""
-    claude_klabauter_root = tmp_path / "claude-klabauter"
-    (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    # machine_local_bin intentionally not created.
-
-    fr._seed_machine_local_registry(confirm=True, non_interactive=True)
-
-    err = capsys.readouterr().err
-    assert "machine-local CLI not found/executable" in err
-
-
 def test_seed_registry_confirm_gate_skip_declines(monkeypatch, tmp_path, capsys):
     """Interactive prompt, reply not in ('', 'y', 'yes') -> seeding skipped,
     discovery/registration never attempted."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "n")
@@ -643,10 +613,10 @@ def test_seed_registry_confirm_gate_skip_declines(monkeypatch, tmp_path, capsys)
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _unexpected_discover)
 
-    def _unexpected_run(*a, **k):
-        raise AssertionError("_run should not be called on the declined-confirm path")
+    def _unexpected_registry_set(*a, **k):
+        raise AssertionError("registry_set should not be called on the declined-confirm path")
 
-    monkeypatch.setattr(fr, "_run", _unexpected_run)
+    monkeypatch.setattr(fr, "registry_set", _unexpected_registry_set)
 
     fr._seed_machine_local_registry(confirm=False, non_interactive=False)
 
@@ -654,16 +624,19 @@ def test_seed_registry_confirm_gate_skip_declines(monkeypatch, tmp_path, capsys)
     assert "Registry seeding skipped" in out
 
 
-def test_seed_registry_happy_path_registers_discovered_repos(monkeypatch, tmp_path, capsys):
+def test_seed_registry_happy_path_writes_expected_entries(monkeypatch, tmp_path, capsys):
     """confirm=True skips the prompt entirely; the stubbed in-process
     discovery call prints two repo paths to stdout (captured via
-    redirect_stdout), and the test asserts the `machine-local set
-    repos.<key> <path>` calls fire with the expected derived keys
-    (byte-parity with _derive_repo_key)."""
+    redirect_stdout). This is an end-to-end exercise of the REAL
+    `registry_set` in-process writer (not mocked) -- asserts the on-disk
+    `registry.local.toml` actually gains the expected `repos.<key> = <path>`
+    entries, byte-parity with `_derive_repo_key`."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+
+    registry_dir = tmp_path / "registry"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
@@ -672,34 +645,29 @@ def test_seed_registry_happy_path_registers_discovered_repos(monkeypatch, tmp_pa
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
 
-    calls = []
-
-    def _fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(fr, "_run", _fake_run)
-
     fr._seed_machine_local_registry(confirm=True, non_interactive=False)
 
     out = capsys.readouterr().out
     assert "Registering repos.claude_klabauter = /x/claude-klabauter" in out
     assert "Registering repos.doe_claude = /x/DoE-claude" in out
-    set_calls = [c for c in calls if "set" in c]
-    keys_and_values = [
-        (c[c.index("set") + 1], c[c.index("set") + 2]) for c in set_calls
-    ]
-    assert keys_and_values == [
-        ("repos.claude_klabauter", "/x/claude-klabauter"),
-        ("repos.doe_claude", "/x/DoE-claude"),
-    ]
+
+    registry_file = registry_dir / "registry.local.toml"
+    assert registry_file.is_file()
+    content = registry_file.read_text(encoding="utf-8")
+    assert "\"repos.claude_klabauter\" = '/x/claude-klabauter'" in content
+    assert "\"repos.doe_claude\" = '/x/DoE-claude'" in content
+
+    from coordinator_core.machine_resolver import registry_get
+
+    assert registry_get("repos.claude_klabauter") == "/x/claude-klabauter"
+    assert registry_get("repos.doe_claude") == "/x/DoE-claude"
 
 
 def test_seed_registry_no_repos_discovered_prints_manual_hint(monkeypatch, tmp_path, capsys):
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", lambda argv: 0)
 
@@ -717,7 +685,7 @@ def test_seed_registry_discover_failure_warns(monkeypatch, tmp_path, capsys):
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _raising_discover(argv):
         raise RuntimeError("boom")
@@ -729,6 +697,32 @@ def test_seed_registry_discover_failure_warns(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "working-repo discovery failed" in captured.err
     assert "No repos discovered. Register later" in captured.out
+
+
+def test_seed_registry_write_failure_warns_and_continues(monkeypatch, tmp_path, capsys):
+    """A registry_set failure (ValueError/OSError) on one repo warns and
+    continues -- Step 3 stays warn-and-continue, never fail-closed on a
+    registry write problem (module docstring's warn-and-continue posture)."""
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
+
+    def _fake_discover(argv):
+        print("/x/claude-klabauter")
+        return 0
+
+    monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
+
+    def _raising_registry_set(key, value):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(fr, "registry_set", _raising_registry_set)
+
+    fr._seed_machine_local_registry(confirm=True, non_interactive=False)
+
+    err = capsys.readouterr().err
+    assert "failed to register repos.claude_klabauter" in err
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +777,7 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
@@ -791,11 +785,6 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
         return 0
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
-
-    def _fake_run(cmd, *a, **k):
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(fr, "_run", _fake_run)
 
     fr._seed_machine_local_registry(confirm=True, non_interactive=False)
 
@@ -807,12 +796,12 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
 
 
 def test_journal_omits_failed_registration_from_written_entries(monkeypatch, tmp_path, _journal_env):
-    """A `machine-local set` call that exits non-zero performed no write —
-    only the genuinely-succeeded registration is journaled."""
+    """A `registry_set` call that raises performed no write — only the
+    genuinely-succeeded registration is journaled."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
@@ -821,12 +810,14 @@ def test_journal_omits_failed_registration_from_written_entries(monkeypatch, tmp
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
 
-    def _fake_run(cmd, *a, **k):
-        registry_key = cmd[cmd.index("set") + 1] if "set" in cmd else ""
-        rc = 1 if "broken_repo" in registry_key else 0
-        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="")
+    real_registry_set = fr.registry_set
 
-    monkeypatch.setattr(fr, "_run", _fake_run)
+    def _flaky_registry_set(key, value):
+        if key == "repos.broken_repo":
+            raise OSError("simulated write failure")
+        return real_registry_set(key, value)
+
+    monkeypatch.setattr(fr, "registry_set", _flaky_registry_set)
 
     fr._seed_machine_local_registry(confirm=True, non_interactive=False)
 
@@ -840,7 +831,7 @@ def test_journal_empty_entries_on_no_repos_discovered(monkeypatch, tmp_path, _jo
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", lambda argv: 0)
 
@@ -855,7 +846,7 @@ def test_journal_empty_entries_on_declined_confirm(monkeypatch, tmp_path, _journ
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "n")
@@ -890,23 +881,18 @@ def test_journal_omits_entry_when_mutation_disabled(monkeypatch, tmp_path, _jour
     """`first_run.py` does not itself gate `_seed_machine_local_registry` on
     `COORDINATOR_DISABLE_MACHINE_MUTATION` — only the journal append does,
     via `resolution_journal.record_resolution`'s own guard. The
-    `machine-local set` calls still fire; only this clause's journal row is
+    `registry_set` calls still fire; only this clause's journal row is
     refused, leaving it UNREPORTED for this run."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
-    _make_executable(claude_klabauter_root / "coordinator" / "bin" / "machine-local")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
         return 0
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
-
-    def _fake_run(cmd, *a, **k):
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(fr, "_run", _fake_run)
 
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
 

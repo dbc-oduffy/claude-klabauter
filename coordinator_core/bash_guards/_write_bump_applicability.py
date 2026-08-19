@@ -892,7 +892,7 @@ def record_applicability_event(
             f"session={session_id} agent_class={agent_class}\n"
         )
         with open(
-            Path(sdir) / _APPLICABILITY_LOG_FILENAME, "a", encoding="utf-8"
+            Path(sdir) / _APPLICABILITY_LOG_FILENAME, "a", encoding="utf-8", newline="\n"
         ) as f:
             f.write(line)
     except Exception:

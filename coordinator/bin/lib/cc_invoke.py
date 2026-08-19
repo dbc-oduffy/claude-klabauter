@@ -87,14 +87,16 @@ Negative-spec (retired transport patterns — DO NOT reintroduce):
 """
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional, Tuple, cast
 
 GENERATES = []  # writes only tempfile.mkstemp() params files (cc_invoke + cc_invoke_bare), always unlinked; no tracked artifact
 
@@ -409,6 +411,116 @@ _CLAUDE_KLABAUTER_ROOT_REMEDIATION = (
 )
 
 
+# The engine-root module's own basename and entry-point name both carry the
+# repo token (`claude_klabauter_root.py` / `coordinator_claude_klabauter_root_with_class`), and the
+# publish transform rewrites that token throughout — so the mirror spells them
+# `claude_klabauter_root.py` / `coordinator_claude_klabauter_root_with_class`.
+# These two patterns are deliberately token-FREE, which makes them the one
+# spelling that survives the transform byte-identically in both trees. Do not
+# "fix" them to name the module directly; that is the defect, not the style.
+_GATE_MODULE_GLOB_SUFFIX = "_root.py"
+_GATE_ENTRY_POINT_RE = re.compile(r"^def (coordinator_\w+_root_with_class)\s*\(", re.MULTILINE)
+
+
+def _gate_entry_point_by_shape(candidate: str) -> Optional[Callable[[], Tuple[str, str]]]:
+    """Locate the engine-root gate entry point in `candidate` BY SHAPE, for a
+    candidate whose module spelling differs from this tree's.
+
+    Returns the resolved callable, or ``None`` when `candidate` genuinely has
+    no engine-root module (a marker-only or broken checkout) — the caller
+    turns that into the same RuntimeError it always raised.
+
+    WHY THIS EXISTS. `_delegate_to_gate` above imports
+    ``coordinator_core.claude_klabauter_root`` from the CANDIDATE's path. That name is
+    correct for a candidate spelled the way THIS tree is spelled, and wrong for
+    one spelled the way the other tree is: the publish transform renames the
+    module and its entry point together, so the live tree asking a published
+    mirror for `coordinator_core.claude_klabauter_root` can never succeed, and the mirror
+    asking a live tree for its own transformed name can never succeed either.
+    Rung 1 hands this function the published mirror on any DR-326 box — where
+    engine dispatch resolves to the published build by design — so the
+    pre-existing behaviour rejected, by construction, the very tree the
+    resolver is built to reach. Symptom was a `scoped-git-commit` refusal on
+    every staged `.py`: `detect-staged-rollback` could not resolve an engine.
+    Backlink: state/bug-backlog/2026-08-19-cc-invoke-validates-a-candidate-root-by-a-c41f7a3e28b9.yaml
+
+    HARD CONSTRAINT PRESERVED: no subprocess, matching `_resolve_claude_klabauter_root`'s
+    own rungs-1/1.5/3 bound. Directory listing, plain reads, one import.
+
+    Negative-spec:
+      - Runs ONLY after the direct import fails, so the same-spelling path
+        keeps its previous cost and behaviour exactly — this adds nothing to
+        the hot path.
+      - Does NOT import every `*_root.py` it finds. `coordinator_core/` also
+        holds `state_root.py`, `data_root.py`, `coordinator_root.py` and
+        friends; the source is text-scanned for the entry-point DEFINITION
+        first and only the one match is imported. (`state_root.py` mentions
+        the suffix without defining one — hence matching `^def `, not a bare
+        substring.)
+      - Does NOT widen what counts as a valid engine. It only lets a candidate
+        answer under its own spelling; the answer still comes from that
+        candidate's own gated ladder, never from a re-derivation here.
+    """
+    pkg_dir = os.path.join(candidate, "coordinator_core")
+    try:
+        entries = sorted(os.listdir(pkg_dir))
+    except OSError:
+        return None
+
+    for entry in entries:
+        if not entry.endswith(_GATE_MODULE_GLOB_SUFFIX) or entry.startswith("test_"):
+            continue
+        try:
+            with open(os.path.join(pkg_dir, entry), "r", encoding="utf-8") as fh:
+                match = _GATE_ENTRY_POINT_RE.search(fh.read())
+        except OSError:
+            continue
+        if match is None:
+            continue
+        module_name = "coordinator_core." + entry[: -len(".py")]
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            # Deliberately broader than ImportError. A candidate whose
+            # engine-root module matches by shape but raises on import (syntax
+            # error mid-publish, a failing module-level side effect, a partial
+            # checkout) is a BROKEN candidate, not this resolver's problem to
+            # re-raise: the caller's contract is that an unusable candidate
+            # yields the one RuntimeError naming the candidate and its source.
+            # Letting an arbitrary exception escape here would surface as an
+            # unrelated traceback on the commit hot path. (Review: rev-D.)
+            continue
+        found = getattr(module, match.group(1), None)
+        if callable(found):
+            return cast(Callable[[], Tuple[str, str]], found)
+    return None
+
+
+def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str) -> str:
+    """Remediation text for a candidate that imported ``coordinator_core.claude_klabauter_root``
+    but whose gated resolver still returned a falsy root.
+
+    Review: engine-root-slice-2 finding 1 — the un-parameterized
+    ``_CLAUDE_KLABAUTER_ROOT_REMEDIATION`` told every rung (env, registry, self-location)
+    to run `machine-local set repos.claude_klabauter`, which is only the right
+    instruction for Rung 2 (the case that text was written for). A bogus
+    `CLAUDE_KLABAUTER_ROOT` (Rung 1) or an unimportable/unstamped self-located checkout
+    (Rung 3) needs a remedy naming the candidate/source that actually failed,
+    not a registry-set instruction unrelated to their problem.
+    """
+    if source == "machine-local repos.claude_klabauter":
+        return _CLAUDE_KLABAUTER_ROOT_REMEDIATION
+    return (
+        f"cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — candidate {candidate!r} (from {source}) "
+        "imported coordinator_core.claude_klabauter_root but the gated ladder returned no root.\n"
+        "  Remediate (choose one):\n"
+        f"    Confirm {candidate!r} is a genuine, stamped claude-klabauter checkout.\n"
+        "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
+        "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
+        "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
+    )
+
+
 
 
 def _resolve_claude_klabauter_root() -> str:
@@ -545,10 +657,14 @@ def _resolve_claude_klabauter_root() -> str:
             try:
                 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
             except ImportError as exc:
-                raise RuntimeError(
-                    f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
-                    f"a valid claude-klabauter checkout — coordinator_core.claude_klabauter_root not importable: {exc}"
-                ) from exc
+                coordinator_claude_klabauter_root_with_class = _gate_entry_point_by_shape(candidate)
+                if coordinator_claude_klabauter_root_with_class is None:
+                    raise RuntimeError(
+                        f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
+                        f"a valid claude-klabauter checkout — no coordinator_core/*_root.py under it defines "
+                        f"a coordinator_*_root_with_class entry point "
+                        f"(direct import also failed: {exc})"
+                    ) from exc
             # Published-engine rung: coordinator_claude_klabauter_root_with_class() runs the
             # DR-132 two-tier gate (published-engine-mirror vs. live-working-tree)
             # instead of the classless coordinator_claude_klabauter_root(), which always
@@ -564,7 +680,7 @@ def _resolve_claude_klabauter_root() -> str:
                 except ValueError:
                     pass
         if not resolved:
-            raise RuntimeError(_CLAUDE_KLABAUTER_ROOT_REMEDIATION)
+            raise RuntimeError(_claude_klabauter_root_gate_empty_remediation(candidate, source=source))
         return resolved
 
     # Rung 1: already in environment — CANDIDATE only now, delegated through
@@ -1532,7 +1648,7 @@ def cc_invoke(
     # cc_invoke_bare()'s identical --params-file handling below.
     _params_fd, _params_path = tempfile.mkstemp(prefix="cc-invoke-params-")
     try:
-        with os.fdopen(_params_fd, "w", encoding="utf-8") as _pf:
+        with os.fdopen(_params_fd, "w", encoding="utf-8", newline="\n") as _pf:
             _pf.write(params_json)
         argv = [
             sys.executable, "-m", "coordinator_core.invoke", op,
@@ -1670,7 +1786,7 @@ def cc_invoke_bare(
     # passed by path, and unlinked in finally so a large payload never overflows argv.
     _params_fd, _params_path = tempfile.mkstemp(prefix="cc-invoke-params-")
     try:
-        with os.fdopen(_params_fd, "w", encoding="utf-8") as _pf:
+        with os.fdopen(_params_fd, "w", encoding="utf-8", newline="\n") as _pf:
             _pf.write(params_json)
         _argv = [
             sys.executable, "-m", "coordinator_core.invoke", op,

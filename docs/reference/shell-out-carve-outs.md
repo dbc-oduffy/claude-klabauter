@@ -357,6 +357,24 @@ location (`BASH_SOURCE[0]` / `__file__`) and are indifferent to what exec'd them
 the set above is closed by construction: it must name what execute actually resolved, and this one
 resolved to zero.
 
+## Reconciled against the directive-verb migration — 2026-08-19
+
+`docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md` § C9 reconciled this list against
+every directive-dispatch verb the plan's migration touched (`pickup_assemble`, `baton_assemble`,
+the three completion tables, `consolidate_assemble`, `merge_assemble`, `backlog_grind_assemble`).
+Each migration chunk (C3-C8) recorded, at the site of its own dispatch table, a live discriminator
+finding of whether any of its verbs spawn `bash`/`sh` and therefore fall inside this doc's scope.
+Every chunk found **none** — verbs either resolved to a registered op, called `git` plumbing
+directly off a hardcoded argv, invoked an existing `coordinator/bin/*.py` script via
+`sys.executable`, or (one case, `node-ceremony-gate`) spawned `node --test` — never `bash`/`sh`.
+
+**Outcome: no entry above is obsolete, and no verb needs to be added.** Nothing in the migrated
+population was ever a member of this list (its `Sites:` are install/hook-generation/interpreter-
+self-probe/pyright surfaces, disjoint from the assembler `apply.py` modules by construction), so no
+verb "stopping spawning" could retire an entry here, and no verb "must keep spawning" (bash/sh
+specifically) was found un-listed. Per this doc's closed-list rule, that finding is recorded rather
+than acted on — there is nothing to remove and nothing to flag to the PM.
+
 ## Related, not a carve-out
 
 The polyglot trampoline blessing ("~1-line polyglot trampoline inside an otherwise-Python CLI")

@@ -73,7 +73,7 @@ def write_marker() -> "tuple[str, int]":
         return (f"workday-start-marker: already fresh ({today})\n", 0)
 
     marker_path.parent.mkdir(parents=True, exist_ok=True)
-    marker_path.write_text(today, encoding="utf-8")
+    marker_path.write_text(today, encoding="utf-8", newline="\n")
     declare_write(marker_path)
     return (f"workday-start-marker: written ({today})\n", 0)
 

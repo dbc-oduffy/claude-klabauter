@@ -679,7 +679,7 @@ def _atomic_write_text(target: Path, content: str) -> None:
         prefix="." + target.name + ".uninstall-strip.", dir=str(out_dir)
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
         os.replace(tmp_name, target)
     except Exception:

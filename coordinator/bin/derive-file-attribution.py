@@ -852,7 +852,7 @@ def _save_cache(cache_path: str, cache_obj: Dict[str, Any]) -> None:
         os.makedirs(cache_dir, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(prefix='.file-attribution-cache-', dir=cache_dir)
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline="\n") as fh:
                 json.dump(cache_obj, fh, ensure_ascii=False)
             os.replace(tmp_path, cache_path)
         except Exception:

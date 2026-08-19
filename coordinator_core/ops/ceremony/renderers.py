@@ -456,7 +456,7 @@ def _process_file(file_path: Path, root: Path, *, check_mode: bool = False) -> d
 
     if changed_count > 0:
         if not check_mode:
-            file_path.write_text(working, encoding="utf-8")
+            file_path.write_text(working, encoding="utf-8", newline="\n")
         return {"changed": True, "changed_count": changed_count, "error_count": error_count}
     return {"changed": False, "changed_count": 0, "error_count": error_count}
 

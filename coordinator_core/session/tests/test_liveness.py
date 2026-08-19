@@ -2374,3 +2374,236 @@ class TestHarnessRegistryLiveSessionIdsParity:
             registry_dir, "s.json", "s-rescued", os.getpid(), _self_create_time()
         )
         assert "s-rescued" in liveness.live_session_ids(cwd=str(repo))
+
+
+# ---------------------------------------------------------------------------
+# session_abandoned — additive predicate (C2, docs/plans/2026-08-19-
+# abandonment-is-its-own-verdict.md). NEVER a liveness verdict; NEVER a DEAD
+# arm. Signal set + threshold per docs/research/2026-08-19-abandonment-
+# signal-census.md.
+# ---------------------------------------------------------------------------
+
+_STALE = "2000-01-01T00:00:00Z"
+_STALE_EPOCH = 946684800
+
+
+class TestSessionAbandoned:
+    def test_empty_sid_not_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert liveness.session_abandoned("", cwd=str(repo)) is False
+
+    def test_missing_dir_not_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert liveness.session_abandoned("no-such-session", cwd=str(repo)) is False
+
+    def test_stale_last_activity_alone_is_not_abandoned(self, tmp_path):
+        # AC2's named negative-spec test, verbatim: a fixture carrying a
+        # stale last_activity and nothing else (no touched.txt, no
+        # dispatched-agents.txt) must read NOT-abandoned -- the >= 2
+        # independent stale signals floor can never be satisfied by one
+        # candidate alone, no matter how stale it is.
+        repo = _make_repo(tmp_path)
+        _write_session(repo, "s-thin", {"pid": "1", "last_activity": _STALE})
+        assert liveness.session_abandoned("s-thin", cwd=str(repo)) is False
+
+    def test_fresh_last_activity_alone_is_not_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo, "s-fresh", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        assert liveness.session_abandoned("s-fresh", cwd=str(repo)) is False
+
+    def test_two_stale_independent_signals_is_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-two-stale", {"pid": "1", "last_activity": _STALE}
+        )
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "touched.txt", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-two-stale", cwd=str(repo)) is True
+
+    def test_stale_last_activity_but_fresh_touched_txt_is_not_abandoned(self, tmp_path):
+        # The primary gate (freshest-of-signals) fires before the >= 2 floor
+        # is even consulted: one fresh signal is dispositive.
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-mixed", {"pid": "1", "last_activity": _STALE}
+        )
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        # freshly-written file -> fresh mtime (now), no _touch() backdate.
+        assert liveness.session_abandoned("s-mixed", cwd=str(repo)) is False
+
+    def test_stale_last_activity_and_stale_dispatched_agents_is_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-dispatch-stale", {"pid": "1", "last_activity": _STALE}
+        )
+        (sdir / "dispatched-agents.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "dispatched-agents.txt", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-dispatch-stale", cwd=str(repo)) is True
+
+    def test_meta_less_stale_touched_txt_is_abandoned(self, tmp_path):
+        # No meta.json at all -- touched.txt alone is dispositive, per C1's
+        # "Meta-less sid, decided" finding. No >= 2 floor applies (there is
+        # structurally only ever one candidate for this population).
+        repo = _make_repo(tmp_path)
+        sdir = _session_dir_path(repo, "s-metaless-stale")
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "touched.txt", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-metaless-stale", cwd=str(repo)) is True
+
+    def test_meta_less_fresh_touched_txt_is_not_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _session_dir_path(repo, "s-metaless-fresh")
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        assert liveness.session_abandoned("s-metaless-fresh", cwd=str(repo)) is False
+
+    def test_meta_less_no_touched_txt_falls_back_to_dir_mtime(self, tmp_path):
+        # No meta.json, no touched.txt -- falls back to
+        # _dir_recency_fallback_epoch, which is fresh (dir just created), so
+        # not abandoned.
+        repo = _make_repo(tmp_path)
+        sdir = _session_dir_path(repo, "s-metaless-empty")
+        sdir.mkdir(parents=True, exist_ok=True)
+        assert liveness.session_abandoned("s-metaless-empty", cwd=str(repo)) is False
+
+    def test_unparseable_last_activity_does_not_count_as_a_stale_signal(
+        self, tmp_path
+    ):
+        # Review: coordinator:code-reviewer P2 (coordinatorcode-reviewer-
+        # 1da5144e.md) -- core.iso_to_epoch returns 0 on BOTH empty input
+        # and parse failure, so an unparseable-but-present last_activity
+        # (e.g. "not-a-timestamp") used to score epoch 0 (maximally stale)
+        # and count as one of the two independent stale signals. This
+        # fixture has a corrupted last_activity AND a genuinely stale
+        # touched.txt -- if the corrupted field still counted, that would
+        # satisfy the >= 2 floor and read ABANDONED. It must not: a
+        # corrupted field contributes NO candidate, so only one real
+        # signal (touched.txt) is stale, and the floor is never reached.
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-corrupt-ts", {"pid": "1", "last_activity": "not-a-timestamp"}
+        )
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "touched.txt", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-corrupt-ts", cwd=str(repo)) is False
+
+    def test_live1_disabled_lever_has_no_effect(self, tmp_path, monkeypatch):
+        # session_abandoned never reads the rollback lever -- toggling it
+        # must not change a verdict this function already committed to.
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-lever", {"pid": "1", "last_activity": _STALE}
+        )
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "touched.txt", _STALE_EPOCH)
+        before = liveness.session_abandoned("s-lever", cwd=str(repo))
+        monkeypatch.setenv("COORDINATOR_SESSION_LAYER1_DISABLE", "1")
+        after = liveness.session_abandoned("s-lever", cwd=str(repo))
+        assert before is after is True
+
+
+# ---------------------------------------------------------------------------
+# AC1 tripwire: session_abandoned is additive. Capture session_live,
+# live_session_ids, live_session_verdicts and session_verdict's outputs
+# BEFORE any session_abandoned call, exercise session_abandoned across the
+# same corpus/fixtures, then re-capture and assert byte-for-byte equality.
+# A diff that changes any of the four functions' return values for any
+# input fails this criterion (AC1).
+# ---------------------------------------------------------------------------
+
+
+class TestAC1CharacterizationUnchanged:
+    def _four_function_snapshot(self, repo, sids):
+        return {
+            "session_live": {sid: liveness.session_live(sid, cwd=str(repo)) for sid in sids},
+            "live_session_ids": liveness.live_session_ids(cwd=str(repo)),
+            "live_session_verdicts": liveness.live_session_verdicts(cwd=str(repo)),
+            "session_verdict": {
+                sid: liveness.session_verdict(sid, cwd=str(repo)) for sid in sids
+            },
+        }
+
+    def test_fixture_matrix_unchanged_by_session_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        # A small matrix spanning session_live's own documented arms: Layer-2
+        # live, Layer-2 stale, Layer-1 dead-with-fresh-recency, meta-less,
+        # and the abandonment predicate's own thin/rich-evidence cases.
+        _write_session(repo, "m-live", {"pid": "1", "last_activity": core.now_iso()})
+        _write_session(repo, "m-stale", {"pid": "1", "last_activity": _STALE})
+        _write_session(
+            repo,
+            "m-layer1-dead",
+            {
+                "pid": "1",
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+                "last_activity": core.now_iso(),
+            },
+        )
+        thin_sdir = _write_session(repo, "m-thin", {"pid": "1", "last_activity": _STALE})
+        rich_sdir = _write_session(repo, "m-rich", {"pid": "1", "last_activity": _STALE})
+        (rich_sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(rich_sdir / "touched.txt", _STALE_EPOCH)
+        metaless_sdir = _session_dir_path(repo, "m-metaless")
+        metaless_sdir.mkdir(parents=True, exist_ok=True)
+        (metaless_sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(metaless_sdir / "touched.txt", _STALE_EPOCH)
+
+        sids = [
+            "m-live", "m-stale", "m-layer1-dead", "m-thin", "m-rich",
+            "m-metaless", "no-such-session",
+        ]
+
+        before = self._four_function_snapshot(repo, sids)
+
+        # Exercise the new predicate across every sid in the matrix --
+        # calling it must not mutate meta.json, touched.txt, or any state
+        # the four functions above read.
+        for sid in sids:
+            liveness.session_abandoned(sid, cwd=str(repo))
+
+        after = self._four_function_snapshot(repo, sids)
+
+        assert before == after
+        # Pin the values themselves too, not just before==after equality --
+        # a regression that shifted BOTH captures identically would still
+        # pass a bare equality check.
+        assert before["session_live"]["m-live"] is True
+        assert before["session_live"]["m-stale"] is False
+        assert before["session_live"]["m-layer1-dead"] is False
+        assert before["session_live"]["m-thin"] is False
+        assert before["session_live"]["m-rich"] is False
+        assert before["session_live"]["no-such-session"] is False
+
+    def test_live_corpus_unchanged_by_session_abandoned(self):
+        # Golden-diff against the REAL on-disk corpus (Q20 pattern, see
+        # TestLiveSessionIdsCorpus above): the four functions must produce
+        # byte-for-byte identical output whether or not session_abandoned is
+        # called on the same sids in between.
+        base = Path(core.git_root() or ".", ".git", "coordinator-sessions")
+        if not base.is_dir():
+            pytest.skip("no real .git/coordinator-sessions/ registry on this box")
+        sids = [p.name for p in base.iterdir() if p.is_dir()][:50]
+
+        before = {
+            "session_live": {sid: liveness.session_live(sid) for sid in sids},
+            "live_session_ids": liveness.live_session_ids(),
+            "live_session_verdicts": liveness.live_session_verdicts(),
+            "session_verdict": {sid: liveness.session_verdict(sid) for sid in sids},
+        }
+
+        for sid in sids:
+            liveness.session_abandoned(sid)
+
+        after = {
+            "session_live": {sid: liveness.session_live(sid) for sid in sids},
+            "live_session_ids": liveness.live_session_ids(),
+            "live_session_verdicts": liveness.live_session_verdicts(),
+            "session_verdict": {sid: liveness.session_verdict(sid) for sid in sids},
+        }
+
+        assert before == after

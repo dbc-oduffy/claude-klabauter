@@ -67,6 +67,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # emit.cadence — sequences backlog.record then artifact.emit over the same common_dir
     # key (derives main_worktree_root(common_dir) exactly like its two sub-ops).
     "emit.cadence":                          "common_dir",
+    # workflow.fire / workflow.fire_status — the fire registry and its logs live
+    # under <git-common-dir>/coordinator-sessions/workflow-fires (fire.py::_registry_dir
+    # walks from the envelope's repo_root), so every linked worktree of a repo must
+    # see the same live-fire population — the concurrency cap is counted over it.
+    "workflow.fire":                         "common_dir",
+    "workflow.fire_status":                  "common_dir",
     # Working-tree, keyed on git_common_dir (shared across linked worktrees)
     "handoff.has_live_children":             "common_dir",
     # Same class as handoff.has_live_children above — reads from the main-

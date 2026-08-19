@@ -620,7 +620,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     is_new = not os.path.isfile(target)
     if is_new:
         os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as fh:
+    with open(target, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(output + "\n")
 
     # DR-276: declared AFTER the write lands, never before — the contract is a

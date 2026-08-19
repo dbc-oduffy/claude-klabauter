@@ -224,7 +224,7 @@ def append_entry(
     line = _entry_line(sha, kind, weight_basis, reviewed_by)
 
     def _append() -> None:
-        with open(path, "a", encoding="utf-8") as fh:
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
 
     anchor = _lock_anchor(path)
@@ -536,7 +536,7 @@ def record_predecessor_pointer(
         return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(pointer, sort_keys=True), encoding="utf-8")
+        path.write_text(json.dumps(pointer, sort_keys=True), encoding="utf-8", newline="\n")
     except OSError:
         return False
     return True

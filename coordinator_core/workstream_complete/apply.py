@@ -206,14 +206,21 @@ Negative-spec:
       module — every consumes-manifest CLI is loaded and invoked in-process
       via `importlib.util.spec_from_file_location` + its own `main`
       entrypoint, never spawned.
-    - Do NOT import or compose `coordinator_core.contract.apply_base` —
-      that module (D1) is a separate baton's anti-scope surface (plan §
-      Anti-scope); this module's directive-execution engine, closed
-      dispatch, and halt-contract composition are authored/assembled
-      locally instead (this module composes the trio from
-      `ceremony_common.apply_halt` — see module docstring above — it does
-      not hand-copy a third instance of it, and it does not reach for
-      `apply_base`).
+    - Do NOT import or compose `coordinator_core.contract.apply_base`'s
+      directive-execution engine (`execute_directives`/`resolve_cli`/
+      `resolve_op`) — that module (D1) is a separate baton's anti-scope
+      surface (plan § Anti-scope); this module's directive-execution
+      engine, closed dispatch, and halt-contract composition are
+      authored/assembled locally instead (this module composes the trio
+      from `ceremony_common.apply_halt` — see module docstring above — it
+      does not hand-copy a third instance of it, and it does not reach for
+      `apply_base`'s execution engine). The ONE named exception (C7,
+      `docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md`) is
+      `apply_base.assert_dispatchable` — the single shared admission check
+      against `authz.dispatchable.ASSEMBLER_DISPATCHABLE`, called from
+      `_resolve_cli` below so the membership check is never hand-copied
+      into three private bodies. It does not resolve, dispatch, or execute
+      anything; it only raises.
     - Do NOT auto-resolve a `judgment_points[]` entry — a directive only
       ever fires off an EXPLICIT `decisions[jp_id]["disposition"]` whose
       OWN `resolves` list names it; an unresolved (or non-terminally-
@@ -275,6 +282,7 @@ from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFai
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete import judgments as _judgments
+from coordinator_core.contract.apply_base import assert_dispatchable
 
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
@@ -346,12 +354,16 @@ _LOADED_MODULES: dict[str, ModuleType] = {}
 def _resolve_cli(cli_name: str) -> Path:
     """The one seam `directives[].cli` ever passes through. Closed over a
     literal dict — an unrecognized name raises before any directive in the
-    run dispatches."""
+    run dispatches. Additionally gated (C7) by the shared
+    `apply_base.assert_dispatchable` admission check against
+    `authz.dispatchable.ASSEMBLER_DISPATCHABLE["workstream_complete"]` — no
+    table in the engine is left with review-only admission."""
     if cli_name not in _CLI_DISPATCH:
         raise UnrecognizedDirective(
             f"workstream_complete.apply: unrecognized cli {cli_name!r} — not a "
             f"member of the consumes-manifest {sorted(_CLI_DISPATCH)!r}"
         )
+    assert_dispatchable("workstream_complete", cli_name)
     return _CLI_DISPATCH[cli_name]
 
 

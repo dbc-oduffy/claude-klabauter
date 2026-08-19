@@ -114,7 +114,7 @@ def _rewrite_anchor(target_file: str, full_sha: str, machine: str) -> None:
             smach = True
             continue
         out.append(line)
-    with open(target_file, "w", encoding="utf-8") as f:
+    with open(target_file, "w", encoding="utf-8", newline="\n") as f:
         f.writelines(out)
     # DR-276: declared AFTER the write lands.
     _declare_write(target_file)
@@ -173,7 +173,7 @@ def _inject_anchor(target_file: str, full_sha: str, machine: str, today: str) ->
             _err('ERROR: no "# Daily Summary" H1 found in file; cannot inject anchor')
             return 1
 
-    with open(target_file, "w", encoding="utf-8") as f:
+    with open(target_file, "w", encoding="utf-8", newline="\n") as f:
         f.writelines(out)
     # DR-276: declared AFTER the write lands.
     _declare_write(target_file)

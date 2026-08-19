@@ -196,7 +196,7 @@ def _write_first_prompt_into_body(
     )
     text = text.replace(_ACCOMPLISHED_PLACEHOLDER, replacement, 1)
     try:
-        handoff_path.write_text(text, encoding="utf-8")
+        handoff_path.write_text(text, encoding="utf-8", newline="\n")
     except OSError:
         pass
 

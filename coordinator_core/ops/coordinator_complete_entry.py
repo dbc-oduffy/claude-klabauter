@@ -1061,7 +1061,7 @@ def _write_entry(
         lines.append("")
         lines.append("<!-- NATURE-INFER: Set the nature: field above (roadmap | bugfix | tech-debt | infra) and remove this comment. -->")
 
-    with open(entry_path, "w", encoding="utf-8") as fh:
+    with open(entry_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
     # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.

@@ -79,7 +79,7 @@ def _cmd_baseline() -> int:
     _BASELINE.parent.mkdir(parents=True, exist_ok=True)
     _BASELINE.write_text(
         json.dumps({"keys": sorted(_fmt(k) for k in keys)}, indent=2) + "\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     print(f"baseline: {len(keys)} raw violation keys -> {_BASELINE.relative_to(_REPO_ROOT)}")
     return 0

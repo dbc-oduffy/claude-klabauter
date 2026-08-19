@@ -2967,7 +2967,7 @@ def _log_fail_open(
         parts = " ".join(f"{k}={v!r}" for k, v in fields.items())
         line = f"[{timestamp}] FAIL-OPEN {parts}\n"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except Exception:  # noqa: BLE001 -- observability must never raise into check()
         pass

@@ -425,7 +425,7 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
             dir=str(outbox_dir), prefix=f".{topic}.", suffix=".tmp",
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 f.write(new_content)
             # Review: code-reviewer — mkstemp defaults to 0o600; chmod to 0o644
             # before replace so compose doesn't silently narrow the draft's

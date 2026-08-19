@@ -196,7 +196,7 @@ def _atomic_write(path: str, content: str) -> None:
     invokes the hook via its own shebang-aware shell layer regardless), so
     the chmod is skipped there rather than issued as a harmless no-op."""
     tmp_path = f"{path}.tmp.{os.getpid()}"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
     os.replace(tmp_path, path)
     if os.name != "nt":

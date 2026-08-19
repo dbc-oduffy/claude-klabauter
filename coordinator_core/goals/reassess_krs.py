@@ -595,7 +595,7 @@ def _write_goal_file_atomic(goal_file: Path, new_text: str) -> None:
     """
     fd, tmp = tempfile.mkstemp(dir=str(goal_file.parent), suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(new_text)
         os.replace(tmp, goal_file)
     except Exception:

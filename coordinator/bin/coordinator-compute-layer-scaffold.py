@@ -224,7 +224,7 @@ def main(argv: list[str]) -> int:
 
     if out_path:
         try:
-            with open(out_path, "w", encoding="utf-8") as f:
+            with open(out_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text + "\n")
         except OSError as exc:
             print(f"{_PROG}: failed to write to --out path: {out_path} ({exc})", file=sys.stderr)

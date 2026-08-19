@@ -72,11 +72,18 @@ Negative-spec (tc-2 D2): NO id field is generated or accepted. The filename
 <date>-<slug>.yaml is the canonical entry handle. Do NOT restore id generation,
 --id flag, or id_prefix_pattern validation — those are intentionally dropped.
 
+Body transport: `--body` carries a ONE-LINE value only. cmd.exe truncates its
+whole command line at the first LF during its own parse, so a multi-line
+`--body` reaching a `.cmd` launcher loses every line after the first -- and
+SILENTLY, when `--body` is the trailing flag (argparse still sees a well-formed
+value, the write succeeds, the entry lands one line long). Pass `--body-file
+<path>` for anything multi-line; a path is one token on every launcher leg.
+
 Invocation:
   coordinator-queue-append \\
       --schema debt-backlog \\
       --title "Title here" \\
-      --body "Multi-line body" \\
+      --body-file /path/to/body.md \\
       --source "daily-review/2026-06-15" \\
       --status open \\
       --risk "Risk text" \\
@@ -86,7 +93,7 @@ Invocation:
   coordinator-queue-append \\
       --schema bug-backlog \\
       --title "Bug title" \\
-      --body "Bug description" \\
+      --body-file /path/to/bug-description.md \\
       --surface "coordinator/auto-push" \\
       --severity P1 \\
       --status open
@@ -115,6 +122,7 @@ import argparse
 import datetime
 import json
 import os
+import pathlib
 import re
 import sys
 import tempfile
@@ -703,7 +711,7 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
         dir=directory,
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         os.replace(tmp_path, out_path)
     except BaseException:
@@ -1243,7 +1251,19 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
             "Multi-line description. Required for the shared base schemas "
             "(debt-backlog, bug-backlog, improvement-queue, lessons). Not used by "
             "--schema workstream or workstream-event. Use literal newlines or \\n. "
-            "Requiredness is enforced in main(), not here (see _WORKSTREAM_STORE_SCHEMAS)."
+            "Requiredness is enforced in main(), not here (see _WORKSTREAM_STORE_SCHEMAS). "
+            "A body carrying real newlines cannot survive the .cmd launcher leg -- "
+            "pass --body-file for anything multi-line."
+        ),
+    )
+    parser.add_argument(
+        "--body-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Read the body from a UTF-8 file instead of argv. Mutually exclusive "
+            "with --body. The only body transport that survives every launcher "
+            "leg intact -- see main()'s resolution block for why."
         ),
     )
     parser.add_argument(
@@ -1665,6 +1685,33 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
+    # --body-file: the argv-immune body transport.
+    #
+    # cmd.exe truncates its ENTIRE command line at the first LF during its own
+    # parse, before a .cmd launcher body ever runs -- `%*` and `%CMDCMDLINE%` are
+    # both already one line by then, so neither `%*` forwarding nor
+    # `raw_cmdline_recovery.recover_windows_argv` can restore what was dropped
+    # (measured 2026-08-19; the standing oracle is the known-bad
+    # `cmd-multiline-truncated` row in coordinator_core/test_bin_launcher_parity.py
+    # ::test_argv_fidelity_matrix). When --body is the trailing flag the loss is
+    # SILENT: argparse still sees a well-formed single-line value, the write
+    # succeeds, and the entry lands holding its first line and nothing else.
+    # A path is one token on every leg, so this flag closes the class outright
+    # instead of warning about it -- same shape as coordinator-safe-commit's and
+    # cross-repo-memo's --body-file.
+    #
+    # Escape expansion is deliberately NOT applied to file-borne text: a file
+    # already carries real newlines, so a literal backslash-n in prose is prose.
+    body_from_file = False
+    if args.body_file is not None:
+        if args.body is not None:
+            parser.error("--body and --body-file are mutually exclusive")
+        try:
+            args.body = pathlib.Path(args.body_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            parser.error(f"--body-file unreadable: {exc}")
+        body_from_file = True
+
     schema_name = args.schema
     if schema_name not in _SCHEMA_OUTPUT_DIRS:
         known = ", ".join(sorted(_SCHEMA_OUTPUT_DIRS.keys()))
@@ -1888,7 +1935,7 @@ def main() -> None:
             # Universal base fields.
             "created": created,
             "title": args.title,
-            "body": args.body.replace("\\n", "\n"),
+            "body": args.body if body_from_file else args.body.replace("\\n", "\n"),
             "status": args.status,
             # Base optional fields (canonical unified names).
             "from_repo": from_repo,

@@ -169,7 +169,7 @@ def _save_advisory_state(tmpdir: str, session_id: str, state: dict) -> None:
     except Exception:
         return
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(state, fh)
         os.replace(tmp_path, path)
     except Exception:
@@ -704,7 +704,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     if os.path.isfile(rt_bark_sentinel):
         return ""
     try:
-        with open(rt_bark_sentinel, "w", encoding="utf-8") as fh:
+        with open(rt_bark_sentinel, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(str(int(time.time())))
     except Exception:
         # Write failed -- fail open toward "fires again next call" rather than
@@ -800,7 +800,7 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
         return ""
 
     try:
-        with open(sentinel, "w", encoding="utf-8") as fh:
+        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(str(int(time.time())))
     except Exception:
         # Sentinel unwritable — fail open toward silence this call rather than

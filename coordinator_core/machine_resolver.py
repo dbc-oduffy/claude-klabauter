@@ -107,8 +107,10 @@ which side the eager-import cascade reaches first, because by the time
 
 from __future__ import annotations
 
+import datetime
 import functools
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -264,6 +266,120 @@ def registry_get(key: str) -> Optional[str]:
 # (``compute_machine``/``compute_contributor``) that predate the DR-071 public
 # promotion. New external callers should import ``registry_get`` directly.
 _registry_get = registry_get
+
+
+_REGISTRY_TARGET_FILE = "registry.local.toml"
+
+_REGISTRY_NEW_FILE_HEADER = (
+    "# registry.local.toml  (created by `machine-local set`)\n"
+    "#\n"
+    "# WARNING: Use `machine-local set <key> <value>` to add or change values.\n"
+    "# Direct hand-edits are fragile: they do not reproduce on reinstall and\n"
+    "# will not transfer automatically to a new machine.\n"
+    "schema = 1\n"
+)
+
+
+def _parse_toml_text(text: str) -> dict:
+    """Best-effort ``tomllib.loads`` over in-memory text — malformed content
+    degrades to ``{}`` (mirrors ``_load_toml``'s own graceful-degradation
+    contract; this call site only ever consults the result for an
+    idempotency comparison, never as the sole source of truth)."""
+    try:
+        import tomllib as _tomllib  # type: ignore[import-not-found]
+    except ImportError:
+        try:
+            import tomli as _tomllib  # type: ignore[no-redef]
+        except ImportError:
+            return {}
+    try:
+        return _tomllib.loads(text)
+    except Exception:  # noqa: BLE001 — faithful catch-all, see docstring
+        return {}
+
+
+def registry_set(key: str, value: str) -> None:
+    """Write one flat, root-namespace registry key into
+    ``registry.local.toml`` — in-process, no ``machine-local`` CLI
+    subprocess.
+
+    Restoration note (2026-08-19): ``coordinator_core.install.first_run.
+    _seed_machine_local_registry`` used to shell out to the ``machine-local``
+    CLI binary (``coordinator/bin/machine-local`` and its ``.cmd``/``.ps1``
+    Windows twins) to perform this write. That binary was deleted in
+    ``3bd2738f4`` (2026-08-14, "C5: delete the three dead bareword
+    forwarders and their Windows twins") as unreachable dead code — correct
+    on its own terms (nothing on PATH ever resolved those files), but it
+    silently broke Step 3's registry seed, which guarded on the binary's
+    existence and had nothing left to spawn from that date forward. This
+    function restores the capability as a genuine in-process write rather
+    than resurrecting a forwarder with nothing left to forward to — do NOT
+    "fix" this by re-adding a `_run([machine_local_bin, "set", ...])` spawn.
+    The real, full-featured ``machine-local`` CLI still lives at
+    ``<settings-home>/bin/machine-local`` for interactive/operator use; this
+    function is a narrower, purpose-built writer for this module's own
+    single-writer ``repos.*`` namespace, not a reimplementation of it.
+
+    Scope: ONLY the flat, root-namespace ``"<key>" = '<value>'`` shape — the
+    same shape ``repos.*`` and ``publish.mirrors.*.path`` keys always use
+    (never promoted to a concern-file namespace — see
+    ``merged_flat_registry``'s docstring). Does not handle table-form
+    definitions, concern-namespaced keys, or array values; a caller needing
+    those must go through the real ``machine-local`` CLI.
+
+    Shape sanctioned for exactly this single-writer-namespaced-table case by
+    DoE-claude's ``docs/wiki/machine-local-registry.md``: "Append-only
+    writers that structurally preserve sibling tables (read ->
+    tomllib-parse-absent-check -> append -> atomic os.replace) satisfy the
+    preserve-unrelated-tables property by construction and need no
+    provenance."
+
+    Idempotent: a key already present with the same value is a no-op (no
+    file write at all — the journal contract this feeds needs to tell a
+    genuinely-performed write from a no-op). A key present with a DIFFERENT
+    value has its single line replaced in place — never a blind append,
+    since TOML forbids redefining a top-level key and a naive append would
+    corrupt the file on next read.
+
+    Raises ``ValueError`` if ``value`` cannot be represented as a TOML
+    literal string (contains ``'`` or a newline) — TOML literal strings have
+    no escape mechanism, matching the real CLI's own refusal policy. Raises
+    ``OSError`` on a genuine filesystem failure. Callers seeding multiple
+    keys should catch both and warn-and-continue per key.
+    """
+    if "'" in value or "\n" in value:
+        raise ValueError(
+            f"registry_set({key!r}, ...): value cannot be written as a TOML "
+            "literal string (contains a single quote or a newline)"
+        )
+
+    reg_dir = registry_dir()
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    target_path = reg_dir / _REGISTRY_TARGET_FILE
+
+    if target_path.is_file():
+        content = target_path.read_text(encoding="utf-8")
+    else:
+        content = _REGISTRY_NEW_FILE_HEADER
+
+    date_tag = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_line = f"\"{key}\" = '{value}'  # set {date_tag}"
+
+    pattern = re.compile(r'^"' + re.escape(key) + r'"\s*=.*$', re.MULTILINE)
+    match = pattern.search(content)
+    if match:
+        existing_value = _flatten(_parse_toml_text(content)).get(key)
+        if existing_value == value:
+            return  # already correct -- no-op, no write, no journal-worthy mutation
+        new_content = content[: match.start()] + new_line + content[match.end() :]
+    else:
+        if not content.endswith("\n"):
+            content += "\n"
+        new_content = content + new_line + "\n"
+
+    tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
+    tmp_path.write_text(new_content, encoding="utf-8", newline="\n")
+    os.replace(tmp_path, target_path)
 
 
 def merged_flat_registry() -> dict:

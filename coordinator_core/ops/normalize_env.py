@@ -539,7 +539,7 @@ def _ne_darwin_bash_profile_repair(
 
     tmp_fd, tmp_name = tempfile.mkstemp(prefix=".bash_profile.tmp.", dir=str(home))
     try:
-        with os.fdopen(tmp_fd, "w") as fh:
+        with os.fdopen(tmp_fd, "w", newline="\n") as fh:
             fh.write(new_content)
         os.chmod(tmp_name, prior_mode)
         os.replace(tmp_name, bp_path)
@@ -754,7 +754,7 @@ def _ne_write_backup_file(backup_path: Path, out) -> bool:
         saved_at = "unknown"
 
     try:
-        with open(backup_path, "w", encoding="utf-8") as fh:
+        with open(backup_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(f"SAVED_PATH={os.environ.get('PATH', '')}\n")
             fh.write(f"SAVED_PYMANAGER_TARGET={py_target}\n")
             fh.write(f"SAVED_AT={saved_at}\n")

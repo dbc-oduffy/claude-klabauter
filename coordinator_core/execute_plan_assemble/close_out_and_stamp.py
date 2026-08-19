@@ -3240,7 +3240,7 @@ def apply_tracker_reconciliation(
     text = tracker_path.read_text(encoding="utf-8")
     new_text, edits = reconcile_tracker_shipped_counts(text, repo_root)
     if edits:
-        tracker_path.write_text(new_text, encoding="utf-8")
+        tracker_path.write_text(new_text, encoding="utf-8", newline="\n")
     return edits
 
 
@@ -3861,7 +3861,7 @@ def _auto_resolve_committed_open_rows(
 
     if not dry_run:
         try:
-            live_path.write_text(new_text, encoding="utf-8")
+            live_path.write_text(new_text, encoding="utf-8", newline="\n")
         except OSError as exc:
             return None, f"auto-resolve: could not write {live_path}: {exc}"
 
@@ -4259,7 +4259,7 @@ def _dry_run_scratch_plan(text: str, suffix: str) -> Path:
     wraps."""
     fd, tmp_name = tempfile.mkstemp(prefix="close-out-and-stamp-dry-run-", suffix=suffix)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(text)
     except Exception:
         Path(tmp_name).unlink(missing_ok=True)
@@ -5076,7 +5076,7 @@ def close_out_and_stamp(
         if cleared_text is not None:
             text = cleared_text
             if not dry_run:
-                live_path.write_text(text, encoding="utf-8")
+                live_path.write_text(text, encoding="utf-8", newline="\n")
                 cleared_live_marker = True
         if dry_run:
             # See `_dry_run_scratch_plan`'s own docstring: composes over the
@@ -5125,7 +5125,7 @@ def close_out_and_stamp(
                             after_key="status",
                         )
                         live_path.write_text(
-                            rebuild(current_split, restored_fm), encoding="utf-8"
+                            rebuild(current_split, restored_fm), encoding="utf-8", newline="\n"
                         )
                 except OSError:
                     # Restoring the marker is best-effort recovery on top of
@@ -5176,7 +5176,7 @@ def close_out_and_stamp(
             text = new_text
             partial_evaluation_stamped = True
             if not dry_run:
-                live_path.write_text(text, encoding="utf-8")
+                live_path.write_text(text, encoding="utf-8", newline="\n")
 
     if status_target == "implemented":
         subject = f"close-out: {plan_path_rel} shipped end-to-end, stamped implemented"

@@ -644,6 +644,109 @@ def test_measure_session_review_scale_inputs_counts_backslash_tracked_modified_f
         assert surface_count == 1
 
 
+def test_measure_session_review_scale_inputs_expands_untracked_directory():
+    """An untracked DIRECTORY in the dirty set must be expanded to the files
+    beneath it, not passed to `_count_lines` as if it were a file.
+
+    Regression pin (observed live 2026-08-19 on a strang-03 close): `git
+    status --porcelain` collapses a wholly-untracked directory to a single
+    trailing-slash entry, and `classify_session_authored_files` passes that
+    entry straight through. Opening a directory raises `OSError`, which
+    `_count_lines` converts to `None`, which collapsed the ENTIRE four-tuple
+    to unresolved -- so one peer's untracked scratch directory sitting in the
+    tree erased this session's own brightline inputs and `decide_review_scale`
+    returned `resolved=False`. That fails toward reviewing LESS, the exact
+    direction `_measure_session_review_scale_inputs`'s negative-spec forbids.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_git_repo(root)
+        session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+        (root / "seed.py").write_text("x = 1\n", encoding="utf-8")
+        _run_git(["add", "seed.py"], str(root))
+        _commit_as(root, "seed", _SESSION_ID)
+
+        brief_dir = root / "briefs" / "a-peer-brief"
+        brief_dir.mkdir(parents=True)
+        (brief_dir / "one.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+        (brief_dir / "two.py").write_text("c = 3\n", encoding="utf-8")
+
+        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+            root,
+            session_start_time,
+            _SESSION_ID,
+            uncommitted_paths=["briefs/a-peer-brief/"],
+        )
+
+        assert (gross_loc, code_loc, commit_count, surface_count) != (None, None, None, None), (
+            "an untracked directory collapsed the whole measurement to unresolved"
+        )
+        assert gross_loc == 4, gross_loc
+        assert code_loc == 4, code_loc
+        assert commit_count == 1
+
+
+def test_measure_session_review_scale_inputs_exhausted_walk_budget_trips_brightline():
+    """An untracked tree too large to enumerate exactly must resolve the
+    brightline UPWARD, never collapse it.
+
+    `_expand_untracked` stops walking once the shared budget is spent, so the
+    counted LOC becomes a floor rather than a total. Reporting that floor
+    as-is would read as a small diff and select LESS review — the same
+    failure direction as the `None` collapse this walk replaced. So an
+    exhausted budget raises the reported LOC to the row-4 threshold, on the
+    reasoning that a directory too large to measure IS a big diff.
+
+    Regression pin: if a future change lowers the raise, drops it, or
+    restores a `None` return on overflow, `decide_review_scale` silently
+    stops selecting `partitioned` for the largest diffs in the fleet."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_git_repo(root)
+        session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+        (root / "seed.py").write_text("x = 1\n", encoding="utf-8")
+        _run_git(["add", "seed.py"], str(root))
+        _commit_as(root, "seed", _SESSION_ID)
+
+        big = root / "big"
+        big.mkdir()
+        for index in range(6):
+            (big / f"f{index}.py").write_text("x = 1\n", encoding="utf-8")
+
+        original_budget = wsc._UNTRACKED_WALK_BUDGET
+        wsc._UNTRACKED_WALK_BUDGET = 3
+        try:
+            gross_loc, code_loc, _commit_count, _surface_count = (
+                wsc._measure_session_review_scale_inputs(
+                    root,
+                    session_start_time,
+                    _SESSION_ID,
+                    uncommitted_paths=["big/"],
+                )
+            )
+        finally:
+            wsc._UNTRACKED_WALK_BUDGET = original_budget
+
+        assert code_loc is not None, "an exhausted budget collapsed the measurement"
+        assert code_loc >= directives_review._BRIGHTLINE_LOC, code_loc
+        assert gross_loc >= directives_review._BRIGHTLINE_LOC, gross_loc
+
+        decision = directives_review.decide_review_scale(
+            gross_loc=gross_loc,
+            code_loc=code_loc,
+            commit_count=1,
+            surface_count=1,
+            executor_dispatched=False,
+            shared_schema_touched=False,
+            chain_disposition="single-session",
+        )
+        assert decision.partition_mandatory is True
+
+
 def test_count_lines_unreadable_path_returns_none(tmp_path):
     """(review-integrator finding 1, half 2) `_count_lines` on a path that
     does not exist on disk returns `None`, never a zero standing in for the

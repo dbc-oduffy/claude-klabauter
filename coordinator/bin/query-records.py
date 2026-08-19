@@ -7,13 +7,20 @@ regression this plan's C1/D1 gate exists to prevent — see
 `docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md` § A2).
 This trampoline services the DoE-used flag subset only — `--type --where
 --since --older-than --format --status --root --list-schemas
---include-archived` — over the
+--include-archived --include-body` — over the
 already-working `coordinator/bin/lib/records_query.py` transport
 (`route_mutation` -> `coordinator_core.invoke records.query`, per that
 module's own docstring). It deliberately does NOT reimplement the query
 grammar, liveness table, or record collection locally — those stay
 engine-owned (`coordinator_core/ops/records_query.py`); this file only
 translates a CLI flag surface into the op's params dict.
+
+`--include-body` (opt-in, default off): projects `frontmatter['body']` onto
+each record — post-frontmatter text for `.md` records, `null` for `.yaml`
+whole-file records. The op rejects it (non-zero exit) for the synthetic
+types (`handoff-ledger`, `research-claim`), which have no body to project;
+this trampoline does not pre-validate that itself, it relies on the op's own
+loud rejection (cockpit ask 11).
 
 Two capabilities this trampoline adds that lib/records_query.py's own CLI
 does not expose:
@@ -149,6 +156,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "invocation without this flag is unaffected."
         ),
     )
+    parser.add_argument(
+        "--include-body",
+        dest="include_body",
+        action="store_true",
+        help=(
+            "OPT-IN: project frontmatter['body'] (post-frontmatter text, "
+            "null for .yaml whole-file types) onto each record. Default "
+            "off. Rejected by the op for synthetic types (handoff-ledger, "
+            "research-claim)."
+        ),
+    )
     return parser
 
 
@@ -213,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
         params["older_than"] = args.older_than
     if args.include_archived:
         params["include_archived"] = True
+    if args.include_body:
+        params["include_body"] = True
     # `is not None`, NOT truthiness: --limit 0 is the documented way to ask
     # for unlimited results (op default is 50). A bare `if args.limit:`
     # guard would silently drop 0 back to the default. Mirrors

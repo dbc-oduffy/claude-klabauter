@@ -114,7 +114,7 @@ def register(reg_path: Path, live_path: str, check_only: bool) -> int:
     # ValueError on Python <3.12 (CPython relaxed this in 3.12); matches the bash
     # oracle's own inline-python comment verbatim.
     tmp = reg_path.parent / (reg_path.name + f".tmp.{os.getpid()}")
-    tmp.write_text(new_text, encoding="utf-8")
+    tmp.write_text(new_text, encoding="utf-8", newline="\n")
     if reg_path.exists():
         try:
             tmp.chmod(reg_path.stat().st_mode)

@@ -113,7 +113,7 @@ def record_publish_swap_refusal(
 
     AUDITS_DIR.mkdir(parents=True, exist_ok=True)
     record_path = AUDITS_DIR / f"{timestamp.strftime('%Y%m%dT%H%M%S.%f')}Z-{pid}.json"
-    record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    record_path.write_text(json.dumps(record, indent=2), encoding="utf-8", newline="\n")
 
     # Two lines, the second `Remediation:`-prefixed — the guard's check is
     # scoped by `stripped.startswith(("Remediation:", "Then:"))`, so a

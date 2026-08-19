@@ -1673,7 +1673,7 @@ def _write_sentinel(
         # doctor-last-run.json for downstream json.loads() consumers.
         fd, tmp = tempfile.mkstemp(dir=str(sentinel_path.parent), suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(payload, f, indent=2)
                 f.write("\n")
             os.replace(tmp, sentinel_path)

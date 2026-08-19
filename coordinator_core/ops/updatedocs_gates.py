@@ -82,6 +82,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -178,6 +179,53 @@ _DETAIL_TAIL_CHARS = 2000
 _DEFAULT_CLI_TIMEOUT_SECONDS = 120.0
 
 
+def _windows_exec_argv(cli_path: Path, args: list[str]) -> Optional[list[str]]:
+    """Resolves the Windows-executable argv form of an extensionless CLI.
+    `CreateProcess` (what `subprocess.run` uses under the hood on Windows)
+    never honours a `#!` shebang line the way POSIX `execve` does — exec'ing
+    `cli_path` directly there raises OSError (WinError 193 / ENOEXEC) before
+    the CLI ever runs, which is exactly the gap the `.cmd`/`.ps1` launcher
+    shim (`coordinator/bin/gen-launcher-shim.py`) exists to close for every
+    `bin/` entrypoint. Checked in the shim's own precedence order — first
+    co-located sibling that exists wins, no cascading past it even if a
+    later candidate would also resolve, so the fallback to a raw shebang
+    read stays a last resort rather than competing with an already-generated
+    shim. Returns None (never raises) when nothing resolves; the caller
+    treats that exactly like today's direct-exec OSError — UNAVAILABLE."""
+    cmd_sibling = Path(str(cli_path) + ".cmd")
+    if cmd_sibling.is_file():
+        return [str(cmd_sibling), *args]
+
+    ps1_sibling = Path(str(cli_path) + ".ps1")
+    if ps1_sibling.is_file():
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if powershell is None:
+            return None
+        # Mirrors gen_claude_doe_launcher.smoke_launcher's own .ps1
+        # invocation shape — the tree's one other site that spawns a
+        # generated .ps1 launcher rather than merely rendering its text.
+        return [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1_sibling), *args]
+
+    py_sibling = Path(str(cli_path) + ".py")
+    if py_sibling.is_file():
+        return [sys.executable, str(py_sibling), *args]
+
+    if cli_path.suffix:
+        return None
+    try:
+        with cli_path.open("r", encoding="utf-8", errors="replace") as f:
+            shebang = f.readline()
+    except OSError:
+        return None
+    # A shebang naming anything other than a Python interpreter (sh/bash/
+    # node/...) is not something this op can safely run in-process or via
+    # sys.executable — that stays a genuine UNAVAILABLE, not an invented
+    # interpreter substitution.
+    if shebang.startswith("#!") and "python" in shebang.lower():
+        return [sys.executable, str(cli_path), *args]
+    return None
+
+
 def _run(
     cli_path: Path,
     args: list[str],
@@ -201,8 +249,11 @@ def _run(
     spawn OSError. `.py` CLIs always get the explicit `sys.executable` prefix
     (the pre-existing contract for check-rag-state.py / generate-repomap.py /
     prune-*.py); every other CLI (the extensionless DoE-claude bin/ scripts)
-    is exec'd directly and relies on its own shebang, exactly as before this
-    diff introduced those gates.
+    is exec'd directly on POSIX and relies on its own shebang, exactly as
+    before this diff introduced those gates. On Windows, direct exec of an
+    extensionless file cannot work at all (CreateProcess does not read
+    shebangs) — see `_windows_exec_argv` for the launcher-shim-shaped
+    resolution used there instead; POSIX behaviour below is unchanged.
 
     Deliberate isolation boundary — do not convert to an in-process import.
     Mechanism: crash containment — runs project-declared gate commands,
@@ -210,7 +261,15 @@ def _run(
     caller. See
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
     """
-    argv = [sys.executable, str(cli_path), *args] if cli_path.suffix == ".py" else [str(cli_path), *args]
+    if cli_path.suffix == ".py":
+        argv = [sys.executable, str(cli_path), *args]
+    elif sys.platform == "win32":
+        resolved = _windows_exec_argv(cli_path, args)
+        if resolved is None:
+            return None
+        argv = resolved
+    else:
+        argv = [str(cli_path), *args]
     # Resolved at call time (not a bound default) so a test/override can
     # tighten _DEFAULT_CLI_TIMEOUT_SECONDS without needing every caller to
     # thread an explicit timeout= through.

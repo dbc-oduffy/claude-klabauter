@@ -458,6 +458,70 @@ def test_external_gate_with_closure_evidence_does_not_exclude_row(tmp_path):
     assert ids == {"C1"}
 
 
+def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
+    # plan-tasks.schema.json 1.9.0: `cleared` asserts whether the gate IS
+    # discharged; `closure_evidence` only names how that was or will be
+    # verified. An explicit `cleared: false` therefore outranks evidence.
+    # Regression: the reader ignored `cleared` entirely, so a status note
+    # parked in `closure_evidence` silently disarmed the gate it documented
+    # -- found against sat-06 C4, a row that writes into a sibling repo's
+    # tree, gated on a DR still at `status: proposed`.
+    body = """- id: C1
+  title: gate documented but NOT discharged
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their DR must be RATIFIED first
+      blocks: execution
+      cleared: false
+      closure_evidence: >-
+        Status only - the DR was authored but is still proposed.
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == set()
+
+
+def test_cleared_absent_leaves_closure_evidence_clearing_behaviour_unchanged(tmp_path):
+    # The 1.9.0 bump is the additive half only: `closure_evidence` still
+    # clears on its own, keeping this reader in sync with DoE-claude's
+    # `_uncleared_execution_gate`. Only the explicit negative is new.
+    body = """- id: C1
+  title: gate cleared by evidence, no cleared key
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+      blocks: execution
+      closure_evidence: abc1234
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == {"C1"}
+
+
+def test_cleared_non_false_value_does_not_disarm_the_override(tmp_path):
+    # Only the literal False is the explicit negative. A malformed value
+    # must not be read as one, matching this module's fail-closed posture
+    # for `blocks`.
+    body = """- id: C1
+  title: malformed cleared value
+  surface: some/surface
+  external_gate:
+    - owner_repo: some-other-repo
+      condition: their thing must ship first
+      blocks: execution
+      cleared: "no"
+      closure_evidence: abc1234
+"""
+    plan_path = _write_plan(tmp_path, body)
+    ids = {row.id for row in read_spine(plan_path)}
+
+    assert ids == {"C1"}
+
+
 def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):
     # A gated predecessor's work has not run -- unlike a satisfied
     # (shipped/deferred) predecessor, its dependent is NOT known-satisfied

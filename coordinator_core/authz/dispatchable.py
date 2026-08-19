@@ -45,4 +45,92 @@ import types
 # CONSUMES_MANIFEST script barewords (completion-family) that assembler may
 # dispatch. See docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md
 # § The discriminator for the mixed end state.
-ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.MappingProxyType({})
+ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.MappingProxyType({
+    # Completion family (C7, plan § The discriminator for the mixed end
+    # state) — script barewords, each a literal member of the named
+    # module's own `CONSUMES_MANIFEST` (the single oracle for the set).
+    # These three tables' UNIT does not change (still `cli`-named, still
+    # in-process module load, never a registered op) — they gain only the
+    # admission CONTROL, via `apply_base.assert_dispatchable`.
+    "workday_complete": frozenset({
+        "workday-complete-args-and-validate",
+        "workday-complete-reconcile",
+        "workday-complete-step2_5-dirty-tree",
+        "reap-orphaned-in-flight-handoffs",
+        "workday-complete-step3-consolidate",
+        "workday-complete-backfill-scan",
+        "workday-complete-backfill-anchor",
+        "workday-complete-close",
+        "standup",
+        "query-completions",
+        "coordinator-queue-append",
+        "prune-closed-bugs",
+        "workday-start-advisory-counters",
+        "check-weekly-staleness",
+        "goal-close-day",
+        "coordinator-ceremony-hook",
+        "emit-cadence",
+    }),
+    "workstream_complete": frozenset({
+        "wsc-coverage-gate-runner",
+        "check-workstream-complete-deletion-blocks",
+        "wsc-close",
+        "wsc-tail",
+        "coordinator-lesson-add",
+        "coordinator-queue-append",
+        "archive-stamp-cli",
+        "coordinator-harvest-deferrals",
+        "coordinator-complete-entry",
+        "reconcile-completion-commits",
+        "coordinator-fold-execution-record",
+        "regenerate-orientation-cache",
+        "check-machine-local-regeneratability",
+        "review-brightline-gate",
+        "freeze-review-diff",
+        "fan-out-integrator",
+        "scan_unresolved_ubt_records",
+        "classify-dispatch-shape",
+        "session-claim-cli",
+        "emit-cadence",
+    }),
+    "workweek_complete": frozenset({
+        "list-week-changelog",
+        "backfill-week-changelog-gaps",
+        "validate-fast-and-packageability",
+        "lint-frontmatter",
+        "workweek-complete-advisories",
+        "query-records",
+        "detect-initiative-candidates",
+        "coordinator-initiative",
+        "cruft-sweep",
+        "check-wsc-inline-budget",
+        "reassess-goal-krs",
+        "workweek-complete-drift-guards",
+        "workweek-complete-reverse-drift-gate",
+        "check-competitor-positioning-nudge",
+        "check-no-illegal-paths",
+        "workweek-trail-scope",
+        "check-arch-audit-staleness",
+        "check-atlas-watch-drift",
+        "query-completions",
+        "workweek-complete-close",
+        "check-version-consistency",
+        "coordinator-ceremony-hook",
+        "emit-cadence",
+        "workweek-complete-doc-staleness",
+        "workweek-complete-doc-verify",
+        "tier-u-grant-cli",
+    }),
+    # Assembler family (C5, plan § C5 / § The discriminator for the mixed
+    # end state) — `baton_assemble`'s two op-shaped verbs that resolve to a
+    # REGISTERED op (measured live against
+    # `coordinator_core.authz.registration_quad._live_registry()`, C5's own
+    # discriminator decision, confirmed not re-derived). The other five
+    # verbs in `baton_assemble/apply.py`'s `_CLI_DISPATCH` — including the
+    # op-shaped-but-NOT-registered `handoff.supersede_predecessor` — stay
+    # `cli`-named and are therefore never dispatched through this seam.
+    "baton_assemble": frozenset({
+        "handoff.stamp_phase",
+        "handoff.author_fork",
+    }),
+})

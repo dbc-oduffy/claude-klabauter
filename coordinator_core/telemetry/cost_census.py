@@ -279,7 +279,7 @@ def _append_row(series_path: Path, row: dict) -> None:
     try:
         os.makedirs(series_path.parent, exist_ok=True)
         line = json.dumps(row, separators=(",", ":")) + "\n"
-        with open(series_path, "a", encoding="utf-8") as fh:
+        with open(series_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except OSError:
         pass

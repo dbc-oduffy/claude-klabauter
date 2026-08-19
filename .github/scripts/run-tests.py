@@ -165,7 +165,7 @@ def emit_summary(text: str) -> None:
     if not summary:
         return
     try:
-        with open(summary, "a", encoding="utf-8") as fh:
+        with open(summary, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(text + "\n")
     except OSError:
         pass

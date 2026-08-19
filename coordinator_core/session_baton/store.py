@@ -244,7 +244,7 @@ def write_baton(
             pass  # fall through to the unlocked write below
 
     try:
-        path.write_text(new_text, encoding="utf-8")
+        path.write_text(new_text, encoding="utf-8", newline="\n")
     except OSError:
         return False
     return True
@@ -360,7 +360,7 @@ def merge_baton(
         old_text = ""
     new_text = _mutate(old_text)
     try:
-        path.write_text(new_text, encoding="utf-8")
+        path.write_text(new_text, encoding="utf-8", newline="\n")
     except OSError:
         return None
     return merged

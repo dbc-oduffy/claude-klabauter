@@ -151,7 +151,7 @@ def cmd_init(repo_root: str, sid: str, name: str, titles: list[str]) -> int:
         lines.append(f"    updated_at: {now}")
 
     tmp_path = mirror_file + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
     os.replace(tmp_path, mirror_file)
 
@@ -209,7 +209,7 @@ def cmd_update(repo_root: str, sid: str, name: str, title: str, state: str) -> i
             out_lines[i] = f"updated_at: {now}"
 
     tmp_path = mirror_file + ".update.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out_lines) + "\n")
     os.replace(tmp_path, mirror_file)
 

@@ -927,7 +927,7 @@ def _set_deployment_state(handoff_path: Path, target: str) -> bool:
 
     new_text = rebuild(fm_split, new_fm)
     try:
-        handoff_path.write_text(new_text, encoding="utf-8")
+        handoff_path.write_text(new_text, encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"skip: _set_deployment_state: handoff_path.write_text(new_text, encoding=\"utf-8\") failed: {exc}", file=sys.stderr)
         _LOG.debug(
@@ -1106,7 +1106,7 @@ def _append_warn_marker(
                 "# Orphan sweep notes\n\n"
                 "Archive events from session.boot_sweep. "
                 "/workday-start Step 0.8 reads and rotates.\n\n",
-                encoding="utf-8",
+                encoding="utf-8", newline="\n",
             )
         ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with marker_path.open("a", encoding="utf-8") as fh:

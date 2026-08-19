@@ -174,6 +174,91 @@ def test_route_distribution_empty_corpus_is_unknown_not_crash():
     assert result["verdict"] == "unknown"
 
 
+def test_route_distribution_default_min_complete_rows_is_back_compat():
+    # An existing-shaped call (no min_complete_rows) is byte-identical.
+    entries = [
+        {"op": "op.a", "route": "warm_server", "kind": "complete"},
+        {"op": "op.a", "route": "in_process", "kind": "complete"},
+    ]
+    with_default = engine_report.route_distribution(entries, coverage_floor=0.5)
+    without_default = engine_report.route_distribution(
+        entries, coverage_floor=0.5, min_complete_rows=0
+    )
+    assert with_default == without_default
+
+
+def test_route_distribution_refuses_below_min_complete_rows():
+    entries = [
+        {"op": "op.a", "route": "warm_server", "kind": "complete"},
+        {"op": "op.a", "route": "in_process", "kind": "complete"},
+        {"op": "op.a", "route": "warm_server", "kind": "complete"},
+    ]
+    result = engine_report.route_distribution(
+        entries, coverage_floor=0.0, min_complete_rows=50
+    )
+    assert result["complete"] == 3
+    assert result["verdict"] == "unknown"
+    assert "3" in result["verdict_reason"]
+    assert "50" in result["verdict_reason"]
+
+
+def test_route_distribution_passes_at_exactly_min_complete_rows():
+    entries = [
+        {"op": "op.a", "route": "warm_server", "kind": "complete"}
+        for _ in range(3)
+    ]
+    result = engine_report.route_distribution(
+        entries, coverage_floor=0.0, min_complete_rows=3
+    )
+    assert result["complete"] == 3
+    assert result["verdict"] == "ok"
+
+
+def test_route_distribution_row_count_and_coverage_reasons_are_distinguishable():
+    entries = [
+        {"op": "op.a", "route": "warm_server", "kind": "complete"}
+        for _ in range(3)
+    ]
+    below_min = engine_report.route_distribution(
+        entries, coverage_floor=0.0, min_complete_rows=50
+    )
+    below_coverage = engine_report.route_distribution(
+        [{"op": "op.a", "kind": "complete"} for _ in range(100)]
+        + [{"op": "op.a", "route": "warm_server", "kind": "complete"}],
+        coverage_floor=0.5,
+        min_complete_rows=0,
+    )
+    assert below_min["verdict"] == "unknown"
+    assert below_coverage["verdict"] == "unknown"
+    assert below_min["verdict_reason"] != below_coverage["verdict_reason"]
+    assert "min_complete_rows" in below_min["verdict_reason"]
+    assert "coverage" in below_coverage["verdict_reason"]
+
+
+def test_route_distribution_zero_rows_refuses_under_both_minimums():
+    # A 0-row window already refuses via the coverage floor's
+    # `if complete else 0.0` guard regardless of the row-count minimum —
+    # the one input where the two guards overlap. At min_complete_rows=0
+    # the row-count check never fires (0 < 0 is false), so the coverage
+    # reason is the one that surfaces; at min_complete_rows=50 the
+    # row-count check fires first (row-count runs BEFORE coverage), so
+    # that reason surfaces instead. Pin which reason fires at each.
+    result_default = engine_report.route_distribution(
+        [], coverage_floor=0.05, min_complete_rows=0
+    )
+    assert result_default["complete"] == 0
+    assert result_default["verdict"] == "unknown"
+    assert "coverage" in result_default["verdict_reason"]
+    assert "min_complete_rows" not in result_default["verdict_reason"]
+
+    result_with_floor = engine_report.route_distribution(
+        [], coverage_floor=0.05, min_complete_rows=50
+    )
+    assert result_with_floor["complete"] == 0
+    assert result_with_floor["verdict"] == "unknown"
+    assert "min_complete_rows" in result_with_floor["verdict_reason"]
+
+
 def test_process_fanout_overall_and_per_op():
     entries = [
         {"op": "op.a", "pid": 100, "kind": "complete"},

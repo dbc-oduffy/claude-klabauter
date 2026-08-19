@@ -195,7 +195,7 @@ def cmd_reap_log(_args: argparse.Namespace) -> int:
         log_dir = claude_config_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_dir / "coordinator-reap.log", "a", encoding="utf-8") as f:
+        with open(log_dir / "coordinator-reap.log", "a", encoding="utf-8", newline="\n") as f:
             f.write(f"{ts}  {reap_log}\n")
     return 0  # best-effort hygiene — never blocks session start
 

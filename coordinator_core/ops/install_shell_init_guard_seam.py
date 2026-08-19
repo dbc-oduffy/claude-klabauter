@@ -212,7 +212,7 @@ def main(argv: List[str]) -> int:
         f"{SENTINEL_END}\n"
     )
     try:
-        with open(rc_path, "a", encoding="utf-8") as fh:
+        with open(rc_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(block)
     except OSError as exc:
         print(f"{_PROG}: failed to write rc block: {exc}", file=sys.stderr)

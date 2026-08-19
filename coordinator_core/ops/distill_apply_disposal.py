@@ -814,7 +814,7 @@ async def _write_denormalizations(
         rebuilt = rebuild(split, fm_text)
 
         try:
-            parent_abs.write_text(rebuilt, encoding="utf-8")
+            parent_abs.write_text(rebuilt, encoding="utf-8", newline="\n")
         except OSError as exc:
             failed.append({"path": parent_rel, "reason": f"denorm-write-failed: {exc}"})
             continue

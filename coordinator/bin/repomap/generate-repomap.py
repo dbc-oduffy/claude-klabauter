@@ -1229,7 +1229,7 @@ def save_cache(cache_path: Path, cache: dict):
     os.makedirs(cache_path.parent, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as f:
             json.dump(cache, f, indent=2)
         os.replace(tmp_path, cache_path)
     except BaseException:
@@ -1564,7 +1564,7 @@ def generate_task_scoped_map(
     os.makedirs(output_path.parent, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=output_path.parent, suffix=".tmp")
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(output_text)
         os.replace(tmp_path, output_path)
     except BaseException:
@@ -1781,7 +1781,7 @@ def generate_repomap(
     os.makedirs(output_path.parent, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=output_path.parent, suffix=".tmp")
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(output_text)
         os.replace(tmp_path, output_path)
     except BaseException:

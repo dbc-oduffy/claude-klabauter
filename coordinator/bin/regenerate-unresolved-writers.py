@@ -223,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         from coordinator_core.session.declared_writes import declare_write
 
         with recording_declared_writes():
-            BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+            BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8", newline="\n")
             declare_write(BASELINE_PATH)
 
     print(json.dumps(diff, indent=2))

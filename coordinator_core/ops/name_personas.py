@@ -265,13 +265,13 @@ def main(argv: List[str]) -> int:  # noqa: C901 - mirrors the oracle's single-pa
             count = count_prose_matches(old, text)
             if count > 0:
                 bak = f.parent / (f.name + ".bak")
-                bak.write_text(text, encoding="utf-8", errors="surrogateescape")
+                bak.write_text(text, encoding="utf-8", errors="surrogateescape", newline="\n")
                 text = replace_in_prose(old, new, text)
                 pair_replacements[old] += count
                 pair_files[old] += 1
                 file_modified = True
         if file_modified:
-            f.write_text(text, encoding="utf-8", errors="surrogateescape")
+            f.write_text(text, encoding="utf-8", errors="surrogateescape", newline="\n")
             file_texts[f] = text
             total_files_modified += 1
 

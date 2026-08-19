@@ -184,9 +184,9 @@ def _try_claim_lock_dir(lock_dir: Path, sid: str) -> bool:
     # of a metadata-write failure is an acceptable edge (mirrors bash, which
     # does not roll back the mkdir on a subsequent `echo >` failure either).
     try:
-        (lock_dir / "pid").write_text(str(os.getpid()), encoding="utf-8")
-        (lock_dir / "session_id").write_text(sid, encoding="utf-8")
-        (lock_dir / "claimed_at").write_text(_now_iso(), encoding="utf-8")
+        (lock_dir / "pid").write_text(str(os.getpid()), encoding="utf-8", newline="\n")
+        (lock_dir / "session_id").write_text(sid, encoding="utf-8", newline="\n")
+        (lock_dir / "claimed_at").write_text(_now_iso(), encoding="utf-8", newline="\n")
     except OSError as exc:
         _LOG.warning(
             "session.record_pickup: lock metadata write failed for %s (lock still held): %s",
@@ -313,7 +313,7 @@ def _record_pickup_sync(
         # Atomic write: mktemp in the session dir + os.replace (mirrors bash mktemp+mv).
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(sdir), prefix="session-shape.json.")
         try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(new_text)
             os.replace(tmp_path, str(shape_file))
             tmp_path = None  # claimed; don't unlink in finally

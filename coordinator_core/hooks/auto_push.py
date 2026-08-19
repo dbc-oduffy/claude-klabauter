@@ -609,7 +609,7 @@ def log_failure(
 
     if stderr_text:
         try:
-            forensic_path.write_text(stderr_text, encoding="utf-8", errors="replace")
+            forensic_path.write_text(stderr_text, encoding="utf-8", errors="replace", newline="\n")
             # as_posix(), not str(): this is a TEXT artifact, not a filesystem
             # call. str(Path) emits backslashes on nt, so the log's own rows
             # drift separator-norm mid-file (pre-port bash rows are all-forward;
@@ -627,7 +627,7 @@ def log_failure(
     )
     log_path = git_dir / "push-failures.log"
     try:
-        with open(log_path, "a", encoding="utf-8") as fh:
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except OSError as exc:
         # This IS the failure-forensics logger; if it can't write, stderr is the
@@ -1002,7 +1002,7 @@ def _write_pending_record(
         "holder_pid": holder_pid,
     }
     try:
-        tmp.write_text(json.dumps(record), encoding="utf-8")
+        tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
         os.replace(tmp, target)
     except OSError:
         try:
@@ -1664,7 +1664,7 @@ def _open_respawn_stderr_log(repo_root: str, branch: str):
         git_dir = resolve_git_common_dir(repo_root)
         git_dir.mkdir(parents=True, exist_ok=True)
         log_path = git_dir / "auto-push-respawn-stderr.log"
-        fh = open(log_path, "a", encoding="utf-8")
+        fh = open(log_path, "a", encoding="utf-8", newline="\n")
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         fh.write(f"--- respawn {stamp} branch={branch} ---\n")
         fh.flush()

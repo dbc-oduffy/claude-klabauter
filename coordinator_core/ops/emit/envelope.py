@@ -1357,7 +1357,7 @@ def emit(ctx: EmitContext, out: Optional[str | Path] = None) -> dict:
     envelope = build(ctx)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(envelope, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    out_path.write_text(json.dumps(envelope, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
 
     malformed_counts = {
         bucket: len(records)

@@ -1762,7 +1762,7 @@ def _synthetic_registry_manifest_overrides():
             _schemas_dir = _content_root / "schemas"
             _schemas_dir.mkdir(parents=True)
             (_schemas_dir / "coordinator-registry.manifest.json").write_text(
-                json.dumps(_SYNTHETIC_REGISTRY_MANIFEST_FIXTURE), encoding="utf-8"
+                json.dumps(_SYNTHETIC_REGISTRY_MANIFEST_FIXTURE), encoding="utf-8", newline="\n"
             )
 
             # A minimal, valid *.yaml schema record -- `coordinator_core.
@@ -1779,7 +1779,7 @@ def _synthetic_registry_manifest_overrides():
             # translator below it, which reads each via `.get(...)` and
             # tolerates absence.
             (_schemas_dir / "synthetic-fixture-doc.yaml").write_text(
-                "schema: synthetic-fixture-doc\n", encoding="utf-8"
+                "schema: synthetic-fixture-doc\n", encoding="utf-8", newline="\n"
             )
 
             # § docstring ENUMERATION above -- the other data dir a shipped,
@@ -1796,12 +1796,12 @@ def _synthetic_registry_manifest_overrides():
             # missing rather than proving both rungs resolvable.
             _snippets_dir = _content_root / "snippets"
             _snippets_dir.mkdir(parents=True)
-            (_snippets_dir / "registry.toml").write_text("schema_version = 1\n", encoding="utf-8")
+            (_snippets_dir / "registry.toml").write_text("schema_version = 1\n", encoding="utf-8", newline="\n")
 
         settings_home = fixture_root_path / "settings_home"
         machine_local_dir = settings_home / "machine-local"
         machine_local_dir.mkdir(parents=True)
-        (machine_local_dir / ".doe-root").write_text(str(plugin_root) + "\n", encoding="utf-8")
+        (machine_local_dir / ".doe-root").write_text(str(plugin_root) + "\n", encoding="utf-8", newline="\n")
 
         yield {"COORDINATOR_SETTINGS_HOME": str(settings_home)}
 
@@ -4351,7 +4351,7 @@ def write_publish_provenance_record(
         record_path = _publish_provenance_record_path()
         record_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = record_path.with_name(record_path.name + f".tmp-{os.getpid()}")
-        tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         os.replace(tmp_path, record_path)
     except Exception as exc:  # noqa: BLE001 - never gate the round on this write
         print(
@@ -5256,7 +5256,7 @@ def run_pre_sync_gates(
         if target.source_dir.name == _CLOSURE_PACKAGE_NAME:
             stamp_sha = root_shas.get(target.source_dir, "unpinned")
             stamp_path = Path(restricted_tmp_src) / _ENGINE_STAMP_FILENAME
-            stamp_path.write_text(f"sha:{stamp_sha}\n", encoding="utf-8")
+            stamp_path.write_text(f"sha:{stamp_sha}\n", encoding="utf-8", newline="\n")
             print(f"  Engine build stamp: {_ENGINE_STAMP_FILENAME} = sha:{stamp_sha}", file=out)
 
     return GateResult(
@@ -6751,7 +6751,7 @@ def write_delta_record(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"signature": signature, "source_sha": source_sha, "dest_head": dest_head}),
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
 
 
@@ -6844,7 +6844,7 @@ def write_lastsync_marker(setup_dir: Path, name: str, dest_dir: Path, *, dry_run
         return
     marker_dir = setup_dir / "percolate-state"
     marker_dir.mkdir(parents=True, exist_ok=True)
-    (marker_dir / f"{name}.lastsync").write_text(dest_head + "\n", encoding="utf-8")
+    (marker_dir / f"{name}.lastsync").write_text(dest_head + "\n", encoding="utf-8", newline="\n")
 
 
 # ---------------------------------------------------------------------------

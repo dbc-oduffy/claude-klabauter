@@ -131,11 +131,12 @@ def _no_stamp_message(root: Path) -> str:
     one fact, one runnable alternative, no self-legitimacy, no apology,
     never a slash command -- this can fire on the cold path, before any
     Claude Code session exists (`COLD_PATH_MODULES`)."""
-    setup_script = Path(root) / "scripts" / "setup.py"
+    root = Path(root).resolve()
+    setup_script = root / "scripts" / "setup.py"
     return (
-        "engine root has no build stamp: {0} is not a published engine.\n"
-        "Remediation: python3 {1}"
-    ).format(root, setup_script)
+        "engine root has no build stamp: {root} is not a published engine.\n"
+        "Remediation: python3 {setup_script}"
+    ).format(root=root, setup_script=setup_script)
 
 # Mirrors `coordinator_core.warm.client.ENGINE_SKEW`. Duplicated rather than
 # imported: `client.engine_token` (C15's placeholder seam) is meant to call
@@ -254,7 +255,7 @@ def write_engine_stamp(repo_root: Path, identity: str) -> Path:
     """
     stamp = _engine_stamp_path(repo_root)
     stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(identity.strip() + "\n", encoding="utf-8")
+    stamp.write_text(identity.strip() + "\n", encoding="utf-8", newline="\n")
     return stamp
 
 
@@ -272,7 +273,12 @@ def read_engine_stamp_sha(engine_root: Path) -> Optional[str]:
     stamp = _engine_stamp_path(engine_root)
     try:
         raw = stamp.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError: a stamp carrying invalid
+        # UTF-8 is unreadable in exactly the sense this function's "never
+        # raises" contract promises to absorb. Catching only OSError left
+        # that one byte-level corruption escaping past a docstring that
+        # said otherwise.
         return None
     if not raw.startswith("sha:"):
         return None
@@ -348,8 +354,8 @@ def publish_lag(engine_root: Path, source_root: Path) -> Optional[PublishLag]:
 
         oldest_proc = subprocess.run(
             [
-                "git", "-C", str(source_root), "log", "--reverse",
-                "--format=%aI", "-1", f"{sha}..HEAD", "--", *_ENGINE_TOUCHING_PATHS,
+                "git", "-C", str(source_root), "log",
+                "--format=%aI", f"{sha}..HEAD", "--", *_ENGINE_TOUCHING_PATHS,
             ],
             capture_output=True,
             text=True,
@@ -358,9 +364,17 @@ def publish_lag(engine_root: Path, source_root: Path) -> Optional[PublishLag]:
         )
         if oldest_proc.returncode != 0:
             return None
-        oldest_iso = oldest_proc.stdout.strip()
-        if not oldest_iso:
+        # NEGATIVE SPEC -- do NOT "optimise" this into `--reverse ... -1`.
+        # git applies the commit limit BEFORE reversing, so `--reverse -1`
+        # returns the NEWEST unpublished commit. That silently pins
+        # `age_minutes` near zero on an active branch, holds the advisory
+        # below its threshold forever, and disables the signal entirely
+        # while every field still looks populated. Take the last line of
+        # the full range instead: same single subprocess, no limit flag.
+        oldest_lines = [ln for ln in oldest_proc.stdout.splitlines() if ln.strip()]
+        if not oldest_lines:
             return None
+        oldest_iso = oldest_lines[-1].strip()
 
         try:
             from datetime import datetime
@@ -377,16 +391,34 @@ def publish_lag(engine_root: Path, source_root: Path) -> Optional[PublishLag]:
             oldest_unpublished_iso=oldest_iso,
             age_minutes=age_minutes,
         )
-    except (OSError, subprocess.SubprocessError):
+    except Exception:
+        # DELIBERATELY BROAD, and narrower was the bug. The docstring's
+        # contract is "never raises into the caller", and a named-type list
+        # cannot honour that: `UnicodeDecodeError` from a corrupt stamp is a
+        # `ValueError`, not an `OSError`, and slipped straight through the
+        # previous `(OSError, subprocess.SubprocessError)` pair. This is an
+        # advisory whose entire purpose is to be ignorable -- a lag helper
+        # that can take down a fire or a close-out is strictly worse than one
+        # that goes quiet, so absorbing the unknown case is the correct trade
+        # here and nowhere else.
         return None
 
 
-def publish_lag_message(lag: PublishLag) -> Optional[str]:
-    """DR-335's advisory text, shared verbatim by both call sites
+def publish_lag_message(lag: PublishLag, *, site: str = "fire") -> Optional[str]:
+    """DR-335's advisory text, authored once for both call sites
     (`ops/workflow_fire/fire.py`, `workstream_complete/directives_commit_tail.py`)
     so the register (docs/wiki/guard-messaging.md § Register -- one fact,
     one runnable alternative, no self-legitimacy, no repetition, no
     reassurance, no apology) is authored once, not twice.
+
+    `site` selects the ONE sentence whose truth condition differs between
+    them, and exists because sharing that sentence verbatim was wrong:
+    "this run executes the published mirror" is true where a fire is about
+    to execute the mirror, and false at close-out, where nothing is
+    executing and the fact is that THIS session's commits are not yet live
+    for anyone. Centralising prose across two audiences is the
+    amplification gotcha the same doc names (§ Gotchas); the fix is one
+    parameter, not two copies.
 
     Returns `None` below `PUBLISH_LAG_THRESHOLD_MINUTES` or when
     `engine_commits_behind` is 0 -- callers gate on this return, not on a
@@ -397,10 +429,14 @@ def publish_lag_message(lag: PublishLag) -> Optional[str]:
     if lag.age_minutes is None or lag.age_minutes <= PUBLISH_LAG_THRESHOLD_MINUTES:
         return None
     age_hours = lag.age_minutes / 60.0
+    scope = (
+        "This run executes the published mirror, not your tree."
+        if site == "fire"
+        else "These are not live for any session until a round lands them."
+    )
     return (
         f"Engine lag: {lag.engine_commits_behind} commit(s) touching engine "
-        f"code are unpublished (oldest {age_hours:.1f}h). This run executes "
-        "the published mirror, not your tree. "
+        f"code are unpublished (oldest {age_hours:.1f}h). {scope} "
         "Publish: python coordinator/bin/percolate-round.py claude-klabauter"
     )
 

@@ -1633,7 +1633,7 @@ def _capture_guard_forensics(
         out_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         out_path = out_dir / f"{_FORENSICS_GUARD_NAME}-{ts}-{os.getpid()}.json"
-        out_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+        out_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
     except Exception:  # noqa: BLE001 — forensics must never raise, never block a write
         pass
 

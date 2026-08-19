@@ -4373,7 +4373,7 @@ def check_blanket_git_add(
             override_log = _override_log_path(git_root, session_id)
             if override_log is None:
                 raise OSError("could not resolve an overrides.log path")
-            with open(override_log, "a", encoding="utf-8") as fh:
+            with open(override_log, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(
                     "%s | %s | OVERRIDE-BLANKET-GIT-ADD | %s\n"
                     % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), session_id or "no-session", cmd[:120])
@@ -4798,7 +4798,7 @@ def check_probe_spray(
                 existing = fh.read().splitlines()
         existing.append(h)
         existing = [x for x in existing if x][-_RING_N:]
-        with open(ring_f, "w", encoding="utf-8") as fh:
+        with open(ring_f, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(existing) + "\n")
     except OSError:
         # Ring-buffer state is best-effort recurrence tracking for the
@@ -4830,7 +4830,7 @@ def check_probe_spray(
 
     if not is_probe:
         try:
-            open(times_f, "w", encoding="utf-8").close()
+            open(times_f, "w", encoding="utf-8", newline="\n").close()
         except OSError:
             # Best-effort reset of the probe window on a non-probe command;
             # a stale times_f just means the next probe run over-counts
@@ -4861,7 +4861,7 @@ def check_probe_spray(
             pass
     newtimes.append(now)
     try:
-        with open(times_f, "w", encoding="utf-8") as fh:
+        with open(times_f, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(str(t) for t in newtimes) + "\n")
     except OSError:
         # Best-effort persistence of the probe window; a write failure
@@ -4882,7 +4882,7 @@ def check_probe_spray(
                 last_nudge = 0
         if now - last_nudge >= _COOLDOWN:
             try:
-                with open(cool_f, "w", encoding="utf-8") as fh:
+                with open(cool_f, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(str(now))
             except OSError:
                 # Cooldown stamp is best-effort; a write failure only
@@ -5514,7 +5514,7 @@ def check_validate_commit(
                     warn_log = os.path.join(session_dir, "scope-warnings.log")
                     warn_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                     try:
-                        with open(warn_log, "a", encoding="utf-8") as fh:
+                        with open(warn_log, "a", encoding="utf-8", newline="\n") as fh:
                             fh.write(
                                 "%s | %s | foreign-staged | %s | owner:%s | "
                                 "pending-resolution\n"

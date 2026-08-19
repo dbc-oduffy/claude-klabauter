@@ -1182,7 +1182,7 @@ def _stamp_heir_shipped(handoff_path: Path) -> None:
     new_text = rebuild(fm_split, new_fm)
 
     try:
-        handoff_path.write_text(new_text, encoding="utf-8")
+        handoff_path.write_text(new_text, encoding="utf-8", newline="\n")
     except OSError as exc:
         _LOG.warning(
             "fleet.archive_completed_handoffs: could not write heir "

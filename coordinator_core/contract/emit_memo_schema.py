@@ -774,7 +774,7 @@ def emit_schemas(
     for name, builder in _MEMO_SCHEMA_BUILDERS.items():
         schema = builder()
         out_path = schema_dir / f"{name}.schema.json"
-        out_path.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n")
+        out_path.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n", newline="\n")
         emitted[name] = schema
     return emitted
 

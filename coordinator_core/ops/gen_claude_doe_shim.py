@@ -628,7 +628,7 @@ def main(argv: List[str]) -> int:
             parent = os.path.dirname(target_rc)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            open(target_rc, "a", encoding="utf-8").close()
+            open(target_rc, "a", encoding="utf-8", newline="\n").close()
         except OSError as exc:
             print(f"{_PROG}: ERROR: Cannot create rc file: {target_rc}: {exc}", file=sys.stderr)
             print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")
@@ -670,7 +670,7 @@ def main(argv: List[str]) -> int:
         tmp_rc = f"{target_rc}.tmp.{os.getpid()}"
         try:
             new_block = f"\n{SENTINEL_BEGIN}\n{expected_source_line}\n{SENTINEL_END}\n"
-            with open(tmp_rc, "w", encoding="utf-8") as fh:
+            with open(tmp_rc, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(rc_text)
                 fh.write(new_block)
             os.replace(tmp_rc, target_rc)

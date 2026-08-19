@@ -849,7 +849,7 @@ def _write_pin(sha: str) -> None:
     Negative-spec: never writes ABSENT (bootstrap-only sentinel), never writes a short SHA.
     The SHA is always the one resolved from FETCH_HEAD (local, post-fetch).
     """
-    PIN_SHA_FILE.write_text(sha + "\n", encoding="utf-8")
+    PIN_SHA_FILE.write_text(sha + "\n", encoding="utf-8", newline="\n")
     try:
         _pin_display = PIN_SHA_FILE.relative_to(_REPO_ROOT)
     except ValueError:

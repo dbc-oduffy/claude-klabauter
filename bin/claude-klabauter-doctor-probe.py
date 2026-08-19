@@ -9,7 +9,9 @@ the test suite.
 DR-215: coordinator_core is a command-type, spawn-per-call engine — no resident process,
 no UDS server, no MCP shim liveness to check.  All probes in this file are static checks.
 
-Checks — seven ProbeResult objects, in dependency order:
+Checks — one ProbeResult per registered probe, run in dependency order (which is
+why `run_probes` arranges sys.path and resolves CLAUDE_KLABAUTER_ROOT as unconditional
+prerequisites before any selection is applied — see `_ensure_core_importable`):
 
   claude-klabauter.root.resolve    REQUIRED — CLAUDE_KLABAUTER_ROOT resolves via env/machine-local/git-root.
   claude-klabauter.registry.key    REQUIRED (OPTIONAL when machine-local absent) — repos.claude_klabauter
@@ -394,6 +396,9 @@ def _resolve_claude_klabauter_root() -> tuple[Path | None, str]:
 # ---------------------------------------------------------------------------
 
 
+_CLAUDE_KLABAUTER_ROOT_PROBE = "claude-klabauter.root.resolve"
+
+
 def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
     """Probe claude-klabauter.root.resolve — REQUIRED.
 
@@ -407,7 +412,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
 
         if root is None:
             return _ProbeResult(
-                probe="claude-klabauter.root.resolve",
+                probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
                 status=_BROKEN,
                 detail=source,
                 remediation=(
@@ -418,7 +423,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
 
         if not root.exists():
             return _ProbeResult(
-                probe="claude-klabauter.root.resolve",
+                probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
                 status=_BROKEN,
                 detail=(
                     f"CLAUDE_KLABAUTER_ROOT resolved to {str(root)!r} (via {source}) "
@@ -433,7 +438,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
         core_dir = root / "coordinator_core"
         if not core_dir.is_dir():
             return _ProbeResult(
-                probe="claude-klabauter.root.resolve",
+                probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
                 status=_BROKEN,
                 detail=(
                     f"CLAUDE_KLABAUTER_ROOT={str(root)!r} (via {source}) but coordinator_core/ "
@@ -446,7 +451,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
             ), None
 
         return _ProbeResult(
-            probe="claude-klabauter.root.resolve",
+            probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
             status=_PASS,
             detail=(
                 f"CLAUDE_KLABAUTER_ROOT={str(root)!r} (resolved via {source}); "
@@ -457,7 +462,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
         ), root
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.root.resolve",
+            probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
             status=_BROKEN,
             detail=f"Unexpected error in root resolve probe: {type(exc).__name__}: {exc}",
             remediation="Re-run the probe after investigating the error.",
@@ -534,6 +539,9 @@ def _is_machine_local_available() -> bool:
         return False
 
 
+_REGISTRY_KEY_PROBE = "claude-klabauter.registry.key"
+
+
 def _run_probe_registry_key() -> _ProbeResult:
     """Probe claude-klabauter.registry.key — REQUIRED when machine-local present; OPTIONAL otherwise.
 
@@ -553,7 +561,7 @@ def _run_probe_registry_key() -> _ProbeResult:
     if machine_local_cmd is None:
         # machine-local absent → coordinator-claude not installed → key not needed.
         return _ProbeResult(
-            probe="claude-klabauter.registry.key",
+            probe=_REGISTRY_KEY_PROBE,
             status=_PASS,
             detail=(
                 "machine-local not found — coordinator-claude absent; "
@@ -586,7 +594,7 @@ def _run_probe_registry_key() -> _ProbeResult:
                 sys.path.remove(candidate_str)
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.registry.key",
+            probe=_REGISTRY_KEY_PROBE,
             status=_BROKEN,
             detail=f"Failed to read repos.claude_klabauter from the registry: {exc}",
             remediation="Verify machine-local is installed and the registry is readable.",
@@ -595,7 +603,7 @@ def _run_probe_registry_key() -> _ProbeResult:
     # machine-local is present — evaluate the registered value.
     if val:
         return _ProbeResult(
-            probe="claude-klabauter.registry.key",
+            probe=_REGISTRY_KEY_PROBE,
             status=_PASS,
             detail=f"repos.claude_klabauter → {val!r}",
             remediation="—",
@@ -603,7 +611,7 @@ def _run_probe_registry_key() -> _ProbeResult:
         )
 
     return _ProbeResult(
-        probe="claude-klabauter.registry.key",
+        probe=_REGISTRY_KEY_PROBE,
         status=_BROKEN,
         detail="repos.claude_klabauter not registered in the machine-local registry.",
         remediation=(
@@ -618,22 +626,57 @@ def _run_probe_registry_key() -> _ProbeResult:
 # ---------------------------------------------------------------------------
 
 
-def _run_probe_core_import(claude_klabauter_root: Path) -> _ProbeResult:
-    """Probe claude-klabauter.core.import — REQUIRED.
+_CORE_IMPORT_PROBE = "claude-klabauter.core.import"
 
-    Adds claude_klabauter_root to sys.path and attempts to import coordinator_core +
-    coordinator_core.lifecycle + coordinator_core.doctor_envelope.
+
+def _ensure_core_importable(claude_klabauter_root: Path | None) -> None:
+    """Put *claude_klabauter_root* on sys.path so any probe can import coordinator_core.
+
+    Purpose: this is a PREREQUISITE, not a probe. The script runs as
+    `python bin/claude-klabauter-doctor-probe.py`, so `sys.path[0]` is `<root>/bin`, never
+    the repo root, and five probe functions import coordinator_core without
+    inserting anything themselves (`_run_probe_version_sanity`,
+    `_run_probe_launch_chain`, and the three warm probes that are not
+    `roundtrip`). `_run_probe_invoke_smoke` shells out to a subprocess that
+    resolves its own `sys.path[0]` from its own `cwd`, so it never depended on
+    this insert. They used to free-ride on the insert
+    `_run_probe_core_import` left behind, which was invisible and correct only
+    because every probe always ran. Under a pre-run selector it stops being
+    true: `--probe claude-klabauter.warm.generation` would report DEGRADED with no defect
+    behind it. `run_probes` therefore calls this unconditionally, whatever the
+    selection.
+
+    Negative-spec:
+      - Does NOT import anything — `claude-klabauter.core.import` is still the probe that
+        reports whether the import works, and still the only thing that grades it.
+      - Does NOT remove the entry afterwards: the whole point is that it outlives
+        the call, for every later probe in the same process.
+
+    Spec backlink: docs/plans/2026-08-19-the-selector-gates-before-the-run.md § C1.
     """
+    if claude_klabauter_root is None:
+        return
     root_str = str(claude_klabauter_root)
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
+
+
+def _run_probe_core_import(claude_klabauter_root: Path) -> _ProbeResult:
+    """Probe claude-klabauter.core.import — REQUIRED.
+
+    Attempts to import coordinator_core + coordinator_core.lifecycle +
+    coordinator_core.doctor_envelope. The sys.path setup this needs is
+    `_ensure_core_importable`'s job, run as a prerequisite by `run_probes`
+    before any probe — this function grades the import, it does not arrange it.
+    """
+    root_str = str(claude_klabauter_root)
 
     try:
         import coordinator_core          # noqa: F401
         import coordinator_core.lifecycle  # noqa: F401
         import coordinator_core.doctor_envelope  # noqa: F401
         return _ProbeResult(
-            probe="claude-klabauter.core.import",
+            probe=_CORE_IMPORT_PROBE,
             status=_PASS,
             detail=(
                 f"import coordinator_core, coordinator_core.lifecycle, "
@@ -644,7 +687,7 @@ def _run_probe_core_import(claude_klabauter_root: Path) -> _ProbeResult:
         )
     except ImportError as exc:
         return _ProbeResult(
-            probe="claude-klabauter.core.import",
+            probe=_CORE_IMPORT_PROBE,
             status=_BROKEN,
             detail=f"import coordinator_core failed: {exc}",
             remediation=(
@@ -656,7 +699,7 @@ def _run_probe_core_import(claude_klabauter_root: Path) -> _ProbeResult:
         )
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.core.import",
+            probe=_CORE_IMPORT_PROBE,
             status=_BROKEN,
             detail=(
                 f"import coordinator_core raised {type(exc).__name__}: {exc}"
@@ -999,6 +1042,9 @@ def _run_probe_entrypoints_path_resolved(claude_klabauter_root: Path | None) -> 
 # ---------------------------------------------------------------------------
 
 
+_RESIDENT_DEBRIS_PROBE = "claude-klabauter.resident.debris"
+
+
 def _run_probe_resident_debris(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.resident.debris — REQUIRED; emits INFO on debris-found, never BROKEN/DEGRADED.
 
@@ -1082,7 +1128,7 @@ def _run_probe_resident_debris(claude_klabauter_root: Path | None) -> _ProbeResu
                 )
 
             return _ProbeResult(
-                probe="claude-klabauter.resident.debris",
+                probe=_RESIDENT_DEBRIS_PROBE,
                 status=_INFO,
                 detail=(
                     f"Stale resident debris from the retired coordinator_core daemon "
@@ -1096,7 +1142,7 @@ def _run_probe_resident_debris(claude_klabauter_root: Path | None) -> _ProbeResu
             )
 
         return _ProbeResult(
-            probe="claude-klabauter.resident.debris",
+            probe=_RESIDENT_DEBRIS_PROBE,
             status=_PASS,
             detail=(
                 "No stale resident debris from the retired coordinator_core daemon found."
@@ -1106,7 +1152,7 @@ def _run_probe_resident_debris(claude_klabauter_root: Path | None) -> _ProbeResu
         )
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.resident.debris",
+            probe=_RESIDENT_DEBRIS_PROBE,
             status=_BROKEN,
             detail=(
                 f"Unexpected error in resident debris probe: {type(exc).__name__}: {exc}"
@@ -1130,6 +1176,9 @@ def _format_bytes_human(size_bytes: int) -> str:
         return f"{gib:.1f} GiB"
     mib = size_bytes / (1024 ** 2)
     return f"{mib:.1f} MiB"
+
+
+_WORKTREE_BLOAT_PROBE = "claude-klabauter.worktree.bloat"
 
 
 def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResult:
@@ -1170,7 +1219,7 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
 
         if claude_klabauter_root is None:
             return _ProbeResult(
-                probe="claude-klabauter.worktree.bloat",
+                probe=_WORKTREE_BLOAT_PROBE,
                 status=_PASS,
                 detail=(
                     "Worktree bloat scan skipped — CLAUDE_KLABAUTER_ROOT unresolved "
@@ -1212,7 +1261,7 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
                 for f in large_files
             )
             return _ProbeResult(
-                probe="claude-klabauter.worktree.bloat",
+                probe=_WORKTREE_BLOAT_PROBE,
                 status=_INFO,
                 detail=(
                     f"{len(large_files)} file(s) exceed the {threshold_human} worktree "
@@ -1227,7 +1276,7 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
             )
 
         return _ProbeResult(
-            probe="claude-klabauter.worktree.bloat",
+            probe=_WORKTREE_BLOAT_PROBE,
             status=_PASS,
             detail=f"No worktree files exceed the {threshold_human} bloat threshold.",
             remediation="—",
@@ -1235,7 +1284,7 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
         )
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.worktree.bloat",
+            probe=_WORKTREE_BLOAT_PROBE,
             status=_BROKEN,
             detail=(
                 f"Unexpected error in worktree bloat probe: {type(exc).__name__}: {exc}"
@@ -1247,6 +1296,9 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
 # ---------------------------------------------------------------------------
 # Probe 6: version sanity
 # ---------------------------------------------------------------------------
+
+
+_VERSION_SANITY_PROBE = "claude-klabauter.version.sanity"
 
 
 def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResult:
@@ -1272,14 +1324,15 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
     Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
     """
     try:
-        # sys.path already set by _run_probe_core_import (runs before this probe).
+        # sys.path already set by `_ensure_core_importable`, run_probes' unconditional
+        # prerequisite — NOT by an earlier probe (see that helper's docstring).
 
         # Check 1: import coordinator_core.
         try:
             import coordinator_core  # noqa: F401
         except ImportError as exc:
             return _ProbeResult(
-                probe="claude-klabauter.version.sanity",
+                probe=_VERSION_SANITY_PROBE,
                 status=_BROKEN,
                 detail=f"import coordinator_core failed: {exc}",
                 remediation=(
@@ -1294,7 +1347,7 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
             version_hash = _compute_core_version()
         except (ImportError, Exception) as exc:
             return _ProbeResult(
-                probe="claude-klabauter.version.sanity",
+                probe=_VERSION_SANITY_PROBE,
                 status=_BROKEN,
                 detail=(
                     f"coordinator_core.lifecycle._compute_core_version() failed: "
@@ -1321,7 +1374,7 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
 
         if retired_dangling:
             return _ProbeResult(
-                probe="claude-klabauter.version.sanity",
+                probe=_VERSION_SANITY_PROBE,
                 status=_BROKEN,
                 detail=(
                     f"Retired submodule(s) still importable (should raise ImportError): "
@@ -1337,7 +1390,7 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
             )
 
         return _ProbeResult(
-            probe="claude-klabauter.version.sanity",
+            probe=_VERSION_SANITY_PROBE,
             status=_PASS,
             detail=(
                 f"coordinator_core imports cleanly; _compute_core_version() resolved "
@@ -1351,7 +1404,7 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
         )
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.version.sanity",
+            probe=_VERSION_SANITY_PROBE,
             status=_BROKEN,
             detail=(
                 f"Unexpected error in version sanity probe: {type(exc).__name__}: {exc}"
@@ -1363,6 +1416,9 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
 # ---------------------------------------------------------------------------
 # Probe 7: invoke dispatch smoke (OPTIONAL)
 # ---------------------------------------------------------------------------
+
+
+_INVOKE_SMOKE_PROBE = "claude-klabauter.invoke.smoke"
 
 
 def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
@@ -1402,7 +1458,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     try:
         if claude_klabauter_root is None:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.smoke",
+                probe=_INVOKE_SMOKE_PROBE,
                 status=_INFO,
                 detail="Cannot run invoke smoke — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
                 remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
@@ -1421,7 +1477,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
             )
         except FileNotFoundError:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.smoke",
+                probe=_INVOKE_SMOKE_PROBE,
                 status=_INFO,
                 detail="Python interpreter not found on PATH; invoke smoke skipped.",
                 remediation="Ensure python3 is on PATH.",
@@ -1430,7 +1486,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
             )
         except subprocess.TimeoutExpired:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.smoke",
+                probe=_INVOKE_SMOKE_PROBE,
                 status=_BROKEN,
                 detail=(
                     "python3 -m coordinator_core.invoke ping '{}' timed out after 30 s. "
@@ -1446,7 +1502,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
 
         if result.returncode != 0:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.smoke",
+                probe=_INVOKE_SMOKE_PROBE,
                 status=_BROKEN,
                 detail=(
                     f"coordinator_core.invoke ping '{{}}' exited {result.returncode}. "
@@ -1465,7 +1521,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
             envelope = json.loads(stdout)
         except json.JSONDecodeError:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.smoke",
+                probe=_INVOKE_SMOKE_PROBE,
                 status=_BROKEN,
                 detail=(
                     f"coordinator_core.invoke ping returned non-JSON output: {stdout!r}"
@@ -1483,7 +1539,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
         payload = envelope.get("result", envelope) if isinstance(envelope, dict) else None
         if not isinstance(payload, dict) or not payload.get("ok"):
             return _ProbeResult(
-                probe="claude-klabauter.invoke.smoke",
+                probe=_INVOKE_SMOKE_PROBE,
                 status=_BROKEN,
                 detail=(
                     "invoke ping returned a malformed result envelope "
@@ -1498,7 +1554,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
             )
 
         return _ProbeResult(
-            probe="claude-klabauter.invoke.smoke",
+            probe=_INVOKE_SMOKE_PROBE,
             status=_PASS,
             detail=(
                 "spawn-per-call dispatch smoke PASS: the coordinator_core.invoke ping op "
@@ -1514,7 +1570,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     except Exception as exc:
         # Probe-authoring invariant: optional probe unexpected failure → SKIP envelope.
         return _ProbeResult(
-            probe="claude-klabauter.invoke.smoke",
+            probe=_INVOKE_SMOKE_PROBE,
             status=_INFO,
             detail=(
                 f"Unexpected error in invoke smoke probe: {type(exc).__name__}: {exc}"
@@ -1528,6 +1584,9 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
 # ---------------------------------------------------------------------------
 # Probe 8: strategic self-description draft staleness (OPTIONAL)
 # ---------------------------------------------------------------------------
+
+
+_STRATEGIC_DRAFT_STALENESS_PROBE = "claude-klabauter.strategic.draft_staleness"
 
 
 def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> _ProbeResult:
@@ -1563,7 +1622,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
     try:
         if claude_klabauter_root is None:
             return _ProbeResult(
-                probe="claude-klabauter.strategic.draft_staleness",
+                probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
                 status=_INFO,
                 detail="Cannot check draft staleness — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
                 remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
@@ -1575,7 +1634,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
 
         if not draft_path.exists():
             return _ProbeResult(
-                probe="claude-klabauter.strategic.draft_staleness",
+                probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
                 status=_INFO,
                 detail=(
                     "No strategic self-description draft present at "
@@ -1596,7 +1655,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
             draft_mtime = draft_path.stat().st_mtime
         except OSError as exc:
             return _ProbeResult(
-                probe="claude-klabauter.strategic.draft_staleness",
+                probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
                 status=_INFO,
                 detail=f"Draft present but stat() failed: {exc}",
                 remediation="Investigate file permissions on state/strategic/.",
@@ -1627,7 +1686,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
 
         if newest_changelog_mtime is None:
             return _ProbeResult(
-                probe="claude-klabauter.strategic.draft_staleness",
+                probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
                 status=_PASS,
                 detail=(
                     f"Draft present at {str(draft_path)!r}; no dated "
@@ -1641,7 +1700,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
 
         if draft_mtime < newest_changelog_mtime:
             return _ProbeResult(
-                probe="claude-klabauter.strategic.draft_staleness",
+                probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
                 status=_INFO,
                 detail=(
                     f"Strategic self-description draft ({str(draft_path)!r}) is OLDER "
@@ -1661,7 +1720,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
             )
 
         return _ProbeResult(
-            probe="claude-klabauter.strategic.draft_staleness",
+            probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
             status=_PASS,
             detail=(
                 f"Strategic self-description draft ({str(draft_path)!r}) is at least as "
@@ -1677,7 +1736,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
         )
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.strategic.draft_staleness",
+            probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
             status=_INFO,
             detail=(
                 f"Unexpected error in draft staleness probe: {type(exc).__name__}: {exc}"
@@ -2463,6 +2522,9 @@ def _resolve_settings_home() -> Path:
     return Path(home) / ".coordinator-claude-settings"
 
 
+_ENGINE_TARGET_ROLLOUT_PROBE = "claude-klabauter.registry.engine_target_rollout"
+
+
 def _run_probe_engine_target_rollout() -> _ProbeResult:
     """Probe claude-klabauter.registry.engine_target_rollout — REQUIRED=False, INFO-only.
 
@@ -2501,7 +2563,7 @@ def _run_probe_engine_target_rollout() -> _ProbeResult:
     Probe-authoring invariant: wraps all logic so unexpected exceptions
     become an INFO/skipped envelope, never an unhandled crash.
     """
-    probe_id = "claude-klabauter.registry.engine_target_rollout"
+    probe_id = _ENGINE_TARGET_ROLLOUT_PROBE
     try:
         candidate = Path(__file__).resolve().parent.parent
         candidate_str = str(candidate)
@@ -2563,6 +2625,9 @@ def _run_probe_engine_target_rollout() -> _ProbeResult:
     )
 
 
+_ROOT_POINTER_PROBE = "claude-klabauter.root.pointer"
+
+
 def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.root.pointer — REQUIRED=False (WARN, not hard FAIL) on absence.
 
@@ -2603,7 +2668,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
         if not pointer_path.exists():
             return _ProbeResult(
-                probe="claude-klabauter.root.pointer",
+                probe=_ROOT_POINTER_PROBE,
                 status=_DEGRADED,
                 detail=(
                     f"claude-klabauter-root pointer absent at {str(pointer_path)!r}. Without it, "
@@ -2623,7 +2688,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
             pointer_content = pointer_path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError) as exc:
             return _ProbeResult(
-                probe="claude-klabauter.root.pointer",
+                probe=_ROOT_POINTER_PROBE,
                 status=_DEGRADED,
                 detail=f"claude-klabauter-root pointer present but unreadable: {exc}",
                 remediation=(
@@ -2636,7 +2701,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
         if claude_klabauter_root is None:
             return _ProbeResult(
-                probe="claude-klabauter.root.pointer",
+                probe=_ROOT_POINTER_PROBE,
                 status=_PASS,
                 detail=(
                     f"claude-klabauter-root pointer present at {str(pointer_path)!r} "
@@ -2661,7 +2726,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 same_target = False
             if not same_target:
                 return _ProbeResult(
-                    probe="claude-klabauter.root.pointer",
+                    probe=_ROOT_POINTER_PROBE,
                     status=_DEGRADED,
                     detail=(
                         f"claude-klabauter-root pointer content {pointer_content!r} does not match "
@@ -2681,7 +2746,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 )
 
         return _ProbeResult(
-            probe="claude-klabauter.root.pointer",
+            probe=_ROOT_POINTER_PROBE,
             status=_PASS,
             detail=(
                 f"claude-klabauter-root pointer present at {str(pointer_path)!r} and matches "
@@ -2699,7 +2764,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
     except Exception as exc:
         # Probe-authoring invariant: optional probe unexpected failure -> SKIP envelope.
         return _ProbeResult(
-            probe="claude-klabauter.root.pointer",
+            probe=_ROOT_POINTER_PROBE,
             status=_INFO,
             detail=(
                 f"Unexpected error in root pointer probe: {type(exc).__name__}: {exc}"
@@ -2720,6 +2785,9 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 # hour later, and the only signal available — `git log` — could not
 # distinguish "running the fix" from "running an hour-old build").
 # ---------------------------------------------------------------------------
+_PUBLISH_PROVENANCE_PROBE = "claude-klabauter.publish.provenance"
+
+
 def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.publish.provenance — REQUIRED=False (WARN, not hard FAIL).
 
@@ -2749,7 +2817,7 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
     Probe-authoring invariant: wraps all logic so unexpected exceptions
     become a DEGRADED-but-never-crashing envelope.
     """
-    probe_id = "claude-klabauter.publish.provenance"
+    probe_id = _PUBLISH_PROVENANCE_PROBE
     try:
         if claude_klabauter_root is None:
             return _ProbeResult(
@@ -2946,6 +3014,9 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
 _INVOKE_LATENCY_BUDGET_MS = 2000
 
 
+_INVOKE_LATENCY_PROBE = "claude-klabauter.invoke.latency"
+
+
 def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.invoke.latency — OPTIONAL (required=False); WARN over budget.
 
@@ -2977,7 +3048,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
     try:
         if claude_klabauter_root is None:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.latency",
+                probe=_INVOKE_LATENCY_PROBE,
                 status=_INFO,
                 detail="Cannot measure invoke latency — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
                 remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
@@ -3000,7 +3071,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
             )
         except FileNotFoundError:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.latency",
+                probe=_INVOKE_LATENCY_PROBE,
                 status=_INFO,
                 detail="Python interpreter not found on PATH; invoke latency probe skipped.",
                 remediation="Ensure python3 is on PATH.",
@@ -3010,7 +3081,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
         except subprocess.TimeoutExpired:
             elapsed_ms = _TIMEOUT_SECONDS * 1000
             return _ProbeResult(
-                probe="claude-klabauter.invoke.latency",
+                probe=_INVOKE_LATENCY_PROBE,
                 status=_DEGRADED,
                 detail=(
                     f"invoke round-trip timed out after {_TIMEOUT_SECONDS * 1000} ms — "
@@ -3031,7 +3102,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
 
         if result.returncode != 0:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.latency",
+                probe=_INVOKE_LATENCY_PROBE,
                 status=_DEGRADED,
                 detail=(
                     f"invoke round-trip completed in {elapsed_ms:.0f} ms but exited "
@@ -3048,7 +3119,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
 
         if elapsed_ms > _INVOKE_LATENCY_BUDGET_MS:
             return _ProbeResult(
-                probe="claude-klabauter.invoke.latency",
+                probe=_INVOKE_LATENCY_PROBE,
                 status=_DEGRADED,
                 detail=(
                     f"invoke round-trip took {elapsed_ms:.0f} ms — exceeds the "
@@ -3067,7 +3138,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
             )
 
         return _ProbeResult(
-            probe="claude-klabauter.invoke.latency",
+            probe=_INVOKE_LATENCY_PROBE,
             status=_PASS,
             detail=(
                 f"invoke round-trip took {elapsed_ms:.0f} ms — within the "
@@ -3079,7 +3150,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
         )
     except Exception as exc:
         return _ProbeResult(
-            probe="claude-klabauter.invoke.latency",
+            probe=_INVOKE_LATENCY_PROBE,
             status=_INFO,
             detail=(
                 f"Unexpected error in invoke latency probe: {type(exc).__name__}: {exc}"
@@ -3460,7 +3531,8 @@ def _run_probe_warm_residency(claude_klabauter_root: Path | None) -> _ProbeResul
                 skipped=True,
             )
 
-        # sys.path already set by _run_probe_core_import (runs before this probe).
+        # sys.path already set by `_ensure_core_importable`, run_probes' unconditional
+        # prerequisite — NOT by an earlier probe (see that helper's docstring).
         try:
             from coordinator_core.warm import breadcrumb, election, skew
             from coordinator_core.session.core import stable_pid_alive
@@ -3882,15 +3954,67 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
 
 _WARM_ROUTE_SHARE_PROBE = "claude-klabauter.warm.route_share"
 
+#: Expanding coverage window (seconds): 1h -> 6h -> 24h, widening only while
+#: the window holds fewer than `_ROUTE_MIN_COMPLETE_ROWS` complete rows
+#: (plan D1, docs/plans/2026-08-19-a-windowed-coverage-refusal.md). Both
+#: endpoints are precedented, not chosen fresh:
+#:   - the LOW end is NOT the ~15min warm-server idle-recycle deadline
+#:     (`docs/wiki/machine-load-norm.md`'s warm-server generation cadence) —
+#:     15min is too tight to *start* from: it held only 453 rows on a *busy*
+#:     evening measurement and would routinely trip the row-count minimum on
+#:     a quiet box, conflating "the box is quiet" with "the instrument
+#:     cannot tell". 1h is the starting horizon instead: it spans roughly
+#:     four warm-server recycle generations, held 1,744 rows and 100%
+#:     coverage at measurement time, and describes "now" while carrying
+#:     enough rows to mean something at this machine's load norm.
+#:   - the HIGH end reuses `cost_census.LOOKBACK_SECS_DEFAULT`
+#:     (`coordinator_core/telemetry/cost_census.py:140`, 24h) as the CAP
+#:     rather than rejecting it as too loose — if 1h and 6h both hold too
+#:     few rows, the probe widens to 24h and refuses a verdict only if that
+#:     still comes up short. 24h stops being "too loose for a verdict" and
+#:     becomes "the point past which we stop trying".
+#: Widening is free at runtime: the sink is read exactly once (below) and
+#: every horizon here is a re-filter of that one in-memory list, never a
+#: second read.
+_ROUTE_COVERAGE_WINDOWS_SECS = (3600, 21600, 86400)
+
+#: Absolute row-count minimum a window must hold before its ratio is judged
+#: at all (plan D3) — a one-row window reads 100% coverage and a ratio
+#: cannot distinguish "1/1" from "1,744/1,744", so this catches a distinct
+#: false-PASS the coverage floor structurally cannot see. 50 sits well
+#: under the 1,744 rows a live hour produced and well over the handful that
+#: would make a ratio noise.
+_ROUTE_MIN_COMPLETE_ROWS = 50
+
+
+def _entry_in_route_window(entry: dict, since_ts: float) -> bool:
+    """True if `entry` belongs in a window starting at `since_ts`.
+
+    Mirrors `iter_sink_entries`'s own `since` rule: a row with a numeric
+    `t_start` is kept only if it falls inside the window; a row lacking a
+    numeric `t_start` is kept unconditionally — a reader cannot safely call
+    an untimestamped row "too old", so it survives every window forever
+    (this is deliberate, not a leak: such a row also cannot carry `route`
+    without `t_start` being written by the same op_latency call, so it
+    cannot sink a windowed verdict either — see the paired fixture row in
+    the unit tests).
+    """
+    t_start = entry.get("t_start")
+    if isinstance(t_start, (int, float)):
+        return t_start >= since_ts
+    return True
+
 
 def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.warm.route_share — OPTIONAL (route-share reader; `warm` cluster).
 
     Calls `coordinator_core.telemetry.engine_report.route_distribution` over
-    `engine_report.iter_sink_entries(repo_root=claude_klabauter_root)` and TRANSLATES its
-    verdict into the closed probe-status enum. This probe does not re-parse the
-    op-latency sink itself — two parsers drift, which is the whole point of
-    building the reader (`iter_sink_entries` / `route_distribution`) first.
+    an EXPANDING WINDOW (`_ROUTE_COVERAGE_WINDOWS_SECS`) of
+    `engine_report.iter_sink_entries(repo_root=claude_klabauter_root)`, read ONCE, and
+    TRANSLATES the windowed verdict into the closed probe-status enum. This
+    probe does not re-parse the op-latency sink itself — two parsers drift,
+    which is the whole point of building the reader (`iter_sink_entries` /
+    `route_distribution`) first.
 
     Translation (do not extend without also updating this comment and the
     reader's own docstring):
@@ -3899,11 +4023,15 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
                                     future share-threshold check; not emitted
                                     today)
       reader verdict "unknown"  -> `skipped=True`, `required=True` — never
-                                    PASS, never FAIL. At today's ~0.257% route
-                                    coverage (DR-328) the honest reading is
-                                    "cannot tell", not a verdict; a probe that
-                                    renders FAIL off it is as wrong as one that
-                                    renders PASS.
+                                    PASS, never FAIL. Fired only when even
+                                    the widest (24h) horizon still holds
+                                    fewer than `_ROUTE_MIN_COMPLETE_ROWS`
+                                    complete rows, or when the best-available
+                                    horizon's coverage is below the reader's
+                                    own floor — the honest reading in either
+                                    case is "cannot tell", not a verdict; a
+                                    probe that renders FAIL off it is as
+                                    wrong as one that renders PASS.
 
     NEGATIVE SPEC: the reader's own verdict string ("ok"/"degraded"/"unknown")
     is a richer DATA-PAYLOAD vocabulary than the probe status enum and is
@@ -3911,6 +4039,12 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
     `_ProbeResult.status` — `status` is the closed, versioned enum in
     `coordinator_core.doctor_envelope.STATUS_VOCAB`, whose own comment says
     do not extend without bumping `ENVELOPE_SCHEMA_VERSION`.
+
+    NEGATIVE SPEC (plan D2, docs/plans/2026-08-19-a-windowed-coverage-refusal.md):
+    `data["all_time"]` (the unwindowed `route_distribution(entries)` over the
+    same single read) is CONTEXT ONLY — it shows the publish-lag trend across
+    the whole corpus. Nothing in this function branches on it; the verdict is
+    always computed from the windowed figure alone.
 
     `_ProbeResult.required` is stated explicitly at every return (F6, same
     convention as C5a/C5b): the TOML manifest's `required = false` footer
@@ -3936,7 +4070,8 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
     correct; this is one convention documented three times across sibling
     probes, not three independent decisions.
 
-    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C6.
+    Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C6;
+    windowing added by docs/plans/2026-08-19-a-windowed-coverage-refusal.md § C2.
     """
     try:
         if claude_klabauter_root is None:
@@ -3961,29 +4096,60 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
                 skipped=True,
             )
 
-        entries = engine_report.iter_sink_entries(repo_root=claude_klabauter_root)
-        reader_result = engine_report.route_distribution(entries)
+        # Read the sink ONCE, unwindowed — every horizon below is a re-filter
+        # of this one in-memory list, never a second read (plan D1).
+        entries = list(engine_report.iter_sink_entries(repo_root=claude_klabauter_root))
+        all_time_result = engine_report.route_distribution(entries)
+
+        now = time.time()
+        reader_result: dict = all_time_result
+        effective_window_secs = _ROUTE_COVERAGE_WINDOWS_SECS[-1]
+        for horizon in _ROUTE_COVERAGE_WINDOWS_SECS:
+            since_ts = now - horizon
+            windowed_entries = [
+                entry for entry in entries if _entry_in_route_window(entry, since_ts)
+            ]
+            reader_result = engine_report.route_distribution(
+                windowed_entries, min_complete_rows=_ROUTE_MIN_COMPLETE_ROWS
+            )
+            effective_window_secs = horizon
+            if reader_result["complete"] >= _ROUTE_MIN_COMPLETE_ROWS:
+                break
+
         verdict = reader_result.get("verdict")
         verdict_reason = reader_result.get("verdict_reason")
+        window_label = f"{effective_window_secs // 3600}h"
+        data = {
+            "reader_verdict": verdict,
+            "route_distribution": reader_result,
+            "effective_window_secs": effective_window_secs,
+            "all_time": all_time_result,
+        }
 
         if verdict == "ok":
             return _ProbeResult(
                 probe=_WARM_ROUTE_SHARE_PROBE,
                 status=_PASS,
-                detail=f"Route-share coverage sufficient: {verdict_reason}",
+                detail=(
+                    f"Route-share coverage sufficient over the last {window_label} "
+                    f"({reader_result['complete']} rows): {verdict_reason}"
+                ),
                 remediation="—",
                 required=True,
-                data={"reader_verdict": verdict, "route_distribution": reader_result},
+                data=data,
             )
 
         if verdict == "degraded":
             return _ProbeResult(
                 probe=_WARM_ROUTE_SHARE_PROBE,
                 status=_DEGRADED,
-                detail=f"Route-share reader reports degraded: {verdict_reason}",
+                detail=(
+                    f"Route-share reader reports degraded over the last {window_label} "
+                    f"({reader_result['complete']} rows): {verdict_reason}"
+                ),
                 remediation="Investigate the warm-route share regression named in the reader's verdict_reason.",
                 required=True,
-                data={"reader_verdict": verdict, "route_distribution": reader_result},
+                data=data,
             )
 
         # "unknown" (or any future unrecognised value) — honest "cannot tell",
@@ -3991,11 +4157,14 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
         return _ProbeResult(
             probe=_WARM_ROUTE_SHARE_PROBE,
             status=_DEGRADED,
-            detail=f"Route-share coverage cannot support a verdict: {verdict_reason}",
+            detail=(
+                f"Route-share coverage cannot support a verdict even at the "
+                f"widest ({window_label}) window: {verdict_reason}"
+            ),
             remediation="—",
             required=True,
             skipped=True,
-            data={"reader_verdict": verdict, "route_distribution": reader_result},
+            data=data,
         )
     except Exception as exc:
         return _ProbeResult(
@@ -4027,15 +4196,14 @@ def _run_probe_warm_roundtrip(
 ) -> _ProbeResult:
     """Probe claude-klabauter.warm.roundtrip — OPTIONAL, weight=heavy, gated behind an explicit opt-in.
 
-    SPLIT OUT OF C6 (staff-eng review, F2): `_apply_selector` is a POST-RUN FILTER —
-    `run_probes()` always exercises the full probe set and the selector only shapes
-    what is emitted. A manifest `weight = "heavy"` / `triage = false` row governs
-    OUTPUT MEMBERSHIP, not execution — it does NOT stop a probe from running. This
-    probe therefore self-gates on the `include_live_roundtrip` parameter, threaded
-    from `main()`'s `--include-live-roundtrip` flag, rather than relying on the
-    manifest alone: without that gate, this probe would fire a live warm-server
-    round-trip on every default `run_probes()` call, every `--triage` run, every
-    `--cluster registry` run, and every CLI shell in the test suite.
+    SPLIT OUT OF C6 (staff-eng review, F2): a manifest `weight = "heavy"` /
+    `triage = false` row governs OUTPUT MEMBERSHIP, not execution. The selector is a
+    pre-run gate now, so it does keep this probe from running on a selection that
+    excludes it — but a DEFAULT run selects nothing and runs everything, and that is
+    the case this self-gate exists for. The `include_live_roundtrip` parameter,
+    threaded from `main()`'s `--include-live-roundtrip` flag, is therefore still the
+    only thing standing between a bare invocation and a live warm-server round-trip
+    on every default run, every `--triage` run, and every CLI shell in the test suite.
 
     Default OFF: when `include_live_roundtrip` is False, this probe does NOT attempt
     a connection at all — it returns `skipped=True` (never an INFO stub) so it still
@@ -4306,19 +4474,43 @@ def _apply_selector(
     results: list[_ProbeResult],
     manifest: dict[str, Any],
     args: "argparse.Namespace",
+    known_ids: set[str] | None = None,
 ) -> list[_ProbeResult]:
-    """Filter the probe results list per the selector flags in args.
+    """Shape the emitted probe set per the selector flags in args.
 
-    Purpose: Post-run filter so run_probes() always exercises the full probe set and
-    the selector only shapes what is emitted.  This preserves existing probe diagnostics
-    even when a subset is requested.
+    Purpose: the selection is applied BEFORE the run now (`run_probes(selected=...)`),
+    so this is no longer where the cost is decided — it synthesises INFO stubs for
+    manifest ids nothing implements, and guarantees a non-empty result.
 
-    For unimplemented probe IDs (in manifest but not in results), a single _ProbeResult
-    with status INFO is synthesised so the selector never returns an empty array.
+    `known_ids` is what `run_probes` reports its call sites NAME. It exists to keep
+    a mis-registration loud: without it, "absent from results" is ambiguous between
+    *declared but never implemented* (an INFO stub, correct) and *implemented,
+    selected, and did not run* — a wrong id constant or a dropped call site, which
+    would otherwise be reported as a benign forward-looking stub at exit 0. Passing
+    None keeps the pre-gate behaviour for callers that ran the full suite.
 
-    Invariant: a valid manifest selector NEVER crashes and NEVER returns an empty list.
+    Invariant: a valid manifest selector NEVER crashes on a legitimate id and NEVER
+    returns an empty list.
     """
     implemented_ids = {r.probe for r in results}
+
+    def _stub_or_raise(pid: str) -> _ProbeResult:
+        """INFO stub for an unimplemented id; a hard error for one that should have run."""
+        if known_ids is not None and pid in known_ids:
+            raise RuntimeError(
+                f"probe {pid!r} is registered in run_probes but produced no result for "
+                "this selection — a mis-wired call site, not a forward-looking stub. "
+                "This is never reported as INFO: see _apply_selector's docstring."
+            )
+        meta = manifest.get(pid, {})
+        return _ProbeResult(
+            probe=pid,
+            status=_INFO,
+            detail=_INFO_STUB_DETAIL,
+            remediation="—",
+            required=meta.get("required", True),
+            skipped=False,
+        )
 
     if args.triage:
         # Probes whose id appears in results but is absent from the manifest get
@@ -4331,14 +4523,7 @@ def _apply_selector(
         # the "NEVER returns an empty list" invariant.
         for pid, meta in manifest.items():
             if meta.get("triage", False) and pid not in implemented_ids:
-                filtered.append(_ProbeResult(
-                    probe=pid,
-                    status=_INFO,
-                    detail=_INFO_STUB_DETAIL,
-                    remediation="—",
-                    required=meta.get("required", True),
-                    skipped=False,
-                ))
+                filtered.append(_stub_or_raise(pid))
         return filtered
 
     if args.cluster:
@@ -4347,30 +4532,16 @@ def _apply_selector(
         # Synthesise INFO stubs for unimplemented probes declared in this cluster.
         for pid, meta in manifest.items():
             if meta.get("cluster") == cluster_name and pid not in implemented_ids:
-                filtered.append(_ProbeResult(
-                    probe=pid,
-                    status=_INFO,
-                    detail=_INFO_STUB_DETAIL,
-                    remediation="—",
-                    required=meta.get("required", True),
-                    skipped=False,
-                ))
+                filtered.append(_stub_or_raise(pid))
         return filtered
 
     if args.probe:
         probe_id = args.probe
         if probe_id in implemented_ids:
             return [r for r in results if r.probe == probe_id]
-        # Unimplemented but valid manifest id (validated in main()).
-        meta = manifest[probe_id]
-        return [_ProbeResult(
-            probe=probe_id,
-            status=_INFO,
-            detail=_INFO_STUB_DETAIL,
-            remediation="—",
-            required=meta.get("required", True),
-            skipped=False,
-        )]
+        # Unimplemented but valid manifest id (validated in main()) — or a
+        # registered id that failed to run, which raises rather than stubbing.
+        return [_stub_or_raise(probe_id)]
 
     # No selector — return all results unchanged.
     return results
@@ -4404,15 +4575,62 @@ def _timed(fn: "Any", *args: "Any") -> _ProbeResult:
     return result
 
 
-def run_probes(*, include_live_roundtrip: bool = False) -> tuple[list[_ProbeResult], Path | None]:
-    """Run the full static probe suite (seven probes) in dependency order.
+def _run_if(
+    selected: "set[str] | None",
+    probe_id: str,
+    fn: "Any",
+    *args: "Any",
+) -> _ProbeResult | None:
+    """Run one probe only when the selection asks for it; time it when it runs.
 
-    Returns (results, claude_klabauter_root_or_None).
+    Purpose: the selector used to be a POST-run filter, so `--probe X` paid for
+    every probe in the suite to emit one — 47.3s of work to report a 43.5ms
+    answer (docs/research/2026-08-19-doctor-per-probe-cost-profile.md). Gating
+    here, before the call, is what makes a scalpel run cost what a scalpel
+    costs. `selected is None` means "no selector" and runs everything, which is
+    what every default run, `--step-zero`, and this module's own full-suite
+    tests take.
+
+    Returns None for a probe the selection excludes; `run_probes` drops those
+    rather than appending a placeholder, so a skipped probe is ABSENT from the
+    result set — never a row that could read as PASS.
+
+    Negative-spec:
+      - Does NOT decide the selection: `main()` derives it from the manifest.
+      - Does NOT swallow a probe's exception, and does NOT bound its runtime.
+
+    Spec backlink: docs/plans/2026-08-19-the-selector-gates-before-the-run.md § C1.
+    """
+    if selected is not None and probe_id not in selected:
+        return None
+    return _timed(fn, *args)
+
+
+def run_probes(
+    *,
+    include_live_roundtrip: bool = False,
+    selected: "set[str] | None" = None,
+) -> tuple[list[_ProbeResult], Path | None, set[str]]:
+    """Run the static probe suite, or the *selected* subset of it.
+
+    Returns (results, claude_klabauter_root_or_None, known_ids).
     The returned claude_klabauter_root is the resolved path when probe 1 succeeds; None otherwise.
+    `known_ids` is every probe id this function's call sites NAME, whether or not
+    the selection ran them — so `known_ids == set(manifest)` is a sub-second,
+    in-process registration check that catches a probe declared in
+    doctor-probes.toml with no call site here, without paying a full suite run.
+
+    `selected` (default None) gates each probe BEFORE it runs: None runs
+    everything in dependency order, exactly as a default run always has; a set
+    runs only its members. Two things are prerequisites and run whatever the
+    selection says — `_run_probe_claude_klabauter_root` (every other probe takes
+    claude_klabauter_root) and `_ensure_core_importable` (five probes import
+    coordinator_core without arranging sys.path themselves). The root probe's
+    RESULT is still emitted only when selected.
 
     `include_live_roundtrip` (default False) gates ONLY `claude-klabauter.warm.roundtrip`
-    (§ C9): every other probe in this function runs unconditionally, exactly as
-    before. False is the correct default for every caller that does not
+    (§ C9), independently of `selected`: opting out keeps the probe from
+    attempting a live connection even when the selection names it. False is the correct default for every caller that does not
     explicitly opt in — the bare CLI invocation, `--triage`, `--cluster warm`
     without the flag, and this module's own test suite all must skip the live
     round-trip by default (see `_run_probe_warm_roundtrip`'s own docstring for
@@ -4423,60 +4641,79 @@ def run_probes(*, include_live_roundtrip: bool = False) -> tuple[list[_ProbeResu
     Retired under docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1a.
     """
     results: list[_ProbeResult] = []
+    known_ids: set[str] = set()
 
-    # Probe 1: CLAUDE_KLABAUTER_ROOT resolves (REQUIRED)
+    def _add(probe_id: str, fn: "Any", *args: "Any") -> None:
+        """Register *probe_id* as known, then run it if the selection includes it."""
+        known_ids.add(probe_id)
+        result = _run_if(selected, probe_id, fn, *args)
+        if result is not None:
+            results.append(result)
+
+    # Prerequisite 1: CLAUDE_KLABAUTER_ROOT (REQUIRED as a probe, unconditional as a dependency).
+    # Every other probe takes claude_klabauter_root, so this runs whatever the selection says;
+    # only its RESULT is gated.
+    known_ids.add(_CLAUDE_KLABAUTER_ROOT_PROBE)
     _t0 = time.perf_counter()
     probe1, claude_klabauter_root = _run_probe_claude_klabauter_root()
     probe1.duration_ms = round((time.perf_counter() - _t0) * 1000.0, 1)
-    results.append(probe1)
+    if selected is None or _CLAUDE_KLABAUTER_ROOT_PROBE in selected:
+        results.append(probe1)
+
+    # Prerequisite 2: sys.path. NOT a probe — six probes import coordinator_core
+    # without arranging it themselves, and used to free-ride on the insert
+    # claude-klabauter.core.import left behind. See _ensure_core_importable.
+    _ensure_core_importable(claude_klabauter_root)
 
     # Probe 2: registry key (REQUIRED when machine-local present; OPTIONAL otherwise)
     # Runs independently of probe 1 — it checks the machine-local registration path
     # directly, which may differ from the resolution path used in probe 1.
-    results.append(_timed(_run_probe_registry_key))
+    _add(_REGISTRY_KEY_PROBE, _run_probe_registry_key)
 
     # Probe 3: import coordinator_core (REQUIRED; depends on probe 1)
-    if claude_klabauter_root is not None:
-        probe3 = _timed(_run_probe_core_import, claude_klabauter_root)
-    else:
-        probe3 = _ProbeResult(
-            probe="claude-klabauter.core.import",
-            # status is ignored when skipped=True (overridden to DEGRADED by the envelope
-            # builder); _INFO is the least-misleading placeholder.
-            status=_INFO,
-            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
-            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
-            skipped=True,
-        )
-    results.append(probe3)
+    known_ids.add(_CORE_IMPORT_PROBE)
+    if selected is None or _CORE_IMPORT_PROBE in selected:
+        if claude_klabauter_root is not None:
+            results.append(_timed(_run_probe_core_import, claude_klabauter_root))
+        else:
+            results.append(_ProbeResult(
+                probe=_CORE_IMPORT_PROBE,
+                # status is ignored when skipped=True (overridden to DEGRADED by the envelope
+                # builder); _INFO is the least-misleading placeholder.
+                status=_INFO,
+                detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+                skipped=True,
+            ))
 
     # Command-type static checks (DR-215 rebuild § C1b). Each accepts claude_klabauter_root
-    # (Path | None) and self-handles the unresolved case. Manifest triage flags +
-    # _apply_selector govern which appear in --triage / --cluster; run_probes runs all.
-    results.append(_timed(_run_probe_dialect_guard_armed, claude_klabauter_root))
-    results.append(_timed(_run_probe_settings_home_complete, claude_klabauter_root))
-    results.append(_timed(_run_probe_entrypoints_path_resolved, claude_klabauter_root))
-    results.append(_timed(_run_probe_resident_debris, claude_klabauter_root))
-    results.append(_timed(_run_probe_worktree_bloat, claude_klabauter_root))
-    results.append(_timed(_run_probe_version_sanity, claude_klabauter_root))
-    results.append(_timed(_run_probe_invoke_smoke, claude_klabauter_root))
-    results.append(_timed(_run_probe_strategic_draft_staleness, claude_klabauter_root))
-    results.append(_timed(_run_probe_vendored_schema_drift, claude_klabauter_root))
-    results.append(_timed(_run_probe_generator_output_staleness, claude_klabauter_root))
-    results.append(_timed(_run_probe_commitments_recheck, claude_klabauter_root))
-    results.append(_timed(_run_probe_stable_pid_miss, claude_klabauter_root))
-    results.append(_timed(_run_probe_root_pointer, claude_klabauter_root))
-    results.append(_timed(_run_probe_publish_provenance, claude_klabauter_root))
-    results.append(_timed(_run_probe_engine_target_rollout))
-    results.append(_timed(_run_probe_invoke_latency, claude_klabauter_root))
-    results.append(_timed(_run_probe_orphaned_execnet_gateways))
-    results.append(_timed(_run_probe_launch_chain))
-    results.append(_timed(_run_probe_warm_residency, claude_klabauter_root))
-    results.append(_timed(_run_probe_warm_generation, claude_klabauter_root))
-    results.append(_timed(_run_probe_warm_route_share, claude_klabauter_root))
-    results.append(_timed(_run_probe_warm_roundtrip, claude_klabauter_root, include_live_roundtrip))
+    # (Path | None) and self-handles the unresolved case. Manifest triage flags govern
+    # which ids reach `selected`; the id named here is the same symbol the probe's own
+    # _ProbeResult carries, so the two cannot drift.
+    _add(_DIALECT_GUARD_ARMED_PROBE, _run_probe_dialect_guard_armed, claude_klabauter_root)
+    _add(_SETTINGS_HOME_COMPLETE_PROBE, _run_probe_settings_home_complete, claude_klabauter_root)
+    _add(_ENTRYPOINTS_PATH_RESOLVED_PROBE, _run_probe_entrypoints_path_resolved, claude_klabauter_root)
+    _add(_RESIDENT_DEBRIS_PROBE, _run_probe_resident_debris, claude_klabauter_root)
+    _add(_WORKTREE_BLOAT_PROBE, _run_probe_worktree_bloat, claude_klabauter_root)
+    _add(_VERSION_SANITY_PROBE, _run_probe_version_sanity, claude_klabauter_root)
+    _add(_INVOKE_SMOKE_PROBE, _run_probe_invoke_smoke, claude_klabauter_root)
+    _add(_STRATEGIC_DRAFT_STALENESS_PROBE, _run_probe_strategic_draft_staleness, claude_klabauter_root)
+    _add(_VENDOR_DRIFT_PROBE, _run_probe_vendored_schema_drift, claude_klabauter_root)
+    _add(_GENERATOR_STALENESS_PROBE, _run_probe_generator_output_staleness, claude_klabauter_root)
+    _add(_COMMITMENTS_RECHECK_PROBE, _run_probe_commitments_recheck, claude_klabauter_root)
+    _add(_STABLE_PID_MISS_PROBE, _run_probe_stable_pid_miss, claude_klabauter_root)
+    _add(_ROOT_POINTER_PROBE, _run_probe_root_pointer, claude_klabauter_root)
+    _add(_PUBLISH_PROVENANCE_PROBE, _run_probe_publish_provenance, claude_klabauter_root)
+    _add(_ENGINE_TARGET_ROLLOUT_PROBE, _run_probe_engine_target_rollout)
+    _add(_INVOKE_LATENCY_PROBE, _run_probe_invoke_latency, claude_klabauter_root)
+    _add(_EXECNET_GATEWAY_PROBE, _run_probe_orphaned_execnet_gateways)
+    _add(_LAUNCH_CHAIN_PROBE, _run_probe_launch_chain)
+    _add(_WARM_RESIDENCY_PROBE, _run_probe_warm_residency, claude_klabauter_root)
+    _add(_WARM_GENERATION_PROBE, _run_probe_warm_generation, claude_klabauter_root)
+    _add(_WARM_ROUTE_SHARE_PROBE, _run_probe_warm_route_share, claude_klabauter_root)
+    _add(_WARM_ROUNDTRIP_PROBE, _run_probe_warm_roundtrip, claude_klabauter_root, include_live_roundtrip)
 
-    return results, claude_klabauter_root
+    return results, claude_klabauter_root, known_ids
 
 
 # ---------------------------------------------------------------------------
@@ -4586,10 +4823,17 @@ def _build_enriched_envelope(
         row["cluster"] = manifest_safe.get(pid, {}).get("cluster")
 
     # Additive top-level keys. `probe_total_ms` is the cost of what was EMITTED;
-    # `probe_suite_total_ms` is the cost of what was RUN. Under a selector the two
-    # diverge by the whole post-run-filter tax — `--probe claude-klabauter.warm.generation`
-    # emits a 43ms probe after running a ~41s suite — and that gap is precisely
-    # the thing this instrumentation exists to keep visible.
+    # `probe_suite_total_ms` is the cost of what was RUN. Post-gate, on every
+    # selector path, the two are equal by construction: `_apply_selector` only
+    # ever narrows `results` to members `run_probes` already gated, so the set
+    # of timed rows is identical going in. Neither field counts the
+    # unconditional prerequisites (`_run_probe_claude_klabauter_root`'s own resolution,
+    # `_ensure_core_importable`) — measured at ~8ms against a 41-53s suite,
+    # small enough that folding it in isn't worth a second signature change to
+    # `run_probes`. The pair still earns its keep because `suite_total_ms` is
+    # summed from the PRE-filter `results` in `main()`: if a future change ever
+    # runs more than it emits again, the two fields will diverge and the
+    # regression becomes visible in the envelope, not only in wall-clock.
     measured = [r.duration_ms for r in results if r.duration_ms is not None]
     if measured:
         envelope["probe_total_ms"] = round(sum(measured), 1)
@@ -4886,7 +5130,7 @@ def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path
         }
         sentinel_path = claude_klabauter_root / "state" / "doctor-last-run.json"
         sentinel_path.parent.mkdir(parents=True, exist_ok=True)
-        sentinel_path.write_text(json.dumps(sentinel, indent=2) + "\n", encoding="utf-8")
+        sentinel_path.write_text(json.dumps(sentinel, indent=2) + "\n", encoding="utf-8", newline="\n")
     except Exception as exc:
         # Sentinel-writing is best-effort ancillary work; never let it crash the probe.
         # stderr only — stdout is reserved for the JSON envelope / NDJSON contract.
@@ -5090,12 +5334,32 @@ def main() -> int:
         )
         sys.exit(2)
 
-    # Run all probes (full set; selector is a post-run filter).
-    results, claude_klabauter_root = run_probes(include_live_roundtrip=args.include_live_roundtrip)
+    # Derive the selected id set from the MANIFEST before running anything: the
+    # selector is a PRE-run gate, so `--probe X` costs one probe rather than the
+    # whole suite (docs/plans/2026-08-19-the-selector-gates-before-the-run.md).
+    # None means "no selector — run everything", which is what a bare invocation
+    # and --step-zero both take: --step-zero shares the mutually-exclusive mode
+    # group with the three selectors, so it can never carry one.
+    selected: set[str] | None
+    if args.probe:
+        selected = {args.probe}
+    elif args.cluster:
+        selected = {
+            pid for pid, meta in manifest.items() if meta.get("cluster") == args.cluster
+        }
+    elif args.triage:
+        selected = {pid for pid, meta in manifest.items() if meta.get("triage", False)}
+    else:
+        selected = None
+
+    results, claude_klabauter_root, known_ids = run_probes(
+        include_live_roundtrip=args.include_live_roundtrip,
+        selected=selected,
+    )
     suite_total_ms = sum(r.duration_ms for r in results if r.duration_ms is not None)
 
-    # Apply selector filter to the results.
-    results = _apply_selector(results, manifest, args)
+    # Shape what is emitted (INFO stubs for declared-but-unimplemented ids).
+    results = _apply_selector(results, manifest, args, known_ids)
 
     if args.step_zero:
         return emit_step_zero(results)

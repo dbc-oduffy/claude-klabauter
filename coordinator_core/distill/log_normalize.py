@@ -515,7 +515,7 @@ def normalize_log(log_path: Path) -> NormalizeResult:
     # process crash mid-write can never leave log_path truncated/partially written;
     # the backup (already on disk, guarded above) remains the recovery path either way.
     tmp_path = log_path.with_name(log_path.name + ".tmp")
-    tmp_path.write_text(canonical_text, encoding="utf-8")
+    tmp_path.write_text(canonical_text, encoding="utf-8", newline="\n")
     os.replace(tmp_path, log_path)
 
     return NormalizeResult(
@@ -759,7 +759,7 @@ def normalize_arrow_dialects_log(log_path: Path) -> NormalizeResult:
         new_text += "\n"
 
     tmp_path = log_path.with_name(log_path.name + ".tmp")
-    tmp_path.write_text(new_text, encoding="utf-8")
+    tmp_path.write_text(new_text, encoding="utf-8", newline="\n")
     os.replace(tmp_path, log_path)
 
     return NormalizeResult(

@@ -835,7 +835,7 @@ def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: 
         override_log = _override_log_path(git_root, session_id)
         if override_log is None:
             return
-        with open(override_log, "a", encoding="utf-8") as fh:
+        with open(override_log, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(
                 "%s | %s | OVERRIDE-PATHSPEC-DIVERGENCE | %s\n"
                 % (

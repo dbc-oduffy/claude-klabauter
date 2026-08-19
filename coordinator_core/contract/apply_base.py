@@ -204,7 +204,6 @@ from typing import Any, Callable, Iterator, List, Optional
 from coordinator_core.authz.dispatchable import ASSEMBLER_DISPATCHABLE
 from coordinator_core.composition_budget import BudgetBreach, CompositionBudget
 from coordinator_core.git_lock_retry import run_with_lock_retry
-from coordinator_core.ops.review_brightline_gate import _is_noise_path, classify_surface
 from coordinator_core.session import core as session_core
 
 _LOG = logging.getLogger(__name__)
@@ -687,6 +686,7 @@ def execute_directives(
         dict[str, Callable[[dict[str, Any], Path, Optional[dict[str, Any]]], Any]]
     ] = None,
     composition_budget: "Optional[CompositionBudget]" = None,
+    assembler_name: Optional[str] = None,
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam, callable directly with two
     `judgment_points` lists differing only in `recommendation` content to
@@ -765,6 +765,23 @@ def execute_directives(
     never populates `"advisory_failures"` at all — the key is omitted, not
     emitted empty, so every pre-existing report shape is unchanged (AC6).
 
+    A directive carries EXACTLY ONE of `cli` or `op` (C3, AC9) -- both
+    present, or neither present, is a whole-run pre-validation refusal
+    (`UnrecognizedDirective`), same as an unrecognized `cli` name always
+    was; the absent-`cli` refusal this replaces is not a regression, it is
+    the same refusal restated to also catch the new both-present case. A
+    `cli` directive still resolves via `resolve_cli(dispatch_table, ...)`;
+    an `op` directive resolves via `resolve_op(dispatch_table,
+    assembler_name, ...)`, gated by `assembler_name` (the caller's own
+    identity for `ASSEMBLER_DISPATCHABLE`'s default-deny lookup -- `None`
+    denies every `op` directive, since `ASSEMBLER_DISPATCHABLE.get(None,
+    frozenset())` is always empty). This is ONE resolution pass with a
+    two-valued key, not a second dispatch mechanism: whichever key a
+    directive carries, its resolved handler is invoked identically below
+    (`handler(directive.get("args", []), repo_root)`), and the two-value
+    check happens once, over the whole directive list, before any of them
+    execute -- exactly where the `resolve_cli` pre-validation already ran.
+
     Otherwise orders execution-ready directives by `depends_on`
     (directive-to-directive ordering — a judgment-point id in
     `depends_on` is not a member of the directive-id set and is
@@ -837,7 +854,24 @@ def execute_directives(
     # per-directive judgment gating, which only decides WHETHER a
     # structurally-valid directive dispatches this pass.
     try:
-        resolved = [(d["id"], resolve_cli(dispatch_table, d["cli"]), d) for d in ordered]
+        resolved = []
+        for d in ordered:
+            has_cli = "cli" in d
+            has_op = "op" in d
+            if has_cli and has_op:
+                raise UnrecognizedDirective(
+                    f"directive {d['id']!r} carries both 'cli' and 'op' -- exactly one "
+                    "is required"
+                )
+            if has_cli:
+                handler = resolve_cli(dispatch_table, d["cli"])
+            elif has_op:
+                handler = resolve_op(dispatch_table, assembler_name, d["op"])
+            else:
+                raise UnrecognizedDirective(
+                    f"directive {d['id']!r} carries neither 'cli' nor 'op'"
+                )
+            resolved.append((d["id"], handler, d))
     except UnrecognizedDirective as exc:
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc), "landed": []}
 
@@ -996,6 +1030,17 @@ def _ledger_kind_and_weight(repo_root: str, paths: List[str]) -> "tuple[str, flo
     # leaves `commit_ledger.store` partially initialized whenever anything
     # imports it before `coordinator_core.ops` -- which de-registers this op.
     from coordinator_core.commit_ledger.classify import weight_for_path
+    # Same reason, second edge: `coordinator_core.ops`'s package import is
+    # EAGER, and `ops.session.boot_sweep` name-imports back out of this
+    # module, so a module-level import of anything under `coordinator_core.
+    # ops` here de-registers `session.boot_sweep` and
+    # `session.sweep_consumed_handoffs` for any process that imports this
+    # module before `coordinator_core.ops`. Measured 2026-08-19: 257 ops
+    # instead of 259, at exit 0, with no traceback anywhere.
+    from coordinator_core.ops.review_brightline_gate import (
+        _is_noise_path,
+        classify_surface,
+    )
 
     total_weight = 0.0
     any_classified = False

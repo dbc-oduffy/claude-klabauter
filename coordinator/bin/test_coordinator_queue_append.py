@@ -681,7 +681,7 @@ def test_schema_load_fails_loud_via_env_override() -> None:
     test_schema_load_failure_fails_loud.
     """
     name = "Test 7b — bad CLAUDE_KLABAUTER_ROOT: native schema seam unreachable → fail loud"
-    with tempfile.TemporaryDirectory() as bad_claude_klabauter_root, \
+    with _engine_root_tmpdir() as bad_claude_klabauter_root, \
          tempfile.TemporaryDirectory() as tmpdir:
         # bad_claude_klabauter_root has no coordinator_core.invoke — schema.describe/validate
         # have no legacy fallback, so the CLI must fail loud before writing anything.
@@ -694,6 +694,10 @@ def test_schema_load_fails_loud_via_env_override() -> None:
             env={
                 "QUEUE_APPEND_OUTPUT_ROOT": tmpdir,
                 "CLAUDE_KLABAUTER_ROOT": bad_claude_klabauter_root,
+                # Without this the child resolves coordinator_core through an
+                # editable install's meta-path pin and the seam is never
+                # absent -- see _seam_absence_env's docstring.
+                **_seam_absence_env(tmpdir),
             },
             cwd=tmpdir,
         )
@@ -837,7 +841,7 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
     selection point a native-seam routing regression would need to break.
     """
     name = "Test 9a — --queue-scope central writes to CLAUDE_KLABAUTER_ROOT, not cwd"
-    with tempfile.TemporaryDirectory() as claude_klabauter_root_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_root_dir, \
          tempfile.TemporaryDirectory() as sibling_cwd:
         # claude_klabauter_root_dir simulates claude-klabauter's own repo root; sibling_cwd simulates a
         # sibling repo whose cwd must NOT receive the central-scope write.
@@ -916,7 +920,7 @@ def test_project_scope_still_writes_cwd_relative() -> None:
     """
     name = "Test 9b — project scope (default) still writes cwd-relative (regression guard)"
     with tempfile.TemporaryDirectory() as claude_home_dir, \
-         tempfile.TemporaryDirectory() as fake_claude_klabauter_root, \
+         _engine_root_tmpdir() as fake_claude_klabauter_root, \
          tempfile.TemporaryDirectory() as project_cwd:
         # Set CLAUDE_HOME to a different dir to confirm it is NOT used for project scope.
         _seed_symlinked_claude_klabauter_root(fake_claude_klabauter_root)
@@ -1269,6 +1273,143 @@ def test_multiline_body_roundtrip() -> None:
             raise AssertionError(f"{name}: " + (f"body roundtrip mismatch: expected {body_input!r}, got {got_body!r}. "
                 f"(trailing newline indicates | clip chomping instead of |- strip chomping)"))
             return
+
+
+
+# ---------------------------------------------------------------------------
+# --body-file — the argv-immune body transport
+#
+# `--body` cannot carry a multi-line value through the `.cmd` launcher leg:
+# cmd.exe truncates its whole command line at the first LF during its own
+# parse, so `%*` (and `%CMDCMDLINE%`, hence `raw_cmdline_recovery`) are already
+# one line before the launcher body runs. That known-bad leg is asserted in
+# coordinator_core/test_bin_launcher_parity.py::test_argv_fidelity_matrix
+# (`cmd-multiline-truncated`); these tests assert the ESCAPE HATCH from it,
+# which is why they drive `--body-file` rather than re-measuring the launcher.
+#
+# Filed as: state/bug-backlog/2026-08-19-published-caller-imports-a-mirror-only-
+# name-from-the-live-tree.yaml (the "stores only the FIRST LINE" finding).
+# ---------------------------------------------------------------------------
+
+def test_body_file_carries_multiline_body() -> None:
+    """A multi-line body supplied via --body-file roundtrips byte-exact, with
+    no --body flag present at all (so this also proves --body-file satisfies
+    the schema's required-`body` check in main())."""
+    body_input = "First line.\n\nThird line after a blank one.\nFourth line."
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        body_path = os.path.join(tmpdir, "body.txt")
+        with open(body_path, "w", encoding="utf-8") as fh:
+            fh.write(body_input)
+
+        result = _run_cli(
+            [
+                "--schema", "bug-backlog",
+                "--title", "Body file multiline entry",
+                "--body-file", body_path,
+                "--status", "open",
+                "--severity", "P3",
+                "--surface", "coordinator/bin/coordinator-queue-append.py",
+                "--from-repo", "test-repo-em",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode == 0, f"CLI exited {result.returncode}: {result.stderr!r}"
+
+        expected_dir = os.path.join(tmpdir, "state", "bug-backlog")
+        yaml_files = [f for f in os.listdir(expected_dir) if f.endswith(".yaml")]
+        assert len(yaml_files) == 1, f"expected 1 YAML file; found {yaml_files}"
+
+        parsed = _parse_yaml_file(os.path.join(expected_dir, yaml_files[0]))
+        assert parsed.get("body") == body_input, (
+            f"body roundtrip mismatch: expected {body_input!r}, got {parsed.get('body')!r}"
+        )
+
+
+def test_body_file_does_not_expand_escape_sequences() -> None:
+    """A literal two-character backslash-n in a FILE is prose, not a newline.
+
+    `--body` applies `.replace("\\n", "\n")` because argv is where an operator
+    has no other way to express a newline; a file already carries real ones, so
+    the expansion is deliberately not applied on this path. Asserting the
+    divergence keeps a future "make both paths consistent" edit from silently
+    corrupting file-borne prose.
+    """
+    body_input = "A regex like \\d+\\n matches a digit run.\nSecond real line."
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        body_path = os.path.join(tmpdir, "body.txt")
+        with open(body_path, "w", encoding="utf-8") as fh:
+            fh.write(body_input)
+
+        result = _run_cli(
+            [
+                "--schema", "bug-backlog",
+                "--title", "Body file literal escape entry",
+                "--body-file", body_path,
+                "--status", "open",
+                "--severity", "P3",
+                "--surface", "coordinator/bin/coordinator-queue-append.py",
+                "--from-repo", "test-repo-em",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode == 0, f"CLI exited {result.returncode}: {result.stderr!r}"
+
+        expected_dir = os.path.join(tmpdir, "state", "bug-backlog")
+        yaml_files = [f for f in os.listdir(expected_dir) if f.endswith(".yaml")]
+        parsed = _parse_yaml_file(os.path.join(expected_dir, yaml_files[0]))
+        assert parsed.get("body") == body_input, (
+            f"file-borne escape sequence was expanded: got {parsed.get('body')!r}"
+        )
+
+
+def test_body_and_body_file_are_mutually_exclusive() -> None:
+    """Two body sources is an ambiguity, not a precedence question — refuse."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        body_path = os.path.join(tmpdir, "body.txt")
+        with open(body_path, "w", encoding="utf-8") as fh:
+            fh.write("from the file")
+
+        result = _run_cli(
+            [
+                "--schema", "bug-backlog",
+                "--title", "Both body sources",
+                "--body", "from argv",
+                "--body-file", body_path,
+                "--status", "open",
+                "--severity", "P3",
+                "--surface", "coordinator/bin/coordinator-queue-append.py",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode != 0, "expected refusal when both body sources are supplied"
+        assert "mutually exclusive" in result.stderr, f"stderr did not name the conflict: {result.stderr!r}"
+
+
+def test_body_file_unreadable_fails_loud() -> None:
+    """An unreadable --body-file refuses; it never writes an empty-bodied entry."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            [
+                "--schema", "bug-backlog",
+                "--title", "Missing body file",
+                "--body-file", os.path.join(tmpdir, "absent.txt"),
+                "--status", "open",
+                "--severity", "P3",
+                "--surface", "coordinator/bin/coordinator-queue-append.py",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode != 0, "expected refusal on an unreadable --body-file"
+        assert "--body-file unreadable" in result.stderr, f"stderr did not name the flag: {result.stderr!r}"
+        assert not os.path.isdir(os.path.join(tmpdir, "state", "bug-backlog")), (
+            "a refused run must not have written anything"
+        )
 
 
 
@@ -1882,6 +2023,71 @@ def test_lesson_add_facet_threading() -> None:
 # Helpers for routing-gate tests (C2 strang-08 arm)
 # ---------------------------------------------------------------------------
 
+#: Source of the `sitecustomize.py` the two seam-ABSENCE tests put on a child
+#: process's PYTHONPATH. `site` imports `sitecustomize` after it has processed
+#: every `.pth` file, so this runs late enough to undo what they installed.
+_DROP_EDITABLE_FINDER_SRC = (
+    "import sys\n"
+    "sys.meta_path[:] = [\n"
+    "    _f for _f in sys.meta_path\n"
+    # An editable finder is registered as the CLASS itself, not an
+    # instance, so `type(_f).__module__` is 'builtins' and only
+    # `_f.__module__` names the generated finder module. Check both --
+    # setuptools has shipped each registration shape across versions.
+    "    if 'coordinator_core' not in getattr(_f, '__module__', '')\n"
+    "    and 'coordinator_core' not in type(_f).__module__\n"
+    "]\n"
+)
+
+
+def _seam_absence_env(tmp_holder: str) -> dict[str, str]:
+    """Env overlay that lets `CLAUDE_KLABAUTER_ROOT` actually govern `coordinator_core`
+    resolution in a spawned child.
+
+    A seam-ABSENCE test needs `coordinator_core.invoke` to be genuinely
+    unimportable from the root under test. On a box where `coordinator_core`
+    is pip-installed EDITABLE, that is not achievable by `CLAUDE_KLABAUTER_ROOT` or
+    `sys.path` alone: setuptools' editable install registers a
+    `sys.meta_path` finder pinning the package to one hard-coded tree, and
+    `sys.meta_path` is consulted BEFORE `sys.path`. So every child resolves
+    that tree's `coordinator_core.invoke` no matter what root the test built,
+    the seam is never absent, and the CLI's fail-loud ladder is never reached
+    -- the test then measures the machine's install layout instead of the
+    behaviour it names. (Measured 2026-08-19 on this box: the editable pin
+    targets the LIVE working tree, so `find_spec('coordinator_core.invoke')`
+    answered from it while `coordinator_core.__path__` pointed at the
+    fixture's root -- two trees in one process, which is the same mixing the
+    `cc_invoke` mirror-name ImportError comes from.)
+
+    Dropping the finder in a `sitecustomize` restores `sys.path` as the
+    authority for the CHILD ONLY -- no machine state is touched, and a box
+    with no editable install is unaffected (the filter matches nothing).
+    """
+    sc_dir = os.path.join(tmp_holder, "_no_editable_finder")
+    os.makedirs(sc_dir, exist_ok=True)
+    with open(os.path.join(sc_dir, "sitecustomize.py"), "w", encoding="utf-8") as fh:
+        fh.write(_DROP_EDITABLE_FINDER_SRC)
+    existing = os.environ.get("PYTHONPATH", "")
+    return {"PYTHONPATH": sc_dir + (os.pathsep + existing if existing else "")}
+
+
+def _engine_root_tmpdir() -> "tempfile.TemporaryDirectory[str]":
+    """A `TemporaryDirectory` for a FAKE ENGINE ROOT, tolerant of teardown races.
+
+    These roots hold a real `coordinator_core` package directory that spawned
+    CLI subprocesses import from, so CPython writes `.pyc` files into
+    `coordinator_core/__pycache__` for as long as the tree is live -- including
+    from concurrently-running processes on this box. A `.pyc` landing between
+    `shutil.rmtree`'s directory walk and its `rmdir` fails the enclosing
+    teardown with WinError 145 ("directory is not empty") AFTER the test body
+    has already passed, reporting a temp-file race as a CLI defect. The
+    directory is OS-reaped from %TEMP% either way, so the cleanup error carries
+    no signal worth a red. Use this ONLY for roots holding an importable
+    package; an ordinary output/cwd tmpdir keeps strict cleanup.
+    """
+    return tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+
+
 def _populate_engine_root_minus_invoke(root: str) -> None:
     """Build a `root/coordinator_core` package that mirrors the real one for
     every top-level entry EXCEPT `invoke`/`invoke.py`.
@@ -1902,9 +2108,16 @@ def _populate_engine_root_minus_invoke(root: str) -> None:
     for _entry in os.listdir(_REPO_ROOT_COORDINATOR_CORE):
         if _entry in ("invoke", "invoke.py", "__pycache__"):
             continue
+        _src = os.path.join(_REPO_ROOT_COORDINATOR_CORE, _entry)
         _dest = os.path.join(coord_dir, _entry)
         if not os.path.exists(_dest):
-            os.symlink(os.path.join(_REPO_ROOT_COORDINATOR_CORE, _entry), _dest)
+            # target_is_directory is Windows-load-bearing: without it a
+            # directory target gets a FILE symlink, which `shutil.rmtree`
+            # then classifies as a file and refuses to remove, failing the
+            # enclosing TemporaryDirectory teardown with WinError 145
+            # ("directory is not empty") AFTER the test body has already
+            # passed. The flag is ignored on POSIX.
+            os.symlink(_src, _dest, target_is_directory=os.path.isdir(_src))
 
 
 def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: str = "") -> str:
@@ -1952,15 +2165,36 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
     for _entry in os.listdir(_REPO_ROOT_COORDINATOR_CORE):
         if _entry in ("invoke", "invoke.py", "__pycache__"):
             continue
+        _src = os.path.join(_REPO_ROOT_COORDINATOR_CORE, _entry)
         _dest = os.path.join(coord_dir, _entry)
         if not os.path.exists(_dest):
-            os.symlink(os.path.join(_REPO_ROOT_COORDINATOR_CORE, _entry), _dest)
+            # target_is_directory is Windows-load-bearing: without it a
+            # directory target gets a FILE symlink, which `shutil.rmtree`
+            # then classifies as a file and refuses to remove, failing the
+            # enclosing TemporaryDirectory teardown with WinError 145
+            # ("directory is not empty") AFTER the test body has already
+            # passed. The flag is ignored on POSIX.
+            os.symlink(_src, _dest, target_is_directory=os.path.isdir(_src))
 
     stash_path_repr = repr(os.path.join(tmpdir, "_schema_fields_stash.json"))
     schema_op_preamble = (
+        # The real transport passes params via `--params-file <path>`, never
+        # positional argv -- see coordinator/bin/lib/cc_invoke.py::cc_invoke's
+        # "Params transport" note (ARG_MAX-immunity on Windows/msys). A fake
+        # engine reading `sys.argv[2]` as JSON therefore parses the literal
+        # string "--params-file" and dies with a JSONDecodeError before the
+        # stubbed op ever answers, turning every routing test that mounts this
+        # preamble permanently red for a reason unrelated to what it asserts.
+        # The positional leg is kept as a fallback so this stub stays faithful
+        # to BOTH call conventions coordinator_core.invoke accepts.
         "import json, os, sys\n"
         "_op = sys.argv[1] if len(sys.argv) > 1 else ''\n"
-        "_params_raw = sys.argv[2] if len(sys.argv) > 2 else '{}'\n"
+        "_params_raw = '{}'\n"
+        "if '--params-file' in sys.argv:\n"
+        "    with open(sys.argv[sys.argv.index('--params-file') + 1], encoding='utf-8') as _pfh:\n"
+        "        _params_raw = _pfh.read()\n"
+        "elif len(sys.argv) > 2 and not sys.argv[2].startswith('--'):\n"
+        "    _params_raw = sys.argv[2]\n"
         "_params = json.loads(_params_raw) if _params_raw else {}\n"
         "if _op == 'schema.validate':\n"
         "    with open(" + stash_path_repr + ", 'w') as _sfh:\n"
@@ -2066,7 +2300,7 @@ def test_routing_seam_absent_uses_legacy() -> None:
     Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     name = "Test R1 — routing: total seam absence -> fails loud, no write (State-1, post de-node cutover)"
-    with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as git_root:
         # Initialize a real git repo so _current_repo_root() returns git_root.
         init = subprocess.run(
@@ -2089,6 +2323,10 @@ def test_routing_seam_absent_uses_legacy() -> None:
             env={
                 "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
                 "CLAUDE_CODE_SESSION_ID": "",
+                # Without this the child resolves coordinator_core through an
+                # editable install's meta-path pin and the seam is never
+                # absent -- see _seam_absence_env's docstring.
+                **_seam_absence_env(git_root),
             },
             cwd=git_root,
         )
@@ -2123,7 +2361,7 @@ def test_routing_seam_present_uses_native() -> None:
     Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     name = "Test R2 — routing: seam-present -> native path, stdout = result out_path (State-2)"
-    with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as git_root:
         init = subprocess.run(
             ["git", "init", git_root], capture_output=True, text=True,
@@ -2201,7 +2439,7 @@ def test_native_provenance_parity() -> None:
     Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC11
     """
     name = "Test R4 — AC11: native path receives CLI-resolved from_repo and session_id"
-    with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as git_root:
         init = subprocess.run(
             ["git", "init", git_root], capture_output=True, text=True,
@@ -2280,7 +2518,7 @@ def test_native_queue_scope_param_threading() -> None:
     """
     # Review: code-reviewer — F5: AC11 gap — queue_scope="central" on native path is untested.
     name = "Test R4b — AC11: --queue-scope central appears in native op params"
-    with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as git_root:
         init = subprocess.run(
             ["git", "init", git_root], capture_output=True, text=True,
@@ -2334,7 +2572,7 @@ def test_skipped_envelope_emits_warn_no_path() -> None:
     Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC12
     """
     name = "Test R5 — AC12: skipped envelope -> WARN to stderr, no path to stdout"
-    with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as git_root:
         init = subprocess.run(
             ["git", "init", git_root], capture_output=True, text=True,
@@ -2391,7 +2629,7 @@ def test_output_root_bypass_skips_native() -> None:
     """
     # Review: code-reviewer — F8: QUEUE_APPEND_OUTPUT_ROOT bypass has no seam-present test.
     name = "Test R6 — QUEUE_APPEND_OUTPUT_ROOT bypass skips native path when seam present"
-    with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
+    with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as output_root, \
          tempfile.TemporaryDirectory() as git_root:
         init = subprocess.run(

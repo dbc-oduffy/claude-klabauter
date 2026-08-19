@@ -882,7 +882,7 @@ def _stamp_file(path: str, deliverable_id: str, field_name: str = "deliverable_i
         pass
 
     tmp_path = f"{path}.backfill.tmp.{os.getpid()}"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.writelines(out_lines)
     if orig_mode is not None:
         try:

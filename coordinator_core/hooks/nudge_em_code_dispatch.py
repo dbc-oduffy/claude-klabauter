@@ -445,7 +445,7 @@ def _write_pending_dispatch_artifact(
         "ambiguous": False,
     }
     try:
-        with open(artifact_path, "w", encoding="utf-8") as fh:
+        with open(artifact_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(artifact, fh, indent=2)
     except OSError:
         pass  # best-effort: artifact write failure does not affect the nudge path

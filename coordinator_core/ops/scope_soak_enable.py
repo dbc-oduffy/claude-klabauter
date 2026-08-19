@@ -75,7 +75,7 @@ def enable(git_root: Optional[str] = None) -> Tuple[str, int]:
 
     os.makedirs(sessions_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with open(sentinel, "w", encoding="utf-8") as fh:
+    with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(ts + "\n")
 
     text = (

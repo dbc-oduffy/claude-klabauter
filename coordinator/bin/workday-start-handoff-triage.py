@@ -304,7 +304,7 @@ def trim_orphan_sweep_notes(
     header = lines[:header_lines]
     body = lines[header_lines:]
     tmp_path = path.with_name(path.name + ".new")
-    tmp_path.write_text("\n".join(header) + ("\n" if header else ""))
+    tmp_path.write_text("\n".join(header) + ("\n" if header else ""), newline="\n")
     tmp_path.replace(path)
     return "\n".join(body) + "\n"
 

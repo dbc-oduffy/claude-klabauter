@@ -642,7 +642,7 @@ def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
     record = {"gate_id": gate_id, "input_parts": list(input_parts)}
     fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.stem}.tmp.", suffix=".json")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(record, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         os.replace(tmp_str, str(path))

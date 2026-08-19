@@ -582,7 +582,7 @@ def _scaffold_dir_entry(
             else:
                 dir_abs.mkdir(parents=True, exist_ok=True)
                 content = f"# {dir_rel}\n\n{readme_text}\n"
-                readme_abs.write_text(content, encoding="utf-8")
+                readme_abs.write_text(content, encoding="utf-8", newline="\n")
                 result.lines.append(f"created README: {dir_rel}/README.md")
                 result.created_readmes += 1
                 journal_entries[2].append(

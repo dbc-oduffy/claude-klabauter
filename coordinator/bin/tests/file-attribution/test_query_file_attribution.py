@@ -184,7 +184,7 @@ class TestQueryCLISessionMode(unittest.TestCase):
     def test_five_records_returned(self):
         result = self._query()
         data = json.loads(result.stdout)
-        file_paths = [r['file_path'] for r in data]
+        file_paths = [r['file_path_local'] for r in data]
         self.assertEqual(
             len(data), 5,
             msg=f'Expected 5 records, got {len(data)}: {file_paths}',
@@ -199,7 +199,7 @@ class TestQueryCLISessionMode(unittest.TestCase):
     def test_main_py_counts(self):
         result = self._query()
         data = json.loads(result.stdout)
-        by_path = {r['file_path']: r for r in data}
+        by_path = {r['file_path_local']: r for r in data}
         self.assertIn('/project/src/main.py', by_path)
         r = by_path['/project/src/main.py']
         self.assertEqual(r['read_count'], 1)
@@ -210,7 +210,7 @@ class TestQueryCLISessionMode(unittest.TestCase):
     def test_new_file_txt_create(self):
         result = self._query()
         data = json.loads(result.stdout)
-        by_path = {r['file_path']: r for r in data}
+        by_path = {r['file_path_local']: r for r in data}
         self.assertIn('/project/new/file.txt', by_path)
         r = by_path['/project/new/file.txt']
         self.assertEqual(r['edited_count'], 1)
@@ -221,7 +221,7 @@ class TestQueryCLISessionMode(unittest.TestCase):
     def test_output_log_bash_partial(self):
         result = self._query()
         data = json.loads(result.stdout)
-        by_path = {r['file_path']: r for r in data}
+        by_path = {r['file_path_local']: r for r in data}
         self.assertIn('/tmp/output.log', by_path)
         r = by_path['/tmp/output.log']
         self.assertEqual(r['edited_count'], 1)
@@ -231,7 +231,7 @@ class TestQueryCLISessionMode(unittest.TestCase):
     def test_src_dir_referenced(self):
         result = self._query()
         data = json.loads(result.stdout)
-        by_path = {r['file_path']: r for r in data}
+        by_path = {r['file_path_local']: r for r in data}
         self.assertIn('/project/src/', by_path)
         r = by_path['/project/src/']
         self.assertEqual(r['referenced_count'], 1)
@@ -265,7 +265,7 @@ class TestQueryCLIFileMode(unittest.TestCase):
         data = json.loads(result.stdout)
         self.assertEqual(len(data), 1, msg=f'Expected 1 record, got: {data}')
         self.assertEqual(data[0]['session_id'], _SESSION_ID)
-        self.assertEqual(data[0]['file_path'], '/project/src/main.py')
+        self.assertEqual(data[0]['file_path_local'], '/project/src/main.py')
         self.assertEqual(data[0]['read_count'], 1)
         self.assertEqual(data[0]['edited_count'], 1)
 
@@ -332,7 +332,7 @@ class TestQueryCLIFileModeResolution(unittest.TestCase):
             len(data), 1,
             msg=f'Expected 1 record for relative arg, got: {data}; stderr={result.stderr}',
         )
-        self.assertEqual(data[0]['file_path'], f'{repo_root}/src/main.py')
+        self.assertEqual(data[0]['file_path_local'], f'{repo_root}/src/main.py')
 
     def test_backslash_arg_matches_forward_slash_record(self):
         tmpdir, repo_root = _make_relative_join_fixture()
@@ -345,7 +345,7 @@ class TestQueryCLIFileModeResolution(unittest.TestCase):
             tmpdir.cleanup()
         data = json.loads(result.stdout)
         self.assertEqual(len(data), 1, msg=f'Expected 1 record, got: {data}')
-        self.assertEqual(data[0]['file_path'], f'{repo_root}/src/main.py')
+        self.assertEqual(data[0]['file_path_local'], f'{repo_root}/src/main.py')
 
     def test_same_basename_different_directory_does_not_match(self):
         """Anti-suffix guard: no bare endswith match."""
@@ -562,6 +562,299 @@ class TestQueryCLIRepoSlug(unittest.TestCase):
                 self.assertEqual(r['repo'], expected)
         finally:
             shutil.rmtree(remoteless, ignore_errors=True)
+
+
+class TestQueryCLIAllMode(unittest.TestCase):
+    """--all — every derived attribution row for the resolved project.
+
+    Spec backlink: pln-cockpit-asks-10-and-11-attribu-9227bf § C1 (AC1-AC3)
+    """
+
+    def setUp(self):
+        self._tmpdir = _make_transcript_dir()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_all_returns_same_records_as_session_query(self):
+        """AC1 — --all emits the same record shape as --session/--file, with
+        every row for the fixture's one session (no session/file filter)."""
+        result = _run_cli('--all', transcript_dir=self._tmpdir.name)
+        self.assertEqual(result.returncode, 0, msg=f'stderr: {result.stderr}')
+        data = json.loads(result.stdout)
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 5, msg=f'got: {data}')
+        for r in data:
+            self.assertIn('session_id', r)
+            self.assertIn('file_path_local', r)
+            self.assertIn('repo', r)
+            self.assertNotIn('file_path', r)
+            self.assertEqual(r['session_id'], _SESSION_ID)
+
+    def test_all_session_and_file_emit_identical_row_shape(self):
+        """AC7 — --session and --file query modes emit the identical row shape
+        as --all (same key set) for the same underlying rows."""
+        all_result = _run_cli('--all', transcript_dir=self._tmpdir.name)
+        session_result = _run_cli('--session', _SESSION_ID, transcript_dir=self._tmpdir.name)
+        file_result = _run_cli('--file', '/project/src/main.py', transcript_dir=self._tmpdir.name)
+        all_data = json.loads(all_result.stdout)
+        session_data = json.loads(session_result.stdout)
+        file_data = json.loads(file_result.stdout)
+        self.assertTrue(all_data and session_data and file_data)
+        all_keys = set(all_data[0].keys())
+        self.assertEqual(set(session_data[0].keys()), all_keys)
+        self.assertEqual(set(file_data[0].keys()), all_keys)
+
+    def test_all_mutually_exclusive_with_session(self):
+        """AC2 — rejected at argparse-validation level, message names the conflict."""
+        result = _run_cli('--all', '--session', _SESSION_ID, transcript_dir=self._tmpdir.name)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--all', result.stderr)
+
+    def test_all_mutually_exclusive_with_file(self):
+        """AC2 — same rejection for --file."""
+        result = _run_cli('--all', '--file', '/project/src/main.py', transcript_dir=self._tmpdir.name)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--all', result.stderr)
+
+    def test_all_empty_result_exits_two(self):
+        """AC3 — same exit-2-on-empty contract as --session/--file."""
+        empty_dir = tempfile.mkdtemp(prefix='fa_query_test_empty_')
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable, _CLI,
+                    '--all',
+                    '--project', _REPO_ROOT,
+                    '--transcript-dir', empty_dir,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **no_console_creationflags(),
+            )
+            self.assertEqual(result.returncode, 2, msg=f'stdout={result.stdout!r} stderr={result.stderr!r}')
+        finally:
+            shutil.rmtree(empty_dir, ignore_errors=True)
+
+    def test_all_table_format_non_empty(self):
+        result = _run_cli('--all', '--format', 'table', transcript_dir=self._tmpdir.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(_SESSION_ID, result.stdout)
+
+
+class TestQueryCLIFilePathRel(unittest.TestCase):
+    """AC4/AC5 — additive file_path_rel field, file_path renamed to file_path_local.
+
+    Spec backlink: pln-cockpit-asks-10-and-11-attribu-9227bf § C1
+    """
+
+    def setUp(self):
+        self._tmpdir = _make_transcript_dir()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_out_of_tree_row_gets_null_file_path_rel(self):
+        """AC4 — the golden fixture's paths ('/project/...') do not resolve
+        under the real repo root used as --project, nor under any real
+        sibling repo root on disk, so file_path_rel (and file_path_repo)
+        stay null — classified external."""
+        result = _run_cli('--session', _SESSION_ID, transcript_dir=self._tmpdir.name)
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        for r in data:
+            self.assertIn('file_path_rel', r)
+            self.assertIsNone(r['file_path_rel'])
+            self.assertIsNone(r['file_path_repo'])
+            self.assertEqual(r['path_class'], 'external')
+
+    def test_file_path_local_unchanged_shape_and_value(self):
+        """AC5 — the renamed file_path_local carries the same values the old
+        file_path key did, byte-identical."""
+        result = self._session_query()
+        data = json.loads(result.stdout)
+        by_path = {r['file_path_local']: r for r in data}
+        self.assertIn('/project/src/main.py', by_path)
+        self.assertIn('/project/new/file.txt', by_path)
+        self.assertIn('/tmp/output.log', by_path)
+        self.assertIn('/project/src/', by_path)
+
+    def test_no_file_path_key_emitted(self):
+        """AC5 — no emitted row carries the old file_path key at all."""
+        result = self._session_query()
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        for r in data:
+            self.assertNotIn('file_path', r)
+            self.assertIn('file_path_local', r)
+
+    def _session_query(self) -> subprocess.CompletedProcess:
+        return _run_cli('--session', _SESSION_ID, transcript_dir=self._tmpdir.name)
+
+    def test_in_tree_row_gets_relative_slash_separated_path(self):
+        """AC1/AC3/AC4 — a row whose file_path resolves under --project is
+        classified in-tree, gets this repo's slug as file_path_repo, and a
+        '/'-separated relative value in file_path_rel."""
+        tmpdir, repo_root = _make_relative_join_fixture()
+        try:
+            result = _run_cli(
+                '--session', _SESSION_ID,
+                transcript_dir=tmpdir.name, project=repo_root,
+            )
+        finally:
+            tmpdir.cleanup()
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        by_path = {r['file_path_local']: r for r in data}
+        self.assertIn(f'{repo_root}/src/main.py', by_path)
+        r = by_path[f'{repo_root}/src/main.py']
+        self.assertEqual(r['path_class'], 'in-tree')
+        self.assertEqual(r['file_path_repo'], f'local/{os.path.basename(repo_root)}')
+        self.assertEqual(r['file_path_rel'], 'src/main.py')
+        self.assertNotIn('\\', r['file_path_rel'])
+
+
+class TestQueryCLIPathClass(unittest.TestCase):
+    """AC1/AC2/AC3/AC4/AC6 — path_class classifier: in-tree, sibling-repo,
+    ephemeral, external.
+
+    Spec backlink: pln-attribution-paths-become-porta-92395a § C1
+    """
+
+    def setUp(self):
+        self._tmpdir = _make_transcript_dir()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_all_path_class_values_are_known_and_non_null(self):
+        """AC1 — the distinct set of path_class values is a subset of the
+        four documented values, with no nulls."""
+        result = _run_cli('--all', transcript_dir=self._tmpdir.name)
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        classes = {r['path_class'] for r in data}
+        self.assertTrue(
+            classes.issubset({'in-tree', 'sibling-repo', 'ephemeral', 'external'}),
+            msg=f'unexpected path_class values: {classes}',
+        )
+        for r in data:
+            self.assertIsNotNone(r['path_class'])
+
+    def test_identity_pair_both_null_or_both_populated(self):
+        """AC4 — (file_path_repo, file_path_rel) is always both-null or
+        both-populated, never one without the other."""
+        result = _run_cli('--all', transcript_dir=self._tmpdir.name)
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        for r in data:
+            repo_is_none = r['file_path_repo'] is None
+            rel_is_none = r['file_path_rel'] is None
+            self.assertEqual(
+                repo_is_none, rel_is_none,
+                msg=f'mismatched identity pair: {r}',
+            )
+
+    def test_ephemeral_row_under_temp_dir_gets_null_identity(self):
+        """AC1/AC4 — a path under the platform temp directory is classified
+        ephemeral, with both file_path_repo and file_path_rel null."""
+        import tempfile as _tempfile
+
+        ephemeral_path = os.path.join(_tempfile.gettempdir(), 'fa_ephemeral_probe.txt')
+        extra = json.dumps({
+            'type': 'assistant',
+            'sessionId': _SESSION_ID,
+            'message': {
+                'role': 'assistant',
+                'content': [{
+                    'type': 'tool_use', 'id': 't100', 'name': 'Write',
+                    'input': {'file_path': ephemeral_path, 'content': 'x'},
+                }],
+            },
+        })
+        extra_result = json.dumps({
+            'type': 'user',
+            'sessionId': _SESSION_ID,
+            'message': {
+                'role': 'user',
+                'content': [{'type': 'tool_result', 'tool_use_id': 't100', 'content': 'OK'}],
+            },
+        })
+        tmpdir, repo_root = _make_relative_join_fixture((extra, extra_result))
+        try:
+            result = _run_cli(
+                '--session', _SESSION_ID,
+                transcript_dir=tmpdir.name, project=repo_root,
+            )
+        finally:
+            tmpdir.cleanup()
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        by_path = {r['file_path_local']: r for r in data}
+        self.assertIn(ephemeral_path, by_path)
+        r = by_path[ephemeral_path]
+        self.assertEqual(r['path_class'], 'ephemeral')
+        self.assertIsNone(r['file_path_repo'])
+        self.assertIsNone(r['file_path_rel'])
+
+    def test_sibling_repo_row_gets_repo_qualified_relative(self):
+        """AC2/AC3 — a path under another repo's root is classified
+        sibling-repo, with file_path_repo naming that repo's own slug (via
+        the canonical producer) and file_path_rel relative to THAT repo's
+        root, POSIX-separated, never a drive letter or '..' prefix."""
+        sibling_dir = tempfile.TemporaryDirectory(prefix='fa_sibling_repo_')
+        try:
+            subprocess.run(
+                ['git', 'init', '-q'],
+                cwd=sibling_dir.name,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **no_console_creationflags(),
+            )
+            sibling_root = sibling_dir.name.replace('\\', '/')
+            sibling_file = f'{sibling_root}/nested/other.py'
+            extra = json.dumps({
+                'type': 'assistant',
+                'sessionId': _SESSION_ID,
+                'message': {
+                    'role': 'assistant',
+                    'content': [{
+                        'type': 'tool_use', 'id': 't101', 'name': 'Write',
+                        'input': {'file_path': sibling_file, 'content': 'x'},
+                    }],
+                },
+            })
+            extra_result = json.dumps({
+                'type': 'user',
+                'sessionId': _SESSION_ID,
+                'message': {
+                    'role': 'user',
+                    'content': [{'type': 'tool_result', 'tool_use_id': 't101', 'content': 'OK'}],
+                },
+            })
+            tmpdir, repo_root = _make_relative_join_fixture((extra, extra_result))
+            try:
+                result = _run_cli(
+                    '--session', _SESSION_ID,
+                    transcript_dir=tmpdir.name, project=repo_root,
+                )
+            finally:
+                tmpdir.cleanup()
+            data = json.loads(result.stdout)
+            self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+            by_path = {r['file_path_local']: r for r in data}
+            self.assertIn(sibling_file, by_path)
+            r = by_path[sibling_file]
+            self.assertEqual(r['path_class'], 'sibling-repo')
+            expected_slug = f'local/{os.path.basename(sibling_dir.name)}'
+            self.assertEqual(r['file_path_repo'], expected_slug)
+            self.assertEqual(r['file_path_rel'], 'nested/other.py')
+            self.assertFalse(r['file_path_rel'].startswith('..'))
+            self.assertNotRegex(r['file_path_rel'], r'^[A-Za-z]:')
+        finally:
+            sibling_dir.cleanup()
 
 
 if __name__ == '__main__':

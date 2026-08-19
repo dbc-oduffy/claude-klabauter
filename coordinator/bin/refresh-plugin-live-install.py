@@ -356,7 +356,7 @@ def _last_recorded_hash(refresh_log: Path, plugin: str) -> str:
 
 def _append_audit(refresh_log: Path, line: str) -> None:
     try:
-        with open(refresh_log, "a", encoding="utf-8") as f:
+        with open(refresh_log, "a", encoding="utf-8", newline="\n") as f:
             f.write(line + "\n")
     except OSError:
         pass
@@ -602,7 +602,7 @@ def _acquire_lock(lock_dir: Path) -> None:
             eprint(f"  If this is stale, run: rm -rf '{lock_dir}'")
             sys.exit(1)
 
-    (lock_dir / "pid").write_text(str(os.getpid()), encoding="utf-8")
+    (lock_dir / "pid").write_text(str(os.getpid()), encoding="utf-8", newline="\n")
 
     def _cleanup() -> None:
         _safe_rmtree(lock_dir)
@@ -822,7 +822,7 @@ def _tty_writer():
         except OSError:
             return None
     try:
-        return open("/dev/tty", "w", encoding="utf-8")
+        return open("/dev/tty", "w", encoding="utf-8", newline="\n")
     except OSError:
         return None
 

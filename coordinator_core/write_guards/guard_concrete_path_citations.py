@@ -375,7 +375,7 @@ def _claim_warn_once(repo_root: "Path | None", payload: dict) -> bool:
     sentinel = base / "coordinator-sessions" / _session_key(payload) / _SESSION_SENTINEL_NAME
     try:
         sentinel.parent.mkdir(parents=True, exist_ok=True)
-        with open(sentinel, "x", encoding="utf-8") as fh:
+        with open(sentinel, "x", encoding="utf-8", newline="\n") as fh:
             fh.write("1")
         return True
     except FileExistsError:

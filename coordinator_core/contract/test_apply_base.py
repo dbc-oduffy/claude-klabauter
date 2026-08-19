@@ -457,6 +457,67 @@ class TestExecuteDirectives:
         # the WHOLE directive list is pre-validated before any of it runs.
         assert report["landed"] == []
 
+    def test_both_cli_and_op_present_aborts_the_whole_run_pre_validation(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"synthetic": frozenset({"noop-cli"})},
+        )
+        directives = [{"id": "d1", "cli": "noop-cli", "op": "noop-cli"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE, assembler_name="synthetic"
+        )
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert report["landed"] == []
+        assert "both" in report["error"]
+
+    def test_neither_cli_nor_op_present_aborts_the_whole_run_pre_validation(self, tmp_path):
+        directives = [{"id": "d1"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert report["landed"] == []
+
+    def test_op_directive_resolves_through_resolve_op_and_dispatches(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"synthetic": frozenset({"noop-cli"})},
+        )
+        directives = [{"id": "d1", "op": "noop-cli", "args": ["x"]}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE, assembler_name="synthetic"
+        )
+        assert exit_code == apply_base.APPLY_EXIT_OK
+        assert report["landed"] == ["d1"]
+
+    def test_op_directive_with_no_assembler_name_default_denies(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"synthetic": frozenset({"noop-cli"})},
+        )
+        directives = [{"id": "d1", "op": "noop-cli"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert report["landed"] == []
+
+    def test_op_directive_not_allowlisted_for_assembler_aborts(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            apply_base,
+            "ASSEMBLER_DISPATCHABLE",
+            {"synthetic": frozenset()},
+        )
+        directives = [{"id": "d1", "op": "noop-cli"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE, assembler_name="synthetic"
+        )
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert report["landed"] == []
+
     def test_handler_exception_is_partial_mutation_with_prior_landed_preserved(self, tmp_path):
         directives = [
             {"id": "d1", "cli": "noop-cli"},

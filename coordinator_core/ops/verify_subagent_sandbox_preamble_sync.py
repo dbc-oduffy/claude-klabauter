@@ -303,7 +303,7 @@ def insert_block(file_path: str, body: str) -> None:
                 break
         out = lines[:insert_before] + [block, "\n"] + lines[insert_before:]
 
-    fpath.write_text("".join(out), encoding="utf-8")
+    fpath.write_text("".join(out), encoding="utf-8", newline="\n")
     # DR-276: declared AFTER the write lands, never before — the contract is
     # a report of what was ACTUALLY written, not of an intended surface.
     declare_write(fpath)
@@ -330,7 +330,7 @@ def rewrite_block(file_path: str, body: str) -> None:
         if not in_block:
             out.append(line)
 
-    fpath.write_text("".join(out), encoding="utf-8")
+    fpath.write_text("".join(out), encoding="utf-8", newline="\n")
     declare_write(fpath)
 
 

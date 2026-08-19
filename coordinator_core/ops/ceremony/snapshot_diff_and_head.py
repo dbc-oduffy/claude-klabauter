@@ -158,8 +158,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     ts_dir.mkdir(parents=True, exist_ok=True)
-    diff_path.write_text(diff_result.stdout, encoding="utf-8")
-    head_sha_path.write_text(head_sha + "\n", encoding="utf-8")
+    diff_path.write_text(diff_result.stdout, encoding="utf-8", newline="\n")
+    head_sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")
 
     return {
         "ts_dir": str(ts_dir),

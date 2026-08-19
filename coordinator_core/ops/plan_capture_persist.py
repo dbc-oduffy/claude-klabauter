@@ -538,7 +538,7 @@ def persist_captured_plan(
         scaffold_text = scaffold_path.read_text(encoding="utf-8")
         scaffold_text = splice_problem_body(scaffold_text, problem_body)
         scaffold_text = splice_tasks(scaffold_text, rows)
-        scaffold_path.write_text(scaffold_text, encoding="utf-8")
+        scaffold_path.write_text(scaffold_text, encoding="utf-8", newline="\n")
     except PersistError as exc:
         return {"status": "error", "path": None, "readme_row": None, "reason": str(exc)}
 

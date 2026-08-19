@@ -97,7 +97,7 @@ def run_and_record() -> ShimDecisionRecord:
     # -- a kill mid-write must never leave this committed-artifact JSON truncated.
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(RECORD_PATH), suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(record.to_json())
         os.replace(tmp_path, RECORD_PATH)
         tmp_path = None

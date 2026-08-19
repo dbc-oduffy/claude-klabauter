@@ -269,6 +269,6 @@ def write_path_excl(out_path: str, content: str, *, caller_name: str) -> str:
                 ) from None
             candidate = f"{root}-{attempt}{ext}"
             continue
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         return candidate

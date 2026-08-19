@@ -109,7 +109,7 @@ def sync_halted_marker(repo_root: str) -> None:
                 pass
         tmp_path = marker_path.with_name(marker_path.name + f".tmp-{os.getpid()}")
         try:
-            tmp_path.write_text(content, encoding="utf-8")
+            tmp_path.write_text(content, encoding="utf-8", newline="\n")
             os.replace(tmp_path, marker_path)
         finally:
             # os.replace consumed tmp_path on success; a survivor means the

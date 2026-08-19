@@ -426,7 +426,7 @@ def _claim_fire(sentinel: str | None) -> bool:
         return True
     try:
         os.makedirs(os.path.dirname(sentinel), exist_ok=True)
-        with open(sentinel, "x", encoding="utf-8") as fh:
+        with open(sentinel, "x", encoding="utf-8", newline="\n") as fh:
             fh.write("1")
         return True
     except FileExistsError:

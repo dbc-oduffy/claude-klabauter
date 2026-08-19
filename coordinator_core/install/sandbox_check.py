@@ -462,7 +462,7 @@ def _tier1_filesystem_shape(
         _assert_gen_settings_hooks_interface(r)
 
         sandbox_settings = os.path.join(sandbox, "settings.json")
-        Path(sandbox_settings).write_text("{}", encoding="utf-8")
+        Path(sandbox_settings).write_text("{}", encoding="utf-8", newline="\n")
 
         # COORDINATOR_SETTINGS_HOME must be pinned into the sandbox, not merely
         # inherited: since 2026-07-28 gen_doe_root_pointer writes
@@ -480,7 +480,7 @@ def _tier1_filesystem_shape(
             r.ok(f"gen_settings_hooks.generate() succeeded against sandbox settings.json ({status})")
         else:
             err_path = os.path.join(sandbox, "gen-hooks-err.txt")
-            Path(err_path).write_text(err or "", encoding="utf-8")
+            Path(err_path).write_text(err or "", encoding="utf-8", newline="\n")
             r.bad(f"gen_settings_hooks.generate() failed (see {err_path})")
 
         # A `skipped (...)` status is the generator DECLINING to write, by
@@ -560,7 +560,7 @@ def _tier1_filesystem_shape(
         }
         cp = _run(_python_launch(wrapper_src, "--dry-run"), env=env)
         dryrun_err = os.path.join(sandbox, "dryrun-err.txt")
-        Path(dryrun_err).write_text(cp.stderr or "", encoding="utf-8")
+        Path(dryrun_err).write_text(cp.stderr or "", encoding="utf-8", newline="\n")
         if cp.returncode == 0:
             dry_out = cp.stdout
             if "exec claude --plugin-dir" in dry_out:
@@ -600,7 +600,7 @@ def _tier1_filesystem_shape(
             env.pop("CLAUDE_HOME", None)
             cp = _run(_python_launch(f5_wrapper, "--dry-run"), env=env)
             f5_err = os.path.join(sandbox, "f5-dryrun-err.txt")
-            Path(f5_err).write_text(cp.stderr or "", encoding="utf-8")
+            Path(f5_err).write_text(cp.stderr or "", encoding="utf-8", newline="\n")
             if cp.returncode == 0:
                 dry_out = cp.stdout
                 if "exec claude --plugin-dir" in dry_out:
@@ -841,7 +841,7 @@ def _tier1b_pointer_and_shim(
         env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone}
         rc, err = _call_gen_doe_root_pointer([], env)
         gp_err = os.path.join(sandbox, "gen-pointer-err.txt")
-        Path(gp_err).write_text(err or "", encoding="utf-8")
+        Path(gp_err).write_text(err or "", encoding="utf-8", newline="\n")
         if rc == 0:
             r.ok("gen_doe_root_pointer.main() exited 0 against sandbox")
             pointer_section_ran = True
@@ -900,13 +900,13 @@ def _tier1b_pointer_and_shim(
         r.ok(f"claude-doe-shim.sh.tmpl present: {shim_tmpl}")
 
         sandbox_rc = os.path.join(sandbox, "sandbox-rc.sh")
-        Path(sandbox_rc).write_text("# sandbox-rc\n", encoding="utf-8")
+        Path(sandbox_rc).write_text("# sandbox-rc\n", encoding="utf-8", newline="\n")
 
         env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc}
         shim_argv = ["--template", shim_tmpl]
         rc, err = _call_gen_claude_doe_shim(shim_argv, env)
         gs_err = os.path.join(sandbox, "gen-shim-err.txt")
-        Path(gs_err).write_text(err or "", encoding="utf-8")
+        Path(gs_err).write_text(err or "", encoding="utf-8", newline="\n")
         if rc == 0:
             r.ok("gen_claude_doe_shim.main() exited 0 against sandbox")
             shim_section_ran = True
@@ -980,7 +980,7 @@ def _tier1b_pointer_and_shim(
                 r.bad("gen_claude_doe_shim.main() failed on second (idempotency) run")
 
         sandbox_rc_check = os.path.join(sandbox, "sandbox-rc-checkonly.sh")
-        Path(sandbox_rc_check).write_text("# sandbox-rc-checkonly\n", encoding="utf-8")
+        Path(sandbox_rc_check).write_text("# sandbox-rc-checkonly\n", encoding="utf-8", newline="\n")
         rc_bak = os.path.join(sandbox, "sandbox-rc-checkonly.bak")
         shutil.copy2(sandbox_rc_check, rc_bak)
         env_check = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc_check}
@@ -1041,7 +1041,7 @@ def _tier1b_mirror_and_cold_tier(
     if doe_clone_resolved:
         cold_env = os.path.join(sandbox, "cold-env")
         os.makedirs(os.path.join(cold_env, ".claude"), exist_ok=True)
-        Path(os.path.join(cold_env, ".claude", ".doe-root")).write_text(doe_clone, encoding="utf-8")
+        Path(os.path.join(cold_env, ".claude", ".doe-root")).write_text(doe_clone, encoding="utf-8", newline="\n")
 
         cold_ptr_read = Path(os.path.join(cold_env, ".claude", ".doe-root")).read_text(encoding="utf-8", errors="replace")
         if cold_ptr_read == doe_clone:
@@ -1229,13 +1229,13 @@ def _tier1c_publish_repo_parity(
             r.bad(f"F8: .doe-root pointer not created for publish clone (expected at: {pub_doe_root})")
     else:
         f8_err = os.path.join(sandbox, "f8-gen-pointer-err.txt")
-        Path(f8_err).write_text(err or "", encoding="utf-8")
+        Path(f8_err).write_text(err or "", encoding="utf-8", newline="\n")
         r.bad(f"F8: gen_doe_root_pointer.main() failed against publish clone (see {f8_err})")
 
     # ---- 15. Settings-hooks generator rooted at publish clone ----
     r.section("--- F8: settings.json hook commands rooted at publish clone ---")
     pub_settings = os.path.join(pub_home, "settings.json")
-    Path(pub_settings).write_text("{}", encoding="utf-8")
+    Path(pub_settings).write_text("{}", encoding="utf-8", newline="\n")
     env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_DOE_CLAUDE": pub_clone}
     rc2, err2, status_pub = _call_gen_settings_hooks(pub_settings, env2)
     if rc2 == 0:
@@ -1275,7 +1275,7 @@ def _tier1c_publish_repo_parity(
                 r.ok("F8: settings.json hook commands do NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
     else:
         f8_hooks_err = os.path.join(sandbox, "f8-gen-hooks-err.txt")
-        Path(f8_hooks_err).write_text(err2 or "", encoding="utf-8")
+        Path(f8_hooks_err).write_text(err2 or "", encoding="utf-8", newline="\n")
         r.bad(f"F8: gen_settings_hooks.generate() failed against publish clone (see {f8_hooks_err})")
 
     # ---- 16. resolve_coordinator_clone rooted at publish clone ----

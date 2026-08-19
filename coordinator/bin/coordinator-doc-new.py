@@ -1305,7 +1305,7 @@ def _write_deliverable_carry_degradation(
             f"{datetime.date.today().isoformat()}"
             f"-{doc_type}-deliverable-carry-degradation.jsonl",
         )
-        with open(audit_path, "a", encoding="utf-8") as audit_fh:
+        with open(audit_path, "a", encoding="utf-8", newline="\n") as audit_fh:
             audit_fh.write(
                 json.dumps(
                     {
@@ -5849,13 +5849,13 @@ def main() -> None:
     try:
         if recording_declared_writes is not None:
             with recording_declared_writes(cwd=_write_repo_root):
-                with open(out_path, "w", encoding="utf-8") as fh:
+                with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(content)
                     if not content.endswith("\n"):
                         fh.write("\n")
                 declare_write(out_path)
         else:
-            with open(out_path, "w", encoding="utf-8") as fh:
+            with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(content)
                 if not content.endswith("\n"):
                     fh.write("\n")

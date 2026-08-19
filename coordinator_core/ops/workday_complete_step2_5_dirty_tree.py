@@ -294,7 +294,7 @@ def _append_to_gitignore(pattern: str, gitignore_path: str, dry_run: bool) -> bo
         print(f"[{_PROG}] DRY-RUN: would append '{pattern}' to {gitignore_path}", file=sys.stderr)
         return True
     try:
-        with open(gitignore_path, "a", encoding="utf-8") as fh:
+        with open(gitignore_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"\n{pattern}\n")
         declare_write(gitignore_path)
         return True

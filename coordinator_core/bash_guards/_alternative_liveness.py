@@ -359,7 +359,7 @@ def _scratch_git_repo():
         _run(["git", "init", "-q"], cwd=tmp)
         _run(["git", "config", "user.email", "altlive-probe@example.com"], cwd=tmp)
         _run(["git", "config", "user.name", "altlive-probe"], cwd=tmp)
-        with open(os.path.join(tmp, "f.txt"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(tmp, "f.txt"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write("hello\n")
         _run(["git", "add", "."], cwd=tmp)
         _run(["git", "commit", "-q", "-m", "init"], cwd=tmp)
@@ -379,11 +379,11 @@ def _make_backpointer(git_root: str, agent_id: str, subagent_type: str, em_sid: 
     it; this fixture is the hermetic substitute for a real dispatch."""
     agents_dir = os.path.join(git_root, ".git", "coordinator-sessions", ".agents", agent_id)
     os.makedirs(agents_dir, exist_ok=True)
-    with open(os.path.join(agents_dir, "em-session-id.txt"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(agents_dir, "em-session-id.txt"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(em_sid + "\n")
     sess_dir = os.path.join(git_root, ".git", "coordinator-sessions", em_sid)
     os.makedirs(sess_dir, exist_ok=True)
-    with open(os.path.join(sess_dir, "dispatched-agents.txt"), "a", encoding="utf-8") as fh:
+    with open(os.path.join(sess_dir, "dispatched-agents.txt"), "a", encoding="utf-8", newline="\n") as fh:
         fh.write("%s\t%s\t%s\n" % (agent_id, "altlive-teammate", subagent_type))
 
 
@@ -391,7 +391,7 @@ def _trigger_destructive_rm() -> Optional[Dict[str, Any]]:
     with _scratch_git_repo() as repo:
         target_dir = os.path.join(repo, "scratch_dir")
         os.makedirs(target_dir)
-        with open(os.path.join(target_dir, "u.txt"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(target_dir, "u.txt"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write("untracked\n")
         return _dc.check_destructive_rm("rm -rf %s" % target_dir, "altlive-probe")
 
@@ -407,11 +407,11 @@ def _trigger_destructive_git_revert() -> Optional[Dict[str, Any]]:
         state_dir = os.path.join(repo, "state")
         os.makedirs(state_dir)
         target = os.path.join(state_dir, "important.md")
-        with open(target, "w", encoding="utf-8") as fh:
+        with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("baseline\n")
         _run(["git", "add", "state/important.md"], cwd=repo)
         _run(["git", "commit", "-q", "-m", "seed state file"], cwd=repo)
-        with open(target, "w", encoding="utf-8") as fh:
+        with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("baseline\nuncommitted edit\n")
         return _dc.check_destructive_git_revert("git -C %s reset --hard" % repo, "altlive-probe")
 
@@ -423,7 +423,7 @@ def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
     additionalContext), never the hard-deny leg."""
     with _scratch_git_repo() as repo:
         target = os.path.join(repo, "f.txt")
-        with open(target, "w", encoding="utf-8") as fh:
+        with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("hello\nuncommitted edit\n")
         return _dc.check_destructive_git_revert_advisory("git -C %s stash" % repo, "altlive-probe")
 
@@ -588,7 +588,7 @@ def _trigger_guard_branch_set_precedence() -> Optional[Dict[str, Any]]:
         _run(["git", "init", "-q", "-b", "main"], cwd=tmp)
         _run(["git", "config", "user.email", "altlive-probe@example.com"], cwd=tmp)
         _run(["git", "config", "user.name", "altlive-probe"], cwd=tmp)
-        with open(os.path.join(tmp, "f.txt"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(tmp, "f.txt"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write("hello\n")
         _run(["git", "add", "."], cwd=tmp)
         _run(["git", "commit", "-q", "-m", "init"], cwd=tmp)
@@ -597,7 +597,7 @@ def _trigger_guard_branch_set_precedence() -> Optional[Dict[str, Any]]:
         today = local_day()
         candidate = "work/altlive-other/%s" % today
         _run(["git", "checkout", "-q", "-b", candidate], cwd=tmp)
-        with open(os.path.join(tmp, "f.txt"), "a", encoding="utf-8") as fh:
+        with open(os.path.join(tmp, "f.txt"), "a", encoding="utf-8", newline="\n") as fh:
             fh.write("candidate commit\n")
         _run(["git", "commit", "-q", "-am", "candidate commit"], cwd=tmp)
         _run(["git", "checkout", "-q", "main"], cwd=tmp)
@@ -914,7 +914,7 @@ def _trigger_validate_frontmatter_schema_advisory() -> Optional[Dict[str, Any]]:
         # (abs_file_path)` gate) and would otherwise fire ahead of the
         # schema-validation branch this trigger exists to exercise (the
         # branch carrying this chunk's own copy edit).
-        with open(os.path.join(handoffs_dir, "altlive-probe.md"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(handoffs_dir, "altlive-probe.md"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write("placeholder\n")
         payload = {
             "tool_name": "Write",

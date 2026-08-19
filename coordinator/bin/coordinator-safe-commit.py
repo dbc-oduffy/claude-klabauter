@@ -845,7 +845,7 @@ def with_overlap_lock(base: str, cs_core, body_fn, *body_args, timeout_s: int = 
             waited += 1
 
     try:
-        with open(os.path.join(lock_dir, "pid"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(lock_dir, "pid"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write(str(os.getpid()))
     except OSError:
         pass
@@ -889,7 +889,7 @@ def _publish_scope_and_check_overlap(
     window). exits 1 on first collision found (matches bash `exit 1` inside
     the loop, which the caller's SystemExit propagation now carries)."""
     try:
-        with open(active_scope_file, "w", encoding="utf-8") as fh:
+        with open(active_scope_file, "w", encoding="utf-8", newline="\n") as fh:
             for f in handoff_files:
                 if f:
                     fh.write(f + "\n")
@@ -925,7 +925,7 @@ def _append_orphans_and_check_overlap(
     against every live peer session's active-scope.txt."""
     if active_scope_file and orphan_resolved:
         try:
-            with open(active_scope_file, "a", encoding="utf-8") as fh:
+            with open(active_scope_file, "a", encoding="utf-8", newline="\n") as fh:
                 for f in orphan_resolved:
                     fh.write(f + "\n")
         except OSError:
@@ -1236,7 +1236,7 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
         os.makedirs(sdir, exist_ok=True)
         log_file = os.path.join(sdir, "blanket-invocations.log")
         try:
-            with open(log_file, "a", encoding="utf-8") as fh:
+            with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(f"{cs_core.now_iso()} invoking_command={invoking or 'unknown'}\n")
         except OSError:
             pass
@@ -1540,7 +1540,7 @@ def do_override(session_id: str, args: "Args", cs_core) -> None:
         os.makedirs(sdir, exist_ok=True)
         log_file = os.path.join(sdir, "overrides.log")
         try:
-            with open(log_file, "a", encoding="utf-8") as fh:
+            with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(f"=== Override at {cs_core.now_iso()} ===\n")
                 fh.write(f"Subject: {args.subject}\n")
                 fh.write(f"Mode: {'pre-staged-index' if pre_staged else 'blanket (git add -A)'}\n")
@@ -1764,7 +1764,7 @@ def do_scoped(
         if not combined_mode and local_active_scope_file:
             own_active_scope_file = True
             try:
-                open(local_active_scope_file, "w", encoding="utf-8").close()
+                open(local_active_scope_file, "w", encoding="utf-8", newline="\n").close()
             except OSError:
                 pass
 
@@ -1816,7 +1816,7 @@ def do_scoped(
             if base and session_id:
                 claim_log = os.path.join(base, session_id, "orphan-claims.log")
                 try:
-                    with open(claim_log, "a", encoding="utf-8") as fh:
+                    with open(claim_log, "a", encoding="utf-8", newline="\n") as fh:
                         fh.write(f"=== Claim at {cs_core.now_iso()} ===\n")
                         fh.write(f"Pathspecs: {' '.join(include_orphans)}\n")
                         fh.write("Resolved dirty files:\n")
@@ -1956,7 +1956,7 @@ def do_scoped(
         msg_fd, msg_path = tempfile.mkstemp(prefix="coordinator-safe-commit.do_scoped.")
         pre_head = _git_rev_parse_head()
         try:
-            with os.fdopen(msg_fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(message)
             commit_result = git_native.commit_scoped(commit_paths, msg_path, cwd=os.getcwd())
         finally:
@@ -2178,7 +2178,7 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
         msg_fd, msg_path = tempfile.mkstemp(prefix="coordinator-safe-commit.do_scope_from.")
         pre_head = _git_rev_parse_head()
         try:
-            with os.fdopen(msg_fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(message)
             commit_result = git_native.commit_scoped(my_scope, msg_path, cwd=os.getcwd())
         finally:

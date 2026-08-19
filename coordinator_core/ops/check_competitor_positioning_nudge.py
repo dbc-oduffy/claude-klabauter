@@ -64,7 +64,7 @@ def _record_decline(repo_root: Path) -> None:
     marker = repo_root / _DECLINE_MARKER_REL
     marker.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    marker.write_text(ts + "\n", encoding="utf-8")
+    marker.write_text(ts + "\n", encoding="utf-8", newline="\n")
 
     # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.

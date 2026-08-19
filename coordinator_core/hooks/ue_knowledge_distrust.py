@@ -185,7 +185,7 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
         data = {"enabledPlugins": {key: True for key in _BOOTSTRAP_KEYS}}
         tmp_path = settings_path.with_name(f"{settings_path.name}.tmp.{os.getpid()}")
         try:
-            tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
             os.replace(tmp_path, settings_path)
         except OSError as exc:
             return False, f"ERROR: could not write {settings_path}: {exc}"
@@ -220,7 +220,7 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
 
     tmp_path = settings_path.with_name(f"{settings_path.name}.tmp.{os.getpid()}")
     try:
-        tmp_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+        tmp_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8", newline="\n")
         os.replace(tmp_path, settings_path)
     except OSError as exc:
         return False, f"ERROR: could not write {settings_path}: {exc}"

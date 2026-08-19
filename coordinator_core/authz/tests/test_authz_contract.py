@@ -273,6 +273,36 @@ class TestOpModuleMapRegistrationCoverage:
             "Add an entry in coordinator_core/ops/_registry_map.py::OP_MODULE_MAP."
         )
 
+    def test_every_mapped_op_is_reachable_on_the_production_import_path(self) -> None:
+        """Every OP_MODULE_MAP key must resolve to a handler after the production import.
+
+        The opposite direction of the test above, and the one that catches a DEAD
+        capability rather than a bookkeeping gap. `test_registered_ops_missing_from_
+        module_map` iterates _REGISTRY, so an op whose module never gets imported is
+        invisible to it — it cannot report the very ops whose unreachability is the
+        defect. Measured 2026-08-19: `workflow.fire` and `workflow.fire_status` were
+        healthy on disk and registered fine on a direct module import, but
+        `get_op_handler("workflow.fire")` returned None on every path a real caller
+        uses, because `_eager_import_all` walks the hand-maintained _EAGER_OP_MODULES
+        list and that list did not name the module. The documented consumer — the
+        headless/cron `emit-dispatch-workflow --fire` path — was dead, and the
+        safe-fallback import that exists for a STALE map entry does not save a
+        MISSING one.
+
+        Bug: state/bug-backlog/2026-08-19-three-authz-guards-red-on-head-ten-ops-r-345344e48218.yaml
+        """
+        import coordinator_core.ops  # noqa: F401 — the production registration path
+        from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+        unreachable = sorted(
+            name for name in OP_MODULE_MAP if name not in coordinator_core.ipc._REGISTRY
+        )
+        assert unreachable == [], (
+            f"Ops in OP_MODULE_MAP that do not register on the production import "
+            f"path, so no caller can dispatch them: {unreachable}. Add the owning "
+            "module to _EAGER_OP_MODULES in coordinator_core/ops/__init__.py."
+        )
+
 
 # ---------------------------------------------------------------------------
 # memo.send classification tests (strang-03 C3)

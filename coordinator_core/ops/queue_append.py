@@ -56,7 +56,9 @@ AC14) before any path construction.
 Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4
 
 Output path precedence:
-    1. ``QUEUE_APPEND_OUTPUT_ROOT`` env var (test isolation).
+    1. ``QUEUE_APPEND_OUTPUT_ROOT`` env var (test isolation), in-process route only
+       -- a warm server's inherited copy is deliberately ignored
+       (``_output_root_override``).
     2. ``queue_scope == "central"`` → claude-klabauter repo root via ``CLAUDE_KLABAUTER_ROOT`` env or
        ``machine-local get repos.claude_klabauter``; raises ``_ClaudeKlabauterUnresolvable``
        when unresolvable (caller degrades gracefully, WARN+skip exit 0).
@@ -111,6 +113,8 @@ import hashlib
 import json
 import logging
 import os
+
+from coordinator_core.telemetry import op_latency
 import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags, same_path
@@ -155,6 +159,40 @@ _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
 _CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
+
+
+def _output_root_override() -> "str | None":
+    """The ``QUEUE_APPEND_OUTPUT_ROOT`` test-isolation redirect, but ONLY
+    when this process is the one the caller ran in.
+
+    ``QUEUE_APPEND_OUTPUT_ROOT`` is a property of a CALLING process (a test
+    redirecting its own writes into a tmpdir). Under the warm engine the op
+    executes in a long-lived server process instead, whose environment was
+    inherited from whichever session happened to spawn it -- so an env var
+    one session exported becomes a standing redirect for every OTHER
+    session's writes served by that process, for as long as it lives. That
+    is not hypothetical: bug-backlog rows landed in
+    ``pytest-of-<user>/pytest-*/…/state/bug-backlog/`` twice, from two
+    different shells, while the CLI printed a normal repo path and exited 0
+    -- a silently lost write, which for a queue whose whole job is not
+    losing items is the worst available failure.
+
+    Refusing the env read on the warm-server route is the whole fix: a
+    genuine in-process test caller (``execution_route() == IN_PROCESS``,
+    which is every non-server process) is unaffected, and the CLI never
+    reaches the native path with this var set anyway -- it forces the legacy
+    in-process write when it is present, so the only way this env var can
+    reach a served handler is by leaking off the server.
+
+    Never a raise: an override that cannot be honoured is dropped, and the
+    write lands where it should have all along.
+    """
+    override = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
+    if not override:
+        return None
+    if op_latency.execution_route() != op_latency.IN_PROCESS:
+        return None
+    return override
 
 
 class _ClaudeKlabauterUnresolvable(RuntimeError):
@@ -774,7 +812,8 @@ def _output_path(
     """Compute the full output path for a new queue entry.
 
     Precedence (mirrors coordinator-queue-append._output_path):
-        1. ``QUEUE_APPEND_OUTPUT_ROOT`` env override (test isolation).
+        1. ``QUEUE_APPEND_OUTPUT_ROOT`` env override (test isolation) -- honoured
+           ONLY on the in-process route; see ``_output_root_override``.
         2. ``queue_scope == "central"`` → claude-klabauter root. Raises ``_ClaudeKlabauterUnresolvable``
            when CLAUDE_KLABAUTER_ROOT cannot be resolved — caller degrades gracefully.
         3. Project scope → ``caller_worktree``:
@@ -809,7 +848,7 @@ def _output_path(
     Spec backlink (store-schema filename keying): pln-teach-the-native-queue-append--8bd701 § C4
     """
     output_dir = _output_dir_for_schema(schema_name)
-    override_root = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
+    override_root = _output_root_override()
 
     if override_root:
         base = os.path.join(override_root, output_dir)
@@ -957,7 +996,7 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
         dir=directory,
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         os.replace(tmp_path, out_path)
     except BaseException:
@@ -1011,7 +1050,7 @@ def _write_out_path_excl(out_path: str, content: str) -> str:
                 ) from None
             candidate = f"{root}-{attempt}{ext}"
             continue
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         return candidate
 

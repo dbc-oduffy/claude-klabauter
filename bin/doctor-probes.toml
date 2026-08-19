@@ -702,8 +702,11 @@ remediation = "This probe reports 'cannot tell' (skipped) when route coverage is
 # (coordinator_core.warm.client.try_warm_dispatch) actually reach the resident
 # server, and how long does it take? SPLIT OUT OF C6 (staff-eng review, F2): this
 # is a real shape change to the probe engine (an explicit run-time opt-in gate),
-# not a manifest tweak -- `_apply_selector` is a POST-RUN FILTER, so weight/triage
-# alone do NOT stop a probe from running. weight = "heavy" (a live connection
+# not a manifest tweak. weight/triage alone still do NOT stop a probe from
+# running: the selector became a PRE-RUN gate (docs/plans/2026-08-19-the-selector
+# -gates-before-the-run.md), so a SELECTION excludes a probe from running, but a
+# default run selects nothing and runs everything -- which is the case this
+# opt-in exists for. weight = "heavy" (a live connection
 # attempt, not a static read), and per the manifest invariant above
 # (triage=true ==> weight in {cheap, standard}) that makes triage = false the
 # only legal value here -- but per the same brief, weight/triage no longer gate

@@ -432,7 +432,7 @@ def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
             prefix=os.path.basename(stamp_path) + ".", dir=stamp_dir
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(contents)
             # Review: code-reviewer — mkstemp hardcodes 0600 regardless of
             # umask; os.replace preserves that mode across the rename, so

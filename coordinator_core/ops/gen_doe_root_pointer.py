@@ -306,7 +306,7 @@ def main(argv: List[str]) -> int:
         # tempfile.gettempdir() resolves TMPDIR/TEMP/TMP per-platform.
         fd, tmp_path = tempfile.mkstemp(prefix="gen-doe-root-pointer.", dir=tempfile.gettempdir())
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", newline="\n") as fh:
                 fh.write(doe_root + "\n")
 
             with open(tmp_path, encoding="utf-8") as fh:
@@ -355,7 +355,7 @@ def main(argv: List[str]) -> int:
     # Atomic write: write to a sibling temp file then rename into place.
     fd, tmp_live = tempfile.mkstemp(prefix=".doe-root.tmp.", dir=pointer_dir or ".")
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", newline="\n") as fh:
             fh.write(doe_root + "\n")
         os.replace(tmp_live, pointer_file)
         # DR-276: declared AFTER the write lands, at the FINAL destination,

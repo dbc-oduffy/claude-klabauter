@@ -1040,7 +1040,7 @@ def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
         Path(tempfile.gettempdir())
         / f"git-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
     )
-    pathspec_file.write_text("\n".join(paths) + "\n", encoding="utf-8")
+    pathspec_file.write_text("\n".join(paths) + "\n", encoding="utf-8", newline="\n")
     return pathspec_file
 
 

@@ -299,7 +299,7 @@ def session_shape_set(
         except OSError:
             return False
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 json.dump(merged, fh)
                 fh.write("\n")
             os.replace(tmp_name, shape_file)
@@ -335,9 +335,9 @@ def _try_claim_lock(lock_dir: str, sid: str) -> bool:
     try:
         # Review: code-reviewer (Finding 2) — trailing "\n" to match bash
         # echo redirection and claims.py::_write_claim_meta byte-parity.
-        (Path(lock_dir) / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
-        (Path(lock_dir) / "session_id").write_text(f"{sid}\n", encoding="utf-8")
-        (Path(lock_dir) / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8")
+        (Path(lock_dir) / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
+        (Path(lock_dir) / "session_id").write_text(f"{sid}\n", encoding="utf-8", newline="\n")
+        (Path(lock_dir) / "claimed_at").write_text(f"{core.now_iso()}\n", encoding="utf-8", newline="\n")
     except OSError:
         # Best-effort metadata write; the lock dir itself is the mutex.
         pass

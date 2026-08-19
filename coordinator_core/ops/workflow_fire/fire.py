@@ -350,7 +350,7 @@ def _write_record(path: Path, record: dict) -> dict:
     record = _annotate_record(record)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
-    tmp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, path)
     return record
 

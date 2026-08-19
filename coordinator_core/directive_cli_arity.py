@@ -44,6 +44,16 @@ Negative-spec:
       dispatch, not a `coordinator/bin/` script -- callers must exclude
       these before calling `requires_subcommand`, matched via
       `looks_like_in_process_op`.
+    - A directive dict/builder site keyed `"op"` instead of `"cli"` (the
+      migrated form -- see
+      `docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md`) is ALWAYS
+      an in-process op dispatch, regardless of whether its value contains a
+      `.` -- unlike a `"cli"`-keyed value, dot-containment is not the
+      discriminator for an `"op"`-keyed site; key presence alone is. Such a
+      site is still discovered by `_module_sites`/`emitted_option_tokens`
+      (so it stays inside the publish gate's domain rather than silently
+      vanishing from it) and is then excluded from the bin-script argv
+      parity check the same way a dotted `"cli"` is.
     - `argv_parity_report` never imports or executes a module or a target
       script -- AST-only, same as the rest of this file. A pairing it cannot
       resolve statically is reported `unresolved`, NEVER silently `clean`;
@@ -419,6 +429,7 @@ def _find_directive_dict_builders(tree: ast.Module) -> dict[str, dict]:
             continue
         params = [a.arg for a in node.args.args]
         cli_param = args_param = id_param = None
+        is_op_key = False
         for stmt in ast.walk(node):
             if not (isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Dict)):
                 continue
@@ -428,22 +439,40 @@ def _find_directive_dict_builders(tree: ast.Module) -> dict[str, dict]:
                     continue
                 if key.value == "cli" and isinstance(val, ast.Name) and val.id in params:
                     cli_param = val.id
+                elif key.value == "op" and isinstance(val, ast.Name) and val.id in params:
+                    # Migrated form, same discriminator as
+                    # `_site_from_dict_literal` -- key presence, not dots.
+                    cli_param = val.id
+                    is_op_key = True
                 elif key.value == "args" and isinstance(val, ast.Name) and val.id in params:
                     args_param = val.id
                 elif key.value in ("id", "id_") and isinstance(val, ast.Name) and val.id in params:
                     id_param = val.id
         if cli_param and args_param:
-            builders[node.name] = {"cli": cli_param, "args": args_param, "id": id_param, "params": params}
+            builders[node.name] = {
+                "cli": cli_param,
+                "args": args_param,
+                "id": id_param,
+                "params": params,
+                "is_op_key": is_op_key,
+            }
     return builders
 
 
 def _site_from_dict_literal(node: ast.Dict, module_consts: dict[str, str], list_vars: dict[str, tuple]):
     cli_node = args_node = id_node = None
+    is_op_key = False
     for key, val in zip(node.keys, node.values):
         if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
             continue
         if key.value == "cli":
             cli_node = val
+        elif key.value == "op":
+            # Migrated form -- see module docstring's negative-spec entry on
+            # `"op"`-keyed sites: ALWAYS in-process, key presence alone is
+            # the discriminator, not dot-containment of the value.
+            cli_node = val
+            is_op_key = True
         elif key.value == "args":
             args_node = val
         elif key.value in ("id", "id_"):
@@ -458,6 +487,7 @@ def _site_from_dict_literal(node: ast.Dict, module_consts: dict[str, str], list_
     return {
         "id": directive_id,
         "cli": cli,
+        "is_op_key": is_op_key,
         "tokens": tokens,
         "unresolved": unresolved,
         "positionals": positionals,
@@ -486,7 +516,15 @@ def _site_from_builder_call(node: ast.Call, builders: dict[str, dict], module_co
     args_expr = resolve_param(sig["args"])
     id_expr = resolve_param(sig["id"])
     if cli_expr is None or args_expr is None:
-        return {"id": None, "cli": None, "tokens": set(), "unresolved": True, "positionals": set(), "producer_refs": set()}
+        return {
+            "id": None,
+            "cli": None,
+            "is_op_key": sig.get("is_op_key", False),
+            "tokens": set(),
+            "unresolved": True,
+            "positionals": set(),
+            "producer_refs": set(),
+        }
     cli = _resolve_str_const(cli_expr, module_consts)
     directive_id = _resolve_str_const(id_expr, module_consts)
     tokens, unresolved, positionals, producer_refs = _resolve_args_expr(args_expr, module_consts, list_vars)
@@ -495,6 +533,7 @@ def _site_from_builder_call(node: ast.Call, builders: dict[str, dict], module_co
     return {
         "id": directive_id,
         "cli": cli,
+        "is_op_key": sig.get("is_op_key", False),
         "tokens": tokens,
         "unresolved": unresolved,
         "positionals": positionals,
@@ -888,7 +927,7 @@ def argv_parity_report(repo_root: Path) -> ParityReport:
             if cli is None:
                 pairings.append(ParityPairing(rel_module, directive_id, "", True, frozenset(), frozenset()))
                 continue
-            if looks_like_in_process_op(cli):
+            if site.get("is_op_key") or looks_like_in_process_op(cli):
                 continue
             script_path = resolve_bin_script(cli, bin_dir)
             if script_path is None:

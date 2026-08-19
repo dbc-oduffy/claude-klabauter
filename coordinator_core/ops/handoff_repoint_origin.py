@@ -328,7 +328,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         rebuilt = rebuild(split, new_fm_text)
 
         try:
-            contained.write_text(rebuilt, encoding="utf-8")
+            contained.write_text(rebuilt, encoding="utf-8", newline="\n")
         except OSError as exc:
             print(f"skip: _handler: contained.write_text(rebuilt, encoding=\"utf-8\") failed: {exc}", file=sys.stderr)
             errors.append({"file": rel_id, "error": f"I/O error writing: {exc}"})

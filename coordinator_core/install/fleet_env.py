@@ -36,6 +36,22 @@ module's own functions, not imported:
     in-place `rmtree` (DoE `4591a557`) because readers hold no lock, and this
     environment has the WHOLE FLEET as such readers on a 50-70-session box.
 
+    NEGATIVE SPEC — the rename-swap does NOT make a Windows rebuild
+    concurrency-safe, and no reader should plan around it as if it did.
+    Measured on a real Windows host 2026-08-15 (see
+    `state/bug-backlog/2026-08-15-windows-venv-swap-fails-winerror-5-when-a3c85da8f0bf.yaml`):
+    `os.rename` of a directory raises WinError 5 when ANY plain-open file
+    handle exists anywhere inside it, even several path segments down, so the
+    FIRST rename below — not merely the reclaim — fails outright while a fleet
+    reader is mid-import. A running interpreter's exe image is the case that
+    does survive (the Windows loader opens images with FILE_SHARE_DELETE); an
+    ordinary `open()` is the case that does not, and on a 50-70-session box
+    that is the common one. Bounded retry cannot help: the handle is held for
+    the whole call, so nothing about it is transient. The only mechanism that
+    satisfies the swap's stated guarantee on Windows is making `env_root` a
+    junction/reparse point, which is an architecture change and is NOT
+    implemented here.
+
 Installs from the committed lock via `uv sync --frozen --no-install-project`
 against a reconstructed copy of C3's synthetic project
 (`fleet_env_lock.render_lock_pyproject` over the same requirements-input and
@@ -491,19 +507,25 @@ def _sweep_orphaned_swap_dirs(env_root: Path) -> None:
 
 def _swap_in_new_env(env_root: Path, build_dir: Path) -> None:
     """Publish `build_dir` as `env_root` via a rename-swap — never an
-    in-place `rmtree` of the live tree. Both `os.rename` calls are
-    metadata-only directory-entry updates on POSIX AND Windows, so a
-    concurrent reader executing out of the OLD tree right now keeps a
-    coherent view instead of having its interpreter gutted out from under
-    it — the exact property that matters more here than anywhere else in
-    this repo, since the fleet is this environment's reader set on a
-    50-70-session box. Reclaiming the vacated old tree differs by platform
-    only in WHEN: POSIX can `rmtree` immediately (a reader's already-open
-    file descriptor survives unlinking); Windows can raise a sharing
-    violation on that same delete while a reader's handle is open, so that
-    failure is caught and the sibling is left for
-    `_sweep_orphaned_swap_dirs` to reclaim on this environment's NEXT
-    rebuild (deferred, not leaked)."""
+    in-place `rmtree` of the live tree. On POSIX both `os.rename` calls are
+    metadata-only directory-entry updates, so a concurrent reader executing
+    out of the OLD tree right now keeps a coherent view instead of having
+    its interpreter gutted out from under it — the property that matters
+    more here than anywhere else in this repo, since the fleet is this
+    environment's reader set on a 50-70-session box. Reclaiming the vacated
+    old tree is then immediate (a reader's already-open file descriptor
+    survives unlinking).
+
+    WINDOWS IS NOT THAT, and the difference is NOT merely when the reclaim
+    happens. The `shutil.rmtree` below is guarded because a reader's open
+    handle can make the delete raise a sharing violation, and that guard is
+    real — but the FIRST `os.rename` is unguarded and is the one measured to
+    fail: renaming a directory raises WinError 5 while any plain-open file
+    handle exists anywhere inside it. See this module's docstring §
+    NEGATIVE SPEC for the measurement and why retry cannot close it. A
+    rebuild racing an ordinary fleet import therefore fails LOUD here rather
+    than swapping safely; that is a known open defect, not a design
+    intention."""
     stale_dir: Optional[Path] = None
     if env_root.is_dir():
         stale_dir = env_root.parent / f"{env_root.name}.stale-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -560,8 +582,8 @@ def _provision_uv_environment(build_dir: Path, *, uv_executable: str = "uv") -> 
 
     with tempfile.TemporaryDirectory(prefix="fleet-env-sync-") as tmp_dir:
         project_dir = Path(tmp_dir)
-        (project_dir / "pyproject.toml").write_text(pyproject_text, encoding="utf-8")
-        (project_dir / "uv.lock").write_text(lock_text, encoding="utf-8")
+        (project_dir / "pyproject.toml").write_text(pyproject_text, encoding="utf-8", newline="\n")
+        (project_dir / "uv.lock").write_text(lock_text, encoding="utf-8", newline="\n")
 
         argv = [
             uv_executable,

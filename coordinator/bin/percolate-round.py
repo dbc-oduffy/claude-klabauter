@@ -1325,7 +1325,7 @@ def _write_round_failure_marker(target: str, percolate_root: str, reason: str, s
         "sha": sha,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
 
 
 def _clear_round_failure_marker(target: str, percolate_root: str) -> None:
@@ -1587,7 +1587,7 @@ def _cmd_round_default(
                     if "REVIEW WARNING" in line:
                         print(f"  {line.strip()}")
 
-            real_stdout_path.write_text(real.stdout, encoding="utf-8")
+            real_stdout_path.write_text(real.stdout, encoding="utf-8", newline="\n")
 
             # --- scan-file-list build, off the real run's own output -------
             parse1 = _run(
@@ -1615,7 +1615,7 @@ def _cmd_round_default(
                 )
                 return _EXIT_FAIL
             scan_files_path.write_text(
-                "\n".join(scan_file_list) + ("\n" if scan_file_list else ""), encoding="utf-8"
+                "\n".join(scan_file_list) + ("\n" if scan_file_list else ""), encoding="utf-8", newline="\n"
             )
 
             # --- Step 2: content-leakage scan (reads SOURCE files) ---------
@@ -1807,7 +1807,7 @@ def _cmd_round_default(
             print(f"=== percolate-round {target} — commit ({len(pathspec)} file(s)) ===")
             pathspec_file_path = tmp / "commit-pathspec.txt"
             pathspec_file_path.write_text(
-                "\n".join(pathspec) + "\n", encoding="utf-8"
+                "\n".join(pathspec) + "\n", encoding="utf-8", newline="\n"
             )
             commit_cmd = [
                 sys.executable,
@@ -1965,7 +1965,7 @@ def _cmd_round(args: argparse.Namespace) -> int:
             dryrun_cmd,
             timeout=_PUBLISH_LEG_TIMEOUT_SECS,
         )
-        dryrun_stdout_path.write_text(dryrun.stdout, encoding="utf-8")
+        dryrun_stdout_path.write_text(dryrun.stdout, encoding="utf-8", newline="\n")
         print(dryrun.stdout)
         if dryrun.returncode != 0:
             _print_step_failure("Step 2 (dry run)", dryrun_cmd, dryrun.stderr)
@@ -2001,7 +2001,7 @@ def _cmd_round(args: argparse.Namespace) -> int:
                 f"{type(exc).__name__}: {exc}\nstdout:\n{parse1.stdout}",
             )
             return _EXIT_FAIL
-        scan_files_path.write_text("\n".join(scan_file_list) + ("\n" if scan_file_list else ""), encoding="utf-8")
+        scan_files_path.write_text("\n".join(scan_file_list) + ("\n" if scan_file_list else ""), encoding="utf-8", newline="\n")
 
         # --- Step 2c: content-leakage scan --------------------------------
         print(f"=== percolate-round {target} — Step 2c: content-leakage scan ===")
@@ -2349,7 +2349,7 @@ def _cmd_round(args: argparse.Namespace) -> int:
                 # exercises the same route the rare (huge) case depends on.
                 pathspec_file_path = tmp / "commit-pathspec.txt"
                 pathspec_file_path.write_text(
-                    "\n".join(pathspec) + "\n", encoding="utf-8"
+                    "\n".join(pathspec) + "\n", encoding="utf-8", newline="\n"
                 )
                 commit_cmd = [
                     sys.executable,

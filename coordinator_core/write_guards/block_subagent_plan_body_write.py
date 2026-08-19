@@ -401,7 +401,7 @@ def _write_block_log(
         log_dir = Path(git_root) / ".git" / "coordinator-sessions" / session_id
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_dir / "plan-body-write-block.log", "a", encoding="utf-8") as fh:
+        with open(log_dir / "plan-body-write-block.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")
     except OSError as exc:
         print(f"block_subagent_plan_body_write: deny-log write failed "
@@ -423,7 +423,7 @@ def _write_hook_emit_log(cwd: Optional[str], emit: str) -> None:
         log_dir = Path(git_dir) / "coordinator-sessions" / session_id / "hook-emits"
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        with open(log_dir / "emits.tsv", "a", encoding="utf-8") as fh:
+        with open(log_dir / "emits.tsv", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{ts}\tblock-subagent-plan-body-write\t{emit}\n")
     except OSError as exc:
         print(f"block_subagent_plan_body_write: hook-emit-log write failed "

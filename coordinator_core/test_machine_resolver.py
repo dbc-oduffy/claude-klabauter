@@ -380,3 +380,83 @@ def test_fresh_process_import_does_not_trigger_ops_eager_import_cycle():
     assert result.returncode == 0, result.stderr
     assert "FAILED to import" not in result.stderr
     assert "circular import" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# registry_set — the in-process registry writer restored by
+# coordinator_core.install.first_run._seed_machine_local_registry after the
+# 2026-08-14 deletion (3bd2738f4) of the `machine-local` CLI forwarder it
+# used to shell out to. See registry_set's own docstring for the write
+# contract this exercises.
+# ---------------------------------------------------------------------------
+
+
+def test_registry_set_creates_file_and_writes_flat_key(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "reg"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+
+    target = reg_dir / "registry.local.toml"
+    assert target.is_file()
+    content = target.read_text(encoding="utf-8")
+    assert "\"repos.claude_klabauter\" = '/x/claude-klabauter'" in content
+    assert mr.registry_get("repos.claude_klabauter") == "/x/claude-klabauter"
+
+
+def test_registry_set_appends_to_existing_file_preserving_other_keys(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir(parents=True)
+    (reg_dir / "registry.local.toml").write_text(
+        "schema = 1\n\"repos.doe_claude\" = '/x/DoE-claude'\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+
+    assert mr.registry_get("repos.doe_claude") == "/x/DoE-claude"
+    assert mr.registry_get("repos.claude_klabauter") == "/x/claude-klabauter"
+
+
+def test_registry_set_replaces_existing_key_in_place(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir(parents=True)
+    (reg_dir / "registry.local.toml").write_text(
+        "schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.doe_claude\" = '/x/DoE-claude'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("repos.claude_klabauter", "/new/path")
+
+    content = (reg_dir / "registry.local.toml").read_text(encoding="utf-8")
+    assert content.count('"repos.claude_klabauter"') == 1
+    assert mr.registry_get("repos.claude_klabauter") == "/new/path"
+    assert mr.registry_get("repos.doe_claude") == "/x/DoE-claude"
+
+
+def test_registry_set_same_value_is_a_true_noop(monkeypatch, tmp_path):
+    """Idempotent: writing the same key/value twice performs no second file
+    write (the journal contract needs to distinguish a genuine mutation from
+    a no-op)."""
+    reg_dir = tmp_path / "reg"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+    target = reg_dir / "registry.local.toml"
+    mtime_before = target.stat().st_mtime_ns
+
+    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+    mtime_after = target.stat().st_mtime_ns
+
+    assert mtime_before == mtime_after
+
+
+def test_registry_set_refuses_value_with_single_quote(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "reg"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    with pytest.raises(ValueError):
+        mr.registry_set("repos.weird", "it's/a/path")
+
+    assert not (reg_dir / "registry.local.toml").exists()

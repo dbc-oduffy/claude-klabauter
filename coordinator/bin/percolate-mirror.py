@@ -218,7 +218,7 @@ def _run_gate_legs(
             # nothing this run, so it has nothing of its own to scan.
             continue
         row_stdout_path = tmp / f"row-stdout-{targets.index(target)}.txt"
-        row_stdout_path.write_text(row_stdout, encoding="utf-8")
+        row_stdout_path.write_text(row_stdout, encoding="utf-8", newline="\n")
 
         parse = _round._run(
             [
@@ -249,7 +249,7 @@ def _run_gate_legs(
         scan_files_path = tmp / f"scan-files-{target}.txt"
         scan_files_path.write_text(
             "\n".join(scan_file_list) + ("\n" if scan_file_list else ""),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
 
         scan_cmd = [
@@ -544,7 +544,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"=== percolate-mirror {mirror_root} — commit ({len(pathspec)} file(s)) ===")
             with tempfile.TemporaryDirectory() as tmpdir:
                 pathspec_file = Path(tmpdir) / "commit-pathspec.txt"
-                pathspec_file.write_text("\n".join(pathspec) + "\n", encoding="utf-8")
+                pathspec_file.write_text("\n".join(pathspec) + "\n", encoding="utf-8", newline="\n")
                 commit = _round._run(
                     [
                         sys.executable,

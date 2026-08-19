@@ -199,7 +199,7 @@ def _write_pathspec_file(paths: list) -> str:
     pathspec_path = os.path.join(
         tempfile.gettempdir(), f"reap-stale-sidecars-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
     )
-    with open(pathspec_path, "w", encoding="utf-8") as fh:
+    with open(pathspec_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(paths) + "\n")
     return pathspec_path
 

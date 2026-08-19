@@ -519,7 +519,16 @@ def brief(
             }
         )
 
-    if any(d["cli"] == "worktree-remove" for d in directives):
+    # C6 fix (docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md § C6,
+    # BREAK-CLASS): reads whichever key the directive actually carries
+    # (`op` or `cli`) rather than unguardedly subscripting `d["cli"]`. Every
+    # directive `_build_directives` emits today still carries `cli` (none of
+    # consolidate's six verbs migrate — see `apply.py`'s own discriminator
+    # comment above its `_CLI_DISPATCH`), so this is a latent-bug fix, not a
+    # behavior change: the moment any consolidate verb carried `op` instead,
+    # this would have raised `KeyError` here, before `apply()` and before
+    # pre-validation.
+    if any(d.get("op", d.get("cli")) == "worktree-remove" for d in directives):
         directives.append(
             {"id": "d-worktree-prune", "cli": "worktree-prune", "args": [], "depends_on": None, "already_satisfied": False}
         )

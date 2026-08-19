@@ -242,7 +242,7 @@ def write_session_start_record(
         if base:
             sdir = Path(base) / session_id
             sdir.mkdir(parents=True, exist_ok=True)
-            (sdir / _RECORD_FILENAME).write_text(resolved_cwd, encoding="utf-8")
+            (sdir / _RECORD_FILENAME).write_text(resolved_cwd, encoding="utf-8", newline="\n")
             in_repo_ok = True
     except Exception:
         # Fail open, unconditionally -- see module docstring "FAIL OPEN". A record that
@@ -254,7 +254,7 @@ def write_session_start_record(
         if hub and _is_safe_settings_home_session_id(session_id):
             hdir = Path(hub) / session_id
             hdir.mkdir(parents=True, exist_ok=True)
-            (hdir / _RECORD_FILENAME).write_text(resolved_cwd, encoding="utf-8")
+            (hdir / _RECORD_FILENAME).write_text(resolved_cwd, encoding="utf-8", newline="\n")
     except Exception:
         # Fail open, unconditionally, and independently of the in-repo write above -- see
         # this function's own "RETURN-VALUE SEMANTICS" paragraph.

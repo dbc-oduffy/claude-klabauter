@@ -1281,7 +1281,7 @@ def _write_decline(
                 f"{format_validation_errors(shape_errors)}."
             )
         path = _decline_record_path(name)
-        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         _info(f"Wrote decline record {_rel(path)} for {name} at {sha} (version {version}).")
     return 0
 

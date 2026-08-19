@@ -601,7 +601,7 @@ def _provision_plan_derivable_doc(
     doc_text = _build_doc_text(agent_type, spawned_at, doc_type, lead_session_id=session_id)
 
     try:
-        with open(doc_path, "x", encoding="utf-8") as handle:
+        with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
         # SUBSUME: touch-claim (docs/plans/2026-08-05-in-process-writers-
         # declare-their-writes.md C2). `session_id` here is the RAW
@@ -709,7 +709,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
         # SUBSUME: deterministic + idempotent path mode (provision_key present).
         doc_path = session_dir / f"{sanitized_provision_key}.md"
         try:
-            with open(doc_path, "x", encoding="utf-8") as handle:
+            with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
                 handle.write(doc_text)
             # SUBSUME: touch-claim (docs/plans/2026-08-05-in-process-writers-
             # declare-their-writes.md C2). `session_id` here is the RAW
@@ -734,7 +734,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     nonce = secrets.token_hex(4)
     doc_path = session_dir / f"{sanitized_label}-{nonce}.md"
     try:
-        with open(doc_path, "x", encoding="utf-8") as handle:
+        with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
     except FileExistsError:
         # Review: the Staff Engineer -- second collision (astronomically unlikely at 32
@@ -744,7 +744,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
         # the spawn.
         nonce = secrets.token_hex(4)
         doc_path = session_dir / f"{sanitized_label}-{nonce}.md"
-        with open(doc_path, "x", encoding="utf-8") as handle:
+        with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
 
     # SUBSUME: touch-claim (docs/plans/2026-08-05-in-process-writers-declare-

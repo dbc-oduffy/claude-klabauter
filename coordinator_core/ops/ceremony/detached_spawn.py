@@ -155,7 +155,7 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
     log_path = housekeeping_failures_log_path(repo_root)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except OSError:
         pass
@@ -251,7 +251,7 @@ def record_child_failure(
     log_path = housekeeping_failures_log_path(repo_root)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except OSError:
         pass
@@ -303,7 +303,7 @@ def clear_failures_log(repo_root: str) -> None:
             # keep the live log from draining, whatever the failure mode.
             pass
     try:
-        log_path.write_text("", encoding="utf-8")
+        log_path.write_text("", encoding="utf-8", newline="\n")
     except OSError:
         pass
 
@@ -332,6 +332,6 @@ def _append_to_failures_archive(repo_root: str, drained: str) -> None:
         marker = retained.find("--- drained ")
         if marker > 0:
             retained = retained[marker:]
-        archive_path.write_text(retained, encoding="utf-8")
+        archive_path.write_text(retained, encoding="utf-8", newline="\n")
     except OSError:
         pass

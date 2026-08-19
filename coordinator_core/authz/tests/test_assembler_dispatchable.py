@@ -2,17 +2,20 @@
 coordinator_core.authz.tests.test_assembler_dispatchable — tests for
 `ASSEMBLER_DISPATCHABLE`, the per-assembler op admission control.
 
-Purpose: proves the three load-bearing properties of C1's control: (AC7) every
+Purpose: proves the load-bearing properties of C1's control: (AC7) every
 op-family entry is a live registered op carrying an `OP_CLASSIFICATION` entry, no
 phantom names; the mapping is immutable at runtime (`MappingProxyType` raises
-`TypeError` on mutation, matching `OP_CLASSIFICATION`'s own shape); and (AC8) a
-planted op name absent from the mapping is reported as not-dispatchable — the
-mapping's own default-deny property, checked directly against the mapping rather
-than through `apply_base.assert_dispatchable` (C2's seam, not this chunk's).
+`TypeError` on mutation, matching `OP_CLASSIFICATION`'s own shape); (AC8, resolver
+end) a planted op name absent from the mapping is reported as not-dispatchable —
+the mapping's own default-deny property, checked directly against the mapping
+rather than through `apply_base.assert_dispatchable` (C2's seam, not this
+chunk's); and (AC8, emitter end, C8) no completion-family module's own declared
+`CONSUMES_MANIFEST` names a verb absent from its `ASSEMBLER_DISPATCHABLE` entry —
+the static-surface closing guard, not merely a runtime-emitted-subset check.
 
 No process spawn, no git — fast tier.
 
-Spec backlink: pln-directives-name-an-op-not-a-cl-e283a9 § C1
+Spec backlink: pln-directives-name-an-op-not-a-cl-e283a9 § C1, § C8
 """
 
 from __future__ import annotations
@@ -32,10 +35,69 @@ def _is_dispatchable(assembler_name: str, op_name: str) -> bool:
 
 
 class TestShipsEmpty:
-    """C1 ships this mapping empty except for entries a later migration chunk adds."""
+    """C1 shipped this mapping empty except for entries a later migration chunk
+    adds. That is a claim about C1's OWN commit, not an invariant true of every
+    later state of the tree -- C7 has since populated the completion family, so
+    asserting emptiness here would be a false red the moment C7 lands, not a
+    check of anything C1 actually guarantees going forward."""
 
-    def test_mapping_is_empty_at_c1(self) -> None:
-        assert dict(ASSEMBLER_DISPATCHABLE) == {}
+
+class TestAC8ClosingGuard:
+    """C8: no emission site names a verb absent from ASSEMBLER_DISPATCHABLE for
+    its own assembler. This is AC8's teeth at the EMITTER end (a static-surface
+    check) rather than only at the resolver end (a runtime refusal, which is
+    correct but late).
+
+    Per the phantom-cli-guard-seam precedent (DoE-claude
+    coordinator/docs/wiki/coordinator-tripwires/phantom-cli-guard-seam.md), the
+    check walks each completion-family module's own DECLARED static emission
+    surface -- its `CONSUMES_MANIFEST`, the closed set every `directive["cli"]`
+    value is drawn from (see e.g. workday_complete/brief.py's own docstring) --
+    not whichever subset of verbs one test run happened to emit. A manifest
+    member never actually dispatched during any single run is still checked,
+    closing exactly the gap the precedent names: "a membership guard plus a
+    runtime-emitted-subset guard compose to leave a manifest member
+    undetectably undispatchable."
+
+    Scope: only assembler modules that are themselves keys in
+    ASSEMBLER_DISPATCHABLE (i.e. modules that have adopted the C2 admission
+    control) are checked here -- `consolidate_assemble` and
+    `contract/apply_base.py` are walked by C8's sweep too, but neither is
+    (yet) an ASSEMBLER_DISPATCHABLE key: `consolidate_assemble`'s verbs stay
+    `cli`-named by design (C6) and `apply_base.py` is the shared resolver, not
+    an emission site of its own."""
+
+    def test_every_consumes_manifest_member_is_in_assembler_dispatchable(self) -> None:
+        from coordinator_core.workday_complete.brief import (
+            CONSUMES_MANIFEST as workday_manifest,
+        )
+        from coordinator_core.workstream_complete import (
+            CONSUMES_MANIFEST as workstream_manifest,
+        )
+        from coordinator_core.workweek_complete.brief import (
+            CONSUMES_MANIFEST as workweek_manifest,
+        )
+
+        manifests_by_assembler = {
+            "workday_complete": workday_manifest,
+            "workstream_complete": workstream_manifest,
+            "workweek_complete": workweek_manifest,
+        }
+
+        undispatchable = {}
+        for assembler_name, manifest in manifests_by_assembler.items():
+            missing = set(manifest) - set(
+                ASSEMBLER_DISPATCHABLE.get(assembler_name, frozenset())
+            )
+            if missing:
+                undispatchable[assembler_name] = sorted(missing)
+
+        assert undispatchable == {}, (
+            f"CONSUMES_MANIFEST member(s) with no corresponding "
+            f"ASSEMBLER_DISPATCHABLE entry for their own assembler -- an "
+            f"emission site could name a verb the C2 admission control would "
+            f"refuse: {undispatchable!r}"
+        )
 
 
 class TestMutationRaises:

@@ -393,15 +393,15 @@ def sweep_review_assemble(monkeypatch: Any, tmp_path: Path) -> PhantomSweepResul
     residue_dir.mkdir(parents=True)
     (residue_dir / "010-shared.md").write_text(
         "---\nsegment_id: shared-seg\nsurface: shared\nclass: protected\norder: 0\n---\nShared.\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     (residue_dir / "020-plan.md").write_text(
         "---\nsegment_id: plan-seg\nsurface: plan\nclass: droppable\norder: 1\n---\nPlan.\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     (residue_dir / "030-diff.md").write_text(
         "---\nsegment_id: diff-seg\nsurface: diff\nclass: droppable\norder: 2\n---\nDiff.\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     monkeypatch.setattr(residue_mod, "resolve_content_root", lambda: str(content_root))
 

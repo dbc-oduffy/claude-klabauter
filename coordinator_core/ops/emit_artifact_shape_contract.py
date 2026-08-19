@@ -1112,7 +1112,7 @@ def _emit(coordinator_root: str) -> int:
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     out_file = os.path.join(out_dir, "artifact-shape-contract.schema.json")
-    with open(out_file, "w", encoding="utf-8") as fh:
+    with open(out_file, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n")
     # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.

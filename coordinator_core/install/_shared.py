@@ -866,6 +866,6 @@ def settings_hook_identity_inverse_strip(
     data = dict(data)
     data["hooks"] = preserved
 
-    with open(out_path, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f, indent=2)
         f.write("\n")

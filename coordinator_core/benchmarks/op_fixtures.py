@@ -130,7 +130,7 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
             "Synthetic fixture handoff #3 — added on top of the origin/main fixture "
             "commit so `coverage.gate`'s default range has a real, non-empty chain.\n"
         ),
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     _run_git(dest, ["add", "-A"])
     _run_git(dest, ["commit", "-q", "-m", "bench-fixture: add post-origin-main commit"])

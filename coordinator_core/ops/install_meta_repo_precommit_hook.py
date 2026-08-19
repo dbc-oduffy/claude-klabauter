@@ -295,7 +295,7 @@ def _atomic_write(path: str, content: str) -> None:
     than trying to preserve whatever bits an earlier file happened to carry.
     """
     tmp_path = f"{path}.tmp.{os.getpid()}"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
     os.replace(tmp_path, path)
     os.chmod(path, 0o755)

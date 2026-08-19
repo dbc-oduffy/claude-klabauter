@@ -135,7 +135,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.out is not None:
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        out_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
 
     print(json.dumps(summary, sort_keys=True))
     return 0

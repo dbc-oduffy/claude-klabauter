@@ -236,7 +236,7 @@ def atomic_write(path: str, content: str) -> None:
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
     if os.path.isfile(path):
         try:
