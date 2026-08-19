@@ -53,7 +53,14 @@ and a second copy is the failure mode this row is most likely to produce:
   - idle demotion -> `warm.idle`. This module's own watchdog thread
     (`_ServerContext._idle_watchdog_loop`) is the trigger this row wires
     in: it must fire even when the accept loop never receives a single
-    connection, so it cannot be reached only from the request path.
+    connection, so it cannot be reached only from the request path. The
+    same watchdog carries the superseded-generation retirement: this
+    module supplies the local predicate (`_token_is_stale`, comparing the
+    boot token embedded in its own pipe name against a live
+    `skew.compute_client_token`) and `warm.idle` owns the decision. That
+    split is why retiring a superseded generation needed no traffic, no
+    bind-time handshake, and no change to `evict_on_skew` -- whose
+    respond -> close_listener -> drain ordering is untouched.
   - lifecycle telemetry -> `warm.telemetry`. `_ServerContext.telemetry` is
     constructed once at boot, `record_invocation`/`record_exit` are called
     from the request and shutdown-trigger paths below, and `flush()` runs
@@ -154,7 +161,13 @@ gap found and named during C15 execution, 2026-08-18.
 from __future__ import annotations
 
 import concurrent.futures
+# `concurrent.futures.process` is a LAZY submodule attribute: referencing it as
+# `concurrent.futures.process.BrokenProcessPool` inside an `except` clause raises
+# AttributeError until something has already built a ProcessPoolExecutor. Imported
+# eagerly so the recovery path cannot fail on the way to handling a failure.
+from concurrent.futures.process import BrokenProcessPool
 import json
+import multiprocessing
 import os
 import queue
 import sys
@@ -163,6 +176,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
+from coordinator_core.telemetry import op_latency
 from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
 from coordinator_core.warm.entry_seam import per_request_state
 
@@ -434,6 +448,78 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     return response
 
 
+def _declare_execution_route() -> None:
+    """Stamp this process's op-latency rows as the `warm_server` route (AC6c).
+
+    `telemetry.op_latency.execution_route` reads
+    `COORDINATOR_EXECUTION_ROUTE` and defaults to `in_process` for every
+    caller that has not declared itself. Nothing declared itself until this
+    call existed, so every row in the corpus -- including rows written by
+    this server, which is by definition NOT the in-process route -- read
+    `in_process`, and `op_latency.double_routed_corr_ids` could not fire:
+    a detector for one `corr_id` under two routes is inert while the corpus
+    holds exactly one route value.
+
+    AN ENV VAR, NOT AN IMPORT, AND THE DIRECTION MATTERS. `op_latency` sits
+    on the dispatch hot path and must never import `warm.server` (or
+    anything that pulls the engine in) to answer "which route am I" -- so
+    the serving process declares itself outward instead. Do not invert this
+    by having telemetry ask the server.
+
+    POOL WORKERS INHERIT IT, WHICH IS WHY `_worker_process_init` DOES NOT
+    SET IT. Since C6, the process that executes an op -- and therefore the
+    process that writes its record -- is a `ProcessPoolExecutor` worker
+    (`_pool_dispatch_worker`), not this one. `os.environ` assignment goes
+    through `putenv`, so the mutation lands in this process's real
+    environment block, and multiprocessing's Windows spawn passes that block
+    to each worker at `CreateProcess` time; verified live 2026-08-19, worker
+    processes read `warm_server`. The pool is built lazily on first dispatch
+    (`_ensure_dispatch_pool`), long after this boot-time call, so the
+    ordering that inheritance depends on holds by construction. The
+    `BrokenProcessPool` fallback in `_pool_dispatch` executes the op in THIS
+    process, which carries the same declaration -- the route follows the
+    executor either way.
+    """
+    os.environ[op_latency.ROUTE_ENV] = op_latency.WARM_SERVER
+
+
+def _suppress_pool_worker_consoles() -> None:
+    """Point multiprocessing's Windows spawn at `pythonw.exe` so pool workers
+    open no console window.
+
+    `ProcessPoolExecutor` exposes no `creationflags` seam — the whole
+    `win_portability.no_console_creationflags` discipline the rest of this
+    repo follows is unreachable from here, because multiprocessing builds its
+    own `CreateProcess` call. A resident warm server is normally started
+    detached (no console of its own), so every worker Windows spawns for it
+    gets a BRAND NEW console allocated: a focus-stealing window, one per
+    worker, that survives for the pool's whole life. Observed live
+    2026-08-19: four such windows, each showing a worker's op-registry
+    preload output.
+
+    `sys.executable` is what multiprocessing spawns, and `pythonw.exe` is the
+    same interpreter with the console subsystem flag cleared — so swapping it
+    suppresses the window without touching the pipe-based worker protocol,
+    which never used stdio. Worker stdout/stderr become `None`; `print` to a
+    `None` stream is a no-op in CPython, and the one thing that wrote there
+    (a per-worker op-module import failure) is ALSO recorded via `logging`
+    and in `coordinator_core.ops._POISONED_MODULES`, which re-raises the real
+    cause on dispatch — so no diagnostic is lost, only its unread window.
+
+    Negative-spec:
+        - Does NOT run off Windows, where there is no console to suppress and
+          `pythonw` does not exist.
+        - Does NOT fall back to some other interpreter if `pythonw.exe` is
+          absent beside `sys.executable`: a popup is a nuisance, spawning a
+          DIFFERENT Python than the server's own is a correctness hazard.
+    """
+    if os.name != "nt":
+        return
+    candidate = Path(sys.executable).with_name("pythonw.exe")
+    if candidate.is_file():
+        multiprocessing.set_executable(str(candidate))
+
+
 def _worker_process_init() -> None:
     """`ProcessPoolExecutor`'s `initializer=` -- runs once per worker
     process, before that process ever dispatches a request, so the
@@ -698,11 +784,20 @@ class _ServerContext:
         sid: str,
         version_state: "skew.ServerVersionState",
         engine_root: Optional[Path] = None,
+        boot_token: Optional[str] = None,
     ):
         self.name = name
         self.sid = sid
         self.version_state = version_state
         self.engine_root = engine_root
+        # The generation token this server's pipe name was built from
+        # (`main()` computes it once and passes it here rather than having
+        # this class re-derive it, so the retirement predicate compares
+        # against the token actually EMBEDDED in `self.name` and cannot
+        # drift from it). `None` disables the superseded arm entirely --
+        # the shape every test that constructs a context directly gets,
+        # keeping the idle watchdog's behaviour unchanged for them.
+        self.boot_token = boot_token
         self.in_flight = InFlightCounter()
         self.telemetry = telemetry.ServerTelemetry()
         self._queue: "queue.Queue[Any]" = queue.Queue()
@@ -760,8 +855,34 @@ class _ServerContext:
         in-process threading restructure, only by moving the CPU-bound work
         off this process's interpreter lock entirely.
         """
-        future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, session_id)
-        return future.result()
+        try:
+            future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, session_id)
+            return future.result()
+        except BrokenProcessPool:
+            # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
+            # every later submit() on that instance raises, so without this the
+            # first dead worker turns a resident server into one that fails
+            # every request it will ever receive, for its whole 15-minute idle
+            # life. Observed live 2026-08-19: a published server served
+            # BrokenProcessPool to `ping` itself, and only a hard kill cleared
+            # it. That silently violated this module's own NEVER FAIL A CALLER
+            # contract, which the pool was never exempt from.
+            #
+            # Drop the corpse so the next request rebuilds a fresh pool, and
+            # serve THIS request in-process rather than failing it: degrading
+            # to the pre-C6 GIL-bound path costs latency under concurrency and
+            # nothing else, which is strictly better than an error. C1's
+            # measurement is why the pool exists, not a reason to prefer a
+            # failed dispatch over a slow one.
+            with self._dispatch_pool_lock:
+                broken = self._dispatch_pool
+                self._dispatch_pool = None
+            if broken is not None:
+                try:
+                    broken.shutdown(wait=False)
+                except Exception:
+                    pass
+            return _run_dispatch(msg, session_id=session_id)
 
     def _ctx_shutdown(self) -> None:
         """Step 3 of `warm.lifecycle`'s sequence: flush the log, unlink the
@@ -789,6 +910,30 @@ class _ServerContext:
     def _drain(self) -> None:
         lifecycle.drain_and_exit(in_flight_count=self.in_flight, ctx_shutdown=self._ctx_shutdown)
 
+    def _token_is_stale(self) -> bool:
+        """`warm.idle.TokenStaleFn`: has a newer engine generation
+        superseded this one?
+
+        Compares this server's boot token -- the one embedded in the pipe
+        name it owns -- against a live `skew.compute_client_token` read.
+        A mismatch means every client now computes a different pipe name,
+        so this process is unreachable and `skew.evict_on_skew` can never
+        fire for it (see `warm.idle`'s SUPERSEDED-GENERATION PREDICATE).
+
+        Never raises: this runs on the idle watchdog thread every poll,
+        and a transient stat failure while the publish round is mid-write
+        must not kill the watchdog. An unreadable token reads as NOT
+        stale, so the failure mode is "waits out the ordinary idle
+        deadline," which is exactly today's behaviour -- never a false
+        retirement of a healthy server.
+        """
+        if self.boot_token is None:
+            return False
+        try:
+            return skew.compute_client_token(self.engine_root) != self.boot_token
+        except Exception:  # noqa: BLE001 -- see docstring; a read failure is not a verdict
+            return False
+
     def _idle_tick(self) -> None:
         """One watchdog poll: record why (if this poll is the one that
         demotes) before handing off to `idle.demote_if_idle`, which owns
@@ -798,10 +943,24 @@ class _ServerContext:
         interval and the only way to know, ahead of the call, whether THIS
         poll is the one that will actually demote.
         """
-        if idle.should_demote(served_count=self.telemetry.served_count):
-            self.record_exit(telemetry.EXIT_REASON_IDLE_DEMOTION)
+        if idle.should_demote(
+            served_count=self.telemetry.served_count,
+            token_stale=self._token_is_stale,
+        ):
+            # Which arm fired decides the recorded reason, and the two are
+            # not interchangeable in the telemetry record -- see
+            # `warm.telemetry`'s EXIT_REASON_SUPERSEDED note. Read the
+            # predicate directly rather than inferring from `should_demote`:
+            # a superseded server is usually ALSO past some deadline, so
+            # the arms overlap and only the specific read distinguishes them.
+            self.record_exit(
+                telemetry.EXIT_REASON_SUPERSEDED
+                if self._token_is_stale()
+                else telemetry.EXIT_REASON_IDLE_DEMOTION
+            )
         idle.demote_if_idle(
             served_count=self.telemetry.served_count,
+            token_stale=self._token_is_stale,
             close_listener=self.close_listener,
             in_flight_count=self.in_flight,
             ctx_shutdown=self._ctx_shutdown,
@@ -1024,7 +1183,11 @@ def main() -> int:
     4. Write the breadcrumb (`warm.breadcrumb.write_breadcrumb`) -- only
        reachable past step 2, so a process that lost the election never
        clobbers the winner's breadcrumb.
-    5. Run the accept loop until a drain-triggered `os._exit(0)` ends the
+    5. Declare this process's execution route
+       (`_declare_execution_route`), so its op-latency rows -- and its
+       dispatch pool workers', which inherit the environment -- stamp
+       `warm_server` instead of the `in_process` default.
+    6. Run the accept loop until a drain-triggered `os._exit(0)` ends the
        process.
     """
     if sys.platform != "win32":
@@ -1059,9 +1222,19 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
         print(f"[warm-server] failed to write breadcrumb: {exc!r}", file=sys.stderr)
 
+    _declare_execution_route()
+
+    _suppress_pool_worker_consoles()
+
     _preload_op_registry()
 
-    ctx = _ServerContext(name=name, sid=sid, version_state=version_state, engine_root=repo_root)
+    ctx = _ServerContext(
+        name=name,
+        sid=sid,
+        version_state=version_state,
+        engine_root=repo_root,
+        boot_token=token,
+    )
     ctx.serve_forever(first_handle)
     return 0
 

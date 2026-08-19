@@ -160,6 +160,46 @@ def test_auto_gitignore_tracked_log_rm_cached(tmp_path, capsys):
     assert status.strip() == ""
 
 
+def test_auto_gitignore_mixed_tracked_and_untracked_batch(tmp_path, capsys):
+    """Multi-item angle on the batched `_act_gitignore` ls-files/rm --cached
+    pair -- a single-tracked-file fixture (test_auto_gitignore_tracked_log_
+    rm_cached above) would pass identically whether or not the batch call
+    correctly attributes each path to its own tracked/untracked status (the
+    same gap that shipped a wrong batched `_own_frozen_diff_shas` on
+    2026-08-19). Two tracked .log files under distinct dirs plus one
+    never-tracked .log file in the SAME gitignore-classified batch --
+    exercises that `git ls-files` correctly reports membership per-path
+    across a multi-path pathspec, and that `git rm --cached` untracks BOTH
+    previously-tracked paths, not just the first."""
+    repo = _make_repo(tmp_path)
+    (repo / "logs").mkdir()
+    (repo / "logs" / "a.log").write_text("tracked a\n")
+    (repo / "logs" / "b.log").write_text("tracked b\n")
+    subprocess.run(["git", "add", "--", "logs/a.log", "logs/b.log"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "accidentally track two"], cwd=repo, check=True)
+    with open(repo / "logs" / "a.log", "a", encoding="utf-8") as fh:
+        fh.write("more a\n")
+    with open(repo / "logs" / "b.log", "a", encoding="utf-8") as fh:
+        fh.write("more b\n")
+    (repo / "logs" / "c.log").write_text("never tracked c\n")
+
+    before = _rev_count(repo)
+    rc, _out, _err = _run_port(repo, [], capsys)
+    assert rc == 0
+    assert _rev_count(repo) == before + 1
+
+    for path in ("logs/a.log", "logs/b.log", "logs/c.log"):
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", path], cwd=repo, capture_output=True
+        )
+        assert tracked.returncode != 0, f"{path} still tracked after batched rm --cached"
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    assert status.strip() == ""
+
+
 def test_source_tree_needs_pm(tmp_path, capsys):
     repo = _make_repo(tmp_path)
     (repo / "bin").mkdir()

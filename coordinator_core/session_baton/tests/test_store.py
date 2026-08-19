@@ -3,7 +3,9 @@ coordinator_core.session_baton.tests.test_store — round-trip, concurrent-write
 tolerance, and the no-write-outside-.git/ negative-spec for
 coordinator_core.session_baton.store.
 
-Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C1.
+Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C1;
+extended by docs/plans/2026-08-19-batons-unify-into-one-successor.md § C6
+(the no-directory-creation and pickup-naming-derivation coverage below).
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+import coordinator_core.pickup_assemble as pickup_assemble
 from coordinator_core.session_baton import store
 
 
@@ -33,6 +36,17 @@ def _make_repo(tmp_path):
 
 def _all_paths(root: Path):
     return {p for p in root.rglob("*") if p.is_file()}
+
+
+def _ensure_session_dir(repo: Path, sid: str) -> Path:
+    """Pre-create the per-session directory this store now REQUIRES rather
+    than mints itself (C6, D-H) — mirrors the constructor the rest of the
+    session hub already relies on (``coordinator_core.session.claims``'s own
+    ``if not Path(sdir).is_dir(): return`` no-op posture at the sibling
+    ``touched.txt`` writer)."""
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    return sdir
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +96,7 @@ def test_read_baton_corrupt_file_degrades_to_default(tmp_path):
 
 def test_write_then_read_round_trips(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-rt")
     record = store.default_record("sid-rt")
     record["first_prompt"] = "hello world"
     record["title"] = "a title"
@@ -98,6 +113,7 @@ def test_write_then_read_round_trips(tmp_path):
 
 def test_merge_baton_first_call_stamps_created_at_once(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-merge")
     merged = store.merge_baton("sid-merge", cwd=str(repo), first_prompt="p1")
     assert merged is not None
     assert merged["created_at"] is not None
@@ -112,6 +128,7 @@ def test_merge_baton_first_call_stamps_created_at_once(tmp_path):
 
 def test_merge_baton_is_idempotent_second_call_updates_not_duplicates(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-idem")
     store.merge_baton("sid-idem", cwd=str(repo), title="first")
     merged = store.merge_baton("sid-idem", cwd=str(repo), title="second")
     assert merged["title"] == "second"
@@ -121,6 +138,7 @@ def test_merge_baton_is_idempotent_second_call_updates_not_duplicates(tmp_path):
 
 def test_merge_baton_dedup_extends_list_fields(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-list")
     store.merge_baton("sid-list", cwd=str(repo), commits=["c1", "c2"])
     merged = store.merge_baton("sid-list", cwd=str(repo), commits=["c2", "c3"])
     assert merged["commits"] == ["c1", "c2", "c3"]
@@ -139,6 +157,7 @@ def test_merge_baton_dedup_extends_list_fields(tmp_path):
 
 def test_merge_baton_promoted_to_explicit_none_is_settable(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-promo")
     store.merge_baton("sid-promo", cwd=str(repo), promoted_to="state/handoffs/x.md")
     merged = store.read_baton("sid-promo", cwd=str(repo))
     assert merged["promoted_to"] == "state/handoffs/x.md"
@@ -155,6 +174,65 @@ def test_merge_baton_promoted_to_explicit_none_is_settable(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# no directory creation (D-H, AC13): require an existing session dir,
+# no-op OBSERVABLY (stderr) rather than mint one.
+# ---------------------------------------------------------------------------
+
+
+def test_write_baton_absent_session_dir_creates_nothing_and_says_so(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    sessions_root = repo / ".git" / "coordinator-sessions"
+    assert not sessions_root.exists()
+
+    ok = store.write_baton(
+        "sid-nodir", store.default_record("sid-nodir"), cwd=str(repo)
+    )
+
+    assert ok is False
+    assert not sessions_root.exists()  # no directory minted
+    err = capsys.readouterr().err
+    assert "sid-nodir" in err
+    assert "write_baton" in err
+
+
+def test_merge_baton_absent_session_dir_creates_nothing_and_says_so(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    sessions_root = repo / ".git" / "coordinator-sessions"
+    assert not sessions_root.exists()
+
+    merged = store.merge_baton("sid-nodir2", cwd=str(repo), first_prompt="p1")
+
+    assert merged is None
+    assert not sessions_root.exists()  # no directory minted
+    err = capsys.readouterr().err
+    assert "sid-nodir2" in err
+    assert "merge_baton" in err
+
+
+def test_write_and_merge_round_trip_unchanged_when_dir_already_exists(tmp_path):
+    """Regression guard: today's write/read behaviour is preserved for the
+    normal case — a session directory the hub already created."""
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-existing")
+
+    ok = store.write_baton(
+        "sid-existing",
+        {**store.default_record("sid-existing"), "title": "t"},
+        cwd=str(repo),
+    )
+    assert ok is True
+
+    merged = store.merge_baton("sid-existing", cwd=str(repo), first_prompt="p1")
+    assert merged is not None
+    assert merged["first_prompt"] == "p1"
+    assert merged["title"] == "t"
+
+    on_disk = store.read_baton("sid-existing", cwd=str(repo))
+    assert on_disk["title"] == "t"
+    assert on_disk["first_prompt"] == "p1"
+
+
+# ---------------------------------------------------------------------------
 # concurrent-write tolerance
 # ---------------------------------------------------------------------------
 
@@ -162,6 +240,7 @@ def test_merge_baton_promoted_to_explicit_none_is_settable(tmp_path):
 def test_concurrent_merge_calls_do_not_lose_writes(tmp_path):
     repo = _make_repo(tmp_path)
     sid = "sid-concurrent"
+    _ensure_session_dir(repo, sid)
     n_threads = 8
     errors = []
 
@@ -186,6 +265,7 @@ def test_concurrent_merge_calls_do_not_lose_writes(tmp_path):
 def test_concurrent_write_baton_never_produces_corrupt_json(tmp_path):
     repo = _make_repo(tmp_path)
     sid = "sid-corrupt-race"
+    _ensure_session_dir(repo, sid)
     n_threads = 6
     errors = []
 
@@ -217,6 +297,7 @@ def test_concurrent_write_baton_never_produces_corrupt_json(tmp_path):
 
 def test_no_path_outside_git_is_written(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-scope")
     before = _all_paths(repo)
 
     store.merge_baton(
@@ -241,3 +322,62 @@ def test_no_path_outside_git_is_written(tmp_path):
     # explicitly: no file under state/handoffs/ (or anywhere else in the
     # tracked tree) was created by minting/merging a baton.
     assert not (repo / "state" / "handoffs").exists()
+
+
+# ---------------------------------------------------------------------------
+# pickup-adoption naming derivation (AC14, C6): `pickup_assemble.
+# _adopt_into_baton` lifts `title`/`intent` off the artifact's own
+# frontmatter at the adoption point.
+# ---------------------------------------------------------------------------
+
+
+def test_adopt_into_baton_names_the_record_from_the_artifact(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    sid = "sid-name"
+    _ensure_session_dir(repo, sid)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    fm = {"title": "The Adopted Handoff", "session_goal": "land the naming fix"}
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/h1.md", fm)
+
+    record = store.read_baton(sid, cwd=str(repo))
+    assert record["title"] == "The Adopted Handoff"
+    assert record["intent"] == "land the naming fix"
+    assert record["adopted_artifacts"] == ["state/handoffs/h1.md"]
+
+
+def test_adopt_into_baton_does_not_clobber_an_already_titled_baton(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    sid = "sid-name2"
+    _ensure_session_dir(repo, sid)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    store.merge_baton(sid, cwd=str(repo), title="EM-set title")
+    pickup_assemble._adopt_into_baton(
+        repo, "state/handoffs/h2.md", {"title": "Second Handoff"}
+    )
+
+    record = store.read_baton(sid, cwd=str(repo))
+    assert record["title"] == "EM-set title"  # first title wins, not clobbered
+    assert record["adopted_artifacts"] == ["state/handoffs/h2.md"]
+
+
+def test_adopt_into_baton_survives_frontmatter_less_artifact(tmp_path, monkeypatch):
+    """Fail-open posture: a malformed/frontmatter-less adopted artifact
+    still adopts (the fan-in edge lands) without raising, and simply
+    leaves title/intent unset — naming is best-effort, never load-bearing."""
+    repo = _make_repo(tmp_path)
+    sid = "sid-name3"
+    _ensure_session_dir(repo, sid)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/h3.md", None)
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/h4.md", {})
+
+    record = store.read_baton(sid, cwd=str(repo))
+    assert record["title"] is None
+    assert record["intent"] is None
+    assert record["adopted_artifacts"] == [
+        "state/handoffs/h3.md",
+        "state/handoffs/h4.md",
+    ]

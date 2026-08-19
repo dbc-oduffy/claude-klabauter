@@ -9,7 +9,9 @@ the SAME per-session directory the existing claim ledger
 per-session state already live in (see ``coordinator_core.session.core ::
 session_dir``). This module adds a file to a directory the system already
 creates and manages per session, rather than introducing a new lifecycle
-object.
+object — so it never creates that directory itself (rule ``30cd75d80``):
+``write_baton``/``merge_baton`` require the directory to already exist and
+no-op, observably (a ``stderr`` advisory), when it does not.
 
 HARD CONSTRAINT (C1's own scope bar): this module writes NOTHING outside
 ``.git/`` — no path under ``state/handoffs/`` or anywhere else in the tracked
@@ -60,12 +62,16 @@ Negative-spec:
       this module just stores whatever list a later caller gives it).
     - Do NOT prune or delete stale baton directories here — see the reaper
       note above; that is explicitly out of scope for this chunk.
+    - Do NOT create the per-session directory — it is the system's own
+      lifecycle object (see the module docstring above); require it to
+      already exist and no-op, observably, otherwise.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -194,13 +200,17 @@ def write_baton(
 ) -> bool:
     """Overwrite ``sid``'s baton record wholesale with ``record`` (its
     ``session_id`` is forced to ``sid`` regardless of what ``record``
-    carries). Creates the per-session directory if absent. Locked against
-    concurrent writers via :func:`coordinator_core.locked_write.locked_rmw`
-    when an anchor can be derived (see :func:`_lock_anchor`); falls back to
-    a direct write when it cannot (test fixtures at ad-hoc paths).
+    carries). Requires the per-session directory to already exist — this
+    store never creates it (rule ``30cd75d80``; see module docstring); a
+    missing directory no-ops with a ``stderr`` advisory rather than
+    minting one. Locked against concurrent writers via
+    :func:`coordinator_core.locked_write.locked_rmw` when an anchor can be
+    derived (see :func:`_lock_anchor`); falls back to a direct write when
+    it cannot (test fixtures at ad-hoc paths).
 
     Returns True on success, False when ``sid`` is empty, the session hub is
-    unresolvable, or the write itself fails (``OSError``, ``LockTimeout``).
+    unresolvable, the session directory does not yet exist, or the write
+    itself fails (``OSError``, ``LockTimeout``).
     """
     if not sid:
         return False
@@ -208,11 +218,16 @@ def write_baton(
     if path is None:
         return False
 
+    if not path.parent.is_dir():
+        print(
+            f"session_baton.write_baton: no session directory for {sid}; write skipped",
+            file=sys.stderr,
+        )
+        return False
+
     to_write = dict(record)
     to_write["session_id"] = sid
     new_text = json.dumps(to_write, indent=2, sort_keys=True) + "\n"
-
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     anchor = _lock_anchor(path)
     if anchor is not None:
@@ -266,16 +281,26 @@ def merge_baton(
     or duplicate an entry. Passing ``None`` (the default) leaves the
     existing list untouched.
 
-    Returns the merged record on success, or ``None`` when ``sid`` is empty
-    or the session hub is unresolvable. A concurrent-write failure
-    (``LockTimeout``) degrades to a best-effort unlocked read-modify-write
-    (see :func:`write_baton`) rather than raising — matches this store's
+    Returns the merged record on success, or ``None`` when ``sid`` is empty,
+    the session hub is unresolvable, or the session directory does not yet
+    exist — this store never creates it (rule ``30cd75d80``; see module
+    docstring); a missing directory no-ops with a ``stderr`` advisory
+    rather than minting one. A concurrent-write failure (``LockTimeout``)
+    degrades to a best-effort unlocked read-modify-write (see
+    :func:`write_baton`) rather than raising — matches this store's
     fail-open posture: an advisory record must never block its caller.
     """
     if not sid:
         return None
     path = baton_path(sid, cwd)
     if path is None:
+        return None
+
+    if not path.parent.is_dir():
+        print(
+            f"session_baton.merge_baton: no session directory for {sid}; merge skipped",
+            file=sys.stderr,
+        )
         return None
 
     merged: Dict[str, Any] = {}
@@ -311,8 +336,6 @@ def merge_baton(
         merged.clear()
         merged.update(record)
         return json.dumps(record, indent=2, sort_keys=True) + "\n"
-
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     anchor = _lock_anchor(path)
     if anchor is not None:

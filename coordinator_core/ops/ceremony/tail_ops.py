@@ -164,7 +164,7 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 # pre-imported here any more (K-001, state/kill-ledger.md): the close path no
 # longer calls this op in-process -- see the retired `run_coverage_gate`
 # below this module's own history. The op still exists as mint-only
-# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
+# plumbing reachable from `cmd_brightline_gate`
 # (coordinator/bin/wsc-coverage-gate-runner.py), which imports and registers
 # it in its own process.
 from coordinator_core.ops import review_trail_write as _review_trail_write_mod  # noqa: F401
@@ -595,7 +595,7 @@ def fire_tracker_and_roadmap_detached(
 # close, one git subprocess per chain commit. `coordinator_core.coverage.
 # run_coverage_gate`, the `coverage.gate` op handler, and
 # `coordinator/bin/review-coverage-gate.py` still exist as mint-only
-# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
+# plumbing reachable from `cmd_brightline_gate`
 # (coordinator/bin/wsc-coverage-gate-runner.py) -- see that op module's own
 # docstring for the live kill-candidate note.
 # ---------------------------------------------------------------------------

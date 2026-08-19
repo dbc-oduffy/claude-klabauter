@@ -281,6 +281,32 @@ def test_artifact_path_excludes_root_commit_regeneration_commit_ish_form(tmp_pat
     assert verdict_from_range(rng) == Verdict.FRESH
 
 
+def test_artifact_path_batch_handles_mixed_multi_commit_range(tmp_path):
+    # Multi-item angle on the batched `_commits_touching_path` replacement
+    # for the old per-commit `git diff-tree` loop -- a single-commit fixture
+    # would pass identically whether or not the batch call correctly
+    # attributes each SHA to its own touch result (the same gap that shipped
+    # a wrong batched `_own_frozen_diff_shas` on 2026-08-19). Three commits:
+    # one drift-only (must stay), one regeneration touching both (must be
+    # excluded), one drift-only again (must stay) -- exercises correct
+    # per-commit attribution across a batch, not just "some filtering
+    # happened".
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    base_sha = _commit(repo, "initial", {"src.py": "1", "artifact.json": "1"})
+    drift_one = _commit(repo, "drift only 1", {"src.py": "2"})
+    _commit(repo, "regen", {"src.py": "3", "artifact.json": "2"})
+    drift_two = _commit(repo, "drift only 2", {"src.py": "4"})
+
+    rng = commits_touching_since(
+        repo, ["src.py"], base_sha, artifact_path="artifact.json"
+    )
+
+    assert rng.indeterminate is False
+    assert set(rng.commits) == {drift_one, drift_two}
+    assert verdict_from_range(rng) == Verdict.STALE
+
+
 def test_artifact_path_does_not_exclude_source_only_commit(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)

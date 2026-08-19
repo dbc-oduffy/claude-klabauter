@@ -21,11 +21,22 @@ spawn, no new file per invocation):
   1. Whether each invocation was served warm or cold
      (`record_invocation(warm=...)`).
   2. The reason a server exited -- `EXIT_REASON_SKEW` (C16's
-     `evict_on_skew`), `EXIT_REASON_IDLE_DEMOTION` (C24's
-     `demote_if_idle`), `EXIT_REASON_OPERATOR_STOP` (the operator stop
-     hatch, `coordinator/bin/warm-engine-stop.py`), or
-     `EXIT_REASON_DEGRADED` (a self-detected degraded-health stop) --
-     recorded by `record_exit(reason)`.
+     `evict_on_skew`), `EXIT_REASON_SUPERSEDED` (`warm.idle`'s
+     token-mismatch predicate: a generation whose pipe name no longer
+     matches the current engine, retiring without traffic),
+     `EXIT_REASON_IDLE_DEMOTION` (C24's `demote_if_idle`),
+     `EXIT_REASON_OPERATOR_STOP` (the operator stop hatch,
+     `coordinator/bin/warm-engine-stop.py`), or `EXIT_REASON_DEGRADED` (a
+     self-detected degraded-health stop) -- recorded by
+     `record_exit(reason)`.
+
+     `SUPERSEDED` is deliberately distinct from `IDLE_DEMOTION` even
+     though both exit through `demote_if_idle`: they answer different
+     questions in the telemetry record. `IDLE_DEMOTION` means "nobody
+     needed this server"; `SUPERSEDED` means "a newer engine replaced
+     it." Folding the two would make the stranded-generation population
+     -- the one that motivated the predicate -- unmeasurable in exactly
+     the record that exists to measure it.
   3. The served-invocation count per server life (`served_count()`) --
      not decoration: it is the direct measurement of the amortization
      argument this plan rests on (a server serving ~130 invocations per
@@ -90,6 +101,7 @@ from coordinator_core.warm.breadcrumb import svc_dir
 
 __all__ = [
     "EXIT_REASON_SKEW",
+    "EXIT_REASON_SUPERSEDED",
     "EXIT_REASON_IDLE_DEMOTION",
     "EXIT_REASON_OPERATOR_STOP",
     "EXIT_REASON_DEGRADED",
@@ -100,6 +112,7 @@ __all__ = [
 ]
 
 EXIT_REASON_SKEW = "skew"
+EXIT_REASON_SUPERSEDED = "superseded"
 EXIT_REASON_IDLE_DEMOTION = "idle-demotion"
 EXIT_REASON_OPERATOR_STOP = "operator-stop"
 EXIT_REASON_DEGRADED = "degraded"
@@ -107,6 +120,7 @@ EXIT_REASON_DEGRADED = "degraded"
 EXIT_REASONS = frozenset(
     {
         EXIT_REASON_SKEW,
+        EXIT_REASON_SUPERSEDED,
         EXIT_REASON_IDLE_DEMOTION,
         EXIT_REASON_OPERATOR_STOP,
         EXIT_REASON_DEGRADED,
@@ -165,7 +179,8 @@ class ServerTelemetry:
 
     def record_exit(self, reason: str) -> None:
         """Record why this server is exiting. `reason` must be one of
-        `EXIT_REASONS` (skew / idle-demotion / operator-stop / degraded).
+        `EXIT_REASONS` (skew / superseded / idle-demotion / operator-stop /
+        degraded).
         First call wins -- a server exits at most once (`warm.lifecycle`'s
         single-shot guard), so a second call is a caller bug, not a
         legitimate second exit; it is silently ignored rather than raised,

@@ -796,6 +796,93 @@ def resolve_ref(repo_root: Path, ref: str) -> Optional[str]:
         return None
 
 
+def _resolve_refs_batch(repo_root: Path, refs: list[str]) -> dict[str, Optional[str]]:
+    """Resolve many refs to SHAs in ONE ``git cat-file --batch-check`` call.
+
+    Replaces a per-ref ``resolve_ref`` (per-item ``git rev-parse``) loop in ``main``'s
+    check-shipped-on-main path. ``--batch-check`` reads one object identifier per stdin
+    line and emits exactly one output line per input, in order, using ``"<input> missing"``
+    for anything it cannot resolve — a 1:1 positional correspondence that survives partial
+    failure, unlike batching plain ``git rev-parse`` (whose stdout drops the failed args
+    entirely, breaking any index-based zip back to the inputs). This is the "git cat-file
+    --batch" batch form the plan's safe-primitive map names as known-correct; ``git
+    rev-list``'s set-algebra batching trap does not apply here since each ref is resolved
+    independently, not combined into a range.
+    """
+    if not refs:
+        return {}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            input="\n".join(refs) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+            **no_console_creationflags(),
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {ref: None for ref in refs}
+
+    lines = proc.stdout.split("\n")
+    result: dict[str, Optional[str]] = {}
+    for ref, line in zip(refs, lines):
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1] != "missing" and len(parts[0]) == 40:
+            result[ref] = parts[0]
+        else:
+            result.setdefault(ref, None)
+    for ref in refs:
+        result.setdefault(ref, None)
+    return result
+
+
+def _commit_age_labels_batch(repo_root: Path, shas: list[str]) -> dict[str, str]:
+    """Batch form of ``_commit_age_label`` — ONE ``git show`` call for N shas.
+
+    ``git show`` walks each positional argument as an independent object (unlike ``git
+    log``'s revision-range set algebra), so batching commit lookups here is safe: each
+    output block corresponds to its input sha, in the order given. Falls back to the
+    per-sha "0s ago" quirk (age 0, faithfully reproducing ``_commit_age_label``'s own
+    documented parity behaviour) for any sha the batch call could not resolve.
+    """
+    now = int(datetime.now(timezone.utc).timestamp())
+    if not shas:
+        return {}
+    by_sha: dict[str, int] = {}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "show", "--no-patch", "--format=%H%x09%ct"] + shas,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+        for line in proc.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 2:
+                try:
+                    by_sha[parts[0]] = int(parts[1])
+                except ValueError:
+                    continue
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        by_sha = {}
+
+    result: dict[str, str] = {}
+    for sha in shas:
+        commit_ts = by_sha.get(sha, now)
+        age_secs = now - commit_ts
+        if age_secs < 3600:
+            result[sha] = f"{age_secs}s ago"
+        elif age_secs < 86400:
+            result[sha] = f"{age_secs // 3600}h ago"
+        else:
+            result[sha] = f"{age_secs // 86400}d ago"
+    return result
+
+
 def _commit_age_label(repo_root: Path, sha: str) -> str:
     """Human-readable age of ``sha``'s commit timestamp (bash §check-shipped-on-main age calc).
 
@@ -887,13 +974,21 @@ def main(argv: list[str]) -> int:
     # `classify_shas_on_origin_main` already batches (its own docstring: two spawns
     # total regardless of set size) — distinct from the many-independent-RANGES shape,
     # which never batches (rev-list set-algebra collapse).
-    resolved: dict[str, Optional[str]] = {ref: resolve_ref(repo_root, ref) for ref in commits}
+    resolved: dict[str, Optional[str]] = _resolve_refs_batch(repo_root, commits)
     shas_to_classify = [sha for sha in resolved.values() if sha is not None]
     classified = (
         classify_shas_on_origin_main(repo_root, shas_to_classify) if shas_to_classify else {}
     )
 
     any_not_on_main = 0
+    age_labels: dict[str, str] = {}
+    if verbose:
+        not_on_main_shas = [
+            resolved[ref]
+            for ref in commits
+            if resolved[ref] is not None and not classified.get(resolved[ref])
+        ]
+        age_labels = _commit_age_labels_batch(repo_root, not_on_main_shas)
     for ref in commits:
         sha = resolved[ref]
         if sha is None:
@@ -915,7 +1010,7 @@ def main(argv: list[str]) -> int:
         else:
             any_not_on_main = 1
             if verbose:
-                age = _commit_age_label(repo_root, sha)
+                age = age_labels.get(sha, "0s ago")
                 print(f"{short}: NOT_ON_MAIN (committed {age})")
 
     return any_not_on_main

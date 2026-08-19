@@ -106,11 +106,23 @@ def as_session(monkeypatch):
     return _bind
 
 
+def _ensure_session_dir(repo: Path, sid: str) -> Path:
+    """Pre-create the per-session directory ``cs_init`` mints on every real
+    session start — this store (C6, docs/plans/2026-08-19-batons-unify-into-
+    one-successor.md § C6) no longer mkdir's it itself, so a fixture binding
+    a session id via env var alone (bypassing real session init) must bring
+    it into being before `_adopt_into_baton`'s `merge_baton` call can land."""
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    return sdir
+
+
 def test_pickup_adopts_artifact_into_session_baton(tmp_path, as_session):
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
     as_session("sid-a")
+    _ensure_session_dir(repo, "sid-a")
 
     pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
@@ -123,6 +135,7 @@ def test_rebrief_same_artifact_does_not_duplicate(tmp_path, as_session):
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
     as_session("sid-a")
+    _ensure_session_dir(repo, "sid-a")
 
     pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
     pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)

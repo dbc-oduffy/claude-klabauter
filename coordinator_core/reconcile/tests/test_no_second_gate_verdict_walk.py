@@ -98,17 +98,74 @@ def _is_blocked_by_read(node: ast.AST) -> bool:
         args = node.args
         if args and isinstance(args[0], ast.Constant) and args[0].value == "blocked_by":
             return True
-        for kw in node.keywords:
-            if kw.arg == "key" and isinstance(kw.value, ast.Constant) and kw.value.value == "blocked_by":
-                return True
     return False
 
 
-def _contains_blocked_by_read(node: ast.AST) -> bool:
-    return any(_is_blocked_by_read(n) for n in ast.walk(node))
+def _blocked_by_tainted_names(func: ast.AST) -> frozenset:
+    """Local names bound, anywhere in `func`, to an expression containing a
+    `blocked_by` read.
+
+    WHY THIS EXISTS (review: code-reviewer slice A, major). Without it the
+    guard only fires when the read is textually nested INSIDE the verdict
+    write's own value expression, so the obvious one-line refactor
+
+        blockers = fm["blocked_by"]
+        return {"pickup_ready": not blockers, ...}
+
+    walks straight through it. That is not an obscure spelling — it is the
+    natural shape of the withdrawn `_is_ready` helper this AC exists to
+    prevent, so a guard blind to it would have missed the very near-miss
+    that motivated AC7.
+
+    Taint propagates through assignment to a FIXPOINT, because one hop is not
+    enough for the shape above: `blockers` is bound from the read, then
+    `ready` is bound from `blockers`, and only `ready` reaches the write.
+
+    It propagates through assignment ONLY, which is what keeps the narrowing
+    below intact. The measured false positive (`pickup_assemble.brief`) reads
+    `blocked_by` into a local and separately writes `deployment_state` from an
+    unrelated value; no assignment chain connects the two, so it stays clean.
+    Propagating through mere co-presence in a function would re-break it.
+    """
+    tainted: set = set()
+
+    def _bindings():
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        yield target.id, node.value
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                if node.value is not None and isinstance(node.target, ast.Name):
+                    yield node.target.id, node.value
+            elif isinstance(node, ast.NamedExpr):
+                if isinstance(node.target, ast.Name):
+                    yield node.target.id, node.value
+
+    bindings = list(_bindings())
+    changed = True
+    while changed:
+        changed = False
+        for name, value in bindings:
+            if name in tainted:
+                continue
+            if _contains_blocked_by_read(value, frozenset(tainted)):
+                tainted.add(name)
+                changed = True
+    return frozenset(tainted)
 
 
-def _dict_literal_verdict_write_reads_blocked_by(node: ast.AST) -> bool:
+def _contains_blocked_by_read(node: ast.AST, tainted: frozenset = frozenset()) -> bool:
+    if any(_is_blocked_by_read(n) for n in ast.walk(node)):
+        return True
+    return any(
+        isinstance(n, ast.Name) and n.id in tainted for n in ast.walk(node)
+    )
+
+
+def _dict_literal_verdict_write_reads_blocked_by(
+    node: ast.AST, tainted: frozenset = frozenset()
+) -> bool:
     """True iff `node` is a dict LITERAL carrying a `pickup_ready`/
     `deployment_state` key whose OWN VALUE expression (not some unrelated
     sibling entry, and not merely "appears somewhere in the same function")
@@ -132,13 +189,15 @@ def _dict_literal_verdict_write_reads_blocked_by(node: ast.AST) -> bool:
             isinstance(key, ast.Constant)
             and key.value in _TARGET_KEYS
             and value is not None
-            and _contains_blocked_by_read(value)
+            and _contains_blocked_by_read(value, tainted)
         ):
             return True
     return False
 
 
-def _subscript_assign_verdict_write_reads_blocked_by(assign: ast.Assign) -> bool:
+def _subscript_assign_verdict_write_reads_blocked_by(
+    assign: ast.Assign, tainted: frozenset = frozenset()
+) -> bool:
     """True iff `assign` targets `x["pickup_ready"|"deployment_state"] = ...`
     AND the assigned VALUE expression itself contains a `blocked_by` read —
     the dataflow-narrowed form for the subscript-assignment write shape."""
@@ -148,7 +207,7 @@ def _subscript_assign_verdict_write_reads_blocked_by(assign: ast.Assign) -> bool
             if (
                 isinstance(key, ast.Constant)
                 and key.value in _TARGET_KEYS
-                and _contains_blocked_by_read(assign.value)
+                and _contains_blocked_by_read(assign.value, tainted)
             ):
                 return True
     return False
@@ -173,13 +232,16 @@ def find_gate_verdict_co_occurrences() -> List[Tuple[Path, str, int]]:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             violated = False
+            tainted = _blocked_by_tainted_names(node)
             for inner in ast.walk(node):
                 if inner is node:
                     continue
-                if _dict_literal_verdict_write_reads_blocked_by(inner):
+                if _dict_literal_verdict_write_reads_blocked_by(inner, tainted):
                     violated = True
                     break
-                if isinstance(inner, ast.Assign) and _subscript_assign_verdict_write_reads_blocked_by(inner):
+                if isinstance(inner, ast.Assign) and _subscript_assign_verdict_write_reads_blocked_by(
+                    inner, tainted
+                ):
                     violated = True
                     break
             if violated:
@@ -198,27 +260,77 @@ class TestNoSecondGateVerdictWalk:
         )
 
 
+def _classify_source(source: str) -> bool:
+    """Run the SAME per-function logic `find_gate_verdict_co_occurrences`
+    runs, taint included, over one source string. Kept in lockstep with the
+    production walk so a self-test cannot pass against a weaker path than
+    the real guard uses."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        tainted = _blocked_by_tainted_names(node)
+        for inner in ast.walk(node):
+            if inner is node:
+                continue
+            if _dict_literal_verdict_write_reads_blocked_by(inner, tainted):
+                return True
+            if isinstance(inner, ast.Assign) and _subscript_assign_verdict_write_reads_blocked_by(
+                inner, tainted
+            ):
+                return True
+    return False
+
+
 class TestCollectorSelfTest:
     """Fixture-level self-test of the AST collector, independent of the live
     tree — pins the collector's own true-positive/true-negative behaviour."""
 
-    def test_detects_planted_co_occurrence(self, tmp_path) -> None:
-        planted = tmp_path / "planted_second_evaluator.py"
-        planted.write_text(
+    def test_detects_planted_co_occurrence(self, tmp_path, monkeypatch) -> None:
+        """Drives the REAL entry point, not just the classifier helper.
+
+        Review (code-reviewer slice A, minor): exercising the predicate
+        directly left the file-discovery pipeline unproven, so the guard
+        could have failed to find a real on-disk violation while this test
+        stayed green.
+        """
+        planted_dir = tmp_path / "coordinator_core"
+        planted_dir.mkdir()
+        (planted_dir / "planted_second_evaluator.py").write_text(
             "def _is_ready(handoff):\n"
             "    return {\n"
             "        'pickup_ready': not handoff.get('blocked_by'),\n"
             "        'deployment_state': 'x',\n"
-            "    }\n"
+            "    }\n",
+            encoding="utf-8",
         )
-        tree = ast.parse(planted.read_text())
-        fn = tree.body[0]
-        violated = any(
-            _dict_literal_verdict_write_reads_blocked_by(n)
-            for n in ast.walk(fn)
-            if n is not fn
+        monkeypatch.setattr(
+            "coordinator_core.reconcile.tests.test_no_second_gate_verdict_walk._SCOPE_ROOTS",
+            (planted_dir,),
         )
-        assert violated is True
+
+        violations = find_gate_verdict_co_occurrences()
+
+        assert [fn for _p, fn, _ln in violations] == ["_is_ready"]
+
+    def test_detects_the_hoisted_read_shape(self) -> None:
+        """The withdrawn `_is_ready` refactored one step — the read bound to a
+        local first. Review (code-reviewer slice A, major): the guard was blind
+        to this, which is the natural shape of the very near-miss AC7 exists to
+        catch, not an obscure spelling."""
+        assert _classify_source(
+            "def _is_ready(handoff):\n"
+            "    blockers = handoff['blocked_by']\n"
+            "    ready = not blockers\n"
+            "    return {'pickup_ready': ready, 'deployment_state': 'x'}\n"
+        ) is True
+
+    def test_detects_the_hoisted_read_in_subscript_assignment(self) -> None:
+        assert _classify_source(
+            "def _stamp(handoff, out):\n"
+            "    blockers = handoff.get('blocked_by')\n"
+            "    out['deployment_state'] = 'awaiting_gate' if blockers else 'ready_to_fire'\n"
+        ) is True
 
     def test_unrelated_blocked_by_read_and_verdict_write_in_same_function_is_not_a_violation(
         self,

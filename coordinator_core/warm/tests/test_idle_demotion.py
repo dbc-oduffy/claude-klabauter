@@ -265,3 +265,139 @@ def test_idle_module_calls_begin_shutdown_not_a_second_sequence():
     assert "begin_shutdown(" in body
     assert "os._exit" not in body
     assert "exit_fn(" not in body
+
+
+# ---------------------------------------------------------------------------
+# Superseded-generation predicate (`TokenStaleFn`)
+#
+# The population BOTH pre-existing arms miss: a server whose served count is
+# NONZERO (so the zero-served deadline never fires) and whose generation
+# token is stale (so `skew.evict_on_skew` can never be reached, because no
+# client computes its pipe name any more). Before this predicate it waited
+# out the full 15-minute idle deadline, holding a preloaded op registry and
+# a dispatch process pool the whole time.
+# ---------------------------------------------------------------------------
+
+
+def test_superseded_generation_demotes_though_served_count_is_nonzero():
+    """THE defect: nonzero served + stale token + fresh idle clock. Every
+    other arm says keep running; only the superseded arm retires it."""
+    fake_now = [0.0]
+    clock = lambda: fake_now[0]
+    idle.mark_invocation(clock=clock)
+    fake_now[0] = 1.0
+
+    assert idle.should_demote(
+        served_count=_served(137),
+        token_stale=lambda: False,
+        idle_deadline_secs=900.0,
+        clock=clock,
+    ) is False
+
+    assert idle.should_demote(
+        served_count=_served(137),
+        token_stale=lambda: True,
+        idle_deadline_secs=900.0,
+        clock=clock,
+    ) is True
+
+
+def test_superseded_arm_needs_no_elapsed_time():
+    """No grace period: a superseded generation is unreachable the instant
+    its token rotates, so waiting buys back zero warm hits."""
+    fake_now = [0.0]
+    clock = lambda: fake_now[0]
+    idle.mark_invocation(clock=clock)
+
+    assert idle.seconds_idle(clock=clock) == pytest.approx(0.0)
+    assert idle.should_demote(
+        served_count=_served(1),
+        token_stale=lambda: True,
+        idle_deadline_secs=900.0,
+        clock=clock,
+    ) is True
+
+
+def test_absent_token_stale_seam_leaves_both_original_arms_unchanged():
+    """`token_stale` defaults to None so every pre-existing caller keeps
+    exactly its two-arm behaviour -- the seam is additive, not a rewrite."""
+    fake_now = [0.0]
+    clock = lambda: fake_now[0]
+    idle.mark_invocation(clock=clock)
+    fake_now[0] = 1.0
+
+    assert idle.should_demote(
+        served_count=_served(5), idle_deadline_secs=900.0, clock=clock
+    ) is False
+
+    fake_now[0] = 901.0
+    assert idle.should_demote(
+        served_count=_served(5), idle_deadline_secs=900.0, clock=clock
+    ) is True
+
+
+def test_demote_if_idle_retires_superseded_generation_through_begin_shutdown():
+    """AC: the retirement preserves orderly drain semantics -- it routes
+    through C17's unchanged sequence (listener closed, in-flight awaited),
+    never a second bespoke shutdown."""
+    order = []
+    in_flight = [2]
+
+    def _in_flight_count():
+        # Drains down, proving the sequence waits rather than dropping work.
+        if in_flight[0] > 0:
+            in_flight[0] -= 1
+        return in_flight[0]
+
+    fake_now = [0.0]
+    clock = lambda: fake_now[0]
+    idle.mark_invocation(clock=clock)
+
+    result = idle.demote_if_idle(
+        served_count=_served(137),
+        token_stale=lambda: True,
+        close_listener=lambda: order.append("close_listener"),
+        in_flight_count=_in_flight_count,
+        ctx_shutdown=lambda: order.append("ctx_shutdown"),
+        exit_fn=lambda code: order.append(f"exit:{code}"),
+        idle_deadline_secs=900.0,
+        clock=clock,
+    )
+
+    assert result is True
+    assert order == ["close_listener", "ctx_shutdown", "exit:0"]
+    assert in_flight[0] == 0
+
+
+def test_token_stale_predicate_is_a_callable_not_a_snapshot():
+    """Pinned because a bool parameter would read generation state at
+    server BOOT, and the whole point is observing a mid-life change."""
+    calls = []
+
+    def _stale():
+        calls.append(1)
+        return False
+
+    idle.should_demote(served_count=_served(1), token_stale=_stale, idle_deadline_secs=900.0)
+    assert calls, "token_stale must be invoked at check time, not read as a value"
+
+
+def test_idle_module_still_does_not_import_skew():
+    """THE INVARIANT, other direction: the superseded predicate is bound by
+    the caller, so `idle` never learns how to compute a token and the two
+    modules stay disjoint."""
+    assert not hasattr(idle, "skew")
+    # Prose in docstrings legitimately NAMES the peer module; only an
+    # actual import statement would couple them, so scan the AST, not the
+    # source text.
+    import ast
+
+    tree = ast.parse(inspect.getsource(idle))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+            imported.update(f"{node.module}.{a.name}" for a in node.names)
+    assert not any("skew" in name for name in imported), sorted(imported)

@@ -20,6 +20,7 @@ Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C30
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import threading
@@ -28,7 +29,7 @@ import time
 import pytest
 
 from coordinator_core.session import declared_writes
-from coordinator_core.warm import breadcrumb, idle, lifecycle, server, skew, telemetry
+from coordinator_core.warm import breadcrumb, election, idle, lifecycle, server, skew, telemetry
 
 
 @pytest.fixture(autouse=True)
@@ -857,3 +858,162 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
         assert ctx.in_flight() == 0
     finally:
         server._handle_connection = orig_handle_connection
+
+
+# ---------------------------------------------------------------------------
+# Superseded-generation retirement (the publish-strands-an-engine defect)
+# ---------------------------------------------------------------------------
+
+
+def test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp(tmp_path):
+    """The defect's actual trigger, reproduced through the real publish
+    seam rather than a synthetic token: `skew.write_engine_stamp` is what
+    a publish round calls, and rewriting it is what rotates the generation
+    token out from under a resident server."""
+    skew.write_engine_stamp(tmp_path, "sha-before-publish")
+    boot_token = skew.compute_client_token(tmp_path)
+
+    ctx = server._ServerContext(
+        name=election.pipe_name(boot_token, engine_clone=tmp_path, user_sid="S-1-5-21-TEST"),
+        sid="S-1-5-21-TEST",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+        boot_token=boot_token,
+    )
+    assert ctx._token_is_stale() is False
+
+    skew.write_engine_stamp(tmp_path, "sha-after-publish")
+
+    assert ctx._token_is_stale() is True
+    # ...and the reason it is unreachable: no client computes its pipe name.
+    assert (
+        election.pipe_name(
+            skew.compute_client_token(tmp_path),
+            engine_clone=tmp_path,
+            user_sid="S-1-5-21-TEST",
+        )
+        != ctx.name
+    )
+
+
+def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path):
+    """AC: a server whose served count is NONZERO and whose token is stale
+    -- the population today's two mechanisms both miss -- retires without
+    receiving a request, and is recorded as SUPERSEDED, not idle-demoted.
+
+    The idle clock is freshly marked, so neither deadline arm can be what
+    fires here.
+    """
+    skew.write_engine_stamp(tmp_path, "sha-before-publish")
+    boot_token = skew.compute_client_token(tmp_path)
+
+    ctx = server._ServerContext(
+        name="pipe-superseded",
+        sid="sid-x",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+        boot_token=boot_token,
+    )
+    ctx.telemetry.record_invocation(warm=True)
+    assert ctx.telemetry.served_count() > 0
+    idle.mark_invocation()
+
+    calls = []
+    monkey_target = idle.demote_if_idle
+
+    def _capture(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    idle.demote_if_idle = _capture
+    try:
+        skew.write_engine_stamp(tmp_path, "sha-after-publish")
+        ctx._idle_tick()
+    finally:
+        idle.demote_if_idle = monkey_target
+
+    assert calls, "a superseded generation must reach demote_if_idle"
+    assert calls[0]["token_stale"]() is True
+    assert ctx.telemetry.snapshot()["exit_reason"] == telemetry.EXIT_REASON_SUPERSEDED
+
+
+def test_healthy_server_is_not_retired_by_the_superseded_arm(tmp_path):
+    """The other half of the AC: a current generation with a fresh idle
+    clock keeps running. A predicate that retires healthy servers would
+    destroy warm serving entirely, so this is pinned alongside the
+    positive case."""
+    skew.write_engine_stamp(tmp_path, "sha-current")
+    boot_token = skew.compute_client_token(tmp_path)
+
+    ctx = server._ServerContext(
+        name="pipe-healthy",
+        sid="sid-x",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+        boot_token=boot_token,
+    )
+    ctx.telemetry.record_invocation(warm=True)
+    idle.mark_invocation()
+
+    assert ctx._token_is_stale() is False
+    assert (
+        idle.should_demote(
+            served_count=ctx.telemetry.served_count,
+            token_stale=ctx._token_is_stale,
+            idle_deadline_secs=900.0,
+        )
+        is False
+    )
+
+
+def test_token_staleness_read_failure_is_not_a_retirement_verdict(tmp_path):
+    """Never raises, and an unreadable token reads as NOT stale -- the
+    watchdog runs this every poll while a publish round may be mid-write,
+    and a transient failure must degrade to today's behaviour (wait out
+    the idle deadline), never to killing a healthy server."""
+    ctx = server._ServerContext(
+        name="pipe-x",
+        sid="sid-x",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+        boot_token="some-token",
+    )
+
+    original = skew.compute_client_token
+
+    def _boom(_root=None):
+        raise OSError("stamp is mid-write")
+
+    skew.compute_client_token = _boom
+    try:
+        assert ctx._token_is_stale() is False
+    finally:
+        skew.compute_client_token = original
+
+
+def test_context_without_a_boot_token_disables_the_superseded_arm(tmp_path):
+    """Every pre-existing `_ServerContext(...)` construction omits
+    `boot_token`; those must keep exactly their old two-arm behaviour."""
+    ctx = server._ServerContext(
+        name="pipe-x", sid="sid-x", version_state=_FakeVersionState(), engine_root=tmp_path
+    )
+    assert ctx.boot_token is None
+    assert ctx._token_is_stale() is False
+
+
+def test_main_binds_the_pipes_own_token_as_the_boot_token():
+    """The predicate must compare against the token actually EMBEDDED in
+    the pipe name this server owns. Pinned by source inspection because
+    `main()` is Windows-only and does not return before serving forever:
+    a refactor that recomputes a token for the context instead of passing
+    the elected one would let the two drift silently."""
+    source = inspect.getsource(server.main)
+    assert "boot_token=token" in source
+    assert "name = election.pipe_name(token" in source
+
+
+def test_evict_on_skew_drain_ordering_is_untouched_by_this_path():
+    """Anti-scope pin: the superseded retirement adds a path, it does not
+    reorder or weaken C16's respond -> close_listener -> drain sequence."""
+    body = inspect.getsource(skew.evict_on_skew)
+    assert body.index("respond(") < body.index("close_listener()") < body.index("drain()")

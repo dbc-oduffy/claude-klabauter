@@ -37,9 +37,11 @@ Three fidelity guards that a naive port silently drops — all three implemented
     (2) exit-0-with-empty-stdout → INDETERMINATE.
         A has-live-children check that signals "blocked" but cannot enumerate blockers
         is a contract violation — treat as INDETERMINATE rather than vacuously coverable
-        (would set all_stale=1 vacuously → false COVERED). In the Python port: any
-        exception from coordinator_core.archival.reverse_membership (including the C4-stub
-        NotImplementedError or a runtime error) triggers INDETERMINATE.
+        (would set all_stale=1 vacuously → false COVERED). This guard's Python-port
+        implementation (`coordinator_core.archival.reverse_membership`) lived in the
+        now-removed DAG-mode segment-attribution section (`_derive_dag_chain_set`, cut
+        2026-08-19 — see state/kill-ledger.md); the flat-mode path below has no
+        equivalent call site.
     (3) all-stale-blockers → coverable. If every blocker handoff's consuming session is
         non-live, the commit is not blocked by any active workstream → treat that
         ancestor as coverable. Implemented via _handoff_session_live() + live_sids
@@ -65,8 +67,9 @@ Negative-spec:
       asymmetric-scope-filter note above).
     - Does NOT write any coordinator substrate (read-only gate; ipc.py negative-spec).
     - Does NOT use raw-PID liveness (liveness.py / D5 / RAW-PID-LIVENESS floor).
-    - The archival.reverse_membership body is filled by C4; NotImplementedError at call-time
-      is expected in Wave 2 before C4 lands. Import resolves cleanly (C0 seam design).
+    - Does NOT import archival.reverse_membership — that seam (filled by C4 for the
+      DAG-mode fixpoint) was removed along with `_derive_dag_chain_set` on 2026-08-19;
+      the C4/Wave-2 staging note it carried no longer applies to this module.
 
 Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C3
 """

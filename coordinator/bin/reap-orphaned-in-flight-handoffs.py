@@ -127,11 +127,13 @@ single-writer invariant, AC5.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import glob
 import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -145,7 +147,6 @@ from coordinator_core.win_portability import no_console_creationflags  # noqa: E
 
 _ARCHIVE_STAMP_CLI = os.path.join(_SCRIPT_DIR, "archive-stamp-cli.py")
 _QUERY_CLI_DEFAULT = os.path.join(_SCRIPT_DIR, "query-completions.py")
-_HAS_LIVE_CHILDREN_CLI = os.path.join(_SCRIPT_DIR, "handoff-has-live-children.py")
 
 
 def _resolve_session_live():
@@ -196,6 +197,38 @@ def _resolve_claim_state():
         sys.path.insert(0, claude_klabauter_root)
     from coordinator_core.claim_state import resolve_claim_state
     return resolve_claim_state
+
+
+def _resolve_handoff_has_live_children():
+    """Import coordinator_core.ops.handoff_children._handoff_has_live_children
+    and coordinator_core.git.repo_root.git_common_dir via CLAUDE_KLABAUTER_ROOT.
+
+    Same in-process import trampoline as ``_resolve_session_live`` above.
+    Amplification burn-down (state/ledgers/amp-wave4-worklist.md W2):
+    ``_has_live_children_exit_code`` previously spawned
+    ``handoff-has-live-children.py`` as a subprocess per orphan, and that
+    script itself spawns a SECOND subprocess (``cc_invoke.route()`` into
+    ``coordinator_core.invoke``) to reach this exact op — two spawns per
+    orphan for a pure read (``handoff.has_live_children`` is
+    ``OpClass.COMPUTE_ONLY``). This resolver goes straight to the op
+    function, mirroring how this file already reaches ``session_live`` /
+    ``resolve_claim_state`` / ``canonical_kind`` in-process rather than via
+    a CLI veneer — zero spawns per orphan instead of two, and no per-item
+    register entry, per the ledger's own guidance to check the walking
+    seams before exempting a primitive-absence claim.
+
+    ``git_common_dir`` (``coordinator_core.git.repo_root``) resolves the op's
+    expected ``repo_root`` param (the git COMMON dir — see that op's own
+    ``main_worktree_root`` derivation) purely by filesystem walk, never a
+    subprocess — the CLI veneer got this for free from its router; calling
+    the op directly means resolving it ourselves.
+    """
+    claude_klabauter_root = _resolve_claude_klabauter_root()
+    if claude_klabauter_root not in sys.path:
+        sys.path.insert(0, claude_klabauter_root)
+    from coordinator_core.git.repo_root import git_common_dir
+    from coordinator_core.ops.handoff_children import _handoff_has_live_children
+    return _handoff_has_live_children, git_common_dir
 
 
 def _resolve_canonical_kind():
@@ -566,7 +599,7 @@ def _run_archive_stamp_cli(args: list) -> tuple:
     return False, f"{os.path.basename(_ARCHIVE_STAMP_CLI)} {args[0]} exit {result.returncode}: {detail}"
 
 
-def _has_live_children_exit_code(handoff_path: str) -> int:
+def _has_live_children_exit_code(handoff_path: str, repo_root: str) -> int:
     """Reverse-membership crash-orphan guard for the clean release fall-through.
 
     The ordinary crash shape this guards against: a session runs /handoff under
@@ -577,19 +610,34 @@ def _has_live_children_exit_code(handoff_path: str) -> int:
     handoff.has_live_children reverse-membership predicate the /handoff
     chain-archival path and fleet.archive_completed_handoffs already consult;
     this reaper was the one lifecycle writer that didn't. Fail-closed: any
-    transport/subprocess failure returns 2 (indeterminate), never 1 (safe to
+    resolution/import/op failure returns 2 (indeterminate), never 1 (safe to
     release).
+
+    Calls the op in-process (see ``_resolve_handoff_has_live_children``) —
+    zero subprocess spawns, not a CLI veneer. ``repo_root`` is this script's
+    own resolved worktree root (``resolve_checked_repo_root``'s
+    ``_show_toplevel``-derived value); the op itself expects the git COMMON
+    dir, so it is re-derived here via ``git_common_dir`` rather than
+    threading the worktree root straight through.
     """
     try:
-        from cc_invoke import child_env  # noqa: E402 (path injected at module top)
-
-        result = subprocess.run(
-            [sys.executable, _HAS_LIVE_CHILDREN_CLI, handoff_path],
-            capture_output=True, text=True, check=False, env=child_env(), **no_console_creationflags(),
-        )
-    except OSError:
+        handler, git_common_dir = _resolve_handoff_has_live_children()
+    except (RuntimeError, ImportError):
         return 2
-    return result.returncode
+
+    common_dir = git_common_dir(cwd=repo_root)
+    if not common_dir:
+        return 2
+
+    try:
+        result = asyncio.run(
+            handler({"candidate": handoff_path}, repo_root=Path(common_dir))
+        )
+    except Exception:
+        return 2
+
+    exit_code = result.get("exit_code") if isinstance(result, dict) else None
+    return exit_code if isinstance(exit_code, int) else 2
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -845,7 +893,7 @@ def main(argv: Optional[list] = None) -> int:
         # land) keeps falling through to release unchanged — it must not
         # be re-gated here.
         if not sha:
-            guard_exit = _has_live_children_exit_code(f)
+            guard_exit = _has_live_children_exit_code(f, repo_root)
             if guard_exit == 0:
                 reason = "has a live succession child; releasing would resurrect an ancestor"
             elif guard_exit == 2:

@@ -6286,6 +6286,25 @@ def _git_rev_parse_detailed(path: Path, *args: str) -> _GitRevParseResult:
     return _GitRevParseResult(stdout=result.stdout.strip(), returncode=0, stderr=result.stderr)
 
 
+def _git_capture(path: Path, *args: str) -> Optional[str]:
+    """Runs `git -C <path> <args>` and returns stripped stdout, or `None` on
+    any non-zero exit or `OSError` — the general-command sibling of
+    `_git_rev_parse`, which hard-codes its subcommand. `None` is "the call
+    failed", never "the call returned nothing": an empty result is `""`."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def _git_rev_parse(path: Path, *args: str) -> Optional[str]:
     """Runs `git -C <path> rev-parse <args>` and returns stripped stdout, or
     `None` on any non-zero exit or `OSError` (e.g. `git` not on `PATH`) —
@@ -6952,6 +6971,87 @@ def _dirty_paths_under(repo_root: Path, scope_dirs: Sequence[Path]) -> Optional[
     return _parse_porcelain_z(probe.stdout)
 
 
+def _normalize_dest_exec_bits(repo_root: Path, scope_dirs: Sequence[Path]) -> "List[str]":
+    """Re-mode every file tracked under `scope_dirs` whose blob starts with
+    `#!` but whose INDEX mode is `100644`, returning the paths it fixed.
+
+    WHY THIS EXISTS. Both this repo and the mirror run `core.fileMode=false`
+    (Windows), so git never reads an exec bit off disk: a dest entry's mode is
+    whatever `git add` first recorded, which is `100644` for anything newly
+    added. `_extract_git_archive` deliberately preserves source modes through
+    `filter='tar'`, but that work is discarded at the dest `git add`, so a
+    shebanged entrypoint reaches a POSIX clone non-executable. The failure is
+    silent on Windows, where every caller invokes the interpreter explicitly
+    and never exercises the bit. The mirror's own release CI catches it
+    (`.github/scripts/check-exec-bit.py`) — this makes the pipeline stop
+    producing what that gate exists to reject.
+
+    The predicate is deliberately the GATE's predicate, not a source-mode
+    comparison: matching `check-exec-bit.py` exactly (index mode `100644` +
+    blob opening `#!`) is what makes a green run here mean a green run there,
+    and it needs no dest-path-to-source-path mapping. It is also correct
+    where the two disagree — `coordinator/bin/percolate-mirror.py` and
+    `coordinator/bin/statusline.py` are shebanged and `100644` in claude-klabauter's own
+    index today, so a source-mode copy would faithfully propagate the defect.
+
+    Converges, and is cheap once converged: an entry already at `100755` stays
+    there across later `git add`s under `core.fileMode=false`, so steady state
+    is two git calls that find nothing.
+
+    Batched by construction — one `ls-files`, one `cat-file --batch`, one
+    `update-index` over every offender — never a call per path
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`).
+
+    SCOPED TO `scope_dirs`, never the whole index, for the same reason
+    `_dirty_paths_under` is: the caller's commit pathspec covers exactly these
+    subtrees, and a mode change staged OUTSIDE them is one no pathspec picks
+    up — it would sit staged-uncommitted and leave the mirror permanently
+    dirty, tripping the next round's dest-cleanliness precondition. Fixing a
+    mode this run cannot also commit is worse than leaving it to the run whose
+    scope does cover it.
+
+    Negative-spec: does NOT commit, and does NOT `git add`. It stages a mode
+    delta only; the caller folds those paths into its own commit pathspec.
+    """
+    staged = _git_capture(repo_root, "ls-files", "--stage", "--", *[str(d) for d in scope_dirs])
+    if staged is None:
+        return []
+    by_blob: "dict[str, List[str]]" = {}
+    for line in staged.splitlines():
+        meta, _, path = line.partition("\t")
+        if not path:
+            continue
+        fields = meta.split()
+        # `<mode> SP <object> SP <stage> TAB <path>`. Stage != 0 means a merge
+        # conflict; leave a conflicted entry entirely alone.
+        if len(fields) != 3 or fields[0] != "100644" or fields[2] != "0":
+            continue
+        by_blob.setdefault(fields[1], []).append(path)
+    if not by_blob:
+        return []
+
+    from coordinator_core.ops.ceremony import git_native  # noqa: PLC0415 - lazy, see module header
+
+    blobs = git_native.cat_file_batch_objects(repo_root, sorted(by_blob))
+    offenders = sorted(
+        path
+        for blob, paths in by_blob.items()
+        if (blobs.get(blob) or "").startswith("#!")
+        for path in paths
+    )
+    if not offenders:
+        return []
+    if _git_capture(repo_root, "update-index", "--chmod=+x", "--", *offenders) is None:
+        print(
+            f"publish.py: could not re-mode {len(offenders)} shebanged path(s) in "
+            f"'{repo_root}' — the mirror's release CI will reject them "
+            "(.github/scripts/check-exec-bit.py).",
+            file=sys.stderr,
+        )
+        return []
+    return offenders
+
+
 def _commit_published_dests(
     published_dest_dirs_by_repo_root: "dict[Path, set[Path]]",
     *,
@@ -7016,6 +7116,16 @@ def _commit_published_dests(
             )
             all_ok = False
             continue
+        # Before the pathspec is frozen, not after: a re-moded path is only
+        # in the commit if it is in `paths`, and `_dirty_paths_under` cannot
+        # see a mode delta that does not exist yet.
+        remoded = _normalize_dest_exec_bits(repo_root, sorted(scope_dirs))
+        if remoded:
+            print(
+                f"  {repo_root}: re-moded {len(remoded)} shebanged path(s) to 100755 "
+                f"({', '.join(remoded[:5])}{', …' if len(remoded) > 5 else ''})."
+            )
+            paths = sorted(set(paths) | set(remoded))
         if not paths:
             print(f"  {repo_root}: already clean — nothing to commit.")
             continue
@@ -7909,6 +8019,56 @@ def _dir_trees_equal(a: Path, b: Path) -> bool:
     return a_stat == b_stat
 
 
+def _load_publish_refusal_record_module():
+    """Lazy-loads the sibling `publish_refusal_record.py` module (same
+    directory as this file) via `spec_from_file_location`, matching this
+    module's own established sibling-load pattern (§ `_load_publish_sync_
+    module` above) rather than a bareword `import publish_refusal_record` —
+    `coordinator/bin` is never added to `sys.path`, and this module can
+    itself be loaded under an arbitrary name (§ `coordinator/bin/tests/
+    test_publish_swap_preserves_dest_git.py`), so a bareword import is not
+    guaranteed to resolve. Called ONLY from inside an `except` handler at
+    one of the six swap call sites (§ CALL SITES, dispatch brief C1) — the
+    success path never pays this import."""
+    bin_dir = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location(
+        "publish_refusal_record", bin_dir / "publish_refusal_record.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("could not build a module spec for publish_refusal_record.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _record_publish_swap_refusal(
+    exc: BaseException,
+    *,
+    refused_path: Path,
+    aside_path: Optional[Path],
+    swap_branch: str,
+    failing_operation: str,
+) -> None:
+    """Records ONE of the six publish-swap call sites' refusals, only when
+    `exc` is the discriminated holder shape (§ `publish_refusal_record.
+    is_holder_refusal`). Callers wrap this call in `try: ... except
+    BaseException: pass` (§ ORDERING, dispatch brief C1) — a record-write
+    (or import) failure must never substitute for or mask the original
+    refusal, so this function is deliberately allowed to raise and relies
+    entirely on the caller to swallow it."""
+    module = _load_publish_refusal_record_module()
+    if not module.is_holder_refusal(exc):
+        return
+    module.record_publish_swap_refusal(
+        refused_path=refused_path,
+        aside_path=aside_path,
+        swap_branch=swap_branch,
+        failing_operation=failing_operation,
+        exc=exc,
+    )
+
+
 def _swap_publish_staging_entry(dest_entry: Path, staging_entry: Path) -> None:
     """Swaps ONE top-level name from `staging_entry` into `dest_entry` —
     the per-entry primitive `_swap_publish_staging_into_dest_root` uses in
@@ -7917,21 +8077,62 @@ def _swap_publish_staging_entry(dest_entry: Path, staging_entry: Path) -> None:
     renamed aside first (`dest_entry` -> `dest_entry` + `.prior`), then
     `staging_entry` -> `dest_entry`; a failure of that second rename
     restores the aside copy, so a partial failure leaves `dest_entry`
-    exactly as it was before this call, never missing."""
+    exactly as it was before this call, never missing.
+
+    Each of the three legs below (aside rename, second rename, file
+    replace) records a refusal (§ `_record_publish_swap_refusal`) before
+    re-raising unchanged — this is the root-dest branch's per-entry
+    primitive, so every recorded `swap_branch` here is `"root-dest"`."""
     if staging_entry.is_dir():
         prior = dest_entry.with_name(dest_entry.name + ".prior")
         if dest_entry.exists():
-            os.rename(dest_entry, prior)
+            try:
+                os.rename(dest_entry, prior)
+            except OSError as exc:
+                try:
+                    _record_publish_swap_refusal(
+                        exc,
+                        refused_path=dest_entry,
+                        aside_path=prior,
+                        swap_branch="root-dest",
+                        failing_operation="aside_rename",
+                    )
+                except BaseException:
+                    pass
+                raise
         try:
             os.rename(staging_entry, dest_entry)
-        except OSError:
+        except OSError as exc:
             if prior.exists():
                 os.rename(prior, dest_entry)
+            try:
+                _record_publish_swap_refusal(
+                    exc,
+                    refused_path=staging_entry,
+                    aside_path=prior,
+                    swap_branch="root-dest",
+                    failing_operation="content_rename",
+                )
+            except BaseException:
+                pass
             raise
         if prior.exists():
             shutil.rmtree(prior, onerror=_rmtree_clear_readonly_onerror)
     else:
-        os.replace(staging_entry, dest_entry)
+        try:
+            os.replace(staging_entry, dest_entry)
+        except OSError as exc:
+            try:
+                _record_publish_swap_refusal(
+                    exc,
+                    refused_path=staging_entry,
+                    aside_path=None,
+                    swap_branch="root-dest",
+                    failing_operation="file_replace",
+                )
+            except BaseException:
+                pass
+            raise
 
 
 def _swap_publish_staging_into_dest_root(dest_dir: Path, staging_dir: Path) -> None:
@@ -7996,7 +8197,20 @@ def _swap_publish_staging_into_dest_root(dest_dir: Path, staging_dir: Path) -> N
             if dest_entry.name == ".git":
                 continue
             if dest_entry.is_file() and dest_entry.name not in staged_names:
-                dest_entry.unlink()
+                try:
+                    dest_entry.unlink()
+                except OSError as exc:
+                    try:
+                        _record_publish_swap_refusal(
+                            exc,
+                            refused_path=dest_entry,
+                            aside_path=None,
+                            swap_branch="root-dest",
+                            failing_operation="unlink",
+                        )
+                    except BaseException:
+                        pass
+                    raise
 
     # Every entry this loop moved is gone from `staging_dir` already
     # (`os.replace`/`os.rename` both remove the source); what remains is
@@ -8155,7 +8369,20 @@ def _swap_publish_staging_into_dest(dest_dir: Path, staging_dir: Path) -> None:
             )
 
     if dest_dir.exists():
-        os.rename(dest_dir, prior_backup)
+        try:
+            os.rename(dest_dir, prior_backup)
+        except OSError as exc:
+            try:
+                _record_publish_swap_refusal(
+                    exc,
+                    refused_path=dest_dir,
+                    aside_path=prior_backup,
+                    swap_branch="whole-tree",
+                    failing_operation="prior_backup_rename",
+                )
+            except BaseException:
+                pass
+            raise
 
     try:
         os.rename(staging_dir, dest_dir)
@@ -8171,6 +8398,16 @@ def _swap_publish_staging_into_dest(dest_dir: Path, staging_dir: Path) -> None:
         try:
             os.rename(prior_backup / ".git", dest_dir / ".git")
         except OSError as exc:
+            try:
+                _record_publish_swap_refusal(
+                    exc,
+                    refused_path=prior_backup / ".git",
+                    aside_path=prior_backup,
+                    swap_branch="whole-tree",
+                    failing_operation="git_rehome",
+                )
+            except BaseException:
+                pass
             raise PublishSwapPartial(
                 f"{dest_dir}: content swap succeeded but re-homing .git from "
                 f"{prior_backup} failed ({exc}) — repo metadata is stranded "

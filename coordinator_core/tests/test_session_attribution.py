@@ -185,6 +185,35 @@ def test_trailerless_commit_outside_known_scope_is_not_silently_safe(repo_root):
     )
 
 
+def test_multiple_trailerless_commits_are_attributed_independently_when_batched(repo_root):
+    """`detect_foreign_commits` resolves every trailerless commit's touched
+    paths in ONE batched `git log --no-walk` call. A single-commit fixture
+    would pass identically whether the batch's per-sha output were correctly
+    aligned or silently shifted by one position — this fixture interleaves
+    three trailerless commits (in-scope, out-of-scope, in-scope) so a
+    misaligned batch parse would misattribute at least one of them."""
+    sid = "sess-attr-batch-001"
+    init_sha = _init_repo(repo_root)
+    in_scope_a = _commit(
+        repo_root, "trailerless A, in scope", files={"scoped/a.txt": "a\n"},
+    )
+    out_of_scope = _commit(
+        repo_root, "trailerless B, out of scope", files={"unscoped/b.txt": "b\n"},
+    )
+    in_scope_c = _commit(
+        repo_root, "trailerless C, in scope", files={"scoped/c.txt": "c\n"},
+    )
+
+    foreign = session_attribution.detect_foreign_commits(
+        repo_root, sid, f"{init_sha}..HEAD",
+        frozenset({"scoped/a.txt", "scoped/c.txt"}),
+    )
+
+    assert in_scope_a not in foreign
+    assert in_scope_c not in foreign
+    assert out_of_scope in foreign
+
+
 # ---------------------------------------------------------------------------
 # Contiguity — range_is_contiguous_suffix
 # ---------------------------------------------------------------------------

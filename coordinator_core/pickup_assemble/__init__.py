@@ -145,7 +145,7 @@ from coordinator_core.ops.parse_completeness_item import (
 )
 from coordinator_core.reconcile.commit_reality import evaluate_commit_reality
 from coordinator_core.reconcile.policy_loader import load_policy
-from coordinator_core.session_baton.store import merge_baton
+from coordinator_core.session_baton.store import merge_baton, read_baton
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import harness_registry as _harness_registry
@@ -3915,13 +3915,27 @@ def compute_claim_grant(
     )
 
 
-def _adopt_into_baton(repo_root: Path, artifact_path: str) -> None:
+def _adopt_into_baton(
+    repo_root: Path, artifact_path: str, fm: Optional[dict] = None
+) -> None:
     """C3 (docs/plans/2026-08-18-a-session-always-has-a-baton.md § C3,
     "a pickup adopts the session baton as a fan-in edge"): record the
     artifact this pickup just claimed into THIS session's baton record's
     ``adopted_artifacts[]`` (``session_baton.store.merge_baton`` —
     dedup-extends, never replaces, so a second `brief` of the same artifact
     within the same session is a no-op here).
+
+    AC14 (C6): also NAME the baton from the artifact being adopted. A
+    pickup session's baton otherwise carries a null `title`/`intent` while
+    the operator-named handoff sits right here in `adopted_artifacts[0]` —
+    this is a DERIVATION off that already-claimed artifact, not a new
+    prompt-shape discrimination (the mint op's first-wins `first_prompt`
+    policy is untouched; it does not run on this path). Only stamps when
+    the baton doesn't already carry a title, so a later, different
+    adoption in the same session never clobbers the first one. `title`
+    comes straight off the schema-required field; `intent` is derived from
+    `session_goal` (forward-looking, unlike the retrospective `summary`)
+    when the frontmatter carries one — otherwise left unset.
 
     Called only from the `claim_at_brief` branches immediately after
     :func:`acquire_brief_claim` — i.e. only when this `brief()` is actually
@@ -3932,6 +3946,8 @@ def _adopt_into_baton(repo_root: Path, artifact_path: str) -> None:
     and `session_baton.store`'s own posture throughout: any failure to
     resolve this session's id, or to read/write the baton store, is
     swallowed here — an advisory fan-in edge must never block a pickup.
+    The naming derivation shares that posture: a malformed or
+    frontmatter-less `fm` must still let the artifact adopt.
     """
     try:
         sid = _session_core.resolve_session_id(str(repo_root))
@@ -3939,8 +3955,23 @@ def _adopt_into_baton(repo_root: Path, artifact_path: str) -> None:
         return
     if not sid:
         return
+
+    kwargs: dict[str, Any] = {"adopted_artifacts": [artifact_path]}
+    if fm:
+        try:
+            already_titled = bool(read_baton(sid, cwd=str(repo_root)).get("title"))
+        except Exception:  # noqa: BLE001 — naming is best-effort, never load-bearing
+            already_titled = True  # err toward not stamping over unknown state
+        if not already_titled:
+            title = fm.get("title")
+            if title:
+                kwargs["title"] = title
+            intent = fm.get("session_goal")
+            if intent:
+                kwargs["intent"] = intent
+
     try:
-        merge_baton(sid, cwd=str(repo_root), adopted_artifacts=[artifact_path])
+        merge_baton(sid, cwd=str(repo_root), **kwargs)
     except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
         pass
 
@@ -6906,7 +6937,20 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "same-topic judgment call, not a keyword match) and check no other "
                 "session already holds a live claim on the artifact this memo concerns "
                 "(an apparently-orphaned lock still needs a liveness check before any "
-                "takeover). If the memo's `scoped_to` looks too narrow or too broad for "
+                "takeover). **A route-to-baton fold into a target that HAS a live "
+                "holder is not complete when the commit lands.** The same claim check "
+                "that says whether you may write also says whom to tell: a live holder "
+                "is mid-work against the body you just changed, will not re-read it on "
+                "your account, and can execute the very thing your constraint binds "
+                "before ever seeing it — a write nobody is told about is a race you "
+                "chose to run. Message them: `gates.competing_claim`'s candidates carry "
+                "`send_message_address` for exactly this, resolved fresh in this brief "
+                "(never persisted or reused past this instant — see that field's own "
+                "negative-spec), so it costs one call and no lookup. Say what you wrote, "
+                "where, and what it binds; keep it to that. If the holder is NOT live, "
+                "or has no resolvable address, say so in the `decision_note` — \"no "
+                "message was owed\" is a finding the next reader needs, and is not the "
+                "same as having skipped it. If the memo's `scoped_to` looks too narrow or too broad for "
                 "the actual change, challenge it rather than accepting it as given. "
                 "Capture any commitment this creates for a sibling repo/session before "
                 "moving on, and record the item's distillation fate (ephemeral / "
@@ -8167,7 +8211,7 @@ def brief(
             took_from = acquire_brief_claim(root, "handoff", basename)
             if took_from:
                 reclaimed.append(took_from)
-            _adopt_into_baton(root, artifact["path"])
+            _adopt_into_baton(root, artifact["path"], fm)
         claim = compute_claim_gate(root, "handoff", basename)
         claim_grant = compute_claim_grant(root, "handoff", basename, artifact["path"], cwd=str(root), fm=fm)
         # Self-claim idempotence (2026-07-29): `d2` (archive-stamp-cli's
@@ -8631,7 +8675,7 @@ def brief(
         took_from = acquire_brief_claim(root, "memo", basename)
         if took_from:
             reclaimed.append(took_from)
-        _adopt_into_baton(root, artifact["path"])
+        _adopt_into_baton(root, artifact["path"], fm)
 
     # Memo/handoff parity fix (cross-repo/inbox/2026-08-17-doe-claude-em-memo-
     # claim-fires-after-the-em-can-already-act.md) — the handoff branch above

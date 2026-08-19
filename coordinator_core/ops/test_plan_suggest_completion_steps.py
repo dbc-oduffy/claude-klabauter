@@ -19,6 +19,7 @@ from coordinator_core.ops.plan_suggest_completion_steps import (
     _EXECUTION_AUTHORIZATION_ELEMENT,
     _REVIEW_TRAIL_ELEMENT,
     _plan_suggest_completion_steps,
+    _plan_touching_shas_batch,
     suggest_completion_steps,
 )
 
@@ -173,6 +174,39 @@ def test_sidecar_file_excluded(tmp_path):
     path = _write_plan(tmp_path, "a.review.md", "executing")
     _commit_plan(tmp_path, path, "add sidecar")
     assert suggest_completion_steps(tmp_path) == []
+
+
+def test_plan_touching_shas_batch_attributes_commits_to_the_right_path(tmp_path):
+    """Multi-item coverage for the batched `git log -- pathA pathB ...`
+    replacement of the former per-path `_plan_touching_shas` loop (W8/C8
+    amplification disposition) — a single-item call would pass identically
+    whether or not cross-path attribution worked; this pins that a commit
+    touching plan A's file is never attributed to plan B's, and vice versa,
+    including a commit that touches BOTH in one go."""
+    _init_repo(tmp_path)
+    path_a = _write_plan(tmp_path, "a.md", "executing")
+    sha_a = _commit_plan(tmp_path, path_a, "add a")
+    path_b = _write_plan(tmp_path, "b.md", "executing")
+    sha_b = _commit_plan(tmp_path, path_b, "add b")
+
+    # A third commit touches BOTH a.md and b.md at once.
+    path_a.write_text(path_a.read_text(encoding="utf-8") + "more\n", encoding="utf-8")
+    path_b.write_text(path_b.read_text(encoding="utf-8") + "more\n", encoding="utf-8")
+    _run_git(tmp_path, "add", "docs/plans/a.md", "docs/plans/b.md")
+    _run_git(tmp_path, "commit", "-q", "-m", "touch both")
+    sha_both = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    result = _plan_touching_shas_batch(tmp_path, ["docs/plans/a.md", "docs/plans/b.md"])
+
+    assert result["docs/plans/a.md"] == frozenset({sha_a, sha_both})
+    assert result["docs/plans/b.md"] == frozenset({sha_b, sha_both})
+
+
+def test_plan_touching_shas_batch_empty_paths_returns_empty_dict(tmp_path):
+    _init_repo(tmp_path)
+    assert _plan_touching_shas_batch(tmp_path, []) == {}
 
 
 def test_op_registered_under_contractual_key():

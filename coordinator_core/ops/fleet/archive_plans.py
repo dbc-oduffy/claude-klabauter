@@ -592,6 +592,61 @@ async def _plan_worktree_dirty(worktree_root: Path, rel_path: str) -> bool:
     return bool(stdout.strip())
 
 
+async def _plan_worktree_dirty_batch(worktree_root: Path, rel_paths: List[str]) -> Set[str]:
+    """Batched sibling of `_plan_worktree_dirty`: ONE `git status --porcelain`
+    call covering every path in `rel_paths`, returning the subset that came
+    back dirty (amplification burn-down, 2026-08-19 C12).
+
+    `git status --porcelain -- <path1> <path2> ...` accepts an arbitrary
+    pathspec list in a single invocation and reports one line per dirty path
+    — unlike `git rm`'s all-or-nothing refusal on ANY divergent path, a
+    clean path here simply produces no output line, so per-path granularity
+    survives batching intact (no isolation contract is broken the way
+    archive_and_commit's per-move git-mv sequence or rm_and_commit's `git rm`
+    would be — see this chunk's sidecar for why those stayed per-item).
+    Same best-effort degrade-to-"not dirty" contract as the single-path form:
+    a subprocess failure returns an empty set rather than raising.
+    """
+    if not rel_paths:
+        return set()
+
+    import asyncio
+
+    env = _make_git_env()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "status", "--porcelain", "--", *rel_paths,
+            cwd=str(worktree_root),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+    except OSError as exc:
+        _LOG.debug(
+            "archive_plans: batched git status subprocess failed (%s) — "
+            "treating all %d path(s) as not-dirty (best-effort)",
+            exc, len(rel_paths),
+        )
+        return set()
+    if proc.returncode != 0:
+        return set()
+
+    dirty: Set[str] = set()
+    known = set(rel_paths)
+    for line in stdout.decode(errors="replace").splitlines():
+        if len(line) < 4:
+            continue
+        candidate = line[3:]
+        if " -> " in candidate:
+            # Rename porcelain form ("old -> new") — the new path is what a
+            # caller queries against.
+            candidate = candidate.split(" -> ", 1)[1]
+        if candidate in known:
+            dirty.add(candidate)
+    return dirty
+
+
 async def _plan_claim_live(common_dir: Path, plan_path: Path) -> bool:
     """Return True iff plan_path's plan-execution claim is held by a live
     session, OR the liveness check itself could not be evaluated.
@@ -701,7 +756,18 @@ async def _handle_preview(
     live_ref_incomplete = live_ref_incomplete or live_ref_ids_incomplete
     candidates: List[dict] = []
 
-    for path in sorted(plans_dir.glob("*.md")):
+    plan_paths = sorted(plans_dir.glob("*.md"))
+    # Batched dirty-tree pre-check (amplification burn-down, C12): one
+    # `git status --porcelain` call covering every non-sidecar *.md path,
+    # rather than one per candidate inside the loop below. Includes paths
+    # that will still be filtered out by an earlier guard (live-reference,
+    # cannot-derive-date) — harmless over-querying, still a single spawn.
+    dirty_rel_paths = await _plan_worktree_dirty_batch(
+        worktree_root,
+        [rel_id(p, worktree_root) for p in plan_paths if not _is_sidecar(p)],
+    )
+
+    for path in plan_paths:
         if _is_sidecar(path):
             continue  # sidecars are not candidates
 
@@ -746,8 +812,9 @@ async def _handle_preview(
         rel_path = rel_id(path, worktree_root)
 
         # Dirty-tree guard (T1 filter): exclude from preview entirely — see
-        # module docstring "Dirty-tree skip guard".
-        if await _plan_worktree_dirty(worktree_root, rel_path):
+        # module docstring "Dirty-tree skip guard". Looked up from the
+        # batched pre-check above, not a per-candidate spawn.
+        if rel_path in dirty_rel_paths:
             _LOG.debug(
                 "archive_plans: T1 skip dirty-tree plan %s", path.name
             )
@@ -830,6 +897,14 @@ async def _handle_act(
     # Resolve the allowed root once outside the loop (CRITICAL path-traversal fix).
     plans_dir_safe = (worktree_root / "docs" / "plans").resolve()
 
+    # Batched dirty-tree pre-check (amplification burn-down, C12): one
+    # `git status --porcelain` call covering every candidate_id's rel path,
+    # rather than one per candidate inside the loop below. Candidate ids are
+    # relative paths already (contract shape), used directly — the loop's
+    # own path-traversal/existence guards below still gate whether a given
+    # candidate is ever looked up in this set.
+    dirty_rel_paths = await _plan_worktree_dirty_batch(worktree_root, list(candidate_ids))
+
     for cid in candidate_ids:
         plan_path = worktree_root / cid
 
@@ -878,8 +953,9 @@ async def _handle_act(
         rel_for_status = rel_id(plan_path, worktree_root)
 
         # Dirty-tree guard at T3 (applied at both T1 and T3) — see module
-        # docstring "Dirty-tree skip guard".
-        if await _plan_worktree_dirty(worktree_root, rel_for_status):
+        # docstring "Dirty-tree skip guard". Looked up from the batched
+        # pre-check above, not a per-candidate spawn.
+        if rel_for_status in dirty_rel_paths:
             skipped.append({
                 "id": cid,
                 "reason": "dirty-tree: uncommitted working-tree changes",

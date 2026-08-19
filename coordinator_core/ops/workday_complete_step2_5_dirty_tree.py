@@ -675,7 +675,6 @@ def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Acc
 
     gi_file = os.path.join(repo_root, ".gitignore")
     patterns_committed: List[str] = []
-    gi_committed_paths: List[str] = []
 
     for path, pattern in zip(acc.gitignore_paths, acc.gitignore_patterns):
         if not _pattern_in_gitignore(pattern, gi_file):
@@ -685,16 +684,30 @@ def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Acc
         if pattern not in patterns_committed:
             patterns_committed.append(pattern)
 
-        tracked_res = _run_git(["ls-files", "--error-unmatch", "--", path], cwd=repo_root)
-        if tracked_res.returncode == 0:
-            if dry_run:
-                print(f"[{_PROG}] DRY-RUN: would git rm --cached -- {path}", file=sys.stderr)
-            else:
-                rm_res = _run_git(["rm", "--cached", "--", path], cwd=repo_root)
-                if rm_res.returncode != 0:
-                    print(f"[{_PROG}] ERROR: git rm --cached failed for {path}", file=sys.stderr)
-                    return 1
-            gi_committed_paths.append(path)
+    # Batched replacement for what used to be a per-path
+    # `git ls-files --error-unmatch` + `git rm --cached` pair (up to 2*N
+    # spawns): ONE `git ls-files -- <paths>` call to determine which of the
+    # candidate paths are tracked (plain `git ls-files` with a pathspec
+    # lists exactly the tracked paths among its arguments -- an untracked
+    # pathspec is silently omitted from stdout rather than erroring, unlike
+    # `--error-unmatch`, so set-membership on stdout is the equivalent
+    # per-path tracked test), then ONE `git rm --cached` over the whole
+    # tracked set. Same two-phase shape `_act_commit`'s `commit_add_paths`
+    # leg (below) and `_diff_name_only`/`_ls_files_stage` (L459/L476, same
+    # file) already use for a pathspec-list git call.
+    tracked_res = _run_git(["ls-files", "--", *acc.gitignore_paths], cwd=repo_root)
+    tracked = set(tracked_res.stdout.splitlines()) if tracked_res.returncode == 0 else set()
+    gi_committed_paths = [p for p in acc.gitignore_paths if p in tracked]
+
+    if gi_committed_paths:
+        if dry_run:
+            for p in gi_committed_paths:
+                print(f"[{_PROG}] DRY-RUN: would git rm --cached -- {p}", file=sys.stderr)
+        else:
+            rm_res = _run_git(["rm", "--cached", "--", *gi_committed_paths], cwd=repo_root)
+            if rm_res.returncode != 0:
+                print(f"[{_PROG}] ERROR: git rm --cached failed for {len(gi_committed_paths)} path(s)", file=sys.stderr)
+                return 1
 
     pattern_list = ", ".join(patterns_committed)
 

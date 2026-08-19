@@ -155,17 +155,28 @@ def _run_git_log(repo_root: Path, args: list[str]) -> tuple[Optional[list[str]],
     return (stripped.splitlines() if stripped else []), ""
 
 
-def _touches_artifact(repo_root: Path, commit: str, artifact_path: str) -> tuple[Optional[bool], str]:
-    """Returns `(touches, stderr_detail)`. On success `stderr_detail` is
-    empty; on failure `touches` is None and `stderr_detail` carries the
-    failed command's stderr for the caller's `SinceRange.detail`."""
+def _commits_touching_path(repo_root: Path, range_args: list[str], artifact_path: str) -> tuple[Optional[set[str]], str]:
+    """Batched replacement for what used to be a per-commit `git diff-tree`
+    loop (one spawn per commit in the since-range): ONE `git log` call,
+    scoped to the SAME range portion of *range_args* (the `<since>..HEAD` /
+    `--since=<T>` token(s) preceding the caller's own `--` pathspec) but
+    re-pathspec'd to *artifact_path* alone, returns the SET of commit SHAs
+    in that range that touch *artifact_path* at all. Equivalent to running
+    `git diff-tree --no-commit-id --name-only -r --root <commit> --
+    <artifact_path>` once per commit and collecting the non-empty results —
+    `git log`'s own history-simplification against a pathspec already
+    matches `git diff-tree --root`'s per-commit touch test (both walk the
+    same commit's tree diff against its parent, or the empty tree for a
+    root commit), so this is a set-membership question answered in one
+    call rather than N.
+
+    Returns `(shas, stderr_detail)` with the same failure contract as
+    `_run_git_log`: `None` on failure, `stderr_detail` carrying the failed
+    command's stderr."""
+    range_only = range_args[: range_args.index("--")] if "--" in range_args else list(range_args)
     try:
         result = subprocess.run(
-            # --root: without it, a parentless (root) commit diffs against
-            # nothing rather than the empty tree, so a root commit that
-            # touches artifact_path would silently read as not-touching it
-            # and escape this exclusion filter — Review: coordinator:code-reviewer
-            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", commit, "--", artifact_path],
+            ["git", "log", "--format=%H", *range_only, "--", artifact_path],
             capture_output=True,
             text=True,
             cwd=str(repo_root),
@@ -173,13 +184,14 @@ def _touches_artifact(repo_root: Path, commit: str, artifact_path: str) -> tuple
         )
     except OSError:
         detail = str(sys.exc_info()[1])
-        print(f"skip: _touches_artifact: subprocess.run failed: {detail}", file=sys.stderr)
+        print(f"skip: _commits_touching_path: subprocess.run failed: {detail}", file=sys.stderr)
         return None, detail
     if result.returncode != 0:
         detail = result.stderr.strip()
-        print(f"skip: _touches_artifact: git diff-tree failed for {commit!r}: {detail}", file=sys.stderr)
+        print(f"skip: _commits_touching_path: git log failed: {detail}", file=sys.stderr)
         return None, detail
-    return bool(result.stdout.strip()), ""
+    stripped = result.stdout.strip()
+    return (set(stripped.splitlines()) if stripped else set()), ""
 
 
 def commits_touching_since(
@@ -232,21 +244,17 @@ def commits_touching_since(
         return SinceRange(commits=(), indeterminate=True, detail=detail)
 
     if artifact_path:
-        filtered: list[str] = []
-        for commit in commits:
-            touches, touch_error = _touches_artifact(repo_root, commit, artifact_path)
-            if touches is None:
-                detail = f"git diff-tree query failed for commit {commit!r}"
-                if touch_error:
-                    detail = f"{detail}: {touch_error}"
-                return SinceRange(
-                    commits=(),
-                    indeterminate=True,
-                    detail=detail,
-                )
-            if not touches:
-                filtered.append(commit)
-        commits = filtered
+        touching, touch_error = _commits_touching_path(repo_root, range_args, artifact_path)
+        if touching is None:
+            detail = "git log query for artifact_path touches failed"
+            if touch_error:
+                detail = f"{detail}: {touch_error}"
+            return SinceRange(
+                commits=(),
+                indeterminate=True,
+                detail=detail,
+            )
+        commits = [commit for commit in commits if commit not in touching]
 
     return SinceRange(commits=tuple(commits), indeterminate=False, detail="")
 

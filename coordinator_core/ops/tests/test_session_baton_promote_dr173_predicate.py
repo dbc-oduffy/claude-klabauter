@@ -86,6 +86,48 @@ class TestDr173RatifiedOutcomeIsPreserved:
         assert "pickup_ready: true" in content
         assert "blocking_notes:" not in content
 
+    def test_predicate_and_gate_note_together_keep_both_reasons(self, tmp_path):
+        """Review (code-reviewer slice C): `gate_note or gated_predicate`
+        silently dropped DR-173's ratified reason text when both were
+        supplied, leaving the baton parked with no record of what parked it.
+        They are two different things — the mechanical condition, and an
+        unrelated advisory constraint — so both survive."""
+        content = _scaffold(
+            tmp_path,
+            "--gated-predicate", "category is an unfilled placeholder",
+            "--gate-note", "needs a GPU box",
+        )
+
+        assert "category is an unfilled placeholder" in content
+        assert "needs a GPU box" in content
+        assert "deployment_state: awaiting_gate" in content
+        assert "pickup_ready: false" in content
+
+    def test_gated_open_and_gate_note_together(self, tmp_path):
+        """C3's body requires this combination be legal and tested: a blocked
+        baton that also carries an advisory note. It had no test anywhere
+        (review: code-reviewer slice C)."""
+        content = _scaffold(
+            tmp_path,
+            "--gated-open", "stb-real-blocker-000001",
+            "--gate-note", "needs a macOS box",
+        )
+
+        assert "deployment_state: awaiting_gate" in content
+        assert "pickup_ready: false" in content
+        assert "stb-real-blocker-000001" in content
+        assert "needs a macOS box" in content
+
+    def test_gate_note_alone_never_parks_the_baton(self, tmp_path):
+        """AC4 at the CLI surface, restated here because it is the assertion
+        the whole ruling rests on: prose does not gate."""
+        content = _scaffold(tmp_path, "--gate-note", "needs a GPU box")
+
+        assert "deployment_state: ready_to_fire" in content
+        assert "pickup_ready: true" in content
+        assert "needs a GPU box" in content
+        assert "blocked_by:" not in content
+
     def test_blank_predicate_is_refused_fail_loud(self, tmp_path):
         out = tmp_path / "hnd-blank.md"
         proc = subprocess.run(

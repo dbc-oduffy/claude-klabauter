@@ -40,6 +40,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards.dispatch_checks import (
+    check_destructive_git_clean,
     check_destructive_git_orphan,
     check_destructive_git_revert,
     check_destructive_git_revert_advisory,
@@ -276,3 +277,62 @@ class TestOrphanCurrentBranchMemoization:
     ) -> None:
         repo, _sha_a = repo_with_droppable_commit
         assert check_destructive_git_orphan("git -C %s reset --hard HEAD" % repo) is None
+
+
+@pytest.fixture()
+def repo_with_untracked_non_loadbearing_file(tmp_path: Path) -> Path:
+    """Untracked file OUTSIDE any load-bearing prefix -- the oracle's
+    ``out.strip()`` is non-empty (so both segments of a chained command
+    actually reach the oracle call, a genuine double-spawn would be
+    visible) but ``loadbearing`` stays empty, so the check does not
+    return early on the first segment."""
+    repo = tmp_path / "clean-oracle-tree"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-qm", "baseline")
+    (repo / "scratch.tmp").write_text("junk\n", encoding="utf-8")
+    return repo
+
+
+class TestGitCleanOracleMemoizedAcrossSegments:
+    """W5/C5 (2026-08-19): ``check_destructive_git_clean``'s ``git clean
+    -nd`` oracle must resolve ONCE per distinct (args, cwd) pair, no matter
+    how many segments of a chained command repeat the exact same ``git
+    clean`` invocation."""
+
+    def test_clean_oracle_resolved_once_across_chained_identical_segments(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_with_untracked_non_loadbearing_file: Path,
+    ) -> None:
+        count = _counting_run_git(monkeypatch, ["-c", "color.ui=never"])
+        repo = repo_with_untracked_non_loadbearing_file
+        cmd = "git -C %s clean -fd && git -C %s clean -fd" % (repo, repo)
+        check_destructive_git_clean(cmd)
+        assert count[0] == 1, (
+            "chained 'git clean -nd && git clean -nd' against ONE working "
+            "tree spawned %d clean-oracle calls; expected exactly 1 -- the "
+            "fact is loop-invariant for identical argv+cwd and must "
+            "resolve once." % count[0]
+        )
+
+    def test_clean_oracle_still_scoped_per_distinct_args(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_with_untracked_non_loadbearing_file: Path,
+        clean_repo: Path,
+    ) -> None:
+        """The memo is keyed on the full args tuple, not hoisted
+        unconditionally -- two segments naming DIFFERENT repos must each
+        still get their own, real oracle call."""
+        count = _counting_run_git(monkeypatch, ["-c", "color.ui=never"])
+        cmd = "git -C %s clean -fd && git -C %s clean -fd" % (
+            repo_with_untracked_non_loadbearing_file,
+            clean_repo,
+        )
+        check_destructive_git_clean(cmd)
+        assert count[0] == 2

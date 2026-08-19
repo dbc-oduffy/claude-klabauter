@@ -34,7 +34,10 @@ Consumes (orchestrates, reimplements none):
     coordinator/bin/review-brightline-gate.py
         -> d-run-review-brightline-gate's directives[].cli (mid-chain).
     coordinator/bin/wsc-coverage-gate-runner.py (write-trail)
-        -> d-write-review-trail's directives[].cli.
+        -> d-write-review-trail's directives[].cli. `write-trail` and
+        `claim-plan` are all that runner still exposes; its
+        `brightline-gate` and `coverage-gate --from-handoff` subcommands
+        were removed 2026-08-19 (state/kill-ledger.md K-007).
     coordinator/bin/freeze-review-diff.py
         -> d-freeze-and-dispatch-review-partition's per-slice
         directives[].cli.
@@ -124,7 +127,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import AbstractSet, Any, Callable, Iterable, Mapping, NamedTuple, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core import chain_attribution
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
@@ -1336,9 +1339,7 @@ def _record_membership_shas(
     """Resolve one trail record's contribution to the chain-membership
     union, or `None` if this record contributes nothing.
 
-    Two different sets answer two different questions (see this module's
-    "membership-vs-coverage split" note above `chain_partition_verdict_
-    discharged`):
+    Two different sets answer two different questions:
 
     - MEMBERSHIP — is this record about THIS chain at all? — tests the
       record's raw resolved range against `chain_dag_sha_set`, the chain's

@@ -295,6 +295,34 @@ def test_sweep_scratch_no_warning_on_genuinely_clean_tree(tmp_path, capsys):
     assert "WARNING" not in capsys.readouterr().err
 
 
+def test_sweep_scratch_apply_batches_multiple_auto_prune_dirs(tmp_path):
+    """Regression for the batched `_delete_paths_batch` rewrite (W6/C6,
+    2026-08-19 amplification burn-down): TWO sibling auto-prune-named
+    directories must both be reported pruned and both actually removed from
+    disk in a single apply run -- a single-item fixture would pass
+    identically whether the deletion were batched or per-item, which is
+    exactly the gap that shipped a wrong batched `_own_frozen_diff_shas`
+    elsewhere in this codebase (see amp-cfinal-exemption-ledger-draft.md)."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+
+    first = repo_root / "tmp-cc"
+    second = repo_root / "fake"
+    first.mkdir()
+    second.mkdir()
+    _age_path(first, 2 * 86400)
+    _age_path(second, 2 * 86400)
+
+    total_bytes, total_items = cruft_sweep.sweep_scratch(
+        repo_root, 1, apply=True, json_mode=False, quiet=True,
+    )
+
+    assert total_items == 2
+    assert not first.exists()
+    assert not second.exists()
+
+
 # ---------------------------------------------------------------------------
 # sweep_empty_toplevel_dirs — net-new Phase E (no bash-oracle counterpart).
 # Regression coverage for the 2026-07-22..2026-07-28 incident: three

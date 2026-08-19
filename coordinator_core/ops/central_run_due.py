@@ -27,6 +27,9 @@ gone — this module re-derives the DoE coordinator content root via `_resolve_d
 unconditional flat-layout fallback the oracle used) for the one remaining subprocess
 boundary (`extract-lessons.py`, already-Python, invoked via `sys.executable` — a
 subprocess-boundary reuse, not a bash bridge, out of C11's bash-retirement scope).
+That extractor has since moved into THIS engine tree, so `_resolve_extract_script()`
+falls back from the DoE candidate to `<engine root>/coordinator/bin/extract-lessons.py`
+— without it the DoE-only lookup misses on every run and the nudge silently skips.
 
 Bash bridges retired (C11, 2026-07-21): `coordinator_state_root_central` (shared
 helper in `coordinator_core.state_root`, since centralized out of this module's own
@@ -130,6 +133,32 @@ def _resolve_doe_content_root(claude_home: str) -> str:
         return candidate
 
     return os.path.join(claude_home, "plugins", "coordinator-claude", "coordinator")
+
+
+def _resolve_extract_script(doe_content_root: str) -> str:
+    """Resolve `extract-lessons.py`, the one remaining subprocess-boundary sibling.
+
+    The bash oracle anchored it to its own DoE-resident location, and the port kept
+    that anchor via `_resolve_doe_content_root()`. But the extractor itself now ships
+    in THIS engine tree (`coordinator/bin/extract-lessons.py`) and no longer exists
+    DoE-side, so a DoE-only lookup missed it on every run and the volume nudge skipped
+    silently with "extractor missing".
+
+    Order: the DoE content root first (an explicit `COORDINATOR_ROOT`/pointer-resolved
+    install that still carries its own copy keeps winning, and the port's env-override
+    seam stays honoured), then this engine tree. Returns the DoE candidate unchanged
+    when neither exists, so the caller's skip line still names a concrete path.
+    """
+    doe_candidate = os.path.join(doe_content_root, "bin", "extract-lessons.py")
+    if os.path.isfile(doe_candidate):
+        return doe_candidate
+
+    engine_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    engine_candidate = os.path.join(engine_root, "coordinator", "bin", "extract-lessons.py")
+    if os.path.isfile(engine_candidate):
+        return engine_candidate
+
+    return doe_candidate
 
 
 def _resolve_threshold(argv: List[str], config_path: str) -> Optional[int]:
@@ -236,7 +265,7 @@ def main(argv: List[str]) -> int:
     config_path = os.path.join(
         _coordinator_state_root_central(), "learn-lessons-config.md"
     )
-    extract_script = os.path.join(doe_content_root, "bin", "extract-lessons.py")
+    extract_script = _resolve_extract_script(doe_content_root)
 
     threshold = _resolve_threshold(argv, config_path)
     if threshold is None:

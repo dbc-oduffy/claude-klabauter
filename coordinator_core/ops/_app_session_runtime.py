@@ -42,7 +42,41 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from coordinator.bin.lib.win_argv import win_safe_shlex_split
+try:
+    from coordinator.bin.lib.win_argv import win_safe_shlex_split
+except ImportError:  # pragma: no cover — sys.path bootstrap fallback
+    import sys as _sys
+
+    # The bootstrap lives HERE, not in `app_session`, because `app_session`
+    # imports THIS module at its own module scope — an unguarded top-level
+    # `from coordinator.bin.lib...` here poisons `app_session`'s eager
+    # registration before its own guarded import is ever reached, and the
+    # namespace package `coordinator/` is only importable while the claude-klabauter
+    # root happens to be on `sys.path` (callers such as `cc_invoke` insert
+    # it and pop it again around their own imports).
+    #
+    # C10 (staff-eng review finding 8): this block runs once, at module
+    # import time — Python's import lock guarantees no concurrent second
+    # run of this exact block in one process, so no refcounting is needed
+    # here (contrast doctor.py's `_sys_path_push`/`_sys_path_pop`, which
+    # guards a function called repeatedly and concurrently). Pop the entry
+    # again once this module's own bootstrap import has resolved, leaving
+    # `sys.path` exactly as this module found it — a permanently widened
+    # `sys.path` lets a LATER, unrelated import elsewhere in a warm,
+    # long-lived process silently resolve against a directory it never
+    # asked for.
+    _lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
+    _lib_dir_already_present = _lib_dir in _sys.path
+    if not _lib_dir_already_present:
+        _sys.path.insert(0, _lib_dir)
+    try:
+        from win_argv import win_safe_shlex_split  # type: ignore
+    finally:
+        if not _lib_dir_already_present:
+            try:
+                _sys.path.remove(_lib_dir)
+            except ValueError:
+                pass  # already absent — nothing to restore
 
 
 @dataclass

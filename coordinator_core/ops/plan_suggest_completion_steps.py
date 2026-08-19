@@ -142,7 +142,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Sequence, Set
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
@@ -249,6 +249,60 @@ def _plan_touching_shas(repo_root: Path, rel_path: str) -> FrozenSet[str]:
     if rc != 0:
         return frozenset()
     return frozenset(line.strip() for line in out.splitlines() if line.strip())
+
+
+#: A `%H` line from `git log --format=%H --name-only ...` — always exactly
+#: 40 lowercase hex characters. Mirrors
+#: coordinator_core.ops.review_coverage_core._FULL_SHA_RE (same
+#: line-shape disambiguation against the file-path lines interleaved in the
+#: same combined-log output).
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _plan_touching_shas_batch(
+    repo_root: Path, rel_paths: Sequence[str]
+) -> Dict[str, FrozenSet[str]]:
+    """Batched counterpart of `_plan_touching_shas`: resolves every candidate
+    plan's touching-commit set in ONE `git log --format=%H --name-only --
+    <rel_paths...>` spawn instead of one `git log -- <rel_path>` spawn per
+    plan (W8/C8 amplification disposition — this was this op's own per-item
+    site: `suggest_completion_steps`'s `candidate_shas` dict comprehension).
+
+    `git log -- pathA pathB ...` is OR-pathspec semantics: it returns every
+    commit that touched AT LEAST ONE of the named paths, together with (via
+    `--name-only`) the FULL list of files that commit touched — not
+    pre-filtered to the candidate set. Attribution back to each candidate
+    path is done here by keying each commit's changed-file lines against
+    `rel_paths`, mirroring
+    `coordinator_core.ops.review_coverage_core.build_segments`'s identical
+    SHA/file-line split over the same combined `git log` shape.
+
+    Every `rel_paths` entry is present in the returned dict (empty
+    frozenset if it never appears), and empty on any git failure — fail-
+    closed, matches `_plan_touching_shas`'s own per-path contract (no
+    manufactured match from an unreadable git state).
+    """
+    result: Dict[str, FrozenSet[str]] = {rel_path: frozenset() for rel_path in rel_paths}
+    if not rel_paths:
+        return result
+
+    rc, out, _err = _git(["git", "log", "--format=%H", "--name-only", "--", *rel_paths], repo_root)
+    if rc != 0:
+        return result
+
+    path_set = set(rel_paths)
+    buckets: Dict[str, Set[str]] = {rel_path: set() for rel_path in rel_paths}
+    current_sha: Optional[str] = None
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _FULL_SHA_RE.match(line):
+            current_sha = line
+            continue
+        if current_sha is not None and line in path_set:
+            buckets[line].add(current_sha)
+    return {rel_path: frozenset(shas) for rel_path, shas in buckets.items()}
 
 
 def _resolve_range_shas(repo_root: Path, sha_range: str) -> FrozenSet[str]:
@@ -387,9 +441,7 @@ def suggest_completion_steps(repo_root: Path) -> List[Dict[str, object]]:
     if not unauthorized:
         return []
 
-    candidate_shas = {
-        rel_path: _plan_touching_shas(repo_root, rel_path) for rel_path in unauthorized
-    }
+    candidate_shas = _plan_touching_shas_batch(repo_root, sorted(unauthorized))
     covered = _plans_with_review_trail_coverage(repo_root, candidate_shas)
 
     results: List[Dict[str, object]] = []

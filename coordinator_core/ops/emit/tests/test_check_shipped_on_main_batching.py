@@ -167,6 +167,63 @@ def test_sha_absent_from_classified_map_degrades_to_not_on_main(repo_with_origin
     assert "ON_MAIN" not in out.replace("NOT_ON_MAIN", "")
 
 
+def test_main_resolves_all_refs_in_one_cat_file_batch_check_call(repo_with_origin, monkeypatch, capsys):
+    """Many refs -> ONE `git cat-file --batch-check` call, not one `git rev-parse` per ref
+    (amp-wave4 C11: `main -> resolve_ref`)."""
+    calls: list[list[str]] = []
+    real_run = envelope.subprocess.run
+
+    def _counting_run(argv, *args, **kwargs):
+        if len(argv) >= 3 and argv[1] == "-C" and any(
+            a == "--batch-check=%(objectname) %(objecttype)" for a in argv
+        ):
+            calls.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(envelope.subprocess, "run", _counting_run)
+
+    rc = main([
+        "--verbose",
+        repo_with_origin["on_main"],
+        repo_with_origin["off_main"],
+        repo_with_origin["off_main_2"],
+    ])
+
+    assert rc == 1
+    assert len(calls) == 1, f"expected exactly one batch-check call, got {len(calls)}: {calls}"
+
+
+def test_resolve_refs_batch_maps_each_ref_to_its_sha_preserving_failures():
+    """`_resolve_refs_batch` on >=2 refs, including one unresolvable, keeps per-ref
+    correspondence rather than losing the failed entry's position."""
+    repo_root = Path(".")
+    refs = ["HEAD", "not-a-real-ref-xyz"]
+    result = envelope._resolve_refs_batch(repo_root, refs)
+    assert set(result) == set(refs)
+    assert result["HEAD"] is not None and len(result["HEAD"]) == 40
+    assert result["not-a-real-ref-xyz"] is None
+
+
+def test_commit_age_labels_batch_covers_multiple_shas_in_one_call(repo_with_origin, monkeypatch):
+    """`_commit_age_labels_batch` resolves >=2 shas' ages via ONE `git show` call."""
+    calls: list[list[str]] = []
+    real_run = envelope.subprocess.run
+
+    def _counting_run(argv, *args, **kwargs):
+        if len(argv) >= 3 and argv[1] == "-C" and "show" in argv:
+            calls.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(envelope.subprocess, "run", _counting_run)
+
+    shas = [repo_with_origin["off_main"], repo_with_origin["off_main_2"]]
+    labels = envelope._commit_age_labels_batch(Path(repo_with_origin["work"]), shas)
+
+    assert len(calls) == 1, f"expected exactly one git show call, got {len(calls)}: {calls}"
+    assert set(labels) == set(shas)
+    assert all(label.endswith(" ago") for label in labels.values())
+
+
 def test_unresolvable_ref_never_reaches_classify_call(repo_with_origin, monkeypatch, capsys):
     """A ref that fails to resolve must be excluded from the batched sha set entirely, not
     passed through as None/'' and misclassified."""

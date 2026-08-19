@@ -1318,6 +1318,7 @@ def sweep_scratch(
         # --- end Tier 2 ---
 
     pruned_parents: List[str] = []
+    scratch_candidates: List[Tuple[Path, str, int, int, int, int]] = []  # dir, name, mtime, age_sec, size_bytes, effective_threshold
     wd = _Watchdog(watchdog_ceiling_secs)
     wd_cnt = 0
 
@@ -1401,25 +1402,43 @@ def sweep_scratch(
 
             size_bytes = _dir_size_bytes(dir_path)
 
-            if apply:
-                if not _delete_path(dir_path):
-                    _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {dir_str}", quiet=quiet)
-                    if json_mode:
-                        emit_jsonl("scratch", dir_str, dir_name, size_bytes, mtime,
-                                   "prune-failed",
-                                   f"name in auto-prune list; mtime {age_sec}s > effective_threshold {effective_threshold}s; delete did not confirm removal",
-                                   emit_fn=emit_fn)
-                    continue
-
-            total_bytes += size_bytes
-            pruned_items += 1
+            # Deletion deferred into one batched call below (see
+            # `_delete_paths_batch` at the sibling harness/uuid/fh sweeps in
+            # this file — W6/C6, 2026-08-19 amplification burn-down) instead
+            # of one `rm -rf` spawn per candidate here. `pruned_parents` is
+            # still appended at IDENTIFICATION time so the nested-child skip
+            # above (`_is_pruned_child`) keeps working during this single
+            # scan pass. BEHAVIOUR CHANGE from the sibling sites: unlike a
+            # flat UUID/fh directory set, scratch dirs can nest, so a
+            # deferred delete that later fails no longer un-skips its
+            # already-skipped nested children within this run — an
+            # accepted, narrow edge case (the failed parent is retried next
+            # run and its children are re-discovered then).
+            scratch_candidates.append((dir_path, dir_name, mtime, age_sec, size_bytes, effective_threshold))
             pruned_parents.append(dir_str)
 
-            if json_mode:
-                emit_jsonl("scratch", dir_str, dir_name, size_bytes, mtime,
-                           "auto-prune",
-                           f"name in auto-prune list; mtime {age_sec}s > effective_threshold {effective_threshold}s",
-                           emit_fn=emit_fn)
+    scratch_delete_results = _delete_paths_batch([c[0] for c in scratch_candidates]) if apply else {}
+
+    for cand_path, cand_name, cand_mtime, cand_age_sec, cand_size_bytes, cand_threshold in scratch_candidates:
+        cand_str = str(cand_path)
+        if apply:
+            if not scratch_delete_results.get(cand_str, False):
+                _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {cand_str}", quiet=quiet)
+                if json_mode:
+                    emit_jsonl("scratch", cand_str, cand_name, cand_size_bytes, cand_mtime,
+                               "prune-failed",
+                               f"name in auto-prune list; mtime {cand_age_sec}s > effective_threshold {cand_threshold}s; delete did not confirm removal",
+                               emit_fn=emit_fn)
+                continue
+
+        total_bytes += cand_size_bytes
+        pruned_items += 1
+
+        if json_mode:
+            emit_jsonl("scratch", cand_str, cand_name, cand_size_bytes, cand_mtime,
+                       "auto-prune",
+                       f"name in auto-prune list; mtime {cand_age_sec}s > effective_threshold {cand_threshold}s",
+                       emit_fn=emit_fn)
 
     total_mb = total_bytes // 1048576
     if not json_mode and not quiet:

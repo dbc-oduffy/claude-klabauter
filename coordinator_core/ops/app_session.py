@@ -109,35 +109,10 @@ from coordinator_core.resolve_validation_cmd import (
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-try:
-    from coordinator.bin.lib.win_argv import win_safe_shlex_split
-except ImportError:  # pragma: no cover — sys.path bootstrap fallback
-    import sys as _sys
-
-    # C10 (staff-eng review finding 8): this block runs once, at module
-    # import time — Python's import lock guarantees no concurrent second
-    # run of this exact block in one process, so no refcounting is needed
-    # here (contrast doctor.py's `_sys_path_push`/`_sys_path_pop`, which
-    # guards a function called repeatedly and concurrently). The prior
-    # shape inserted `_lib_dir` and never removed it, permanently widening
-    # `sys.path` for the rest of the process's lifetime — under warm,
-    # long-lived dispatch a LATER, unrelated import elsewhere in the
-    # process could then silently resolve against this directory it never
-    # asked for. Fixed additively: pop the entry again once this module's
-    # own bootstrap import has resolved, leaving `sys.path` exactly as this
-    # module found it.
-    _lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
-    _lib_dir_already_present = _lib_dir in _sys.path
-    if not _lib_dir_already_present:
-        _sys.path.insert(0, _lib_dir)
-    try:
-        from win_argv import win_safe_shlex_split  # type: ignore
-    finally:
-        if not _lib_dir_already_present:
-            try:
-                _sys.path.remove(_lib_dir)
-            except ValueError:
-                pass  # already absent — nothing to restore
+# Re-exported from `_app_session_runtime` (imported above), which owns the
+# single guarded bootstrap for this cross-repo symbol — duplicating the
+# try/except here would leave TWO bootstraps and only one of them reached.
+from coordinator_core.ops._app_session_runtime import win_safe_shlex_split
 
 APP_SESSION_CONFIG_KEY = "app_session"
 _HANDLE_DIRNAME = "coordinator-app-sessions"

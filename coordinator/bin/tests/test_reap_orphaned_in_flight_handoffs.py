@@ -50,6 +50,7 @@ import importlib.util
 import os
 import sys
 import time
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -297,7 +298,7 @@ def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=Non
     mod._resolve_canonical_kind = lambda: (lambda kind: kind)
     mod._claim_holder = lambda path, repo_root="": claim_holder_map.get(path, "")
     mod._handoff_id_archived_twin = lambda handoff_id, repo_root: ""
-    mod._has_live_children_exit_code = lambda path: 1  # childless -> proceed to release
+    mod._has_live_children_exit_code = lambda path, repo_root=None: 1  # childless -> proceed to release
     mod._run_archive_stamp_cli = lambda args: (True, "")
 
 
@@ -477,6 +478,64 @@ def test_main_no_orphans_makes_zero_git_log_batch_calls(tmp_path, monkeypatch):
     rc = mod.main([])
     assert rc == 0
     assert git_log_calls == [], f"no orphans -> zero batch calls, got {git_log_calls}"
+
+
+# ===========================================================================
+# _has_live_children_exit_code -- amplification burn-down (W2/C2): now an
+# in-process op call (coordinator_core.ops.handoff_children.
+# _handoff_has_live_children), not a subprocess spawn of
+# handoff-has-live-children.py (which itself spawned a second subprocess via
+# cc_invoke.route()). Asserts zero `subprocess.run` calls and correct
+# exit-code passthrough/fail-closed mapping.
+# ===========================================================================
+def test_has_live_children_exit_code_calls_op_in_process_zero_spawns(monkeypatch):
+    mod = _load_module()
+
+    calls = []
+
+    async def fake_handler(params, repo_root=None):
+        calls.append((params, repo_root))
+        return {"referenced": True, "children": ["x"], "live_session_count": 0, "exit_code": 0}
+
+    def fake_git_common_dir(cwd=None):
+        return "/fake/common/.git"
+
+    mod._resolve_handoff_has_live_children = lambda: (fake_handler, fake_git_common_dir)
+
+    spawned = []
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: spawned.append((a, kw)))
+
+    rc = mod._has_live_children_exit_code("/fake/state/handoffs/x.md", "/fake/worktree")
+
+    assert rc == 0
+    assert spawned == [], f"expected zero subprocess.run calls, got {spawned}"
+    assert len(calls) == 1
+    params, repo_root = calls[0]
+    assert params == {"candidate": "/fake/state/handoffs/x.md"}
+    assert Path(repo_root) == Path("/fake/common/.git")
+
+
+def test_has_live_children_exit_code_fails_closed_on_unresolvable_common_dir():
+    mod = _load_module()
+
+    mod._resolve_handoff_has_live_children = lambda: (None, lambda cwd=None: None)
+
+    rc = mod._has_live_children_exit_code("/fake/state/handoffs/x.md", "/fake/worktree")
+
+    assert rc == 2
+
+
+def test_has_live_children_exit_code_fails_closed_on_op_exception():
+    mod = _load_module()
+
+    async def raising_handler(params, repo_root=None):
+        raise RuntimeError("boom")
+
+    mod._resolve_handoff_has_live_children = lambda: (raising_handler, lambda cwd=None: "/fake/common/.git")
+
+    rc = mod._has_live_children_exit_code("/fake/state/handoffs/x.md", "/fake/worktree")
+
+    assert rc == 2
 
 
 if __name__ == "__main__":

@@ -27,6 +27,17 @@ def _make_repo(tmp_path):
     return tmp_path
 
 
+def _ensure_session_dir(repo: Path, sid: str) -> Path:
+    """Pre-create the per-session directory ``cs_init`` mints on every real
+    session start — this store (C6, docs/plans/2026-08-19-batons-unify-into-
+    one-successor.md § C6) no longer mkdir's it itself, so a fixture calling
+    the promote op (or `store.merge_baton` directly) without going through
+    session init must bring it into being."""
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    return sdir
+
+
 def _promote(**params):
     return promote_mod._handler(dict(params))
 
@@ -37,7 +48,7 @@ def _fake_scaffold(dest_rel: str, body: str = ""):
     returns dest_rel, exactly like coordinator-doc-new's real stdout
     contract (a path string)."""
 
-    def _fake(title, branch, cwd, category=None, summary=None, gated_open=None):
+    def _fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
         target = Path(cwd) / dest_rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
@@ -64,6 +75,7 @@ def _fake_scaffold(dest_rel: str, body: str = ""):
 
 def test_promote_scaffolds_and_stamps_baton(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-1")
     store.merge_baton("sid-1", cwd=str(repo), first_prompt="do the thing")
 
     monkeypatch.setattr(
@@ -93,6 +105,7 @@ def test_promote_scaffolds_and_stamps_baton(tmp_path, monkeypatch):
 
 def test_promote_without_first_prompt_leaves_placeholder(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-noprompt")
     monkeypatch.setattr(
         promote_mod,
         "_scaffold_via_doc_new",
@@ -118,12 +131,13 @@ def test_promote_without_first_prompt_leaves_placeholder(tmp_path, monkeypatch):
 
 def test_second_promote_call_returns_existing_path_no_rescaffold(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-idem")
     calls = []
 
-    def _counting_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
+    def _counting_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
         calls.append(1)
         fake = _fake_scaffold("state/handoffs/2026-08-18-once.md")
-        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _counting_fake)
 
@@ -168,8 +182,9 @@ def test_non_string_title_errors(tmp_path):
 
 def test_scaffold_failure_returns_error_not_exception(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-fail")
 
-    def _boom(title, branch, cwd, category=None, summary=None, gated_open=None):
+    def _boom(title, branch, cwd, category=None, summary=None, gated_predicate=None):
         raise RuntimeError("coordinator-doc-new blew up")
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _boom)
@@ -184,10 +199,11 @@ def test_scaffold_failure_returns_error_not_exception(tmp_path, monkeypatch):
 
 def test_scaffold_empty_stdout_is_an_error(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-empty")
     monkeypatch.setattr(
         promote_mod,
         "_scaffold_via_doc_new",
-        lambda title, branch, cwd, category=None, summary=None, gated_open=None: "",
+        lambda title, branch, cwd, category=None, summary=None, gated_predicate=None: "",
     )
 
     result = _promote(session_id="sid-empty", cwd=str(repo))
@@ -204,6 +220,7 @@ def test_scaffold_empty_stdout_is_an_error(tmp_path, monkeypatch):
 @pytest.mark.real_home
 def test_real_coordinator_doc_new_seam(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-real")
     store.merge_baton("sid-real", cwd=str(repo), first_prompt="the real first prompt")
 
     result = _promote(
@@ -245,12 +262,13 @@ def test_non_string_summary_errors(tmp_path):
 
 def test_both_present_threads_category_and_summary_no_gating(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-both")
     captured = {}
 
-    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
-        captured.update(category=category, summary=summary, gated_open=gated_open)
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        captured.update(category=category, summary=summary, gated_predicate=gated_predicate)
         fake = _fake_scaffold("state/handoffs/2026-08-19-both.md")
-        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
 
@@ -261,17 +279,18 @@ def test_both_present_threads_category_and_summary_no_gating(tmp_path, monkeypat
         cwd=str(repo),
     )
     assert result["exit_code"] == 0
-    assert captured == {"category": "bug", "summary": "fixed the thing", "gated_open": None}
+    assert captured == {"category": "bug", "summary": "fixed the thing", "gated_predicate": None}
 
 
 def test_both_absent_gates_naming_both_fields(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-neither")
     captured = {}
 
-    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
-        captured.update(category=category, summary=summary, gated_open=gated_open)
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        captured.update(category=category, summary=summary, gated_predicate=gated_predicate)
         fake = _fake_scaffold("state/handoffs/2026-08-19-neither.md")
-        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
 
@@ -279,17 +298,18 @@ def test_both_absent_gates_naming_both_fields(tmp_path, monkeypatch):
     assert result["exit_code"] == 0
     assert captured["category"] is None
     assert captured["summary"] is None
-    assert captured["gated_open"] == "category and summary are unfilled placeholders"
+    assert captured["gated_predicate"] == "category and summary are unfilled placeholders"
 
 
 def test_category_only_gates_naming_summary(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-catonly")
     captured = {}
 
-    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
-        captured.update(category=category, summary=summary, gated_open=gated_open)
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        captured.update(category=category, summary=summary, gated_predicate=gated_predicate)
         fake = _fake_scaffold("state/handoffs/2026-08-19-catonly.md")
-        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
 
@@ -297,17 +317,18 @@ def test_category_only_gates_naming_summary(tmp_path, monkeypatch):
     assert result["exit_code"] == 0
     assert captured["category"] == "docs"
     assert captured["summary"] is None
-    assert captured["gated_open"] == "summary is an unfilled placeholder"
+    assert captured["gated_predicate"] == "summary is an unfilled placeholder"
 
 
 def test_summary_only_gates_naming_category(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-sumonly")
     captured = {}
 
-    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
-        captured.update(category=category, summary=summary, gated_open=gated_open)
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        captured.update(category=category, summary=summary, gated_predicate=gated_predicate)
         fake = _fake_scaffold("state/handoffs/2026-08-19-sumonly.md")
-        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
 
@@ -315,7 +336,7 @@ def test_summary_only_gates_naming_category(tmp_path, monkeypatch):
     assert result["exit_code"] == 0
     assert captured["category"] is None
     assert captured["summary"] == "wrote the thing"
-    assert captured["gated_open"] == "category is an unfilled placeholder"
+    assert captured["gated_predicate"] == "category is an unfilled placeholder"
 
 
 def _read_frontmatter(handoff_path: Path) -> dict:
@@ -347,6 +368,7 @@ def test_category_summary_four_way_schema_validation(tmp_path, category, summary
 
     repo = _make_repo(tmp_path)
     sid = f"sid-4way-{category}-{summary}"
+    _ensure_session_dir(repo, sid)
     result = _promote(
         session_id=sid,
         title="Four-way test",

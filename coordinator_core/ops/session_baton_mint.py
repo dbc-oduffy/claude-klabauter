@@ -132,9 +132,19 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
 
     merged = store.merge_baton(session_id, cwd, **merge_kwargs)
     if merged is None:
+        # `None` has two causes since C6 of docs/plans/2026-08-19-batons-unify-into-
+        # one-successor.md removed the store's `mkdir`: an unresolvable session hub,
+        # and a session directory that does not exist yet (`cs_init` not having run).
+        # Reporting the second as the first sends an operator hunting a git-repo
+        # problem that is not there.
+        if store.baton_path(session_id, cwd) is None:
+            return _err(
+                "session_baton.mint: could not resolve the session hub for "
+                f"session_id={session_id!r} (not a git repo?)"
+            )
         return _err(
-            "session_baton.mint: could not resolve the session hub for "
-            f"session_id={session_id!r} (not a git repo?)"
+            "session_baton.mint: no session directory for "
+            f"session_id={session_id!r}; cs_init has not run for this session"
         )
 
     baton_path = store.baton_path(session_id, cwd)

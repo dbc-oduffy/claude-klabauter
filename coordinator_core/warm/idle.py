@@ -35,6 +35,33 @@ deadline -- a predicate on an existing signal (C26's served-invocation
 counter), not a new mechanism. `ServedCountFn` below is the seam C26 binds
 to: a zero-arg callable returning the served-invocation count so far.
 
+SUPERSEDED-GENERATION PREDICATE (`TokenStaleFn`): the two deadlines above
+are both CLOCKS, and neither one reaches the population that motivated
+this predicate. A publish rewrites the engine's build stamp, so the
+generation token rotates, so `election.pipe_name` -- which embeds the
+token -- names a DIFFERENT pipe. Every client thereafter dials that new
+name, and the predecessor receives zero further traffic BY CONSTRUCTION.
+`warm.skew.evict_on_skew` is traffic-driven, so the very token change that
+should evict the predecessor is the one that routes traffic away from it:
+the eviction path is unreachable for exactly the servers it exists to
+retire. The zero-served deadline does not catch it either, because a
+superseded generation has typically served plenty. So it waits out the
+FULL idle deadline (15 minutes by default), and N publishes inside one
+idle window leave N+1 engines resident, each holding a preloaded op
+registry and a dispatch process pool. Observed live 2026-08-19: three
+resident generations off the published mirror inside one hour.
+
+`TokenStaleFn` is a LOCAL predicate -- "my generation token no longer
+matches the current engine fingerprint" -- and needs no cross-process
+handshake, no bind-time notification, and no prior-token registry. The
+caller binds it (`warm.server._ServerContext._token_is_stale`); this
+module never computes a token and never imports `warm.skew`, which is
+what keeps THE INVARIANT below literally true in both directions.
+
+NOT FIXED BY SHORTENING THE IDLE DEADLINE, deliberately: that trades
+stranding window against warm-hit rate for every HEALTHY server while
+leaving the unreachable-eviction defect in place. It hides the symptom.
+
 CONFIG SURFACE: `engine.warm.idle_minutes` extends the SAME
 `engine.warm.*` registry namespace C23's `settings.py` introduced --
 resolved through the same `machine_resolver.registry_get` read path, no
@@ -56,6 +83,7 @@ __all__ = [
     "DEFAULT_IDLE_MINUTES",
     "ZERO_SERVED_DEADLINE_SECS",
     "ServedCountFn",
+    "TokenStaleFn",
     "mark_invocation",
     "seconds_idle",
     "reset_idle_clock_for_test",
@@ -78,6 +106,15 @@ ZERO_SERVED_DEADLINE_SECS = 90.0
 # and `demote_if_idle` accept this rather than a raw int so the caller
 # supplies a live read, never a snapshot taken before this call.
 ServedCountFn = Callable[[], int]
+
+# The seam the server binds its superseded-generation check to (module
+# docstring): a zero-arg callable returning True iff this server's own
+# generation token no longer matches the current engine fingerprint.
+# A CALLABLE rather than a bool for the same reason `ServedCountFn` is --
+# the predicate must read live state at check time, never a snapshot taken
+# at server boot, since the whole point is to observe a change that
+# happens mid-life.
+TokenStaleFn = Callable[[], bool]
 
 _clock_lock = threading.Lock()
 _last_invocation_monotonic: Optional[float] = None
@@ -142,31 +179,56 @@ def resolve_idle_deadline_secs() -> float:
 def should_demote(
     *,
     served_count: ServedCountFn,
+    token_stale: Optional[TokenStaleFn] = None,
     idle_deadline_secs: Optional[float] = None,
     zero_served_deadline_secs: float = ZERO_SERVED_DEADLINE_SECS,
     clock: Callable[[], float] = time.monotonic,
 ) -> bool:
-    """True if the server should demote right now: either the full idle
-    deadline has elapsed, or the zero-served deadline has elapsed while
-    `served_count()` is still zero (staff-eng finding 5). Pure predicate --
-    no side effects, no shutdown call; `demote_if_idle` is the one that
-    acts on this.
+    """True if the server should demote right now, on any of three arms:
+    this server's generation has been superseded (`token_stale()`, module
+    docstring), the full idle deadline has elapsed, or the zero-served
+    deadline has elapsed while `served_count()` is still zero (staff-eng
+    finding 5). Pure predicate -- no side effects, no shutdown call;
+    `demote_if_idle` is the one that acts on this.
+
+    THE SUPERSEDED ARM CARRIES NO DEADLINE, and that is not an oversight.
+    The other two arms are clocks because "nobody is using this server" is
+    a claim that only time can establish. "A newer engine has replaced
+    this one" is established the instant it is true, and waiting adds
+    nothing: no client can reach a superseded generation anyway -- its
+    pipe name is one no client computes any more -- so a grace period
+    buys back zero warm hits and costs one fully resident engine for its
+    whole duration. Orderly drain is preserved not by delaying the
+    decision but by `demote_if_idle` routing through C17's unchanged
+    `begin_shutdown`, which closes the listener and waits out in-flight
+    work exactly as every other exit path does.
+
+    `token_stale` defaults to `None` (never stale) so every existing
+    caller and test keeps its current two-arm behaviour unchanged; only a
+    caller that can actually compute its own generation token binds it.
 
     THE FULL-DEADLINE ARM MUST STAY KEYED ON `seconds_idle()` (time since
     the LAST `mark_invocation`), never narrowed to "never served anything
     (`served_count() == 0`)" -- that narrower predicate looks like the
     obvious simplification and is wrong: the field orphan a stranded
-    generation actually produces (`warm.skew`'s per-commit token rotation
-    minting a new pipe name out from under a still-listening predecessor)
-    typically SERVED requests before rotation stranded it, so its
-    `served_count()` is nonzero and only `seconds_idle()` ever crosses the
-    deadline for it. A refactor that drops the OR and demotes solely on
-    `served_count() == 0` leaves that real orphan running forever while
+    generation actually produces (`warm.skew`'s token rotation minting a
+    new pipe name out from under a still-listening predecessor) typically
+    SERVED requests before rotation stranded it, so its `served_count()`
+    is nonzero. A refactor that drops the OR and demotes solely on
+    `served_count() == 0` leaves that orphan to the full deadline while
     still passing a synthetic zero-invocation test
     (test_idle_demotion_survives_token_rotation_after_serving in
     `warm/tests/test_server_loop.py` is the regression pinned against
     exactly this).
+
+    The superseded arm now retires that orphan promptly, but it does NOT
+    make the full-deadline arm redundant for it: `token_stale` is
+    caller-bound and optional, so any caller that does not bind one still
+    depends on `seconds_idle()` as the only thing that ever crosses a
+    deadline for a nonzero-served orphan. Both arms stay.
     """
+    if token_stale is not None and token_stale():
+        return True
     idle = seconds_idle(clock=clock)
     deadline = (
         resolve_idle_deadline_secs() if idle_deadline_secs is None else idle_deadline_secs
@@ -179,6 +241,7 @@ def should_demote(
 def demote_if_idle(
     *,
     served_count: ServedCountFn,
+    token_stale: Optional[TokenStaleFn] = None,
     close_listener: Callable[[], None],
     in_flight_count: Callable[[], int],
     ctx_shutdown: Callable[[], None],
@@ -197,6 +260,7 @@ def demote_if_idle(
     """
     if not should_demote(
         served_count=served_count,
+        token_stale=token_stale,
         idle_deadline_secs=idle_deadline_secs,
         zero_served_deadline_secs=zero_served_deadline_secs,
         clock=clock,

@@ -337,6 +337,7 @@ def detect_foreign_commits(
 
     trailer_re = re.compile(r"^Session-Id:\s*(\S+)\s*$", re.MULTILINE)
     foreign_shas: List[str] = []
+    trailerless_shas: List[str] = []
     for entry in log_result.stdout.split("\x02"):
         entry = entry.strip("\n")
         if not entry or "\x01" not in entry:
@@ -352,32 +353,72 @@ def detect_foreign_commits(
                 foreign_shas.append(sha)
             continue
 
-        # Trailerless — fall back to touched-path scope membership.
-        paths_result = _git_run(
-            ["show", "--name-only", "--format=", sha],
-            cwd=worktree_root,
-        )
-        if paths_result.returncode != 0:
-            # Cannot determine touched paths — conservatively treat as
-            # foreign rather than silently attributing an unreadable commit.
-            foreign_shas.append(sha)
-            continue
-        touched = [
-            line.strip() for line in paths_result.stdout.splitlines() if line.strip()
-        ]
-        # Review: code-reviewer — Finding 1 (P2, fix-on-principle): an empty
-        # touched-set (a merge commit's `--name-only` diff is empty, or a
-        # genuinely empty commit) must be treated as "cannot place in scope"
-        # (foreign), matching the conservative posture already taken a few
-        # lines above for an unreadable `git show` — NOT as "safe by default".
-        # `_range_log`'s backing `git log` deliberately still walks merges
-        # here (no `--no-merges`) so they reach this classifier at all; a
-        # trailerless merge with nothing to check against scope must not be
-        # silently waved through just because there was nothing to examine.
-        if not touched or not any(p in known_scope_paths for p in touched):
-            foreign_shas.append(sha)
+        # Trailerless — defer to a single batched touched-path lookup below,
+        # rather than one `git show` spawn per commit.
+        trailerless_shas.append(sha)
+
+    if trailerless_shas:
+        touched_by_sha = _batch_touched_paths(worktree_root, trailerless_shas)
+        for sha in trailerless_shas:
+            touched = touched_by_sha.get(sha)
+            # Review: code-reviewer — Finding 1 (P2, fix-on-principle): an empty
+            # touched-set (a merge commit's `--name-only` diff is empty, or a
+            # genuinely empty commit) must be treated as "cannot place in scope"
+            # (foreign), matching the conservative posture already taken for an
+            # unreadable/unresolvable commit — NOT as "safe by default".
+            # `_range_log`'s backing `git log` deliberately still walks merges
+            # here (no `--no-merges`) so they reach this classifier at all; a
+            # trailerless merge with nothing to check against scope must not be
+            # silently waved through just because there was nothing to examine.
+            if touched is None:
+                # Cannot determine touched paths (batch call failed, or this
+                # sha never resolved in the batch output) — conservatively
+                # treat as foreign rather than silently attributing an
+                # unreadable commit.
+                foreign_shas.append(sha)
+                continue
+            if not touched or not any(p in known_scope_paths for p in touched):
+                foreign_shas.append(sha)
 
     return foreign_shas
+
+
+def _batch_touched_paths(worktree_root: Path, shas: List[str]) -> Dict[str, List[str]]:
+    """One `git log --no-walk` spawn resolving touched paths for every sha in
+    `shas`, replacing a `git show --name-only` call per sha.
+
+    `--no-walk` preserves the given commit ORDER verbatim (it does not sort by
+    date/topology), so each `\x02`-delimited output segment corresponds
+    positionally to `shas[i]` — required for correct per-commit attribution.
+    Returns {} for every sha (via a missing key) on a whole-batch git failure,
+    mirroring the per-item `returncode != 0` fail-closed path this replaces.
+    """
+    if not shas:
+        return {}
+    # Leading delimiter (not trailing): a trailing "%H\x02" splits the NEXT
+    # commit's hash into the CURRENT commit's segment (the blank separator
+    # line + --name-only paths land between one commit's \x02 and the next
+    # commit's hash), misattributing every touched-path list by one commit.
+    # A leading "\x02%H" makes each split segment self-contained: sha first,
+    # then its own paths, with nothing bleeding across the boundary.
+    result = _git_run(
+        ["log", "--no-walk", "--name-only", "--format=\x02%H", *shas],
+        cwd=worktree_root,
+    )
+    if result.returncode != 0:
+        return {}
+    out_by_sha: Dict[str, List[str]] = {}
+    for segment in result.stdout.split("\x02"):
+        if not segment.strip():
+            continue
+        lines = segment.splitlines()
+        if not lines:
+            continue
+        seg_sha = lines[0].strip()
+        if not seg_sha:
+            continue
+        out_by_sha[seg_sha] = [ln.strip() for ln in lines[1:] if ln.strip()]
+    return out_by_sha
 
 
 def range_is_contiguous_suffix(

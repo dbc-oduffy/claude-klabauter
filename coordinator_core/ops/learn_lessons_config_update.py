@@ -22,18 +22,19 @@ Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 Negative-spec:
     - Does NOT write/mutate any tracked file — advisory stderr hint only.
     - Does NOT require machine-local to be present/executable — if the
-      resolver is missing or ``keys``/``get`` fail, treats the repo as
+      resolver is missing or ``dump`` fails, treats the repo as
       unregistered and falls through to the advisory hint (fail-open,
       mirroring the bash oracle's `[ -x "$ML" ]` guard + `|| continue` reads).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
@@ -60,10 +61,22 @@ def _resolve_machine_local(claude_home: str) -> Optional[str]:
     return None
 
 
-def _machine_local_keys(ml: str) -> List[str]:
+def _repos_snapshot(ml: str) -> Dict[str, str]:
+    """One `dump --prefix repos --format json` call resolving every
+    `repos.*` key at once — batch counterpart to the per-key `keys` + `get`
+    pair the caller used to spawn once per registered repo (amplification
+    hitlist, 2026-08-19; same primitive already proven in
+    `coordinator_core.ops.register_discovered_repos._registry_snapshot`
+    and `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos`).
+
+    Fail-open: any spawn/parse failure or non-zero returncode returns {}
+    (empty registry), matching the pre-batch behavior of `_machine_local_keys`
+    returning [] on the same failure classes -- the caller's loop then falls
+    through to the advisory hint either way.
+    """
     try:
         proc = subprocess.run(
-            [ml, "keys"],
+            [ml, "dump", "--prefix", "repos", "--format", "json"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -72,34 +85,17 @@ def _machine_local_keys(ml: str) -> List[str]:
             **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
-        print(f"skip: _machine_local_keys: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return []
+        print(f"skip: _repos_snapshot: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return {}
     if proc.returncode != 0:
-        return []
-    return [
-        line.strip()
-        for line in proc.stdout.splitlines()
-        if line.strip().startswith("repos.")
-    ]
-
-
-def _machine_local_get(ml: str, key: str) -> str:
+        return {}
     try:
-        proc = subprocess.run(
-            [ml, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            # Review: code-reviewer — Windows portability convention applied
-            # inconsistently across this wave's siblings; align this call site.
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        print(f"skip: _machine_local_get: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return ""
-    if proc.returncode != 0:
-        return ""
-    return proc.stdout.strip()
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str)}
 
 
 def _slugify(name: str) -> str:
@@ -122,8 +118,7 @@ def main(argv: List[str]) -> int:
 
     ml = _resolve_machine_local(claude_home)
     if ml:
-        for key in _machine_local_keys(ml):
-            p = _machine_local_get(ml, key)
+        for p in _repos_snapshot(ml).values():
             if not p:
                 continue
             if _norm(p) == cwd:

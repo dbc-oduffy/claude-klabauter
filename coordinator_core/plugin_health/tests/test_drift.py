@@ -37,6 +37,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.plugin_health.drift import (
+    _check_copy_install,
     _venv_mapping_check,
     check_plugin,
     git_worktree_root_if_self,
@@ -211,3 +212,57 @@ def test_default_leg_git_state_fetch_failure_warns(tmp_path: Path, monkeypatch):
     # HEAD..origin/main with no remote configured yields no count -> no drift claim
     # from Leg 1, but the probe completes and returns a DriftResult either way.
     assert result is not None
+
+
+def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_path: Path):
+    """`_check_copy_install`'s content-equivalence leg batches every mismatched-
+    sentinel file's `git hash-object` into ONE `--stdin-paths` call instead of
+    one spawn per file. A single-item fixture would pass identically whether
+    the batch call were correctly zipped back to its paths or silently
+    shuffled — this fixture uses THREE files (one matching, two diverging) so a
+    misattributed index would flip a false [ok] into a missed [drift] or vice
+    versa."""
+    source = tmp_path / "source"
+    _mkrepo(source)
+    plugin_dir = source / "plugin" / "demo"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "same.txt").write_text("unchanged\n")
+    (plugin_dir / "changed_a.txt").write_text("source-a\n")
+    (plugin_dir / "changed_b.txt").write_text("source-b\n")
+    env = {
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    subprocess.run(["git", "-C", str(source), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "commit", "-qm", "add plugin files"],
+        check=True,
+        env={**_env_base(), **env},
+    )
+    head = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "same.txt").write_text("unchanged\n")
+    (live / "changed_a.txt").write_text("live-a-DIFFERENT\n")
+    (live / "changed_b.txt").write_text("live-b-DIFFERENT\n")
+    # sentinel deliberately stale (not source HEAD) to force the
+    # content-equivalence leg to run instead of the fast sentinel-match exit.
+    (live / "version.txt").write_text("0" * 40)
+
+    claude_home = tmp_path
+    result = _check_copy_install(
+        "demo", str(source), str(live), "plugin/demo", False, claude_home,
+    )
+
+    joined = "\n".join(result.lines)
+    assert not result.ok
+    assert "changed_a.txt" in joined
+    assert "changed_b.txt" in joined
+    assert "same.txt" not in joined
+    assert head[:12] in joined

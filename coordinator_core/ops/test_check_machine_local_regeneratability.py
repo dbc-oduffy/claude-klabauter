@@ -254,12 +254,45 @@ schema = 1
     )
 
     bin_dir = claude_dir / "bin"
-    write_fake_machine_local(bin_dir, "import sys\nsys.exit(0)\n")
+    write_fake_machine_local(
+        bin_dir,
+        "import sys\n"
+        "print('{\"repos.example-sim-repo\": \"/home/user/example-sim-repo\"}')\n"
+        "sys.exit(0)\n",
+    )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
 
     assert rc == 0
     assert "repos.example-sim-repo" not in err
+
+
+def test_repos_key_ladder_snapshot_missing_key_falls_through(tmp_path, capsys, monkeypatch):
+    """A dump that succeeds but does not contain the key must fall through to
+    the normal tracked/local check, exercising the batched `!= None but absent`
+    branch distinct from the `snapshot is None` (binary-missing) fallback.
+    """
+    claude_dir, ml_dir = _make_claude_dir(tmp_path)
+    (ml_dir / "registry.toml").write_text(
+        """
+schema = 1
+
+[regeneratability]
+"repos.example-sim-repo" = "session-accumulated-must-survive-crash"
+"""
+    )
+    (ml_dir / "registry.local.toml").write_text(
+        'schema = 1\n"repos.example-sim-repo" = "/home/user/example-sim-repo"\n'
+    )
+
+    bin_dir = claude_dir / "bin"
+    write_fake_machine_local(bin_dir, "import sys\nprint('{}')\nsys.exit(0)\n")
+
+    rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
+
+    assert rc == 0
+    assert "install-surface-completeness defect" in err
+    assert "repos.example-sim-repo" in err
 
 
 # ---------------------------------------------------------------------------

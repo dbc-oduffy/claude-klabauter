@@ -27,6 +27,16 @@ def _make_repo(tmp_path):
     return tmp_path
 
 
+def _ensure_session_dir(repo: Path, sid: str) -> Path:
+    """Pre-create the per-session directory ``cs_init`` mints on every real
+    session start — this store (C6, docs/plans/2026-08-19-batons-unify-into-
+    one-successor.md § C6) no longer mkdir's it itself, so a fixture calling
+    the mint op directly (bypassing session init) must bring it into being."""
+    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+    return sdir
+
+
 def _mint(**params):
     return mint_mod._handler(dict(params))
 
@@ -38,6 +48,7 @@ def _mint(**params):
 
 def test_mint_creates_record_with_first_prompt(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-1")
     result = _mint(session_id="sid-1", prompt="hello world", cwd=str(repo))
 
     assert result["exit_code"] == 0
@@ -56,6 +67,7 @@ def test_mint_creates_record_with_first_prompt(tmp_path):
 
 def test_mint_without_prompt_still_creates_record(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-noprompt")
     result = _mint(session_id="sid-noprompt", cwd=str(repo))
 
     assert result["exit_code"] == 0
@@ -70,6 +82,7 @@ def test_mint_without_prompt_still_creates_record(tmp_path):
 
 def test_second_call_same_session_updates_not_duplicates(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-idem")
     first = _mint(session_id="sid-idem", prompt="p1", cwd=str(repo))
     assert first["created"] is True
 
@@ -90,6 +103,7 @@ def test_second_call_same_session_updates_not_duplicates(tmp_path):
 
 def test_later_call_does_not_overwrite_first_prompt(tmp_path):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-first-wins")
     _mint(session_id="sid-first-wins", prompt="the real first prompt", cwd=str(repo))
     second = _mint(
         session_id="sid-first-wins", prompt="a later, different prompt", cwd=str(repo)
@@ -137,6 +151,7 @@ def test_non_git_cwd_errors(tmp_path):
 
 def test_mint_spawns_no_subprocess(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-no-spawn")
 
     def _raise(*args, **kwargs):
         raise AssertionError(

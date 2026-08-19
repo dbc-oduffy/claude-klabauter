@@ -55,6 +55,7 @@ class SidecarRefusalLegibilityTest(unittest.TestCase):
         self._orig = {
             "move": _op.archive_and_commit,
             "dirty": _op._plan_worktree_dirty,
+            "dirty_batch": _op._plan_worktree_dirty_batch,
             "claim": _op._plan_claim_live,
             "gate": _op._run_backlink_gate,
         }
@@ -63,16 +64,21 @@ class SidecarRefusalLegibilityTest(unittest.TestCase):
         async def _not_dirty(worktree_root, rel_path):
             return False
 
+        async def _not_dirty_batch(worktree_root, rel_paths):
+            return set()
+
         async def _not_claimed(common_dir, plan_path):
             return False
 
         _op._plan_worktree_dirty = _not_dirty
+        _op._plan_worktree_dirty_batch = _not_dirty_batch
         _op._plan_claim_live = _not_claimed
         _op._run_backlink_gate = lambda root: 0
 
     def _restore(self):
         _op.archive_and_commit = self._orig["move"]
         _op._plan_worktree_dirty = self._orig["dirty"]
+        _op._plan_worktree_dirty_batch = self._orig["dirty_batch"]
         _op._plan_claim_live = self._orig["claim"]
         _op._run_backlink_gate = self._orig["gate"]
 

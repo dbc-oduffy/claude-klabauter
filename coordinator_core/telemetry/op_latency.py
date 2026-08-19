@@ -118,6 +118,68 @@ from coordinator_core import atomic_append
 
 _DISABLE_ENV = "COORDINATOR_OP_LATENCY_DISABLE"
 
+#: Execution routes a logical op can take. THE one place this set is stated
+#: (AC6c, docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C12).
+#:
+#: The invariant AC6c needs is MUTUAL EXCLUSION PER LOGICAL OP, not writer
+#: ownership: a given op takes exactly one of these routes, never two. Writer
+#: ownership alone does not hold the line -- a call that goes over `http` while
+#: a shim also calls `ipc.dispatch_from_hook` emits a second
+#: `record_op_started`/`record_op_latency` pair however careful each writer is,
+#: and that double-count corrupts the traffic census the warm-engine win figures
+#: are derived from. Cross-process is the gap: `dispatch_message` is already the
+#: sole chokepoint WITHIN a process, so nothing below this line is about
+#: double-counting inside one interpreter.
+#:
+#: Ownership rule, once exclusion holds: the process that EXECUTES the op owns
+#: the record. In-process route -> the caller's own hook process; http route ->
+#: the warm server.
+IN_PROCESS = "in_process"
+WARM_SERVER = "warm_server"
+HTTP_SERVER = "http_server"
+EXECUTION_ROUTES = frozenset({IN_PROCESS, WARM_SERVER, HTTP_SERVER})
+
+#: A serving process declares its own route here (PUBLIC: `warm.server.
+#: _declare_execution_route` writes it; this module only ever reads it). Deliberately an env var and
+#: not an import: this module sits on the dispatch hot path and must not import
+#: `warm.server` (or anything that imports the engine) to answer the question.
+ROUTE_ENV = "COORDINATOR_EXECUTION_ROUTE"
+
+
+def execution_route() -> str:
+    """Route the CURRENT process executes ops under.
+
+    Defaults to ``IN_PROCESS``, which is what every caller that has not
+    declared itself a server is. Never raises and never rejects: an
+    unrecognised value degrades to ``IN_PROCESS`` rather than failing a peer's
+    op, per this module's never-breaks-dispatch contract. A wrong route label
+    costs one mislabelled census row; a raise here costs the op.
+    """
+    declared = os.environ.get(ROUTE_ENV)
+    return declared if declared in EXECUTION_ROUTES else IN_PROCESS
+
+
+def double_routed_corr_ids(entries) -> set:
+    """`corr_id`s that appear under more than one execution route.
+
+    A non-empty result is the AC6c violation made visible: the same logical op
+    was recorded by two processes, so the census counts it twice. Returns a set
+    rather than raising -- this is a census reader, not a guard, and the rows it
+    reads are already on disk by the time anyone asks.
+    """
+    seen: dict = {}
+    doubled = set()
+    for entry in entries:
+        corr_id = entry.get("corr_id")
+        route = entry.get("route")
+        if corr_id is None or route is None:
+            continue
+        prior = seen.setdefault(corr_id, route)
+        if prior != route:
+            doubled.add(corr_id)
+    return doubled
+
+
 # See atomic_append.IS_WINDOWS for why this is os.name and not platform.system().
 _IS_WINDOWS = atomic_append.IS_WINDOWS
 
@@ -161,6 +223,8 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
     try:
         if os.environ.get(_DISABLE_ENV) == "1":
             return
+
+        entry["route"] = execution_route()
 
         key_source = "envelope"
         if repo_root is None:

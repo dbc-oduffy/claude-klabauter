@@ -88,7 +88,12 @@ class DriftResult:
     stderr_lines: List[str] = field(default_factory=list)
 
 
-def _run_git(args: List[str], cwd: Optional[Path] = None, timeout: int = 60):
+def _run_git(
+    args: List[str],
+    cwd: Optional[Path] = None,
+    timeout: int = 60,
+    input_text: Optional[str] = None,
+):
     import subprocess
 
     try:
@@ -100,7 +105,8 @@ def _run_git(args: List[str], cwd: Optional[Path] = None, timeout: int = 60):
             capture_output=True,
             text=True,
             timeout=timeout,
-            stdin=subprocess.DEVNULL,
+            input=input_text,
+            stdin=subprocess.DEVNULL if input_text is None else None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception as exc:  # noqa: BLE001 — mirrors bash's `|| true` / `|| echo unknown`
@@ -399,6 +405,9 @@ def _check_copy_install(
         return DriftResult(ok=True, lines=lines)
 
     mismatched_paths: List[str] = []
+    # First pass: parse `ls-tree` entries and filter to those with a live file
+    # present, deferring the git spawn to a single batched call below.
+    hashable: List[tuple] = []  # (tracked_path, blob_sha, live_file)
     for ls_line in ls_tree_out.splitlines():
         if not ls_line:
             continue
@@ -428,16 +437,30 @@ def _check_copy_install(
             mismatched_paths.append(f"{tracked_path} (missing in live)")
             continue
 
-        # -C claude_home (NOT ci_live_path): applies the LIVE REPO's clean filter
-        # (incl. autocrlf) — apples-to-apples with the source blob SHA. Pinned by
-        # the AC5/crlf regression test (crlf-divergent-but-content-equal).
-        hash_result = _run_git(["hash-object", str(live_file)], cwd=claude_home)
-        if hash_result.returncode != 0:
-            mismatched_paths.append(f"{tracked_path} (hash-object failed)")
-            continue
-        live_sha = (hash_result.stdout or "").strip().replace("\r", "")
-        if blob_sha != live_sha:
-            mismatched_paths.append(tracked_path)
+        hashable.append((tracked_path, blob_sha, live_file))
+
+    # Second pass: one `git hash-object --stdin-paths` call for every live file
+    # instead of one spawn per file. -C claude_home (NOT ci_live_path): applies
+    # the LIVE REPO's clean filter (incl. autocrlf) — apples-to-apples with the
+    # source blob SHA. Pinned by the AC5/crlf regression test
+    # (crlf-divergent-but-content-equal). `hash-object --stdin-paths` emits one
+    # line per path IN ORDER and aborts (nonzero rc) on the first unreadable
+    # path, printing only the lines already resolved before the failure — so a
+    # short read is treated as success-for-the-resolved-prefix, failure for the
+    # remainder, never misattributed across paths.
+    if hashable:
+        stdin_payload = "".join(f"{str(live_file)}\n" for _, _, live_file in hashable)
+        hash_result = _run_git(
+            ["hash-object", "--stdin-paths"], cwd=claude_home, input_text=stdin_payload
+        )
+        out_lines = (hash_result.stdout or "").splitlines()
+        for idx, (tracked_path, blob_sha, _live_file) in enumerate(hashable):
+            if idx >= len(out_lines):
+                mismatched_paths.append(f"{tracked_path} (hash-object failed)")
+                continue
+            live_sha = out_lines[idx].strip().replace("\r", "")
+            if blob_sha != live_sha:
+                mismatched_paths.append(tracked_path)
 
     if not mismatched_paths:
         lines.append(

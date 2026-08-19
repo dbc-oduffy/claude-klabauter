@@ -552,6 +552,35 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
     if derived_deployment is None:
         return fm
 
+    # TIGHTEN-ONLY. This may PARK a record, never FREE one.
+    #
+    # Freeing is not a one-field flip: `handoff.schema.json` holds a union
+    # invariant across `blocked_by`/`no_longer_blocked_by` — a resolved
+    # blocker MOVES between them, never just disappears — and the
+    # `_cf_ready_to_fire_no_unresolved_blocked_by` cross-field rule refuses
+    # `ready_to_fire` while `blocked_by` still names anyone. So writing a
+    # `freed` verdict here without performing that move produces a record the
+    # validator rejects, and the whole transition aborts. Reproduced: repark
+    # of a baton whose only blocker had shipped failed validation outright.
+    #
+    # `gate_cascade_clear` already owns the freeing path, MOVE and
+    # `gate_cleared_by` SHA provenance included, and flips to `ready_to_fire`
+    # only once `blocked_by` drains. Duplicating that bookkeeping here would
+    # be a second writer of the same invariant. So the derivation's job at
+    # this seam is the direction nothing else covers: refusing to let a verb
+    # assert a readiness the graph contradicts.
+    # A record whose `blocked_by` still names anyone is NOT ready to fire,
+    # whatever the blockers' own states say. Park it instead of passing the
+    # freed verdict through: a caller may have hardcoded `ready_to_fire`
+    # before calling (repark does exactly that), so returning `fm` untouched
+    # would leave that illegal stamp standing and the whole transition would
+    # abort on the cross-field rule. Parking is both legal and truthful, and
+    # `gate_cascade_clear` still performs the real freeing later, MOVE and
+    # provenance included.
+    if derived_deployment == "ready_to_fire" and fm_dict.get("blocked_by"):
+        derived_deployment = "awaiting_gate"
+        verdict = {**verdict, "pickup_ready": False}
+
     fm = replace_fm_field(fm, "deployment_state", derived_deployment)
     pickup_ready_value = "true" if verdict["pickup_ready"] else "false"
     if read_fm_field(fm, "pickup_ready") is not None:
@@ -1106,6 +1135,22 @@ def _repark(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
         # gate_evidence block is a machine-authored claim the author can
         # simply re-add.)
         fm = _strip_gate_evidence(fm)
+
+        # AC3's LIVE call site. The hardcoded ready_to_fire above is an
+        # assertion repark cannot actually make: a baton handed back while
+        # `blocked_by` still names an unresolved blocker is not ready to fire,
+        # and stamping it so is precisely the lie this plan exists to stop.
+        # Running the derivation here re-decides it from the graph -- parking
+        # the record when the gate is still shut, and freeing it without a
+        # hand edit once every blocker has shipped.
+        #
+        # Wired here rather than only at `_claim` (review: code-reviewer slice
+        # B, critical). `_claim` stamps `in_flight` BEFORE calling this, and
+        # `in_flight` is off the gate axis, so the derivation returns
+        # (None, None) there every time -- a call site where it can never do
+        # anything. Repark is the verb that actually leaves a handoff on the
+        # gate axis, so it is where the derivation earns its keep.
+        fm = _apply_derived_readiness(fm, worktree)
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)

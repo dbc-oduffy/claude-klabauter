@@ -245,7 +245,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
         assert rel in before, f"fixture failure: {rel!r} is not dirty before the wrap"
 
     # -----------------------------------------------------------------
-    # Ownership readout sanity, BEFORE the wrap: all four classes are
+    # Ownership readout sanity, BEFORE the wrap: all three classes are
     # this session's own claimed work; the peer's own artifact is
     # attributed to the peer, never to "mine".
     # -----------------------------------------------------------------

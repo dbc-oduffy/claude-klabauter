@@ -1955,9 +1955,15 @@ def _scaffold_handoff(
     # DR-173's ratified trio ships unchanged: awaiting_gate + pickup_ready:
     # false + the blocking_notes reason text. The reason is OUTPUT the gating
     # decision writes, never an input anything reads.
-    _note = gate_note or gated_predicate
-    if _note:
-        lines.append(f"blocking_notes: {_yaml_quote(_note)}")
+    # Both may be supplied: --gated-predicate names the mechanical condition
+    # that parked the baton, --gate-note is an unrelated advisory constraint.
+    # JOIN them rather than letting one win (review: code-reviewer slice C) --
+    # `gate_note or gated_predicate` silently dropped DR-173's ratified reason
+    # text whenever a caller passed both, leaving the baton parked with no
+    # record of what parked it.
+    _notes = [n for n in (gated_predicate, gate_note) if n]
+    if _notes:
+        lines.append(f"blocking_notes: {_yaml_quote('; '.join(_notes))}")
     lines += [
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",

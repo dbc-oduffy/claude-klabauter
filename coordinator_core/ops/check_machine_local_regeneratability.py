@@ -66,8 +66,9 @@ Negative-spec (do NOT "fix" while porting):
       subprocess'd Python helper (mktemp'd heredoc) because bash cannot parse TOML
       natively. This port has no subprocess boundary for TOML parsing at all — it calls
       ``tomllib``/``tomli`` in-process. The ONLY subprocess retained is the
-      ``machine-local get`` ladder probe (Check 2's repos.* skip), which is genuinely an
-      external CLI call, not a TOML-parsing workaround.
+      ``machine-local dump --prefix repos --format json`` ladder probe (Check 2's
+      repos.* skip, batched W6/C6 2026-08-19 from a per-key ``get`` into one call),
+      which is genuinely an external CLI call, not a TOML-parsing workaround.
     - The registry DIRECTORY resolves via the settings-home ladder (``_resolve_registry_dir``:
       ``MACHINE_LOCAL_REGISTRY_DIR`` override > ``<settings-home>/machine-local``), NOT the
       legacy ``${CLAUDE_HOME:-$HOME}/.claude/machine-local`` path — that legacy path caused
@@ -79,6 +80,7 @@ Negative-spec (do NOT "fix" while porting):
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
@@ -262,30 +264,56 @@ def _tracked_toml_files(ml_dir: Path) -> List[Path]:
     return sorted(f for f in ml_dir.glob("*.toml") if not f.name.endswith(".local.toml"))
 
 
-def _ladder_resolves(machine_local_bin: Path, key: str) -> bool:
-    """Probe the machine-local path-resolution ladder for a repos.* key.
+def _ladder_snapshot(machine_local_bin: Path) -> Optional[Dict[str, str]]:
+    """One `dump --prefix repos --format json` call resolving every repos.* key
+    at once — batch counterpart to the per-key `machine-local get <key>` probe
+    this Check 2 arm used to spawn once per repos.* finding candidate (W6/C6,
+    2026-08-19 amplification burn-down; same primitive already proven in
+    `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos` and
+    `coordinator_core/ops/register_discovered_repos.py::_registry_snapshot`,
+    whose docstring cites `_machine_local.py::cmd_dump` sharing `resolve_one`
+    with `get` — a dumped value is byte-identical to what a per-key `get`
+    would print).
 
-    rc=0 means the ladder (autodiscovery or another rung) can derive the value on a
-    fresh-machine clone — NOT an install-surface-completeness gap. A missing binary,
-    timeout, or any subprocess error is treated as "does not resolve" (fail-safe: the
-    key still gets evaluated by the normal tracked/local check below, matching the
-    bash oracle's `if ... ; then continue; fi` — a non-zero/errored probe falls through).
+    Returns None (never {}) on a missing binary, timeout, or any subprocess/parse
+    failure or non-zero returncode — fail-safe: `_key_ladder_resolves` below then
+    treats every repos.* key as "does not resolve", so the key still gets
+    evaluated by the normal tracked/local check, matching the ladder-probe's
+    original `if ... ; then continue; fi` behaviour (a non-zero/errored probe
+    falls through, never crashes).
     """
     if not machine_local_bin.is_file():
-        return False
+        return None
     try:
         result = subprocess.run(
-            [str(machine_local_bin), "get", key],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            [str(machine_local_bin), "dump", "--prefix", "repos", "--format", "json"],
+            capture_output=True,
+            text=True,
             stdin=subprocess.DEVNULL,
             timeout=10,
             **no_console_creationflags(),
         )
-        return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _ladder_resolves: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(f"skip: _ladder_snapshot: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return None
+    if result.returncode != 0 or not (result.stdout or "").strip():
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {k: v for k, v in data.items() if isinstance(v, str) and v}
+
+
+def _key_ladder_resolves(snapshot: Optional[Dict[str, str]], key: str) -> bool:
+    """True if `key` resolved in the batched ladder snapshot (or is missing
+    from a `None`/absent snapshot, which fails safe to "does not resolve").
+    """
+    if snapshot is None:
         return False
+    return bool(snapshot.get(key))
 
 
 def main(argv: List[str]) -> int:
@@ -370,6 +398,12 @@ def main(argv: List[str]) -> int:
         if cmd_sibling.is_file():
             machine_local_bin = cmd_sibling
 
+    # One batched dump replacing a per-repos.*-key `machine-local get` spawn —
+    # see `_ladder_snapshot`. Computed unconditionally but cheaply (single
+    # spawn, memoised for the whole loop below); `_key_ladder_resolves` fails
+    # safe to "not resolved" if the binary is missing or the dump errors.
+    ladder_snapshot = _ladder_snapshot(machine_local_bin)
+
     for key, val in regen_table.items():
         if val != "session-accumulated-must-survive-crash":
             continue
@@ -377,10 +411,10 @@ def main(argv: List[str]) -> int:
         in_tracked = key in tracked_keys
         in_local = local_keys.get(key)
 
-        # For repos.* keys: probe the path-resolution ladder before flagging as a gap.
-        # rc=0 from `machine-local get` means rung-2 autodiscovery (or another ladder
+        # For repos.* keys: consult the batched ladder snapshot before flagging as
+        # a gap. Presence in the dump means rung-2 autodiscovery (or another ladder
         # rung) can derive the value on a fresh-machine clone — NOT a manual-re-entry gap.
-        if key.startswith("repos.") and _ladder_resolves(machine_local_bin, key):
+        if key.startswith("repos.") and _key_ladder_resolves(ladder_snapshot, key):
             continue
 
         if not in_tracked and in_local is not None:

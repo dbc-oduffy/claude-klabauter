@@ -713,6 +713,32 @@ def _validate_pathspec(pathspec: str) -> bool:
     return result.returncode == 0
 
 
+def _first_invalid_pathspec(pathspecs: List[str]) -> Optional[str]:
+    """Validates a list of pathspecs with ONE `git ls-files --` call in the
+    common (all-valid) case: N -> 1 spawns. `git ls-files` exits non-zero if
+    ANY pathspec in the batch is malformed, so the batched call can positively
+    confirm "all valid" but cannot identify WHICH entry failed on the invalid
+    path -- falls back to per-item `_validate_pathspec` only then, to keep the
+    existing per-item error message without paying an N-spawn cost on the
+    (overwhelmingly common) all-valid path. Returns None if every pathspec is
+    valid, else the first invalid one (matching this module's existing
+    fail-on-first-bad-entry contract at both call sites)."""
+    if not pathspecs:
+        return None
+    try:
+        batch_result = subprocess.run(
+            ["git", "ls-files", "--", *pathspecs], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        batch_result = None
+    if batch_result is not None and batch_result.returncode == 0:
+        return None
+    for ps in pathspecs:
+        if not _validate_pathspec(ps):
+            return ps
+    return None
+
+
 _SCOPE_ITEM_RE = re.compile(r"^\s+-\s+(.+)$")
 _TOPLEVEL_KEY_RE = re.compile(r"^[a-zA-Z]")
 _SCOPE_KEY_RE = re.compile(r"^scope:\s*$")
@@ -1743,14 +1769,15 @@ def do_scoped(
                 pass
 
         try:
+            invalid_ps = _first_invalid_pathspec(include_orphans)
+            if invalid_ps is not None:
+                print(
+                    f"ERROR: --include-orphans: malformed or invalid pathspec '{invalid_ps}'",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             orphan_candidate_files: List[str] = []
             for ops in include_orphans:
-                if not _validate_pathspec(ops):
-                    print(
-                        f"ERROR: --include-orphans: malformed or invalid pathspec '{ops}'",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
                 orphan_candidate_files.extend(_git_ls_files_pathspec(ops))
 
             if not orphan_candidate_files:
@@ -2023,10 +2050,13 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
         )
         sys.exit(1)
 
-    for ps in handoff_pathspecs:
-        if not _validate_pathspec(ps):
-            print(f"ERROR: Malformed or invalid pathspec in scope: '{ps}'", file=sys.stderr)
-            sys.exit(1)
+    invalid_handoff_ps = _first_invalid_pathspec(handoff_pathspecs)
+    if invalid_handoff_ps is not None:
+        print(
+            f"ERROR: Malformed or invalid pathspec in scope: '{invalid_handoff_ps}'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     handoff_files: List[str] = []
     for ps in handoff_pathspecs:

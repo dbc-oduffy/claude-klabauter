@@ -904,6 +904,23 @@ def _interactive_gate(plugin: str, live_path: Path, checkout_ref: str):
             tty.close()
 
 
+def _checkout_approved_files(
+    checkout_ref: str, approved_files: list[str], live_path: Path
+) -> subprocess.CompletedProcess:
+    """`git checkout <checkout_ref> -- <approved_files...>` in ONE spawn.
+
+    Amplification burn-down (state/ledgers/amp-wave4-worklist.md W2):
+    previously one `_git(["checkout", checkout_ref, "--", f], live_path)`
+    spawn per approved file (`_handle_default`'s interactive-partial leg).
+    `git checkout <tree-ish> -- <pathspec>...` accepts multiple pathspecs in
+    a single invocation, so the whole approved set rides one call -- an
+    all-or-nothing checkout (git's own atomicity for this form), matching
+    the pre-existing all-or-nothing error handling at the call site (any
+    failure aborts the refresh; there was never a per-file retry/skip
+    path)."""
+    return _git(["checkout", checkout_ref, "--", *approved_files], live_path)
+
+
 # ---------------------------------------------------------------------------
 # Mode handlers.
 # ---------------------------------------------------------------------------
@@ -1546,11 +1563,10 @@ def _handle_default(
 
     if interactive_partial:
         print(f"{PROG}: [git-leg] PARTIAL checkout of approved files only (HEAD will NOT advance).")
-        for f in interactive_approved:
-            r = _git(["checkout", checkout_ref, "--", f], live_path)
-            if r.returncode != 0:
-                eprint(f"{PROG}: git checkout of '{f}' failed.")
-                return 1
+        r = _checkout_approved_files(checkout_ref, interactive_approved, live_path)
+        if r.returncode != 0:
+            eprint(f"{PROG}: git checkout of approved files failed.")
+            return 1
         new_sha = _git_rev_parse(live_path, "HEAD") or "unknown"
         print(f"{PROG}: [git-leg] PARTIAL checkout complete. HEAD stayed at {new_sha[:12]}.")
     else:

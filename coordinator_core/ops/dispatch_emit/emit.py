@@ -623,6 +623,19 @@ def _reviewers_for_tier(fragment: dict, tier: str) -> list[str]:
         raise ReviewRosterFragmentError(
             f"review roster fragment declares no reviewers for tier {tier!r}"
         )
+    # A schema_version >= 2 fragment maps each tier to {"stages": [...]}, not
+    # to a flat reviewer list. `list()` over that mapping yields its KEYS --
+    # ``['stages']`` -- which composes a review phase dispatching a
+    # nonexistent ``agentType: 'stages'``. Silently wrong beats loudly wrong
+    # for nobody, so refuse: stage consumption is deliberately not implemented
+    # here (it needs gate/abort composition this module has no concept of).
+    if not isinstance(reviewers, list):
+        raise ReviewRosterFragmentError(
+            f"review roster fragment tier {tier!r} is not a flat reviewer "
+            f"list (schema_version {fragment.get('schema_version', 1)!r}); "
+            "this emitter consumes the flat shape only and cannot compose "
+            "the staged shape's gates"
+        )
     return list(reviewers)
 
 

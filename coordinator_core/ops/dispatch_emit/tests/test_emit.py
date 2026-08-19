@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     MixedAgentTypeRowError,
     NoWavesError,
     ReviewRosterFragmentError,
+    _reviewers_for_tier,
     assert_zero_errors,
     compose_script,
     derive_review_tier,
@@ -641,6 +642,32 @@ def test_compose_script_composes_a_parallel_review_phase_for_multiple_reviewers(
     assert "review:coordinator:integrator" in script
     assert "review:coordinator:staff-reviewer" in script
     assert script.count("agentType: 'coordinator:staff-reviewer'") == 1
+
+
+def test_reviewers_for_tier_refuses_a_staged_schema_version_2_fragment():
+    """A v2 fragment maps a tier to ``{"stages": [...]}``. ``list()`` over that
+    mapping yields its KEYS — ``['stages']`` — which would compose a review
+    phase dispatching a nonexistent ``agentType: 'stages'``. This emitter
+    consumes the flat shape only; the staged shape needs gate/abort composition
+    it has no concept of, so it must refuse rather than emit nonsense."""
+    staged = {
+        "schema": "review-roster-fragment",
+        "schema_version": 2,
+        "tiers": {
+            "standard": {
+                "stages": [
+                    {"gate": True, "agents": ["coordinator:prior-art-checker"]},
+                    {"agents": ["coordinator:code-reviewer", "coordinator:staff-eng"]},
+                ]
+            }
+        },
+    }
+
+    with pytest.raises(ReviewRosterFragmentError) as excinfo:
+        _reviewers_for_tier(staged, "standard")
+
+    assert "flat reviewer list" in str(excinfo.value)
+    assert "2" in str(excinfo.value)
 
 
 def test_review_calls_carry_no_model_key_so_the_agent_definition_pins_the_tier():

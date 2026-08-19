@@ -519,11 +519,25 @@ _HEREDOC_SCRIPTABLE_INTERPRETERS = frozenset({
 _SPAWN_INDICATOR_TOKENS = (
     "subprocess", "os.system", "os.popen", "commands.", "shell_exec(",
     "proc_open(", "system(", "exec(", "execsync", "spawnsync", "spawn(",
-    "child_process", "qx(", "qx{", "qx/", "open3", "%x(", "%x{", "`",
+    "child_process", "qx(", "qx{", "qx/", "open3", "%x(", "%x{",
 )
 
+#: Backtick is a spawn indicator in exactly the languages where it MEANS
+#: command substitution. Perl/Ruby/PHP execute `` `cmd` ``; Python and Node
+#: do not -- a backtick there is a syntax error, never a subprocess. Keeping
+#: it unconditional made a markdown code span inside a Python heredoc's
+#: string literal (`` `git reset --hard` `` written as documentation) read as
+#: a spawn, holding the whole body visible to CHECK 1/2/3, which then denied
+#: the prose. Negative spec: this narrows the indicator by INTERPRETER, never
+#: by body content -- every Perl/Ruby/PHP backtick deny is retained.
+#: Reported by DoE-claude, cross-repo memo
+#: `2026-08-19-doe-claude-em-check1-hazard-prose-false-positive-reproduced-and-bounded.md`.
+_BACKTICK_SUBSTITUTION_INTERPRETERS = frozenset({"perl", "ruby", "php"})
 
-def _heredoc_body_has_spawn_indicator(body_lines: List[str]) -> bool:
+
+def _heredoc_body_has_spawn_indicator(
+    body_lines: List[str], interpreter: Optional[str] = None
+) -> bool:
     """True if `body_lines` (a scriptable-interpreter heredoc body) contains
     any token from `_SPAWN_INDICATOR_TOKENS`, case-insensitively. A single
     substring scan over the joined body is intentionally coarse (a
@@ -531,9 +545,18 @@ def _heredoc_body_has_spawn_indicator(body_lines: List[str]) -> bool:
     body that merely MENTIONS "subprocess" in a comment/string) only cost a
     body staying visible to CHECK 2/3's existing regex scan, which is
     itself tolerant of prose (see CHECK 1's oracle-verification precedent);
-    they can never cause a false ALLOW."""
+    they can never cause a false ALLOW.
+
+    `interpreter` is the resolved command word of the introducing line (see
+    `_heredoc_intro_command_word`). A backtick counts as a spawn indicator
+    only for `_BACKTICK_SUBSTITUTION_INTERPRETERS`; an unknown/absent
+    interpreter fails CLOSED and keeps counting it."""
     text = "\n".join(body_lines).lower()
-    return any(tok in text for tok in _SPAWN_INDICATOR_TOKENS)
+    if any(tok in text for tok in _SPAWN_INDICATOR_TOKENS):
+        return True
+    if interpreter is None or interpreter not in _HEREDOC_SCRIPTABLE_INTERPRETERS:
+        return "`" in text
+    return interpreter in _BACKTICK_SUBSTITUTION_INTERPRETERS and "`" in text
 
 
 def _line_has_shell_in_command_position(line: str) -> bool:
@@ -610,15 +633,35 @@ def _classify_heredoc_intro(prefix: str, full_line: str = "") -> str:
     """
     if _line_has_shell_in_command_position(full_line if full_line else prefix):
         return "shell"
+    cmd_tok = _heredoc_intro_command_word(prefix)
+    if cmd_tok is None:
+        return "unknown"
+    if cmd_tok in _HEREDOC_SHELL_INTERPRETERS:
+        return "shell"
+    if cmd_tok in _HEREDOC_SCRIPTABLE_INTERPRETERS:
+        return "scriptable"
+    return "prose"
+
+
+def _heredoc_intro_command_word(prefix: str) -> Optional[str]:
+    """Resolve the command word a heredoc-introducing `prefix` invokes (its
+    basename, wrapper words and `VAR=` assignments skipped), or `None` when
+    that cannot be determined -- an unparseable prefix, one over the
+    tokenizable ceiling, or one with no command word at all.
+
+    Extracted from `_classify_heredoc_intro` so the resolved interpreter is
+    available to `_heredoc_body_has_spawn_indicator`'s backtick arm as well
+    as to the classification itself. `None` is the fail-CLOSED value at both
+    call sites: `"unknown"` classification, and backtick-counts-as-spawn."""
     if _bt_exceeds_tokenizable_ceiling(prefix):
         # DoS bound inherited from `_command_tokenizer`, not a local tuning
-        # knob -- `"unknown"` is the documented always-visible fail-closed
-        # class an unparseable prefix already lands on.
-        return "unknown"
+        # knob -- `None` is the documented always-visible fail-closed
+        # answer an unparseable prefix already lands on.
+        return None
     try:
         tokens = shlex.split(prefix, posix=True)
     except ValueError:
-        return "unknown"
+        return None
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -630,13 +673,8 @@ def _classify_heredoc_intro(prefix: str, full_line: str = "") -> str:
             continue
         break
     if i >= len(tokens):
-        return "unknown"
-    cmd_tok = os.path.basename(tokens[i])
-    if cmd_tok in _HEREDOC_SHELL_INTERPRETERS:
-        return "shell"
-    if cmd_tok in _HEREDOC_SCRIPTABLE_INTERPRETERS:
-        return "scriptable"
-    return "prose"
+        return None
+    return os.path.basename(tokens[i])
 
 
 _QUOTE_SENTINEL_SQ = ""
@@ -658,6 +696,69 @@ def _protect_line_quotes(line: str) -> str:
 
 def _restore_protected_quotes(s: str) -> str:
     return s.replace(_QUOTE_SENTINEL_SQ, "'").replace(_QUOTE_SENTINEL_DQ, '"')
+
+
+def _strip_shell_comments_for_prose_scan(cmd: str) -> str:
+    """Drop shell `#` comments from `cmd` before
+    `check_destructive_git_orphan` pattern-matches it, so prose in a comment
+    can never trip a check that is supposed to match what the command DOES.
+    Same contract as `_seg_excluding_freetext_operands`, one layer out:
+    a comment is text the shell never executes, so removing it can only
+    NARROW what CHECK 1/2/3 see, never widen it into a false ALLOW.
+
+    Negative spec: this is NOT a heredoc fix. The reported case
+    (`python -c "print(1)"  # the doc mentions `` `git reset --hard` ``)
+    carries no heredoc at all -- CHECK 1 builds `after` as everything
+    following the first `reset` token, comments included, so a markdown code
+    span in a trailing comment read as a command substitution.
+    `_seg_resolved_git_subcommand`'s docstring already names the mirror-image
+    hazard (`git push origin main --force # git stash push` suppressing
+    CHECK 2 via a comment); stripping comments strengthens that walk rather
+    than competing with it.
+
+    A `#` opens a comment only at word start (line start or after
+    whitespace) and outside quoting -- `${x#y}`, `foo#bar` and a `#` inside
+    a quoted span are all left alone. Quote state is tracked per line and
+    over the Private-Use-Area sentinels `_protect_line_quotes` substitutes,
+    since kept heredoc-body lines reach this function still protected.
+
+    Fails closed per line, never open: a line whose quoting does not close
+    (unterminated quote, or one over the tokenizable ceiling) is returned
+    UNCHANGED, so the caller's raw regex scan runs exactly as before --
+    still over-blocking, never under-blocking.
+    """
+    single = ("'", _QUOTE_SENTINEL_SQ)
+    double = ('"', _QUOTE_SENTINEL_DQ)
+    out: List[str] = []
+    for line in cmd.split("\n"):
+        if "#" not in line:
+            out.append(line)
+            continue
+        if _bt_exceeds_tokenizable_ceiling(line):
+            # DoS bound inherited from `_command_tokenizer` -- same
+            # unchanged-line fail-closed branch an unterminated quote takes.
+            out.append(line)
+            continue
+        in_sq = in_dq = False
+        cut = None
+        prev_ws = True
+        for idx, ch in enumerate(line):
+            if ch == "\\" and not in_sq:
+                prev_ws = False
+                continue
+            if ch in single and not in_dq:
+                in_sq = not in_sq
+            elif ch in double and not in_sq:
+                in_dq = not in_dq
+            elif ch == "#" and not in_sq and not in_dq and prev_ws:
+                cut = idx
+                break
+            prev_ws = ch.isspace()
+        if in_sq or in_dq:
+            out.append(line)
+            continue
+        out.append(line if cut is None else line[:cut].rstrip())
+    return "\n".join(out)
 
 
 def _strip_heredoc_bodies_for_prose_scan(cmd: str) -> str:
@@ -709,6 +810,7 @@ def _strip_heredoc_bodies_for_prose_scan(cmd: str) -> str:
     hd_word = ""
     hd_strip = False
     hd_class = "unknown"
+    hd_interp: Optional[str] = None
     pending_body_lines: List[str] = []
     for line in lines:
         if not in_hd:
@@ -722,6 +824,7 @@ def _strip_heredoc_bodies_for_prose_scan(cmd: str) -> str:
                 hd_word = w
                 in_hd = True
                 hd_class = _classify_heredoc_intro(line[: m.start()], line)
+                hd_interp = _heredoc_intro_command_word(line[: m.start()])
                 pending_body_lines = []
             out_lines.append(line)
         else:
@@ -731,7 +834,7 @@ def _strip_heredoc_bodies_for_prose_scan(cmd: str) -> str:
             if check == hd_word:
                 in_hd = False
                 if hd_class == "scriptable":
-                    if _heredoc_body_has_spawn_indicator(pending_body_lines):
+                    if _heredoc_body_has_spawn_indicator(pending_body_lines, hd_interp):
                         out_lines.extend(_protect_line_quotes(bl) for bl in pending_body_lines)
                         out_lines.append(line)
                     # else: prose -- buffered body lines AND terminator both
@@ -811,6 +914,7 @@ def _heredoc_shell_payloads(cmd: str, depth: int = 0) -> List[str]:
     hd_word = ""
     hd_strip = False
     hd_class = "unknown"
+    hd_interp: Optional[str] = None
     pending_body_lines: List[str] = []
     for line in lines:
         if not in_hd:
@@ -824,6 +928,7 @@ def _heredoc_shell_payloads(cmd: str, depth: int = 0) -> List[str]:
                 hd_word = w
                 in_hd = True
                 hd_class = _classify_heredoc_intro(line[: m.start()], line)
+                hd_interp = _heredoc_intro_command_word(line[: m.start()])
                 pending_body_lines = []
         else:
             check = line
@@ -833,7 +938,9 @@ def _heredoc_shell_payloads(cmd: str, depth: int = 0) -> List[str]:
                 in_hd = False
                 if hd_class in ("shell", "unknown"):
                     payloads.append("\n".join(pending_body_lines))
-                elif hd_class == "scriptable" and _heredoc_body_has_spawn_indicator(pending_body_lines):
+                elif hd_class == "scriptable" and _heredoc_body_has_spawn_indicator(
+                    pending_body_lines, hd_interp
+                ):
                     payloads.append("\n".join(pending_body_lines))
                 pending_body_lines = []
             else:
@@ -1904,6 +2011,12 @@ def check_destructive_git_orphan(
     # shell-fed-vs-prose discriminator (CHECK 2/3 fix, cross-repo memo
     # 2026-07-2x heredoc-body-prose-false-positive).
     cmd = _strip_heredoc_bodies_for_prose_scan(cmd)
+    # Comments run AFTER heredoc-body stripping (so a `#` inside a body the
+    # pass above discarded is never consulted) and BEFORE
+    # `_strip_ws_quoted_spans` (which would otherwise delete the quoted
+    # spans this scanner needs to track quote state across). See
+    # `_strip_shell_comments_for_prose_scan` for why this cannot widen.
+    cmd = _strip_shell_comments_for_prose_scan(cmd)
     cmd = _strip_ws_quoted_spans(cmd)
     # Restore quote chars sentinel-protected by `_strip_heredoc_bodies_for_
     # prose_scan` for KEPT heredoc-body lines, now that the whitespace-quoted-
@@ -1935,7 +2048,14 @@ def check_destructive_git_orphan(
         # CHECK 1 -- git reset --hard <target>
         if re.search(r"\breset\b", seg) and re.search(r"--hard", seg):
             after = re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
-            if re.search(r"\$\(|`", after):
+            # A lone `$(`/backtick in `after` is not proof of a subshell-
+            # resolved target: prose that NAMES the hazard (a markdown code
+            # span, a comment, a string literal assembled elsewhere) can
+            # leave exactly one delimiter in this slice -- the other half of
+            # its pair sits before `reset`, outside `after` entirely. A real
+            # target opens AND closes its subshell inside `after`, so require
+            # the matched pair rather than bare presence (DR-144).
+            if re.search(r"\$\(.*\)|`.*`", after):
                 return _deny(
                     "BLOCKED: 'git reset --hard' with a subshell-resolved "
                     "target ($(...) or backticks) cannot be verified safe — "
@@ -3080,6 +3200,23 @@ def check_destructive_git_clean(
     if _override("COORDINATOR_OVERRIDE_GIT_CLEAN"):
         return None
 
+    # W5/C5 (2026-08-19, spawn-count defect): identical to the F0-b shape
+    # `_new_git_memo` was built for -- a chained command repeating the exact
+    # same `git clean` invocation (`git clean -nd dirA && git clean -nd
+    # dirA`) re-ran the oracle once per segment with byte-identical argv.
+    # `extra_env` is a fixed `{"LC_ALL": "C"}` on every call in this loop, so
+    # it is not part of the memo key -- folding it in would be a no-op that
+    # only widens the key for no reason.
+    _clean_oracle_memo: Dict[Tuple[str, ...], Tuple[int, str]] = {}
+
+    def _memo_run_clean_oracle(args: List[str]) -> Tuple[int, str]:
+        key = tuple(args)
+        cached = _clean_oracle_memo.get(key)
+        if cached is None:
+            cached = _run_git(args, extra_env={"LC_ALL": "C"})
+            _clean_oracle_memo[key] = cached
+        return cached
+
     for seg in _split_segments(cmd):
         if not seg.strip():
             continue
@@ -3112,8 +3249,7 @@ def check_destructive_git_clean(
             tail = re.sub(r".*\s--\s*", "", after_clean, count=1)
             pathspecs = tail.split()
 
-        rc, out = _run_git(oracle_args + (["--", *pathspecs] if pathspecs else []),
-                            extra_env={"LC_ALL": "C"})
+        rc, out = _memo_run_clean_oracle(oracle_args + (["--", *pathspecs] if pathspecs else []))
         if rc == -1:
             _clean_note = operator_override_note(
                 "COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload, git_root=git_root
