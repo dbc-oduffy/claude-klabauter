@@ -719,7 +719,7 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
     diff and resolve the verdict toward reviewing less.
 
     `gross_loc` is the added+deleted sum over the range's non-noise files
-    (2026-08-11 metric-wide noise exclusion, matching `_compute_chain_oracle`
+    (2026-08-11 metric-wide noise exclusion, matching the removed `_compute_chain_oracle`
     / `review_brightline_gate._session_scoped`'s contract — see
     `docs/plans/2026-08-11-brightline-gates-measure-reviewable-chan.md` AC3).
     Naming trap (review finding, 2026-08-11): `workstream_complete/__init__.py`'s
@@ -759,7 +759,7 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
         added, deleted, path = match.groups()
         # 2026-08-12: resolve rename notation (`{old => new}`/`old => new`)
         # to the destination path before any path predicate sees it — same
-        # fix as `review_brightline_gate._compute_chain_oracle`'s, over
+        # fix as the removed `review_brightline_gate._compute_chain_oracle`'s (K-007), over
         # the identical bug (`_is_noise_path`'s anchored lifecycle-prefix
         # match never fires against the literal rename fragment). See
         # `_resolve_numstat_row_path`.

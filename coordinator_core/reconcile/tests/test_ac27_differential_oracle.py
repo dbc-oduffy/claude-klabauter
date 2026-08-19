@@ -171,6 +171,74 @@ def test_corpus_axis_does_not_report_appeared_or_disappeared_as_deltas(
     assert result["disappeared"][0]["handoff_id"] == "only-at-old"
 
 
+def test_check_transitive_import_isolation_flags_only_the_diverged_path(
+    tmp_path: Path,
+) -> None:
+    """Slice-s7 review finding: `_check_transitive_import_isolation`'s reuse
+    of `cat_file_batch_objects` (the `[pre-specs...] + [post-specs...]`
+    index recovery, `i` / `n+i`) was entirely unexercised. Two covered
+    paths, only one diverged between the two pinned shas -- a broken index
+    recovery (e.g. `n+i` off by one, or only the first path ever checked)
+    would either miss the real divergence or misattribute it to the wrong
+    path; this asserts both: exactly one warning, naming the path that
+    actually changed, silent on the one that did not.
+    """
+    root = tmp_path / "iso-repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "Test")
+    (root / "module_a.py").write_text("A = 1\n", encoding="utf-8")
+    (root / "module_b.py").write_text("B = 1\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "pre")
+    pre_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+    (root / "module_a.py").write_text("A = 2\n", encoding="utf-8")  # diverges
+    # module_b.py left untouched -- must stay silent.
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "post")
+    post_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            oracle, "_GATE_EVAL_TRANSITIVE_IMPORT_PATHS", ("module_a.py", "module_b.py"),
+        )
+        warnings = oracle._check_transitive_import_isolation(root, pre_sha, post_sha)
+
+    assert len(warnings) == 1
+    assert "module_a.py" in warnings[0]
+    assert not any("module_b.py" in w for w in warnings)
+
+
+def test_check_transitive_import_isolation_silent_when_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """Companion negative case: no divergence anywhere in the covered path
+    set must produce an empty warnings list, not a false positive from the
+    batched read."""
+    root = tmp_path / "iso-repo-clean"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "Test")
+    (root / "module_a.py").write_text("A = 1\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "pre")
+    pre_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+    (root / "unrelated.py").write_text("U = 1\n", encoding="utf-8")  # module_a.py untouched
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "post")
+    post_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(oracle, "_GATE_EVAL_TRANSITIVE_IMPORT_PATHS", ("module_a.py",))
+        warnings = oracle._check_transitive_import_isolation(root, pre_sha, post_sha)
+
+    assert warnings == []
+
+
 def test_run_both_axes_keeps_the_two_axes_under_distinct_keys(
     corpus_repo: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

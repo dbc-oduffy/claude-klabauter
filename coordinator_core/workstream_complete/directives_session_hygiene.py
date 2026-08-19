@@ -174,7 +174,7 @@ stays internally consistent and reviewable in one read:
      (directives_lessons_plan.py build_lesson_capture_directives);
      `d-flip-memo-status` entries, `d-emit-deletion-blocks`
      (directives_memo_lifecycle.py); `d-run-review-brightline-gate`,
-     `d-run-chain-plan-brightline-gate`, per-slice `d-freeze-and-
+     per-slice `d-freeze-and-
      dispatch-review-partition-*`, `d-freeze-and-dispatch-review-
      partition-integrator`, `d-run-chain-coverage-gate`, `d-write-
      review-trail`, `d-run-ubt-pending-check` (when emitted; the table

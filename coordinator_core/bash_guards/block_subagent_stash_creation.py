@@ -131,6 +131,11 @@ from coordinator_core.bash_guards.block_stash_destruction import (
     _STASH_WORD_RE,
 )
 
+# Held Bash-only deliberately (2026-08-19 subagent-boundary MATCHERS pass):
+# same `if tokens is None: return _evaluate_legacy(cmd)` free-text fallback
+# as `block_stash_destruction.py`, sharing its risk -- see that module's
+# comment and docs/reference/guard-tool-name-membership.md § 3 (documented
+# cohort, EM-ruled).
 CLASS = "hard-deny"
 MATCHERS = ("Bash",)
 #: `dispatch.py` hardcodes chain ordering explicitly, so this value governs

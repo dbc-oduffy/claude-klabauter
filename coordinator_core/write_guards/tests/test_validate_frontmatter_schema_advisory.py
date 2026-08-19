@@ -712,6 +712,108 @@ class TestPlanTasksSpineWarn:
             f"warn at the schema layer: {result}"
         )
 
+    # Review: review-a-write-guard (MAJOR) -- `_cf_plan_tasks_writes_declared`
+    # was registered in `_PLAN_TASKS_CROSS_FIELD_RULES` but this guard never
+    # forwarded `plan_created`, so it never fired here either -- mirrors the
+    # deny sibling's identical fix (2026-08-19): `_plan_tasks_spine_errors`
+    # now forwards `frontmatter.get('created')`.
+
+    _POST_CUTOFF_FRONTMATTER = (
+        "---\ntitle: Test plan\ncreated: 2026-08-19\nauthor: test\nstatus: draft\n---\n\n"
+        "# Plan\n\n## Tasks\n"
+    )
+
+    def _write_and_check_with_frontmatter(self, tmp_path, frontmatter, tasks_block):
+        fp = self._plan_path(tmp_path)
+        fp.write_text(frontmatter, encoding="utf-8")
+        new_content = frontmatter + tasks_block
+        return guard.check(
+            _payload("Edit", str(fp), str(tmp_path), old_string=frontmatter, new_string=new_content)
+        )
+
+    def test_writes_declared_post_cutoff_open_row_missing_writes_warns(self, tmp_path):
+        """The regression this fix closes: before it, this assertion read
+        None regardless of whether `writes` enforcement actually worked --
+        `_cf_plan_tasks_writes_declared` never fired on this guard at all."""
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/foo\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(
+            tmp_path, self._POST_CUTOFF_FRONTMATTER, tasks_block
+        )
+        assert result is not None
+        text = _advisory_text(result)
+        assert "tasks[C1].writes" in text
+        assert "'writes' is required on a non-deferred open row" in text
+
+    def test_writes_declared_post_cutoff_open_row_missing_writes_silent_under_strict(
+        self, tmp_path, monkeypatch
+    ):
+        """This module stands down under strict -- the deny sibling renders
+        the finding instead (mirrors `test_strict_mode_yields_none_not_mine`
+        above)."""
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/foo\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(
+            tmp_path, self._POST_CUTOFF_FRONTMATTER, tasks_block
+        )
+        assert result is None
+
+    def test_writes_declared_pre_cutoff_open_row_missing_writes_passes(self, tmp_path):
+        """Retro-safety: a plan `created` before the 2026-08-19 cutoff is
+        never enforced -- `self._FRONTMATTER` carries `created: 2026-07-29`."""
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/foo\n"
+            "```\n"
+        )
+        assert self._write_and_check(tmp_path, tasks_block) is None
+
+    def test_writes_declared_epistemic_premise_carveout_passes(self, tmp_path):
+        """A row gated on a predecessor's epistemic-premise verdict has no
+        interface to declare `writes` against yet -- the carve-out must
+        survive the round trip through this guard, not just the rule in
+        isolation."""
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C0\n"
+            "  title: Decide whether C1 is needed\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/foo\n"
+            "- id: C1\n"
+            "  title: Do a thing, if C0 says so\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/foo\n"
+            "  depends_on:\n"
+            "    - chunk: C0\n"
+            "      gate_kind: epistemic-premise\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(
+            tmp_path, self._POST_CUTOFF_FRONTMATTER, tasks_block
+        )
+        # C0 has no depends_on and no writes -- it must still fire; only C1's
+        # carve-out is under test.
+        assert result is not None
+        text = _advisory_text(result)
+        assert "tasks[C0].writes" in text
+        assert "tasks[C1]" not in text
+
 
 class TestReviewedRangeOffer:
     """docs/plans/2026-08-14-the-write-time-offer-for-reviewed-range.md — the

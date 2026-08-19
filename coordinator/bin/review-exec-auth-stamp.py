@@ -13,7 +13,18 @@
 # every other direct-import CLI in this tree (pickup-assemble,
 # archive-stamp-cli, baton-assemble).
 #
-# Subcommand:
+# Subcommands:
+#   authorize-invocation <plan-path> --typed-command </command>
+#       [--utterance <PM's verbatim words>] [--at <YYYY-MM-DD>]
+#     The PM-invocation mint: the command that means "execute this" is the
+#     command that authorizes it. --typed-command is the only required flag;
+#     --utterance is optional — a bare invocation with no accompanying words
+#     still mints, and the note then records the typed command itself as the
+#     authorizing act. When supplied, the utterance is embedded verbatim.
+#     Writes the same four fields through the same single stamping surface,
+#     always with execution_authorized_by: PM. MUTATING. Convergent —
+#     re-invoking against unchanged plan content is a no-op, including
+#     across a date boundary. Refuses a non-slash-command trigger.
 #   stamp <plan-path> --by <who> --note <verbatim-note> [--at <YYYY-MM-DD>]
 #     Computes the plan-body hash and writes all four
 #     execution_authorized_{by,at,sha,note} fields onto the plan's own

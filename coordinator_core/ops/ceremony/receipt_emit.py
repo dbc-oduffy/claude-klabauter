@@ -75,7 +75,6 @@ from coordinator_core.engine_version import resolve_engine_dirty, resolve_engine
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.ops.ceremony.receipt_schema import (
     CEREMONY_RECEIPT_DIR,
-    COVERAGE_GATE_RELPATH,
     compute_op_tail,
     make_receipt,
 )
@@ -349,7 +348,6 @@ def emit_receipt(
         scope_mode=ctx.scope_mode,
         nodes=ctx.nodes,
         op_tail=op_tail,
-        coverage_pointer=COVERAGE_GATE_RELPATH,
         # Review: code-reviewer 2026-07-08 Finding 5 — thread sid (already available
         # here from emit_receipt's own param) into the receipt body so a read-back
         # site can verify the resolved shard's body-level sid matches the sid it

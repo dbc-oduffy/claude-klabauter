@@ -45,6 +45,7 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.frontmatter.schema_validate import (
     _cf_carried_items_shape,
     _cf_plan_tasks_disposition_shape,
+    _cf_plan_tasks_writes_declared,
     _GLOB_OVERRIDES,
     _lint_collect_files_for_glob,
     _lint_is_sidecar_file,
@@ -2359,6 +2360,155 @@ class TestPlanTasksDispositionShape:
         )
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition' and 'disposition_detail' in e['error'] for e in errors)
+
+
+class TestPlanTasksWritesDeclared:
+    """`_cf_plan_tasks_writes_declared` (sibling to
+    `_cf_plan_tasks_disposition_shape`): a non-deferred, open row must
+    declare `writes` — `writes: []` counts as declared; an ABSENT key OR a
+    present-but-null value (`writes:` with nothing after it, `writes: null`)
+    fails, matching `spine_read`'s AC2 UNDECLARED predicate exactly. Called
+    directly (not via `validate_frontmatter`) since the retro-safety cutoff
+    needs a `plan_created` this function derives from no row on its own —
+    `validate_frontmatter`'s public API never forwards it."""
+
+    _POST_CUTOFF = '2026-08-19'
+    _PRE_CUTOFF = '2026-07-01'
+
+    def test_absent_writes_on_open_row_fails(self):
+        row = _valid_plan_task_row()
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is not None
+        assert error['field'] == 'writes'
+        assert 'C1' in error['error']
+
+    def test_empty_writes_list_passes(self):
+        row = _valid_plan_task_row(writes=[])
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is None
+
+    def test_deferred_row_passes_regardless_of_writes(self):
+        row = _valid_plan_task_row(deferred=True)
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is None
+
+    def test_coded_row_passes_regardless_of_writes(self):
+        row = _valid_plan_task_row(
+            disposition='coded',
+            disposition_ref='a1b2c3d',
+        )
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is None
+
+    def test_pre_cutoff_plan_passes(self):
+        row = _valid_plan_task_row()
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._PRE_CUTOFF)
+        assert error is None
+
+    def test_unforwarded_plan_created_passes(self):
+        """A caller that does not wire `plan_created` through (both write
+        guards' `_plan_tasks_spine_errors` now do; this covers any other
+        caller that doesn't) must not reject — see the function's own
+        docstring for why unforwarded and genuinely-absent read identically
+        here."""
+        row = _valid_plan_task_row()
+        error = _cf_plan_tasks_writes_declared(row)
+        assert error is None
+
+    def test_absent_writes_passes_on_an_epistemic_premise_gated_row(self):
+        """The one sanctioned omission. `spine_read`'s AC2 gives an ABSENT
+        key the UNDECLARED sentinel ("unknown, collides with everything"),
+        which is what forces wave separation and lets
+        `wave_map._compute_held_out` hold the row out of the pass. A row
+        whose surface a predecessor names cannot declare `writes` yet, and
+        must NOT be pushed toward `writes: []` — that is the positive claim
+        "writes nothing", and `pathspec.commit_pathspec` silently drops a
+        declared-empty row from a SHARED wave's pathspec, losing its work."""
+        row = _valid_plan_task_row(
+            depends_on=[{'chunk': 'C0', 'gate_kind': 'epistemic-premise'}],
+        )
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is None
+
+    def test_absent_writes_still_fails_on_a_runtime_gated_row(self):
+        """The carve-out is scoped to `epistemic-premise` alone. An
+        `output-consumption-runtime` edge means the predecessor's artifact
+        must exist at runtime — the surface is knowable, so the omission has
+        no alibi."""
+        row = _valid_plan_task_row(
+            depends_on=[{'chunk': 'C0', 'gate_kind': 'output-consumption-runtime'}],
+        )
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is not None
+        assert error['field'] == 'writes'
+
+    def test_absent_writes_still_fails_on_a_malformed_bare_id_edge(self):
+        """A bare-chunk-id `depends_on` entry is not a valid edge (the schema
+        requires objects with chunk/gate_kind), so it cannot earn the
+        carve-out. Belt-and-braces against the shorthand that broke a real
+        emit: the malformed edge must not read as an epistemic alibi."""
+        row = _valid_plan_task_row(depends_on=['C0'])
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is not None
+
+    def test_null_writes_value_fails_same_as_absent_key(self):
+        """`writes: null` (or a bare `writes:` with nothing after it) parses
+        to `None`, exactly like an absent key. `spine_read.read_spine`'s AC2
+        collapses BOTH spellings to the UNDECLARED sentinel (see
+        `spine_read.py`'s `writes is None` branch) — a guard keyed on mere
+        key-presence (`'writes' in row`) would let this spelling through
+        wearing a colon while the emitter still reads it as undeclared. Must
+        fail identically to the absent-key case."""
+        row = _valid_plan_task_row(writes=None)
+        assert 'writes' in row  # key present, value null -- the trap case
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is not None
+        assert error['field'] == 'writes'
+
+    def test_null_writes_passes_on_an_epistemic_premise_gated_row(self):
+        """The null spelling earns the same epistemic-premise carve-out as
+        the absent-key spelling -- both are UNDECLARED to `spine_read`."""
+        row = _valid_plan_task_row(
+            writes=None,
+            depends_on=[{'chunk': 'C0', 'gate_kind': 'epistemic-premise'}],
+        )
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is None
+
+    def test_hint_does_not_offer_writes_empty_list_as_the_omission_remedy(self):
+        """Regression pin for the exact prior inversion: the first version of
+        this rule told authors to write `writes: []` to fix an omission,
+        which is the un-alibi'd-omission bug wearing a colon (see this
+        function's own NEGATIVE SPEC docstring section). The hint text is
+        unguarded prose an editor could silently re-invert while every other
+        test stays green, so pin its content directly: it must name omission
+        (via the epistemic-premise gate) as the correct remedy, and must not
+        read as instructing `writes: []` as a fix for the omission case."""
+        row = _valid_plan_task_row()
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        hint = error['hint']
+        assert 'epistemic-premise' in hint
+        assert "'writes: []' means it writes nothing" in hint
+        assert not hint.startswith("Write 'writes: []'")
+        assert "omit 'writes' only on a row gated" in hint.lower()
+
+    def test_epistemic_premise_carve_out_matches_the_schema_enum_member(self):
+        """`_cf_plan_tasks_writes_declared` hardcodes the literal
+        `'epistemic-premise'`; `wave_map` independently names it
+        `_EPISTEMIC_PREMISE`. Neither derives from
+        `plan-tasks.schema.json`'s `depends_on.items.properties.gate_kind`
+        enum, so nothing catches the two (three, counting the schema) drifting
+        apart. Drive the row's `gate_kind` FROM THE SCHEMA -- not a literal in
+        this test -- so a rename on any side is caught here."""
+        schema = json.loads(_PLAN_TASKS_SCHEMA.read_text())
+        enum = schema['properties']['depends_on']['items']['properties']['gate_kind']['enum']
+        assert 'epistemic-premise' in enum
+        schema_gate_kind = next(v for v in enum if v == 'epistemic-premise')
+        row = _valid_plan_task_row(
+            depends_on=[{'chunk': 'C0', 'gate_kind': schema_gate_kind}],
+        )
+        error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
+        assert error is None
 
 
 class TestPlanTasksCaseAgainstShape:

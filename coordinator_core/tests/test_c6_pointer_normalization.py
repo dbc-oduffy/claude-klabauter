@@ -216,6 +216,72 @@ def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
     )
 
 
+class TestForeignFamilyPointerIsNotRehomed:
+    """A pointer naming a non-baton family must not basename-recover onto a baton.
+
+    Regression: `state/handoffs/<name>.md` carrying
+    `predecessor: cross-repo/inbox/<name>.md` (the memo-pickup convention, where
+    the handoff inherits the memo's slug) resolved onto ITSELF once the memo was
+    archived out of `cross-repo/inbox/`, because resolve_target's stale-path
+    recovery tier probes `state/handoffs/<basename>` regardless of the directory
+    the ref names. `referenced_by` then reported the baton as its own referencer,
+    which blocks its archival forever. Fixture-backed rather than corpus-backed:
+    the differential-oracle tests below can only catch this while the offending
+    record happens to be in the live corpus.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path):
+        state_dir = tmp_path / "state" / "handoffs"
+        state_dir.mkdir(parents=True)
+        (tmp_path / "cross-repo" / "archive").mkdir(parents=True)
+        baton = state_dir / "2026-08-17_000000_memo-topic.md"
+        _write_handoff(
+            baton,
+            slug="memo-topic",
+            predecessor="cross-repo/inbox/2026-08-17_000000_memo-topic.md",
+        )
+        return tmp_path, state_dir, baton
+
+    def test_resolve_target_does_not_rehome_onto_same_basename_baton(self, repo):
+        tmp_path, state_dir, baton = repo
+        resolved = dag.resolve_target(
+            "cross-repo/inbox/2026-08-17_000000_memo-topic.md",
+            str(state_dir),
+            str(tmp_path),
+            include_history_tier=False,
+        )
+        assert resolved is None, (
+            "a ref naming cross-repo/inbox/ must not resolve to a same-basename "
+            f"handoff; got {resolved!r}"
+        )
+
+    def test_referenced_by_reports_no_self_edge(self, repo):
+        tmp_path, state_dir, baton = repo
+        result = dag.referenced_by(
+            str(baton),
+            [str(baton)],
+            edge_kinds={"predecessor"},
+            handoff_dir=str(state_dir),
+        )
+        assert result["referencedBy"] == []
+        assert result["referenced"] is False
+
+    def test_baton_family_ref_still_basename_recovers(self, repo):
+        """Negative control — the stale-path recovery this fix narrows still works."""
+        tmp_path, state_dir, baton = repo
+        parent = state_dir / "2026-07-01_000000_parent.md"
+        _write_handoff(parent, slug="parent")
+        resolved = dag.resolve_target(
+            "archive/handoffs/2026-07/2026-07-01_000000_parent.md",
+            str(state_dir),
+            str(tmp_path),
+            include_history_tier=False,
+        )
+        assert resolved is not None
+        assert os.path.abspath(resolved) == os.path.abspath(str(parent))
+
+
 class TestDifferentialOracleAgreement:
     def test_claude_klabauter_predecessor_family(self):
         root = str(Path(__file__).resolve().parents[2])

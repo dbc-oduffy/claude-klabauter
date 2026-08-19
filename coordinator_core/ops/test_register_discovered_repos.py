@@ -56,7 +56,7 @@ def _make_fake_machine_local(bin_dir: Path, registry: dict) -> Path:
     reg_file.write_text("")
     impl = bin_dir / "_fake_machine_local_impl.py"
     impl.write_text(
-        "import sys, pathlib\n"
+        "import json, sys, pathlib\n"
         f"reg = pathlib.Path({str(reg_file)!r})\n"
         "lines = [l for l in reg.read_text().splitlines() if l.strip()]\n"
         "kv = dict(l.split('=', 1) for l in lines)\n"
@@ -73,6 +73,12 @@ def _make_fake_machine_local(bin_dir: Path, registry: dict) -> Path:
         "    val = sys.argv[3]\n"
         "    kv[key] = val\n"
         "    reg.write_text('\\n'.join(f'{k}={v}' for k, v in kv.items()) + '\\n')\n"
+        "    sys.exit(0)\n"
+        "elif cmd == 'dump':\n"
+        "    args = sys.argv[1:]\n"
+        "    prefix = args[args.index('--prefix') + 1] if '--prefix' in args else None\n"
+        "    out = {k: v for k, v in kv.items() if prefix is None or k.startswith(prefix + '.')}\n"
+        "    print(json.dumps(out), end='')\n"
         "    sys.exit(0)\n"
         "sys.exit(9)\n"
     )
@@ -160,6 +166,69 @@ def test_non_interactive_registers_absent_keys(env, tmp_path, monkeypatch, capsy
     reg = _read_registry(bin_dir)
     assert reg["repos.repo_alpha"] == repo_a
     assert reg["repos.repo_beta"] == repo_b
+
+
+def test_batched_snapshot_resolves_multiple_candidates_without_per_key_has(
+    env, tmp_path, monkeypatch
+):
+    """Multi-item regression, T3 h4-ops-b deferred item: with THREE
+    candidates (one already registered, two new), the already-registered/
+    not-yet-registered determination for all three comes from ONE `dump`
+    call, not one `has` spawn per candidate.
+
+    FAILS against the pre-batch per-candidate `has` loop: that code path
+    never calls `dump` at all, so asserting `dump_calls == 1` would see 0;
+    reverting `_registry_snapshot`'s call site back to the per-key `has`
+    loop makes this test fail. Confirmed by the dispatching agent via local
+    revert-and-rerun; see the run report.
+
+    Also proves per-item attribution survives the batch: the pre-registered
+    repo is left untouched (only-if-absent) while both new repos register,
+    in the same run.
+    """
+    lib_dir, bin_dir = env
+    repo_a = str(tmp_path / "dev" / "repo-alpha")
+    repo_b = str(tmp_path / "dev" / "repo-beta")
+    repo_c = str(tmp_path / "dev" / "repo-gamma")
+    _stub_discover(monkeypatch, [repo_a, repo_b, repo_c])
+
+    reg_file = bin_dir / "_fake_registry.txt"
+    reg_file.write_text("repos.repo_alpha=/manually/overridden/path\n")
+
+    import coordinator_core.ops.register_discovered_repos as rdr_mod
+
+    real_run = rdr_mod.subprocess.run
+    dump_calls = []
+    has_calls = []
+
+    def _counting_run(argv, *args, **kwargs):
+        if "dump" in argv:
+            dump_calls.append(list(argv))
+        if "has" in argv:
+            has_calls.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(rdr_mod.subprocess, "run", _counting_run)
+
+    rc = main(["--non-interactive"], self_dir=lib_dir)
+
+    assert rc == 0
+    assert len(dump_calls) == 1, (
+        f"expected exactly one `dump` spawn resolving all 3 candidates' "
+        f"registration status, got {len(dump_calls)}: {dump_calls!r}"
+    )
+    assert has_calls == [], (
+        f"a successful dump snapshot must make the per-candidate `has` "
+        f"fallback unreachable; got {has_calls!r}"
+    )
+
+    reg = _read_registry(bin_dir)
+    assert reg["repos.repo_alpha"] == "/manually/overridden/path", (
+        "the pre-registered repo must be left untouched (only-if-absent), "
+        f"got {reg!r}"
+    )
+    assert reg["repos.repo_beta"] == repo_b
+    assert reg["repos.repo_gamma"] == repo_c
 
 
 def test_only_if_absent_never_clobbers(env, tmp_path, monkeypatch):

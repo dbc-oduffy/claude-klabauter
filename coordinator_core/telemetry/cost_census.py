@@ -115,11 +115,12 @@ from typing import Dict, List, Optional
 #: comparable run over run even as new ops are added elsewhere — an op
 #: NOT in this list is simply not part of the series yet, not silently
 #: dropped from view (op-latency.jsonl itself still has every row).
-#: `review_brightline_gate.from_handoff` is the C1 instrument this module's
-#: own sibling deliverable just added (K-004) — included from day one so
-#: its very first day of traffic starts building a comparable series.
+#: `review_brightline_gate.from_handoff` (the K-004 C1 instrument) was
+#: REMOVED from this tuple on 2026-08-19: the op it measured is gone
+#: (state/kill-ledger.md K-007) and can never emit another row, so keeping
+#: it would report a permanent zero as if it were a measurement. Its 117
+#: historical rows remain in op-latency.jsonl and are quoted in K-007.
 HOT_PATH_OPS: tuple = (
-    "review_brightline_gate.from_handoff",
     "coverage.gate",
     "handoff.stamp",
     "session.claim_plan",

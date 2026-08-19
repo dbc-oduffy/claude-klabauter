@@ -210,6 +210,47 @@ def test_is_tracked_batch_empty_input_returns_empty_dict_no_spawn(tmp_path: Path
     assert result == {}
 
 
+@_requires_rg
+def test_is_tracked_batch_all_tracked_rc0_branch(tmp_path: Path):
+    """A batch where every path is tracked exercises the rc==0 branch
+    (`{p: "tracked" for p in paths}`) in isolation -- the existing mixed
+    fixture only reaches rc==0 incidentally via rc==1's stdout parse.
+    Pre-fix, this branch was untouched by Finding 1 (it never parses
+    stdout), so this test does not regress against the pre-fix code; it
+    closes the coverage gap the review named (amp-s8 Finding 3)."""
+    _init_repo_with_commits(tmp_path)
+    tracked_abs = tmp_path / "archive" / "handoffs" / "eligible.md"
+
+    result = _run(_is_tracked_batch(tmp_path, [tracked_abs]))
+
+    assert result == {tracked_abs: "tracked"}
+
+
+@_requires_rg
+def test_is_tracked_batch_quoted_path_is_classified_tracked(tmp_path: Path):
+    """A tracked path containing a non-ASCII byte is C-quoted by `git
+    ls-files` under the default `core.quotePath=true` -- a raw
+    `splitlines()` parse of that quoted stdout form never matches the
+    unquoted `rel` string, so the pre-fix implementation (rc==1 branch,
+    `set(out.decode().splitlines())` membership test) misclassifies this
+    TRACKED path as "untracked". `-z` disables quoting, so the fixed
+    implementation reports "tracked". This is Finding 1 from the review
+    (amp-s8) -- this test fails against the pre-fix splitlines() parse and
+    passes against the `-z`/NUL-split fix."""
+    _init_repo_with_commits(tmp_path)
+    quoted_path = tmp_path / "archive" / "handoffs" / "quötéd.md"
+    quoted_path.write_text("body\n", encoding="utf-8")
+    _git("add", "--", "archive/handoffs/quötéd.md", cwd=tmp_path)
+    _git("commit", "-q", "-m", "add quoted-path candidate", cwd=tmp_path)
+
+    untracked_abs = tmp_path / "archive" / "handoffs" / "never-added.md"
+    untracked_abs.write_text("body\n", encoding="utf-8")
+
+    result = _run(_is_tracked_batch(tmp_path, [quoted_path, untracked_abs]))
+
+    assert result == {quoted_path: "tracked", untracked_abs: "untracked"}
+
+
 def test_is_tracked_batch_nonzero_nonone_rc_is_indeterminate_for_every_path(
     tmp_path: Path, monkeypatch
 ):
@@ -415,10 +456,17 @@ def test_apply_disposal_manifest_deletes_untracked_no_commit_for_that_half(tmp_p
     untracked = tmp_path / "archive" / "handoffs" / "untracked.md"
     untracked.write_text(
         "---\nshipped_in: 68b27420\nstatus: consumed\ndeployment_state: shipped\n"
-        "realized_by: inline\n---\nbody\n",
+        "realized_by: inline\ndistill_fate: ephemeral\n---\nbody\n",
         encoding="utf-8",
     )
-    # Deliberately NOT git-added — stays untracked.
+    # Deliberately NOT git-added — stays untracked. `distill_fate: ephemeral`
+    # is required here: check_distill_fate's absent-fate branch fails CLOSED
+    # for a candidate with no git history (2026-08-06 safety-hole fix — a
+    # zero-history result is indistinguishable from a shallow/pruned clone
+    # masking a pre-cutover candidate), so an untracked fixture with no
+    # explicit fate would never reach this test's untracked-delete mechanics
+    # at all — it would be newly_blocked before compute_apply_plan even gets
+    # to partition by tracked-status.
 
     manifest = _manifest([_eligible_row("archive/handoffs/untracked.md")])
     stamped = _stamped(manifest)
@@ -722,7 +770,15 @@ def _write_child_handoff(
     value is an opaque id, not the child's own path (a path would make guard
     3's active-reference scan see the child as "still referenced" by its own
     parent and block its delete this run — a real, separate guard
-    interaction, not what these fixtures are testing)."""
+    interaction, not what these fixtures are testing).
+
+    Carries `distill_fate: ephemeral` unconditionally: check_distill_fate's
+    absent-fate branch fails CLOSED for a candidate with no git history
+    (2026-08-06 safety-hole fix), so an UNTRACKED child fixture with no
+    explicit fate would be newly_blocked before ever reaching the
+    tracked/untracked delete mechanics these tests target. Harmless for
+    TRACKED-child callers too — `ephemeral` is an unconditional PASS
+    regardless of tracked status."""
     path.parent.mkdir(parents=True, exist_ok=True)
     id_line = f"handoff_id: {handoff_id}\n" if handoff_id else ""
     path.write_text(
@@ -733,6 +789,7 @@ def _write_child_handoff(
         f"{edge_field}: {edge_value}\n"
         f"{id_line}"
         "realized_by: inline\n"
+        "distill_fate: ephemeral\n"
         "---\n"
         "body\n",
         encoding="utf-8",

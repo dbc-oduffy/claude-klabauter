@@ -532,10 +532,18 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
     superseded`'s own docstring for why the fixture needs two branches.
 
     The `executed` leg of each site's legitimation is measured HERE, not inferred from the
-    spawn count alone -- `is_ancestor_calls`/`invoke_publish_calls` wrap the real functions via
-    `monkeypatch.setattr`, so a fixture that silently short-circuits the superseded branch (and
-    still happens to match the manifest's spawn count by coincidence) fails loudly instead of
-    passing quietly.
+    spawn count alone -- `push_once_calls`/`is_ancestor_calls`/`invoke_publish_calls` wrap the
+    real functions via `monkeypatch.setattr`, so a fixture that silently short-circuits the
+    superseded branch (and still happens to match the manifest's spawn count by coincidence)
+    fails loudly instead of passing quietly.
+
+    All THREE get their own wrapper deliberately. `push_once` could be argued from control flow
+    alone -- it is the unconditional first statement of `run_push_with_retry`'s retry loop, and
+    `_is_ancestor` is only reachable after a `push_once` rejection, so a verified `_is_ancestor`
+    call implies one. That inference is sound, and it is still the wrong shape for this gate: an
+    `executed` leg is a MEASUREMENT, and an argument that a measurement was implied is what the
+    three-leg definition exists to refuse. Chaining off a sibling's evidence also silently breaks
+    if that sibling's reachability ever changes.
     """
     tmp_path = tmp_path_factory.mktemp("e2e-spawn-pending-drain")
     repo, schema_sha = _init_repo_pending_drain_superseded(tmp_path)
@@ -551,10 +559,16 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
     )
     assert wrote, "fixture could not plant the pending-push record"
 
+    push_once_calls = {"n": 0}
     is_ancestor_calls = {"n": 0}
     invoke_publish_calls = {"n": 0}
+    orig_push_once = auto_push.push_once
     orig_is_ancestor = auto_push._is_ancestor
     orig_invoke_publish = auto_push._invoke_cockpit_publish
+
+    def _push_once_wrapper(*a, **kw):
+        push_once_calls["n"] += 1
+        return orig_push_once(*a, **kw)
 
     def _is_ancestor_wrapper(*a, **kw):
         is_ancestor_calls["n"] += 1
@@ -564,6 +578,7 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
         invoke_publish_calls["n"] += 1
         return orig_invoke_publish(*a, **kw)
 
+    monkeypatch.setattr(auto_push, "push_once", _push_once_wrapper)
     monkeypatch.setattr(auto_push, "_is_ancestor", _is_ancestor_wrapper)
     monkeypatch.setattr(auto_push, "_invoke_cockpit_publish", _invoke_publish_wrapper)
 
@@ -583,6 +598,10 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
         "fixture's own commit did not push cleanly on work/main -- push_state is %r, so "
         "_drain_pending_push_after_sync never fires and this test is measuring the wrong path"
         % (result.get("push_state"),)
+    )
+    assert push_once_calls["n"] >= 1, (
+        "fixture did not reach auto_push.push_once -- the drain never attempted a push, so this "
+        "is not the path this test claims to measure"
     )
     assert is_ancestor_calls["n"] >= 1, (
         "fixture did not reach auto_push._is_ancestor -- the superseded non-fast-forward branch "

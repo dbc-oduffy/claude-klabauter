@@ -5,7 +5,8 @@ C7 (docs/plans/2026-08-05-in-process-writers-declare-their-writes.md) — the
 plan's closing proof, AC9. This is the chunk that proves the PLAN, not any
 one chunk's individual claim: C1-C6 author no part of this file.
 
-Builds a fixture tree containing freshly-written artifacts of ALL FOUR
+Builds a fixture tree containing freshly-written artifacts of the THREE
+surviving (of an original four)
 in-process-writer classes this plan fixed, each produced by its REAL
 writer (never hand-placed — a hand-placed file proves nothing about
 whether the writer itself claims what it wrote):
@@ -14,8 +15,8 @@ whether the writer itself claims what it wrote):
      (state/subagent-share/<sid>/...)
   2. C2 — coordinator_core.subagent_sandbox.provision_report (CLI `main`,
      the real spawn-time entrypoint) (state/subagent-share/<sid>/...)
-  3. C3 — coordinator_core.workstream_complete.chain_partition_verdict_
-     store.write_verdict_record (state/ceremony/wsc-chain-partition-verdict/)
+  3. C3 — REMOVED (state/kill-ledger.md K-007, 2026-08-19): was
+     workstream_complete.chain_partition_verdict_store.write_verdict_record
   4. C4 — coordinator_core.ops.artifact_emit's "artifact.emit" op, driven
      through the REAL coordinator_core.ipc.dispatch_message (the ONLY seam
      that turns a handler's `_scope_touch_paths` self-report into a claim)
@@ -62,7 +63,6 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
 from coordinator_core.subagent_sandbox.provision_report import main as provision_report_main
-from coordinator_core.workstream_complete import chain_partition_verdict_store as verdict_store
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -199,22 +199,11 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     c2_rel = json.loads(captured.out.splitlines()[0])["report_sidecar"]
     assert (repo / c2_rel).is_file()
 
-    # -----------------------------------------------------------------
     # Class 3 — workstream_complete/chain_partition_verdict_store.py's
-    # real write_verdict_record, for the closing session.
-    # -----------------------------------------------------------------
-    c3_path = verdict_store.write_verdict_record(
-        repo,
-        session_id=session_id,
-        verdict="PARTITION-MANDATORY",
-        from_handoff="state/handoffs/x.md",
-        git_range=None,
-        basis="plan_oracle=4(...) tier=B",
-        tier="B",
-    )
-    assert c3_path.is_file()
-    c3_rel = c3_path.relative_to(repo).as_posix()
-
+    # write_verdict_record — is REMOVED (state/kill-ledger.md K-007,
+    # 2026-08-19): the module and the gate that drove it are gone, so the
+    # class has no writer left to exercise. Three classes remain; the
+    # sweep's contract over them is unchanged.
     # -----------------------------------------------------------------
     # Class 4 — ops/artifact_emit.py's "artifact.emit" op, driven through
     # the REAL ipc.dispatch_message (the only seam that turns a handler's
@@ -245,14 +234,14 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     assert "error" not in d, d
     c4_out_path = Path(d["result"]["out"])
     assert c4_out_path.is_file()
-    c4_rel = str(c4_out_path.relative_to(repo))
+    c4_rel = c4_out_path.relative_to(repo).as_posix()  # git status emits POSIX separators on Windows too
 
     # -----------------------------------------------------------------
     # Pre-wrap sanity: every one of the five newly-written files (four
     # classes + the peer's) is genuinely dirty in the working tree.
     # -----------------------------------------------------------------
     before = _dirty_status(repo)
-    for rel in (c1_mine_rel, c2_rel, c3_rel, c4_rel, peer_rel):
+    for rel in (c1_mine_rel, c2_rel, c4_rel, peer_rel):
         assert rel in before, f"fixture failure: {rel!r} is not dirty before the wrap"
 
     # -----------------------------------------------------------------
@@ -261,7 +250,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     # attributed to the peer, never to "mine".
     # -----------------------------------------------------------------
     offer = safe_commit_offer.compute_offer(session_id, cwd=str(repo))
-    for rel in (c1_mine_rel, c2_rel, c3_rel, c4_rel):
+    for rel in (c1_mine_rel, c2_rel, c4_rel):
         assert rel in offer["safe_paths"], (
             f"{rel!r} did not reach safe_paths: safe_paths={offer['safe_paths']!r} "
             f"orphans={offer['orphans']!r} excluded={offer['excluded']!r}"
@@ -283,7 +272,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     assert report["failed_groups"] == [], report["failed_groups"]
 
     after = _dirty_status(repo)
-    for rel in (c1_mine_rel, c2_rel, c3_rel, c4_rel):
+    for rel in (c1_mine_rel, c2_rel, c4_rel):
         assert rel not in after, (
             f"{rel!r} is STILL dirty after the wrap — the writer's claim did "
             f"not survive to a committable state: git status:\n{after}"
@@ -300,4 +289,4 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
 
     committed_paths = {p for g in report["groups"] for p in g["paths"]}
     assert peer_rel not in committed_paths
-    assert {c1_mine_rel, c2_rel, c3_rel, c4_rel} <= committed_paths
+    assert {c1_mine_rel, c2_rel, c4_rel} <= committed_paths

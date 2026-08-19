@@ -117,7 +117,7 @@ class _StubCore:
 
 
 class _StubHolderEvidence:
-    """Stand-in for coordinator_core.pickup_assemble.holder_evidence, on its
+    """Stand-in for coordinator_core.session.holder_evidence, on its
     OWN seam (_cli._import_holder_evidence_module) — AC7/AC8 coverage."""
 
     def __init__(self, *, liveness_basis=None):

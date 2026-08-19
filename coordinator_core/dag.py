@@ -1161,6 +1161,33 @@ def _memoized_ever_tracked(
 # backfill sweep. Three-tier resolution: live ∪ archive-on-disk ∪ git-history.
 # ---------------------------------------------------------------------------
 
+#: Directory prefixes a pointer may name and still be a baton reference.
+#: A ref naming any OTHER directory names a different record family, and
+#: basename-keyed recovery must not re-home it onto a same-basename baton.
+_BATON_FAMILY_DIRS: Tuple[str, ...] = ('state/handoffs', 'archive/handoffs')
+
+
+def _ref_names_foreign_family(ref: str) -> bool:
+    """True when `ref` explicitly names a directory outside the baton families.
+
+    A bare basename (no directory at all) is NOT foreign — bare-ref resolution
+    against the handoff corpus is the convention this module exists to serve.
+
+    Matching is per path SEGMENT, not by raw string prefix: a bare
+    `startswith('state/handoffs')` also swallows a sibling like
+    `state/handoffs-archive/`, silently re-admitting it to basename recovery.
+    The ref is normalized first so a `./`-prefixed spelling of a genuine baton
+    path is not misread as foreign and denied legitimate stale-path recovery.
+    """
+    ref_dir = os.path.dirname(os.path.normpath(str(ref)).replace('\\', '/')).strip('/')
+    if not ref_dir:
+        return False
+    return not any(
+        ref_dir == family or ref_dir.startswith(family + '/')
+        for family in _BATON_FAMILY_DIRS
+    )
+
+
 def resolve_target(
     ref: Any,
     handoff_dir: str,
@@ -1262,10 +1289,22 @@ def resolve_target(
         # basename (`foo.md`). handoff_dir alone cannot cover both because it is the start
         # node's own dir, which is the archive dir — not `state/handoffs` — on the escape path.
         os.path.normpath(os.path.join(repo_root, target)),
-        os.path.normpath(os.path.join(repo_root, 'state', 'handoffs', basename)),
-        os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', target)),
-        os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', basename)),
     ]
+    # Basename recovery (the tiers below) is STALE-PATH recovery within the baton
+    # families — it must not re-home a pointer that explicitly names a different
+    # family. `predecessor: cross-repo/inbox/<name>.md` on a handoff itself named
+    # `<name>.md` (the cross-repo memo-pickup convention: the handoff inherits the
+    # memo's slug) otherwise resolves onto the handoff itself once the memo moves
+    # to `cross-repo/archive/`, and `referenced_by` then reports the baton as its
+    # own referencer — a self-edge that blocks its archival forever. Same rule, and
+    # same reasoning, as `tests/_baton_dag_oracle.build_children_index`'s
+    # non-baton-family skip; the two implementations reach it independently.
+    if not _ref_names_foreign_family(target):
+        candidates.extend([
+            os.path.normpath(os.path.join(repo_root, 'state', 'handoffs', basename)),
+            os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', target)),
+            os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', basename)),
+        ])
 
     for candidate in candidates:
         if os.path.exists(candidate):
@@ -1273,7 +1312,7 @@ def resolve_target(
 
     # Month-foldered archive: archive/handoffs/YYYY-MM/<basename>
     archive_dir = os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs'))
-    if os.path.isdir(archive_dir):
+    if os.path.isdir(archive_dir) and not _ref_names_foreign_family(target):
         try:
             for entry in os.listdir(archive_dir):
                 if re.match(r'^\d{4}-\d{2}$', entry):
@@ -1299,10 +1338,11 @@ def resolve_target(
         # month directory currently on disk, so a reference from anywhere
         # resolves a target ever tracked under archive/handoffs/YYYY-MM/.
         tier3_extra: List[str] = []
+        foreign_family = _ref_names_foreign_family(target)
         month_match = re.match(r'^(\d{4}-\d{2})-\d{2}', basename)
-        if month_match:
+        if month_match and not foreign_family:
             tier3_extra.append(f'archive/handoffs/{month_match.group(1)}/{basename}')
-        if os.path.isdir(archive_dir):
+        if os.path.isdir(archive_dir) and not foreign_family:
             try:
                 for entry in os.listdir(archive_dir):
                     if re.match(r'^\d{4}-\d{2}$', entry):
@@ -1781,8 +1821,12 @@ def referenced_by(
             if resolved_ref is None or resolved_ref == 'git-history':
                 # Unresolvable, or tier-3-only (no disk path to compare against
                 # abs_target — a live-membership test needs a disk path on both
-                # sides). Fall back to basename comparison in either case.
-                if os.path.basename(raw_ref) == target_basename:
+                # sides). Fall back to basename comparison in either case —
+                # except for a ref that explicitly names a non-baton family,
+                # which names that file and not a same-basename baton (see
+                # `_ref_names_foreign_family`; without this the resolve_target
+                # fix just relocates the self-edge into this branch).
+                if not _ref_names_foreign_family(raw_ref) and os.path.basename(raw_ref) == target_basename:
                     referencers.append(node_abs_path)
                     break
                 continue

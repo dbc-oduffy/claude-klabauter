@@ -2690,6 +2690,227 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
 
 # ---------------------------------------------------------------------------
+# publish provenance staleness — docs/plans/2026-08-19-the-published-engine-
+# says-what-it-was-published-from.md (C2). Reads the machine-local record
+# publish.py's `write_publish_provenance_record` writes at round end (C1)
+# and reports how far claude-klabauter's own HEAD has moved past the sha that record
+# says was actually published — the read half of the DR-326 stale-dispatch
+# fix (a warm-client fix landed, dispatch flipped to the published build an
+# hour later, and the only signal available — `git log` — could not
+# distinguish "running the fix" from "running an hour-old build").
+# ---------------------------------------------------------------------------
+def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.publish.provenance — REQUIRED=False (WARN, not hard FAIL).
+
+    Reads the C1 record (`<settings-home>/machine-local/publish-provenance.json`)
+    for a row whose recorded toplevel matches this claude-klabauter checkout, and
+    compares its pinned sha against claude-klabauter's own current HEAD via a single
+    `git rev-list --count <sha>..HEAD` (Anti-scope 5 — one git call for the
+    whole answer, never per row; the amplification gate at
+    coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py governs).
+
+    Verdict shape:
+      - Record absent, unreadable, or naming no row for this claude-klabauter toplevel
+        -> DEGRADED, "unknown" (AC5 — never reported as current; the whole
+        point of this plan is to stop asserting freshness that cannot be
+        established).
+      - Recorded sha not resolvable in claude-klabauter's own history (e.g. a stale
+        record from before a history rewrite) -> DEGRADED, "unknown".
+      - Recorded sha IS claude-klabauter's current HEAD -> PASS.
+      - Recorded sha resolves but is behind HEAD -> DEGRADED naming the
+        commit distance.
+
+    Negative-spec: does not write the record — read-only diagnostic, mirrors
+    every other probe in this module. Does not resolve or interpret any
+    OTHER toplevel in the record (e.g. a sibling repo's own publish row);
+    this probe answers for claude-klabauter's own checkout only.
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions
+    become a DEGRADED-but-never-crashing envelope.
+    """
+    probe_id = "claude-klabauter.publish.provenance"
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_INFO,
+                detail="Cannot check publish provenance — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=False,
+                skipped=True,
+            )
+
+        settings_home = _resolve_settings_home()
+        record_path = settings_home / "machine-local" / "publish-provenance.json"
+
+        if not record_path.exists():
+            return _ProbeResult(
+                probe=probe_id,
+                status=_DEGRADED,
+                detail=(
+                    f"publish provenance unknown — no record at {str(record_path)!r}. "
+                    "Either no percolate round has completed on this machine yet, or "
+                    "C1's write did not land — cannot tell which build is dispatched."
+                ),
+                remediation="Run a percolate round; publish.py writes this record at round end.",
+                required=False,
+                data={"record_path": str(record_path), "present": False},
+            )
+
+        try:
+            record_raw = record_path.read_text(encoding="utf-8")
+            record = json.loads(record_raw)
+            rows = record.get("rows", {}) if isinstance(record, dict) else {}
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_DEGRADED,
+                detail=f"publish provenance unknown — record at {str(record_path)!r} unreadable: {exc}",
+                remediation="Re-run a percolate round to regenerate the record.",
+                required=False,
+                data={"record_path": str(record_path), "present": True, "readable": False},
+            )
+
+        toplevel_result = subprocess.run(
+            ["git", "-C", str(claude_klabauter_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if toplevel_result.returncode != 0:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_DEGRADED,
+                detail=(
+                    f"publish provenance unknown — could not resolve claude-klabauter's own git "
+                    f"toplevel: {toplevel_result.stderr.strip()}"
+                ),
+                remediation="Verify CLAUDE_KLABAUTER_ROOT points at a git work tree.",
+                required=False,
+                data={"record_path": str(record_path), "present": True},
+            )
+        claude_klabauter_toplevel = str(Path(toplevel_result.stdout.strip()).resolve())
+
+        published_sha: str | None = None
+        published_row: str | None = None
+        for row_name, row_data in rows.items():
+            if not isinstance(row_data, dict) or not row_data.get("published"):
+                continue
+            toplevels = row_data.get("toplevels", {})
+            if not isinstance(toplevels, dict):
+                continue
+            for toplevel_key, sha in toplevels.items():
+                try:
+                    normalized = str(Path(toplevel_key).resolve())
+                except OSError:
+                    normalized = toplevel_key
+                if normalized == claude_klabauter_toplevel and isinstance(sha, str) and sha:
+                    published_sha = sha
+                    published_row = row_name
+                    break
+            if published_sha is not None:
+                break
+
+        if published_sha is None:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_DEGRADED,
+                detail=(
+                    f"publish provenance unknown — no published row in {str(record_path)!r} "
+                    f"names this claude-klabauter checkout ({claude_klabauter_toplevel!r})."
+                ),
+                remediation="Run a percolate round that publishes from this checkout.",
+                required=False,
+                data={"record_path": str(record_path), "present": True, "claude_klabauter_toplevel": claude_klabauter_toplevel},
+            )
+
+        distance_result = subprocess.run(
+            ["git", "-C", str(claude_klabauter_root), "rev-list", "--count", f"{published_sha}..HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if distance_result.returncode != 0:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_DEGRADED,
+                detail=(
+                    f"publish provenance unknown — published sha {published_sha!r} (row "
+                    f"{published_row!r}) is not resolvable in claude-klabauter's own history: "
+                    f"{distance_result.stderr.strip()}"
+                ),
+                remediation="Re-run a percolate round to refresh the record.",
+                required=False,
+                data={
+                    "record_path": str(record_path),
+                    "published_sha": published_sha,
+                    "published_row": published_row,
+                },
+            )
+
+        distance_str = distance_result.stdout.strip()
+        distance = int(distance_str) if distance_str.isdigit() else None
+        if distance is None:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_DEGRADED,
+                detail=(
+                    f"publish provenance unknown — could not parse commit distance from "
+                    f"{distance_str!r}."
+                ),
+                remediation="Re-run a percolate round to refresh the record.",
+                required=False,
+                data={"record_path": str(record_path), "published_sha": published_sha},
+            )
+
+        if distance == 0:
+            return _ProbeResult(
+                probe=probe_id,
+                status=_PASS,
+                detail=(
+                    f"published engine is current — row {published_row!r} published claude-klabauter "
+                    f"@ {published_sha}, which is claude-klabauter's HEAD."
+                ),
+                remediation="—",
+                required=False,
+                data={
+                    "record_path": str(record_path),
+                    "published_sha": published_sha,
+                    "published_row": published_row,
+                    "commits_behind": 0,
+                },
+            )
+
+        return _ProbeResult(
+            probe=probe_id,
+            status=_DEGRADED,
+            detail=(
+                f"published engine is {distance} commit(s) behind claude-klabauter's HEAD — row "
+                f"{published_row!r} published @ {published_sha}."
+            ),
+            remediation="Run a percolate round to publish claude-klabauter's current HEAD.",
+            required=False,
+            data={
+                "record_path": str(record_path),
+                "published_sha": published_sha,
+                "published_row": published_row,
+                "commits_behind": distance,
+            },
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=probe_id,
+            status=_DEGRADED,
+            detail=f"publish provenance unknown — unexpected error: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            data={"unexpected_error": True},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Probe 10: per-invoke resolution/dispatch latency budget (Windows-portability)
 # ---------------------------------------------------------------------------
 
@@ -3288,6 +3509,7 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_commitments_recheck(claude_klabauter_root))
     results.append(_run_probe_stable_pid_miss(claude_klabauter_root))
     results.append(_run_probe_root_pointer(claude_klabauter_root))
+    results.append(_run_probe_publish_provenance(claude_klabauter_root))
     results.append(_run_probe_engine_target_rollout())
     results.append(_run_probe_invoke_latency(claude_klabauter_root))
     results.append(_run_probe_orphaned_execnet_gateways())

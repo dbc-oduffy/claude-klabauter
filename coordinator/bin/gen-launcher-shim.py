@@ -240,11 +240,29 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # to the caret-eating defect on those two CLIs. Closed here — see
 # `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_substrate_targets`
 # for the drift guard. Extend BOTH sets together, or that test goes red.
+# 2026-08-19 survey (docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-
+# that-never-broke.md's mechanism, extended to the rest of the git-rev-taking
+# bin/ surface): `freeze-review-diff.py`, `parallel-review-gate-decision.py`,
+# `parallel-review-orthogonality-guard.py`, and `wsc-coverage-gate-runner.py`
+# all take an arbitrary git rev/range directly from an agent's typed CLI
+# invocation (never defaulted, never composed internally via a Python-list
+# subprocess call the way e.g. wsc-close.py's --review-sha-range is), so a
+# literal `^` (`sha^..sha`, the per-commit predecessor-range shape `--scope
+# chain` callers use) is genuinely reachable in normal use on each. Every
+# other git-rev/sha-taking bin/ CLI surveyed at the same time (`close-origin-
+# stub-on-ship.py --sha`, `install-sentinel-write.py --sha`) takes only a
+# single 40-hex SHA with no range/caret shape, and was deliberately NOT
+# enrolled -- see this generator's own module docstring § RAW-CMDLINE-
+# PRESERVATION ENTRYPOINTS for why this stays a narrow, named, opt-in set.
 _RAW_CMDLINE_ENTRYPOINTS = frozenset(
     {
         "coordinator/bin/coordinator-write-review-trail.py",
         "coordinator/bin/scoped-git-commit",
         "coordinator/bin/cross-repo-memo.py",
+        "coordinator/bin/freeze-review-diff.py",
+        "coordinator/bin/parallel-review-gate-decision.py",
+        "coordinator/bin/parallel-review-orthogonality-guard.py",
+        "coordinator/bin/wsc-coverage-gate-runner.py",
     }
 )
 

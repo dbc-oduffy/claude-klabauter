@@ -39,7 +39,7 @@ import os
 import pytest
 
 from coordinator_core.hooks import auto_push
-from coordinator_core.ops.ceremony import commit_pipeline, git_native
+from coordinator_core.ops.ceremony import commit_pipeline, git_native, wsc_tail
 
 _ENV = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
 
@@ -162,8 +162,35 @@ def _init_repo(tmp_path):
     ],
 )
 def test_suppression_is_wired_to_sync_mode_only(monkeypatch, tmp_path, push_mode, expected):
-    """A deferred/none commit must leave the hook's push alone: it is the only
-    publisher on those modes, and suppressing it strands the commit.
+    """Pins the LOWER layer only: the per-call `suppress_post_commit_auto_
+    push` argument `commit_pipeline.commit()` computes for itself is tied to
+    `push_mode == PUSH_MODE_SYNC` and nothing else in `push_mode`.
+
+    Re-derived (C5, docs/plans/2026-08-19-windows-commit-hook-starts-python-
+    once.md): this test used to pin the WHOLE invariant -- "suppression is
+    wired to sync mode only" -- because before C5 that per-call argument WAS
+    the whole story: `_sole_publisher_env()` suppressed iff this one boolean
+    was True, full stop, and the old docstring said so verbatim ("whoever
+    sets this WILL push, synchronously, in this same invocation").
+
+    C5 makes that no longer true at the EFFECTIVE layer: `wsc_tail`'s
+    deferred-path backstop (`_deferred_publisher_backstop`) now widens
+    suppression for the WHOLE deferred-path span via `git_native.
+    deferred_publisher_span()`, additively -- `_sole_publisher_env()`
+    suppresses when EITHER this per-call argument is True OR that span is
+    active (see its own docstring: the invariant is now "the caller will
+    publish", not "... synchronously, in this same invocation" -- a
+    deferred-path commit publishes via a DETACHED child spawned later, not
+    synchronously, but is still published by exactly one caller). This test
+    still asserts `expected is (push_mode == PUSH_MODE_SYNC)` because that
+    remains true of THIS ONE ARGUMENT -- `commit_pipeline.commit()`'s own
+    wiring is genuinely unchanged, and re-deriving this test to check the
+    EFFECTIVE (span-widened) suppression would test the wrong layer, and
+    silently stop pinning that the raw argument itself never drifts back
+    onto `push_mode` inputs it should not read. The widened, EFFECTIVE
+    invariant is pinned separately below, by
+    `test_deferred_publisher_span_widens_effective_suppression` and
+    `test_deferred_publisher_backstop_wraps_the_deferred_path_only`.
 
     Review (code-reviewer, s4): this test previously compared
     `push_mode == PUSH_MODE_SYNC` to its own parametrize value and never called
@@ -253,3 +280,112 @@ def test_drain_failure_never_fails_a_landed_push(monkeypatch, tmp_path):
 
     monkeypatch.setattr(auto_push, "drain_pending_push", _boom)
     commit_pipeline._drain_pending_push_after_sync(tmp_path)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# C5 (docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md):
+# the deferred-path backstop -- one publisher on the DEFAULT (deferred) path.
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_publisher_span_widens_effective_suppression():
+    """`deferred_publisher_span()` makes `_sole_publisher_env(False)` suppress.
+
+    This is the EFFECTIVE-layer counterpart `test_suppression_is_wired_to_
+    sync_mode_only`'s own docstring points to: the per-call argument stays
+    False (unrelated to `push_mode`), yet the env now carries the marker,
+    because a span is active. Outside the span, `False` still means `None`
+    -- the widening is additive, never a replacement for the original wire.
+    """
+    assert git_native._sole_publisher_env(False) is None
+    with git_native.deferred_publisher_span():
+        env = git_native._sole_publisher_env(False)
+        assert env is not None and env[_ENV] == "1"
+    assert git_native._sole_publisher_env(False) is None, (
+        "suppression outlived the span -- the contextvar token was not reset"
+    )
+
+
+def test_deferred_publisher_span_never_touches_os_environ():
+    before = dict(os.environ)
+    with git_native.deferred_publisher_span():
+        git_native._sole_publisher_env(False)
+        assert dict(os.environ) == before
+    assert dict(os.environ) == before
+
+
+def test_deferred_publisher_backstop_wraps_the_deferred_path_only(monkeypatch, tmp_path):
+    """`_deferred_publisher_backstop` is a no-op for sync/none, and widens
+    suppression for deferred -- the same "sync and nothing else" question
+    `test_suppression_is_wired_to_sync_mode_only` asks of the raw argument,
+    asked here of the EFFECTIVE (span-widened) outcome instead.
+    """
+    monkeypatch.setattr(auto_push, "resolve_branch", lambda root: "work/x/y")
+    monkeypatch.setattr(auto_push, "_write_pending_record", lambda *a, **kw: True)
+
+    for mode, expect_suppressed in (
+        (commit_pipeline.PUSH_MODE_SYNC, False),
+        (commit_pipeline.PUSH_MODE_NONE, False),
+        (commit_pipeline.PUSH_MODE_DEFERRED, True),
+    ):
+        with wsc_tail._deferred_publisher_backstop(tmp_path, mode):
+            env = git_native._sole_publisher_env(False)
+            if expect_suppressed:
+                assert env is not None and env[_ENV] == "1", mode
+            else:
+                assert env is None, mode
+        assert git_native._sole_publisher_env(False) is None, (
+            "span outlived _deferred_publisher_backstop's own with-block"
+        )
+
+
+def test_deferred_publisher_backstop_writes_a_pending_record_before_the_span(
+    monkeypatch, tmp_path
+):
+    """AC3: a swallowed step-5e spawn failure must still end at an existing
+    drain point. This asserts the record exists BEFORE the span (and
+    therefore before any commit made inside it) -- the seam that DECIDES
+    suppression, not step 5e, per this chunk's brief. `sha` is None: the
+    commit has not landed yet when this record is written.
+    """
+    calls: list = []
+    monkeypatch.setattr(auto_push, "resolve_branch", lambda root: "work/x/y")
+
+    def _spy_write(repo_root, branch, sha, hold_until, holder_pid):
+        calls.append((repo_root, branch, sha))
+        return True
+
+    monkeypatch.setattr(auto_push, "_write_pending_record", _spy_write)
+
+    with wsc_tail._deferred_publisher_backstop(tmp_path, commit_pipeline.PUSH_MODE_DEFERRED):
+        # The record must already be written by the time the span's body runs.
+        assert calls == [(str(tmp_path), "work/x/y", None)]
+
+
+def test_deferred_publisher_backstop_record_write_failure_is_skip_loud(monkeypatch, tmp_path):
+    """A pending-record write failure must never block the commit it backstops."""
+    monkeypatch.setattr(auto_push, "resolve_branch", lambda root: "work/x/y")
+
+    def _boom(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(auto_push, "_write_pending_record", _boom)
+
+    with wsc_tail._deferred_publisher_backstop(tmp_path, commit_pipeline.PUSH_MODE_DEFERRED):
+        pass  # must not raise
+
+
+def test_deferred_publisher_backstop_no_branch_skips_record_but_still_suppresses(
+    monkeypatch, tmp_path
+):
+    """An unresolvable branch must not stop suppression from widening --
+    only the record write (which needs a branch name) is skipped.
+    """
+    calls: list = []
+    monkeypatch.setattr(auto_push, "resolve_branch", lambda root: None)
+    monkeypatch.setattr(auto_push, "_write_pending_record", lambda *a, **kw: calls.append(a))
+
+    with wsc_tail._deferred_publisher_backstop(tmp_path, commit_pipeline.PUSH_MODE_DEFERRED):
+        assert calls == []
+        env = git_native._sole_publisher_env(False)
+        assert env is not None and env[_ENV] == "1"

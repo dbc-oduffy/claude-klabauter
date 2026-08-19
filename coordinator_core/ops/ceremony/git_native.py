@@ -42,13 +42,15 @@ Negative-spec (hard-won):
 
 from __future__ import annotations
 
+import contextvars
 import os
 import subprocess
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
@@ -843,6 +845,50 @@ def directory_pathspec_diagnostic(path: str) -> str:
 _AUTO_PUSH_SUPPRESS_ENV = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
 
 
+#: Widens `_sole_publisher_env()`'s suppression decision for the DURATION of
+#: a caller-declared span, independent of the per-call `suppress_post_commit_
+#: auto_push` argument each higher-level caller (`commit_pipeline.commit`,
+#: `post_commit_tail`, `consumed_handoff_stamp`) computes for itself as
+#: `(push_mode == PUSH_MODE_SYNC)`. A `contextvars.ContextVar`, deliberately
+#: NOT `os.environ`: `_sole_publisher_env`'s own docstring names the reason
+#: `os.environ` is never mutated here (a cold-spawn engine hides a process-
+#: global toggle; a warm one turns it into a cross-request leak) -- a
+#: contextvar is coroutine/task-local under asyncio (and copied into an
+#: `asyncio.to_thread` worker via `contextvars.copy_context()`, so it
+#: survives the `commit_pipeline`/`post_commit_tail` call chain's own
+#: to_thread hop) and carries none of that leak risk. Sole writer today:
+#: `wsc_tail._deferred_publisher_backstop()`, wrapping the deferred-path's
+#: steps 5a-5d so the hook's own push stands down for the WHOLE span (the
+#: main ceremony commit and its 5c/5d follow-up commits alike), leaving
+#: step 5e's own detached push as the sole publisher (opro-01 C-01 follow-up,
+#: docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md C5).
+_deferred_publisher_active: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_deferred_publisher_active", default=False
+)
+
+
+@contextmanager
+def deferred_publisher_span() -> Iterator[None]:
+    """Mark every `_sole_publisher_env()` call reached during this span as
+    "the caller will publish" (see `_sole_publisher_env`'s own docstring:
+    "the invariant is not enforceable here ... held at each call site").
+    `wsc_tail`'s deferred-path backstop is this contextvar's sole caller --
+    see its own docstring for why the widening is scoped to that one span
+    rather than applied unconditionally to every `push_mode="deferred"`
+    caller in the codebase (there is, today, exactly one: `wsc_tail`).
+
+    Resets via the token on exit (including on an exception) rather than
+    unconditionally clearing to `False` -- a NESTED span (not exercised
+    today, but the correct contract for one) restores the OUTER span's
+    value instead of clobbering it to `False` on the inner span's exit.
+    """
+    token = _deferred_publisher_active.set(True)
+    try:
+        yield
+    finally:
+        _deferred_publisher_active.reset(token)
+
+
 def _sole_publisher_env(suppress_post_commit_auto_push: bool) -> Optional[Dict[str, str]]:
     """Env for a `git commit` whose caller will publish the commit itself.
 
@@ -871,20 +917,32 @@ def _sole_publisher_env(suppress_post_commit_auto_push: bool) -> Optional[Dict[s
     next drain a push this caller already owns, which is the two-publisher
     problem this seam exists to remove.
 
-    The invariant "whoever sets this WILL push, synchronously, in this same
-    invocation" is not enforceable here: this function cannot see the caller's
-    later control flow. It is held at each call site by tying the flag to
-    `push_mode == PUSH_MODE_SYNC`, and pinned by
-    `test_suppression_is_wired_to_sync_mode_only`.
+    The invariant is "whoever sets this WILL publish the commit" -- not,
+    as an earlier revision of this docstring stated, "synchronously, in
+    this same invocation": `wsc_tail`'s deferred-path backstop (C5,
+    docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md) sets
+    this for a commit it will publish via a DETACHED child spawned later,
+    after steps 5a-5d complete -- still exactly one publisher, just not a
+    synchronous one. Neither shape is enforceable here: this function
+    cannot see the caller's later control flow. Each is held at its own
+    call site -- the synchronous shape by tying the per-call
+    `suppress_post_commit_auto_push` argument to `push_mode ==
+    PUSH_MODE_SYNC` (pinned by `test_suppression_is_wired_to_sync_mode_
+    only`), the deferred shape by `wsc_tail` wrapping steps 5a-5d in
+    `deferred_publisher_span()` (pinned by
+    `test_deferred_publisher_span_widens_suppression`).
 
-    Returns None when suppression is off, so the caller passes `env=None` and
-    `_git` inherits the parent environment unchanged (never a rebuilt copy of
-    `os.environ`, which would be a behaviour change wearing a no-op's
-    clothes). `os.environ` itself is never mutated: this repo's engine is a
-    cold spawn per invocation today, but the warm engine would make a
-    process-global toggle here a cross-request leak.
+    Returns None when suppression is off (neither the per-call argument NOR
+    an active `deferred_publisher_span()`), so the caller passes `env=None`
+    and `_git` inherits the parent environment unchanged (never a rebuilt
+    copy of `os.environ`, which would be a behaviour change wearing a
+    no-op's clothes). `os.environ` itself is never mutated: this repo's
+    engine is a cold spawn per invocation today, but the warm engine would
+    make a process-global toggle here a cross-request leak -- the reason
+    the span above is a `contextvars.ContextVar`, not a second `os.environ`
+    write.
     """
-    if not suppress_post_commit_auto_push:
+    if not (suppress_post_commit_auto_push or _deferred_publisher_active.get()):
         return None
     env = dict(os.environ)
     env[_AUTO_PUSH_SUPPRESS_ENV] = "1"

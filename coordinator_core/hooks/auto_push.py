@@ -1220,19 +1220,36 @@ def _drain_dead_ref_record(repo_root: str, record: dict, branch: str) -> None:
     (and, pre-AC1/AC2, re-failed into push-failures.log) on every commit
     from here on.
 
-    Branches on the pinned `sha`, in this order:
-      1. `sha` absent, or already reachable from origin's copy of the
+    `sha` can itself be `None` -- `wsc_tail._deferred_publisher_backstop`
+    writes its record before the commit it backstops has landed, so at
+    write time there is genuinely no sha to pin yet (see that function's
+    own docstring). That case is branched on FIRST, separately from the
+    "sha pinned" cases below (review: coordinator:review-code, Finding 1,
+    2026-08-19 -- a `sha=None` record used to fall into the same predicate
+    as "no payload was ever queued" and get dropped outright here,
+    silently losing the backstop's obligation on the exact compound case
+    -- swallowed step-5e spawn AND an intervening branch rename before the
+    next drain -- it exists to cover):
+      0. `sha is None` -- unknown payload, not "no payload". If a current
+         branch resolves, retarget the record onto it (same shape as case
+         2 below, just without a specific sha to check ancestry for) and
+         push: whatever the current branch's tip is now includes whatever
+         this record was backstopping, if anything landed at all, and
+         `push_once` is a harmless no-op ("everything up to date") if nothing
+         did. Only with NO current branch to retarget onto -- nothing left
+         that could hold the payload -- does this drop.
+      1. `sha` pinned and already reachable from origin's copy of the
          CURRENT branch (typically the rename's own push, which already
-         carried the commit) -- the queued push either never had a payload
-         or has already landed by some other path. Drop, stderr note only
-         (AC6). Checked first: if the commit is already safely on origin,
-         there is nothing left to retarget-and-push, even if it also
-         happens to be locally reachable from the current branch.
-      2. `sha` reachable from the CURRENT local branch (not yet on origin)
-         -- the commits moved with the rename and the queued push is still
-         wanted, just misaddressed. Re-target the record onto the current
-         branch via `_write_pending_record` and push it (AC5); that push's
-         own success clears the just-rewritten record via
+         carried the commit) -- the queued push has already landed by some
+         other path. Drop, stderr note only (AC6). Checked before case 2:
+         if the commit is already safely on origin, there is nothing left
+         to retarget-and-push, even if it also happens to be locally
+         reachable from the current branch.
+      2. `sha` pinned and reachable from the CURRENT local branch (not yet
+         on origin) -- the commits moved with the rename and the queued
+         push is still wanted, just misaddressed. Re-target the record onto
+         the current branch via `_write_pending_record` and push it (AC5);
+         that push's own success clears the just-rewritten record via
          `_clear_pending_record_if_branch`, same as any other successful
          push.
       3. Reachable from nowhere this function can check -- a genuine loss
@@ -1244,11 +1261,42 @@ def _drain_dead_ref_record(repo_root: str, record: dict, branch: str) -> None:
     sha = record.get("sha")
     current_branch = resolve_branch(repo_root)
 
-    if not sha or (current_branch and _is_superseded(repo_root, current_branch, sha)):
+    if sha is None:
+        if current_branch:
+            retargeted = _write_pending_record(
+                repo_root,
+                current_branch,
+                None,
+                record.get("hold_until", time.time()),
+                record.get("holder_pid", os.getpid()),
+            )
+            if retargeted:
+                print(
+                    f"coordinator-auto-push: pending push for {branch} "
+                    f"(no sha pinned yet) re-targeted to {current_branch} "
+                    "(branch rename) -- pushing.",
+                    file=sys.stderr,
+                )
+                run_push_with_retry(repo_root, current_branch, _skip_hold=True)
+                return
+            # _write_pending_record failed -- same AC14a precondition-(1)
+            # reasoning as case 2's own fallthrough below: never trust a
+            # failed write, fall through to drop-with-note rather than
+            # silently losing an unknown payload.
+        print(
+            f"coordinator-auto-push: dropping pending push for {branch} -- "
+            "branch no longer resolves locally, no commit was pinned yet, "
+            "and no current branch exists to retarget onto; nothing to retry.",
+            file=sys.stderr,
+        )
+        _remove_pending_record(repo_root)
+        return
+
+    if current_branch and _is_superseded(repo_root, current_branch, sha):
         print(
             f"coordinator-auto-push: dropping pending push for {branch} -- "
             "branch no longer resolves locally and the commit is already "
-            "on origin (or no commit was pinned); nothing to retry.",
+            "on origin; nothing to retry.",
             file=sys.stderr,
         )
         _remove_pending_record(repo_root)
@@ -1408,7 +1456,33 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
         # that spawn at zero extra process cost. `_skip_hold=True` marks
         # the drain's OWN nested call, so this can never recurse: the drain
         # path pushes once and returns, it never drains again.
+        #
+        # `pending_before` is read BEFORE the drain to detect the case
+        # where the record drain just actioned is THIS call's own branch
+        # (review: coordinator:review-code, Finding 2, 2026-08-19): when
+        # `wsc_tail._deferred_publisher_backstop` writes an already-due
+        # record moments before spawning this very push, `drain_pending_push`
+        # below reads it back, does a nested `_skip_hold=True` push, and
+        # clears it on success -- all before `_hold_window` gets a look.
+        # Without this check, `_hold_window` then finds no record for
+        # `branch`, mistakes this outer call for a brand-new holder on a
+        # shared branch, and writes a fresh record + sleeps out a fully
+        # redundant `_HOLD_WINDOW_SECONDS` for a push that already landed.
+        pending_before = _read_pending_record(repo_root)
         drain_pending_push(repo_root)
+        if (
+            pending_before is not None
+            and pending_before.get("branch") == branch
+            and _read_pending_record(repo_root) is None
+        ):
+            # The drain just cleared (pushed) or dropped (already-superseded
+            # / orphaned) the record for THIS branch -- either way there is
+            # nothing left for this call to publish or hold for, so return
+            # rather than re-entering `_hold_window` as a phantom fresh
+            # holder. A record still present here (failed push, or a live
+            # incumbent's own untouched hold) falls through to the normal
+            # `_hold_window` decision below, unchanged.
+            return
         if not _hold_window(repo_root, branch):
             return
 

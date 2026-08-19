@@ -1000,11 +1000,7 @@ def test_resolves_computed_marker_is_pinned_to_exactly_the_resolver_backed_five(
 
 from coordinator_core import workstream_complete as _wsc_regression
 from coordinator_core.contract.decision_object.envelope import _emit as _regression_emit
-from coordinator_core.workstream_complete import chain_partition_verdict_store
-from coordinator_core.workstream_complete.directives_review import (
-    _CHAIN_VERDICT_PARTITION_MANDATORY,
-    decide_review_scale,
-)
+from coordinator_core.workstream_complete.directives_review import decide_review_scale
 
 _REVIEW_SCALE_RESOLVED_SMALL: dict[str, Any] = dict(
     gross_loc=10,
@@ -1016,24 +1012,39 @@ _REVIEW_SCALE_RESOLVED_SMALL: dict[str, Any] = dict(
 )
 
 
+#: Row 6 and the `verdict_presence` tri-state these regressions originally
+#: drove through are gone (state/kill-ledger.md K-007, 2026-08-19). The
+#: CONTRACT they guard is untouched — a resolved chain-terminal review-scale
+#: point must not make `_emit` raise — so they are re-driven through the
+#: surviving rows rather than deleted: row 4 for the resolved
+#: partition-mandatory state row 6 used to supply, row 5 for resolved
+#: non-mandatory, and an unresolved row-4 input for the unresolved state.
+_REVIEW_SCALE_RESOLVED_BIG: dict[str, Any] = dict(
+    gross_loc=600,
+    code_loc=600,
+    commit_count=9,
+    surface_count=5,
+    executor_dispatched=False,
+    shared_schema_touched=False,
+)
+
+
 def test_resolved_chain_terminal_review_scale_point_survives_emit():
     """AC-1/regression proper: a RESOLVED `ReviewScaleDecision` on a
-    chain-terminal row (6, PARTITION-MANDATORY) must produce a judgment
-    point that `_emit` accepts -- asserted on the envelope emitting
-    successfully (never raising `DecisionObjectError`), not merely on the
-    `reportable` key's presence: the key is today's implementation detail,
-    the contract is that the envelope does not raise."""
+    chain-terminal partition-mandatory row must produce a judgment point
+    that `_emit` accepts -- asserted on the envelope emitting successfully
+    (never raising `DecisionObjectError`), not merely on the `reportable`
+    key's presence: the key is today's implementation detail, the contract
+    is that the envelope does not raise. Row 4 since K-007; row 6 before."""
     decision = decide_review_scale(
-        **_REVIEW_SCALE_RESOLVED_SMALL,
+        **_REVIEW_SCALE_RESOLVED_BIG,
         chain_disposition="predecessor-consumed",
-        chain_partition_verdict=_CHAIN_VERDICT_PARTITION_MANDATORY,
     )
     assert decision.resolved is True
-    assert decision.row == 6
+    assert decision.row == 4
+    assert decision.partition_mandatory is True
 
-    jp = _wsc_regression.build_review_scale_judgment_point(
-        decision, chain_terminal=True, verdict_presence=chain_partition_verdict_store.PRESENCE_PRESENT
-    )
+    jp = _wsc_regression.build_review_scale_judgment_point(decision, chain_terminal=True)
     assert jp is not None
     assert jp["id"] == "jp-review-scale"
     assert jp.get("recommendation") is not None
@@ -1044,36 +1055,28 @@ def test_resolved_chain_terminal_review_scale_point_survives_emit():
 
 
 def test_unresolved_review_scale_branches_are_not_marked_reportable():
-    """AC-2/asymmetry: the three UNRESOLVED branches (pending/unreadable/
-    generic-untrusted-gate) must NOT be marked `reportable=True` -- a
-    blanket `reportable=True` across all four branches would also make
-    `_emit` stop raising and would be the wrong fix (those branches carry
-    real dispositions -- run-the-pending-gate, partition-by-hand,
-    report-if-still-unreadable -- the EM must still act on, not a pure
+    """AC-2/asymmetry: the UNRESOLVED branch must NOT be marked
+    `reportable=True` -- a blanket `reportable=True` would also make
+    `_emit` stop raising and would be the wrong fix (the branch carries
+    real dispositions the EM must still act on, not a pure
     acknowledgement). This test fails if someone "fixes" the defect that
-    way."""
+    way. The pending/unreadable variants died with the verdict store
+    (K-007); the generic untrusted-gate branch they flanked is the one
+    that survives, and it is the one this asymmetry was always about."""
     unresolved_decision = decide_review_scale(
-        **_REVIEW_SCALE_RESOLVED_SMALL,
+        **{**_REVIEW_SCALE_RESOLVED_SMALL, "code_loc": None},
         chain_disposition="predecessor-consumed",
-        chain_partition_verdict=None,
     )
     assert unresolved_decision.resolved is False
 
-    pending_jp = _wsc_regression.build_review_scale_judgment_point(
-        unresolved_decision,
-        chain_terminal=True,
-        verdict_presence=chain_partition_verdict_store.PRESENCE_ABSENT,
-    )
-    unreadable_jp = _wsc_regression.build_review_scale_judgment_point(
-        unresolved_decision,
-        chain_terminal=True,
-        verdict_presence=chain_partition_verdict_store.PRESENCE_UNREADABLE,
+    chain_jp = _wsc_regression.build_review_scale_judgment_point(
+        unresolved_decision, chain_terminal=True
     )
     generic_jp = _wsc_regression.build_review_scale_judgment_point(
-        unresolved_decision, chain_terminal=False, verdict_presence=None
+        unresolved_decision, chain_terminal=False
     )
 
-    for jp in (pending_jp, unreadable_jp, generic_jp):
+    for jp in (chain_jp, generic_jp):
         assert jp is not None
         assert jp.get("recommendation") is None
         assert jp.get("reportable") is not True
@@ -1089,25 +1092,21 @@ def test_review_scale_transition_from_unresolved_to_resolved_never_starts_raisin
     NEXT close's `decide_review_scale` call resolved the same chain-terminal
     row and raised."""
     unresolved_decision = decide_review_scale(
-        **_REVIEW_SCALE_RESOLVED_SMALL,
+        **{**_REVIEW_SCALE_RESOLVED_SMALL, "code_loc": None},
         chain_disposition="predecessor-consumed",
-        chain_partition_verdict=None,
     )
     unresolved_jp = _wsc_regression.build_review_scale_judgment_point(
-        unresolved_decision,
-        chain_terminal=True,
-        verdict_presence=chain_partition_verdict_store.PRESENCE_ABSENT,
+        unresolved_decision, chain_terminal=True
     )
     unresolved_envelope = _minimal_envelope(judgment_points=[unresolved_jp], directives=[])
     assert _regression_emit(unresolved_envelope) is unresolved_envelope
 
     resolved_decision = decide_review_scale(
-        **_REVIEW_SCALE_RESOLVED_SMALL,
+        **_REVIEW_SCALE_RESOLVED_BIG,
         chain_disposition="predecessor-consumed",
-        chain_partition_verdict=_CHAIN_VERDICT_PARTITION_MANDATORY,
     )
     resolved_jp = _wsc_regression.build_review_scale_judgment_point(
-        resolved_decision, chain_terminal=True, verdict_presence=chain_partition_verdict_store.PRESENCE_PRESENT
+        resolved_decision, chain_terminal=True
     )
     resolved_envelope = _minimal_envelope(judgment_points=[resolved_jp], directives=[])
     # This is the regression: pre-fix, this call raised `DecisionObjectError`

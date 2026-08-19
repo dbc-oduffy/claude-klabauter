@@ -66,6 +66,71 @@ reports success rather than absence. ``terminal_test_scope`` refuses
 (``NoTestTargetError``) in that case too, naming the paths that mapped to
 nothing.
 
+## ``writes: []`` vs an absent ``writes:`` key — the asymmetry is real, and deliberate (finding A4)
+
+These are NOT interchangeable authoring choices, and the difference is
+sharper than it looks. Read ``spine_read``'s ``UNDECLARED`` sentinel
+docstring first: omitting ``writes:`` entirely (or leaving it empty/``null``)
+gets a row the ``UNDECLARED`` sentinel; writing ``writes: []`` explicitly
+gets it a real, empty list — a structurally different value, by design.
+
+For an ``epistemic-premise``-gated row (one whose predecessor decides
+whether the row should even exist, so there is no surface to author against
+yet), OMISSION is the safe choice and ``[]`` is the hazardous one — the
+opposite of what the two spellings look like they'd mean to an author
+reaching for "I don't have a value yet." Omitting the key:
+
+  - forces ``wave_map._writes_overlap`` to treat the row as unable to share
+    a wave with ANYTHING (UNDECLARED can't be proven disjoint from
+    anything, including another UNDECLARED row) — so ``build_waves`` always
+    lands it alone in its own wave;
+  - which means ``commit_pathspec`` sees it solo, and the AC4
+    ``declares_writes`` check refuses immediately and loudly, before any
+    other row's work is anywhere near this row's fate.
+
+Declaring ``writes: []`` does neither of those things: an empty list is
+NOT the UNDECLARED sentinel, so ``_writes_overlap`` sees no claimed overlap
+with anything and the row can freely land in a wave alongside rows that DO
+declare real writes. That is exactly the shape finding A4 closed — see
+``commit_pathspec``'s docstring for the per-row zero-contribution check
+that catches it, and staff review finding P0-1 for why that check WARNS
+rather than raises when the row shares a wave with a real-contributing
+sibling. The two spellings end in DIFFERENT outcome classes, not the same
+one, and by different mechanisms and at different moments: an
+omitted-``writes:`` row lands solo in its own wave and hits the AC4
+whole-wave ``NoWritesDeclaredError`` refusal immediately, before any
+dispatch happens for that row (nothing in the wave declares writes at
+all); a ``writes: []`` row sharing a wave with a real-contributing row
+instead gets a named log warning at ``commit_pathspec`` time — which, per
+this module's own negative spec above, runs to derive the commit phase
+FOLLOWING a wave that has, by then, already been dispatched and executed —
+and is silently excluded from that wave's pathspec, loud-not-silent but
+not illegal. A `[]`-declared epistemic-premise row therefore still wastes
+a real dispatch before the warning fires; it merely no longer LOSES that
+dispatch's output without a trace. The one shape that still raises for
+``writes: []`` is when NOTHING in the wave contributes — every row
+declared ``[]`` — because an empty pathspec is never a legal return
+regardless of which spelling produced it (``commit_pathspec``'s docstring,
+refusal 2).
+
+This is left as a documented asymmetry rather than reconciled into one
+mechanism: reconciling would mean either (a) treating ``writes: []`` as
+UNDECLARED, which destroys the one thing AC2 exists to preserve — a spine
+author's ability to assert "this row genuinely writes nothing" as a fact
+distinct from "unknown" — or (b) relaxing UNDECLARED to tolerate wave-
+sharing, which reopens the exact "cannot prove disjoint" hazard point 1 of
+this module's own docstring (spine_read's AC2 discussion) already rejected.
+Neither is a fix; both trade one hazard for a worse one. The correct
+authoring guidance, not a mechanical guarantee, is: for a row whose surface
+is genuinely unknown (epistemic-premise, unresolved predecessor), OMIT
+``writes:`` — never spell it ``[]``. ``writes: []`` is for a row whose
+author is CERTAIN, right now, that it writes nothing at all: a real,
+non-code declaration (operational/EM-owned rows, ``change_kind:
+verification`` rows) that this module must accept, not an illegal spelling
+(staff review finding P0-1; see ``commit_pathspec``'s docstring for the
+per-row zero-contribution check that WARNS on it rather than refusing when
+a real-contributing sibling is present).
+
 ## The executed premise this module's output inherits (AC14)
 
 The orphan-claim gate that ``git-commit-agent`` enforces at runtime binds
@@ -83,21 +148,44 @@ otherwise will refuse at runtime with nobody present to widen it.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path, PurePosixPath
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
+_logger = logging.getLogger(__name__)
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class NoWritesDeclaredError(ValueError):
-    """Raised when no row in scope declares ``writes:`` (AC4, AC10).
+    """Raised in two shapes, both from ``commit_pathspec`` and
+    ``terminal_test_scope``'s equivalent whole-spine check — see each
+    function's own docstring for the exact boundary:
 
-    Covers both granularities this module derives at: a single wave (AC4,
-    ``commit_pathspec``) and the whole spine (AC10, ``terminal_test_scope``).
-    Never resolved by emitting an empty pathspec/scope — see module
-    docstring.
+      1. No row in scope declares ``writes:`` at all — every row is
+         UNDECLARED with a non-concrete surface (AC4, AC10). With zero
+         declarations there is no way to single out a subset as "the"
+         offenders, so this names every row in scope.
+      2. Every row DOES declare, but the union of their contributions is
+         still empty — every row declared ``writes: []``. Names the
+         zero-contributing rows (in this shape, every row in scope). This
+         shape exists because a per-row ``writes: []`` is NOT, by itself,
+         an error (see case below) — but a wave/spine whose declared
+         writes contribute nothing must still refuse rather than emit an
+         empty pathspec/scope, per the module docstring's negative spec
+         ("name the rows, never emit an empty result").
+
+    A row that declares ``writes: []`` while SHARING scope with a
+    real-contributing row is a different case and does NOT raise this
+    error — that per-row zero contribution is a named ``_logger.warning``,
+    not a refusal (staff review finding P0-1; see ``commit_pathspec``'s
+    docstring). Making ``writes: []`` categorically fatal, for every row
+    regardless of its wave-mates, made it an unrepresentable state for a
+    row whose author is certain, right now, that it writes nothing at all
+    (operational/EM-owned rows, ``change_kind: verification`` rows) — see
+    module docstring's § ``writes: []`` vs an absent ``writes:`` key.
     """
 
 
@@ -181,10 +269,55 @@ def _named_rows(rows) -> str:
 
 def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     """Derive the commit pathspec for the commit phase following ``wave``
-    (AC3). Refuses (``NoWritesDeclaredError``) if NO row in ``wave``
-    declares ``writes:`` (AC4) — naming every row in the wave, since with
-    zero declarations there is no way to single out a subset as "the"
-    offenders.
+    (AC3). Two distinct refusals, both ``NoWritesDeclaredError``, both
+    naming rows, because both guard the same invariant — this function
+    never returns an empty pathspec (module docstring's negative spec:
+    "name the rows, never emit an empty result"):
+
+      1. NO row in ``wave`` declares ``writes:`` at all (AC4) — every row
+         is UNDECLARED with a non-concrete surface. Fires before any
+         per-row contribution is computed, naming every row in the wave,
+         since with zero declarations there is no way to single out a
+         subset as "the" offenders.
+      2. Every row DOES declare (none UNDECLARED), but the union of their
+         contributions is still empty — every row declared ``writes: []``.
+         Fires AFTER the union, naming the rows that contributed nothing
+         (which, in this all-empty shape, is every row in the wave).
+
+    Between those two refusals sits the WARN-not-raise case (staff review
+    finding P0-1): if SOME but not all rows in ``wave`` declare ``writes:
+    []`` while others contribute real paths, the zero-contributing rows are
+    excluded from the returned pathspec and named in a ``_logger.warning``,
+    but the wave is not refused — the real-contributing rows' paths are
+    still returned. That row's dispatched executor still ran and may have
+    written real files this pathspec never carries, and no later wave's
+    (file-pathspec, not directory-pathspec) commit phase sweeps them up
+    either — the warning exists to surface that loudly, not silently. An
+    earlier version of this check RAISED per row instead of warning here;
+    that made ``writes: []`` an unrepresentable state — a single such row
+    anywhere in a spine failed ``dispatch.emit`` for the WHOLE plan, even
+    when sharing a wave with real-contributing rows, including for rows
+    whose author declared it deliberately (operational/EM-owned rows,
+    ``change_kind: verification`` rows — real, open, non-deferred rows on
+    disk do this). See module docstring § ``writes: []`` vs an absent
+    ``writes:`` key and ``NoWritesDeclaredError``'s docstring.
+
+    Refusal 2 is what keeps the ALL-empty case from falling through that
+    same warn-and-continue path into an empty return: an all-``writes: []``
+    wave has nothing UNDECLARED, so refusal 1's ``declares_writes`` check
+    does not fire, and every row is zero-contributing, so the union is
+    empty — the warning still logs (both fire together in this shape), but
+    the empty result additionally raises, because an empty pathspec handed
+    to a commit phase is never a legal return regardless of which spelling
+    produced it.
+
+    An UNDECLARED row that also contributes zero paths (unknown surface, no
+    concrete-surface fallback) is a different case, not covered by either
+    of these — ``wave_map._writes_overlap`` forces every UNDECLARED row
+    into its own solitary wave, so it can only ever reach here alongside
+    other rows via a hand-built wave bypassing ``build_waves`` (as this
+    module's own test suite does for coverage) — refusal 1 above already
+    covers the real, ``build_waves``-reachable UNDECLARED case.
     """
     declares_writes = [row for row in wave if row.writes is not UNDECLARED]
     if not declares_writes:
@@ -192,19 +325,27 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
             "wave has no row declaring writes: refusing to emit a commit "
             f"phase pathspec (rows: {_named_rows(wave)})"
         )
+
+    zero_contribution = [
+        row
+        for row in wave
+        if row.writes is not UNDECLARED and not _declared_paths(row)
+    ]
+    if zero_contribution:
+        _logger.warning(
+            "writes: [] declared, excluded from this wave's commit "
+            "pathspec (rows: %s)",
+            _named_rows(zero_contribution),
+        )
+
     paths: list[str] = []
     for row in wave:
         paths.extend(_declared_paths(row))
     paths = _dedupe(paths)
     if not paths:
-        # Review: code-reviewer (wsc-B) -- every row declared writes: (an
-        # explicit []), not UNDECLARED, so the check above didn't fire, but
-        # zero rows contributed a path. Emitting [] here would produce a
-        # commit phase with an empty pathspec -- a dispatched commit agent
-        # told to commit nothing. Refuse instead of emitting.
         raise NoWritesDeclaredError(
-            "every row in the wave declared an empty writes: [], refusing "
-            f"to emit an empty commit phase pathspec (rows: {_named_rows(wave)})"
+            "wave's declared writes contribute no paths: refusing to emit "
+            f"an empty commit phase pathspec (rows: {_named_rows(wave)})"
         )
     return paths
 

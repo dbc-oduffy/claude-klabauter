@@ -1,5 +1,5 @@
 """
-coordinator_core.pickup_assemble.tests.test_holder_goal_state
+coordinator_core.session.tests.test_holder_goal_state
 
 Purpose: pins `holder_evidence`'s `holder_goal_state` disambiguation
 (2026-08-13, state/handoffs/2026-08-13-session-goal-field-has-no-writer.md
@@ -8,8 +8,12 @@ empty `goal` on a readable meta.json) from "unreadable" (no holder_sid, no
 session dir, or the fail-soft exception path), so a null/empty `holder_goal`
 no longer reads ambiguously as either.
 
+Relocated (2026-08-19, docs/plans/2026-08-19-fleet-work-state-who-holds-
+which-baton.md, chunk C1a) alongside `holder_evidence.py`'s move from
+`coordinator_core.pickup_assemble` to `coordinator_core.session`.
+
 Run (from the repo root): python -m pytest
-coordinator_core/pickup_assemble/tests/test_holder_goal_state.py -q
+coordinator_core/session/tests/test_holder_goal_state.py -q
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+from coordinator_core.session.holder_evidence import holder_evidence
 
 pytestmark = [
     pytest.mark.cadence,
@@ -118,7 +122,7 @@ class TestHolderGoalState:
             raise RuntimeError("simulated liveness_basis failure")
 
         monkeypatch.setattr(
-            "coordinator_core.pickup_assemble.holder_evidence._liveness_basis", _boom
+            "coordinator_core.session.holder_evidence._liveness_basis", _boom
         )
         result = holder_evidence("sess-boom", repo)
         assert result["holder_goal_state"] == "unreadable"
@@ -139,8 +143,13 @@ class TestHolderGoalState:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated transcript-resolution failure")
 
+        # `_resolve_transcript` is imported function-local inside
+        # `holder_evidence()` (2026-08-19 relocation, chunk C1a — see that
+        # function's docstring note on why), so the patch target is the
+        # source module it is imported FROM at call time, not a
+        # module-level name on `holder_evidence.py` itself.
         monkeypatch.setattr(
-            "coordinator_core.pickup_assemble.holder_evidence._resolve_transcript",
+            "coordinator_core.ops.check_em_environment._resolve_transcript",
             _boom,
         )
         result = holder_evidence("sess-late-boom", repo, want_activity=True)

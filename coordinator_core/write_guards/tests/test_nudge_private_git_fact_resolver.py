@@ -62,9 +62,13 @@ def _private_resolver_source(flag: str) -> str:
         ("--show-toplevel", "coordinator_core.git.repo_root.show_toplevel"),
         ("--git-dir", "coordinator_core.git.repo_root.git_dir"),
         ("--git-common-dir", "coordinator_core.git.repo_root.git_common_dir"),
+        ("--absolute-git-dir", "coordinator_core.git.repo_root.absolute_git_dir"),
     ],
 )
-def test_fires_on_each_walk_backed_form_in_hot_path_module(flag, expected_symbol):
+def test_fires_on_each_walk_only_form_in_hot_path_module(flag, expected_symbol):
+    """`--absolute-git-dir` joined this list on 2026-08-19, moving out of the
+    silent set because `repo_root.absolute_git_dir` stopped spawning. The
+    silent set is membership in a real property, not a fixed list."""
     content = _private_resolver_source(flag)
     result = guard.check(
         _payload("Write", {"file_path": _HOT_PATH_FILE, "content": content})
@@ -74,8 +78,14 @@ def test_fires_on_each_walk_backed_form_in_hot_path_module(flag, expected_symbol
     text = result["hookSpecificOutput"]["additionalContext"]
     assert expected_symbol in text
     assert flag in text
-    assert "eliminates the spawn" not in text
-    assert "cheaper in the ordinary case, never more expensive" in text
+    # AC5 honesty, INVERTED 2026-08-19 and deliberately kept as an assertion
+    # rather than deleted. This used to read `assert "eliminates the spawn"
+    # not in text` -- because it did not: the seam fell back to a spawn when
+    # the walk found no `.git`. That fallback is gone for every form in this
+    # list, so the ban became a pin on an understatement. The property under
+    # test is unchanged -- the offer text must state what the seam actually
+    # does -- only the truth it has to match moved.
+    assert "never spawns, on any path" in text
 
 
 def test_fires_on_live_measured_path_format_absolute_git_common_dir_membership():
@@ -123,14 +133,19 @@ def test_silent_on_non_hot_path_module():
     assert result is None
 
 
-@pytest.mark.parametrize(
-    "flag", ["--show-prefix", "--absolute-git-dir", "--is-inside-work-tree"]
-)
+@pytest.mark.parametrize("flag", ["--show-prefix", "--is-inside-work-tree"])
 def test_silent_on_each_always_spawning_form(flag):
-    """These three forms ALWAYS spawn per coordinator_core/git/repo_root.py's
+    """These two forms ALWAYS spawn per coordinator_core/git/repo_root.py's
     own docstring -- the offered seam is fork-equal or a documented semantic
     trap for each, so this guard must stay silent rather than mis-claim
-    cheapness (see nudge_private_git_fact_resolver.py's AC5 HONESTY note)."""
+    cheapness (see nudge_private_git_fact_resolver.py's AC5 HONESTY note).
+
+    `--absolute-git-dir` was a third member until 2026-08-19, when
+    `repo_root.absolute_git_dir` became walk-only and it moved to the
+    FIRE-SET -- see `test_fires_on_absolute_git_dir_now_that_its_seam_is_
+    walk_only` below. The silent set is membership in a real property, not a
+    fixed list: a form belongs here while its seam still spawns, and leaves
+    when it stops."""
     content = _private_resolver_source(flag)
     result = guard.check(
         _payload("Write", {"file_path": _HOT_PATH_FILE, "content": content})

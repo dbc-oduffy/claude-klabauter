@@ -58,10 +58,11 @@ OSS requirement: works for any coordinator-claude installer with zero registered
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -138,18 +139,49 @@ def _is_publish_target(
     return False
 
 
+def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
+    """Resolve every `repos.*` key in ONE `dump --prefix repos --format json`
+    call — the batch counterpart to `_registry_roots`' former enumerate-then-
+    `get` loop (one `keys` spawn plus one `get` spawn per key). Same
+    primitive already proven in `coordinator/bin/coordinator-doc-new.py` and
+    `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos`.
+
+    Fails closed to {} on any spawn failure, empty stdout, unparseable JSON,
+    OR a non-zero returncode — a non-zero exit with parseable stdout is a
+    partial/crashed dump, not a value to trust (this is the fixed shape;
+    an earlier revision of the sibling helpers above trusted parseable
+    stdout regardless of returncode, which a code review caught as a silent
+    partial-table read). Callers already tolerate an empty/partial roots
+    list — this degrades exactly like "no machine-local" does.
+    """
+    try:
+        proc = subprocess.run(
+            [machine_local, "dump", "--prefix", "repos", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_SECS,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"skip: _machine_local_dump_repos: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return {}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str) and v}
+
+
 def _registry_roots(machine_local: str) -> List[str]:
-    """Enumerate `repos.*` keys, resolve each, skip-absent, minus publish targets."""
+    """Resolve every `repos.*` key via ONE batched dump call, skip-absent,
+    minus publish targets. See `_machine_local_dump_repos` for the batching
+    rationale (T3 h4-ops-b deferred item)."""
     roots: List[str] = []
     pub_dests = _publish_target_dests(machine_local)
-    keys_out = _machine_local_run(machine_local, "keys")
-    keys = [
-        line.strip()
-        for line in keys_out.splitlines()
-        if line.strip().startswith("repos.")
-    ]
-    for key in keys:
-        resolved = _machine_local_run(machine_local, "get", key).strip()
+    for resolved in _machine_local_dump_repos(machine_local).values():
+        resolved = resolved.strip()
         if not resolved:
             continue
         if not os.path.isdir(resolved):

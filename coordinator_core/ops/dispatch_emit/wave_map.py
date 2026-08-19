@@ -30,7 +30,42 @@ three constraints that are COMPUTED here, never read off the spine:
 
 A cycle in the combined depends_on + read-after-write predecessor graph
 (including a self-edge) is detected and raises ``WaveCycleError`` fail-loud,
-naming the cycle's members — it is never silently ordered or hung on.
+naming the cycle's members — it is never silently ordered or hung on. This
+check runs against the FULL predecessor graph, before the epistemic-premise
+holdout below removes any row, so a cycle made up entirely of held-out rows
+is still caught rather than reported as two indistinguishable ordinary
+holds (see § Epistemic-premise holdout).
+
+## Epistemic-premise holdout (break-class fix, 2026-08-19)
+
+A row gated ``epistemic-premise`` on a predecessor (plan-tasks.schema.json's
+``gate_kind`` enum: the predecessor "decides whether this row should exist
+at all... there is no interface to pin and nothing to author against until
+its verdict lands") whose ``writes`` is UNDECLARED cannot be placed in ANY
+wave without either sinking the whole emit (``pathspec.commit_pathspec``'s
+``NoWritesDeclaredError`` when it lands alone) or fabricating a surface it
+does not have. ``build_waves`` HOLDS such a row OUT of this pass's wave
+graph entirely, transitively (a row that itself depends on a held row
+cannot run against a predecessor that did not run), and reports every held
+row by id via ``logging.warning`` before deriving waves from what remains.
+
+This is a scheduling decision, not a disposition mutation — a held row
+carries no changed ``disposition``/``deferred``/``writes``/anything; it
+simply does not appear in this call's wave output, and re-appears once a
+later ``read_spine`` call sees its epistemic predecessor's verdict resolve
+the gate (either the row's ``writes`` becomes declared, or the
+``depends_on`` edge/row is edited away in the plan body).
+
+The predicate is exactly two-part and BOTH parts are required:
+  (a) the row carries a ``depends_on`` edge with
+      ``gate_kind == "epistemic-premise"``, and
+  (b) the row's own ``writes`` is the UNDECLARED sentinel (identity check,
+      never truthiness — see AC2 above). ``writes: []`` is a POSITIVE
+      empty declaration, not UNDECLARED, and does not hold the row out.
+A row satisfying only one half keeps its current (unheld) behaviour
+exactly — including a row that itself gates ``epistemic-premise`` on a
+predecessor but declares real writes, which stays live and orders no
+differently than an ``output-consumption-runtime`` gate would.
 
 This module is a pure function: same rows in, same wave order out, no I/O,
 no mutation of its inputs.
@@ -43,17 +78,25 @@ Negative-spec:
     DERIVES a partition from scratch, which is a different problem shape.
     Its exact-string-equality comparison is also insufficient here (see
     point 1 above) and is not carried over.
-  - Does NOT special-case ``gate_kind`` beyond carrying it through — both
-    declarable kinds order identically (see module docstring above).
+  - Does NOT special-case ``gate_kind`` beyond carrying it through and the
+    one named epistemic-premise holdout above — every other gate kind
+    orders identically (see module docstring above).
+  - Does NOT stamp any disposition or write to the plan file for a held
+    row — see § Epistemic-premise holdout above.
 """
 
 from __future__ import annotations
 
+import logging
 import posixpath
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
+
+_logger = logging.getLogger(__name__)
+
+_EPISTEMIC_PREMISE = "epistemic-premise"
 
 
 class WaveRow(NamedTuple):
@@ -163,6 +206,79 @@ def _predecessors(rows: list[EmitterRow]) -> dict[str, set[str]]:
     return preds
 
 
+def _epistemic_premise_predecessors(row: EmitterRow) -> list[str]:
+    """Row ids named by one of ``row``'s ``depends_on`` edges whose
+    ``gate_kind`` is ``epistemic-premise``. Empty if none."""
+    return [
+        edge.get("chunk")
+        for edge in row.depends_on
+        if isinstance(edge, dict) and edge.get("gate_kind") == _EPISTEMIC_PREMISE
+    ]
+
+
+def _compute_held_out(
+    rows: list[EmitterRow], preds: dict[str, set[str]]
+) -> dict[str, str]:
+    """Row id -> human-readable hold reason, for every row this pass excludes
+    from the wave graph (§ Epistemic-premise holdout in the module
+    docstring).
+
+    Two membership routes, both computed here rather than trusted from a
+    caller:
+
+      1. Direct — the row carries an ``epistemic-premise`` depends_on edge
+         AND its own ``writes`` is UNDECLARED (both halves required; see
+         module docstring predicate).
+      2. Transitive — the row (transitively, via ``preds``, which already
+         combines depends_on and read-after-write edges) depends on a row
+         already held for either reason. A row cannot run against a
+         predecessor that did not run.
+
+    ``preds`` must be derived from the FULL ``rows`` list (before any
+    holdout filtering) — the transitive walk needs every edge, including
+    ones pointing at rows route 1 is about to hold.
+    """
+    reasons: dict[str, str] = {}
+    for row in rows:
+        gates = _epistemic_premise_predecessors(row)
+        if gates and row.writes is UNDECLARED:
+            reasons[row.id] = (
+                "epistemic-premise gate on "
+                + ", ".join(gates)
+                + ", surface not yet declared"
+            )
+
+    # Fixed-point closure: a row held this round can make another row
+    # eligible next round (a chain of depends_on edges through held rows).
+    # Bounded by len(rows) — each round holds at least one more row or the
+    # loop stops.
+    changed = True
+    while changed:
+        changed = False
+        for row in rows:
+            if row.id in reasons:
+                continue
+            blockers = sorted(preds[row.id] & reasons.keys())
+            if blockers:
+                reasons[row.id] = "depends on held row(s) " + ", ".join(blockers)
+                changed = True
+
+    return reasons
+
+
+def _report_held_out(held: dict[str, str]) -> None:
+    """Log every held-out row by id and reason (never silent — see module
+    docstring § Epistemic-premise holdout). ``logging.warning`` reaches the
+    caller's stderr via Python's last-resort handler with no configuration
+    required, so an operator sees this without reading code."""
+    for row_id in sorted(held):
+        _logger.warning(
+            "wave_map: held %s out of this pass's wave graph (%s)",
+            row_id,
+            held[row_id],
+        )
+
+
 def _detect_cycle(preds: dict[str, set[str]]) -> None:
     """Raise ``WaveCycleError`` if ``preds`` contains a cycle or self-edge."""
     WHITE, GRAY, BLACK = 0, 1, 2
@@ -241,9 +357,32 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
     that is simultaneously (a) free of any write-overlap conflict with every
     row already placed in that wave and (b) at or past every one of the
     row's predecessor waves + 1.
+
+    A row held out under § Epistemic-premise holdout (module docstring)
+    never reaches wave placement at all — it, and every row that
+    transitively depends on it, is removed from ``rows`` before the
+    predecessor graph used for placement is (re)computed, and reported by
+    id via ``logging.warning``. This does not weaken the wave-level
+    ``NoWritesDeclaredError``-style refusal for any OTHER reason a wave
+    might end up with no declared writes — it carves out exactly this one
+    named, justified case.
+
+    Cycle detection runs against the FULL, unfiltered predecessor graph —
+    before any holdout row is removed — so a cycle consisting entirely of
+    held-out rows (each blocked on the other, so neither's epistemic-premise
+    gate can ever resolve) still raises ``WaveCycleError`` instead of being
+    silently swallowed as two ordinary holds. Removing a strict subset of
+    nodes (and their edges) from an already-acyclic graph cannot introduce a
+    cycle, so no second cycle check against the filtered graph is needed.
     """
+    full_preds = _predecessors(rows)
+    _detect_cycle(full_preds)
+    held = _compute_held_out(rows, full_preds)
+    if held:
+        _report_held_out(held)
+    rows = [row for row in rows if row.id not in held]
+
     preds = _predecessors(rows)
-    _detect_cycle(preds)
     order = _topological_order(rows, preds)
 
     wave_of: dict[str, int] = {}

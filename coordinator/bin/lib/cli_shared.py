@@ -115,8 +115,10 @@ def machine_local_dump_repos() -> dict[str, str]:
     counterpart to enumerate-then-get). `dump --prefix repos` shares
     resolve_one with `get`, so a batched value is byte-identical to what a
     per-key `get` would print — see _machine_local.py::cmd_dump docstring.
-    Returns {} on any spawn/parse failure; callers already tolerate an
-    empty/partial paths table.
+    Returns {} on any spawn/parse failure OR a non-zero returncode (matches
+    machine_local_get's fail-closed contract — a non-zero exit with
+    parseable stdout is a partial/crashed dump, not a value to trust);
+    callers already tolerate an empty/partial paths table.
     """
     impl = machine_local_impl()
     python = resolve_python()
@@ -129,7 +131,7 @@ def machine_local_dump_repos() -> dict[str, str]:
         )
     except OSError:
         return {}
-    if not result.stdout.strip():
+    if result.returncode != 0 or not result.stdout.strip():
         return {}
     try:
         data = json.loads(result.stdout)

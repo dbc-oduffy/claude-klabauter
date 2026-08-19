@@ -130,7 +130,7 @@ class TestBrief:
             if args[:2] == ["rev-parse", "--verify"]:
                 ok = args[2] == "main"
                 return SimpleNamespace(returncode=0 if ok else 1, stdout="", stderr="")
-            if args[0] == "branch":
+            if args == ["branch", "-a"]:
                 return SimpleNamespace(returncode=0, stdout=branch_lines, stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout=f"{tip_author}\n", stderr="")
@@ -196,16 +196,85 @@ class TestBrief:
         assert cherry_pick_directives[0]["cli"] == "cherry-pick-and-delete"
         assert cherry_pick_directives[0]["depends_on"] == "j-absorb-stale"
 
-    def test_inspection_gather_is_one_show_spawn_for_all_commits(self, monkeypatch, tmp_path):
-        """The gather is `count × 1` git spawns, not `count × 1` per commit --
-        a git spawn is ~100ms on Windows (DoE spawn-cost memo, 2026-08-08)."""
+    def test_inspection_gather_is_one_show_spawn_for_all_branches(self, monkeypatch, tmp_path):
+        """PINS: one `git show --stat` spawn TOTAL for the whole `brief()`
+        call, regardless of stale-branch count -- not one per stale branch.
+
+        History: this test previously asserted `len(show_calls) ==
+        len(stale)`, i.e. one spawn PER BRANCH (already a won collapse off
+        an earlier per-COMMIT shape). That assertion could not tell a
+        genuine global collapse apart from the per-branch shape it was
+        pinning, because its fixture only ever exercised a single stale
+        branch (`len(stale) == 1` in every case), so `len(show_calls) ==
+        len(stale)` was compatible with either design. This version uses
+        TWO stale branches with disjoint sha sets specifically so the two
+        designs diverge: per-branch would spawn twice here, the global
+        collapse spawns once. A git spawn is ~100ms on Windows (DoE
+        spawn-cost memo, 2026-08-08); collapsing "per branch" to "per brief
+        call" removes a second multiplier the same way the earlier
+        per-commit collapse removed the first.
+
+        Attribution argument (why this collapse is safe, unlike the sibling
+        `unique_commits`/`branch_reachable` per-branch spawns this file
+        keeps): a commit's `git show --stat` block is a pure function of
+        that commit alone -- it does not vary with which other revs ride
+        alongside it in the same argv, and is unaffected by which branch's
+        `current..stale` range surfaced the sha. So `brief()` doesn't need
+        `inspect_commits` to know about branches at all: it dedups every
+        stale branch's shas into one flat argv, spawns once, and each
+        branch fans back out by keying the one shared result dict on its
+        own shas. This is asserted below by confirming BOTH branches'
+        inspections resolve correct, distinct, byte-identical stat blocks
+        from that single spawn.
+
+        Also regression-pins a second leak the two-pass split introduced and
+        this test's prior version did not catch: the absorb directive's
+        `args` need `ref`, which the pass-1 loop binds (`name, ref =
+        entry["name"], entry["ref"]`) but pass 2 does not automatically
+        inherit -- an earlier version of the split read whatever `ref`
+        pass 1's LAST iteration happened to leave bound, giving every
+        branch's absorb directive the SAME (wrong-for-all-but-one) ref, a
+        `pytest` pass with silently corrupt directives. `stale-b` here is
+        REMOTE-ONLY (`ref == "origin/stale-b"`, distinct from both its own
+        `name` and from `stale-a`'s local `ref == "stale-a"`), so a leaked
+        single value cannot satisfy both branches' ref assertions below by
+        coincidence."""
         calls = []
-        run_git = self._stub(
-            monkeypatch,
-            branch_lines="* current\n  main\n  stale\n",
-            worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
-            unique_commits=["aaa111 first", "bbb222 second", "ccc333 third"],
-        )
+
+        def run_git(args, cwd):
+            if args[:2] == ["config", "user.email"]:
+                return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
+            if args[:2] == ["rev-parse", "--abbrev-ref"]:
+                return SimpleNamespace(returncode=0, stdout="current\n", stderr="")
+            if args[:2] == ["rev-parse", "--verify"]:
+                ok = args[3] == "main"
+                return SimpleNamespace(returncode=0 if ok else 1, stdout="", stderr="")
+            if args == ["branch", "-a"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="* current\n  main\n  stale-a\n  remotes/origin/stale-b\n",
+                    stderr="",
+                )
+            if args[0] == "log" and args[1] == "-1":
+                return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
+            if args[0] == "log" and args[1] == "--oneline":
+                ref = args[2].split("..", 1)[1]
+                commits = {
+                    "stale-a": ["aaa111 first"],
+                    "origin/stale-b": ["bbb222 second", "ccc333 third"],
+                }[ref]
+                return SimpleNamespace(returncode=0, stdout="\n".join(commits) + "\n", stderr="")
+            if args[0] == "show":
+                return SimpleNamespace(returncode=0, stdout=_show_stdout(args[2:]), stderr="")
+            if args[0] == "worktree" and args[1] == "list":
+                return SimpleNamespace(
+                    returncode=0, stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n", stderr=""
+                )
+            if args[0] == "merge-base":
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            if args[0] == "status":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected git call: {args}")
 
         def recording(args, cwd):
             calls.append(args)
@@ -213,17 +282,36 @@ class TestBrief:
 
         do = consolidate_assemble.brief(repo_root=tmp_path, run_git=recording)
         stale = [b for b in do["gates"]["branches"] if b["category"] == "mine-stale"]
-        show_calls = [args for args in calls if args[0] == "show"]
-        assert len(show_calls) == len(stale)
-        assert all(args == ["show", "--stat", "aaa111", "bbb222", "ccc333"] for args in show_calls)
+        assert len(stale) == 2  # two branches feeding the one spawn below, not one
 
-        jp = next(jp for jp in do["judgment_points"] if jp["id"] == "j-absorb-stale")
-        inspections = jp["evidence"]["inspections"]
-        assert [i["sha"] for i in inspections] == ["aaa111", "bbb222", "ccc333"]
-        assert all(i["stat"].startswith(f"commit {i['sha']}") for i in inspections)
+        show_calls = [args for args in calls if args[0] == "show"]
+        assert len(show_calls) == 1
+        assert show_calls[0] == ["show", "--stat", "aaa111", "bbb222", "ccc333"]
+
+        jp_a = next(jp for jp in do["judgment_points"] if jp["id"] == "j-absorb-stale-a")
+        jp_b = next(jp for jp in do["judgment_points"] if jp["id"] == "j-absorb-stale-b")
+        inspections_a = jp_a["evidence"]["inspections"]
+        inspections_b = jp_b["evidence"]["inspections"]
+        assert [i["sha"] for i in inspections_a] == ["aaa111"]
+        assert [i["sha"] for i in inspections_b] == ["bbb222", "ccc333"]
         # Each block is byte-identical to that commit's own `git show --stat` -- the batch
-        # separator git emits BETWEEN objects never bleeds into the preceding commit's evidence.
-        assert all(i["stat"] == _show_stdout([i["sha"]]) for i in inspections)
+        # separator git emits BETWEEN objects never bleeds into a neighboring commit's evidence,
+        # and the fan-out from the one shared spawn attributes each block to the right branch.
+        for i in inspections_a + inspections_b:
+            assert i["stat"].startswith(f"commit {i['sha']}")
+            assert i["stat"] == _show_stdout([i["sha"]])
+
+        # Regression: each branch's absorb directive must carry ITS OWN
+        # `ref`, not whatever `ref` the pass-1 loop last left bound.
+        # `stale-a` is local (`ref == name == "stale-a"`); `stale-b` is
+        # remote-only (`ref == "origin/stale-b"`, and its directive also
+        # appends "origin" as the remote-delete arg) -- the two refs differ
+        # from each other AND from `stale-b`'s own name, so a single leaked
+        # value cannot satisfy both.
+        absorb_a = next(d for d in do["directives"] if d["id"] == "d-absorb-stale-a")
+        absorb_b = next(d for d in do["directives"] if d["id"] == "d-absorb-stale-b")
+        assert absorb_a["args"] == ["stale-a", "stale-a"]
+        assert absorb_b["args"] == ["stale-b", "origin/stale-b", "origin"]
 
     def test_inspect_commits_on_empty_sha_list_spawns_nothing(self, tmp_path):
         def run_git(args, cwd):
@@ -269,7 +357,7 @@ class TestApplyDispatchTable:
                 ("config", "user.email"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("rev-parse", "--abbrev-ref"): SimpleNamespace(returncode=0, stdout="current\n", stderr=""),
                 ("rev-parse", "--verify"): SimpleNamespace(returncode=0, stdout="", stderr=""),
-                ("branch",): SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr=""),
+                ("branch", "-a"): SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="abc123 a commit\n", stderr=""),
                 ("show",): SimpleNamespace(returncode=0, stdout="1 file changed\n", stderr=""),
@@ -302,7 +390,7 @@ class TestApplyDispatchTable:
                 ("config", "user.email"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("rev-parse", "--abbrev-ref"): SimpleNamespace(returncode=0, stdout="current\n", stderr=""),
                 ("rev-parse", "--verify"): SimpleNamespace(returncode=1, stdout="", stderr=""),
-                ("branch",): SimpleNamespace(returncode=0, stdout="* current\n  stale\n", stderr=""),
+                ("branch", "-a"): SimpleNamespace(returncode=0, stdout="* current\n  stale\n", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("worktree", "list"): SimpleNamespace(

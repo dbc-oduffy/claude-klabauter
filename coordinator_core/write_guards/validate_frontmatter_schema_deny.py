@@ -936,6 +936,17 @@ def _plan_tasks_spine_errors(
     shape (rendered by the advisory sibling) report the identical finding
     for the identical row.
 
+    `plan_created` is now forwarded to `_apply_cross_field_rules` from this
+    document's own frontmatter (`fm.get('created')`, mirroring
+    `check_plan_tasks_source`'s call exactly) — 2026-08-19 fix. Before this,
+    `_cf_plan_tasks_writes_declared` (registered in
+    `_PLAN_TASKS_CROSS_FIELD_RULES`) never fired on either write guard: its
+    own safe-default treats an unforwarded `plan_created` as "cannot
+    confirm post-cutoff" and stands down unconditionally, so a hand-edited
+    plan could omit `writes` on an open row and still save cleanly, only
+    getting caught later at `dispatch.emit`'s preflight (Review:
+    review-a-write-guard, MAJOR).
+
     GOVERNED-AWARE as of 2026-07-29 (write-guard-bypass fix). `frontmatter`
     is the plan DOCUMENT's own parsed frontmatter (the caller already has it
     — see `_evaluate_schema_validation`), used ONLY to resolve
@@ -1002,7 +1013,10 @@ def _plan_tasks_spine_errors(
             })
             continue
         row_errors = _validate_json_schema_node(row, schema, schema)
-        row_errors.extend(_apply_cross_field_rules(row, "plan-tasks", governed=governed))
+        row_errors.extend(_apply_cross_field_rules(
+            row, "plan-tasks", governed=governed,
+            plan_created=frontmatter.get('created') if isinstance(frontmatter, dict) else None,
+        ))
         for err in row_errors:
             errors.append({
                 "field": f"tasks[{row_label}].{err.get('field')}",

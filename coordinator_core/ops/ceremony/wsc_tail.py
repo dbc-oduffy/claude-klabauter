@@ -430,7 +430,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_UNCONFIRMED,
     run_commit_pipeline,
 )
-from coordinator_core.ops.ceremony.git_native import add_paths
+from coordinator_core.ops.ceremony.git_native import add_paths, deferred_publisher_span
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.ops.ceremony.receipt_emit import emit_receipt
 from coordinator_core.ops.ceremony.receipt_schema import make_d_node
@@ -552,6 +552,86 @@ class _TailTiming:
 
 def _resolve_push_mode() -> str:
     return PUSH_MODE_SYNC if os.environ.get(_ENV_SYNC_PUSH) == "1" else PUSH_MODE_DEFERRED
+
+
+@contextmanager
+def _deferred_publisher_backstop(worktree_root: Path, push_mode: str) -> Iterator[None]:
+    """C5 (opro-01-where-the-push-outcome-is-known follow-up, docs/plans/
+    2026-08-19-windows-commit-hook-starts-python-once.md): on the deferred
+    path, both the post-commit hook's own respawned child AND step 5e's
+    `_spawn_deferred_push_skip_loud()` publish the same branch tip -- the
+    two-publisher race `git_native._sole_publisher_env` exists to remove,
+    reintroduced structurally by DEC-1's deferred default. This wraps steps
+    5a-5d (fresh AND resumed passes alike, mirroring the module docstring's
+    own "both steps run on BOTH the fresh pass and the AC18 resumed pass"
+    framing for 5c/5d) in `git_native.deferred_publisher_span()`, which
+    widens EVERY `_sole_publisher_env()` call reached during the span --
+    the main ceremony commit (5a) and steps 5c/5d's own follow-up commits
+    alike -- to stand the hook down, leaving step 5e (below, after this
+    span exits) as the sole publisher.
+
+    Suppressing the hook removes an accidental backstop (AC3): step 5e is
+    deliberately skip-loud, and today a swallowed spawn failure still
+    leaves the hook's own child to push. With the hook suppressed, that
+    failure would otherwise mean nobody publishes AND no pending record
+    exists. This closes that gap the ONLY way that holds across the whole
+    span -- record-then-publish, at the seam that DECIDES suppression,
+    not at step 5e itself (the stamp/stub-close span between commit and
+    5e is seconds wide, not milliseconds): before the span opens, a
+    pending-push record is written directly via `auto_push.
+    _write_pending_record()` (best-effort, skip-loud -- a failed write
+    here must never block a commit), naming this process as holder and an
+    already-elapsed `hold_until` so the record is immediately due at
+    whichever drain point reaches it. `sha` is `None` -- the commit has
+    not landed yet at this seam. `drain_pending_push()`'s common
+    (branch-resolves) path never reads `sha` as a precondition to
+    draining, but `_drain_dead_ref_record`'s rename-recovery path does:
+    `sha is None` there means "unknown payload, retarget onto whatever
+    branch now exists and push" rather than "no payload, drop" -- see
+    that function's own docstring case 0 (review: coordinator:review-code,
+    Finding 1, 2026-08-19).
+
+    On success, step 5e's own respawned push clears this record via the
+    normal `_clear_pending_record_if_branch()` success path -- this
+    record is a backstop for the swallowed-failure case, not a second
+    publisher of its own; nothing here spawns or pushes anything.
+
+    RESIDUAL, stated honestly (per this chunk's brief): a swallowed 5e
+    failure is recovered only at the NEXT `drain_pending_push()` call --
+    session-boot or workday-start (see that function's own docstring for
+    its three call sites) -- never "another child pushes now". That is a
+    real freshness reduction relative to today's accidental double-
+    publisher, and the price of removing the race; it is NOT equivalent
+    to today's behaviour.
+
+    A no-op (no record write, no suppression widening) when `push_mode`
+    is not `PUSH_MODE_DEFERRED` -- `push_mode="sync"` already suppresses
+    the hook per-call via the existing `suppress_post_commit_auto_push=
+    (push_mode == PUSH_MODE_SYNC)` wiring in `commit_pipeline`/
+    `post_commit_tail`/`consumed_handoff_stamp`, and `push_mode="none"`
+    (tests only) makes the hook's own push the sole publisher by design
+    -- neither needs this backstop.
+    """
+    if push_mode != PUSH_MODE_DEFERRED:
+        yield
+        return
+    try:
+        branch = auto_push.resolve_branch(str(worktree_root))
+        if branch:
+            auto_push._write_pending_record(  # noqa: SLF001 -- same-package cross-module use, no public wrapper exists
+                str(worktree_root),
+                branch,
+                None,
+                time.time(),
+                os.getpid(),
+            )
+    except Exception as exc:  # noqa: BLE001 -- skip-loud, never block the commit this backstops
+        _LOG.warning(
+            "wsc_tail: deferred-publisher backstop record write failed (skip-loud): "
+            "%s: %s", type(exc).__name__, exc,
+        )
+    with deferred_publisher_span():
+        yield
 
 
 def _spawn_deferred_push_skip_loud(worktree_root: Path) -> None:
@@ -1288,196 +1368,218 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # that path by construction, exactly like `commit_failed` does.
     sha_unverified = False
 
-    if not resumed:
-        # --- Adjudication/review-trail supply gate (fail-loud, PRE-mutation) ---
-        # `tail_ops.write_review_trail` turns this exact input into a
-        # `failed_critical[]` entry, but that entry only becomes an exit code
-        # at the bottom of this handler -- by which point the ceremony commit
-        # has already landed. The observed shape (2026-08-14): a close-out
-        # asserting adjudication, supplying no review metadata, exiting
-        # non-zero AFTER its own commit, leaving a green-looking ceremony
-        # with no trail record and nothing left to re-run. The breach is
-        # decidable from params alone, so it is decided here, before the
-        # roadmap render, the coverage gate, and the commit.
-        if (b_adjudication_present or partition_mandatory) and not tail_ops.review_trail_metadata_complete(
-            review_trail
-        ):
-            fields_str = ", ".join(tail_ops.REVIEW_TRAIL_REQUIRED_FIELDS)
-            # D (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-
-            # skips-silently.md): a resolved review-scale row 4/6
-            # (`partition_mandatory`) is folded into the SAME pre-commit
-            # refusal `b_adjudication_present` already trips -- a mandatory-
-            # partition close with NO review metadata at all must not exit 0
-            # any more than an adjudicated one may. The remediation names a
-            # runnable producer, not a slash command: `workstream-complete
-            # brief` already emits the per-commit slice list this needs at
-            # `gates.review_scale.commit_slices`.
-            if partition_mandatory and not b_adjudication_present:
-                breach = (
-                    f"{OP_NAME}: partition_mandatory with no complete review_trail record "
-                    f"-- required fields: {fields_str}. gates.review_scale.chain_slices is the "
-                    "chain-scoped review obligation (uncapped); gates.review_scale.commit_slices "
-                    "is the narrower record-write population -- different sets by design. "
-                    "The engine's own workstream-complete brief already computed a "
-                    "per-commit slice list for this close at gates.review_scale.commit_slices "
-                    "-- fill in reviewer/scope/verdict per entry and supply the list as "
-                    "decisions['review'], or wsc-tail.py's --review-slice (repeatable) / "
-                    "discrete --review-* flags."
+    with _deferred_publisher_backstop(worktree_root, push_mode):
+        if not resumed:
+            # --- Adjudication/review-trail supply gate (fail-loud, PRE-mutation) ---
+            # `tail_ops.write_review_trail` turns this exact input into a
+            # `failed_critical[]` entry, but that entry only becomes an exit code
+            # at the bottom of this handler -- by which point the ceremony commit
+            # has already landed. The observed shape (2026-08-14): a close-out
+            # asserting adjudication, supplying no review metadata, exiting
+            # non-zero AFTER its own commit, leaving a green-looking ceremony
+            # with no trail record and nothing left to re-run. The breach is
+            # decidable from params alone, so it is decided here, before the
+            # roadmap render, the coverage gate, and the commit.
+            if (b_adjudication_present or partition_mandatory) and not tail_ops.review_trail_metadata_complete(
+                review_trail
+            ):
+                fields_str = ", ".join(tail_ops.REVIEW_TRAIL_REQUIRED_FIELDS)
+                # D (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-
+                # skips-silently.md): a resolved review-scale row 4/6
+                # (`partition_mandatory`) is folded into the SAME pre-commit
+                # refusal `b_adjudication_present` already trips -- a mandatory-
+                # partition close with NO review metadata at all must not exit 0
+                # any more than an adjudicated one may. The remediation names a
+                # runnable producer, not a slash command: `workstream-complete
+                # brief` already emits the per-commit slice list this needs at
+                # `gates.review_scale.commit_slices`.
+                if partition_mandatory and not b_adjudication_present:
+                    breach = (
+                        f"{OP_NAME}: partition_mandatory with no complete review_trail record "
+                        f"-- required fields: {fields_str}. gates.review_scale.chain_slices is the "
+                        "chain-scoped review obligation (uncapped); gates.review_scale.commit_slices "
+                        "is the narrower record-write population -- different sets by design. "
+                        "The engine's own workstream-complete brief already computed a "
+                        "per-commit slice list for this close at gates.review_scale.commit_slices "
+                        "-- fill in reviewer/scope/verdict per entry and supply the list as "
+                        "decisions['review'], or wsc-tail.py's --review-slice (repeatable) / "
+                        "discrete --review-* flags."
+                    )
+                else:
+                    breach = (
+                        f"{OP_NAME}: b_adjudication_present with no complete review_trail record "
+                        f"-- required fields: {fields_str}. Supply them (decisions['review'], or "
+                        "wsc-tail.py's --review-* / --review-slice flags), or drop the "
+                        "adjudication assertion."
+                    )
+                _LOG.warning("wsc_tail: refusing commit -- %s", breach)
+                return {
+                    "exit_code": 1,
+                    "error": breach,
+                    "diagnostics": [breach],
+                    "disposition": disposition,
+                    "resumed_from_sentinel": False,
+                }
+
+            # --- Step 2: pre-commit tail ops (best-effort) --- `precommit_tail_total`
+            # is the whole-call span; `_run_precommit_tail` records its own four
+            # named sub-step spans into the SAME `timing` recorder (see that
+            # function's docstring) -- both levels are visible in the map.
+            with timing.measure("precommit_tail_total"):
+                precommit_results, extra_stage_paths = await _run_precommit_tail(
+                    common_dir,
+                    worktree_root,
+                    sid,
+                    review_trail=review_trail,
+                    b_adjudication_present=b_adjudication_present,
+                    partition_mandatory=partition_mandatory,
+                    coverage_range=coverage_range,
+                    coverage_from_handoff=coverage_from_handoff,
+                    coverage_scope_paths=coverage_scope_paths,
+                    consumed_handoff_paths=[p for p, _fm in initial_consumed],
+                    timing=timing,
                 )
-            else:
-                breach = (
-                    f"{OP_NAME}: b_adjudication_present with no complete review_trail record "
-                    f"-- required fields: {fields_str}. Supply them (decisions['review'], or "
-                    "wsc-tail.py's --review-* / --review-slice flags), or drop the "
-                    "adjudication assertion."
+            tail_results.update(precommit_results)
+
+            full_stage_paths = [*stage_paths, *extra_stage_paths]
+
+            # --- Completion-entry scaffold-residue gate (fail-loud, commit
+            # boundary) --- bug 2026-07-28-workstream-complete-d-complete-entry-
+            # emi-f6be5553dee4: refuse the commit outright if any staged
+            # `archive/completed/` path still carries unfilled
+            # `coordinator-complete-entry` scaffold residue. See
+            # `_scan_completion_entry_scaffold_residue`'s own docstring for why
+            # this sits here (commit boundary) and not at the scaffold.
+            scaffold_residue = _scan_completion_entry_scaffold_residue(
+                full_stage_paths, worktree_root
+            )
+            if scaffold_residue:
+                _LOG.warning(
+                    "wsc_tail: refusing commit -- %d completion-entry scaffold "
+                    "residue diagnostic(s): %s",
+                    len(scaffold_residue), scaffold_residue,
                 )
-            _LOG.warning("wsc_tail: refusing commit -- %s", breach)
-            return {
-                "exit_code": 1,
-                "error": breach,
-                "diagnostics": [breach],
-                "disposition": disposition,
-                "resumed_from_sentinel": False,
-            }
+                return {
+                    "exit_code": 1,
+                    "error": (
+                        f"{OP_NAME}: completion-entry scaffold residue blocks this "
+                        "commit -- see diagnostics"
+                    ),
+                    "diagnostics": scaffold_residue,
+                    "disposition": disposition,
+                    "resumed_from_sentinel": False,
+                }
 
-        # --- Step 2: pre-commit tail ops (best-effort) --- `precommit_tail_total`
-        # is the whole-call span; `_run_precommit_tail` records its own four
-        # named sub-step spans into the SAME `timing` recorder (see that
-        # function's docstring) -- both levels are visible in the map.
-        with timing.measure("precommit_tail_total"):
-            precommit_results, extra_stage_paths = await _run_precommit_tail(
-                common_dir,
-                worktree_root,
-                sid,
-                review_trail=review_trail,
-                b_adjudication_present=b_adjudication_present,
-                partition_mandatory=partition_mandatory,
-                coverage_range=coverage_range,
-                coverage_from_handoff=coverage_from_handoff,
-                coverage_scope_paths=coverage_scope_paths,
-                consumed_handoff_paths=[p for p, _fm in initial_consumed],
-                timing=timing,
-            )
-        tail_results.update(precommit_results)
+            # --- Step 3: trailer derivation --- to_thread'd (AC6): pre-stages
+            # stage_paths and may shell out to `git`/call `commit.anchors`
+            # synchronously. Kept INDIVIDUALLY visible in the timing map (not
+            # folded into `commit_pipeline` below) -- the plan calls this step
+            # out by name as KEEP-BUT-UNMEASURED: it reads the STAGED diff via
+            # `commit.anchors` and its cost is exactly what this instrumentation
+            # exists to surface.
+            with timing.measure("trailer_derivation"):
+                trailers = await asyncio.to_thread(
+                    _derive_trailers,
+                    common_dir, sid, full_stage_paths, nature or None, str(params.get("trailers") or ""),
+                    governing_plan_slug or None,
+                )
 
-        full_stage_paths = [*stage_paths, *extra_stage_paths]
+            swept_srcs, swept_dsts = _swept_srcs_dsts(swept_renames_raw)
 
-        # --- Completion-entry scaffold-residue gate (fail-loud, commit
-        # boundary) --- bug 2026-07-28-workstream-complete-d-complete-entry-
-        # emi-f6be5553dee4: refuse the commit outright if any staged
-        # `archive/completed/` path still carries unfilled
-        # `coordinator-complete-entry` scaffold residue. See
-        # `_scan_completion_entry_scaffold_residue`'s own docstring for why
-        # this sits here (commit boundary) and not at the scaffold.
-        scaffold_residue = _scan_completion_entry_scaffold_residue(
-            full_stage_paths, worktree_root
-        )
-        if scaffold_residue:
-            _LOG.warning(
-                "wsc_tail: refusing commit -- %d completion-entry scaffold "
-                "residue diagnostic(s): %s",
-                len(scaffold_residue), scaffold_residue,
-            )
-            return {
-                "exit_code": 1,
-                "error": (
-                    f"{OP_NAME}: completion-entry scaffold residue blocks this "
-                    "commit -- see diagnostics"
-                ),
-                "diagnostics": scaffold_residue,
-                "disposition": disposition,
-                "resumed_from_sentinel": False,
-            }
+            # --- Step 4: pre-commit sentinel (AC18, pass-intent placeholder) ---
+            with timing.measure("sentinel_write"):
+                _write_sentinel(sentinel_path, "")
 
-        # --- Step 3: trailer derivation --- to_thread'd (AC6): pre-stages
-        # stage_paths and may shell out to `git`/call `commit.anchors`
-        # synchronously. Kept INDIVIDUALLY visible in the timing map (not
-        # folded into `commit_pipeline` below) -- the plan calls this step
-        # out by name as KEEP-BUT-UNMEASURED: it reads the STAGED diff via
-        # `commit.anchors` and its cost is exactly what this instrumentation
-        # exists to surface.
-        with timing.measure("trailer_derivation"):
-            trailers = await asyncio.to_thread(
-                _derive_trailers,
-                common_dir, sid, full_stage_paths, nature or None, str(params.get("trailers") or ""),
-                governing_plan_slug or None,
-            )
+            # --- Step 5a/5b: commit unit (DEC-3: no outer ceremony_lock wrap
+            # here; excise-the-ceremony-lock 2026-08-07 removed run_commit_
+            # pipeline's own inner acquisition too -- no ceremony_lock is taken
+            # anywhere on this call's path). Run as ONE synchronous function
+            # inside ONE asyncio.to_thread call (AC6) so the ipc dispatch
+            # `wait_for` timer CAN fire during this section. INVARIANT (verbatim,
+            # must hold): a fired timeout must abandon-and-let-complete, never
+            # tear down ahead of the work -- cancelling this await abandons the
+            # worker thread; the thread completes its commit on its own thread,
+            # entirely outside asyncio's cancellation reach.
+            #
+            # `commit_pipeline` times `run_commit_pipeline()` AS A WHOLE, including
+            # its internal `dirty_tree_gate` whole-worktree scan -- that scan is
+            # NOT separately timed here. `dirty_tree_gate`'s own gate_paths are
+            # derived INSIDE `run_commit_pipeline` (see commit_pipeline.py) and
+            # are not reproducible from this call site without either duplicating
+            # that derivation (drift-prone, and a second live scan would not
+            # measure the SAME invocation the pipeline actually gated on) or
+            # editing commit_pipeline.py, which this chunk's remit hard-forbids.
+            # KEEP-BUT-UNMEASURED at the sub-span level, by design -- see the
+            # C1 chunk's DONE report.
+            with timing.measure("commit_pipeline"):
+                pipeline_result = await asyncio.to_thread(
+                    run_commit_pipeline,
+                    worktree_root,
+                    session_id=sid,
+                    subject=subject,
+                    prose=prose,
+                    deleted_paths=deleted_paths,
+                    kept_entries=kept_entries,
+                    trailers=trailers,
+                    stage_paths=[*full_stage_paths, *swept_srcs],
+                    caller_paths=caller_paths,
+                    push_mode=push_mode,
+                    # Step 5b (AC18, review Finding 2 fix): write the REAL
+                    # committed_sha the instant the commit lands INSIDE
+                    # run_commit_pipeline() -- before push_mode="sync"'s own
+                    # push-with-retry network round-trip runs -- so a crash
+                    # during push is also covered by "resume from stamp step"
+                    # instead of re-running the whole pipeline (which would
+                    # double-commit). Never re-derived from a later `git
+                    # rev-parse HEAD`. See commit_pipeline.run_commit_pipeline's
+                    # `on_committed` docstring for the full rationale.
+                    on_committed=lambda sha: _write_sentinel(sentinel_path, sha),
+                )
 
-        swept_srcs, swept_dsts = _swept_srcs_dsts(swept_renames_raw)
+            diagnostics.extend(pipeline_result.diagnostics)
+            commit_failed = pipeline_result.commit_failed
+            committed_sha = pipeline_result.committed_sha
+            sha_unverified = pipeline_result.sha_unverified
+            pushed = pipeline_result.pushed
+            integrity_breach = pipeline_result.integrity_breach
 
-        # --- Step 4: pre-commit sentinel (AC18, pass-intent placeholder) ---
-        with timing.measure("sentinel_write"):
-            _write_sentinel(sentinel_path, "")
-
-        # --- Step 5a/5b: commit unit (DEC-3: no outer ceremony_lock wrap
-        # here; excise-the-ceremony-lock 2026-08-07 removed run_commit_
-        # pipeline's own inner acquisition too -- no ceremony_lock is taken
-        # anywhere on this call's path). Run as ONE synchronous function
-        # inside ONE asyncio.to_thread call (AC6) so the ipc dispatch
-        # `wait_for` timer CAN fire during this section. INVARIANT (verbatim,
-        # must hold): a fired timeout must abandon-and-let-complete, never
-        # tear down ahead of the work -- cancelling this await abandons the
-        # worker thread; the thread completes its commit on its own thread,
-        # entirely outside asyncio's cancellation reach.
-        #
-        # `commit_pipeline` times `run_commit_pipeline()` AS A WHOLE, including
-        # its internal `dirty_tree_gate` whole-worktree scan -- that scan is
-        # NOT separately timed here. `dirty_tree_gate`'s own gate_paths are
-        # derived INSIDE `run_commit_pipeline` (see commit_pipeline.py) and
-        # are not reproducible from this call site without either duplicating
-        # that derivation (drift-prone, and a second live scan would not
-        # measure the SAME invocation the pipeline actually gated on) or
-        # editing commit_pipeline.py, which this chunk's remit hard-forbids.
-        # KEEP-BUT-UNMEASURED at the sub-span level, by design -- see the
-        # C1 chunk's DONE report.
-        with timing.measure("commit_pipeline"):
-            pipeline_result = await asyncio.to_thread(
-                run_commit_pipeline,
-                worktree_root,
-                session_id=sid,
-                subject=subject,
-                prose=prose,
-                deleted_paths=deleted_paths,
-                kept_entries=kept_entries,
-                trailers=trailers,
-                stage_paths=[*full_stage_paths, *swept_srcs],
-                caller_paths=caller_paths,
-                push_mode=push_mode,
-                # Step 5b (AC18, review Finding 2 fix): write the REAL
-                # committed_sha the instant the commit lands INSIDE
-                # run_commit_pipeline() -- before push_mode="sync"'s own
-                # push-with-retry network round-trip runs -- so a crash
-                # during push is also covered by "resume from stamp step"
-                # instead of re-running the whole pipeline (which would
-                # double-commit). Never re-derived from a later `git
-                # rev-parse HEAD`. See commit_pipeline.run_commit_pipeline's
-                # `on_committed` docstring for the full rationale.
-                on_committed=lambda sha: _write_sentinel(sentinel_path, sha),
-            )
-
-        diagnostics.extend(pipeline_result.diagnostics)
-        commit_failed = pipeline_result.commit_failed
-        committed_sha = pipeline_result.committed_sha
-        sha_unverified = pipeline_result.sha_unverified
-        pushed = pipeline_result.pushed
-        integrity_breach = pipeline_result.integrity_breach
-
-        stamp_outcome = consumed_handoff_stamp.StampOutcome()
-        origin_stub_result: dict = {"acted": [], "skipped": [], "failed": []}
-        deliverable_cascade_result: dict = {"acted": [], "skipped": [], "failed": []}
-        if committed_sha is not None:
-            # Steps 5c+5d (C5 stamp+ship, origin-stub close) -- UNLOCKED
-            # (DEC-3). Sentinel already carries the real committed_sha as of
-            # the on_committed callback above -- no re-write needed here.
-            # Composed via `post_commit_tail.run()` (C3a extraction, see the
-            # pointer comment above this function and that module's
-            # docstring) -- same in-process invocation shape as before this
-            # extraction, just one call instead of two inline blocks.
+            stamp_outcome = consumed_handoff_stamp.StampOutcome()
+            origin_stub_result: dict = {"acted": [], "skipped": [], "failed": []}
+            deliverable_cascade_result: dict = {"acted": [], "skipped": [], "failed": []}
+            if committed_sha is not None:
+                # Steps 5c+5d (C5 stamp+ship, origin-stub close) -- UNLOCKED
+                # (DEC-3). Sentinel already carries the real committed_sha as of
+                # the on_committed callback above -- no re-write needed here.
+                # Composed via `post_commit_tail.run()` (C3a extraction, see the
+                # pointer comment above this function and that module's
+                # docstring) -- same in-process invocation shape as before this
+                # extraction, just one call instead of two inline blocks.
+                tail_outcome = await post_commit_tail.run(
+                    worktree_root,
+                    common_dir,
+                    sid,
+                    committed_sha,
+                    chain_terminal=chain_terminal,
+                    governing_plan_slug=governing_plan_slug,
+                    initial_consumed=initial_consumed,
+                    close_origin_stub_handler=_close_origin_stub_handler,
+                    push_mode=push_mode,
+                    timing=timing,
+                )
+                stamp_outcome = tail_outcome.stamp_outcome
+                origin_stub_result = tail_outcome.origin_stub_result
+                deliverable_cascade_result = tail_outcome.deliverable_cascade_result
+        else:
+            # --- Resumed invocation (AC18): skip straight to the post-commit stamp
+            # + origin-stub close -- UNLOCKED (DEC-3), keyed on the RECOVERED sha
+            # (never a fresh HEAD read) -- both are post-commit work, so both
+            # must still run on a resumed pass (see module docstring step 5d).
+            # Same `post_commit_tail.run()` composition as the fresh pass above.
             tail_outcome = await post_commit_tail.run(
                 worktree_root,
                 common_dir,
                 sid,
-                committed_sha,
+                committed_sha,  # type: ignore[arg-type]  -- resumed => not None (see resumed check above)
                 chain_terminal=chain_terminal,
                 governing_plan_slug=governing_plan_slug,
                 initial_consumed=initial_consumed,
@@ -1488,27 +1590,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             stamp_outcome = tail_outcome.stamp_outcome
             origin_stub_result = tail_outcome.origin_stub_result
             deliverable_cascade_result = tail_outcome.deliverable_cascade_result
-    else:
-        # --- Resumed invocation (AC18): skip straight to the post-commit stamp
-        # + origin-stub close -- UNLOCKED (DEC-3), keyed on the RECOVERED sha
-        # (never a fresh HEAD read) -- both are post-commit work, so both
-        # must still run on a resumed pass (see module docstring step 5d).
-        # Same `post_commit_tail.run()` composition as the fresh pass above.
-        tail_outcome = await post_commit_tail.run(
-            worktree_root,
-            common_dir,
-            sid,
-            committed_sha,  # type: ignore[arg-type]  -- resumed => not None (see resumed check above)
-            chain_terminal=chain_terminal,
-            governing_plan_slug=governing_plan_slug,
-            initial_consumed=initial_consumed,
-            close_origin_stub_handler=_close_origin_stub_handler,
-            push_mode=push_mode,
-            timing=timing,
-        )
-        stamp_outcome = tail_outcome.stamp_outcome
-        origin_stub_result = tail_outcome.origin_stub_result
-        deliverable_cascade_result = tail_outcome.deliverable_cascade_result
 
     # C2 (2026-07-23 wsc-tail-slim-down, POST-COMMIT correction 2026-07-23): archive
     # sweeps fire DETACHED here -- AFTER the commit has landed (fresh OR resumed pass

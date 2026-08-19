@@ -869,6 +869,11 @@ def _plan_tasks_spine_errors(
     defect writeup (governed-plan rows were spuriously rejected twice over:
     once by the schema's own `pm_approved`-required `allOf` branches, once
     by `_apply_cross_field_rules` silently defaulting `governed=False`).
+
+    `plan_created` is now forwarded from this document's own frontmatter
+    (2026-08-19 fix, mirrors the deny sibling exactly) — see that sibling's
+    docstring for the full writeup of why this was previously dead on both
+    write guards.
     """
     plan_tasks_schema = schemas.get("plan-tasks")
     if not isinstance(plan_tasks_schema, dict):
@@ -915,7 +920,10 @@ def _plan_tasks_spine_errors(
             })
             continue
         row_errors = _validate_json_schema_node(row, schema, schema)
-        row_errors.extend(_apply_cross_field_rules(row, "plan-tasks", governed=governed))
+        row_errors.extend(_apply_cross_field_rules(
+            row, "plan-tasks", governed=governed,
+            plan_created=frontmatter.get('created') if isinstance(frontmatter, dict) else None,
+        ))
         for err in row_errors:
             errors.append({
                 "field": f"tasks[{row_label}].{err.get('field')}",

@@ -172,6 +172,7 @@ from percolate.targets import (  # noqa: E402  (path setup must precede this imp
 # lazy `coordinator_core.percolate.*` imports below exist to guard.
 from coordinator_core import directive_cli_arity  # noqa: E402
 from coordinator_core.git.repo_root import git_dir as _resolve_git_dir  # noqa: E402
+from coordinator_core.git.repo_root import show_toplevel as _resolve_show_toplevel  # noqa: E402
 from coordinator_core.git.git_dir import (  # noqa: E402
     resolve_git_dir as _native_resolve_git_dir,
     resolve_git_common_dir as _native_resolve_git_common_dir,
@@ -816,7 +817,11 @@ def _resolve_inject_src_placeholders(section: dict, percolate_root: Optional[Pat
     return {**section, "inject": resolved_entries}
 
 
-def _materialize_inject_srcs(section: dict, percolate_root: Optional[Path]) -> dict:
+def _materialize_inject_srcs(
+    section: dict,
+    percolate_root: Optional[Path],
+    round_pinned_shas: "Optional[dict[str, str]]" = None,
+) -> dict:
     """Rewrites every inject entry's already-absolute `src` (§
     `_resolve_inject_src_placeholders`, which runs first) to point at its
     committed-ref shadow instead of the live working tree — docs/plans/
@@ -880,6 +885,12 @@ def _materialize_inject_srcs(section: dict, percolate_root: Optional[Path]) -> d
     inject_entries = section.get("inject") or []
     if not inject_entries:
         return section
+    # A caller that passes no pin (direct unit-test use of
+    # `dispatch_percolate_inject`) gets a call-scoped dict, matching
+    # `run_pre_sync_gates`' own None-handling — one pin per call rather than
+    # one per round, which is exactly today's behaviour for those callers.
+    if round_pinned_shas is None:
+        round_pinned_shas = {}
     resolved_entries = []
     for entry in inject_entries:
         resolved_entry = dict(entry)
@@ -894,7 +905,20 @@ def _materialize_inject_srcs(section: dict, percolate_root: Optional[Path]) -> d
             # of this row. Resolve the git root from the containing
             # directory for a file entry, then re-append the filename.
             git_root = src_path if resolved_src_path.is_dir() else src_path.parent
-            shadow_root = _git_materialize_ref(git_root)
+            # Round-pinned sha, never a fresh `ref="HEAD"` read
+            # (§ `_round_pin_source_sha`). C4/AC6 closed the hole where
+            # injected payload bypassed materialization altogether, but it
+            # resolved HEAD per call, so C1b's round-pin amendment never
+            # reached this site: on a box where peers commit during a round,
+            # the injected CI-harness files materialized from a LATER commit
+            # than the sha the round pinned, printed as `Provenance: ...
+            # shipped from <sha>`, and promised as reproducible. One publish,
+            # two commits, one provenance line -- and a second full-tree
+            # extraction (~40s on a 26k-file tree) to produce it.
+            # `late=True`: inject runs during per-row processing, by
+            # definition after `main`'s round-start pinning pass.
+            sha = _round_pin_source_sha(git_root, round_pinned_shas, late=True)
+            shadow_root = _git_materialize_ref(git_root, ref=sha)
             shadow_path = (
                 shadow_root if resolved_src_path.is_dir() else shadow_root / src_path.name
             )
@@ -929,6 +953,7 @@ def dispatch_percolate_inject(
     percolate_root: Optional[Path] = None,
     *,
     visited_sink: "Optional[set[Path]]" = None,
+    round_pinned_shas: "Optional[dict[str, str]]" = None,
 ) -> "tuple[Path, ...]":
     """The SEPARATE `run_inject_for_section` engine call (§ module docstring,
     STEP 2 — inject is NOT phase-wired). Runs AFTER `dispatch_percolate_post_rsync`
@@ -998,7 +1023,7 @@ def dispatch_percolate_inject(
 
     section = _resolve_inject_src_placeholders(section, percolate_root)
     _cache_before = set(_MATERIALIZED_REF_CACHE.values())
-    section = _materialize_inject_srcs(section, percolate_root)
+    section = _materialize_inject_srcs(section, percolate_root, round_pinned_shas)
     newly_materialized = tuple(
         shadow for shadow in _MATERIALIZED_REF_CACHE.values() if shadow not in _cache_before
     )
@@ -2788,6 +2813,17 @@ def dispatch_end_of_run_argv_parity_gate(
         return False
 
     ok = True
+    # Pass 1: pure computation, no git spawn anywhere in this loop body —
+    # collect every repo_root's failing pairings into `failing_by_root`
+    # first, so the origin-lookup spawn (pass 2, below) is issued from a
+    # single call site outside any loop over `repo_roots`, instead of once
+    # per root from inside this loop (docs/plans/2026-08-19-burn-down-the-
+    # amplification-hitlist.md C5-2: the previous shape still called a
+    # spawning helper once per `repo_root` from directly inside this loop,
+    # which is itself the per-item-call-inside-a-qualifying-loop shape
+    # `test_no_unbatched_per_item_git_spawn.py` flags, one level up from
+    # the per-pairing amplification C5 already closed within one root).
+    failing_by_root: "dict[Path, list]" = {}
     for repo_root in repo_roots:
         if not repo_root.is_dir():
             print(
@@ -2825,25 +2861,34 @@ def dispatch_end_of_run_argv_parity_gate(
             )
             if new_unaccepted or new_undeclared_required:
                 failing.append((pairing, new_unaccepted, new_undeclared_required))
-        if not failing:
-            continue
+        if failing:
+            ok = False
+            failing_by_root[repo_root] = failing
 
-        ok = False
-        # Batch ALL failing pairings' origin lookups for this `repo_root`
-        # into ONE `git status --porcelain` spawn (docs/plans/2026-08-19-
-        # burn-down-the-amplification-hitlist.md C5) instead of one spawn
-        # per pairing via `_argv_parity_pairing_origin` — every pairing
-        # below shares the SAME `repo_root`, so their per-file `git status`
-        # pathspecs fold into a single multi-pathspec call exactly like
-        # `_git_ls_tree_entries_files` folds multiple allowlist entries
-        # into one `ls-tree` call per root. `_argv_parity_pairing_origin`
-        # itself is left in place (its per-pairing contract is unchanged,
-        # only this hot loop stops calling it) as it is still the single-
-        # pairing primitive `test_publish_argv_parity_gate.py` may exercise
-        # directly.
-        origin_by_module = _argv_parity_pairing_origin_batch(
-            repo_root, [pairing.module for pairing, _, _ in failing]
-        )
+    if not failing_by_root:
+        return ok
+
+    # Pass 2: ONE call, outside any loop over `repo_roots`, resolving every
+    # failing pairing's origin across every root that had failures.
+    # `_argv_parity_pairing_origin_batch_by_root` still issues one `git
+    # status` spawn per DISTINCT root internally — there is no git
+    # primitive that spans multiple `-C` roots in a single invocation, so
+    # that per-root spawn count is the structural floor, same as
+    # `_git_ls_tree_entries_files`'s own per-root call in
+    # `_publish_relevant_allowlist_leg`. What this hoist removes is this
+    # function's OWN per-root call to a spawning helper sitting directly in
+    # a loop it controls; the unavoidable per-root fan-out now lives
+    # entirely inside the batch helper, which is the SAME single call site
+    # regardless of how many roots are in `failing_by_root`.
+    origin_by_root = _argv_parity_pairing_origin_batch_by_root(
+        {
+            repo_root: [pairing.module for pairing, _, _ in failing]
+            for repo_root, failing in failing_by_root.items()
+        }
+    )
+
+    for repo_root, failing in failing_by_root.items():
+        origin_by_module = origin_by_root.get(repo_root, {})
         lines = []
         for pairing, new_unaccepted, new_undeclared_required in failing:
             origin = origin_by_module.get(pairing.module, "unknown-origin")
@@ -2899,23 +2944,42 @@ def _argv_parity_pairing_origin(repo_root: Path, rel_module: str) -> str:
     return "unknown-origin"
 
 
-def _porcelain_touched_paths(stdout: str) -> "set[str]":
-    """Extracts every path `git status --porcelain` reports as touched —
-    both sides of a rename/copy line (`XY old -> new`) as well as the
-    ordinary `XY path` form — used by `_argv_parity_pairing_origin_batch`
-    to attribute a single multi-pathspec `git status` call's output back to
-    the individual rel_module path(s) that produced it."""
+def _porcelain_touched_paths(stdout_bytes: bytes) -> "set[str]":
+    """Extracts every path `git status --porcelain -z` reports as touched —
+    both sides of a rename/copy record as well as the ordinary `XY path`
+    form — used by `_argv_parity_pairing_origin_batch` to attribute a single
+    multi-pathspec `git status` call's output back to the individual
+    rel_module path(s) that produced it.
+
+    Takes the raw NUL-terminated `-z` byte stream, not the `\\n`-terminated
+    default text format: with `-z`, git status never C-quotes a path
+    containing non-ASCII/control characters (that quoting only applies to
+    the human-readable, newline-terminated form), so an exact-string match
+    against the plain `rel_module` string can't silently miss an entry the
+    way it could against quoted `\\n`-delimited output. `-z` renames/copies
+    are two consecutive NUL-terminated fields — new path, then old path —
+    with no ` -> ` separator, unlike the human-readable form.
+    """
     paths: "set[str]" = set()
-    for line in stdout.splitlines():
-        if len(line) < 4:
+    fields = stdout_bytes.split(b"\0")
+    i = 0
+    n = len(fields)
+    while i < n:
+        entry = fields[i]
+        i += 1
+        if not entry:
             continue
-        rest = line[3:]
-        if " -> " in rest:
-            old, new = rest.split(" -> ", 1)
-            paths.add(old)
-            paths.add(new)
-        else:
-            paths.add(rest)
+        if len(entry) < 4:
+            continue
+        xy = entry[:2]
+        path = entry[3:].decode("utf-8", errors="surrogateescape")
+        paths.add(path)
+        if b"R" in xy or b"C" in xy:
+            # Rename/copy: the next NUL-terminated field is the old path,
+            # not a fresh `XY path` record.
+            if i < n and fields[i]:
+                paths.add(fields[i].decode("utf-8", errors="surrogateescape"))
+                i += 1
     return paths
 
 
@@ -2923,7 +2987,7 @@ def _argv_parity_pairing_origin_batch(
     repo_root: Path, rel_modules: "list[str]"
 ) -> "dict[str, str]":
     """Batched sibling of `_argv_parity_pairing_origin` — issues ONE `git
-    -C <repo_root> status --porcelain -- <rel_module1> <rel_module2> ...`
+    -C <repo_root> status --porcelain -z -- <rel_module1> <rel_module2> ...`
     spawn covering every failing pairing's `module` path for this
     `repo_root`, instead of one spawn per pairing
     (docs/plans/2026-08-19-burn-down-the-amplification-hitlist.md C5).
@@ -2933,29 +2997,35 @@ def _argv_parity_pairing_origin_batch(
     this is exactly the pathspec-shaped batching `_git_ls_tree_entries_files`
     already applies one level up (multiple entries, one shared `-C` root).
 
-    Preserves `_argv_parity_pairing_origin`'s per-entry verdict exactly:
-    a `git` spawn failure or non-zero exit maps every `rel_module` to
-    `"unknown-origin"` (same fail-closed shape as the per-item function's
-    `OSError`/non-zero-returncode branches); otherwise each `rel_module`
-    is independently classified by whether IT (not some other batched
-    entry) appears in the porcelain output (`_porcelain_touched_paths`),
-    falling back to `module_path.exists()` exactly as the per-item version
-    does. Returns `{}` for an empty `rel_modules`.
+    Preserves `_argv_parity_pairing_origin`'s per-entry verdict exactly on
+    the success path: each `rel_module` is independently classified by
+    whether IT (not some other batched entry) appears in the porcelain
+    output (`_porcelain_touched_paths`), falling back to
+    `module_path.exists()` exactly as the per-item version does.
+
+    On a batch-level spawn failure or non-zero exit, this falls back to
+    calling `_argv_parity_pairing_origin` once per `rel_module` rather than
+    mapping the whole set to `"unknown-origin"` — review finding amp-s1 #3:
+    a single flaky/timed-out batched spawn previously blinded every pairing
+    in the batch, even ones a working per-item call would still have
+    resolved. This is diagnostic text for an already-failing gate, spawned
+    only on the rare failure path, so it does not reintroduce the
+    per-pairing spawn amplification the batching exists to remove in the
+    common case. Returns `{}` for an empty `rel_modules`.
     """
     if not rel_modules:
         return {}
     try:
         result = subprocess.run(
-            ["git", "-C", str(repo_root), "status", "--porcelain", "--", *rel_modules],
+            ["git", "-C", str(repo_root), "status", "--porcelain", "-z", "--", *rel_modules],
             capture_output=True,
-            text=True,
             timeout=10,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:  # noqa: BLE001 - diagnostic aid only, never fatal
-        return {rel_module: "unknown-origin" for rel_module in rel_modules}
+        return {rel_module: _argv_parity_pairing_origin(repo_root, rel_module) for rel_module in rel_modules}
     if result.returncode != 0:
-        return {rel_module: "unknown-origin" for rel_module in rel_modules}
+        return {rel_module: _argv_parity_pairing_origin(repo_root, rel_module) for rel_module in rel_modules}
 
     touched = _porcelain_touched_paths(result.stdout)
     origins: "dict[str, str]" = {}
@@ -2967,6 +3037,26 @@ def _argv_parity_pairing_origin_batch(
         else:
             origins[rel_module] = "unknown-origin"
     return origins
+
+
+def _argv_parity_pairing_origin_batch_by_root(
+    rel_modules_by_root: "dict[Path, list[str]]",
+) -> "dict[Path, dict[str, str]]":
+    """Multi-root sibling of `_argv_parity_pairing_origin_batch`, called
+    exactly ONCE by `dispatch_end_of_run_argv_parity_gate` regardless of how
+    many roots have failing pairings — the call site that function's own
+    loop over `repo_roots` used to hold directly. A `git status` process is
+    still spawned once per DISTINCT root in `rel_modules_by_root` (no git
+    invocation can span multiple `-C` roots at once, the same structural
+    floor `_git_ls_tree_entries_files`'s own per-root call in
+    `_publish_relevant_allowlist_leg` accepts), but that per-root fan-out
+    is now entirely internal to this one function rather than driven by a
+    loop the caller controls. Returns `{}` for an empty mapping.
+    """
+    return {
+        repo_root: _argv_parity_pairing_origin_batch(repo_root, rel_modules)
+        for repo_root, rel_modules in rel_modules_by_root.items()
+    }
 
 
 _UNSCANNED_EXCEPTIONS_PATH = Path(__file__).resolve().parent / "percolate-published-unscanned-exceptions.yaml"
@@ -4164,6 +4254,111 @@ def _machine_local_percolate_identity_path() -> Path:
         os.environ.get("CLAUDE_HOME") or str(Path.home()), ".coordinator-claude-settings"
     )
     return Path(settings_home) / ".percolate-identity"
+
+
+# ---------------------------------------------------------------------------
+# Publish provenance record — docs/plans/2026-08-19-the-published-engine-
+# says-what-it-was-published-from.md (C1). `_round_pin_source_sha` already
+# resolves and prints the round-pinned sha per contributing git toplevel;
+# nothing durable survives the round, so no consumer can later answer "which
+# revision of claude-klabauter is actually running in the published build?" (the
+# DR-326 stale-dispatch incident this plan documents). This record is that
+# durable answer — machine-local, written once at round end, read-only for
+# every consumer (the C2 doctor probe).
+# ---------------------------------------------------------------------------
+def _publish_provenance_record_path() -> Path:
+    """Machine-local publish-provenance record location: settings-home
+    `machine-local/publish-provenance.json`, beside `.claude-klabauter-root`
+    (Anti-scope 2 — never in the published tree; every consumer of this
+    record is on this box). Mirrors `_machine_local_percolate_identity_path`'s
+    env-var precedence: `COORDINATOR_SETTINGS_HOME` wins if set, else a path
+    relative to `CLAUDE_HOME`, else a path relative to the platform home
+    directory."""
+    settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
+        os.environ.get("CLAUDE_HOME") or str(Path.home()), ".coordinator-claude-settings"
+    )
+    return Path(settings_home) / "machine-local" / "publish-provenance.json"
+
+
+def write_publish_provenance_record(
+    *,
+    succeeded_row_names: "List[str]",
+    failed_row_names: "List[str]",
+    skipped_row_names: "List[str]",
+    rows_by_name: "dict[str, ResolvedTarget]",
+    round_pinned_shas: "dict[str, str]",
+    out: IO[str] = sys.stdout,
+    err: IO[str] = sys.stderr,
+) -> None:
+    """Persist, per row this round reached, whether it actually published
+    and — for rows that did — the git toplevel(s) it published from and the
+    sha `_round_pin_source_sha` pinned for each (AC1). A row in
+    `failed_row_names` or `skipped_row_names` is recorded with
+    `"published": false` and NO sha (Anti-scope 3, AC2) — never folded into
+    a round-wide claim; the record must never assert the mirror carries code
+    a specific row's own outcome contradicts.
+
+    Does not touch `write_delta_record`/`_delta_state_path`/
+    `delta_row_unchanged`/`_delta_row_source_sha` (Anti-scope 1) — this is a
+    wholly separate, always-attempted record, not a repurposing of the delta
+    optimization cache.
+
+    Failure posture (plan body, "Failure posture"): any exception writing
+    this record is caught here and warned to `err`; the round's own exit
+    code is untouched by design — the round publishing correctly matters
+    more than this record, and a missing/stale record is read by the C2
+    probe as "unknown", which is honest (AC5)."""
+    try:
+        rows: "dict[str, Any]" = {}
+        for name in succeeded_row_names:
+            target = rows_by_name.get(name)
+            toplevels: "dict[str, str]" = {}
+            if target is not None:
+                for root in _contributing_roots(target):
+                    # `repo_root.show_toplevel` WALKS ONLY and never spawns, on
+                    # any path (38ada515b) — a `_git_rev_parse_detailed` here is
+                    # O(rows x roots) git spawns on the round-end path, which the
+                    # amplification collector reads as a per-item spawn in a
+                    # qualifying loop. Per-root degrade is deliberate: one
+                    # unresolvable root must not cost the others their sha, which
+                    # is the property a naive batch would trade away.
+                    toplevel_stdout = _resolve_show_toplevel(str(root))
+                    if toplevel_stdout is None:
+                        continue
+                    toplevel_key = str(Path(toplevel_stdout))
+                    sha = round_pinned_shas.get(toplevel_key)
+                    if sha is not None:
+                        toplevels[toplevel_key] = sha
+            # A succeeded row whose toplevel(s) could not be resolved back to
+            # a pinned sha (should not happen — the round-start pre-pin pass
+            # already walked every contributing root — but honesty over
+            # optimism per AC5) is recorded as not-published rather than
+            # asserting a sha it cannot back up.
+            rows[name] = (
+                {"published": True, "toplevels": toplevels}
+                if toplevels
+                else {"published": False}
+            )
+        for name in failed_row_names:
+            rows[name] = {"published": False}
+        for name in skipped_row_names:
+            rows[name] = {"published": False}
+
+        record = {
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "rows": rows,
+        }
+        record_path = _publish_provenance_record_path()
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = record_path.with_name(record_path.name + f".tmp-{os.getpid()}")
+        tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp_path, record_path)
+    except Exception as exc:  # noqa: BLE001 - never gate the round on this write
+        print(
+            f"[publish.py] WARNING: could not write publish provenance record ({exc}); "
+            "a doctor probe reading it will report 'unknown' rather than 'current'.",
+            file=err,
+        )
 
 
 def resolve_percolate_identity_path(setup_dir: Path) -> Optional[Path]:
@@ -5964,10 +6159,16 @@ def _git_head(path: Path) -> str:
         rule, so the loose-file read is tried first).
 
     Returns `""` on ANY resolution failure — missing `.git`, empty/
-    unparseable `HEAD`, a `ref:` pointer with no loose file and no
-    matching `packed-refs` entry, or any `OSError` reading these files —
-    the exact same fail-closed shape the replaced `subprocess.run` path
-    had for a non-zero/missing-git exit, never a raise.
+    unparseable `HEAD`, a detached-HEAD line that isn't a validly-shaped
+    sha (review finding amp-s1 #6: a corrupt `HEAD` file is neither a
+    `ref:` pointer nor a real object id, and `git rev-parse HEAD` fails
+    closed on it -- returning the garbage text verbatim would be a
+    fail-open divergence from that replaced path even though no CURRENT
+    caller depends on the value being sha-shaped), a `ref:` pointer with no
+    loose file and no matching `packed-refs` entry, or any `OSError`
+    reading these files — the exact same fail-closed shape the replaced
+    `subprocess.run` path had for a non-zero/missing-git exit, never a
+    raise.
     """
     try:
         gitdir = _native_resolve_git_dir(path)
@@ -5977,7 +6178,12 @@ def _git_head(path: Path) -> str:
     if not head_text:
         return ""
     if not head_text.startswith("ref:"):
-        return head_text
+        # Detached HEAD: only a validly-shaped sha (40-hex sha1 or 64-hex
+        # sha256) is trusted verbatim -- anything else is a corrupt HEAD
+        # file, failed closed rather than returned as if it were a sha.
+        if re.fullmatch(r"[0-9a-fA-F]{40}", head_text) or re.fullmatch(r"[0-9a-fA-F]{64}", head_text):
+            return head_text
+        return ""
 
     ref = head_text[len("ref:"):].strip()
     if not ref:
@@ -8403,6 +8609,7 @@ def process_target(
                         sync_target,
                         percolate_root=setup_dir.parent,
                         visited_sink=row_visited,
+                        round_pinned_shas=round_pinned_shas,
                     )
                 with _time_phase(timing_sink, target.name, "dispatch_percolate_pre_ci"):
                     dispatch_percolate_pre_ci(
@@ -9466,6 +9673,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                         )
         finally:
             _cleanup_shadow_roots(tuple(dict.fromkeys(all_shadow_roots)))
+
+        # Publish provenance record (docs/plans/2026-08-19-the-published-
+        # engine-says-what-it-was-published-from.md C1) — after shadow-root
+        # cleanup, alongside the row-outcome tallies this same block already
+        # computed. Never under --dry-run: nothing landed to record
+        # provenance for, and the round's row lists above are advisory only
+        # in that mode.
+        if not args.dry_run:
+            write_publish_provenance_record(
+                succeeded_row_names=succeeded_row_names,
+                failed_row_names=failed_row_names,
+                skipped_row_names=skipped_row_names,
+                rows_by_name={t.name: t for t in parsed_rows.values()},
+                round_pinned_shas=round_pinned_shas,
+            )
 
         print("===============================")
         if mirror_expansion is not None:

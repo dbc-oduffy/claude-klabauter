@@ -1,15 +1,22 @@
 """raw_cmdline_recovery — shared Windows raw-cmdline argv recovery.
 
 Consumers: `coordinator/bin/coordinator-write-review-trail.py`,
-`coordinator/bin/scoped-git-commit`, and `coordinator/bin/cross-repo-memo.py`
-— the three entrypoints named in `gen-launcher-shim.py`'s
-`_RAW_CMDLINE_ENTRYPOINTS` (mirrored, not imported, against
-`coordinator_core/install/substrate.py`'s `_RAW_CMDLINE_TARGETS`).
-`cross-repo-memo.py` is in both `_RAW_CMDLINE_ENTRYPOINTS` and
-`_RAW_CMDLINE_TARGETS` and calls `recover_windows_argv` at its own
-`sys.exit(main(...))` line, same as the other two. All three already insert
-`coordinator/bin/lib` onto `sys.path` before importing their own siblings, so
-no new bootstrap step is needed at any call site.
+`coordinator/bin/scoped-git-commit`, `coordinator/bin/cross-repo-memo.py`,
+`coordinator/bin/freeze-review-diff.py`,
+`coordinator/bin/parallel-review-gate-decision.py`,
+and `coordinator/bin/parallel-review-orthogonality-guard.py` — the six
+entrypoints named
+in `gen-launcher-shim.py`'s `_RAW_CMDLINE_ENTRYPOINTS` (mirrored, not
+imported, against `coordinator_core/install/substrate.py`'s
+`_RAW_CMDLINE_TARGETS`). `scoped-git-commit` and `cross-repo-memo.py` are
+C2b's detect-and-record posture (staged, not a fleet-wide refusal — see
+`docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-that-never-broke.md`);
+every other consumer here calls `recover_windows_argv` at its own
+`sys.exit(main(...))` line and REFUSES on `UnsoundRawCmdlineTransport`
+(C2's posture — each is a low-traffic, agent-typed CLI, not a
+~40-concurrent-session commit hot path). All consumers insert
+`coordinator/bin/lib` onto `sys.path` before importing their own siblings,
+so no new bootstrap step is needed at any call site.
 
 Why this exists as a standalone module rather than being copied a second
 time: the recovery logic (read the `%CMDCMDLINE%` capture file, locate this

@@ -273,6 +273,221 @@ def stamp_execution_authorization(
     return EXIT_OK, {"applied": state["applied"], "sha": sha, "message": message}
 
 
+#: Shape a PM's typed command must have for the invocation mint to fire: a
+#: literal slash command. The mint records a PM ACT, so its trigger has to be
+#: a thing the PM literally typed -- never an EM inference, a peer's message,
+#: or an intent-shaped remark (see this spinoff's anti-scope).
+INVOCATION_COMMAND_PREFIX = "/"
+
+
+def _compose_invocation_note(utterance: Optional[str], typed_command: str) -> str:
+    """The `execution_authorized_note` value for an invocation-authorized
+    mint: the command the PM typed, plus their verbatim words when there
+    were any.
+
+    An utterance, when present, is embedded unaltered (no reflow, no
+    truncation, no paraphrase) -- a paraphrase here is the same class of
+    failure as a stealth-skip, since the field would then record the EM's
+    reading of consent rather than the consent itself.
+
+    But the utterance is EVIDENCE, not the authorization. The typed command
+    is the authorization (PM ruling, verbatim, 2026-08-19: *"my using
+    `/execute-plan` should be registered as execution authorization. It's
+    literally the command to do so."*), so a bare invocation with no
+    accompanying words mints just as well and records exactly that. Demanding
+    prose before the engine will honour a command the PM literally typed
+    turns a consent primitive into a password prompt.
+    """
+    if utterance and utterance.strip():
+        return f'PM verbatim: "{utterance}" (authorized by typed command: {typed_command})'
+    return f"PM authorized by typed command: {typed_command} (no accompanying words)"
+
+
+def stamp_invocation_authorization(
+    plan_path: str,
+    utterance: Optional[str],
+    typed_command: str,
+    *,
+    at: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> tuple[int, dict[str, Any]]:
+    """Mint execution authorization from a PM's LITERAL invocation of the
+    command that means "execute this" -- so `/execute-plan` on a
+    PM-approved plan is itself the authorization, instead of demanding a
+    stamp only `/review`'s cross-reference exit could ever have written.
+
+    Not a second stamping surface: this composes a note and delegates the
+    whole four-field write to `stamp_execution_authorization`, which stays
+    the sole mint. `by` is always `PM` -- the invocation IS the PM act, and
+    a caller-chosen `by` would let a non-PM route wear the PM's attribution.
+
+    Convergence (stricter than the plain `--append-note` path). Re-invoking
+    on an already-authorized plan whose BODY is unchanged is a no-op even
+    across a date boundary: the delegate's own convergence test compares
+    `execution_authorized_at` exactly, so a bare re-delegate would re-stamp
+    tomorrow purely because the default `at` moved. This function therefore
+    preserves the recorded `at` whenever the stamped sha still matches the
+    live body, and only takes a fresh timestamp when the sha differs (a
+    genuinely new authorization against changed content). The note is
+    appended, never replaced -- an earlier `/review` stamp's verbatim
+    utterance is evidence too.
+
+    `utterance` is OPTIONAL and an absent one is not a refusal: the typed
+    command is the authorization, the words are evidence (see
+    `_compose_invocation_note`). The only trigger check that survives is
+    that `typed_command` really is a literal slash command -- that is what
+    keeps the mint recording a PM ACT rather than an EM inference, and it
+    does not need prose to do it.
+
+    Refuses (EXIT_USAGE) an utterance carrying a real newline (a single
+    embedded line break breaks every single-line-per-field frontmatter
+    primitive in this tree -- see the module docstring's
+    `NOTE_APPEND_SEPARATOR` note) and a `typed_command` that is not a
+    literal slash command.
+
+    Spine-population decision (RECORDED, per this baton's spec): this mint
+    does NOT inspect the plan's `writes:` / `depends_on:` spine and does NOT
+    refuse an unpopulated one. Authorization and executability are different
+    questions; folding the second into the first would put a scheduling
+    concern inside a consent primitive, and executability already has two
+    owners -- `/execute-plan` Phase 1.4 and `dispatch.emit`'s
+    `NoWritesDeclaredError`. A plan can be authorized and not yet runnable;
+    those are separate refusals with separate remedies.
+
+    Returns `(exit_code, result_dict)` in `stamp_execution_authorization`'s
+    own shape, plus `note` (the composed value) on the OK arms.
+    """
+    if utterance and any(ch in utterance for ch in (chr(10), chr(13))):
+        return EXIT_USAGE, {
+            "error": (
+                "refusing to mint: the utterance contains a real line break, which no "
+                "single-line frontmatter field can hold -- pass it as one line"
+            )
+        }
+    if not typed_command.startswith(INVOCATION_COMMAND_PREFIX):
+        return EXIT_USAGE, {
+            "error": (
+                f"refusing to mint: --typed-command must be the literal slash command the PM "
+                f"typed (got {typed_command!r})"
+            )
+        }
+
+    root = repo_root or resolve_repo_root()
+    if root is None:
+        return EXIT_BUSINESS_FAIL, {"error": "could not resolve a git worktree root"}
+
+    live_path = Path(plan_path) if Path(plan_path).is_absolute() else root / plan_path
+    if not live_path.is_file():
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: not found"}
+
+    try:
+        text = live_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: could not read ({exc})"}
+
+    split = split_frontmatter(text)
+    if split is None:
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: no parseable frontmatter"}
+
+    try:
+        sha = _canonical_body_sha(text, root)
+    except RuntimeError as exc:
+        return EXIT_BUSINESS_FAIL, {"error": str(exc)}
+
+    note = _compose_invocation_note(utterance, typed_command)
+
+    # This pre-read is advisory only -- it decides which `at` to hand the
+    # delegate. The authoritative convergence test is the delegate's own,
+    # inside `locked_rmw`; a concurrent write between these two reads costs
+    # at worst a redundant identical stamp, never a lost one.
+    fm = split.fm_text
+    existing_sha = read_fm_field_unquoted(fm, "execution_authorized_sha")
+    existing_note = read_fm_field_unquoted(fm, "execution_authorized_note") or ""
+    existing_at = read_fm_field_unquoted(fm, "execution_authorized_at")
+    body_unchanged_since_stamp = existing_sha == sha
+
+    if body_unchanged_since_stamp and existing_note.endswith(note):
+        return EXIT_OK, {
+            "applied": False,
+            "sha": sha,
+            "note": note,
+            "message": (
+                f"{plan_path} is already execution-authorized by this invocation against "
+                "unchanged plan content -- no-op"
+            ),
+        }
+
+    at_value = at or (existing_at if body_unchanged_since_stamp and existing_at else None)
+
+    exit_code, result = stamp_execution_authorization(
+        plan_path,
+        "PM",
+        note,
+        at=at_value,
+        repo_root=root,
+        append_note=True,
+    )
+    if exit_code == EXIT_OK:
+        result["note"] = note
+    return exit_code, result
+
+
+USAGE = (
+    "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
+    "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]\n"
+    "       review-exec-auth-stamp authorize-invocation <plan-path> "
+    "--typed-command </command> [--utterance <PM's verbatim words>] [--at <YYYY-MM-DD>]"
+)
+
+
+def _main_authorize_invocation(rest: list[str]) -> int:
+    """`authorize-invocation <plan-path> --utterance <text> --typed-command
+    </cmd> [--at <YYYY-MM-DD>]` — the PM-invocation mint (see
+    `stamp_invocation_authorization`). `--by` is deliberately NOT an
+    argument: this verb only ever writes `PM`."""
+    import json
+    import sys
+
+    if not rest or rest[0].startswith("--"):
+        print("review-exec-auth-stamp: missing required <plan-path>", file=sys.stderr)
+        return EXIT_USAGE
+    plan_path = rest[0]
+
+    utterance: Optional[str] = None
+    typed_command: Optional[str] = None
+    at: Optional[str] = None
+    i = 1
+    while i < len(rest):
+        arg = rest[i]
+        if arg == "--utterance" and i + 1 < len(rest):
+            utterance = rest[i + 1]
+            i += 2
+        elif arg == "--typed-command" and i + 1 < len(rest):
+            typed_command = rest[i + 1]
+            i += 2
+        elif arg == "--at" and i + 1 < len(rest):
+            at = rest[i + 1]
+            i += 2
+        else:
+            print(f"review-exec-auth-stamp: unrecognized argument: {arg}", file=sys.stderr)
+            return EXIT_USAGE
+
+    # `--utterance` is deliberately optional: a bare `/execute-plan` with no
+    # accompanying words is still a PM act, and the mint records it as one.
+    if typed_command is None:
+        print(
+            "review-exec-auth-stamp: --typed-command is required",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    exit_code, result = stamp_invocation_authorization(
+        plan_path, utterance, typed_command, at=at
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return exit_code
+
+
 def main(argv: list[str]) -> int:
     """`review-exec-auth-stamp stamp <plan-path> --by <who> (--note <note> | --append-note <text>) [--at <date>]`
 
@@ -281,23 +496,23 @@ def main(argv: list[str]) -> int:
     `--append-note` instead appends its text to whatever the field already
     holds (see `stamp_execution_authorization`'s `append_note` docstring).
     The two are mutually exclusive.
+
+    `authorize-invocation` is the second verb: the PM-invocation mint, which
+    supplies its own `by`/`note` and delegates to the same single stamping
+    surface -- see `_main_authorize_invocation`.
     """
     import json
     import sys
 
     if argv[:1] and argv[0] in ("--help", "-h"):
-        print(
-            "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
-            "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]"
-        )
+        print(USAGE)
         return EXIT_OK
 
+    if argv[:1] and argv[0] == "authorize-invocation":
+        return _main_authorize_invocation(argv[1:])
+
     if not argv or argv[0] != "stamp":
-        print(
-            "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
-            "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]",
-            file=sys.stderr,
-        )
+        print(USAGE, file=sys.stderr)
         return EXIT_USAGE
 
     rest = argv[1:]

@@ -91,12 +91,64 @@ def test_commit_pathspec_does_not_refuse_when_at_least_one_row_declares_writes()
     assert commit_pathspec(wave) == ["a.py"]
 
 
-def test_commit_pathspec_refuses_when_every_row_declares_empty_writes_naming_rows():
-    # writes: [] is an explicit declaration, distinct from UNDECLARED --
-    # the AC4 "no row declares writes:" check does not fire. But zero
-    # declared paths must still refuse rather than silently emit an empty
-    # commit-phase pathspec (Review: code-reviewer wsc-B finding).
+def test_commit_pathspec_warns_and_refuses_when_every_row_declares_empty_writes_naming_rows(caplog):
+    # writes: [] is an explicit declaration, distinct from UNDECLARED -- the
+    # AC4 "no row declares writes:" check does not fire (every row DID
+    # declare). But every row is also zero-contributing, so the union is
+    # empty -- an empty pathspec is never a legal return regardless of
+    # which spelling produced it (module docstring's negative spec: "name
+    # the rows, never emit an empty result"). This is refusal 2 in
+    # commit_pathspec's docstring, distinct from the per-row warn-and-
+    # continue case (staff review finding P0-1) which only applies when a
+    # real-contributing sibling is present to carry the wave. Both the
+    # warning AND the raise fire here.
     wave = [_wave_row("C1", []), _wave_row("C2", [])]
+    with caplog.at_level("WARNING"):
+        with pytest.raises(NoWritesDeclaredError) as excinfo:
+            commit_pathspec(wave)
+    assert "'C1'" in caplog.text
+    assert "'C2'" in caplog.text
+    assert "'C1'" in str(excinfo.value)
+    assert "'C2'" in str(excinfo.value)
+
+
+def test_commit_pathspec_warns_but_returns_real_paths_when_one_row_declares_empty_writes_sharing_a_wave(caplog):
+    # Finding A4's original shape: C2 declares writes: [] (zero paths) but
+    # shares its wave with C1, which contributes real paths. Pre-A4,
+    # neither the declares_writes check (C2 IS declared, just empty) nor
+    # the old whole-wave "if not paths" check (C1's path makes the total
+    # non-empty) fired -- C2 vanished with NO signal at all, its dispatched
+    # executor's real writes uncarried by this or any later wave's
+    # pathspec. Per P0-1, the fix is a named warning that excludes ONLY the
+    # zero-contributing row -- NOT a refusal that fails the whole wave for
+    # C1's sake too. This is the regression P0-1 exists to prevent.
+    wave = [_wave_row("C1", ["a.py"]), _wave_row("C2", [])]
+    with caplog.at_level("WARNING"):
+        assert commit_pathspec(wave) == ["a.py"]
+    assert "'C2'" in caplog.text
+    assert "'C1'" not in caplog.text
+
+
+def test_commit_pathspec_warns_but_returns_surface_fallback_when_empty_writes_row_shares_a_wave(caplog):
+    # Same A4 shape, but the OTHER row contributes via the surface fallback
+    # rather than a declared writes: list -- confirms the per-row warning
+    # fires regardless of how the sibling row contributes, and the sibling's
+    # path still comes back.
+    wave = [
+        _wave_row("C1", UNDECLARED, surface="coordinator_core/ops/dispatch_emit/pathspec.py"),
+        _wave_row("C2", []),
+    ]
+    with caplog.at_level("WARNING"):
+        assert commit_pathspec(wave) == ["coordinator_core/ops/dispatch_emit/pathspec.py"]
+    assert "'C2'" in caplog.text
+
+
+def test_commit_pathspec_ac4_refusal_still_fires_when_no_row_declares_writes_at_all():
+    # Guard against over-correction: downgrading the per-row zero-
+    # contribution case to a warning must not have touched the wave-level
+    # AC4 refusal, which fires when NOT ONE row in the wave declares
+    # writes: at all (every row UNDECLARED, no concrete surface fallback).
+    wave = [_wave_row("C1", UNDECLARED), _wave_row("C2", UNDECLARED, surface="dispatch_emit")]
     with pytest.raises(NoWritesDeclaredError) as excinfo:
         commit_pathspec(wave)
     assert "'C1'" in str(excinfo.value)

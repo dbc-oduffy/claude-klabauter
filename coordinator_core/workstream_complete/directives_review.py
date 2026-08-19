@@ -35,7 +35,6 @@ Consumes (orchestrates, reimplements none):
         -> d-run-review-brightline-gate's directives[].cli (mid-chain).
     coordinator/bin/wsc-coverage-gate-runner.py
         (brightline-gate --from-handoff / coverage-gate --from-handoff /
-        write-trail) -> d-run-chain-plan-brightline-gate's,
         d-run-chain-coverage-gate's, and d-write-review-trail's
         directives[].cli.
     coordinator/bin/freeze-review-diff.py
@@ -195,6 +194,7 @@ _BRIGHTLINE_SURFACES = 4
 _SMALL_FIX_LOC_CEILING = 50
 
 #: The two literal `verdict=` values `review_brightline_gate.py::_from_handoff_main`
+#: (removed 2026-08-19, state/kill-ledger.md K-007)
 #: prints on its `BRIGHTLINE ...` stdout line (see that function's tail,
 #: `verdict = "PARTITION-MANDATORY" if reviewers_required >= 2 else
 #: "single-reviewer-ok"`). `chain_partition_verdict` below is that string,
@@ -230,7 +230,6 @@ def decide_review_scale(
     executor_dispatched: Optional[bool],
     shared_schema_touched: Optional[bool],
     chain_disposition: str,
-    chain_partition_verdict: Optional[str] = None,
     baton_count: Optional[int] = None,
     commit_count_scope: Optional[str] = None,
 ) -> ReviewScaleDecision:
@@ -254,15 +253,15 @@ def decide_review_scale(
     of conservative on a chain terminal, not "the conservative per-session
     answer" the old docstring claimed here.
 
-    Scope of each input (SESSION-scoped = this closing session's own diff;
-    CHAIN-scoped = the full chain DAG a chain-terminal close accumulates
-    across, walked once by the brightline gate, not re-walked here):
+    Scope of each input (every input below is SESSION-scoped — this closing
+    session's own diff. No CHAIN-scoped input survives: the chain-terminal
+    brightline gate that walked the full chain DAG was removed 2026-08-19,
+    state/kill-ledger.md K-007):
       - `commit_count`, `surface_count` — SESSION-scoped. Feed the row-4
         big-diff brightline predicate below alongside `code_loc`. A
         session-scoped brightline on a chain terminal means "this final
-        session's own diff is big," not "the diff accumulated across the
-        whole chain is big" — deliberately: see `chain_partition_verdict`
-        for the chain-scoped question row 6 actually answers.
+        session's own diff is big," NOT "the diff accumulated across the
+        whole chain is big" — and since K-007 nothing answers the latter.
       - `code_loc` — SESSION-scoped, noise-excluded reviewable LOC. Feeds
         BOTH the row 1/2/3 code-vs-noise discrimination AND (2026-08-11,
         AC4) the row-4 big-diff brightline predicate — a gate measuring
@@ -274,20 +273,6 @@ def decide_review_scale(
       - `executor_dispatched`, `shared_schema_touched` — SESSION-scoped.
         Whether THIS session dispatched an executor / touched a shared
         schema or seam.
-      - `chain_partition_verdict` — CHAIN-scoped. Consulted only when
-        `chain_disposition` canonicalizes to a chain terminal
-        (`wsc_disposition.PREDECESSOR_CONSUMED`). This is the verbatim
-        `verdict=` value already emitted by
-        `review_brightline_gate.py::_from_handoff_main`'s
-        `BRIGHTLINE ...` stdout line — `"PARTITION-MANDATORY"` or
-        `"single-reviewer-ok"` — which that directive derives via
-        `max(plan_oracle, chain_oracle, session_oracle)` capped at 4 over
-        the full chain DAG. This function does NOT re-derive that verdict
-        from raw chain metrics (no `chain_loc`/`chain_commits`/
-        `chain_surfaces` params here) — doing so would ship a second
-        oracle with a different composition rule and no reconciliation
-        with the one `review_brightline_gate.py` already computes. `None`
-        means "not yet resolved," never "trivial."
       - `baton_count` — SESSION-scoped (2026-08-04 sizing,
         `state/sizings/2026-08-04-mise-run-record-should-carry-baton-count.yaml`;
         source memo `cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-
@@ -335,50 +320,15 @@ def decide_review_scale(
         `is None`-checking) — a caller cannot distinguish "I attested and
         the scope is empty" from "I didn't attest" on the trail record.
 
-    Producer/consumer seam (C5, 2026-08-03 plan
-    docs/plans/2026-08-03-chain-end-review-scale-wiring.md, the Staff Engineer finding 2):
-    this function is the CONSUMER of `chain_partition_verdict`; the PRODUCER
-    is `coordinator/bin/wsc-coverage-gate-runner.py::cmd_brightline_gate`,
-    which already parses the `BRIGHTLINE ...` line via `_parse_brightline_line`
-    / `_BRIGHTLINE_RE` and now prints an `ACTION:` stderr line naming the
-    exact `decisions["chain_partition_verdict"]` key the EM must carry into
-    the NEXT `wsc.brief()`/`wsc.apply()` call. Before this producer-side edit,
-    every test exercising rows 5/6 was satisfiable via a hand-authored
-    `decisions=` fixture with zero real traffic ever reaching this branch in
-    production — a green suite proving self-consistency with its own
-    fixtures, not that it matches what the real producer emits. See
-    `state/lessons/0000-00-00-green-tests-can-encode-the-bug-verify-producer-
-    consumer-key.yaml` (scope: universal): "grep a corpus of real producer
-    artifacts for the exact key the consumer reads before trusting any test
-    that exercises that path" — done here by locating the ALREADY-EXISTING
-    `_parse_brightline_line` parser rather than authoring a second one.
-
-    Row 6 fires on `chain_partition_verdict ==
-    _CHAIN_VERDICT_PARTITION_MANDATORY` alone (chain-scoped, independent
-    of the session-scoped row-4 brightline) — the accumulated-over-many-
-    small-sessions case the source memo describes would never trip a
-    session-scoped predicate. Row 5 fires when the chain terminal's
-    verdict resolved but is NOT mandatory. Row 4 fires on the
-    session-scoped brightline alone, regardless of chain-terminal status
-    — including on a chain terminal whose `chain_partition_verdict` is
-    still `None` or unrecognized: the row-4 brightline check is evaluated
-    BEFORE those chain-terminal-unresolved returns (fixed 2026-08-10; the
-    prior code returned unresolved on `chain_partition_verdict is None`
-    ahead of ever evaluating row 4, silently under-reporting scale to
-    `partition_mandatory=False` on a chain-terminal close whose own
-    session-scoped diff emphatically hit the brightline). Precedence is
-    checked in row order 6, 4, then the chain-terminal-unresolved returns
-    (`chain_partition_verdict` not yet resolved, or resolved to something
-    other than `single-reviewer-ok`/`PARTITION-MANDATORY`), then the
-    row-4-inputs-unresolved return, then 5, 3, 1, 2 — the chain-terminal
-    verdict's own unresolved reason is surfaced ahead of a *simultaneously*
-    unresolved row-4 input set, because "the chain-scoped verdict this
-    terminal close needs is missing" is the more actionable message for a
-    chain terminal than "some session-scoped LOC/commit/surface count is
-    missing," and matches the pre-fix reporting shape for that specific
-    combination. Any branch whose own predicate needs an unresolved input
-    to be ruled out returns the unresolved outcome rather than falling
-    through to a lower-precedence row.
+    Row 6 (chain-scoped PARTITION-MANDATORY) is REMOVED along with the
+    chain-terminal brightline gate that produced its verdict — state/kill-
+    ledger.md K-007, 2026-08-19, PM ruling. A chain-terminal close now
+    resolves on the session-scoped brightline alone: row 4 when it trips,
+    row 5 when it resolves and does not. The accumulated-over-many-small-
+    sessions case row 6 existed to catch is UNDETECTED until the PM
+    specifies replacement coverage; row 4 still fires on a chain terminal
+    whose own session diff hits the brightline. Precedence is now 4, then
+    the row-4-inputs-unresolved return, then 5, 3, 1, 2.
 
     shell-doc-ok: the backticked comparisons above are Python boolean
     expressions quoted from this function's own code, not shell version
@@ -436,30 +386,19 @@ def decide_review_scale(
         )
 
     if is_chain_terminal:
-        if chain_partition_verdict == _CHAIN_VERDICT_PARTITION_MANDATORY:
-            return ReviewScaleDecision(
-                row=6, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
-                reason="chain-terminal AND the chain-scoped brightline gate verdict is PARTITION-MANDATORY",
-            )
+        # Row 6 (the chain-scoped PARTITION-MANDATORY verdict) is REMOVED with
+        # the chain-terminal brightline gate that produced it — state/kill-
+        # ledger.md K-007, 2026-08-19, PM ruling. A chain terminal now decides
+        # on the session-scoped brightline alone: row 4 when it trips, row 5
+        # otherwise. The accumulated-over-many-small-sessions case row 6 used
+        # to catch has no detector until the PM specifies the replacement.
         if brightline_known_true:
             return _row4_decision()
-        if chain_partition_verdict is None:
-            return _unresolved(
-                "chain-terminal close but chain_partition_verdict is not yet resolved "
-                "(rows 5/6 cannot be ruled out)"
-            )
-        if chain_partition_verdict != _CHAIN_VERDICT_SINGLE_REVIEWER_OK:
-            return _unresolved(
-                f"chain-terminal close with an unrecognized chain_partition_verdict "
-                f"{chain_partition_verdict!r} (expected "
-                f"{_CHAIN_VERDICT_PARTITION_MANDATORY!r} or {_CHAIN_VERDICT_SINGLE_REVIEWER_OK!r})"
-            )
         if not brightline_resolved:
             return _row4_inputs_unresolved()
-        # chain_partition_verdict == _CHAIN_VERDICT_SINGLE_REVIEWER_OK, row 4 ruled out.
         return ReviewScaleDecision(
             row=5, scale="code-reviewer", partition_mandatory=False, commit_message_names_change=False,
-            reason="chain-terminal with a resolved, non-mandatory chain-scoped brightline verdict",
+            reason="chain-terminal with the session-scoped brightline resolved and not tripped",
         )
 
     if brightline_known_true:
@@ -552,7 +491,9 @@ def decide_review_scale(
 # nothing session-scoped, matching the stub's explicit instruction that a
 # stale-input memo must MISS rather than serve a wrong verdict.
 #
-# Storage shape only borrows from `chain_partition_verdict_store.py`
+# Storage shape only borrows from `chain_partition_verdict_store.py` (that
+# module was removed 2026-08-19, state/kill-ledger.md K-007; the SHAPE it
+# established is what this still mirrors)
 # (per-record JSON file under `state/ceremony/`, atomic mkstemp+replace,
 # hashed filename) — that module's KEYING (session id) is explicitly the
 # wrong key for this correctness-bearing skip (its own module docstring:
@@ -791,7 +732,7 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
 
 
 # ---------------------------------------------------------------------------
-# d-run-review-brightline-gate / d-run-chain-plan-brightline-gate
+# d-run-review-brightline-gate  (d-run-chain-plan-brightline-gate: removed, K-007)
 # (SKILL.md:428-442) — mechanical CLI + verdict parse.
 # ---------------------------------------------------------------------------
 
@@ -879,18 +820,6 @@ def build_review_brightline_gate_directive(
     if repo_root is not None and gate_memo_hit(repo_root, directive["id"], *args):
         directive["already_satisfied"] = True
     return directive
-
-
-def build_chain_plan_brightline_gate_directive(consumed_handoff: str) -> dict[str, Any]:
-    """Chain-terminus two-oracle brightline gate (`WSC_DISPOSITION ==
-    chain-terminal`, SKILL.md:436-442) — the two-oracle chain+plan
-    enforcement path over the closing handoff, wrapped by
-    `wsc-coverage-gate-runner.py brightline-gate --from-handoff`."""
-    return _directive(
-        "d-run-chain-plan-brightline-gate",
-        _COVERAGE_GATE_RUNNER_CLI,
-        ["brightline-gate", "--from-handoff", consumed_handoff],
-    )
 
 
 # ---------------------------------------------------------------------------

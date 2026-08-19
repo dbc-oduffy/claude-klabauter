@@ -119,7 +119,7 @@ def test_emit_roundtrip_fields(tmp_path: Path) -> None:
     assert receipt["scope_mode"] == "architecture"
     assert "nodes" in receipt
     assert "op_tail" in receipt
-    assert "coverage_pointer" in receipt
+    assert "coverage_pointer" not in receipt
 
 
 def test_emit_roundtrip_node_count(tmp_path: Path) -> None:

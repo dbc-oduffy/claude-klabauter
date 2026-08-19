@@ -259,7 +259,13 @@ from coordinator_core.archival import _is_terminal_or_archived_child, claimed_or
 # C8 (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md § C8): the SAME
 # ledger-first accessor C1 introduced — see this module's "FOURTH LEG" docstring section.
 from coordinator_core.claim_state import resolve_claim_state
-from coordinator_core.dag import _read_meta, build_handoff_id_index, handoff_edges, resolve_target
+from coordinator_core.dag import (
+    _read_meta,
+    _ref_names_foreign_family,
+    build_handoff_id_index,
+    handoff_edges,
+    resolve_target,
+)
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.handoff_archive_transition import _handoff_live_holder_session
@@ -391,10 +397,27 @@ def _build_predecessor_reverse_index(
         seen_targets: set = set()
         seen_basenames: set = set()
         for raw_ref in raw_edges:
+            # This branch is a deliberate duplicate of `dag.referenced_by`'s fallback
+            # (see this module's docstring), so it inherits that function's two
+            # constraints rather than only the one it was written with. Tier 3 is off
+            # for the same reason: the branch below collapses `None` and `'git-history'`
+            # onto one path, so the probe can change no outcome while costing a
+            # `git log --all` spawn per (node, edge) pair. And basename recovery is
+            # withheld from a ref naming a non-baton family — without that gate a
+            # handoff carrying `predecessor: cross-repo/inbox/<slug>.md`, named
+            # `<slug>.md` itself, indexes as its own referencer once the memo archives,
+            # and STRANDED/HELD classification then sees a live child that is the baton
+            # itself. Keep both in step with `dag.referenced_by`.
             resolved_ref = resolve_target(
-                raw_ref, node_handoff_dir, repo_root, id_index=id_index
+                raw_ref,
+                node_handoff_dir,
+                repo_root,
+                id_index=id_index,
+                include_history_tier=False,
             )
             if resolved_ref is None or resolved_ref == "git-history":
+                if _ref_names_foreign_family(raw_ref):
+                    continue
                 basename = os.path.basename(raw_ref)
                 if basename not in seen_basenames:
                     seen_basenames.add(basename)

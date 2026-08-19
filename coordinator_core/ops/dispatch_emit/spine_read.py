@@ -28,11 +28,26 @@ didn't name:
      (see the plan's Anti-scope: absent writes: must never be read as an
      empty set).
   2. AC6 — every ``depends_on[].chunk`` referent is resolved against the
-     spine's row ``id`` set at read time. A dangling referent raises
-     ``DanglingDependencyError`` naming both the row holding the edge and
-     the unresolvable value — this referent is asserted in schema prose
-     (plan-tasks.schema.json's ``depends_on`` description) but was
-     enforced by no code anywhere in the fleet before this module.
+     spine's row ``id`` set at read time. A dangling referent — a
+     well-formed ``{chunk: ..., gate_kind: ...}`` edge whose ``chunk``
+     names no row in this spine — raises ``DanglingDependencyError``
+     naming both the row holding the edge and the unresolvable id. A
+     MALFORMED edge (not an object, or an object with no ``chunk`` key —
+     a bare string, a bare scalar, or a dict missing the key) is a
+     DIFFERENT failure and raises ``MalformedDependencyEdgeError``
+     instead, naming the offending edge value itself and the required
+     shape: the edge was never looked at closely enough to know what
+     chunk id it meant, so it must never be reported as chunk ``None``.
+     Before this edge value ever reaches either check,
+     ``schema_validate.check_plan_tasks_source`` runs as a preflight; when
+     the FIRST schema-shape error it finds for this spine is under
+     ``depends_on``, that error's own field/reason (e.g. an out-of-enum
+     ``gate_kind``, or the exact same expected-object-got-str diagnosis)
+     is what gets raised, in ``MalformedDependencyEdgeError``'s voice —
+     the shipped validator's diagnosis, not a hand-rolled one. This
+     referent is asserted in schema prose (plan-tasks.schema.json's
+     ``depends_on`` description) but was enforced by no code anywhere in
+     the fleet before this module.
   3. A scalar ``writes:``/``reads:``/``depends_on:`` value (e.g.
      ``writes: some/path.py`` instead of a one-item list) raises
      ``InvalidFieldTypeError`` naming the row and the value, rather than
@@ -77,6 +92,23 @@ Negative-spec:
     every field except the two AC-bearing ones it fails loudly on, plus
     the closed-disposition/deferred exclusion described above — a value
     filter, not a cross-field validation rule.
+  - The ``check_plan_tasks_source`` preflight (point 2 above) does NOT
+    change that: it is consulted, but only its verdict on ``depends_on``
+    is ever acted on, and only when at least one raw row declares
+    ``depends_on`` at all — a spine with none never pays the full
+    schema+cross-field validation cost. ``check_plan_tasks_source``
+    returns at most ONE error — the first row-order failure anywhere in
+    the spine — so a row missing ``change_kind`` (say) ahead of the
+    malformed edge in file order suppresses the depends_on diagnosis for
+    that read entirely and this module falls back to its own message;
+    that gap is inherent to the shared door's single-error contract, not
+    something this module papers over with a second pass. The
+    2026-08-06 ruling that a schema-shape violation WARNS, never BLOCKS,
+    at write time (``write_guards/validate_frontmatter_schema_deny.py``)
+    is UNCHANGED by this — that policy governs the write guard, not the
+    emitter, and the emitter already fails loud on a malformed edge
+    regardless; the preflight only improves which message it fails loud
+    WITH.
   - Does NOT derive waves, pathspecs, or script text — those are C2/C3/C4.
   - Does NOT special-case ``gate_kind`` or any depends_on field beyond
     ``chunk`` — resolving the referent is this module's whole job here.
@@ -87,6 +119,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 from coordinator_core.ops.plan_tasks_render import load_rows
 
 
@@ -162,8 +195,45 @@ class SpineReadError(ValueError):
     """
 
 
-class DanglingDependencyError(ValueError):
-    """Raised when a ``depends_on[].chunk`` referent has no matching row id (AC6)."""
+class DanglingDependencyError(SpineReadError):
+    """Raised when a ``depends_on[].chunk`` referent has no matching row id (AC6).
+
+    Reserved for a WELL-FORMED edge (an object carrying a ``chunk`` key)
+    whose value genuinely resolves to nothing in this spine's row-id set.
+    A malformed edge — not an object, or an object with no ``chunk`` key
+    at all — is never routed here; see ``MalformedDependencyEdgeError``.
+
+    Extends ``SpineReadError`` (not bare ``ValueError``) so a caller that
+    catches ``SpineReadError`` around ``read_spine`` — e.g.
+    ``plan_assemble.predicates.composition_graph``'s ``chunk_overlap`` and
+    ``path_rename_or_move``, which degrade to ``undetermined(...)`` on any
+    unreadable spine — degrades gracefully on a dangling edge exactly as it
+    already does on an absent/malformed spine block, instead of raising
+    uncaught. A dangling referent is still a real authoring defect (AC6
+    keeps raising it), but it is a spine-content defect the same class as
+    every other one this module fails loud on, not a reason to crash a
+    predicate that has no way to fix the plan file it is reading.
+    """
+
+
+class MalformedDependencyEdgeError(SpineReadError):
+    """Raised when a ``depends_on`` entry is not an object with a ``chunk``
+    key — a bare string, a bare scalar, or a dict missing the key.
+
+    Distinct from ``DanglingDependencyError``: that error means a real
+    chunk id was named and did not resolve; this one means the edge was
+    never shaped well enough to name a chunk id in the first place, so
+    reporting it as an unresolvable chunk ``None`` would blame the wrong
+    layer. Names the offending edge value and the required shape:
+    ``{chunk: <row id>, gate_kind: <kind>[, note: ...]}``.
+
+    When ``schema_validate.check_plan_tasks_source``'s preflight finds the
+    spine's first row-order schema error under ``depends_on``, this error
+    carries THAT message instead of a hand-rolled one — the shipped
+    validator's diagnosis is more precise (e.g. it names an out-of-enum
+    ``gate_kind`` this module does not itself check) and is preferred
+    whenever it is available for the failure at hand.
+    """
 
 
 class InvalidFieldTypeError(SpineReadError):
@@ -213,10 +283,12 @@ def read_spine(plan_path) -> list[EmitterRow]:
 
     Raises ``SpineReadError`` if the spine block is absent or malformed,
     ``InvalidRowIdError`` if any row's ``id`` is missing/non-string or
-    duplicates another row's id, ``DanglingDependencyError`` if any row's
-    ``depends_on[].chunk`` does not resolve against the spine's row-id set
-    (AC6), and ``InvalidFieldTypeError`` if ``writes:``/``reads:``/
-    ``depends_on:`` is declared as a non-list value rather than a list.
+    duplicates another row's id, ``MalformedDependencyEdgeError`` if any
+    ``depends_on`` entry is not an object with a ``chunk`` key,
+    ``DanglingDependencyError`` if a well-formed ``depends_on[].chunk``
+    does not resolve against the spine's row-id set (AC6), and
+    ``InvalidFieldTypeError`` if ``writes:``/``reads:``/``depends_on:`` is
+    declared as a non-list value rather than a list.
     ``writes`` is UNDECLARED (AC2) on any row that omits the key or
     declares it present-but-empty; ``reads`` and ``depends_on`` both
     default to ``[]`` when omitted (neither carries an undeclared-vs-empty
@@ -244,6 +316,26 @@ def read_spine(plan_path) -> list[EmitterRow]:
         )
 
     raw_rows = result.rows
+
+    # depends_on schema-shape preflight: `check_plan_tasks_source` returns
+    # at most the FIRST row-order schema error in the whole spine (its own
+    # documented contract), so this only fires when THAT error happens to
+    # be under `depends_on` — a row with some other shape problem ahead of
+    # it in file order suppresses this and falls through to the tolerant
+    # checks below, unchanged. When it does fire, it is strictly a better
+    # diagnosis than anything this module derives on its own (module
+    # docstring point 2): the shipped validator, not a coercion artefact.
+    # Skipped entirely when no row declares depends_on at all — the most
+    # common spine shape — since there is then no depends_on-shape error
+    # for the full schema+cross-field validator to find, and running it
+    # anyway would spend that cost on every emit for no possible payoff.
+    if any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
+        schema_error = check_plan_tasks_source(source)
+        if schema_error is not None and schema_error["field"].startswith("depends_on"):
+            raise MalformedDependencyEdgeError(
+                f"plan {plan_path!r} spine field {schema_error['field']}: "
+                f"{schema_error['error']} ({schema_error['hint']})"
+            )
 
     # id presence/uniqueness (finding: coordinator:code-reviewer wsc-A,
     # ecb99d36, P1). Validated once here, up front, so every downstream
@@ -290,7 +382,16 @@ def read_spine(plan_path) -> list[EmitterRow]:
             )
 
         for edge in depends_on:
-            chunk = edge.get("chunk") if isinstance(edge, dict) else None
+            if not isinstance(edge, dict) or "chunk" not in edge:
+                # The edge was never shaped well enough to name a chunk id
+                # at all — never coerce this into DanglingDependencyError
+                # with a fabricated `None` (module docstring point 2).
+                raise MalformedDependencyEdgeError(
+                    f"row {row_id!r} depends_on entry {edge!r} is not an "
+                    "object with a chunk key; depends_on entries must be "
+                    "shaped {chunk: <row id>, gate_kind: <kind>[, note: ...]}"
+                )
+            chunk = edge["chunk"]
             if chunk not in row_ids:
                 raise DanglingDependencyError(
                     f"row {row_id!r} depends_on unresolvable chunk {chunk!r}"

@@ -13,10 +13,13 @@ every guard reads) or changing `check`'s arity across all discovered guards
 
 Instead: this is a plain import-and-call module. It delegates to
 `coordinator_core.git.repo_root.show_toplevel`, which already implements a
-cwd-keyed, process-lifetime memo (walks for `.git` first, spawns only when
-the walk finds nothing) -- see that module's own docstring for the memo
-policy. Delegating rather than re-implementing means this module adds ZERO
-new subprocess logic and zero new caching logic; it exists only so write
+cwd-keyed, process-lifetime memo and WALKS ONLY -- it never spawns, on any
+path (2026-08-19: its spawn fallback was deleted once measured to return
+either a failure the walk had already established or, with `GIT_DIR` set,
+the CWD as the toplevel, which is wrong). See that module's own docstring
+for the memo policy. Delegating rather than re-implementing means this
+module adds ZERO subprocess logic and zero caching logic; it exists only so
+write
 guards have one obvious, guard-package-local import to reach for instead of
 each hand-rolling its own `git rev-parse --show-toplevel` call.
 
@@ -27,7 +30,10 @@ guard within that one process the same resolution without spawning twice,
 while a fresh process (the next hook invocation) gets a fresh resolution.
 This module adds no cross-process cache of its own -- see the delegate's own
 "Negative caching" section for why a failed resolution is never memoized
-either.
+either. Note the guard-relevant consequence of the walk-only delegate: an
+unresolvable root is now `None` rather than a spawn's best guess, and for a
+guard on the Write/Edit hot path that is the safer direction as well as the
+cheaper one.
 
 Not built here: a cross-process cache. That is a different, larger design
 with staleness questions this module does not open (see

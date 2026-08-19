@@ -96,6 +96,7 @@ from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.write_guards.block_subagent_plan_body_write import (
     _resolve_subagent_identity,
 )
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 # DEFERRED, NOT a module-level import (2026-08-13 hot-path import-budget fix,
 # latent-infra-blocker sibling of coordinator_core/bash_guards/_helpers.py's
@@ -129,7 +130,12 @@ def _resolve_roster_accessor():
 
 
 CLASS = "hard-deny"
-MATCHERS = ("Bash",)
+# Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
+# docs/reference/guard-tool-name-membership.md): `check()` already branches
+# on `Dialect.POWERSHELL` internally (`dialect_from_tool_name`) -- this
+# guard was pre-built dialect-aware, just never reachable under the
+# PowerShell tool until now.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
 # Generator-provenance declaration (generator_provenance.py). _write_block_log

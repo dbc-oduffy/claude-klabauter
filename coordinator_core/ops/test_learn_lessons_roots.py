@@ -31,6 +31,7 @@ def _make_machine_local(bin_dir: Path, repos: dict, publish_targets=(), extra=No
     """
     extra_dict = extra or {}
     python_body = f"""
+import json
 import sys
 
 _REPOS = {repos!r}
@@ -45,6 +46,17 @@ def _main():
     if args[0] == "keys":
         for short_key in _REPOS:
             print(f"repos.{{short_key}}")
+        return 0
+    if args[0] == "dump":
+        prefix = None
+        if "--prefix" in args:
+            prefix = args[args.index("--prefix") + 1]
+        out = {{
+            f"repos.{{short_key}}": path
+            for short_key, path in _REPOS.items()
+            if prefix is None or f"repos.{{short_key}}".startswith(prefix + ".")
+        }}
+        print(json.dumps(out))
         return 0
     if args[0] == "get" and len(args) > 1:
         key = args[1]
@@ -118,6 +130,61 @@ class TestPositive:
         assert str(claude_home) in lines
         assert str(repo_a) in lines
         assert lines[0] == str(claude_home)
+
+    def test_registry_roots_resolve_via_dump_only_fixture(self, tmp_path: Path):
+        """Multi-item regression, T3 h4-ops-b deferred item: a fake
+        machine-local that answers ONLY `dump --prefix repos --format json`
+        (no `keys`, no per-key `get`) still resolves every repos.* root.
+        FAILS against the pre-batch enumerate-then-`get` implementation --
+        that code path calls `keys` (returns nothing here) then `get` per
+        key (never reached), so it would see zero registry roots. Confirmed
+        by the dispatching agent via local revert-and-rerun; see run report.
+        """
+        claude_home = tmp_path / ".claude"
+        claude_home.mkdir(parents=True)
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        repo_a.mkdir()
+        repo_b.mkdir()
+
+        bin_dir = claude_home / "bin"
+        python_body = f"""
+import json
+import sys
+
+_REPOS = {{"repo_a": {str(repo_a)!r}, "repo_b": {str(repo_b)!r}}}
+
+
+def _main():
+    args = sys.argv[1:]
+    if args and args[0] == "dump":
+        prefix = None
+        if "--prefix" in args:
+            prefix = args[args.index("--prefix") + 1]
+        out = {{
+            f"repos.{{k}}": v for k, v in _REPOS.items()
+            if prefix is None or f"repos.{{k}}".startswith(prefix + ".")
+        }}
+        print(json.dumps(out))
+        return 0
+    # keys/get deliberately unsupported here -- the pre-batch code path
+    # relied on them and would see an empty registry.
+    return 0
+
+
+sys.exit(_main())
+"""
+        from coordinator_core.testing.fake_machine_local import write_fake_machine_local
+
+        write_fake_machine_local(bin_dir, python_body)
+
+        env = _env_for(tmp_path)
+        rc, out, err = _run_main([], env)
+
+        assert rc == 0
+        lines = out.splitlines()
+        assert str(repo_a) in lines, f"expected {repo_a} in {lines!r}"
+        assert str(repo_b) in lines, f"expected {repo_b} in {lines!r}"
 
     def test_registry_repo_skipped_when_dir_missing(self, tmp_path: Path):
         claude_home = tmp_path / ".claude"

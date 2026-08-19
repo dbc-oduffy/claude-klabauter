@@ -2007,21 +2007,37 @@ class TestForeignSessionScopeGuard:
     commits."""
 
 
-    def test_foreign_refusal_message_names_remedy_not_absolute_impossibility(
+    def test_foreign_refusal_message_names_the_session_not_an_untrailered_commit(
         self, tmp_path
     ) -> None:
-        """Regression: the refusal message must not claim there is no
-        remedy at all. This fixture's sole commit carries a Session-Id
+        """Regression: this fixture's sole commit carries a Session-Id
         trailer naming a DIFFERENT session (`_GUARD_FOREIGN_SESSION`), so it
         is the foreign-trailered population C5 (docs/plans/2026-08-18-
-        chain-review-records-and-credits-predecessors.md § C5, AC8) fixed:
-        the remedy this message now names is the reviewer-attestation route
-        (C2), not re-committing to add a trailer — that remedy belongs only
-        to the genuinely-untrailered branch, see
-        test_single_commit_case3_does_not_advise_impossible_narrowing.
-        Before C5 this message wrongly claimed the commit was untrailered
-        and pointed at that inapplicable remedy; see this module's
-        docstring update for the full incident context."""
+        chain-review-records-and-credits-predecessors.md § C5, AC8) fixed —
+        it must never again be told it "is untrailered" and pointed at the
+        re-commit remedy, which belongs only to the genuinely-untrailered
+        branch (see
+        test_single_commit_case3_does_not_advise_impossible_narrowing).
+
+        RENAMED and re-scoped 2026-08-19. This test previously also asserted
+        that the message names the reviewer-attestation route as this
+        population's standing remedy. That assertion pinned a claim which
+        does not hold and was falsified by execution: AC1c admits an attested
+        commit only inside this session's own frozen-diff range, and the sole
+        producer of that range (`freeze-review-diff.py`) writes through this
+        same op with no `attestation_dispatch_id`, so it is refused at this
+        very branch. The commit therefore cannot be brought inside the range,
+        and the attestation remedy was unreachable for exactly the population
+        this test asserted it served
+        (state/bug-backlog/2026-08-19-inherited-chain-commit-review-records-
+        are-unwritable.yaml). The fixture commit here is outside the frozen
+        range (this session froze nothing), so the corrected message says the
+        record is not writable and why.
+
+        The attestation route IS still named for the population that can take
+        it — a commit inside the frozen range — and that case, plus this one,
+        is covered directly in
+        `test_review_trail_write_attestation_remedy.py`."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -2050,8 +2066,13 @@ class TestForeignSessionScopeGuard:
         # for the genuinely-untrailered branch only).
         assert "is untrailered" not in message
         assert "names a different session" in message
-        assert "reviewer sidecar" in message
+        # The corrected contract for a commit outside the frozen range: state
+        # that no record is writable, and say why, rather than naming a call
+        # that refuses. Still not a bare "impossible" — the reason is in the
+        # message, which is what the old test name was reaching for.
+        assert "No review-trail record naming this commit is writable" in message
         assert "attestation_dispatch_id" in message
+        assert "supply reviewer_evidence" not in message
 
 
     def test_untrailered_commit_placed_in_scope_by_touched_path_writes_and_logs(

@@ -1057,6 +1057,14 @@ def _batch_show_index_blobs(paths: List[str], cwd: Optional[str]) -> Dict[str, O
         return {p: None for p in paths}
     except OSError:
         return {p: None for p in paths}
+    if proc.returncode != 0:
+        # A non-zero exit can follow partial stdout writes; treating that
+        # stdout as trustworthy would let the byte-offset parser slice a
+        # short/garbled record and hand back a WRONG (truncated) blob
+        # instead of a missing one. Fail the whole batch closed, same as
+        # TimeoutExpired/OSError above -- an indeterminate read must never
+        # present as a successfully-read blob on this commit-hot-path guard.
+        return {p: None for p in paths}
     stdout = proc.stdout
     results: Dict[str, Optional[str]] = {}
     pos = 0
@@ -5559,8 +5567,15 @@ def check_validate_commit(
         _frontmatter_diff_targets.append(f)
 
     if _frontmatter_diff_targets:
+        # `-c core.quotePath=false` -- without it, git C-quotes a header
+        # path containing non-ASCII/control characters (default
+        # core.quotePath=true), and the exact-string `_diff_headers` lookup
+        # below would silently miss that header line, never flagging the
+        # file's frontmatter mutation. Forcing quoting off is safe here
+        # because every candidate path is already a known plain string from
+        # `_frontmatter_diff_targets`, not something parsed back out of git.
         _rc_d, diff_out = _run_git(
-            ["diff", "--cached", "-U0", "--", *_frontmatter_diff_targets], _cwd
+            ["-c", "core.quotePath=false", "diff", "--cached", "-U0", "--", *_frontmatter_diff_targets], _cwd
         )
         if diff_out:
             _diff_headers = {

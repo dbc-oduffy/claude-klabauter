@@ -202,6 +202,43 @@ class TestFalsePositiveGuards:
         assert result["verdict"] == "no_signal"
         assert result["mutating_tool_call_count"] == 2
 
+    def test_multiple_target_paths_any_dirty_one_is_changed(self, tmp_path: Path) -> None:
+        """Slice-s7 review finding: every existing fixture passes a
+        single-element `target_paths` list, so the actual point of this
+        site's batching -- one `git status` correctly attributing dirty vs
+        clean per path across MULTIPLE pathspecs in a single call -- was
+        unverified. Two committed files, only the second dirtied; the
+        single batched `git status --porcelain -- a.py b.py` call must
+        still report the pair as changed (an all-or-nothing regression that
+        only checked the FIRST pathspec would report False here)."""
+        from coordinator_core.hooks.subagent_fabrication_check import _targets_changed
+
+        repo_root = _init_repo(tmp_path)
+        second = repo_root / "second.py"
+        second.write_text("original\n")
+        _git(repo_root, "add", "second.py")
+        _git(repo_root, "commit", "-q", "-m", "add second.py")
+        second.write_text("edited\n")  # dirty, uncommitted -- second path only
+
+        result = _targets_changed(str(repo_root), ["target.py", "second.py"])
+        assert result is True
+
+    def test_multiple_target_paths_all_clean_is_unchanged(self, tmp_path: Path) -> None:
+        """Companion to the above: two clean, committed paths batched into
+        ONE `git status` call must report unchanged -- a regression that
+        misreads a multi-pathspec call as always-dirty (e.g. from stray
+        pathspec-parsing output) would false-fire here."""
+        from coordinator_core.hooks.subagent_fabrication_check import _targets_changed
+
+        repo_root = _init_repo(tmp_path)
+        second = repo_root / "second.py"
+        second.write_text("original\n")
+        _git(repo_root, "add", "second.py")
+        _git(repo_root, "commit", "-q", "-m", "add second.py")
+
+        result = _targets_changed(str(repo_root), ["target.py", "second.py"])
+        assert result is False
+
     def test_genuinely_changed_target_is_silent(self, tmp_path: Path) -> None:
         """Zero recorded tool calls (e.g. a transcript gap) but the target is actually
         dirty on disk — no signal; real change accounted for even without matching

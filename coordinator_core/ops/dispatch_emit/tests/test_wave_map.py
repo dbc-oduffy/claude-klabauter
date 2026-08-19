@@ -6,9 +6,13 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C2.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
+from coordinator_core.ops.dispatch_emit import wave_map
 from coordinator_core.ops.dispatch_emit.wave_map import WaveCycleError, build_waves
 
 
@@ -251,3 +255,172 @@ def test_two_row_cycle_raises_wave_cycle_error():
     message = str(excinfo.value)
     assert "C1" in message
     assert "C2" in message
+
+
+def test_epistemic_premise_undeclared_row_held_out_of_wave_graph(caplog):
+    # The reproducing case (docs/plans/2026-08-19-the-fired-path-reaches-
+    # the-engine.md, chunk C6): a row gated epistemic-premise on a
+    # predecessor, with no writes: key at all, must not sink the emit for
+    # the other, ready chunks -- it is held out instead, loudly.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row(
+            "C6",
+            UNDECLARED,
+            depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}],
+        ),
+    ]
+    with caplog.at_level("WARNING"):
+        waves = build_waves(rows)
+
+    all_ids = {w.id for wave in waves for w in wave}
+    assert all_ids == {"C1"}
+    assert any("C6" in record.message for record in caplog.records)
+
+
+def test_epistemic_premise_gate_with_declared_writes_not_held():
+    # Predicate half (b) fails: writes: is a real (even empty) list, not
+    # UNDECLARED, so the row keeps current (unheld) behaviour exactly.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row(
+            "C2",
+            [],
+            depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}],
+        ),
+    ]
+    waves = build_waves(rows)
+    all_ids = {w.id for wave in waves for w in wave}
+    assert all_ids == {"C1", "C2"}
+
+
+def test_undeclared_writes_without_epistemic_premise_gate_not_held():
+    # Predicate half (a) fails: no epistemic-premise depends_on edge, so an
+    # UNDECLARED row keeps its pre-existing isolated-wave behaviour (AC2)
+    # rather than being held out.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row(
+            "C2",
+            UNDECLARED,
+            depends_on=[{"chunk": "C1", "gate_kind": "output-consumption-runtime"}],
+        ),
+    ]
+    waves = build_waves(rows)
+    all_ids = {w.id for wave in waves for w in wave}
+    assert all_ids == {"C1", "C2"}
+
+
+def test_held_out_row_transitively_holds_its_own_dependent():
+    # C7 depends on C6 (held). C7 cannot run against a predecessor that
+    # did not run, so C7 must be held too, even though C7 itself declares
+    # writes and has no epistemic-premise gate of its own.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row(
+            "C6",
+            UNDECLARED,
+            depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}],
+        ),
+        _row(
+            "C7",
+            ["c7.py"],
+            depends_on=[{"chunk": "C6", "gate_kind": "output-consumption-runtime"}],
+        ),
+    ]
+    waves = build_waves(rows)
+    all_ids = {w.id for wave in waves for w in wave}
+    assert all_ids == {"C1"}
+
+
+def test_cycle_among_held_out_rows_still_raises_wave_cycle_error():
+    # MAJOR (review-c-pathspec-wavemap.md): a cycle consisting entirely of
+    # epistemic-premise-gated UNDECLARED rows must not be silently swallowed
+    # by holdout filtering. C1 gates epistemic-premise on C2 and C2 gates
+    # epistemic-premise on C1; both independently satisfy _compute_held_out's
+    # direct predicate (gated + UNDECLARED writes), so a holdout pass that
+    # filters BEFORE cycle detection would strip both rows and never see the
+    # mutual deadlock -- it would surface only as two indistinguishable
+    # ordinary "waiting on an epistemic-premise gate" holds. Cycle detection
+    # must run against the full, unfiltered predecessor graph.
+    rows = [
+        _row(
+            "C1",
+            UNDECLARED,
+            depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}],
+        ),
+        _row(
+            "C2",
+            UNDECLARED,
+            depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}],
+        ),
+    ]
+    with pytest.raises(WaveCycleError) as excinfo:
+        build_waves(rows)
+    message = str(excinfo.value)
+    assert "C1" in message
+    assert "C2" in message
+
+
+def test_held_out_row_transitively_holds_across_two_hops():
+    # Two-hop extension of test_held_out_row_transitively_holds_its_own_
+    # dependent: C8 depends on C7, which depends on held C6. This confirms
+    # _compute_held_out's fixed-point loop actually iterates past one round
+    # rather than only catching a single hop.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row(
+            "C6",
+            UNDECLARED,
+            depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}],
+        ),
+        _row(
+            "C7",
+            ["c7.py"],
+            depends_on=[{"chunk": "C6", "gate_kind": "output-consumption-runtime"}],
+        ),
+        _row(
+            "C8",
+            ["c8.py"],
+            depends_on=[{"chunk": "C7", "gate_kind": "output-consumption-runtime"}],
+        ),
+    ]
+    waves = build_waves(rows)
+    all_ids = {w.id for wave in waves for w in wave}
+    assert all_ids == {"C1"}
+
+
+def test_epistemic_premise_constant_is_a_member_of_the_schema_enum():
+    # MINOR (review-c-pathspec-wavemap.md): wave_map._EPISTEMIC_PREMISE and
+    # schema_validate.py's hardcoded 'epistemic-premise' literal are two
+    # independent copies of the same discriminator value, with nothing
+    # asserting they agree. This does not unify them (a shared constant
+    # would not catch enum drift originating on the schema side); it asserts
+    # the wave_map half stays a member of plan-tasks.schema.json's
+    # depends_on[].gate_kind enum, so drift there fails a test instead of
+    # silently desyncing.
+    schema_path = (
+        Path(__file__).resolve().parents[3]
+        / "frontmatter"
+        / "schemas"
+        / "plan-tasks.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    gate_kind_enum = schema["properties"]["depends_on"]["items"]["properties"][
+        "gate_kind"
+    ]["enum"]
+    assert wave_map._EPISTEMIC_PREMISE in gate_kind_enum
+
+
+def test_held_out_row_never_stamps_disposition_or_mutates_input_rows():
+    rows = [
+        _row("C1", ["a.py"]),
+        _row(
+            "C6",
+            UNDECLARED,
+            depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}],
+        ),
+    ]
+    snapshot = list(rows)
+    build_waves(rows)
+    assert rows == snapshot

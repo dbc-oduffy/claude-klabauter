@@ -178,9 +178,16 @@ from coordinator_core.bash_guards._helpers import resolve_git_root
 from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
 from coordinator_core.daily_branch import is_canonical_branch
 from coordinator_core.daily_day import local_day
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-MATCHERS = ("Bash",)
+# Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
+# docs/reference/guard-tool-name-membership.md): this guard is registered
+# ADVISORY_REWRITE/fail_closed=False (see module docstring) and fails OPEN
+# on any name shape it cannot evaluate ("FAIL OPEN ON A NAME THIS GUARD
+# NEVER ACTUALLY SAW" above) -- no spurious-deny risk from unparseable
+# PowerShell input.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
 #: Longlived branch prefixes this guard deliberately does NOT deny -- see

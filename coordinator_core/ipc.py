@@ -649,7 +649,8 @@ except Exception:
 # coverage.gate's row was removed here (K-001, state/kill-ledger.md, 2026-08-16): the
 # close path no longer invokes the op that needed this widened cap — see the kill
 # ledger for the measured cost and disposition. `coverage.gate` may still be reached
-# off the close path (mint-only plumbing behind `cmd_brightline_gate`); that caller
+# off the close path (mint-only plumbing behind `cmd_brightline_gate`, itself
+# removed 2026-08-19 per state/kill-ledger.md K-007); that caller
 # now resolves via the ordinary global runaway-guard timeout like any unlisted op.
 #
 # ceremony.scoped_git_commit (2026-08-15, live incident: a ~2116-path publish commit

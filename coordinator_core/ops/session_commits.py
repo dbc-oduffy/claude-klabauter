@@ -19,6 +19,7 @@ question):
       FULL commit message, so a body line quoting another session's trailer
       verbatim also matches. Documented as the SAFE direction on purpose.
     - `ops/review_brightline_gate.py :: _compute_session_oracle_single`
+      (removed 2026-08-19, state/kill-ledger.md K-007)
       greps `^Session-Id: <sid>$` (anchored at BOTH ends). Verified live
       (workstream_complete's own docstring) to silently DROP a commit whose
       `Session-Id` line is not the message's final line — e.g. one followed

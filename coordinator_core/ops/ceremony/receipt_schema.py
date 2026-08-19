@@ -26,8 +26,6 @@ Receipt top-level shape:
   op_tail           dict        — {phase, acted[], skipped[], failed[]}; capability-generic
                                   derived view over D-node tail entries; computed at emit time,
                                   NOT stored independently of the ledger
-  coverage_pointer  str         — repo-relative path to state/coverage/gate-result.json;
-                                  a reference only — receipt does NOT gate on coverage success
   applicable_node_ids  list[str]  — OPTIONAL, additive.  Ordered step-IDs that apply to
                                   this session's disposition, declared once by the
                                   producer (wsc_resolve) off already-resolved state —
@@ -76,6 +74,13 @@ Graceful-absent rules (HARD):
   - op_tail ALWAYS present even when tail did not run: {phase:"<label>", acted:[], skipped:[], failed:[]}
     — absence of the op_tail object reintroduces the "absent vs. not-run" ambiguity
 
+Negative spec — do NOT reintroduce `coverage_pointer`: the review-coverage gate it
+pointed at was killed under K-001 (state/kill-ledger.md), and its artifact path
+state/coverage/gate-result.json no longer exists.  A receipt field naming an
+unproducible path is a false evidence claim, not an inert one.  Receipts written
+before the removal still carry the key and still validate — validate() ignores
+unknown top-level keys.
+
 Spec backlink:
   docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § Design → receipt
 """
@@ -90,9 +95,6 @@ from typing import Any
 
 SCHEMA_VERSION: int = 1
 """Schema version integer — not semver; consistent with session-shape.json convention."""
-
-COVERAGE_GATE_RELPATH: str = "state/coverage/gate-result.json"
-"""Repo-relative path to the coverage gate artifact; used as coverage_pointer value."""
 
 CEREMONY_RECEIPT_DIR: str = "state/ceremony"
 """Repo-relative directory where ceremony receipts are written."""
@@ -294,7 +296,6 @@ def make_receipt(
     scope_mode: str,
     nodes: list[dict[str, Any]] | None = None,
     op_tail: dict[str, Any] | None = None,
-    coverage_pointer: str = COVERAGE_GATE_RELPATH,
     sid: str | None = None,
     applicable_node_ids: list[str] | None = None,
     engine_sha: str | None = None,
@@ -367,7 +368,6 @@ def make_receipt(
         "scope_mode": scope_mode,
         "nodes": node_list,
         "op_tail": tail,
-        "coverage_pointer": coverage_pointer,
     }
     if sid:
         receipt["sid"] = sid
@@ -396,7 +396,6 @@ _REQUIRED_TOP_FIELDS: tuple[str, ...] = (
     "scope_mode",
     "nodes",
     "op_tail",
-    "coverage_pointer",
 )
 
 _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
@@ -498,12 +497,6 @@ def validate(receipt: dict[str, Any]) -> list[str]:
     # --- scope_mode ---
     if not isinstance(receipt["scope_mode"], str):
         errors.append(f"scope_mode must be a string; got {type(receipt['scope_mode']).__name__}")
-
-    # --- coverage_pointer ---
-    if not isinstance(receipt["coverage_pointer"], str):
-        errors.append(
-            f"coverage_pointer must be a string; got {type(receipt['coverage_pointer']).__name__}"
-        )
 
     # --- applicable_node_ids (optional, additive — D1) ---
     if "applicable_node_ids" in receipt:

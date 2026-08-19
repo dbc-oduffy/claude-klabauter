@@ -1675,6 +1675,62 @@ def _resolve_reviewer_attestation(
     return frozenset(admitted), attestation
 
 
+def _attestation_remedy_clause(
+    sha_range: str, own_session_id: str, caller_worktree: Path,
+) -> str:
+    """The tail clause of the single-commit foreign-trailer refusal: name the
+    attestation route only when this commit can actually take it.
+
+    AC1c admits an attested commit only if it sits inside this session's own
+    frozen-diff range (`_own_frozen_diff_shas` — the union of this session's
+    `verdict: pending`, `scope_kind: "diff"` records). The sole producer of
+    those records, `freeze-review-diff.py`'s `_open_pending_trail_record`,
+    writes through this same op supplying no `attestation_dispatch_id`, so it
+    is refused at this very branch for any commit whose trailer names another
+    session. For that population the frozen range cannot come to contain the
+    commit, and printing the attestation remedy names a call that cannot
+    succeed — measured: three inherited commits, three refusals, an empty
+    frozen set (state/bug-backlog/2026-08-19-inherited-chain-commit-review-
+    records-are-unwritable.yaml).
+
+    So: test membership rather than assert it. In the frozen range → the
+    remedy is performable, name it. Outside it → say the record is not
+    writable and name the own-commit `--scope chain` write as the trap it is,
+    since that write SUCCEEDS and discharges nothing, which is the failure
+    this clause exists to stop a reader from walking into.
+
+    Fails toward naming the remedy: an unreadable trail directory or a git
+    failure inside `_own_frozen_diff_shas` returns an empty set, which is
+    indistinguishable here from "genuinely not frozen". A caller told to try
+    a route that then refuses loses one command; a caller told a record is
+    unwritable when it was writable loses the record, so the ambiguous case
+    takes the recoverable side.
+    """
+    range_shas = _resolve_range_shas(sha_range, caller_worktree)
+    frozen_shas = _own_frozen_diff_shas(own_session_id, caller_worktree)
+    reachable = bool(range_shas) and bool(frozen_shas) and range_shas.issubset(frozen_shas)
+    if reachable or range_shas is None:
+        return (
+            "A record naming this commit is admitted when it cites a reviewer "
+            "sidecar whose reviewed_range names it and resolves within that "
+            "dispatch's own frozen review range — supply reviewer_evidence "
+            "(the sidecar path) and attestation_dispatch_id (that dispatch's "
+            "own id in this session's dispatched-agents.txt)."
+        )
+    return (
+        "No review-trail record naming this commit is writable from this "
+        "session. The attestation route (reviewer_evidence + "
+        "attestation_dispatch_id) admits a commit only inside a range this "
+        "session itself froze for review; this commit is outside that range, "
+        "and the freeze path refuses it at this same branch, so it cannot be "
+        "brought inside. Writing an own-commit scope=chain record that names "
+        "this commit in its body is not a substitute: that write succeeds and "
+        "covers nothing, because coverage keys on the record's own sha_range. "
+        "Tracked: state/bug-backlog/2026-08-19-inherited-chain-commit-review-"
+        "records-are-unwritable.yaml."
+    )
+
+
 def _guard_foreign_session_range(
     sha_range: str,
     own_session_id: str,
@@ -2000,12 +2056,7 @@ def _guard_foreign_session_range(
             "ambiguous — its own Session-Id trailer names a different "
             f"session. {_FOREIGN_SESSION_UNDETERMINED_NOTE} "
             "There is no narrower range than one commit, so narrowing "
-            "further is not a performable remedy here. A record naming "
-            "this commit is admitted when it cites a reviewer sidecar "
-            "whose reviewed_range names it and resolves within that "
-            "dispatch's own frozen review range — supply reviewer_evidence "
-            "(the sidecar path) and attestation_dispatch_id (that "
-            "dispatch's own id in this session's dispatched-agents.txt)."
+            f"further is not a performable remedy here. {_attestation_remedy_clause(sha_range, own_session_id, caller_worktree)}"
         )
 
     raise ForeignSessionRangeRefused(

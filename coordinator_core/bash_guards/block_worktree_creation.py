@@ -126,6 +126,15 @@ from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv,
 )
 
+# Held Bash-only deliberately (2026-08-19 subagent-boundary MATCHERS pass):
+# this guard's `if tokens is None: return _evaluate_legacy(cmd)` free-text
+# fallback fails CLOSED on unparseable input, and PowerShell's here-string/
+# backtick-escape shapes defeat the `shlex`-based tokenizer feeding it.
+# Widening MATCHERS before that fallback fails open (or is replaced) ships
+# a live spurious-deny path: a legitimate command that merely mentions
+# `worktree` in a quoted string or commit message would deny for a reason
+# unrelated to what it does. Documented cohort, EM-ruled:
+# docs/reference/guard-tool-name-membership.md § 3.
 CLASS = "hard-deny"
 MATCHERS = ("Bash",)
 PRIORITY = 41

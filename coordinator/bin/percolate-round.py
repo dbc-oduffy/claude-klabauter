@@ -791,38 +791,78 @@ def _gitignored_dest_paths(dest: str, rel_paths: List[str]) -> set:
     return {path for path in result.stdout.split("\0") if path}
 
 
-def _dest_path_exists(dest: str, rel: str) -> bool:
-    """Whether `rel` exists at `dest` in the worktree OR the index -- a
-    deletion-intent for a path absent from both has nothing left to
-    commit. A real, still-uncommitted deletion (the physical file already
-    removed by Step 4's real publish) stays TRACKED in the index until the
-    deletion itself is committed, so `git ls-files --error-unmatch` still
-    reports it as existing -- only a path absent from BOTH worktree and
-    index is treated as already gone.
+# The single-item form (`_dest_path_exists`) was removed -- its only
+# caller was its own one-line delegation to `_dest_paths_exist(dest,
+# [rel])[rel]` (Review: coordinator:code-reviewer amp-review-s6 F4).
+# `_dest_paths_exist` below is the sole entry point; a future single-item
+# caller should call it with a one-element list directly rather than
+# reintroduce the wrapper.
 
-    Fails OPEN, not closed: `git ls-files --error-unmatch` exits `1` only
-    for a confirmed not-tracked path; any other non-zero (not a git repo,
-    dest missing, etc.) is an undetermined probe, not a confirmed absence,
-    and this returns `True` so the caller does not drop a path it could not
-    actually verify is gone."""
-    return _dest_paths_exist(dest, [rel])[rel]
+# Windows `CreateProcess` argv ceiling is ~32KB (measured live at
+# reap-stale-subagent-sidecars.py::_tracked_paths -- 621047 bytes of
+# pathspec argv, 19x over). `git ls-files` has no `--pathspec-from-file`
+# support (verified live there too -- `error: unknown option`), so
+# `_dest_paths_exist` chunks its own `-- <paths>` argv the same way rather
+# than scoping to a directory (unlike `_tracked_paths`, this call needs a
+# per-path verdict, not a subtree membership check, so directory-scoping
+# isn't available here). Kept comfortably under the measured ceiling to
+# leave room for the fixed `git -C <dest> ls-files --error-unmatch --`
+# prefix and per-arg quoting overhead.
+_LS_FILES_ARGV_BYTE_CAP = 28_000
+
+
+def _chunk_paths_by_argv_bytes(
+    paths: List[str], cap: int = _LS_FILES_ARGV_BYTE_CAP
+) -> List[List[str]]:
+    """Split `paths` into argv-sized chunks, each kept under `cap` bytes of
+    UTF-8-encoded path text (a conservative proxy for actual argv bytes,
+    which also carry OS-level quoting/separator overhead). Chunk boundaries
+    never split a single path, and every input path lands in exactly one
+    chunk, in order -- preserving per-path identity for the caller's
+    per-row attribution."""
+    chunks: List[List[str]] = []
+    current: List[str] = []
+    current_bytes = 0
+    for path in paths:
+        path_bytes = len(path.encode("utf-8")) + 1
+        if current and current_bytes + path_bytes > cap:
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(path)
+        current_bytes += path_bytes
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _dest_paths_exist(dest: str, rels: List[str]) -> Dict[str, bool]:
-    """Batched form of `_dest_path_exists` -- one `git ls-files
-    --error-unmatch` spawn for every `rel` still needing a git probe
-    (absent from the worktree/symlink check), rather than one spawn per
-    deletion-intent row. `git ls-files --error-unmatch` evaluates every
-    named pathspec even when some are unmatched (an unmatched entry only
-    ever adds an extra stderr line -- verified live, it never
-    short-circuits the rest), so a single call's stdout is exactly the
-    subset of `rels` still tracked in the index; everything else asked
-    about is confirmed gone from both worktree and index.
+    """Whether each of `rels` exists at `dest` in the worktree OR the
+    index -- a deletion-intent for a path absent from both has nothing
+    left to commit. A real, still-uncommitted deletion (the physical file
+    already removed by Step 4's real publish) stays TRACKED in the index
+    until the deletion itself is committed, so `git ls-files
+    --error-unmatch` still reports it as existing -- only a path absent
+    from BOTH worktree and index is treated as already gone.
 
-    Fails OPEN exactly like the per-item form: a returncode outside
-    `{0, 1}` (not a git repo, dest missing, etc.) is an undetermined probe,
-    and every `rel` in that batch resolves to `True` (kept) rather than
-    being silently dropped."""
+    One `git ls-files --error-unmatch` spawn per argv-sized chunk
+    (§ `_chunk_paths_by_argv_bytes`) of every `rel` still needing a git
+    probe (absent from the worktree/symlink check), rather than one spawn
+    per deletion-intent row.
+    `git ls-files --error-unmatch` evaluates every named pathspec even when
+    some are unmatched (an unmatched entry only ever adds an extra stderr
+    line -- verified live, it never short-circuits the rest), so each
+    chunk's stdout is exactly the subset of that chunk still tracked in the
+    index; everything else asked about is confirmed gone from both
+    worktree and index. Chunk boundaries never affect the result -- each
+    `rel` is written into `result` exactly once, keyed by its own value,
+    so attribution is exact across chunk boundaries.
+
+    Fails OPEN exactly like the per-item form, per chunk: a returncode
+    outside `{0, 1}` for a given chunk (not a git repo, dest missing, etc.)
+    is an undetermined probe for THAT chunk only, and every `rel` in that
+    chunk resolves to `True` (kept) rather than being silently dropped;
+    other chunks are unaffected."""
     result: Dict[str, bool] = {}
     to_probe: List[str] = []
     for rel in rels:
@@ -833,14 +873,17 @@ def _dest_paths_exist(dest: str, rels: List[str]) -> Dict[str, bool]:
             to_probe.append(rel)
     if not to_probe:
         return result
-    probe = _run(["git", "-C", dest, "ls-files", "--error-unmatch", "--"] + to_probe)
-    if probe.returncode not in (0, 1):
-        for rel in to_probe:
-            result[rel] = True
-        return result
-    tracked = set(probe.stdout.splitlines())
+    tracked: set = set()
+    for chunk in _chunk_paths_by_argv_bytes(to_probe, cap=_LS_FILES_ARGV_BYTE_CAP):
+        probe = _run(["git", "-C", dest, "ls-files", "--error-unmatch", "--"] + chunk)
+        if probe.returncode not in (0, 1):
+            for rel in chunk:
+                result[rel] = True
+            continue
+        tracked |= set(probe.stdout.splitlines())
     for rel in to_probe:
-        result[rel] = rel in tracked
+        if rel not in result:
+            result[rel] = rel in tracked
     return result
 
 

@@ -1050,6 +1050,127 @@ class TestPlanTasksSpineDeny:
         )
         assert result is None
 
+    # Review: review-a-write-guard (MAJOR) -- `_cf_plan_tasks_writes_declared`
+    # was registered in `_PLAN_TASKS_CROSS_FIELD_RULES` but this guard never
+    # forwarded `plan_created`, so the rule's own safe-default ("cannot
+    # confirm post-cutoff") stood down unconditionally on every write -- a
+    # hand-edited plan could omit `writes` on an open row and still save
+    # cleanly. Fixed 2026-08-19: `_plan_tasks_spine_errors` now forwards
+    # `frontmatter.get('created')`, matching `check_plan_tasks_source`.
+    #
+    # `writes` is a schema-shape finding, never one of the four UNCONDITIONAL
+    # denies -- like `test_bad_change_kind_*` above, it is silent by default
+    # (the advisory sibling renders it) and surfaces on THIS module only
+    # under COORDINATOR_SCHEMA_STRICT=1.
+
+    _POST_CUTOFF_FRONTMATTER = (
+        "---\ntitle: Test plan\ncreated: 2026-08-19\nauthor: test\nstatus: draft\n---\n\n"
+        "# Plan\n\n## Tasks\n"
+    )
+
+    def _write_and_check_with_frontmatter(self, tmp_path, frontmatter, tasks_block):
+        fp = self._plan_path(tmp_path)
+        fp.write_text(frontmatter, encoding="utf-8")
+        new_content = frontmatter + tasks_block
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path), old_string=frontmatter, new_string=new_content
+        )
+        return guard.check(payload)
+
+    def test_writes_declared_post_cutoff_open_row_missing_writes_warns_under_strict(
+        self, tmp_path, monkeypatch
+    ):
+        """The regression this fix closes: before it, this assertion read
+        None regardless of whether `writes` enforcement actually worked --
+        `_cf_plan_tasks_writes_declared` never fired on this guard at all."""
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: code-edit\n"
+            "  surface: coordinator_core/frontmatter/schema_validate.py\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(
+            tmp_path, self._POST_CUTOFF_FRONTMATTER, tasks_block
+        )
+        assert result is not None
+        reason = _assert_advisory_shape(result)
+        assert "tasks[C1].writes" in reason
+        assert "'writes' is required on a non-deferred open row" in reason
+
+    def test_writes_declared_post_cutoff_open_row_missing_writes_silent_by_default(
+        self, tmp_path
+    ):
+        """Non-strict mode: this guard stays silent (the advisory sibling
+        renders the finding instead) -- mirrors `test_bad_change_kind_
+        silent_by_default` above."""
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: code-edit\n"
+            "  surface: coordinator_core/frontmatter/schema_validate.py\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(
+            tmp_path, self._POST_CUTOFF_FRONTMATTER, tasks_block
+        )
+        assert result is None
+
+    def test_writes_declared_pre_cutoff_open_row_missing_writes_passes_even_under_strict(
+        self, tmp_path, monkeypatch
+    ):
+        """Retro-safety: a plan `created` before the 2026-08-19 cutoff is
+        never enforced -- `self._FRONTMATTER` carries `created: 2026-07-29`."""
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: code-edit\n"
+            "  surface: coordinator_core/frontmatter/schema_validate.py\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(tmp_path, self._FRONTMATTER, tasks_block)
+        assert result is None
+
+    def test_writes_declared_epistemic_premise_carveout_passes_even_under_strict(
+        self, tmp_path, monkeypatch
+    ):
+        """A row gated on a predecessor's epistemic-premise verdict has no
+        interface to declare `writes` against yet -- the carve-out must
+        survive the round trip through this guard, not just the rule in
+        isolation (the entire point of this regression: unit-testing
+        `_cf_plan_tasks_writes_declared` directly proved nothing about
+        whether the guard actually forwards `plan_created` to it)."""
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        tasks_block = (
+            "```yaml plan-tasks\n"
+            "- id: C0\n"
+            "  title: Decide whether C1 is needed\n"
+            "  change_kind: code-edit\n"
+            "  surface: coordinator_core/frontmatter/schema_validate.py\n"
+            "- id: C1\n"
+            "  title: Do a thing, if C0 says so\n"
+            "  change_kind: code-edit\n"
+            "  surface: coordinator_core/frontmatter/schema_validate.py\n"
+            "  depends_on:\n"
+            "    - chunk: C0\n"
+            "      gate_kind: epistemic-premise\n"
+            "```\n"
+        )
+        result = self._write_and_check_with_frontmatter(
+            tmp_path, self._POST_CUTOFF_FRONTMATTER, tasks_block
+        )
+        # C0 has no depends_on and no writes -- it must still fire; only C1's
+        # carve-out is under test.
+        assert result is not None
+        reason = _assert_advisory_shape(result)
+        assert "tasks[C0].writes" in reason
+        assert "tasks[C1]" not in reason
+
 
 class TestEveryFiringResultIsDenyOrAdvisoryShaped:
     """This module is CLASS=hard-deny; the engine's hard-deny phase returns

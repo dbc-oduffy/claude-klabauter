@@ -35,6 +35,13 @@ Negative-spec:
       real divergence back into `apply_base`'s parameters instead.
     - Do NOT trust a caller-supplied decision object as the mutation plan —
       `apply()` recomputes `brief()` itself.
+    - Do NOT clean up a failed cherry-pick with `git cherry-pick --abort`,
+      or `--quit` followed by a tree-wide `git reset --hard HEAD` / `git
+      checkout -- .` — `repo_root` is a SHARED working tree serving
+      50-70 concurrent sessions on this machine; any of those destroys
+      every peer session's uncommitted work across the whole repo, not
+      just this cherry-pick's damage. See `_clean_cherry_pick_conflict`,
+      which scopes the restore to exactly the paths git reports unmerged.
 """
 from __future__ import annotations
 
@@ -124,6 +131,48 @@ def _dispatch_delete_only(args: list[str], repo_root: Path) -> dict[str, Any]:
     return {"cli": "delete-only", **detail}
 
 
+def _clean_cherry_pick_conflict(repo_root: Path) -> None:
+    """On a failed multi-commit cherry-pick, restore ONLY the conflicted
+    paths to `HEAD` before clearing the sequencer with `--quit`.
+
+    `--quit` (per `git-cherry-pick(1)`) forgets the sequencer bookkeeping
+    ONLY — it does not touch the index or the working tree. Left alone, the
+    conflicted paths stay as unmerged index entries with live `<<<<<<<`
+    conflict markers written into the files on disk.
+
+    NEGATIVE-SPEC — do NOT replace this with `git cherry-pick --abort`, or
+    `--quit` followed by a tree-wide `git reset --hard HEAD` / `git checkout
+    -- .`. `repo_root` is a SHARED working tree serving 50-70 concurrent
+    sessions on this machine; any of those would discard every peer
+    session's uncommitted work across the ENTIRE repo, not just this
+    cherry-pick's damage. Scoping the restore to exactly the paths git
+    reports as unmerged is safe precisely because git already destroyed
+    those files' content with conflict markers — nothing further is lost by
+    resetting them to HEAD — while every other file, where peer sessions'
+    real uncommitted work lives, is never touched.
+
+    Order: enumerate + restore the conflicted paths FIRST, `--quit` second.
+    The sequencer state (`.git/sequencer/`) is independent bookkeeping from
+    the index/working-tree state these paths carry, so reading the unmerged
+    set before clearing it removes any risk of the enumeration racing its
+    own cleanup.
+    """
+    unmerged_proc = _run_git(["diff", "--name-only", "--diff-filter=U", "-z"], repo_root)
+    _fail("diff --diff-filter=U", unmerged_proc)
+    unmerged_paths = [p for p in unmerged_proc.stdout.split("\0") if p]
+    if unmerged_paths:
+        restore_proc = _run_git(["checkout", "HEAD", "--", *unmerged_paths], repo_root)
+        _fail("checkout-conflict-cleanup", restore_proc)
+    quit_proc = _run_git(["cherry-pick", "--quit"], repo_root)
+    if quit_proc.returncode != 0:
+        raise RuntimeError(
+            "cherry-pick --quit: exited "
+            f"{quit_proc.returncode}: "
+            f"{quit_proc.stderr.strip() or quit_proc.stdout.strip() or '<no output>'} "
+            "— sequencer left in place; clear it by hand with `git cherry-pick --quit`"
+        )
+
+
 def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
     name, ref = args[0], args[1]
     remote = len(args) > 2 and args[2] == "origin"
@@ -142,11 +191,10 @@ def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[s
             # A multi-commit cherry-pick that stops leaves a `.git/sequencer`
             # directory the former one-sha-per-spawn form never created, and a
             # repo left mid-sequence refuses the next cherry-pick in ANY session
-            # sharing this tree. `--quit` clears the sequencer while keeping the
-            # commits already applied, which is exactly the state the per-sha
-            # loop left behind. `--abort` would roll those back and is NOT the
-            # equivalent.
-            _run_git(["cherry-pick", "--quit"], repo_root)
+            # sharing this tree. See `_clean_cherry_pick_conflict` for the
+            # scoped cleanup this requires and why a tree-wide reset/abort is
+            # forbidden here.
+            _clean_cherry_pick_conflict(repo_root)
         _fail("cherry-pick", proc)
     delete_detail = _delete_branch(name, remote, repo_root)
     return {"cli": "cherry-pick-and-delete", "commits": shas, **delete_detail}

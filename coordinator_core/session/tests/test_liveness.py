@@ -61,7 +61,7 @@ import pytest
 from coordinator_core.session import core, liveness, scope
 from coordinator_core.session import harness_registry
 from coordinator_core.pickup_assemble import compute_competing_claim
-from coordinator_core.pickup_assemble import holder_evidence as holder_evidence_mod
+from coordinator_core.session import holder_evidence as holder_evidence_mod
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --

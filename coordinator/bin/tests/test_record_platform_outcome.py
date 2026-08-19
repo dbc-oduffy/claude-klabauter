@@ -283,6 +283,15 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write("import sys\nsys.exit(1)\n")
     env["MACHINE_LOCAL_IMPL"] = stub
+    # CLAUDE_HOME must also be isolated: doe_root()'s codename-free rungs
+    # (`.doe-root` pointer file, marketplace-cache, flat plugin layout) all
+    # derive their candidate paths from claude_home() independent of the
+    # MACHINE_LOCAL_IMPL stub above. Left ambient, a real dev box's
+    # ~/.claude/.doe-root (or <settings-home>/machine-local/.doe-root)
+    # resolves the real DoE-claude clone and defeats the "fully unresolvable"
+    # premise this test exists to cover, exactly like the REPO_DOE_CLAUDE
+    # leak the comment above already guards against.
+    env["CLAUDE_HOME"] = str(tmp_path / "no-such-claude-home")
     result = subprocess.run(
         [
             sys.executable, str(_CLI_PATH),

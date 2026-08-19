@@ -201,12 +201,127 @@ def test_moves_resync_argv_is_index_only_never_worktree_writing():
     assert "read-tree" not in argv
 
 
+def test_moves_resync_batches_multiple_items_into_one_call():
+    """Review finding 1 (2026-08-19) — N>1 argv-shape coverage. The
+    pre-batch implementation issued one `git restore --staged -- src dst`
+    call PER move (3 calls for 3 moves here); this asserts exactly ONE call
+    whose argv interleaves each move's src/dst pair in input order. Fails
+    against the pre-batch loop, which would produce `len(fake.calls) == 3`
+    with each argv holding a single src/dst pair.
+    """
+    worktree_root = Path("/repo")
+    moves = [
+        Move(src=worktree_root / "a-src.md", dst=worktree_root / "a-dst.md", candidate_id="a.md"),
+        Move(src=worktree_root / "b-src.md", dst=worktree_root / "b-dst.md", candidate_id="b.md"),
+        Move(src=worktree_root / "c-src.md", dst=worktree_root / "c-dst.md", candidate_id="c.md"),
+    ]
+    acted_by_id = {
+        m.candidate_id: {"id": m.candidate_id, "archived": True} for m in moves
+    }
+    fake = _FakeRunGit()
+
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) == 1
+    argv = fake.calls[0]["argv"]
+    expected = ["git", "restore", "--staged", "--"]
+    for m in moves:
+        expected.append(str(m.src))
+        expected.append(str(m.dst))
+    assert argv == expected
+    for m in moves:
+        assert "index_resync_failed" not in acted_by_id[m.candidate_id]
+
+
+def test_moves_resync_batch_failure_annotates_every_item():
+    """Review finding 1 (2026-08-19) — pins the docstring's claim ("A batch
+    failure is reported against every item in the batch"). With a
+    `_FakeRunGit` scripted to fail exactly ONE call, the pre-batch per-move
+    loop would fail only the FIRST move's call and succeed the rest (the
+    fake's results list is consumed one entry per invocation, returning
+    success once exhausted) — so under the pre-batch code only a.md would
+    carry `index_resync_failed`. The batched implementation issues one call
+    for the whole batch, so that one failure must annotate all three.
+    """
+    worktree_root = Path("/repo")
+    moves = [
+        Move(src=worktree_root / "a-src.md", dst=worktree_root / "a-dst.md", candidate_id="a.md"),
+        Move(src=worktree_root / "b-src.md", dst=worktree_root / "b-dst.md", candidate_id="b.md"),
+        Move(src=worktree_root / "c-src.md", dst=worktree_root / "c-dst.md", candidate_id="c.md"),
+    ]
+    acted_by_id = {
+        m.candidate_id: {"id": m.candidate_id, "archived": True} for m in moves
+    }
+    fake = _FakeRunGit(results=["index.lock still held after retries"])
+
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) == 1
+    for m in moves:
+        assert acted_by_id[m.candidate_id]["index_resync_failed"] == (
+            "restore-staged-failed: index.lock still held after retries"
+        )
+
+
+def test_moves_resync_rename_chain_within_one_batch_not_deduped():
+    """Review finding 1 (2026-08-19) — duplicate/rename-chain coverage: one
+    move's dst equals another move's src within the SAME batch (a -> b,
+    b -> c). Asserts both occurrences of the shared path `b` survive into
+    the single batched argv (as move1's dst and move2's src) rather than
+    being collapsed/deduped, and that the call is still issued as ONE
+    invocation covering both moves. Fails against the pre-batch loop, which
+    would issue two separate single-pair calls instead of one call
+    containing both occurrences of `b`.
+    """
+    worktree_root = Path("/repo")
+    path_a = worktree_root / "a.md"
+    path_b = worktree_root / "b.md"
+    path_c = worktree_root / "c.md"
+    move1 = Move(src=path_a, dst=path_b, candidate_id="chain-1")
+    move2 = Move(src=path_b, dst=path_c, candidate_id="chain-2")
+    acted_by_id = {
+        move1.candidate_id: {"id": move1.candidate_id, "archived": True},
+        move2.candidate_id: {"id": move2.candidate_id, "archived": True},
+    }
+    fake = _FakeRunGit()
+
+    _run(
+        _resync_main_index_for_moves(
+            [move1, move2], acted_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) == 1
+    argv = fake.calls[0]["argv"]
+    assert argv == ["git", "restore", "--staged", "--", str(path_a), str(path_b), str(path_b), str(path_c)]
+    assert argv.count(str(path_b)) == 2
+    for cid in acted_by_id:
+        assert "index_resync_failed" not in acted_by_id[cid]
+
+
 # ---------------------------------------------------------------------------
 # Part 1 — spawn-free fakes: _resync_main_index_for_reaps
 # ---------------------------------------------------------------------------
 
 
-def test_reaps_resync_issues_one_remove_call_per_path():
+def test_reaps_resync_single_path_issues_one_remove_call():
+    """Single-item case only. Renamed from
+    `test_reaps_resync_issues_one_remove_call_per_path` (review finding 1,
+    2026-08-19 integration): the old name implied per-path call-issuing
+    behavior, but this test's assertion (len(calls) == 1 for a ONE-path
+    input) is true both before and after the C4 batching change — it does
+    not exercise the batching this module now does. See
+    `test_reaps_resync_batches_multiple_paths_into_one_call` below for the
+    N>1 coverage that actually distinguishes batched from per-item.
+    """
     worktree_root = Path("/repo")
     path = worktree_root / "state" / "handoffs" / "b.md"
     candidate_id = "state/handoffs/b.md"
@@ -223,6 +338,77 @@ def test_reaps_resync_issues_one_remove_call_per_path():
     argv = fake.calls[0]["argv"]
     assert argv == ["git", "update-index", "--remove", "--", str(path)]
     assert "index_resync_failed" not in reaped_by_id[candidate_id]
+
+
+def test_reaps_resync_batches_multiple_paths_into_one_call():
+    """Review finding 1 (2026-08-19) — N>1 argv-shape coverage. The
+    pre-batch implementation issued one `git update-index --remove --
+    <path>` call PER path (3 calls for 3 paths here); this asserts exactly
+    ONE call whose argv is the concatenated path list in input order. Fails
+    against the pre-batch loop, which would produce `len(fake.calls) == 3`
+    with each argv holding a single path.
+    """
+    worktree_root = Path("/repo")
+    paths = [
+        worktree_root / "state" / "handoffs" / "b1.md",
+        worktree_root / "state" / "handoffs" / "b2.md",
+        worktree_root / "state" / "handoffs" / "b3.md",
+    ]
+    reaped_by_id = {
+        "state/handoffs/b1.md": {"id": "state/handoffs/b1.md", "reaped": True},
+        "state/handoffs/b2.md": {"id": "state/handoffs/b2.md", "reaped": True},
+        "state/handoffs/b3.md": {"id": "state/handoffs/b3.md", "reaped": True},
+    }
+    fake = _FakeRunGit()
+
+    _run(
+        _resync_main_index_for_reaps(
+            paths, reaped_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) == 1
+    argv = fake.calls[0]["argv"]
+    assert argv == ["git", "update-index", "--remove", "--"] + [str(p) for p in paths]
+    for candidate_id in reaped_by_id:
+        assert "index_resync_failed" not in reaped_by_id[candidate_id]
+
+
+def test_reaps_resync_batch_failure_annotates_every_item():
+    """Review finding 1 (2026-08-19) — pins the docstring's claim ("A batch
+    failure is reported against every relevant item") for the reaps side.
+    With a `_FakeRunGit` scripted to fail exactly ONE call, the pre-batch
+    per-path loop would fail only the FIRST path's call and succeed the
+    rest (results list is consumed one entry per invocation, and the fake
+    returns success once exhausted) — so under the pre-batch code only
+    b1.md would carry `index_resync_failed`. The batched implementation
+    issues one call for the whole batch, so that one failure must annotate
+    all three.
+    """
+    worktree_root = Path("/repo")
+    paths = [
+        worktree_root / "state" / "handoffs" / "b1.md",
+        worktree_root / "state" / "handoffs" / "b2.md",
+        worktree_root / "state" / "handoffs" / "b3.md",
+    ]
+    reaped_by_id = {
+        "state/handoffs/b1.md": {"id": "state/handoffs/b1.md", "reaped": True},
+        "state/handoffs/b2.md": {"id": "state/handoffs/b2.md", "reaped": True},
+        "state/handoffs/b3.md": {"id": "state/handoffs/b3.md", "reaped": True},
+    }
+    fake = _FakeRunGit(results=["index.lock still held after retries"])
+
+    _run(
+        _resync_main_index_for_reaps(
+            paths, reaped_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) == 1
+    for candidate_id in reaped_by_id:
+        assert reaped_by_id[candidate_id]["index_resync_failed"] == (
+            "remove-failed: index.lock still held after retries"
+        )
 
 
 def test_reaps_resync_annotates_index_resync_failed_on_persistent_failure():
@@ -345,9 +531,11 @@ def test_restore_staged_on_head_absent_path_removes_index_entry_real_git(tmp_pat
     throwaway-repo check (referenced by the plan) is now a permanent test
     for, rather than a re-discovered answer.
 
-    This is the ONLY test in this module — and the only one in the AC5
-    coverage this chunk builds — that spawns real git. Every other test
-    above fakes the `run_git` seam.
+    This is the first of TWO tests in this module that spawn real git (see
+    `test_restore_staged_batch_aborts_atomically_on_one_bad_pathspec_real_git`
+    below, added 2026-08-19 for review finding 2 — the AC5 coverage this
+    chunk builds is unchanged, the batch-atomicity coverage is additional).
+    Every other test above fakes the `run_git` seam.
     """
     import subprocess
 
@@ -398,6 +586,66 @@ def test_restore_staged_on_head_absent_path_removes_index_entry_real_git(tmp_pat
             assert staged_marker in (" ", "?"), (
                 f"expected no staged marker for tracked.md, got {line!r}"
             )
+
+
+def test_restore_staged_batch_aborts_atomically_on_one_bad_pathspec_real_git(tmp_path):
+    """Review finding 2 (2026-08-19) — pins the atomicity assumption the
+    accepted tradeoff (batch failure marks every item `index_resync_failed`
+    even though only one candidate was actually malformed) rests on, with
+    REAL git rather than an inferred lockfile-based-write argument. Builds
+    ONE genuinely-residue path (`tracked.md`, same shape as the test above)
+    plus one pathspec that matches nothing in HEAD or the index at all
+    (`nonexistent.md` — never added, never committed: not the normal
+    "just-archived, absent-from-HEAD" case that restores cleanly). Runs a
+    SINGLE `git restore --staged -- tracked.md nonexistent.md` call — the
+    batched shape `_resync_main_index_for_moves` issues — and asserts BOTH:
+    (a) the call fails (nonzero rc, "did not match any file(s)" in stderr),
+    and (b) tracked.md's staged residue is UNCHANGED afterward — i.e. the
+    one bad pathspec aborted the WHOLE batch rather than the good pathspec
+    still landing. This is the real-git evidence Finding 2 says was
+    previously only inferred from restore/update-index being lockfile-based
+    atomic writes.
+    """
+    import subprocess
+
+    root = real_git_repo(tmp_path)
+
+    tracked = root / "tracked.md"
+    tracked.write_text("tracked content\n", encoding="utf-8")
+    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add tracked.md"], cwd=str(root), check=True,
+    )
+    subprocess.run(["git", "rm", "-q", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "remove tracked.md"], cwd=str(root), check=True,
+    )
+    tracked.write_text("resurrected on disk\n", encoding="utf-8")
+    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True)
+
+    status_before = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=str(root), capture_output=True, text=True, check=True,
+    ).stdout
+    assert "tracked.md" in status_before
+
+    result = subprocess.run(
+        ["git", "restore", "--staged", "--", "tracked.md", "nonexistent.md"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "did not match any file" in result.stderr
+
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=str(root), capture_output=True, text=True, check=True,
+    ).stdout
+    # The batch aborted BEFORE writing anything: tracked.md's staged residue
+    # from before the call is still present, byte-for-byte, rather than
+    # having been (correctly) resolved by the half of the batch that was
+    # well-formed. This is the N-1-healthy-items-stranded shape Finding 2
+    # names — verified here, not just argued.
+    assert status_before == status_after
 
 
 # ---------------------------------------------------------------------------

@@ -259,6 +259,17 @@ _WATCHDOG_CEILING_SECS_DEFAULT = 300
 # 60s cap per delete — matches bash `cs_timeout 60 -- rm -rf ...`.
 _DELETE_TIMEOUT_SECS = 60
 
+# Batch-delete chunk size — bounds a single blocking `rm -rf` call's worst
+# case to _DELETE_TIMEOUT_SECS * this many targets (20 min at the defaults
+# above), regardless of how large the overall batch is. Review finding
+# (amp-s1 #1): an unchunked N-scaled timeout (60s * N in one blocking call)
+# put no ceiling on box-hazard liveness for a box running 50-70 concurrent
+# LLM sessions — a batch in the hundreds could block minutes-to-hours with
+# no watchdog visibility into the deletion phase. Chunking keeps every
+# subprocess call's worst case fixed and gives later chunks a chance to run
+# even if one chunk stalls, without changing per-item outcome attribution.
+_DELETE_BATCH_CHUNK_SIZE = 20
+
 EmitFn = Callable[[dict], None]
 
 
@@ -499,10 +510,17 @@ def _delete_paths_batch(targets: Sequence[Path]) -> dict:
     its own `exists()` check below, exactly like the single-item helper,
     never inferred from the batch call's exit status.
 
-    Timeout is `_DELETE_TIMEOUT_SECS * len(targets)`, preserving the
-    per-target 60s floor the single-item helper gives every delete -- a
-    flat 60s ceiling on N targets would starve a large, legitimately-slow
-    batch of the budget any one of its members would individually have had.
+    Targets are processed in fixed-size chunks of `_DELETE_BATCH_CHUNK_SIZE`,
+    each issued as its own `rm -rf` subprocess call timed out at
+    `_DELETE_TIMEOUT_SECS * len(chunk)` -- preserving the per-target 60s
+    floor the single-item helper gives every delete (a flat 60s ceiling on N
+    targets would starve a large, legitimately-slow batch of the budget any
+    one of its members would individually have had) while bounding any one
+    blocking call's worst case to a fixed ceiling instead of scaling
+    unbounded with the whole batch's size (review finding amp-s1 #1: a
+    single N-scaled call had no ceiling visible to `_Watchdog`, which only
+    bounds the collection phase, not deletion). A chunk that times out or
+    errors does not stop later chunks from being attempted.
 
     Returns {str(target): confirmed_gone_bool} for every entry in `targets`.
     """
@@ -514,16 +532,23 @@ def _delete_paths_batch(targets: Sequence[Path]) -> dict:
         # identical stderr message on failure, and keeps `_delete_path`
         # itself as the seam a caller/test mocks for the N==1 case.
         return {str(targets[0]): _delete_path(targets[0])}
-    try:
-        subprocess.run(
-            ["rm", "-rf"] + [str(t) for t in targets],
-            timeout=_DELETE_TIMEOUT_SECS * len(targets),
-            capture_output=True,
-            **no_console_creationflags(),
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        print(f"_delete_paths_batch: rm -rf failed for {len(targets)} target(s): {sys.exc_info()[1]}", file=sys.stderr)
-    return {str(t): not t.exists() for t in targets}
+    results: dict = {}
+    for start in range(0, len(targets), _DELETE_BATCH_CHUNK_SIZE):
+        chunk = targets[start:start + _DELETE_BATCH_CHUNK_SIZE]
+        try:
+            subprocess.run(
+                ["rm", "-rf"] + [str(t) for t in chunk],
+                timeout=_DELETE_TIMEOUT_SECS * len(chunk),
+                capture_output=True,
+                **no_console_creationflags(),
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            print(f"_delete_paths_batch: rm -rf failed for {len(chunk)} target(s): {sys.exc_info()[1]}", file=sys.stderr)
+        # Outcome is decided by post-hoc existence per target, never by the
+        # chunk subprocess's aggregate returncode or whether it raised --
+        # same contract as `_delete_path`, applied per chunk member.
+        results.update({str(t): not t.exists() for t in chunk})
+    return results
 
 
 def _delete_file(target: Path) -> bool:

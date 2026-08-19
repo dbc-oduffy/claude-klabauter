@@ -777,6 +777,96 @@ def test_defender_offer_skips_cleanly_on_non_windows_host(stub_env, monkeypatch)
     assert rc == 0
 
 
+def test_defender_offer_batches_single_add_mppreference_call(monkeypatch):
+    """Regression for the s4 batching commit (e527554b8): one
+    `Add-MpPreference -ExclusionProcess (...)` spawn for every resolved
+    tool target, not one per target. Calls `_defender_offer` directly
+    (not through `maximalist.run`) so the consent/admin/which plumbing can
+    be stubbed precisely.
+
+    Fails against the pre-batch per-target loop: that shape called
+    `_run`/subprocess once per target (3 calls here, each with a single
+    path baked into its own `-Command` string), so both the call-count
+    assertion and the single-batched-`-Command`-string assertion below
+    would fail on it.
+    """
+    monkeypatch.setattr(maximalist, "_is_windows_host", lambda: True)
+
+    def fake_which(name):
+        return {
+            "powershell.exe": "fake-powershell-path",
+            "bash": "fake-bash-path",
+            "git": "fake-git-path",
+            "sh": "fake-sh-path",
+        }.get(name)
+
+    monkeypatch.setattr(maximalist.shutil, "which", fake_which)
+    # Admin-check + no cygpath on PATH -> targets resolve straight from `which`.
+    monkeypatch.setattr(
+        maximalist.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="True\n"),
+    )
+    monkeypatch.setattr(maximalist.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "y")
+
+    run_calls = []
+
+    def fake_run(cmd, env=None):
+        run_calls.append((list(cmd), dict(env) if env else None))
+        return 0
+
+    monkeypatch.setattr(maximalist, "_run", fake_run)
+
+    orch = maximalist._Orchestrator()
+    maximalist._defender_offer(check_only=False, non_interactive=False, orch=orch)
+
+    assert len(run_calls) == 1, f"expected one batched Add-MpPreference spawn, got {run_calls}"
+    cmd, env = run_calls[0]
+    assert cmd[-1] == 'Add-MpPreference -ExclusionProcess ($env:EXCL_PATHS -split "`n")'
+    assert env["EXCL_PATHS"].split("\n") == [
+        "fake-bash-path",
+        "fake-git-path",
+        "fake-sh-path",
+    ]
+    assert orch.failed is False
+
+
+def test_defender_offer_no_targets_never_calls_add_mppreference(monkeypatch):
+    """Empty-input guard: when `which` resolves none of bash/git/sh, the
+    function must return before ever spawning `Add-MpPreference` -- an
+    empty `-ExclusionProcess` array would be a no-op at best, and this
+    pins that the batch call is gated on a non-empty target list rather
+    than fired unconditionally after the loop.
+
+    Note (per-report): unlike the test above, this one does NOT
+    discriminate against the pre-batch per-target loop -- an empty
+    `targets` list makes a `for t in targets:` loop run zero times either
+    way, so both shapes pass it. Kept anyway because it pins a real
+    safety guard the review flagged as load-bearing; the batching
+    regression itself is covered by the test above.
+    """
+    monkeypatch.setattr(maximalist, "_is_windows_host", lambda: True)
+    monkeypatch.setattr(
+        maximalist.shutil,
+        "which",
+        lambda name: "fake-powershell-path" if name == "powershell.exe" else None,
+    )
+    monkeypatch.setattr(
+        maximalist.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="True\n"),
+    )
+
+    run_calls = []
+    monkeypatch.setattr(maximalist, "_run", lambda *a, **kw: run_calls.append((a, kw)) or 0)
+
+    orch = maximalist._Orchestrator()
+    maximalist._defender_offer(check_only=False, non_interactive=False, orch=orch)
+
+    assert run_calls == []
+
+
 # ---------------------------------------------------------------------------
 # Step 3.5c -- gen-settings-hooks (DR-059 bash kill, 2026-07-20)
 #

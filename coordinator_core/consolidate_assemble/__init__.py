@@ -7,8 +7,9 @@ categorization (`git config user.email`, `git branch -a`,
 `git log -1 --format=%ae`), worktree enumeration + reachability
 categorization (`git worktree list --porcelain`, dirty check), unique-commit
 computation (`git log cur..stale`), and inspection data-gather (one batched
-`git show --stat <sha>...` per stale branch, never one spawn per commit —
-see `inspect_commits`) — computed ONCE here rather than re-derived by the EM
+`git show --stat <sha>...` across every stale branch's shas GLOBALLY, never
+one spawn per branch and never one per commit — see `inspect_commits`) —
+computed ONCE here rather than re-derived by the EM
 reading raw git output on every invocation. Returns the eight-key decision
 object (`artifact`/`preflight`/`gates`/`directives`/`judgment_points`/
 `decisions`/`narration`/`next_move`) per the Tier-B contract; every mutating
@@ -46,11 +47,12 @@ Negative-spec:
       `my_email` — such entries are reported in `gates.branches`/
       `gates.worktrees` with `category: "others"` and never appear in
       `directives[]` or `judgment_points[]`.
-    - Do NOT re-introduce a per-commit `git show` — the inspection gather is
-      one spawn per stale branch, not `unique_commits × ~100ms`
+    - Do NOT re-introduce a per-commit OR per-branch `git show` — the
+      inspection gather is one spawn total, across every stale branch's
+      shas, not `unique_commits × ~100ms` or `stale_branches × ~100ms`
       (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`
-      graduated this site off `_KNOWN_SITES`; a per-item reintroduction
-      fails that gate).
+      graduated this site off `_KNOWN_SITES`; a per-item or per-branch
+      reintroduction fails that gate).
     - Do NOT shell out with a caller-derived string — every git invocation
       here is a literal argv list through the injected `run_git` callable,
       never a shell string built from a branch/path name.
@@ -147,6 +149,11 @@ def list_branches(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
 
 
 def tip_author(run_git: RunGit, repo_root: Path, ref: str) -> str:
+    """One call per ref by design: `git log -1 --format=%ae <ref>` resolves
+    against a single tip commit, and there is no batch form that returns a
+    per-ref author map in one invocation. `--no-walk=unsorted --format=%ae`
+    across multiple refs would still need per-ref demultiplexing of the
+    output, not a genuine collapse."""
     proc = run_git(["log", "-1", "--format=%ae", ref], repo_root)
     return proc.stdout.strip()
 
@@ -226,6 +233,12 @@ def branch_reachable(run_git: RunGit, repo_root: Path, ref: str, target: str) ->
 
 
 def unique_commits(run_git: RunGit, repo_root: Path, current: str, stale_ref: str) -> list[str]:
+    """One call per stale branch by design: `git rev-list a..b c..d` computes
+    `reachable({b, d}) \\ reachable({a, c})`, the union's exclusion against
+    the union's reachable set, not a union of independent per-range
+    subtractions. A naive multi-branch batch would silently misattribute
+    commits across branches, so each `current..stale_ref` range stays its
+    own invocation."""
     proc = run_git(["log", "--oneline", f"{current}..{stale_ref}"], repo_root)
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
@@ -244,8 +257,20 @@ def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[s
 
     A git spawn on Windows costs ~100ms (DoE memo
     `cross-repo/inbox/2026-08-08-doe-claude-em-engine-side-git-spawn-cost.md`,
-    7-rep median), so the per-commit shape cost `unique_commits × ~100ms` on
-    every consolidation.
+    7-rep median), so a per-commit shape would cost `unique_commits ×
+    ~100ms`, and a per-branch shape `stale_branches × ~100ms`, on every
+    consolidation.
+
+    Called exactly ONCE per `brief()` invocation, across the union of every
+    stale branch's shas — not once per branch and not once per commit.
+    `test_inspection_gather_is_one_show_spawn_for_all_branches` pins
+    `len(show_calls) == 1` regardless of stale-branch count. Per-branch
+    attribution of the result survives the collapse because a commit's own
+    `git show --stat` block is a pure function of that commit — identical
+    whether it rides alongside one branch's shas or three branches' shas in
+    the same argv — so `brief()`'s caller keys the shared result dict by sha
+    per branch rather than needing this function to know about branches at
+    all. See `brief()`'s call site for the dedup-then-fan-out shape.
     """
     if not shas:
         return {}
@@ -300,6 +325,17 @@ def brief(
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
 
+    # Two passes: gather every stale branch's unique-commit shas first, then
+    # one GLOBAL `inspect_commits` call across the union of all of them
+    # (see that function's docstring for why a commit's `git show --stat`
+    # block is safe to key by sha alone, independent of which branch's loop
+    # iteration it was collected from). This trades "one spawn per stale
+    # branch" for "one spawn total" — see
+    # `test_inspection_gather_is_one_show_spawn_for_all_branches` for the
+    # pinned invariant and its attribution argument.
+    stale_branches: list[dict[str, Any]] = []
+    all_shas: list[str] = []
+
     for entry in branch_entries:
         name, ref = entry["name"], entry["ref"]
         if name == current or (main_branch is not None and name == main_branch):
@@ -317,6 +353,23 @@ def brief(
             {**entry, "tip_author": author, "category": "mine-stale", "unique_commit_count": len(commits)}
         )
 
+        shas = [line.split(" ", 1)[0] for line in commits]
+        stale_branches.append({"entry": entry, "name": name, "commits": commits, "shas": shas})
+        all_shas.extend(shas)
+
+    # Dedup preserving first-encounter order: the same sha can legitimately
+    # be reachable from more than one stale branch (both diverged from
+    # `current` and share a commit neither has in common with it) — that is
+    # not an attribution hazard, because a commit's own `git show --stat`
+    # block is identical regardless of which branch's argv it rides in on,
+    # so every branch below just looks its own shas up in the one shared
+    # result dict.
+    global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
+
+    for stale in stale_branches:
+        entry, name, commits, shas = stale["entry"], stale["name"], stale["commits"], stale["shas"]
+        ref = entry["ref"]
+
         delete_directive_id = f"d-delete-{name}"
         if not commits:
             directives.append(
@@ -330,9 +383,7 @@ def brief(
             )
             continue
 
-        shas = [line.split(" ", 1)[0] for line in commits]
-        stats = inspect_commits(run_git, repo_root, shas)
-        inspections = [{"sha": sha, "stat": stats.get(sha, "")} for sha in shas]
+        inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in shas]
         jp_id = f"j-absorb-{name}"
         absorb_directive_id = f"d-absorb-{name}"
         absorb_cli = _cherry_pick_or_merge_cli(len(commits))
@@ -388,13 +439,17 @@ def brief(
             continue
 
         # `branch_reachable` and `worktree_is_dirty` stay per-item here.
-        # `branch_reachable`'s only batch-capable primitive
-        # (`git branch --merged <target>`) is a different argv shape than
-        # `test_consolidate_assemble.py`'s fixture `run_git` recognizes, and
-        # that file is outside this chunk's scope. `worktree_is_dirty` has
-        # no batch form at all: `git status --porcelain` reads one working
-        # directory's state, and each worktree is its own separate tree — no
-        # single git invocation reports every worktree's dirty state at once.
+        # `branch_reachable`'s only batch-capable primitive is `git branch
+        # --merged <target>` (a full-listing form, distinct from the
+        # `merge-base --is-ancestor` single-ref call made below); it needs a
+        # parse path this module does not have yet, and
+        # `test_consolidate_assemble.py`'s fixture `run_git` now rejects that
+        # argv shape outright rather than modeling it — both are fixture
+        # debt outside this chunk's scope, not a fixture-modeled wall.
+        # `worktree_is_dirty` has no batch form at all: `git status
+        # --porcelain` reads one working directory's state, and each
+        # worktree is its own separate tree — no single git invocation
+        # reports every worktree's dirty state at once.
         reachable = branch_reachable(run_git, repo_root, branch_name, main_branch or current)
         dirty_probe = worktree_is_dirty(run_git, wt_path)
         # DR-319 posture, applied at the call site: a degraded probe is

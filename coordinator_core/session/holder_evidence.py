@@ -1,5 +1,5 @@
 """
-coordinator_core.pickup_assemble.holder_evidence — decidable evidence about
+coordinator_core.session.holder_evidence — decidable evidence about
 WHAT a claim/handoff holder is actually doing, not merely THAT it is live.
 
 Purpose: `compute_claim_grant`/`compute_competing_claim` (`pickup_assemble/
@@ -44,6 +44,16 @@ not survive the re-point (see `_claim_scope_overlap`'s docstring).
 
 Spec backlink: pln-pickup-as-a-code-computed-deci-7394dc,
 pln-trace-a-claim-back-to-its-sess-25ae79 (C3)
+
+Relocated (2026-08-19, docs/plans/2026-08-19-fleet-work-state-who-holds-
+which-baton.md, chunk C1a) from `coordinator_core.pickup_assemble.
+holder_evidence` into `coordinator_core.session` — unchanged in behaviour
+except the `_resolve_transcript` import, which moved from module scope to
+function-local inside `holder_evidence()` to break an import cycle through
+`coordinator_core.ops` (see that function's docstring note and the chunk's
+own cycle trace). `session/` is light and on no eager-import path;
+`pickup_assemble` is heavy and on the cold-invocation budget — nothing in
+this module may import `pickup_assemble`.
 """
 
 from __future__ import annotations
@@ -54,7 +64,6 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ops.check_em_environment import _resolve_transcript
 from coordinator_core.session import claim_index
 from coordinator_core.session import claim_neighbours
 from coordinator_core.session import core
@@ -504,6 +513,18 @@ def holder_evidence(
 
         if not want_activity:
             return result
+
+        # Function-local (not module-scope): this is the ONE module-level
+        # `coordinator_core.ops.*` import that used to sit at the top of
+        # this file (before the 2026-08-19 relocation into `session/`), and
+        # it is what closes the import cycle through `ops.__init__`'s
+        # `_eager_import_all()` once `holder_evidence.py` lives in
+        # `session/` and is imported by `session.work_state` — see chunk
+        # C1a's cycle trace. `session/` must not carry a module-level `ops`
+        # import; deferring it here keeps this the ONLY place it happens,
+        # same discipline `liveness.py`'s D5 note already documents for its
+        # own single-import-site invariants.
+        from coordinator_core.ops.check_em_environment import _resolve_transcript
 
         home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
         user_claude = Path(home) / ".claude" if home else Path(".claude")

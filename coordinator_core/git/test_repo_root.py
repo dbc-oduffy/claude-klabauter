@@ -122,21 +122,6 @@ def test_timeout_returns_none(tmp_path, monkeypatch):
     assert repo_root.show_prefix(str(lone)) is None
 
 
-def test_memo_memoizes_same_cwd_spawn_fallback(tmp_path, monkeypatch):
-    lone = tmp_path / "no_dot_git"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    repo_root.git_dir(str(lone))
-    repo_root.git_dir(str(lone))
-    assert len(calls) == 1
-
-
 def test_show_toplevel_never_spawns_even_when_the_walk_finds_nothing(
     tmp_path, monkeypatch
 ):
@@ -162,6 +147,76 @@ def test_show_toplevel_never_spawns_even_when_the_walk_finds_nothing(
     monkeypatch.setattr(subprocess, "run", _fail)
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "unrelated.git"))
     assert repo_root.show_toplevel(str(lone)) is None
+
+
+def test_bare_repo_resolves_git_dir_and_common_dir_without_spawning(
+    tmp_path, monkeypatch
+):
+    """The bare repo is the ONLY case `git_dir`/`git_common_dir` had a spawn
+    fallback for -- real git answers `.` there while the walk found no
+    `.git`. `_looks_like_git_dir` answers it from the same filesystem
+    markers git's own `is_git_directory()` uses, so the fallback is gone and
+    any spawn reached from here fails this test outright.
+    """
+    bare = tmp_path / "bare.git"
+    (bare / "objects").mkdir(parents=True)
+    (bare / "refs").mkdir()
+    (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("bare-repo resolution spawned; it is walk-only")
+
+    monkeypatch.setattr(subprocess, "run", _fail)
+    assert repo_root.git_dir(str(bare)) == str(bare)
+    assert repo_root.git_common_dir(str(bare)) == str(bare)
+    assert repo_root.absolute_git_dir(str(bare)) == str(bare)
+
+
+def test_bare_repo_has_no_toplevel(tmp_path, monkeypatch):
+    """`show_toplevel` must stay None in a bare repo -- real git exits 128
+    with "must be run in a work tree" there. Recognizing the bare repo in
+    the walk must not turn that into a confident wrong answer."""
+    bare = tmp_path / "bare2.git"
+    (bare / "objects").mkdir(parents=True)
+    (bare / "refs").mkdir()
+    (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("show_toplevel spawned")
+
+    monkeypatch.setattr(subprocess, "run", _fail)
+    assert repo_root.show_toplevel(str(bare)) is None
+
+
+def test_cwd_inside_a_bare_repo_climbs_to_the_bare_root(tmp_path, monkeypatch):
+    bare = tmp_path / "bare3.git"
+    (bare / "objects").mkdir(parents=True)
+    (bare / "refs" / "heads").mkdir(parents=True)
+    (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("bare-repo resolution spawned")
+
+    monkeypatch.setattr(subprocess, "run", _fail)
+    assert repo_root.git_dir(str(bare / "refs" / "heads")) == str(bare)
+
+
+def test_worktree_wins_over_bare_markers_at_the_same_level(tmp_path, monkeypatch):
+    """A directory carrying BOTH a `.git` entry and bare-looking markers is
+    a worktree. The `.git` check runs first at each level for that reason."""
+    repo = tmp_path / "both"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (repo / "objects").mkdir()
+    (repo / "refs").mkdir()
+    (repo / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("resolution spawned")
+
+    monkeypatch.setattr(subprocess, "run", _fail)
+    assert repo_root.show_toplevel(str(repo)) == str(repo)
+    assert repo_root.git_dir(str(repo)) == str(repo / ".git")
 
 
 def test_memo_memoizes_is_inside_work_tree_spawn(tmp_path, monkeypatch):
@@ -209,150 +264,6 @@ def test_failed_walk_resolution_is_not_memoized(tmp_path):
 
     (lone / ".git").mkdir()
     assert repo_root.show_toplevel(str(lone)) == str(lone)
-
-
-def test_deterministic_not_a_repository_is_cached_for_a_walk_backed_form(
-    tmp_path, monkeypatch
-):
-    """Exit 128 at a walk-backed form is the ONE cacheable failure -- see
-    `repo_root`'s "Negative caching" docstring section. Without this the
-    ordinary not-a-repo case re-spawns `git` on every call to be told what
-    the walk established one line earlier."""
-    lone = tmp_path / "no_dot_git_yet"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a repo")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    monkeypatch.delenv("GIT_DIR", raising=False)
-    assert repo_root.git_dir(str(lone)) is None
-    assert repo_root.git_dir(str(lone)) is None
-    assert len(calls) == 1
-
-
-def test_transient_spawn_failure_is_never_cached(tmp_path, monkeypatch):
-    """The half of the old blanket rule that stays. A timeout on a box
-    running 50-70 concurrent agents is transient by construction; caching
-    it would make one loaded moment permanent for the process."""
-    lone = tmp_path / "no_dot_git_transient"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=2.0)
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    assert repo_root.git_dir(str(lone)) is None
-    assert repo_root.git_dir(str(lone)) is None
-    assert len(calls) == 2
-
-
-def test_unexpected_nonzero_exit_is_treated_as_transient(tmp_path, monkeypatch):
-    """Only 128 is documented as not-a-repository; every other non-zero
-    exit takes the conservative (uncached) branch."""
-    lone = tmp_path / "no_dot_git_rc1"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    assert repo_root.git_dir(str(lone)) is None
-    assert repo_root.git_dir(str(lone)) is None
-    assert len(calls) == 2
-
-
-def test_not_a_repository_is_not_cached_for_an_always_spawning_form(
-    tmp_path, monkeypatch
-):
-    """`--absolute-git-dir` spawns unconditionally, so a cached 128 WOULD
-    survive a `git init` at the same cwd. `_WALK_BACKED_FORMS` excludes it
-    for exactly that reason; this is the pair to the show-prefix test
-    below."""
-    lone = tmp_path / "no_dot_git_always_spawn"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a repo")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    assert repo_root.absolute_git_dir(str(lone)) is None
-    assert repo_root.absolute_git_dir(str(lone)) is None
-    assert len(calls) == 2
-
-
-def test_git_dir_env_change_invalidates_the_negative_entry(tmp_path, monkeypatch):
-    """`GIT_DIR` is the measured discriminator between exit 128 and exit 0
-    at a cwd with no `.git`, so it is part of the negative key -- setting
-    it must not be answered from a cache recorded while it was unset."""
-    lone = tmp_path / "no_dot_git_env"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        if "GIT_DIR" in os.environ:
-            return subprocess.CompletedProcess(
-                cmd, 0, stdout=str(lone) + "\n", stderr=""
-            )
-        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a repo")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    monkeypatch.delenv("GIT_DIR", raising=False)
-    assert repo_root.git_dir(str(lone)) is None
-    assert repo_root.git_dir(str(lone)) is None
-    assert len(calls) == 1
-
-    monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere.git"))
-    assert repo_root.git_dir(str(lone)) == str(lone)
-    assert len(calls) == 2
-
-
-def test_git_init_after_a_cached_negative_still_resolves(tmp_path, monkeypatch):
-    """The hazard the old blanket rule existed to prevent, shown closed by
-    construction rather than by refusing the cache: reaching the spawn at a
-    walk-backed form requires a failed walk, walk failure is never
-    memoized, so a repo appearing at that cwd is answered by the re-walk
-    and the negative entry is never consulted."""
-    lone = tmp_path / "no_dot_git_then_init"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a repo")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    assert repo_root.git_dir(str(lone)) is None
-
-    (lone / ".git").mkdir()
-    assert repo_root.git_dir(str(lone)) == str(lone / ".git")
-    assert len(calls) == 1
-
-
-def test_positive_spawn_result_still_memoized(tmp_path, monkeypatch):
-    lone = tmp_path / "no_dot_git_positive"
-    lone.mkdir()
-    calls = []
-
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout=str(lone) + "\n", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    first = repo_root.git_dir(str(lone))
-    second = repo_root.git_dir(str(lone))
-    assert first == str(lone)
-    assert second == str(lone)
-    assert len(calls) == 1
 
 
 def test_cwd_none_resolves_and_keys_on_current_absolute_cwd(tmp_path, monkeypatch):
@@ -557,7 +468,7 @@ def test_no_console_creationflags_and_timeout_passed(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout="/x\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    repo_root.git_dir(str(lone))
+    repo_root.show_prefix(str(lone))
     assert seen_kwargs["timeout"] == 2.0
     assert seen_kwargs["stdin"] == subprocess.DEVNULL
     assert seen_kwargs["capture_output"] is True

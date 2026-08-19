@@ -36,7 +36,6 @@ from coordinator_core.session import harness_registry as hr
 from coordinator_core.testing.doe_root import resolve_doe_root
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.workstream_complete import apply as wsc_apply
-from coordinator_core.workstream_complete import chain_partition_verdict_store
 from coordinator_core.workstream_complete import completion_verdict as _cv
 from coordinator_core.workstream_complete import judgments
 
@@ -219,7 +218,6 @@ def test_every_consumes_manifest_member_resolves_to_a_real_file_on_disk() -> Non
         )
 
 
-
 #: Every directive id that constitutes a brightline-class gate, in EITHER
 #: scope. The pin below asserts membership in this set rather than one
 #: specific id, so a future re-scoping of the chain gate keeps the invariant
@@ -259,18 +257,31 @@ def test_every_disposition_computes_some_brightline_gate_directive(monkeypatch, 
         )
 
 
-def test_chain_terminal_brightline_gate_is_chain_scoped_not_session_scoped(monkeypatch, tmp_path):
-    """The session-scoped gate is the WRONG scope for a chain terminal — the
-    substitution must be the chain+plan two-oracle gate over the closing
-    handoff, not the session gate re-emitted."""
+def test_chain_terminal_takes_the_session_scoped_gate_after_k006(monkeypatch, tmp_path):
+    """A chain terminal now takes the SESSION-scoped brightline directive.
+
+    Inverts this test's own prior assertion deliberately: the chain+plan
+    two-oracle gate it used to require is removed (state/kill-ledger.md
+    K-007, 2026-08-19, PM ruling — measured 7.4s per chain-terminal close
+    to produce a review-scale verdict). The fallback is the session gate,
+    never silence: a chain terminal with strictly less brightline gating
+    than an ordinary session is the failure mode the sibling test below
+    already guards, and it applies here for the same reason."""
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md"))
     directives = wsc.brief(decisions={}, repo_root=tmp_path)["directives"]
     ids = {d["id"] for d in directives}
-    assert "d-run-chain-plan-brightline-gate" in ids
-    assert "d-run-review-brightline-gate" not in ids
-    gate = next(d for d in directives if d["id"] == "d-run-chain-plan-brightline-gate")
-    assert gate["cli"] == "wsc-coverage-gate-runner"
-    assert gate["args"] == ["brightline-gate", "--from-handoff", "state/handoffs/x.md"]
+    assert "d-run-chain-plan-brightline-gate" not in ids
+    assert "d-run-review-brightline-gate" in ids
+
+
+def test_no_directive_invokes_the_removed_brightline_gate_subcommand(monkeypatch, tmp_path):
+    """Negative-spec for K-007: nothing may emit a directive that shells out
+    to `wsc-coverage-gate-runner brightline-gate` — that subcommand no
+    longer exists, so such a directive would fail at argv parsing."""
+    for disposition, handoff in (("chain-terminal", "state/handoffs/x.md"), ("single-session", "")):
+        _patch_gate(monkeypatch, _gate(disposition, consumed_handoff=handoff))
+        for directive in wsc.brief(decisions={}, repo_root=tmp_path)["directives"]:
+            assert "brightline-gate" not in (directive.get("args") or [])
 
 
 def test_chain_terminal_without_consumed_handoff_falls_back_to_session_gate(monkeypatch, tmp_path):
@@ -288,7 +299,6 @@ def test_chain_terminal_without_consumed_handoff_falls_back_to_session_gate(monk
     ids = {d["id"] for d in wsc.brief(decisions={}, repo_root=tmp_path)["directives"]}
     assert "d-run-review-brightline-gate" in ids
     assert "d-run-chain-plan-brightline-gate" not in ids
-
 
 
 def test_write_trail_directive_requires_all_five_review_fields(monkeypatch, tmp_path):
@@ -425,9 +435,6 @@ def test_build_deletion_blocks_check_directive_returns_none_for_falsy_msg_file()
 # ---------------------------------------------------------------------------
 
 
-
-
-
 def test_untrusted_gate_reported_point_stays_a_judgment_point_not_narration(monkeypatch, tmp_path):
     """Anti-scope: an untrusted-gate point (`recommendation=None`, e.g.
     `jp-session-shape`) must never be demoted into narration even when
@@ -475,7 +482,6 @@ def test_resolver_backed_review_partition_strategy_never_demoted_by_a_single_emp
     assert "review-partition-strategy" in jp_ids
 
 
-
 # ---------------------------------------------------------------------------
 # decide_review_scale wiring (2026-08-03-chain-end-review-scale-wiring.md,
 # chunk C4) -- AC2's deliverable and the regression pin for the whole defect
@@ -487,10 +493,14 @@ def test_resolver_backed_review_partition_strategy_never_demoted_by_a_single_emp
 # defect's entire life; it proves nothing about whether anything CALLS it.
 # ---------------------------------------------------------------------------
 
-_CHAIN_END_ROW_IDS = frozenset({5, 6})
+_CHAIN_END_ROW_IDS = frozenset({5})
 
 
 def _review_scale_decisions(**overrides: Any) -> dict:
+    """Row-5/6 fixture base. `chain_partition_verdict` is GONE from this
+    dict (state/kill-ledger.md K-007, 2026-08-19): the chain-scoped gate
+    that produced it is removed, so a chain-terminal close resolves on the
+    session-scoped brightline alone and row 6 is unreachable."""
     base: dict[str, Any] = dict(
         gross_loc=10,
         code_loc=10,
@@ -498,7 +508,6 @@ def _review_scale_decisions(**overrides: Any) -> dict:
         surface_count=1,
         executor_dispatched=False,
         shared_schema_touched=False,
-        chain_partition_verdict="single-reviewer-ok",
     )
     base.update(overrides)
     return base
@@ -515,98 +524,6 @@ def test_chain_terminal_non_trivial_chain_diff_below_brightline_selects_row_5(mo
     assert review_scale["row"] == 5
     assert review_scale["scale"] == "code-reviewer"
     assert review_scale["partition_mandatory"] is False
-
-
-def test_chain_terminal_over_the_brightline_selects_row_6_partition_mandatory(monkeypatch, tmp_path):
-    """(b) chain-terminal + the chain-scoped brightline gate's own verdict
-    is PARTITION-MANDATORY -> row 6, partition_mandatory True."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict="PARTITION-MANDATORY"),
-        repo_root=tmp_path,
-    )
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is True
-    assert review_scale["row"] in _CHAIN_END_ROW_IDS
-    assert review_scale["row"] == 6
-    assert review_scale["scale"] == "partitioned"
-    assert review_scale["partition_mandatory"] is True
-
-
-def test_chain_terminal_unresolved_triviality_never_falls_through_to_a_per_session_row(monkeypatch, tmp_path):
-    """(c) chain-terminal with `chain_partition_verdict` not yet supplied ->
-    the unresolved outcome C1 defines, and NEVER a silent per-session row
-    (1/2/3) -- the exact shape of the original defect, under a new name."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["row"] is None
-    assert review_scale["row"] not in {1, 2, 3}
-    assert review_scale["scale"] == "unresolved"
-    assert review_scale["partition_mandatory"] is False
-
-
-def test_review_scale_judgment_point_is_advisory_no_dependency_edge_on_commit_tail(monkeypatch, tmp_path):
-    """(d) the ADVISORY posture (C0's implemented default) actually holds:
-    `d-run-wsc-tail` carries NO dependency edge on `jp-review-scale`, on
-    either a chain-terminal or a single-session close, so a future reader
-    cannot mistake the edge's absence for an oversight.
-
-    Fixture picked to resolve `jp-review-scale` (row 6 on the chain-terminal
-    leg via `chain_partition_verdict="PARTITION-MANDATORY"`) so its RESOLVED
-    branch — the one that actually carries a `recommendation` — is the one
-    under test. As of `docs/plans/2026-08-15-judgment-points-that-gate-
-    nothing-stop-being-questions.md` C2, that resolved branch always sets
-    `reportable=True` with `resolves=[]`, so `contract/decision_object/
-    judgment.py::partition_reportable` demotes it out of
-    `decision_object["judgment_points"]` into `narration` on every
-    resolved row — `"jp-review-scale" in ids` is no longer a valid
-    precondition for this test's actual subject (see test 3 below for the
-    narration-facing assertion on that recommendation). This test's real
-    subject, DR-068's advisory posture, is asserted two independent ways:
-
-    1. No directive's `depends_on` names `jp-review-scale` directly — the
-       DR-068 property itself, checked on both legs below.
-    2. On the chain-terminal leg (the fixture that RESOLVES the decision,
-       so the recommendation-carrying branch actually fires),
-       `jp-review-scale` is absent from `judgment_points` (observed
-       demotion). `partition_reportable`'s own contract says a point named
-       in ANY directive's `depends_on` is NEVER classified `reported`, even
-       when marked `reportable=True` — so the observed demotion is itself
-       independent evidence that no dependency edge exists. Two
-       mechanisms, one property, not a duplicate check. The single-session
-       leg's `decisions={}` fixture leaves the decision UNRESOLVED, which
-       builds one of the untrusted-gate branches instead (no
-       `recommendation`, so `partition_reportable` does not demote it) —
-       (1) alone is the right check there; asserting (2) on that leg would
-       pin an accident of an unrelated, unresolved-only code path rather
-       than this test's actual subject.
-    """
-    for gate, decisions, expect_resolved in (
-        (
-            _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
-            _review_scale_decisions(chain_partition_verdict="PARTITION-MANDATORY"),
-            True,
-        ),
-        (_gate("single-session", consumed_handoff_paths=()), {}, False),
-    ):
-        _patch_gate(monkeypatch, gate)
-        decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-        assert decision_object["gates"]["review_scale"]["resolved"] is expect_resolved
-        for directive in decision_object["directives"]:
-            assert "jp-review-scale" not in (directive.get("depends_on") or ())
-        ids = {jp["id"] for jp in decision_object["judgment_points"]}
-        if expect_resolved:
-            assert "jp-review-scale" not in ids
-        wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-        depends_on = wsc_tail["depends_on"]
-        depends_on_list = [depends_on] if isinstance(depends_on, str) else list(depends_on)
-        assert "d-close-tail-args" in depends_on_list
-        assert "jp-review-scale" not in depends_on_list
 
 
 def test_review_scale_judgment_point_does_not_fire_on_a_fully_resolved_row_1_or_2_close(monkeypatch, tmp_path):
@@ -749,190 +666,6 @@ def test_brief_omits_commit_slices_key_when_measurement_unresolvable(monkeypatch
     assert "uncommitted_code_loc" not in review_scale
 
 
-def test_review_scale_judgment_point_unresolved_carries_no_recommendation(monkeypatch, tmp_path):
-    """(e) example-retrieval-repo-em memo (cross-repo/inbox/2026-08-04-example-retrieval-repo-em-
-    brightline-partition-mandatory-does-not-halt.md, "mechanism 3"): an
-    unresolved chain-terminal review-scale decision must NOT come with a
-    `proceed-unresolved` recommendation -- that recommendation is what let
-    an EM route around a brightline gate's own PARTITION-MANDATORY verdict
-    when it wasn't carried forward. `jp-review-scale` must still fire (the
-    unresolved state is real and must be surfaced), just with
-    `recommendation is None` (the untrusted-gate shape)."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
-    assert jp["recommendation"] is None
-
-
-def test_review_scale_judgment_point_unresolved_enum_is_never_a_singleton(monkeypatch, tmp_path):
-    """(e2) example-retrieval-repo-em memo (cross-repo/inbox/2026-08-10-example-retrieval-repo-em-
-    jp-review-scale-null-is-blocked-computation.md, defect 2): dropping the
-    recommendation in (e) left `proceed-unresolved` as the enum's SOLE
-    value, so the only recordable answer was the one this point's own
-    `reason` calls routing around a missing verdict -- an EM who correctly
-    determined the close IS partition-mandatory could not say so. The
-    unresolved enum must therefore offer a settling exit alongside the
-    route-around, and must never regress to a singleton.
-
-    Review: coordinator:code-reviewer (Nit 1) — this test actually traverses
-    the PENDING branch (chain-terminal, no verdict record on disk at all)
-    under commit 2's added call-site gating, not a generic "unresolved"
-    branch distinct from it; the invariant this test uniquely protects,
-    which `test_review_scale_unresolved_pending_gate_does_not_assert_a_
-    carry_forward_failure` does NOT cover, is that the enum is never a
-    singleton and never regresses to only `proceed-unresolved` — kept here
-    rather than duplicated there.
-
-    The absent `single-reviewer-ok` counterpart is asserted deliberately:
-    a hand-declared permissive verdict is what `chain_partition_verdict_
-    store`'s fail-closed contract exists to make impossible, and the enum
-    must not reopen it here."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
-    values = [d["value"] for d in jp["dispositions"]]
-
-    # Asserted as an INVARIANT over every unresolved cause, not as literals:
-    # the three causes name their settling exit differently (run the pending
-    # gate / re-run a gate whose record is corrupt / supply a session-scoped
-    # input), and pinning one spelling here would fail the next time a cause
-    # is split out, without any safety property having regressed.
-    #
-    # Review: coordinator:code-reviewer (Nit 2) — tightened from a bare
-    # substring match (`"report" in value`) to membership in the known
-    # settling-disposition allow-list, so an unrelated future value like
-    # "reporter-stub" (contains "report", no real settling semantics)
-    # cannot satisfy this assertion.
-    _KNOWN_SETTLING_DISPOSITIONS = frozenset({
-        "run-the-pending-gate-and-recompute",
-        "rerun-gate-then-report-if-still-unreadable",
-        "resolve-input-and-recompute",
-    })
-    assert "partition-review-by-hand" in values
-    assert any(
-        (value.endswith("-recompute") or "report" in value) and value in _KNOWN_SETTLING_DISPOSITIONS
-        for value in values
-    )
-    assert "proceed-unresolved" in values
-    assert values != ["proceed-unresolved"]
-    assert not any("single-reviewer-ok" in value for value in values)
-    assert jp["recommendation"] is None
-
-
-def test_review_scale_unresolved_pending_gate_does_not_assert_a_carry_forward_failure(monkeypatch, tmp_path):
-    """(e3) PM ruling 2026-08-10. `brief()` appends `d-run-chain-plan-
-    brightline-gate` unconditionally on a chain terminal with a resolved
-    consumed handoff, so the ORDINARY reason the chain verdict is missing
-    is that the producer on this same envelope has not run yet.
-
-    The point must say exactly that, and must NOT assert the break-class
-    cause ("a verdict that was not carried forward") it has checked nothing
-    to earn -- that assertion was the defect: it told every EM their
-    persistence seam had failed when the truth was simply "not yet"."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-
-    directive_ids = [d.get("id") for d in decision_object["directives"]]
-    assert "d-run-chain-plan-brightline-gate" in directive_ids
-
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
-    assert "not carried forward" not in jp["reason"]
-    assert "presence=absent" in jp["evidence"]
-    assert "d-run-chain-plan-brightline-gate" in jp["question"]
-    assert "run-the-pending-gate-and-recompute" in [d["value"] for d in jp["dispositions"]]
-
-
-def test_review_scale_unresolved_unreadable_record_is_reported_as_break_class(monkeypatch, tmp_path):
-    """(e4) The complement: when a record DOES exist for this session and
-    `read_verdict_record` rejects it, the gate really did run and its
-    verdict really did not survive the seam. That is the one cause the old
-    blanket prose described correctly, and it must be named break-class --
-    a corrupt seam is reported, never quietly answered as a scale call."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    record_path = chain_partition_verdict_store.verdict_store_path(tmp_path, "testsid123")
-    record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text("{ this is not valid json", encoding="utf-8")
-
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
-
-    assert "presence=unreadable" in jp["evidence"]
-    assert "BREAK-CLASS" in jp["question"]
-    assert "did not carry forward" in jp["reason"]
-    assert "rerun-gate-then-report-if-still-unreadable" in [d["value"] for d in jp["dispositions"]]
-
-
-def test_review_scale_chain_terminal_with_empty_consumed_handoff_does_not_claim_chain_directive_pending(monkeypatch, tmp_path):
-    """Review: coordinator:code-reviewer (P1) — regression pin for the bug
-    the finding identified: a chain-terminal gate with an EMPTY
-    `consumed_handoff` takes the SESSION-scoped brightline directive at line
-    ~970 (`d-run-review-brightline-gate`), never the chain-scoped one. Every
-    other test in this module hardcodes a non-empty `consumed_handoff`,
-    which is why the omitted `and gate.consumed_handoff` conjunct at the
-    `jp-review-scale` call site slipped through: `review_scale_chain_
-    terminal` must track the SAME condition that decides which directive is
-    actually live, so the point can never assert a chain-scoped directive
-    ("d-run-chain-plan-brightline-gate") is pending on an envelope that only
-    ever got the session-scoped one."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=""))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-    directive_ids = [d.get("id") for d in decision_object["directives"]]
-    assert "d-run-review-brightline-gate" in directive_ids
-    assert "d-run-chain-plan-brightline-gate" not in directive_ids
-
-    jp = next((jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale"), None)
-    if jp is not None:
-        assert "d-run-chain-plan-brightline-gate" not in jp["question"]
-        assert "d-run-chain-plan-brightline-gate" not in jp.get("reason", "")
-
-
-def test_review_scale_presence_rejects_a_from_handoff_mismatched_record(monkeypatch, tmp_path):
-    """Review: coordinator:code-reviewer (P2) — a record that is well-formed
-    and session-matched but was computed against a DIFFERENT
-    `from_handoff` than this close's `gate.consumed_handoff` (e.g. a stale
-    record from an earlier attempt on the same sid) must report
-    `PRESENCE_UNREADABLE`, not `PRESENCE_PRESENT` -- `verdict_record_
-    presence` must reject exactly what `read_verdict_record` (the value
-    axis it exists to diagnose) rejects."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    chain_partition_verdict_store.write_verdict_record(
-        tmp_path,
-        session_id="testsid123",
-        verdict="single-reviewer-ok",
-        from_handoff="state/handoffs/a-different-handoff.md",
-        git_range=None,
-        basis="test",
-        tier="test",
-    )
-
-    presence = chain_partition_verdict_store.verdict_record_presence(
-        tmp_path, session_id="testsid123", expected_from_handoff="state/handoffs/x.md"
-    )
-    assert presence == chain_partition_verdict_store.PRESENCE_UNREADABLE
-
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict=None),
-        repo_root=tmp_path,
-    )
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-review-scale")
-    assert "presence=unreadable" in jp["evidence"]
-
-
 def test_review_scale_judgment_point_resolved_non_trivial_row_keeps_acknowledge_scale(monkeypatch, tmp_path):
     """(f) the RESOLVED branch is untouched by the mechanism-3 fix: a
     resolved, non-1/2 row (here row 5, the base `_review_scale_decisions()`
@@ -958,29 +691,9 @@ def test_review_scale_judgment_point_resolved_non_trivial_row_keeps_acknowledge_
     narration = decision_object["narration"]
     assert "jp-review-scale (" in narration
     assert (
-        "-- review scale row 5 (code-reviewer): chain-terminal with a resolved, "
-        "non-mandatory chain-scoped brightline verdict" in narration
+        "-- review scale row 5 (code-reviewer): chain-terminal with the "
+        "session-scoped brightline resolved and not tripped" in narration
     )
-
-
-def test_review_scale_resolved_false_triviality_but_missing_metric_stays_unresolved(monkeypatch, tmp_path):
-    """(e) the Staff Engineer finding 3: triviality resolves False (chain-scoped verdict
-    is `single-reviewer-ok`, ruling out row 6) AND a row-4 metric
-    (`code_loc`) is absent -> the unresolved outcome, never row 5. A
-    resolved-false chain verdict must not be read as "safe to fall through
-    to row 5 regardless of what else is unknown". (2026-08-11, C7: updated
-    from `gross_loc=None` to `code_loc=None` -- since C2, row 4 reads
-    `code_loc`, not `gross_loc`, so nulling `gross_loc` alone no longer
-    leaves row 4's inputs unresolved.)"""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict="single-reviewer-ok", code_loc=None),
-        repo_root=tmp_path,
-    )
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["row"] is None
-    assert review_scale["row"] != 5
 
 
 # ---------------------------------------------------------------------------
@@ -995,154 +708,6 @@ def test_review_scale_resolved_false_triviality_but_missing_metric_stays_unresol
 
 _SID = "testsid123"  # matches `_gate()`'s default `sid`
 _HANDOFF = "state/handoffs/x.md"  # matches the `consumed_handoff` used below
-
-
-def _persist(tmp_path: Path, *, session_id: str = _SID, verdict: str, from_handoff: str = _HANDOFF) -> None:
-    chain_partition_verdict_store.write_verdict_record(
-        tmp_path,
-        session_id=session_id,
-        verdict=verdict,
-        from_handoff=from_handoff,
-        git_range=None,
-        basis="plan_oracle=4(...) chain_oracle=32(...) session_oracle=10(...) tier=B",
-        tier="B",
-    )
-
-
-def test_disk_persisted_verdict_used_when_decisions_omits_it_selects_row_6(monkeypatch, tmp_path):
-    """Producer wrote PARTITION-MANDATORY to disk; the EM's `decisions` dict
-    never re-supplies it -- brief() must still resolve row 6, closing the
-    exact defect the field report traced."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist(tmp_path, verdict="PARTITION-MANDATORY")
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is True
-    assert review_scale["row"] == 6
-    assert review_scale["scale"] == "partitioned"
-    assert review_scale["partition_mandatory"] is True
-
-
-def test_explicit_decisions_verdict_overrides_persisted_disk_record(monkeypatch, tmp_path):
-    """An explicit `decisions["chain_partition_verdict"]` always wins over
-    whatever is on disk -- disk is a fallback only, never an override."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist(tmp_path, verdict="PARTITION-MANDATORY")
-    decision_object = wsc.brief(
-        decisions=_review_scale_decisions(chain_partition_verdict="single-reviewer-ok"),
-        repo_root=tmp_path,
-    )
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["row"] == 5
-    assert review_scale["partition_mandatory"] is False
-
-
-def test_disk_record_from_a_different_session_is_ignored(monkeypatch, tmp_path):
-    """A record keyed to a DIFFERENT session id (e.g. a stale/foreign run)
-    must never be adopted -- it degrades to unresolved, exactly as if no
-    record existed."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist(tmp_path, session_id="some-other-session", verdict="PARTITION-MANDATORY")
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["scale"] == "unresolved"
-
-
-def test_disk_record_with_mismatched_from_handoff_is_ignored(monkeypatch, tmp_path):
-    """A record computed over a DIFFERENT handoff (stale provenance) must
-    never be adopted for this close."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist(tmp_path, verdict="PARTITION-MANDATORY", from_handoff="state/handoffs/some-other-run.md")
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["scale"] == "unresolved"
-
-
-def test_corrupt_disk_record_degrades_to_unresolved_never_fabricates(monkeypatch, tmp_path):
-    """Corrupt JSON on disk must never crash brief() nor manufacture a
-    verdict -- fail-closed to unresolved."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    path = chain_partition_verdict_store.verdict_store_path(tmp_path, _SID)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{ not valid json", encoding="utf-8")
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["scale"] == "unresolved"
-
-
-def test_missing_disk_record_degrades_to_unresolved(monkeypatch, tmp_path):
-    """No record on disk at all (never persisted, or a fresh tmp_path) ->
-    unresolved -- the pre-existing behavior, unchanged."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["scale"] == "unresolved"
-
-
-def test_unknown_verdict_string_on_disk_degrades_to_unresolved(monkeypatch, tmp_path):
-    """A verdict string outside the two known literals (e.g. corruption or
-    a future schema drift) is treated as absent, never adopted."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    path = chain_partition_verdict_store.verdict_store_path(tmp_path, _SID)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-
-    path.write_text(
-        _json.dumps(
-            {
-                "schema_version": 1,
-                "session_id": _SID,
-                "verdict": "totally-unknown-verdict",
-                "from_handoff": _HANDOFF,
-                "git_range": None,
-                "basis": "",
-                "tier": "B",
-                "written_at": "2026-08-04T00:00:00Z",
-            }
-        ),
-        encoding="utf-8",
-    )
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["resolved"] is False
-    assert review_scale["scale"] == "unresolved"
-
-
-def test_brief_reading_persisted_verdict_still_mutates_nothing(monkeypatch, tmp_path):
-    """brief() is documented read-only -- reading the persisted verdict
-    record must not write, touch, or delete it (or anything else under
-    tmp_path)."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist(tmp_path, verdict="PARTITION-MANDATORY")
-    path = chain_partition_verdict_store.verdict_store_path(tmp_path, _SID)
-    before = path.read_bytes()
-    before_mtime = path.stat().st_mtime_ns
-    files_before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file())
-
-    decisions = _review_scale_decisions()
-    del decisions["chain_partition_verdict"]
-    wsc.brief(decisions=decisions, repo_root=tmp_path)
-
-    assert path.read_bytes() == before
-    assert path.stat().st_mtime_ns == before_mtime
-    files_after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file())
-    assert files_after == files_before
 
 
 # ---------------------------------------------------------------------------
@@ -1160,83 +725,6 @@ _CHAIN_SLICE_ENTRY = {
     "recordable": True,
     "certifies_review": False,
 }
-
-
-def _persist_with_slices(tmp_path: Path, *, verdict: str, chain_slices) -> None:
-    chain_partition_verdict_store.write_verdict_record(
-        tmp_path,
-        session_id=_SID,
-        verdict=verdict,
-        from_handoff=_HANDOFF,
-        git_range=None,
-        basis="plan_oracle=4(...) chain_oracle=32(...) session_oracle=10(...) tier=B",
-        tier="B",
-        chain_slices=chain_slices,
-    )
-
-
-def test_brief_emits_chain_slices_present_on_disk(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist_with_slices(tmp_path, verdict="PARTITION-MANDATORY", chain_slices=[_CHAIN_SLICE_ENTRY])
-    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert "chain_slices" in review_scale
-    assert review_scale["chain_slices"] == [_CHAIN_SLICE_ENTRY]
-
-
-def test_brief_emits_chain_slices_resolved_empty(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist_with_slices(tmp_path, verdict="single-reviewer-ok", chain_slices=[])
-    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert "chain_slices" in review_scale
-    assert review_scale["chain_slices"] == []
-
-
-def test_brief_omits_chain_slices_key_when_unresolvable(monkeypatch, tmp_path):
-    """No record on disk at all -> the key is ABSENT, never defaulted to
-    `[]` (which would falsely claim the gate ran and found nothing owed)."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert "chain_slices" not in review_scale
-
-
-def test_brief_omits_chain_slices_key_when_verdict_persisted_without_a_slate(monkeypatch, tmp_path):
-    """A record written by an older producer (or one that failed to persist
-    the slate) carries a verdict but no `chain_slices` key -- still absent,
-    not `[]`, on the payload."""
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff=_HANDOFF, consumed_handoff_paths=()))
-    _persist(tmp_path, verdict="PARTITION-MANDATORY")  # no chain_slices kwarg
-    decision_object = wsc.brief(decisions=_review_scale_decisions(), repo_root=tmp_path)
-    review_scale = decision_object["gates"]["review_scale"]
-    assert "chain_slices" not in review_scale
-
-
-def test_chain_slices_and_commit_slices_are_independent_populations(monkeypatch, tmp_path):
-    """Negative-spec regression: a close can owe chain-scoped review
-    (`chain_slices` non-empty) while this session's own record-write
-    population (`commit_slices`) is empty, and vice versa -- a future
-    reader must not treat one as derivable from the other."""
-    sha = _init_repo_with_session_commit(tmp_path)
-    gate = wsc.SessionShapeGate(
-        sid=_SESSION_ID_FOR_SLICES,
-        disposition="chain-terminal",
-        consumed_handoff=_HANDOFF,
-        diagnostics=[],
-        consumed_handoff_paths=(),
-        detection={},
-    )
-    _patch_gate(monkeypatch, gate)
-    _persist_with_slices(tmp_path, verdict="single-reviewer-ok", chain_slices=[])
-
-    decision_object = wsc.brief(
-        decisions=dict(_review_scale_decisions(), stage_paths=[]), repo_root=tmp_path
-    )
-    review_scale = decision_object["gates"]["review_scale"]
-    assert review_scale["chain_slices"] == []
-    assert len(review_scale["commit_slices"]) == 1
-    assert review_scale["commit_slices"][0]["sha"] == sha
 
 
 # ---------------------------------------------------------------------------
@@ -3017,7 +2505,6 @@ def test_clean_session_shape_surfaces_no_session_shape_judgment_point(monkeypatc
     assert "jp-session-shape" not in ids
 
 
-
 def test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_detection_record(monkeypatch, tmp_path):
     """The settled-fact assertion (plan Execution Notes): a `memo-
     predecessor` deciding leg is NEVER flagged uncertain, even when its
@@ -3049,8 +2536,6 @@ def test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_detecti
         ),
     )
     assert "jp-session-shape" not in ids
-
-
 
 
 def test_review_dispatch_vehicle_choice_does_not_recommend_the_provisioning_bypassing_vehicle():
@@ -6146,33 +5631,6 @@ def test_execution_basis_report_empty_when_chain_inputs_unresolved():
     assert _dc_review.chain_partition_execution_basis_report(
         records, chain_code_shas=[_C4_CHAIN_SHA], chain_dag_shas=[_C4_CHAIN_SHA], resolve_range_shas=None,
     ) == {}
-
-
-@pytest.mark.parametrize("verdict", ["ok", "warn", "blocked", "waived", "pending"])
-def test_execution_basis_report_never_changes_discharge_outcome(verdict):
-    """Regression, the load-bearing test for this chunk: adding
-    `execution_basis` (present, absent, or any value) to a record must not
-    move `chain_partition_verdict_discharged`'s verdict for any of the five
-    real verdict values — the gate gained a VOICE, not a veto."""
-    for execution_basis in (None, "executed", "read-only", "some-future-value"):
-        records = [_c4_record(verdict, execution_basis=execution_basis)]
-        without_basis = _dc_review.chain_partition_verdict_discharged(
-            [_c4_record(verdict)],
-            chain_code_shas=[_C4_CHAIN_SHA],
-            chain_dag_shas=[_C4_CHAIN_SHA],
-            resolve_range_shas=_c4_resolve_range_shas,
-        )
-        with_basis = _dc_review.chain_partition_verdict_discharged(
-            records,
-            chain_code_shas=[_C4_CHAIN_SHA],
-            chain_dag_shas=[_C4_CHAIN_SHA],
-            resolve_range_shas=_c4_resolve_range_shas,
-        )
-        assert with_basis == without_basis
-        # Table from the plan's problem statement (§ Problem): ok/warn/blocked
-        # discharge, waived/pending do not — unchanged by this chunk.
-        expected = verdict in {"ok", "warn", "blocked"}
-        assert with_basis is expected
 
 
 # AC5's "validate" clause (docs/plans/2026-08-11-review-trail-carries-

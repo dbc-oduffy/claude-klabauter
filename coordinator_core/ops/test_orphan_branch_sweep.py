@@ -595,3 +595,217 @@ def test_verify_commit_in_review_window_handler(tmp_path):
         )
     )
     assert result == {"in_window": True}
+
+
+# ---------------------------------------------------------------------------
+# s5 batching (commit 40dd999f8) -- `main`'s batched author/committer-date
+# read (`git log --no-walk --format=%H%x1f%ae%x1f%ct <shas...>`) and its
+# per-branch fallback. amp-review-s5 (WARN): no test exercised this new
+# batch/fallback branch logic. `_git` is monkeypatched (wrapping the real
+# implementation, recording every call) rather than the whole `main()`
+# pipeline being re-derived, so these tests observe exactly what argv
+# reaches git.
+# ---------------------------------------------------------------------------
+
+
+def _no_gh(monkeypatch) -> None:
+    """Keep `gh_available` False so severity classification only depends on
+    age/ahead-of-main, not a PR stub -- irrelevant to what these tests pin."""
+    monkeypatch.setattr(obs.shutil, "which", lambda name: None if name == "gh" else None)
+
+
+def _recording_git(monkeypatch, intercept):
+    """Wrap `obs._git` so every call is logged, with an optional
+    `intercept(args) -> CompletedProcess | None` hook that can fake a
+    specific call's result (return None to fall through to the real `_git`).
+    Returns the shared call-log list."""
+    real_git = obs._git
+    calls: list[list[str]] = []
+
+    def fake_git(args, timeout=obs._GIT_TIMEOUT, cwd=None):
+        calls.append(list(args))
+        faked = intercept(args)
+        if faked is not None:
+            return faked
+        return real_git(args, timeout=timeout, cwd=cwd)
+
+    monkeypatch.setattr(obs, "_git", fake_git)
+    return calls
+
+
+def test_batched_author_date_read_is_one_no_walk_call_not_per_branch(tmp_path, monkeypatch):
+    """Two branches with distinct tips must resolve author+committer-date
+    through exactly ONE `git log --no-walk --format=%H%x1f%ae%x1f%ct <shas>`
+    call carrying both tip shas, never the pre-batch per-branch
+    `git log -1 --format=%ae <sha>` / `--format=%ct <sha>` pair.
+
+    Fails against the pre-batch implementation: that shape never issues a
+    `--no-walk` call at all and instead issues 2 `git log -1 --format=%ae`
+    and 2 `git log -1 --format=%ct` calls (one pair per branch) -- both the
+    "exactly one --no-walk call" and "zero per-branch log -1 calls"
+    assertions below fail on it.
+    """
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _no_gh(monkeypatch)
+
+    base_ts = int(time.time()) - 10 * 86400
+    _git(repo, "checkout", "-q", "-b", "work/test/one")
+    _dated_commit(repo, "one.txt", "one", base_ts)
+    tip_one = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-q", "main")
+
+    _git(repo, "checkout", "-q", "-b", "work/test/two")
+    _dated_commit(repo, "two.txt", "two", base_ts + 500)
+    tip_two = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-q", "main")
+
+    calls = _recording_git(monkeypatch, lambda args: None)
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+    assert rc == 0
+
+    no_walk_calls = [c for c in calls if c[:2] == ["log", "--no-walk"]]
+    assert len(no_walk_calls) == 1, f"expected one batched --no-walk call, got: {no_walk_calls}"
+    assert no_walk_calls[0][2] == "--format=%H%x1f%ae%x1f%ct"
+    assert sorted(no_walk_calls[0][3:]) == sorted({tip_one, tip_two})
+
+    per_branch_calls = [
+        c for c in calls
+        if len(c) >= 3 and c[0] == "log" and c[1] == "-1" and c[2] in ("--format=%ae", "--format=%ct")
+    ]
+    assert per_branch_calls == [], f"unexpected per-branch fallback calls on a healthy batch: {per_branch_calls}"
+
+
+def test_forced_batch_failure_routes_every_branch_through_fallback(tmp_path, monkeypatch, capsys):
+    """A whole-command non-zero exit from the batched `--no-walk` call must
+    disable `batch_ok` and route EVERY branch through the pre-existing
+    per-branch fallback (`git log -1 --format=%ae` / `--format=%ct`), which
+    must still resolve the correct severity/age for each branch.
+
+    Note (per-report): this does NOT discriminate against the pre-batch
+    implementation -- the fallback path reproduces exactly what pre-batch
+    code always did (per-branch `git log -1` calls), so pre-batch code
+    would pass this same assertion. It pins that the NEW fallback branch
+    (unreachable before this commit existed) is correct, not that it
+    differs from the old behavior -- the batching regression itself is
+    covered by the test above.
+    """
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _no_gh(monkeypatch)
+
+    base_ts = int(time.time()) - 10 * 86400
+    _git(repo, "checkout", "-q", "-b", "work/test/one")
+    _dated_commit(repo, "one.txt", "one", base_ts)
+    _git(repo, "checkout", "-q", "main")
+
+    def force_no_walk_failure(args):
+        if args[:2] == ["log", "--no-walk"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="simulated failure")
+        return None
+
+    calls = _recording_git(monkeypatch, force_no_walk_failure)
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    lines = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+    by_branch = {ln["branch"]: ln for ln in lines}
+
+    assert "work/test/one" in by_branch
+    assert by_branch["work/test/one"]["severity"] == "WARNING"
+
+    per_branch_ae = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ae"]
+    per_branch_ct = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ct"]
+    assert len(per_branch_ae) == 1
+    assert len(per_branch_ct) == 1
+
+
+def test_duplicate_tip_shas_both_resolve_through_batch(tmp_path, monkeypatch, capsys):
+    """Two branches sharing one tip sha must both correctly resolve through
+    the batched path -- the dict-keyed `%H` lookup makes `--no-walk`'s
+    reordering harmless and de-dupes the distinct-sha argv, but must not
+    drop or cross-wire either branch's result.
+
+    Note (per-report): does not discriminate against the pre-batch
+    implementation -- pre-batch resolved each branch independently and
+    would produce the same per-branch values for two branches sharing a
+    tip. Kept because it pins the dedup/dict-keyed-lookup behavior the
+    review verified by inspection but wanted a test pinning.
+    """
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _no_gh(monkeypatch)
+
+    base_ts = int(time.time()) - 10 * 86400
+    _git(repo, "checkout", "-q", "-b", "work/test/dup-a")
+    _dated_commit(repo, "dup.txt", "dup", base_ts)
+    shared_tip = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # dup-b branches off the exact same commit -- no new commit -- so both
+    # branches share one tip sha.
+    _git(repo, "checkout", "-q", "-b", "work/test/dup-b")
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == shared_tip
+    _git(repo, "checkout", "-q", "main")
+
+    calls = _recording_git(monkeypatch, lambda args: None)
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    lines = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+    by_branch = {ln["branch"]: ln for ln in lines}
+
+    assert "work/test/dup-a" in by_branch and "work/test/dup-b" in by_branch
+    assert by_branch["work/test/dup-a"]["severity"] == by_branch["work/test/dup-b"]["severity"] == "WARNING"
+    assert by_branch["work/test/dup-a"]["age_h"] == by_branch["work/test/dup-b"]["age_h"]
+
+    no_walk_calls = [c for c in calls if c[:2] == ["log", "--no-walk"]]
+    assert len(no_walk_calls) == 1
+    assert no_walk_calls[0][3:] == [shared_tip], "distinct_shas must dedup the shared tip to one entry"
+
+
+def test_missing_batch_line_falls_through_to_existing_now_default(tmp_path, monkeypatch, capsys):
+    """A sha absent from an otherwise-successful batch response (dropped or
+    malformed line) must fall through to the exact pre-existing per-item
+    default (`age_h` computed from `now`, i.e. ~0), not raise or silently
+    misreport the real (much older) commit age. `user.email` is stubbed
+    empty here so the author-identity filter (which would otherwise also
+    default to "" on a missing line and drop the branch before age is even
+    observable) doesn't mask the assertion.
+    """
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _no_gh(monkeypatch)
+
+    base_ts = int(time.time()) - 40 * 86400  # 40 days old
+    _git(repo, "checkout", "-q", "-b", "work/test/malformed")
+    _dated_commit(repo, "m.txt", "m", base_ts)
+    _git(repo, "checkout", "-q", "main")
+
+    def intercept(args):
+        if args == ["config", "user.email"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:2] == ["log", "--no-walk"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return None
+
+    calls = _recording_git(monkeypatch, intercept)
+
+    rc = main(["--format", "json", "--severity-min", "ok"])  # default --max-age-days 30
+    assert rc == 0
+    out = capsys.readouterr().out
+    lines = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+    by_branch = {ln["branch"]: ln for ln in lines}
+
+    # The real commit is 40 days old -- if the batch-miss default did NOT
+    # fire, this branch would exceed --max-age-days 30 and be dropped
+    # entirely. Its presence, with age_h ~ 0, is the proof the "" / now
+    # default took over rather than the true (much older) committer date.
+    assert "work/test/malformed" in by_branch
+    assert by_branch["work/test/malformed"]["age_h"] <= 1
+
+    # Confirm this went through the successful-batch-but-missing-entry path,
+    # not the whole-command-failure fallback exercised above.
+    per_branch_ct = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ct"]
+    assert per_branch_ct == [], "expected the batch-hit/missing-line path, not the per-branch fallback"

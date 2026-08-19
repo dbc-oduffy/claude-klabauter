@@ -2303,6 +2303,7 @@ def evaluate_gate_triage(
     scan_incomplete: bool = False,
     scan_errors: Optional[Sequence[str]] = None,
     gate_evidence: Optional[Dict[str, Any]] = None,
+    consult_prose_gates: bool = True,
 ) -> Dict[str, Any]:
     """Machine-resolvable TRIAGE classifier: freed / still-blocked / indeterminate.
 
@@ -2415,6 +2416,22 @@ def evaluate_gate_triage(
             PROJECTION" for the precedence rule and each leg's expected shape.
             `None` (the default) reproduces every pre-C3 code path byte-for-
             byte — this parameter is purely additive.
+        consult_prose_gates: default True reproduces every existing caller's
+            behaviour byte-for-byte (aging, surface, reconcile — untouched).
+            `False` suppresses BOTH prose-reading branches ahead of the
+            structured walk — the `_scaffold_sentinel_field` placeholder
+            check and the demoted `blocking_notes`-dominance vacuous-clear
+            branch — so the verdict is a pure function of the structured
+            `blocked_by` graph alone. This is NOT a second evaluator: same
+            function, same resolution walk, one parameter naming which legs
+            a caller is entitled to (Review: eng-director/the Director of Engineering, Finding 1).
+            `coordinator_core.reconcile.gate_eval.derive_readiness` (C1) is
+            the ONLY caller that passes `False` — it must never let prose
+            gate readiness (PM ruling 2026-08-19), and delegating with the
+            default `True` would silently re-inherit the DR-259 vacuous-
+            clear-dominance branch, permanently parking any `blocked_by: []`
+            + non-empty `blocking_notes` record (41-record corpus exposure,
+            reproduced against the two AC4-pinned records).
 
     Returns:
         {handoff_id, status: "freed"|"still-blocked"|"indeterminate"|
@@ -2473,7 +2490,11 @@ def evaluate_gate_triage(
         "gate_evidence_legs": [],
     }
 
-    sentinel_field = _scaffold_sentinel_field(handoff)
+    # Review: eng-director/the Director of Engineering, Finding 1 — `consult_prose_gates=False`
+    # suppresses this branch entirely so a prose scaffold placeholder never
+    # parks a readiness verdict; every other caller keeps the default `True`
+    # and this line is a no-op for them.
+    sentinel_field = _scaffold_sentinel_field(handoff) if consult_prose_gates else None
     if sentinel_field is not None:
         # Rule SC (C2, module docstring "C2 SCAFFOLD SENTINEL"): checked
         # ahead of every other branch, mirroring `evaluate_gate`'s own
@@ -2495,7 +2516,12 @@ def evaluate_gate_triage(
             ],
         }
 
-    if has_blocking_notes and not _is_structured_gate(handoff):
+    # Review: eng-director/the Director of Engineering, Finding 1 — `consult_prose_gates=False`
+    # suppresses the DR-259 demoted-dominance branch below as well, so an
+    # empty `blocked_by` plus a gate NOTE (never a gate) does not read as
+    # `indeterminate`. Default `True` leaves this branch reachable exactly
+    # as before for every other caller.
+    if consult_prose_gates and has_blocking_notes and not _is_structured_gate(handoff):
         # BLOCKING_NOTES DOMINANCE — DEMOTED (C4 gate-dependency-template-
         # emission-spec chunk; module docstring "BLOCKING_NOTES DOMINANCE"):
         # `blocking_notes` no longer overrides a SATISFIED STRUCTURED GRAPH —

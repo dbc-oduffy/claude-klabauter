@@ -1166,6 +1166,7 @@ from coordinator_core.bash_guards._helpers import (
 from coordinator_core.write_guards.block_subagent_plan_body_write import (
     _resolve_subagent_identity,
 )
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 # C3 (2026-08-03-narrow-subagent-commit-confinement-two-classes.md) landing-
 # order safety: C4's ownership-scope check (`assert_paths_in_session_scope`)
@@ -1194,7 +1195,16 @@ def _import_assert_paths_in_session_scope():
     return assert_paths_in_session_scope
 
 CLASS = "hard-deny"
-MATCHERS = ("Bash",)
+# Widened 2026-08-19 (subagent-boundary MATCHERS parity): a dispatched
+# subagent choosing the PowerShell tool instead of Bash previously bypassed
+# this guard entirely (see docs/reference/guard-tool-name-membership.md).
+# Several internal helpers (`_has_git_commit`, `_has_coordinator_safe_
+# commit`, `_has_committing_op_invoke`) fail CLOSED on unparseable input --
+# a documented, intentional DENY-biased posture for this guard specifically
+# (see `_import_assert_paths_in_session_scope`'s comment above), unlike the
+# held stash/worktree cohort where a fail-closed fallback was ruled a
+# defect. Widening here is therefore not the same risk class.
+MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
 #: The one narrow, route-keyed commit exemption this module grants (DR-125

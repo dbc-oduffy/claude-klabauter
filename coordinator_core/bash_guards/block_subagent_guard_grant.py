@@ -106,9 +106,15 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 from coordinator_core.bash_guards._command_tokenizer import (
     _extract_dash_c_payload,
 )
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-MATCHERS = ("Bash",)
+# Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
+# docs/reference/guard-tool-name-membership.md): `_classify_dash_m/c_
+# invocation` fail OPEN (return None) when `_tokenize_full_command` cannot
+# parse `cmd`, so unparseable PowerShell input is a missed detection, never
+# a spurious deny -- not the held stash/worktree fail-closed risk class.
+MATCHERS = COMMAND_TOOL_NAMES
 #: `dispatch.py` hardcodes chain ordering explicitly, so this value governs
 #: nothing at runtime; matches the sibling identity-gated hard-denies
 #: (`block_subagent_commit`, `block_subagent_destructive_action`,

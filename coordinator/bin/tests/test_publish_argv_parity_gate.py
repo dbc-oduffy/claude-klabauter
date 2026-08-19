@@ -196,6 +196,39 @@ def build_directive():
         )
         assert ok is False
 
+    def test_origin_lookup_batched_once_across_all_failing_roots(self, tmp_path, monkeypatch):
+        """docs/plans/2026-08-19-burn-down-the-amplification-hitlist.md C5-2:
+        the origin-lookup spawn helper must be called EXACTLY ONCE per gate
+        invocation, passed EVERY failing root's pairings together -- not
+        once per `repo_root` from inside the loop over `repo_roots` (the
+        per-item-call-inside-a-qualifying-loop shape
+        `test_no_unbatched_per_item_git_spawn.py`'s amplification collector
+        flags). TWO roots, BOTH broken, is required to distinguish this
+        from a single-root call, which looks identical either way -- a
+        single-root regression test would pass unchanged against the
+        pre-fix shape that called the batch helper once per root from
+        inside the loop."""
+        root_a = _make_repo(tmp_path, "broken-a")
+        _write_unaccepted_tree(root_a)
+        root_b = _make_repo(tmp_path, "broken-b")
+        _write_undeclared_required_tree(root_b)
+
+        calls: list = []
+        original = publish._argv_parity_pairing_origin_batch_by_root
+
+        def _spy(rel_modules_by_root):
+            calls.append(dict(rel_modules_by_root))
+            return original(rel_modules_by_root)
+
+        monkeypatch.setattr(publish, "_argv_parity_pairing_origin_batch_by_root", _spy)
+
+        ok = publish.dispatch_end_of_run_argv_parity_gate(
+            [root_a, root_b], target_filtered=False
+        )
+        assert ok is False
+        assert len(calls) == 1, f"expected exactly one batched origin-lookup call, got {len(calls)}"
+        assert set(calls[0]) == {root_a, root_b}
+
     def test_missing_source_baseline_fails_hard(self, tmp_path, monkeypatch, capsys):
         """A gate that cannot find its baseline must FAIL, not degrade to
         permissive -- even over an otherwise-clean destination tree."""

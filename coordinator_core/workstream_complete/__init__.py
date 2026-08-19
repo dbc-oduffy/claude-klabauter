@@ -246,7 +246,6 @@ from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: f
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
 
-from coordinator_core.workstream_complete import chain_partition_verdict_store
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_completion
@@ -339,7 +338,6 @@ _RESOLVER_BACKED_OUT_OF_SCOPE_IDS: frozenset[str] = frozenset(
 #: Problem section reconstructs. A template that omitted it would have
 #: reproduced the motivating failure while claiming to fix it.
 FREE_VALUE_KEYS: tuple[str, ...] = (
-    "chain_partition_verdict",
     "classify_dispatch_plan_file",
     "code_loc",
     "commit_count",
@@ -825,12 +823,17 @@ def _build_legacy_coverage_and_trail_directives(
 ) -> list[dict[str, Any]]:
     """The pre-existing (Convert #2) `d-write-trail` directive builder.
 
-    `d-coverage-gate` — the LIVE chain-end coverage-verdict directive this
-    function used to also emit (`wsc-coverage-gate-runner coverage-gate
-    --from-handoff <consumed_handoff>`, gated on `gate.disposition ==
-    PREDECESSOR_CONSUMED and gate.consumed_handoff`) — was removed here
-    (K-001, state/kill-ledger.md): the DAG walk behind its verdict cost
-    ~150-180s per close. The gate-verdict memo machinery it used
+    `d-coverage-gate` — REMOVED (K-001, state/kill-ledger.md), NOT live, and
+    built by nothing in this repo. This function emits `d-write-trail` only.
+    It formerly also emitted `d-coverage-gate` (`wsc-coverage-gate-runner
+    coverage-gate --from-handoff <consumed_handoff>`, gated on
+    `gate.disposition == PREDECESSOR_CONSUMED and gate.consumed_handoff`);
+    the DAG walk behind that verdict cost ~150-180s per close.
+    (Wording fixed 2026-08-19: this paragraph opened "the LIVE chain-end
+    coverage-verdict directive" and only said "was removed" four lines
+    later, which read as a live directive to anyone skimming the first
+    line — it sent a peer session hunting a construction site that has not
+    existed since K-001.) The gate-verdict memo machinery it used
     (`directives_review.gate_memo_hit`/`record_gate_verdict_if_passed`) was
     trimmed alongside it; only `d-run-review-brightline-gate`'s memo entry
     survives (brightline itself is unaffected by this cut and still mints
@@ -1177,20 +1180,23 @@ def build_directives(
     # brightline gate is strictly more than none, and emitting nothing here
     # would reinstate the very hole this branch exists to close, just on a
     # rarer path. Wrong-scope-but-present beats absent.
-    if canonicalize(gate.disposition) != PREDECESSOR_CONSUMED or not gate.consumed_handoff:
-        floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, session_start_time)
-        if floor_kwargs is not None:
-            directives.append(
-                directives_review.build_review_brightline_gate_directive(
-                    gate.sid, repo_root=repo_root, **floor_kwargs
-                )
+    # Every close — chain-terminal or not — now takes the SESSION-scoped
+    # brightline directive. The chain-terminal branch used to take
+    # `d-run-chain-plan-brightline-gate` instead; that gate is removed
+    # (state/kill-ledger.md K-007, 2026-08-19, PM ruling), so a chain
+    # terminal falls back to the cheap session-scoped gate rather than to
+    # no gate at all.
+    floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, session_start_time)
+    if floor_kwargs is not None:
+        directives.append(
+            directives_review.build_review_brightline_gate_directive(
+                gate.sid, repo_root=repo_root, **floor_kwargs
             )
-        else:
-            directives.append(
-                directives_review.build_review_brightline_gate_directive(gate.sid, repo_root=repo_root)
-            )
+        )
     else:
-        directives.append(directives_review.build_chain_plan_brightline_gate_directive(gate.consumed_handoff))
+        directives.append(
+            directives_review.build_review_brightline_gate_directive(gate.sid, repo_root=repo_root)
+        )
     review_partition = decisions.get("review_partition") or {}
     if review_partition.get("range") and review_partition.get("slices"):
         slices = [
@@ -1268,7 +1274,6 @@ def build_review_scale_judgment_point(
     decision: directives_review.ReviewScaleDecision,
     *,
     chain_terminal: bool = False,
-    verdict_presence: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Surfaces `decide_review_scale`'s verdict — otherwise dead code with
     no call site (source memo 2026-08-03-doe-claude-em-wsc-chain-terminal-
@@ -1301,12 +1306,12 @@ def build_review_scale_judgment_point(
     UNRESOLVED branch carries no `recommendation` (example-retrieval-repo-em memo,
     cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-
     mandatory-does-not-halt.md, "mechanism 3"): an unresolved decision on a
-    chain-terminal close typically means the brightline gate already
-    computed a `PARTITION-MANDATORY` verdict that a prior call simply
-    failed to carry forward (`decisions["chain_partition_verdict"]` never
-    re-supplied) — this assembler recommending `proceed-unresolved` in that
-    exact case routed the EM around its own mandatory-partition gate
-    precisely because the gate's own verdict went missing. `decide_review_
+    chain-terminal close meant the brightline gate had computed a
+    `PARTITION-MANDATORY` verdict that a prior call failed to carry forward
+    — this assembler recommending `proceed-unresolved` in that exact case
+    routed the EM around its own mandatory-partition gate. That cause is
+    now impossible (K-007 removed the gate), but the no-recommendation
+    posture is retained on its own merits below. `decide_review_
     scale` returning unresolved is a genuine "this assembler has no further
     evidence to settle it" gap, structurally identical to the one
     `build_session_shape_judgment_point` already handles via
@@ -1344,14 +1349,11 @@ def build_review_scale_judgment_point(
     dispositions for the same class of unmeasured-range problem — rather
     than inventing a second idiom:
 
-      - `resolve-verdict-and-recompute` — the discharging exit. On a
-        chain-terminal close, run `wsc-coverage-gate-runner brightline-gate
-        --from-handoff <path>`: it computes the verdict AND persists it via
-        `chain_partition_verdict_store`, so the NEXT `brief()` resolves
-        rows 5/6 with no EM transcription (that store is the mechanism-2
-        fix; this disposition is what points the EM at it). Where the
-        unresolved input is session-scoped instead, supply it
-        (`decisions["stage_paths"]`, a resolvable session id) and recompute.
+      - `resolve-verdict-and-recompute` — the discharging exit. Supply the
+        unresolved session-scoped input (`decisions["stage_paths"]`, a
+        resolvable session id) and recompute. The chain-terminal arm of this
+        disposition — run the gate, let it persist a verdict — is gone with
+        the gate (K-007); nothing to run, nothing to carry forward.
       - `partition-review-by-hand` — the EM resolved the scale off SKILL.md's
         table and is running the partitioned review on that basis. This is
         the "resolved: partition-mandatory" answer the enum previously could
@@ -1362,50 +1364,29 @@ def build_review_scale_judgment_point(
     Negative-spec on that enum: there is deliberately NO hand-declared
     `single-reviewer-ok` / "resolve-not-mandatory" counterpart. The
     asymmetry is a safety property, not an oversight — a permissive verdict
-    nothing computed is the one outcome `chain_partition_verdict_store`'s
-    fail-closed contract exists to make impossible (that module's docstring,
-    "Fail-closed contract"), and re-introducing it here as an EM-typed
-    disposition would reopen it at a different seam. Over-reviewing on a
+    nothing computed was the one outcome the removed verdict store's
+    fail-closed contract existed to make impossible, and re-introducing it
+    here as an EM-typed disposition would reopen it at a different seam.
+    The store is gone (K-007); the asymmetry it justified is not. Over-reviewing on a
     hand call is safe; under-reviewing on one is the reported defect.
 
-    THE UNRESOLVED CAUSE IS DISCRIMINATED, NEVER ASSERTED (PM ruling
-    2026-08-10, correcting this function's own prior "unresolved is simply
-    honest" defence). The single unresolved branch used to tell EVERY
-    unresolved close that an unresolved chain-terminal decision "typically
-    means the brightline gate already computed a PARTITION-MANDATORY
-    verdict that was not carried forward." That sentence diagnoses a cause
-    the function had checked nothing to earn, and in the common case it is
-    simply FALSE: `brief()` appends `d-run-chain-plan-brightline-gate` to
-    `directives` unconditionally on a chain terminal with a resolved
-    consumed handoff, so the usual reason the verdict is missing is that
-    the producer ON THIS SAME ENVELOPE has not run yet. An envelope that
-    schedules the computation and, in the same breath, asks the EM to
-    exercise judgment in its absence is not surfacing a genuine judgment
-    gap — it is asking a question one of its own directives is about to
-    answer. That is `SKILL.md`'s "blocked computation" (unresolved only
-    because a computable input was not computed), which doctrine says is to
-    be reported, not answered.
+    THE UNRESOLVED CAUSE IS NO LONGER DISCRIMINATED FROM DISK (state/kill-
+    ledger.md K-007, 2026-08-19, PM ruling). The prior three-way split
+    (`absent` = producer pending / `unreadable` = break-class / residual =
+    genuinely the EM's) was read off `chain_partition_verdict_store` via one
+    stat. That store and the `d-run-chain-plan-brightline-gate` producer
+    that wrote it are both removed, so there is no persisted chain verdict
+    left to be pending or corrupt: a chain-terminal close now resolves on
+    the session-scoped brightline alone and reaches this branch only when a
+    session-scoped input is genuinely unresolved. That residual case is the
+    one the generic unresolved text always described, so the two
+    presence-keyed branches were deleted rather than left to test a fact
+    nothing can produce.
 
-    `brief()` staying read-only — it does not shell out to run the gate
-    itself — is the part that IS by design, and it does not license the
-    conflation: the three causes are distinguishable from disk with one
-    stat, via `chain_partition_verdict_store.verdict_record_presence`.
-
-      - presence `absent` — PENDING. The producer has not run. Say so, name
-        the pending directive, and point at running it. Not a defect and
-        not an EM judgment call.
-      - presence `unreadable` — BREAK-CLASS. The gate ran and the verdict
-        did not survive the seam. This is the only cause under which the
-        old prose was accurate, and it is the one to report rather than
-        answer.
-      - not chain-terminal (or a caller-supplied verdict) — the residual
-        session-scoped unresolved input; genuinely the EM's, and the branch
-        that keeps the generic text.
-
-    Both new parameters default to the pre-existing behaviour
-    (`chain_terminal=False`, `verdict_presence=None`) so every caller and
-    test that passes only a `ReviewScaleDecision` keeps its exact prior
-    shape; only `brief()`, which can resolve both facts, opts in.
+    `chain_terminal` is retained and still defaults to `False`: it no longer
+    selects a branch here, but it stays on the signature because the
+    replacement coverage the PM is specifying for the chain-wide question
+    will need it, and callers already pass it.
     """
     if decision.resolved and decision.row in (1, 2):
         return None
@@ -1439,66 +1420,6 @@ def build_review_scale_judgment_point(
             # on, and are correctly left unmarked.
             reportable=True,
         )
-    if chain_terminal and verdict_presence == chain_partition_verdict_store.PRESENCE_ABSENT:
-        return build_untrusted_gate_judgment_point(
-            id="jp-review-scale",
-            question=(
-                "The chain-scoped brightline verdict has not been computed yet for this "
-                "close — `d-run-chain-plan-brightline-gate` is on THIS envelope and has "
-                "not run. Run it (it persists its own verdict, so the next brief() "
-                "resolves rows 5/6 with nothing for you to retype), then recompute. "
-                "Answer this point by hand only if you are deliberately resolving the "
-                "scale off SKILL.md's table instead."
-            ),
-            dispositions=[
-                build_disposition("run-the-pending-gate-and-recompute", resolves=[]),
-                build_disposition("partition-review-by-hand", resolves=[]),
-                build_disposition("proceed-unresolved", resolves=[]),
-            ],
-            evidence=(
-                "gates['review_scale'] + chain_partition_verdict_store presence=absent "
-                "(no record for this session; the producer has not run)"
-            ),
-            reason=(
-                f"review scale unresolved: {decision.reason} — PENDING, not blocked: the "
-                "producer that settles it (`d-run-chain-plan-brightline-gate`) is carried "
-                "on this same envelope and simply has not executed yet. This is ordering, "
-                "not a defect, and it is not a judgment the assembler is asking you to "
-                "substitute for the gate: run the gate."
-            ),
-        )
-
-    if chain_terminal and verdict_presence == chain_partition_verdict_store.PRESENCE_UNREADABLE:
-        return build_untrusted_gate_judgment_point(
-            id="jp-review-scale",
-            question=(
-                "The brightline gate RAN for this close and its verdict did not survive "
-                "the persistence seam — a record exists at this session's verdict-store "
-                "path but does not read back (corrupt, schema-unexpected, or provenance "
-                "mismatched). This is a BREAK-CLASS engine defect, not a scale question: "
-                "report it. Re-running the gate may re-persist a clean record; if it does "
-                "not, partition by hand and memo the seam failure rather than closing on "
-                "an unresolved chain terminal."
-            ),
-            dispositions=[
-                build_disposition("rerun-gate-then-report-if-still-unreadable", resolves=[]),
-                build_disposition("partition-review-by-hand", resolves=[]),
-                build_disposition("proceed-unresolved", resolves=[]),
-            ],
-            evidence=(
-                "gates['review_scale'] + chain_partition_verdict_store presence=unreadable "
-                "(a record exists for this session and read_verdict_record rejects it)"
-            ),
-            reason=(
-                f"review scale unresolved: {decision.reason} — the verdict WAS computed and "
-                "did not carry forward. This is the one cause under which "
-                "proceed-unresolved routes around a gate's own missing verdict "
-                "(cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-"
-                "does-not-halt.md, mechanism 3), and the one that is break-class to report "
-                "rather than answer."
-            ),
-        )
-
     return build_untrusted_gate_judgment_point(
         id="jp-review-scale",
         question=(
@@ -3577,41 +3498,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # absence, which is exactly `decide_review_scale`'s "not yet resolved"
     # sentinel for every one of these seven params.
     #
-    # `chain_partition_verdict` is the one exception to "caller-supplied
-    # only": an explicit `decisions["chain_partition_verdict"]` ALWAYS wins
-    # (never overridden by disk); when `decisions` omits it, fall back to the
-    # persisted record `wsc-coverage-gate-runner.py::cmd_brightline_gate`
-    # writes via `chain_partition_verdict_store` (root cause fix, cross-repo/
-    # inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-does-
-    # not-halt.md "mechanism 2"). This is still a pure READ — `read_verdict_
-    # record` never writes and fails closed (returns None, never a
-    # fabricated verdict) on any absent/corrupt/foreign-session/mismatched-
-    # provenance record; see that function's own docstring. The fallback is
-    # skipped entirely when `decisions` already supplies a value, so every
-    # existing test that passes `decisions=` keeps passing unchanged.
-    chain_partition_verdict = decisions.get("chain_partition_verdict")
-    if chain_partition_verdict is None:
-        chain_partition_verdict = chain_partition_verdict_store.read_verdict_record(
-            root,
-            session_id=gate.sid,
-            expected_from_handoff=gate.consumed_handoff or None,
-        )
-
-    # Seam 3 (C2 -> C3, this plan): the chain-scoped review-obligation slate,
-    # carried OPAQUELY off the same record `chain_partition_verdict` above
-    # already reads — never inspected, validated, or re-ordered here (this
-    # would make the carrier a second oracle over C7's shape). `None` means
-    # the gate has not run for this close yet (or ran before this key
-    # existed); a resolved-but-empty list is a real, distinct answer. No
-    # `decisions[...]` override exists for this key — unlike `chain_
-    # partition_verdict`, which an EM can hand-type, `chain_slices` is a
-    # machine-computed slate with no hand-carry path to override.
-    review_scale_chain_slices = chain_partition_verdict_store.read_chain_slices(
-        root,
-        session_id=gate.sid,
-        expected_from_handoff=gate.consumed_handoff or None,
-    )
-
     # AC6/AC9 (2026-08-08-the-engine-asks-for-facts-it-already-holds, C5):
     # `gross_loc`/`commit_count`/`surface_count` are the three disk-
     # derivable row-4 brightline inputs — see
@@ -3733,7 +3619,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         executor_dispatched=decisions.get("executor_dispatched"),
         shared_schema_touched=decisions.get("shared_schema_touched"),
         chain_disposition=gate.disposition,
-        chain_partition_verdict=chain_partition_verdict,
         commit_count_scope=resolved_commit_count_scope,
     )
 
@@ -3758,33 +3643,17 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         judgment_points.append(session_shape_jp)
     # `jp-coverage-verdict` (build_coverage_judgment_point) was removed here
     # (K-001, state/kill-ledger.md) along with `d-coverage-gate` itself.
-    # The unresolved point's cause is DISCRIMINATED, never asserted: before
-    # this, the point told every unresolved chain-terminal close that a
-    # verdict "was not carried forward" — a diagnosis it had checked
-    # nothing to earn, and which is FALSE in the common case where
-    # `d-run-chain-plan-brightline-gate` (appended unconditionally to
-    # `directives` above on this same envelope) simply has not run yet.
-    # Presence is a pure stat + the existing fail-closed read; the verdict
-    # VALUE still comes only from `read_verdict_record` above.
-    # Review: coordinator:code-reviewer (P1) — gate on gate.consumed_handoff
-    # too, mirroring line ~970's inverse condition exactly: without it, a
-    # chain terminal with an empty consumed_handoff takes the SESSION-scoped
-    # brightline directive (line 970's fallback) while this point still
-    # claimed the CHAIN-scoped directive was pending on this envelope.
+    # `chain_terminal` no longer selects a branch inside the judgment point
+    # (K-007, 2026-08-19 — the chain-scoped verdict and its store are gone),
+    # but it is still computed and passed: the replacement coverage the PM
+    # is specifying for the chain-wide question will need it, and the
+    # consumed_handoff leg keeps the flag meaning what it has always meant.
     review_scale_chain_terminal = (
         canonicalize(gate.disposition) == PREDECESSOR_CONSUMED and bool(gate.consumed_handoff)
-    )
-    review_scale_presence = (
-        chain_partition_verdict_store.verdict_record_presence(
-            root, session_id=gate.sid, expected_from_handoff=gate.consumed_handoff or None
-        )
-        if review_scale_chain_terminal and chain_partition_verdict is None
-        else None
     )
     review_scale_jp = build_review_scale_judgment_point(
         review_scale_decision,
         chain_terminal=review_scale_chain_terminal,
-        verdict_presence=review_scale_presence,
     )
     if review_scale_jp:
         judgment_points.append(review_scale_jp)
@@ -4053,23 +3922,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             max(0, measured_code_loc - _sliced_code_loc) if measured_code_loc is not None else None
         )
 
-    # AC4 (this plan): `chain_slices`, bolted onto the SAME payload beside
-    # `commit_slices` above. Absent key when unresolved (`review_scale_
-    # chain_slices is None`, per `read_chain_slices`'s own None-vs-`[]`
-    # contract) — never defaulted to `[]`, which would claim "resolved and
-    # empty" for a gate that has not run yet.
-    #
-    # NEGATIVE SPEC — `chain_slices` is NOT `commit_slices` and a future
-    # reader must not "reconcile" them: `chain_slices` is the chain-scoped
-    # REVIEW OBLIGATION (who owes review, decorated from `chain_partition_
-    # uncovered_shas`, sourced by C2/C7 off the DAG/session-trailer chain
-    # oracle) while `commit_slices` is the RECORD-WRITE POPULATION (this
-    # session's own trail-ready commit slices, measured above by `_measure_
-    # session_review_scale_inputs`). Different sets by design, different
-    # producers, different failure axes — one can be non-empty while the
-    # other is empty or absent, and that is not a bug.
-    if review_scale_chain_slices is not None:
-        review_scale_payload["chain_slices"] = review_scale_chain_slices
 
     # C2, pln-one-completion-verdict-for-wor-ea96e2: `gates.completion_
     # verdict` — one rollup over the five gate payloads just built above,

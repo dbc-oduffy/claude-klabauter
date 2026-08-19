@@ -147,6 +147,24 @@ class TestDashCForm:
         assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
 
 
+class TestPowerShellParity:
+    """2026-08-19 subagent-boundary MATCHERS widening: the same deny that
+    fires under Bash must fire under PowerShell carrying the identical
+    command -- the whole point of the widening (see module's MATCHERS
+    comment and docs/reference/guard-tool-name-membership.md).
+    """
+
+    def test_subagent_grant_denies_via_powershell(self):
+        p = _payload(_MODULE_M_GRANT, agent_id="a1")
+        p["tool_name"] = "PowerShell"
+        _reason(guard.check(p))
+
+    def test_em_grant_allows_via_powershell(self):
+        p = _payload(_MODULE_M_GRANT)
+        p["tool_name"] = "PowerShell"
+        assert guard.check(p) is None
+
+
 class TestDispatchWiring:
     """C2: the leg is registered in `dispatch.py`'s CONFINEMENT_DENY run and
     is reachable through the dispatcher entrypoint, not merely callable in

@@ -2501,6 +2501,113 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
     return None
 
 
+# `writes` landed as an optional field on plan-tasks.schema.json 1.7.0
+# (2026-07-19-pcli-phase2-stubs-claude-klabauter-contracts.md C2). Enforcement below is
+# going-forward only, gated on THIS date — the date `_cf_plan_tasks_writes_declared`
+# itself was wired in, not the field's own schema-bump date. A plan created
+# before this cutoff was authored under a regime where declaring `writes` was
+# not yet an expectation; retro-fitting ~any pre-existing open row would turn
+# an ordinary close-out write into a rejection for a gap the author had no
+# way to know about. Mirrors `_cf_category_required_post_cutoff` /
+# `_cf_summary_required_post_cutoff`'s going-forward-cutoff idiom.
+_PLAN_TASKS_WRITES_REQUIRED_CUTOFF = '2026-08-19'
+
+
+def _cf_plan_tasks_writes_declared(
+    row: dict, *, plan_created: str | None = None, governed: bool = False
+) -> ErrorDict | None:
+    """Hard-reject cross-field validator: a non-deferred, OPEN plan-tasks row
+    must declare `writes` — the key must be PRESENT, not necessarily
+    non-empty. Sibling to `_cf_plan_tasks_disposition_shape` above, same
+    per-row schema, registered alongside it in `_PLAN_TASKS_CROSS_FIELD_RULES`.
+
+    Fires only when BOTH:
+      - the row is non-deferred (`deferred` absent or false — a deferred row
+        is a harvest candidate, not a dispatch candidate, and has nothing to
+        declare yet), AND
+      - `disposition` is `open` (absent, per the schema default, counts as
+        open) — a coded/spun_off/backlogged/wont_do row is history, and
+        history does not retroactively acquire a write-surface declaration.
+
+    Fails on an ABSENT `writes` key OR a present-but-null value (`writes:`
+    with nothing after it, or `writes: null`) — matching `spine_read`'s AC2
+    UNDECLARED predicate exactly, not mere key presence — with ONE carve-out:
+    a row carrying a `depends_on` edge whose `gate_kind` is `epistemic-premise`
+    passes with `writes` undeclared.
+
+    NEGATIVE SPEC — do not "simplify" this into "an absent key is always an
+    error, tell the author to write `writes: []`". That inverts the two
+    values' meanings and was the first version of this rule.
+    `spine_read`'s AC2 is the authority: an ABSENT key yields the UNDECLARED
+    sentinel, meaning "unknown, treat as colliding with everything", which is
+    what forces wave separation; `writes: []` is a structurally different
+    value meaning the positive claim "writes nothing". They are not
+    interchangeable, and steering an author with an unknown surface toward
+    `writes: []` is actively harmful: `pathspec.commit_pathspec` drops a
+    declared-empty row from a SHARED wave's pathspec silently, so its
+    executor's work never reaches a commit.
+
+    An `epistemic-premise` edge is precisely the case where the surface
+    cannot be known yet — the schema defines that gate_kind as "the
+    predecessor decides whether this row should exist at all, so there is no
+    interface to pin and nothing to author against until its verdict lands".
+    The same discriminator holds this row out of the wave graph in
+    `wave_map._compute_held_out`; the two must agree, so change them
+    together or not at all.
+
+    What this rule actually catches, then, is the un-alibi'd omission: a row
+    with no write surface declared and no epistemic gate justifying the
+    silence — the shape that reaches `dispatch.emit` and cannot be fired.
+
+    `plan_created` is PLAN-scoped context a lone row cannot derive from
+    itself — the same `rule_kwargs` forwarding seam `governed=` already uses
+    (see `_apply_cross_field_rules`'s docstring). A caller that does not
+    forward it (or forwards `None`) gets NO enforcement from this rule, by
+    design: this function cannot distinguish "the plan really has no
+    created date" from "the caller never wired plan_created through," and
+    both must read as "cannot confirm this plan is post-cutoff" — the safe
+    default given the retro-safety concern above, mirroring how
+    `_apply_cross_field_rules` treats an unforwarded `governed` as its safe
+    default (False) rather than guessing. `check_plan_tasks_source` (below)
+    and both write guards' `_plan_tasks_spine_errors`
+    (`validate_frontmatter_schema_deny.py`,
+    `validate_frontmatter_schema_advisory.py`) now forward it from the plan's
+    own frontmatter, so an unforwarded call is the exception case, not the
+    normal one — the safe default above still matters for any other caller
+    that invokes this rule without threading `plan_created` through.
+
+    `governed` is accepted (unused) only so `_apply_cross_field_rules`'s
+    kwarg-filter-by-declared-param mechanism does not need this function to
+    special-case its absence — declaring it costs nothing and keeps the
+    signature uniform with its sibling rule.
+    """
+    if row.get('deferred') is True:
+        return None
+    disposition = row.get('disposition', 'open')
+    if disposition != 'open':
+        return None
+    if not plan_created or str(plan_created) < _PLAN_TASKS_WRITES_REQUIRED_CUTOFF:
+        return None
+    if row.get('writes') is not None:
+        return None
+    depends_on = row.get('depends_on')
+    if isinstance(depends_on, list) and any(
+        isinstance(edge, dict) and edge.get('gate_kind') == 'epistemic-premise'
+        for edge in depends_on
+    ):
+        return None
+    row_label = row.get('id') or '(row)'
+    return {
+        'field': 'writes',
+        'error': f"plan-tasks row {row_label}: 'writes' is required on a non-deferred open row.",
+        'hint': (
+            "List the paths this chunk writes. Omit 'writes' only on a row gated "
+            "'epistemic-premise', whose surface a predecessor names; 'writes: []' "
+            "means it writes nothing."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Ordering lint — closed rows sort to the bottom of the spine (D5, C3).
 #
@@ -3091,7 +3198,10 @@ def check_plan_tasks_source(source: str) -> ErrorDict | None:
         shape_errors = _validate_json_schema_node(row, schema, schema)
         if shape_errors:
             return shape_errors[0]
-        cf_errors = _apply_cross_field_rules(row, 'plan-tasks', governed=governed)
+        cf_errors = _apply_cross_field_rules(
+            row, 'plan-tasks', governed=governed,
+            plan_created=fm.get('created') if isinstance(fm, dict) else None,
+        )
         if cf_errors:
             return cf_errors[0]
     return None
@@ -3099,6 +3209,7 @@ def check_plan_tasks_source(source: str) -> ErrorDict | None:
 
 _PLAN_TASKS_CROSS_FIELD_RULES = [
     _cf_plan_tasks_disposition_shape,
+    _cf_plan_tasks_writes_declared,
 ]
 
 

@@ -203,6 +203,19 @@ async def _is_tracked_batch(worktree_root: Path, paths: List[Path]) -> Dict[Path
     supplied (verified live), so matching is done against each path's form
     relative to `worktree_root`, not the raw pathspec string.
 
+    Uses `-z` (NUL-terminated, unquoted output) rather than the default
+    newline-terminated stdout -- under git's default `core.quotePath=true`,
+    a matched entry containing non-ASCII bytes, a backslash, a double-quote,
+    or other "special" characters is emitted C-quoted (wrapped in `"…"`) on
+    the default form, which silently misclassified any such TRACKED path as
+    untracked when membership-tested against the raw, unquoted `rel` string
+    (Review: code-reviewer -- amp-s8 Finding 1). `-z` disables quoting
+    entirely and is NUL-delimited, so it also sidesteps a literal-newline
+    filename splitting incorrectly on `splitlines()`. Verified live that
+    `-z` composes with `--error-unmatch` without disturbing the rc tri-state
+    (rc==0/1/other unchanged; docs/plans/2026-08-19-burn-down-the-
+    amplification-hitlist.md).
+
     Empty `paths` returns {} without spawning.
     """
     if not paths:
@@ -214,7 +227,7 @@ async def _is_tracked_batch(worktree_root: Path, paths: List[Path]) -> Dict[Path
         except ValueError:
             rels.append(str(p))
     proc = await asyncio.create_subprocess_exec(
-        "git", "ls-files", "--error-unmatch", "--", *rels,
+        "git", "ls-files", "-z", "--error-unmatch", "--", *rels,
         cwd=str(worktree_root),
         env=_make_git_env(),
         stdout=asyncio.subprocess.PIPE,
@@ -224,7 +237,8 @@ async def _is_tracked_batch(worktree_root: Path, paths: List[Path]) -> Dict[Path
     if proc.returncode == 0:
         return {p: "tracked" for p in paths}
     if proc.returncode == 1:
-        tracked_rels = set(out.decode(errors="replace").splitlines())
+        tracked_rels = set(out.decode(errors="replace").split("\0"))
+        tracked_rels.discard("")
         return {
             p: ("tracked" if rel in tracked_rels else "untracked")
             for p, rel in zip(paths, rels)

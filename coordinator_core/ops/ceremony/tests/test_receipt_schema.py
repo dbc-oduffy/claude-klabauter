@@ -34,7 +34,6 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.ceremony.receipt_schema import (
-    COVERAGE_GATE_RELPATH,
     SCHEMA_VERSION,
     VALID_NODE_TYPES,
     VALID_SCOPING_METHODS,
@@ -88,7 +87,7 @@ def test_make_receipt_all_required_fields_present() -> None:
     r = _minimal_receipt()
     required = [
         "schema_version", "ceremony", "phase", "emitted_at",
-        "scope_mode", "nodes", "op_tail", "coverage_pointer",
+        "scope_mode", "nodes", "op_tail",
     ]
     for field in required:
         assert field in r, f"required field {field!r} missing from make_receipt() result"
@@ -116,10 +115,17 @@ def test_make_receipt_op_tail_arrays_never_absent() -> None:
         assert isinstance(tail[key], list)
 
 
-def test_make_receipt_coverage_pointer_default() -> None:
-    """coverage_pointer defaults to the canonical coverage gate path."""
+def test_make_receipt_omits_coverage_pointer() -> None:
+    """The K-001-killed coverage_pointer field is not emitted."""
     r = _minimal_receipt()
-    assert r["coverage_pointer"] == COVERAGE_GATE_RELPATH
+    assert "coverage_pointer" not in r
+
+
+def test_validate_accepts_legacy_receipt_with_coverage_pointer() -> None:
+    """Receipts written before the K-001 field removal still validate."""
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
+    r["coverage_pointer"] = "state/coverage/gate-result.json"
+    assert validate(r) == []
 
 
 def test_make_receipt_schema_version_is_integer() -> None:
@@ -263,7 +269,7 @@ def test_validate_full_receipt_valid() -> None:
 
 @pytest.mark.parametrize("drop_field", [
     "schema_version", "ceremony", "phase", "emitted_at",
-    "scope_mode", "nodes", "op_tail", "coverage_pointer",
+    "scope_mode", "nodes", "op_tail",
 ])
 def test_validate_missing_required_field(drop_field: str) -> None:
     """Dropping any required top-level field produces a validation error."""

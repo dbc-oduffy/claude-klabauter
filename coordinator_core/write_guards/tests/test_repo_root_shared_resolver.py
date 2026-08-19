@@ -118,7 +118,7 @@ class TestSharedResolver:
     ):
         """`show_toplevel` is walk-only as of 2026-08-19, so a failed walk
         resolves to None and spawns NOTHING -- forced here by stubbing
-        `_walk_for_dot_git` to find nothing, the shape that previously took
+        `_walk_for_repo` to find nothing, the shape that previously took
         the spawn fallback.
 
         This replaces a test that pinned the fallback's memoization ("only
@@ -130,7 +130,7 @@ class TestSharedResolver:
         path, where a per-call subprocess is the cost that matters and a
         confidently wrong repo root is the correctness risk that matters.
         """
-        monkeypatch.setattr(_git_repo_root, "_walk_for_dot_git", lambda start: None)
+        monkeypatch.setattr(_git_repo_root, "_walk_for_repo", lambda start: None)
 
         spawn_calls = []
         real_spawn = _git_repo_root._spawn_rev_parse

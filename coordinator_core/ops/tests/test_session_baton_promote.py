@@ -37,7 +37,7 @@ def _fake_scaffold(dest_rel: str, body: str = ""):
     returns dest_rel, exactly like coordinator-doc-new's real stdout
     contract (a path string)."""
 
-    def _fake(title, branch, cwd):
+    def _fake(title, branch, cwd, category=None, summary=None, gated_open=None):
         target = Path(cwd) / dest_rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
@@ -120,10 +120,10 @@ def test_second_promote_call_returns_existing_path_no_rescaffold(tmp_path, monke
     repo = _make_repo(tmp_path)
     calls = []
 
-    def _counting_fake(title, branch, cwd):
+    def _counting_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
         calls.append(1)
         fake = _fake_scaffold("state/handoffs/2026-08-18-once.md")
-        return fake(title, branch, cwd)
+        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _counting_fake)
 
@@ -169,7 +169,7 @@ def test_non_string_title_errors(tmp_path):
 def test_scaffold_failure_returns_error_not_exception(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
 
-    def _boom(title, branch, cwd):
+    def _boom(title, branch, cwd, category=None, summary=None, gated_open=None):
         raise RuntimeError("coordinator-doc-new blew up")
 
     monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _boom)
@@ -185,7 +185,9 @@ def test_scaffold_failure_returns_error_not_exception(tmp_path, monkeypatch):
 def test_scaffold_empty_stdout_is_an_error(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     monkeypatch.setattr(
-        promote_mod, "_scaffold_via_doc_new", lambda title, branch, cwd: ""
+        promote_mod,
+        "_scaffold_via_doc_new",
+        lambda title, branch, cwd, category=None, summary=None, gated_open=None: "",
     )
 
     result = _promote(session_id="sid-empty", cwd=str(repo))
@@ -199,6 +201,7 @@ def test_scaffold_empty_stdout_is_an_error(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.real_home
 def test_real_coordinator_doc_new_seam(tmp_path):
     repo = _make_repo(tmp_path)
     store.merge_baton("sid-real", cwd=str(repo), first_prompt="the real first prompt")
@@ -220,5 +223,169 @@ def test_real_coordinator_doc_new_seam(tmp_path):
     assert "kind: session-handoff" in text
     assert "the real first prompt" in text
 
-    on_disk = store.read_baton("sid-real", cwd=str(repo))
+
+# ---------------------------------------------------------------------------
+# category/summary params (AC4-AC8, 2026-08-19 plan)
+# ---------------------------------------------------------------------------
+
+
+def test_non_string_category_errors(tmp_path):
+    repo = _make_repo(tmp_path)
+    result = _promote(session_id="sid-badcat", category=123, cwd=str(repo))
+    assert result["exit_code"] == 1
+    assert "category" in result["error"]
+
+
+def test_non_string_summary_errors(tmp_path):
+    repo = _make_repo(tmp_path)
+    result = _promote(session_id="sid-badsum", summary=123, cwd=str(repo))
+    assert result["exit_code"] == 1
+    assert "summary" in result["error"]
+
+
+def test_both_present_threads_category_and_summary_no_gating(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    captured = {}
+
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
+        captured.update(category=category, summary=summary, gated_open=gated_open)
+        fake = _fake_scaffold("state/handoffs/2026-08-19-both.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
+
+    result = _promote(
+        session_id="sid-both",
+        category="bug",
+        summary="fixed the thing",
+        cwd=str(repo),
+    )
+    assert result["exit_code"] == 0
+    assert captured == {"category": "bug", "summary": "fixed the thing", "gated_open": None}
+
+
+def test_both_absent_gates_naming_both_fields(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    captured = {}
+
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
+        captured.update(category=category, summary=summary, gated_open=gated_open)
+        fake = _fake_scaffold("state/handoffs/2026-08-19-neither.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
+
+    result = _promote(session_id="sid-neither", cwd=str(repo))
+    assert result["exit_code"] == 0
+    assert captured["category"] is None
+    assert captured["summary"] is None
+    assert captured["gated_open"] == "category and summary are unfilled placeholders"
+
+
+def test_category_only_gates_naming_summary(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    captured = {}
+
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
+        captured.update(category=category, summary=summary, gated_open=gated_open)
+        fake = _fake_scaffold("state/handoffs/2026-08-19-catonly.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
+
+    result = _promote(session_id="sid-catonly", category="docs", cwd=str(repo))
+    assert result["exit_code"] == 0
+    assert captured["category"] == "docs"
+    assert captured["summary"] is None
+    assert captured["gated_open"] == "summary is an unfilled placeholder"
+
+
+def test_summary_only_gates_naming_category(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    captured = {}
+
+    def _capturing_fake(title, branch, cwd, category=None, summary=None, gated_open=None):
+        captured.update(category=category, summary=summary, gated_open=gated_open)
+        fake = _fake_scaffold("state/handoffs/2026-08-19-sumonly.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_open=gated_open)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _capturing_fake)
+
+    result = _promote(session_id="sid-sumonly", summary="wrote the thing", cwd=str(repo))
+    assert result["exit_code"] == 0
+    assert captured["category"] is None
+    assert captured["summary"] == "wrote the thing"
+    assert captured["gated_open"] == "category is an unfilled placeholder"
+
+
+def _read_frontmatter(handoff_path: Path) -> dict:
+    import yaml
+
+    text = handoff_path.read_text(encoding="utf-8")
+    fm_text = text.split("---", 2)[1]
+    return yaml.safe_load(fm_text)
+
+
+@pytest.mark.parametrize(
+    "category,summary",
+    [
+        ("infra", "did the thing"),
+        (None, "did the thing"),
+        ("infra", None),
+        (None, None),
+    ],
+)
+@pytest.mark.real_home
+def test_category_summary_four_way_schema_validation(tmp_path, category, summary):
+    """AC7: every combination of the two params validates clean against the
+    handoff schema (real coordinator-doc-new seam, not mocked)."""
+    from coordinator_core.frontmatter.schema_validate import (
+        _SCHEMAS_DIR,
+        load_schemas,
+        validate_frontmatter_obj,
+    )
+
+    repo = _make_repo(tmp_path)
+    sid = f"sid-4way-{category}-{summary}"
+    result = _promote(
+        session_id=sid,
+        title="Four-way test",
+        cwd=str(repo),
+        category=category,
+        summary=summary,
+    )
+    if result["exit_code"] != 0:
+        pytest.skip(
+            "coordinator-doc-new CLI unavailable/misconfigured in this "
+            f"environment: {result['error']}"
+        )
+
+    handoff_path = Path(result["handoff_path"])
+    if not handoff_path.is_absolute():
+        handoff_path = repo / handoff_path
+    fields = _read_frontmatter(handoff_path)
+
+    schema_obj = load_schemas(_SCHEMAS_DIR)["handoff"]
+    validation = validate_frontmatter_obj(fields, schema_obj)
+    assert validation["ok"], validation.get("errors")
+
+    if category and summary:
+        assert fields["deployment_state"] == "ready_to_fire"
+        assert fields["pickup_ready"] is True
+        assert "blocking_notes" not in fields
+        assert fields["category"] == "infra"
+        assert fields["summary"] == "did the thing"
+    else:
+        assert fields["deployment_state"] == "awaiting_gate"
+        assert fields["pickup_ready"] is False
+        notes = fields["blocking_notes"]
+        assert notes
+        if not category and not summary:
+            assert "category" in notes and "summary" in notes
+        elif not category:
+            assert "category" in notes and "summary" not in notes
+        else:
+            assert "summary" in notes and "category" not in notes
+
+    on_disk = store.read_baton(sid, cwd=str(repo))
     assert on_disk["promoted_to"] == result["handoff_path"]

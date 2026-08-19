@@ -405,6 +405,21 @@ def main(argv):
     # ---------------------------------------------------------------------
     try:
         claude_klabauter_root = _resolve_claude_klabauter_root()
+        # Verify coordinator_core actually LIVES at the resolved claude_klabauter_root
+        # before trusting the imports below. sys.path.insert(0, claude_klabauter_root)
+        # alone does not guarantee this: if claude_klabauter_root is empty (or lacks
+        # coordinator_core) but coordinator_core is ALSO reachable elsewhere
+        # on this interpreter's sys.path -- e.g. a developer's ambient
+        # `pip install -e .` of the engine, ahead or behind the inserted
+        # entry -- the bare import below silently succeeds against that
+        # OTHER install instead of failing. That is a dependency-resolution
+        # failure wearing a success's clothes: the operator asked for the
+        # engine at claude_klabauter_root and got a possibly-different one with no
+        # signal. Fail loud here instead, before either import is attempted.
+        if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):
+            raise RuntimeError(
+                f"coordinator_core not found under resolved CLAUDE_KLABAUTER_ROOT={claude_klabauter_root!r}"
+            )
         if claude_klabauter_root not in sys.path:
             sys.path.insert(0, claude_klabauter_root)
         from coordinator_core.state_root import coordinator_state_root

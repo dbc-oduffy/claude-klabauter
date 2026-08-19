@@ -461,7 +461,7 @@ def _synthesize_tasks_section(source: str, body_yaml: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _validate_row(row: dict, *, governed: bool = False) -> list:
+def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[str] = None) -> list:
     """Validate a single task row against the vendored base per-row shape
     PLUS the plan-tasks cross-field rules (DR-103 defect fix, 2026-07-29).
 
@@ -518,11 +518,19 @@ def _validate_row(row: dict, *, governed: bool = False) -> list:
     """
     schema = _PLAN_TASKS_SCHEMA_GOVERNED_DICT if governed else _PLAN_TASKS_SCHEMA_DICT
     errors = _validate_json_schema_node(row, schema, schema)
-    errors.extend(_apply_cross_field_rules(row, "plan-tasks", governed=governed))
+    errors.extend(_apply_cross_field_rules(
+        row, "plan-tasks", governed=governed, plan_created=plan_created,
+    ))
     return errors
 
 
-def _validate_all(rows: list, *, governed: bool = False, touched_ids: Optional[set] = None) -> list:
+def _validate_all(
+    rows: list,
+    *,
+    governed: bool = False,
+    touched_ids: Optional[set] = None,
+    plan_created: Optional[str] = None,
+) -> list:
     """Validate rows in `rows`; raise MutateAbort on the first invalid TOUCHED
     row. Returns the list of ids of pre-existing invalid rows this call did
     NOT touch (untouched-invalid diagnostic — empty list when there are
@@ -537,7 +545,13 @@ def _validate_all(rows: list, *, governed: bool = False, touched_ids: Optional[s
 
     `governed` is PLAN-scoped and must be resolved by the caller from the
     plan's frontmatter — no row can answer it. Default False is the legacy
-    predicate, i.e. today's behaviour exactly.
+    predicate, i.e. today's behaviour exactly. `plan_created` (2026-08-19
+    fix) is likewise PLAN-scoped — the plan document's own `created`
+    frontmatter field, forwarded through to `_cf_plan_tasks_writes_declared`
+    (see that rule's docstring) so a hand-authored open row missing
+    `writes` is actually caught here, not only at `dispatch.emit`'s
+    preflight. Every verb below resolves it from `old_text`'s own
+    frontmatter, mirroring how `_resolve` already resolves `governed`.
 
     `touched_ids` (2026-08-16, untouched-invalid-row deadlock fix — queue
     entry for the live repro: two rows each schema-invalid for reasons
@@ -555,7 +569,7 @@ def _validate_all(rows: list, *, governed: bool = False, touched_ids: Optional[s
     """
     untouched_invalid: list = []
     for row in rows:
-        errors = _validate_row(row, governed=governed)
+        errors = _validate_row(row, governed=governed, plan_created=plan_created)
         if not errors:
             continue
         row_id = row.get("id")
@@ -627,6 +641,13 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
                 "or a fence not directly under the '## Tasks' heading)"
             )
 
+        # PLAN-scoped context _validate_all forwards to the writes-declared
+        # cross-field rule (2026-08-19 fix) — resolved once per mutate call,
+        # mirroring how `_resolve` already resolves `governed` from the same
+        # frontmatter parse.
+        plan_fm = parse_frontmatter(old_text).get("frontmatter")
+        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+
         if result.status is LocateStatus.ABSENT:
             rows: list = []
             new_rows = rows + [task]
@@ -634,7 +655,9 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
             # shared _validate_all helper in both ABSENT and LOCATED branches,
             # instead of validating `task` alone here (F3).
             try:
-                untouched_invalid = _validate_all(new_rows, touched_ids={task["id"]})
+                untouched_invalid = _validate_all(
+                    new_rows, touched_ids={task["id"]}, plan_created=plan_created,
+                )
             except MutateAbort as exc:
                 raise MutateAbort(f"add-task: {exc.args[0] if exc.args else exc}") from exc
             body_yaml = _dump_rows(new_rows)
@@ -658,7 +681,9 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
 
         new_rows = rows + [task]
         try:
-            untouched_invalid = _validate_all(new_rows, touched_ids={task["id"]})
+            untouched_invalid = _validate_all(
+                new_rows, touched_ids={task["id"]}, plan_created=plan_created,
+            )
         except MutateAbort as exc:
             raise MutateAbort(f"add-task: {exc.args[0] if exc.args else exc}") from exc
 
@@ -751,6 +776,11 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         if result.status is LocateStatus.ABSENT:
             raise MutateAbort("stamp: task spine is absent — nothing to stamp")
 
+        # PLAN-scoped context forwarded to the writes-declared cross-field
+        # rule (2026-08-19 fix) — see _add_task's identical resolution.
+        plan_fm = parse_frontmatter(old_text).get("frontmatter")
+        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+
         rows = yaml.safe_load(result.body) or []
         if not isinstance(rows, list):
             raise MutateAbort("stamp: task spine body is not a YAML list")
@@ -786,7 +816,9 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         # deadlock fix): a pre-existing invalid row this batch did not
         # stamp must not veto the batch — see _validate_all's own docstring.
         try:
-            untouched_invalid = _validate_all(rows, touched_ids=set(stamped_ids))
+            untouched_invalid = _validate_all(
+                rows, touched_ids=set(stamped_ids), plan_created=plan_created,
+            )
         except MutateAbort as exc:
             raise MutateAbort(f"stamp: {exc.args[0] if exc.args else exc}") from exc
 
@@ -1384,6 +1416,9 @@ def _resolve(
         #     boolean, checked per row (no grouping to batch over).
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
+        # PLAN-scoped context forwarded to the writes-declared cross-field
+        # rule (2026-08-19 fix) — see _add_task's identical resolution.
+        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
 
         # id -> prospective (about-to-be-written) disposition for the WHOLE
         # batch — this is what makes the digest check below cover the
@@ -1628,7 +1663,9 @@ def _resolve(
         # change there that lets a partial write through would silently
         # reintroduce that risk without this file changing at all.
         try:
-            untouched_invalid = _validate_all(rows, governed=governed, touched_ids=set(resolved_ids))
+            untouched_invalid = _validate_all(
+                rows, governed=governed, touched_ids=set(resolved_ids), plan_created=plan_created,
+            )
         except MutateAbort as exc:
             raise MutateAbort(f"resolve: {exc.args[0] if exc.args else exc}") from exc
         _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)

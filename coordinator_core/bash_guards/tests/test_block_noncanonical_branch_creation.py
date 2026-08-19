@@ -227,6 +227,21 @@ class TestPowerShellIdiomDialectNeutral:
         ) is None
 
 
+class TestActualPowerShellToolName:
+    """2026-08-19 subagent-boundary MATCHERS widening: the class above
+    issues PowerShell-shaped text through `tool_name: "Bash"`, which per
+    docs/reference/guard-tool-name-membership.md proves detection only, not
+    that this guard is reached at all under a genuine PowerShell-tool
+    payload -- the exact bypass this widening closes. This pins the real
+    gate with `tool_name` actually set to `"PowerShell"`.
+    """
+
+    def test_denies_via_actual_powershell_tool_name(self):
+        p = _payload("git checkout -b bad-name")
+        p["tool_name"] = "PowerShell"
+        _reason(guard.check(p))
+
+
 class TestFailOpenOnUnreadableName:
     def test_unexpanded_shell_variable_passes(self):
         assert guard.check(_payload('git checkout -b "$BRANCH"')) is None

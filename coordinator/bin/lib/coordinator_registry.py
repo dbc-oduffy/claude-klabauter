@@ -443,9 +443,18 @@ try:
     with open(_MANIFEST_PATH, encoding="utf-8") as _f:
         _manifest = json.load(_f)
 except FileNotFoundError as _e:
+    # Split-repo layout (schemas/ live in DoE-claude, not co-located here):
+    # every rung above that could have found the manifest elsewhere derives
+    # from the same DOE_ROOT/REPO_DOE_CLAUDE resolution doe_root() performs
+    # below -- if none of them found it, that resolution is what actually
+    # failed. Name it explicitly so this reads as a dependency-resolution
+    # failure the operator can act on (set DOE_ROOT / REPO_DOE_CLAUDE), not
+    # a generic "plugin isn't installed" report when it demonstrably is.
     raise FileNotFoundError(
-        f"coordinator_registry: manifest not found at {_MANIFEST_PATH!r}. "
-        "This is an install-integrity failure — ensure the coordinator plugin is fully installed."
+        f"coordinator_registry: manifest not found at {_MANIFEST_PATH!r}, and no "
+        "DOE_ROOT/REPO_DOE_CLAUDE-resolvable candidate located one either. "
+        "This is an install-integrity failure — ensure the coordinator plugin is "
+        "fully installed, or set DOE_ROOT to the DoE-claude repo root."
     ) from _e
 except json.JSONDecodeError as _e:
     raise ValueError(

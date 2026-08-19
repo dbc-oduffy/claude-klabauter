@@ -96,6 +96,23 @@ severity_if_fail = "degraded"
 remediation = "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to populate <settings-home>/machine-local/.claude-klabauter-root with the resolved CLAUDE_KLABAUTER_ROOT path"
 
 [[probe]]
+id = "claude-klabauter.publish.provenance"
+cluster = "registry"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (run a percolate round; publish.py writes the provenance record at round end)"
+symptom_keywords = ["published engine stale", "which revision is dispatched", "publish provenance unknown", "DR-326", "stale dispatch", "commits behind published build"]
+# triage=true: a file read plus one bounded `git rev-list --count` call is cheap
+# enough for the bare-invocation triage set, and directly answers the question that
+# caused the DR-326 stale-dispatch incident (a consumer could not tell "running the
+# fix" from "running an hour-old build").
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_publish_provenance"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run a percolate round to publish claude-klabauter's current HEAD; publish.py's round-end write refreshes the provenance record this probe reads"
+
+[[probe]]
 id = "claude-klabauter.registry.key"
 cluster = "registry"
 weight = "standard"

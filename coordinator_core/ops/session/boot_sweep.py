@@ -252,6 +252,7 @@ from coordinator_core.ops.fleet.archive_handoffs import (
     _handle_preview_handoffs,
     _HEIR_NOTE_PREFIX,
     _is_terminal,
+    _shipped_in_batch_resolvable,
     _shipped_in_resolvable,
 )
 from coordinator_core.ops.fleet._common import (
@@ -1834,6 +1835,14 @@ async def _sweep_consumed_handoffs(
                 "surfacing — %s; skipping this boot (degrade safe)", exc,
             )
             live_paths_for_heir_retain = []
+        # Deferred to ONE batched `git cat-file --batch` call after this loop
+        # (T3 h4-ops-b deferred item, coordinator_core/ops/session/boot_sweep.py
+        # L1885) instead of spawning `git cat-file -e` once per candidate that
+        # reaches the shipped_in check below — see
+        # archive_handoffs._shipped_in_batch_resolvable. Every OTHER git call
+        # in this loop (_classify_heir_children, _is_terminal) stays per-item:
+        # this deferral touches only the one primitive the ledger named.
+        _pending_shipped_in_checks: List[tuple] = []
         for handoff_path in live_paths_for_heir_retain:
             cid = rel_id(handoff_path, state_worktree)
             if cid in heir_cids:
@@ -1882,18 +1891,24 @@ async def _sweep_consumed_handoffs(
                 })
                 continue
             shipped_in = meta.get("shipped_in")
-            resolvable = bool(shipped_in) and await _shipped_in_resolvable(
-                state_worktree, str(shipped_in)
+            _pending_shipped_in_checks.append((cid, heir_detail, shipped_in))
+
+        if _pending_shipped_in_checks:
+            resolvable_map = await _shipped_in_batch_resolvable(
+                state_worktree,
+                [sha for _cid, _detail, sha in _pending_shipped_in_checks if sha],
             )
-            if resolvable:
-                continue
-            heir_retained_skipped.append({
-                "id": cid,
-                "reason": (
-                    f"{_HEIR_NOTE_PREFIX}{heir_detail} but no resolvable "
-                    "shipped_in — retained for reaper"
-                ),
-            })
+            for cid, heir_detail, shipped_in in _pending_shipped_in_checks:
+                resolvable = bool(shipped_in) and resolvable_map.get(str(shipped_in), False)
+                if resolvable:
+                    continue
+                heir_retained_skipped.append({
+                    "id": cid,
+                    "reason": (
+                        f"{_HEIR_NOTE_PREFIX}{heir_detail} but no resolvable "
+                        "shipped_in — retained for reaper"
+                    ),
+                })
 
     filtered_ids: List[str] = []
     recency_skipped: List[dict] = []

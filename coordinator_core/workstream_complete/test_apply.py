@@ -2078,10 +2078,8 @@ def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -
         ],
         "directives_review.py": [
             ("d-run-review-brightline-gate", False),
-            ("d-run-chain-plan-brightline-gate", False),
             ("d-freeze-and-dispatch-review-partition-", True),
             ("d-freeze-and-dispatch-review-partition-integrator", False),
-            ("d-run-chain-coverage-gate", False),
             ("d-write-review-trail", False),
             ("d-run-ubt-pending-check", False),
             ("d-classify-dispatch-shape", False),
@@ -2447,87 +2445,6 @@ def test_execute_directives_repro_from_plan_dispatch_message(
 # plan-claim directives is incidental (append order in `__init__.py`'s
 # `build_directives`), never enforced by the halt gate.
 # ---------------------------------------------------------------------------
-
-
-def test_coverage_gate_directive_carries_no_depends_on() -> None:
-    from coordinator_core.workstream_complete import _build_legacy_coverage_and_trail_directives
-
-    gate = type(
-        "FakeGate",
-        (),
-        {
-            "disposition": "predecessor-consumed",
-            "consumed_handoff": "state/handoffs/x.md",
-            # f200bfae1 added a `gate.sid` read at the write-trail call site
-            # (`__init__.py::_build_legacy_coverage_and_trail_directives`) without
-            # widening this fixture, so these pins died on AttributeError rather
-            # than on the behaviour they assert.
-            "sid": "00000000-0000-4000-8000-000000000000",
-        },
-    )()
-    directives = _build_legacy_coverage_and_trail_directives(
-        gate, decisions={}, plan_claim_directives=[{"id": "d-claim-plan-execution-lock"}]
-    )
-    ids = {d["id"]: d for d in directives}
-    assert ids["d-coverage-gate"]["depends_on"] is None
-
-
-def test_coverage_gate_directive_still_dispatches_when_plan_claim_producer_failed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from coordinator_core.workstream_complete import _build_legacy_coverage_and_trail_directives
-
-    def failing_claim_main(argv: list[str]) -> int:
-        return 1
-
-    def ok_gate_main(argv: list[str]) -> int:
-        return 0
-
-    modules = {
-        "wsc-coverage-gate-runner-claim": _fake_module(failing_claim_main, "fake_claim"),
-        "wsc-coverage-gate-runner": _fake_module(ok_gate_main, "fake_gate"),
-    }
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    gate = type(
-        "FakeGate",
-        (),
-        {
-            "disposition": "predecessor-consumed",
-            "consumed_handoff": "state/handoffs/x.md",
-            # f200bfae1 added a `gate.sid` read at the write-trail call site
-            # (`__init__.py::_build_legacy_coverage_and_trail_directives`) without
-            # widening this fixture, so these pins died on AttributeError rather
-            # than on the behaviour they assert.
-            "sid": "00000000-0000-4000-8000-000000000000",
-        },
-    )()
-    plan_claim_directive = _directive("d-claim-plan-execution-lock", "wsc-coverage-gate-runner-claim")
-    pair = _build_legacy_coverage_and_trail_directives(
-        gate, decisions={}, plan_claim_directives=[plan_claim_directive]
-    )
-    directives = [plan_claim_directive] + pair
-
-    # Review: code-reviewer (Finding 2) — this dispatches `d-coverage-gate`
-    # through the real `_execute_directives` seam with exit_code==0 and
-    # `consumed_handoff="state/handoffs/x.md"`, a directive id/verdict-shape
-    # `record_gate_verdict_if_passed` DOES memoize. Without `repo_root`
-    # pinned to an isolated `tmp_path`, `_lazy_repo_root()` resolves the
-    # REAL repo root and writes a fixture memo into live
-    # `state/ceremony/wsc-gate-verdict-memo/` — exactly the leaked file this
-    # finding traced.
-    exit_code, report = ws_apply._execute_directives(directives, [], {}, repo_root=tmp_path)
-
-    assert report["failed"] == [
-        {"id": "d-claim-plan-execution-lock", "error": "wsc-coverage-gate-runner-claim exited 1 (args=[])"}
-    ]
-    assert "d-coverage-gate" in report["landed"], (
-        "d-coverage-gate must still dispatch when the plan-claim producer "
-        "failed -- depends_on naming a sibling directive id never gates "
-        "(apply_halt._directive_gate_open), so this pair's ordering is "
-        "incidental, never an enforced block"
-    )
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
 
 
 # ---------------------------------------------------------------------------

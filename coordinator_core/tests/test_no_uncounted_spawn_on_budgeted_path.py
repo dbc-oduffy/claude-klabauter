@@ -520,10 +520,13 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         counter=_GLOBAL_SUBPROCESS_RUN,
         counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
         executed="Measured 2026-08-19: `test_pending_drain_superseded_path_spawn_count_matches_"
-        "budget`'s fixture plants a due pending-push record naming a non-fast-forward-superseded "
-        "branch; `run_push_with_retry`'s retry loop calls `push_once` unconditionally as its "
-        "first attempt (the rejected non-fast-forward push that then routes into "
-        "`_is_superseded`). Counted by `op_total_pending_drain_superseded` (exact equality).",
+        "budget` wraps `auto_push.push_once` via `monkeypatch.setattr` and asserts the wrapper "
+        "fired (`push_once_calls >= 1`), against a fixture planting a due pending-push record "
+        "naming a non-fast-forward-superseded branch. A DIRECT call measurement, not the "
+        "control-flow argument that `run_push_with_retry`'s loop calls it unconditionally -- "
+        "that argument is sound but is an inference that a measurement was implied, which is the "
+        "shape this gate's third leg exists to refuse. Counted by "
+        "`op_total_pending_drain_superseded` (exact equality).",
     ),
     (
         "ceremony.scoped_git_commit",
@@ -602,34 +605,19 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
     ),
 }
 
-#: Sites this gate keeps RED that a static reading would wrongly clear: each is transitively
-#: reachable from a budgeted entrypoint AND its op's companion test uses an exact-equality global
-#: `subprocess.run` counter -- but the site was MEASURED (2026-08-19, same instrument as the
-#: `executed` legs above) never to run under that counter, so a new spawn added here moves no
-#: assertion. Recorded rather than silently omitted, because "reachable and under a counter" is
-#: exactly the shape that reads as counted until the measurement is taken. Not consumed by any
-#: assertion -- this is the negative half of the drain evidence.
-_UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {
-    (
-        "execute_plan_assemble.sibling_committed_chunk_ids_memo",
-        "coordinator_core/git/repo_root.py::_spawn_rev_parse",
-    ): "Same bare-repo-only `git_common_dir` fallback as the ceremony entry above. Measured "
-    "2026-08-19 under BOTH of this op's shapes -- the memo hit, and the first-call shape with a "
-    "real sibling repo, and again with a sibling directory having no `.git` anywhere up to the "
-    "root: 3 of 3 spawns came from `close_out_and_stamp::_run_git` and this site executed in "
-    "none of them. Adding further shapes to this op will not reach it.",
-    (
-        "ceremony.scoped_git_commit",
-        "coordinator_core/git/repo_root.py::_spawn_rev_parse",
-    ): "Reachable via `git_common_dir`'s spawn fallback, NOT `show_toplevel`'s -- the latter was "
-    "deleted 2026-08-19 once measured to have no case in which it returned a right answer the "
-    "walk had not already produced. `git_common_dir`'s fallback is different and is KEPT: "
-    "`git rev-parse --git-common-dir` answers rc=0 in a BARE repo, where the walk finds no "
-    "`.git` and has nothing to report. That is the condition under which this site is live -- "
-    "and it is mutually exclusive with this op's own precondition, since `scoped_git_commit` "
-    "commits into a worktree and a bare repo has none. Not a fixture omission: no fixture for "
-    "THIS op can be in a bare repo and still be this op.",
-}
+#: Sites this gate keeps RED that a static reading would wrongly clear. EMPTY as of 2026-08-19,
+#: and that is the end state, not a reset: every entry it ever held was discharged, and the last
+#: four went by DELETING the spawn rather than by counting it. `show_toplevel`'s spawn fallback
+#: had no case in which it returned a right answer the walk had not already produced;
+#: `git_dir`/`git_common_dir`'s existed solely for the bare repo, which `_looks_like_git_dir` now
+#: answers from the filesystem markers git itself uses; and `absolute_git_dir` always spawned on
+#: a docstring claim about a sibling function that measurement did not support.
+#:
+#: Kept as a named, empty mapping rather than removed: it is where the NEXT measured-unreached
+#: site goes, and its emptiness is the evidence that "reachable and under a counter" was checked
+#: against a measurement in every case rather than assumed. Not consumed by any assertion -- this
+#: is the negative half of the drain evidence.
+_UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {}
 
 
 def _module_dotted_name(relpath: str) -> str | None:
@@ -1080,78 +1068,53 @@ def test_plant_mechanism_drift_is_detected(tmp_path, monkeypatch):
     )
 
 
-@pytest.mark.designed_red
 def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
-    """The C-13 gate. For each of the nine live budgeted entrypoints, every `spawn_policy`-
-    detected spawn site whose enclosing function is transitively reachable from that entrypoint
-    must carry a `_LEGITIMIZED_SITES` entry for THAT op. Still EXPECTED RED, at 2 of the original
-    18 (module docstring, "THIS GATE'S OPERATIONAL DEFINITION"); this is deliberate, not a bug in
-    the gate.
+    """The C-13 gate, now STANDING. For each of the nine live budgeted entrypoints, every
+    `spawn_policy`-detected spawn site whose enclosing function is transitively reachable from
+    that entrypoint must carry a `_LEGITIMIZED_SITES` entry for THAT op.
 
-    `designed_red` BY EM DECISION, not by the authoring agent: this lands as a standing,
-    non-gating worklist rather than a tier-breaking failure, exactly as
-    `test_no_unbatched_per_item_git_spawn.py` split its own collector (G1) from its assertions
-    (G2) across waves. Each site leaves this list by being routed through its op's counter or by
-    earning a `_LEGITIMIZED_SITES` entry that says how it IS counted. When the list empties, this
-    marker comes off and the gate becomes standing -- that removal is the definition of C6 being
-    done, and it must not be done by populating `_LEGITIMIZED_SITES` wholesale to buy a green.
+    This carried `designed_red` from its landing until 2026-08-19, as a standing worklist rather
+    than a tier-breaking failure. The marker came off when the list emptied, which its own text
+    named as the definition of C6 being done -- and the condition it attached to that removal
+    holds: `_LEGITIMIZED_SITES` was never populated wholesale to buy a green. It went 18 -> 0
+    entry by entry, and the four routes out are worth keeping distinct, because only the first is
+    the one a reader assumes:
 
-    THE 2 THAT REMAIN, and how the previous 9 left. The `ceremony.scoped_git_commit` bypasses
-    were SEVEN: three were closed 2026-08-19 (opro-03 C6, first pass) by giving their op a
-    counter that could SEE them -- `test_commit_e2e_spawn_budget.py` counts via the
-    `subprocess.run` module attribute against `op_total_*` keys. The remaining THREE were
-    CONDITIONAL-PATH (`push_once`, `_is_ancestor`, `_invoke_cockpit_publish`) -- reachable,
-    spawning via `subprocess.run`, and counted the moment they ran, but no fixture took their
-    branch. C6's second pass (`test_pending_drain_superseded_path_spawn_count_matches_budget`)
-    closed all three the same way as the first: NOT by rerouting them through `git_native._git`
-    (`auto_push` is a hook with callers outside this pipeline, so that would change their
-    behaviour to buy a measurement) but by giving the op's existing `op_total_*` counter a
-    fixture that actually reaches the non-fast-forward/superseded branch -- a due pending-push
-    record naming a second, synthetic branch engineered non-fast-forward-superseded against
-    origin, with a planted cockpit-publish script and a schema-touching commit. All seven bypasses
-    are now counted by `op_total_*` keys (23/24/28/39) alongside the seam's 17/18/20/23; none was
-    legitimized on the strength of the counter alone -- each `executed` leg cites a DIRECT call
-    counter (`monkeypatch.setattr` wrapper, asserted `>= 1`), not an inference from the spawn
-    total matching.
+      1. GIVE THE SITE'S BRANCH ITS PRECONDITION. The three `auto_push` conditional-path sites
+         (`push_once`, `_is_ancestor`, `_invoke_cockpit_publish`) were reachable and would have
+         been counted the moment they ran; no fixture took their branch. One shape
+         (`pending_drain_superseded`) reaches all three.
+      2. GIVE THE OP A SHAPE AT ALL. `sibling_committed_chunk_ids_memo`'s only budgeted shape was
+         `second_call_identical_inputs: 0`, the memo hit. A shape that spawns nothing by
+         construction can never make ANY site visible to a counter, so its `_run_git` was
+         undischargeable for want of a shape, not a precondition.
+      3. GIVE THE OP A COUNTER THAT CAN SEE THE SITE. The first three `scoped_git_commit`
+         bypasses left this way, via `op_total_*` keys counting `subprocess.run` globally rather
+         than through the routing-narrow `git_native._git` seam.
+      4. DELETE THE SPAWN. The last four `repo_root::_spawn_rev_parse` instances left this way,
+         and this is the disposition to reach for FIRST. `show_toplevel`'s fallback had no case in
+         which it returned a right answer the walk had not already produced -- with `GIT_DIR` set
+         it reported the CWD as the toplevel, which is wrong, and hooks are where `GIT_DIR` is
+         set. `git_dir`/`git_common_dir`'s existed only for the bare repo, now answered by
+         `_looks_like_git_dir` from the same filesystem markers git's own `is_git_directory()`
+         uses. `absolute_git_dir` always spawned on the claim that the walk-based pair "does not
+         separately expose" the private gitdir, which `git_dir()` does; measured against real git
+         in a plain repo, a subdirectory and a linked worktree, the two agree.
 
-    `sibling_committed_chunk_ids_memo`'s `_run_git` left the list the same day, and by a third
-    route worth naming separately: not a fixture precondition and not a counter change, but a
-    missing SHAPE. That op's only budgeted shape was `second_call_identical_inputs: 0`, the memo
-    hit, which spawns nothing by construction -- and a shape that spawns nothing can never make
-    any site visible to any counter, so the site was undischargeable while that was the op's only
-    shape. `first_call_one_sibling` is the shape in which the op's own scan actually runs.
+    A gate that can only be satisfied by accounting for a spawn teaches the wrong lesson. Three
+    of the four routes above make a spawn visible; the fourth removes the reason it existed. When
+    a site lands on this list, ask in that order and stop at the first that applies.
 
-    THE 2 SURVIVORS are ONE SITE: `repo_root::_spawn_rev_parse`, under two ops. The third
-    instance (`bin.coordinator_harvest_deferrals_dedup_scan_root_resolution`) left the list by
-    DELETION rather than by counting -- it reached the site only through `show_toplevel`'s spawn
-    fallback, and that fallback is gone. Measured 2026-08-19, every reachable outcome of it was
-    either a failure the walk had already established or, with `GIT_DIR` set, git reporting the
-    CWD as the toplevel: an actively wrong answer for a caller asking which worktree it is in.
-    The bare-repo and ceiling-directory cases it was justified by cannot be answered by that form
-    at all. Removing a spawn beats counting one, and that is the disposition to reach for first.
+    Every `executed` leg cites a DIRECT measurement -- a call counter asserted `>= 1`, or a
+    stack-recording `subprocess.run` wrapper attributing each spawn to its origin frame -- never
+    an inference from a spawn total matching a budget. That is the leg neither the mechanism nor
+    the assertion shape establishes, and the one this gate cannot check statically (see "WHAT
+    THIS GATE DELIBERATELY DOES NOT CATCH").
 
-    The two that remain reach the site through `git_common_dir`'s fallback instead, which is NOT
-    the same call and is deliberately kept: `git rev-parse --git-common-dir` answers rc=0 in a
-    BARE repo, where the walk finds no `.git` and has nothing to report. So the site is live
-    under a real, nameable condition -- and that condition is mutually exclusive with both ops'
-    own preconditions. `ceremony.scoped_git_commit` commits into a worktree, and a bare repo has
-    none; `sibling_committed_chunk_ids_memo` was measured across all three of its shapes (memo
-    hit, first-call with a real sibling, first-call with a sibling having no `.git` up to the
-    root) with the site executing in none.
-
-    THE OPEN QUESTION these two pose, recorded rather than resolved by a disposition invented to
-    absorb it: if an op's own precondition negates a site's, no fixture for that op can reach it,
-    and the gate's premise -- every reachable spawn site must be visible to that op's counter --
-    is not satisfiable for the pair. The honest resolution is a change to the gate's CONTRACT
-    (a disposition that requires naming both mutually-exclusive preconditions, so the claim stays
-    falsifiable by anyone who produces a reaching fixture), not a fixture and not an exemption.
-    Do not clear these two by legitimizing on the strength of a counter alone -- that is
-    precisely the leg-3 failure the operational definition exists to name.
-
-    The four tests around this one are NOT `designed_red` and gate normally: the entrypoint
-    registry must resolve, no exemption may name a dead op or drift off its counter's spawn
-    mechanism, and the planted-fixture RED/GREEN pair must hold. Those are what prove this module
-    still works while its live-tree list is non-empty."""
+    The five tests around this one gate normally too: the entrypoint registry must resolve, no
+    exemption may name a dead op or drift off its counter's spawn mechanism, and the planted
+    RED/GREEN fixtures must hold. Those are what prove this module still detects anything.
+    """
     (
         index,
         spawn_sites_by_file,

@@ -142,23 +142,6 @@ _STORED_HEAD_ENDPOINT_RE = re.compile(r"^HEAD(?:[~^][0-9]*)*$")
 DEFAULT_COVERAGE_RATIO_THRESHOLD = 0.66
 
 
-def _resolve_coverage_ratio_threshold() -> float:
-    """Read COORDINATOR_COVERAGE_RATIO_THRESHOLD if set and valid, else
-    DEFAULT_COVERAGE_RATIO_THRESHOLD. Isolated so callers needing the
-    resolved threshold value (e.g. a notes render) don't re-parse env
-    themselves."""
-    raw = os.environ.get("COORDINATOR_COVERAGE_RATIO_THRESHOLD", "")
-    if not raw:
-        return DEFAULT_COVERAGE_RATIO_THRESHOLD
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_COVERAGE_RATIO_THRESHOLD
-    if not (0.0 <= value <= 1.0):
-        return DEFAULT_COVERAGE_RATIO_THRESHOLD
-    return value
-
-
 def _record_range_has_stored_head(sha_range: str) -> bool:
     """True if either endpoint of a STORED trail record's sha_range is a
     literal "HEAD" (with or without ^/~N ops), e.g. "0227ea17..HEAD".
@@ -3628,9 +3611,11 @@ class CoverageResult:
     verdict:       'COVERED' | 'WARN' | 'INDETERMINATE' (C10: the pre-C10
                    binary 'UNCOVERED' token no longer exists — see the
                    ratio/threshold assembly below). 'COVERED' when
-                   uncovered_shas is empty OR coverage_ratio is at/above
-                   _resolve_coverage_ratio_threshold(); 'WARN' below
-                   threshold, carrying a remediation OFFER (dispatch
+                   uncovered_shas is empty OR coverage_ratio is at/above the
+                   resolved ratio threshold (its resolver was removed with
+                   K-001, 2026-08-16 — this class has no constructor in the
+                   tree and the described assembly no longer runs); 'WARN'
+                   below threshold, carrying a remediation OFFER (dispatch
                    coordinator:review-code over uncovered_shas) rather than a
                    block.
     verdict_line:  Frozen CLI contract line (AC11), extended by C10:

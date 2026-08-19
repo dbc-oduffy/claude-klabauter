@@ -301,6 +301,24 @@ def test_powershell_semicolon_chained_git_commit_denies_same_as_bash(monkeypatch
     _denies(monkeypatch, 'Set-Location C:\\repo; git commit -m "msg"')
 
 
+def test_git_commit_denies_via_actual_powershell_tool_name(monkeypatch):
+    """2026-08-19 subagent-boundary MATCHERS widening: the prior tests in
+    this section issue PowerShell-*shaped text* through the Bash tool,
+    which per docs/reference/guard-tool-name-membership.md proves detection
+    only, not that the guard is reached at all under a genuine
+    `tool_name: "PowerShell"` payload -- the exact bypass this widening
+    closes (a subagent choosing the PowerShell tool over Bash). This test
+    exercises the real gate: `check()` must still deny the same command
+    when `tool_name` is actually `"PowerShell"`.
+    """
+    _subagent(monkeypatch)
+    p = _payload('git commit -m "msg"', agent_type=_SUBAGENT_TYPE)
+    p["tool_name"] = "PowerShell"
+    result = guard.check(p)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 # ---------------------------------------------------------------------------
 # 2026-07-29 part 4 -- ``coordinator-safe-commit`` quote-blindness
 # (integrator report during the part-3 port above): the part-3 comment used

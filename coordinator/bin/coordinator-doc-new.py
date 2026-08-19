@@ -476,8 +476,10 @@ def _machine_local_dump_repos() -> dict[str, str]:
     counterpart to enumerate-then-get). `dump --prefix repos` shares
     resolve_one with `get`, so a batched value is byte-identical to what a
     per-key `get` would print — see _machine_local.py::cmd_dump docstring.
-    Returns {} on any spawn/parse failure; callers already tolerate an
-    empty/partial paths table.
+    Returns {} on any spawn/parse failure OR a non-zero returncode (matches
+    _machine_local_get's fail-closed contract — a non-zero exit with
+    parseable stdout is a partial/crashed dump, not a value to trust);
+    callers already tolerate an empty/partial paths table.
     """
     impl = _machine_local_impl()
     try:
@@ -487,7 +489,7 @@ def _machine_local_dump_repos() -> dict[str, str]:
         )
     except OSError:
         return {}
-    if not result.stdout.strip():
+    if result.returncode != 0 or not result.stdout.strip():
         return {}
     try:
         data = json.loads(result.stdout)
@@ -1632,6 +1634,8 @@ def _scaffold_handoff(
     predecessor_id: str | None = None,
     category: str | None = None,
     additional_predecessors: list[str] | None = None,
+    summary: str | None = None,
+    gated_open: str | None = None,
 ) -> str:
     """Generate validator-clean handoff frontmatter + canonical section skeleton.
 
@@ -1687,6 +1691,25 @@ def _scaffold_handoff(
 
     Spec backlink: roadmap stub sedge-02 (state/roadmap/sedge-2026-08-06/),
     § Successor-side back-edge on a fan-in.
+
+    summary (--summary) replaces the hardcoded placeholder summary when
+    supplied; the placeholder is emitted unchanged when omitted (byte-identical
+    to before this parameter existed). Refused fail-loud when blank or over the
+    handoff schema's 140-char cap (_cf_summary_length_cap) — the caller fixes it
+    here rather than the scaffolder authoring frontmatter the validator will
+    then reject.
+
+    gated_open (--gated-open) emits the DR-173 trio as one unit when supplied:
+    deployment_state: awaiting_gate, pickup_ready: false, and
+    blocking_notes: <gated_open>. Omitted → today's ready_to_fire /
+    pickup_ready: true / no blocking_notes, byte-identical. One parameter
+    rather than three separate ones because schema_validate.py's
+    _cf_awaiting_gate_needs_dependency and _cf_awaiting_gate_not_pickup_ready
+    cross-field rules make only this one combination legal — encoding it once
+    here is cheaper than validating three independently-suppliable fields.
+    Refused fail-loud when blank.
+
+    Spec backlink: docs/plans/2026-08-19-promote-fills-its-own-placeholders.md
 
     Supplying predecessor_id WITHOUT predecessor is refused (fail-loud). The two
     are the ID and path representations of one edge, and the referential-integrity
@@ -1785,6 +1808,41 @@ def _scaffold_handoff(
             file=sys.stderr,
         )
         sys.exit(1)
+    # --summary is refused fail-loud (not silently truncated/emitted) when it
+    # would author frontmatter the handoff schema's own cross-field rules
+    # reject outright — blank (_cf_summary_required_post_cutoff) or over 140
+    # chars (_cf_summary_length_cap). The caller fixes it here rather than
+    # discovering the rejection downstream.
+    if summary is not None and not summary.strip():
+        print(
+            "coordinator-doc-new: --summary was supplied an empty or whitespace-only "
+            "value. Omit --summary entirely to keep the placeholder summary, or pass "
+            "real summary text.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if summary is not None and len(summary) > 140:
+        print(
+            f"coordinator-doc-new: --summary exceeds 140 characters (got {len(summary)}). "
+            "The handoff schema's _cf_summary_length_cap rejects it outright; shorten "
+            "it before scaffolding.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    # --gated-open is the DR-173 trio's single entry point (see docstring) —
+    # blank is refused for the same reason as --summary above: blocking_notes
+    # must be a non-empty string naming the gate.
+    if gated_open is not None and not gated_open.strip():
+        print(
+            "coordinator-doc-new: --gated-open was supplied an empty or whitespace-only "
+            "value. blocking_notes must be a non-empty string naming the gate; omit "
+            "--gated-open entirely to scaffold ready_to_fire instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _summary_value = summary if summary else placeholder_summary
+    _deployment_state = "awaiting_gate" if gated_open else "ready_to_fire"
+    _pickup_ready = "false" if gated_open else "true"
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
@@ -1794,10 +1852,14 @@ def _scaffold_handoff(
         f"predecessor: {_predecessor if _predecessor == 'none' else _yaml_quote(_predecessor)}",
         "kind: session-handoff",
         "handoff_phase: continuation",
-        "deployment_state: ready_to_fire",
+        f"deployment_state: {_deployment_state}",
         f"category: {_category}",
-        f"summary: {_yaml_quote(placeholder_summary)}",
-        "pickup_ready: true",
+        f"summary: {_yaml_quote(_summary_value)}",
+        f"pickup_ready: {_pickup_ready}",
+    ]
+    if gated_open:
+        lines.append(f"blocking_notes: {_yaml_quote(gated_open)}")
+    lines += [
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
     ]
@@ -2595,7 +2657,11 @@ def _scaffold_plan(
         "     `yaml plan-tasks` block belongs directly under this heading (parser-locate",
         "     rule — zero or >1 blocks is a defined error). Each list item validates against",
         "     schemas/plan-tasks.schema.json. Delete the two sample rows below and replace with",
-        "     real chunks; keep at least the shape (id/title/change_kind/surface required).",
+        "     real chunks; keep at least the shape (id/title/change_kind/surface/writes required",
+        "     on every non-deferred row — dispatch.emit cannot fire without writes:. The two",
+        "     empty forms are NOT interchangeable: `writes: []` claims this row writes NOTHING,",
+        "     while an ABSENT writes: key means 'unknown', which forces wave separation. Omit the",
+        "     key ONLY on a row gated epistemic-premise, whose surface a predecessor names).",
         "     KEEP THE CLOSING ``` FENCE when you replace the rows: `locate_fenced_block` matches",
         "     an OPEN-and-CLOSED pair, so a dropped closing fence reads as ABSENT — the spine is",
         "     visibly there and every plan-tasks CLI refuses it with 'task spine is absent'.",
@@ -2607,6 +2673,16 @@ def _scaffold_plan(
         "  title: PLACEHOLDER — one-line brief for the first shipped chunk",
         "  change_kind: script-edit  # replace with the actual change kind for this row",
         "  surface: path/to/primary/target  # single path or subsystem, not the full write-files set",
+        "  writes: [path/to/file/this/chunk/writes.py]  # REQUIRED on a non-deferred row —",
+        "              # dispatch.emit cannot fire without it. Replace with the real repo-relative",
+        "              # paths this chunk writes. An empty `writes: []` is a POSITIVE claim that",
+        "              # it writes nothing — NOT 'not known yet'. If the surface is not knowable,",
+        "              # omit this key entirely (UNDECLARED), which is legal only on a row gated",
+        "              # epistemic-premise; see spine_read's AC2 for why they differ.",
+        "  # depends_on:",
+        "  #   - chunk: C0  # predecessor row's id — SCHEMA-CORRECT object form only, never a bare id",
+        "  #     gate_kind: output-consumption-runtime  # or epistemic-premise — the only two writable kinds",
+        "  #     note: one-line rationale for the edge",
         "  queue_scope: project  # project (default) | central",
         "  disposition: open  # open (default) | coded | spun_off | backlogged | wont_do",
         "  # case_against: >",
@@ -2620,6 +2696,7 @@ def _scaffold_plan(
         "  title: PLACEHOLDER — one-line brief for the second shipped chunk",
         "  change_kind: doc-edit  # replace with the actual change kind for this row",
         "  surface: path/to/secondary/target",
+        "  writes: [path/to/another/file/this/chunk/writes.py]  # REQUIRED — see C1's writes: comment",
         "  queue_scope: project",
         "  disposition: open",
         "  body: |",
@@ -4402,6 +4479,40 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--summary",
+        dest="summary",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "(handoff) One-line session summary: frontmatter field. Replaces the "
+            "hardcoded placeholder summary when supplied; the placeholder is "
+            "emitted unchanged when omitted. Refused fail-loud (not silently "
+            "truncated) when blank or over the handoff schema's 140-char cap — "
+            "the caller fixes it here rather than authoring frontmatter the "
+            "validator will then reject. Handoff-scoped: refused fail-loud for "
+            "every other --type. "
+            "Spec: docs/plans/2026-08-19-promote-fills-its-own-placeholders.md"
+        ),
+    )
+    parser.add_argument(
+        "--gated-open",
+        dest="gated_open",
+        default=None,
+        metavar="NOTES",
+        help=(
+            "(handoff) Scaffold as a gated-open baton: emits deployment_state: "
+            "awaiting_gate, pickup_ready: false, and blocking_notes: <NOTES> as "
+            "one unit -- the DR-173 trio. Omitted -> today's ready_to_fire / "
+            "pickup_ready: true / no blocking_notes, byte-identical. One flag "
+            "rather than three: the handoff schema's "
+            "_cf_awaiting_gate_needs_dependency and "
+            "_cf_awaiting_gate_not_pickup_ready cross-field rules make only this "
+            "one combination legal. Refused fail-loud when blank. Handoff-scoped: "
+            "refused fail-loud for every other --type. "
+            "Spec: docs/plans/2026-08-19-promote-fills-its-own-placeholders.md"
+        ),
+    )
+    parser.add_argument(
         "--recovers-session",
         dest="recovers_session",
         default=None,
@@ -5203,6 +5314,21 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # --summary/--gated-open are handoff-scoped, same posture as
+    # --additional-predecessor above: refused fail-loud for every other
+    # --type rather than silently dropped (cross-repo/inbox/
+    # 2026-08-18-example-retrieval-repo-em-doc-new-silently-drops-type-inapplicable-flags.md
+    # offered warn-or-refuse; refuse matches the existing
+    # --additional-predecessor precedent, so no third posture is invented).
+    if (args.summary or args.gated_open) and doc_type != "handoff":
+        _bad_flag = "--summary" if args.summary else "--gated-open"
+        print(
+            f"coordinator-doc-new: {_bad_flag} is not accepted for --type {doc_type}. "
+            "Both --summary and --gated-open are handoff-only fields.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Generate scaffold content.
     if doc_type == "handoff":
         content = _scaffold_handoff(
@@ -5216,6 +5342,8 @@ def main() -> None:
             predecessor_id=args.predecessor_id,
             category=args.category,
             additional_predecessors=args.additional_predecessors,
+            summary=args.summary,
+            gated_open=args.gated_open,
         )
     elif doc_type == "recovery":
         content = _scaffold_recovery(

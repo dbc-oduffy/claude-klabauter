@@ -308,13 +308,14 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AbstractSet, List, Optional
+from typing import AbstractSet, Dict, List, Optional, Sequence
 
 from coordinator_core.archival import reverse_membership
 from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta
 from coordinator_core.dag import referenced_by as _dag_referenced_by
 from coordinator_core.frontmatter.baton_class import canonical_kind
+from coordinator_core.ops.ceremony.git_native import cat_file_batch_objects
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -625,6 +626,42 @@ async def _shipped_in_resolvable(worktree: Path, sha: str) -> bool:
     )
     await proc.wait()
     return proc.returncode == 0
+
+
+async def _shipped_in_batch_resolvable(worktree: Path, shas: Sequence[str]) -> Dict[str, bool]:
+    """Batch counterpart to `_shipped_in_resolvable`: resolves every sha's
+    `<sha>^{commit}` existence in ONE `git cat-file --batch` feed instead of
+    one `git cat-file -e` spawn per candidate.
+
+    Reuses `cat_file_batch_objects` (coordinator_core.ops.ceremony.git_native,
+    reviewed clean this week) rather than a bespoke `--batch-check` parser —
+    feeding it `"<sha>^{commit}"` specs gets the SAME reconciliation-by-
+    position contract that function already carries (resolved -> blob text,
+    missing/truncated/malformed -> None, absence from git's output is never
+    read as "resolved"); a non-None result for that spec is exactly what
+    `git cat-file -e <sha>^{commit}` tests for. `--batch` (not `--batch-check`)
+    is deliberate here — it is the primitive this module already has a
+    reviewed parser for, and the resolvability question this predicate asks
+    is binary (missing vs. not), so the extra blob bytes `--batch` returns
+    for a resolved commit are read and discarded, never a correctness gap.
+
+    Deduplicates shas before the spawn (repeat shipped_in values across
+    candidates are common) and drops blank/non-str entries, which always
+    resolve to False — matching `_shipped_in_resolvable`'s own guard. Called
+    from an `async def` per DR-211 D4 (never a blocking `subprocess.run` on
+    the event loop thread): the underlying spawn is synchronous, so it is
+    off-loaded via `asyncio.to_thread`, not awaited directly.
+
+    Returns {} (spawning no subprocess) when nothing is left to resolve —
+    guards the empty-input case explicitly rather than relying on git's own
+    empty-stdin behavior.
+    """
+    distinct = sorted({s.strip() for s in shas if s and isinstance(s, str) and s.strip()})
+    if not distinct:
+        return {}
+    specs = [f"{sha}^{{commit}}" for sha in distinct]
+    resolved = await asyncio.to_thread(cat_file_batch_objects, worktree, specs)
+    return {sha: resolved.get(f"{sha}^{{commit}}") is not None for sha in distinct}
 
 
 async def _classify_heir_children(

@@ -185,16 +185,35 @@ import sys
 from pathlib import Path
 
 _PROG = "freeze-review-diff.py"
+_SCRIPT_DIR = Path(__file__).resolve().parent
 
 _CLAUDE_KLABAUTER_REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_CLAUDE_KLABAUTER_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_CLAUDE_KLABAUTER_REPO_ROOT))
+
+_LIB_DIR = str(_SCRIPT_DIR / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
 
 from coordinator_core.cli_entry import recording_declared_writes  # noqa: E402
 from coordinator_core.ops.review_freeze_diff import (  # noqa: E402
     _validate_slice_id,
     freeze_diff,
 )
+from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_argv  # noqa: E402
+
+#: The .cmd launcher's own basename — used by `recover_windows_argv` to locate
+#: where this invocation's own arguments begin within the raw `%CMDCMDLINE%`
+#: capture (see `raw_cmdline_recovery` module docstring). `--range` is a git
+#: rev/range this CLI's caller types directly (never defaulted — see module
+#: docstring), and git revision syntax leans on a literal `^` (`sha^..sha`,
+#: the per-commit predecessor-range shape `--scope chain` callers use) --
+#: exactly the character cmd.exe's `%*` batch-parameter population strips
+#: silently. Refuses on an unvouchable capture (coordinator-write-review-
+#: trail.py's C2 posture, not scoped-git-commit's C2b detect-and-record --
+#: this is a low-traffic per-review CLI, not a ~40-concurrent-session commit
+#: hot path, so a false refusal does not carry C2b's fleet-break risk).
+_LAUNCHER_CMD_NAME = "freeze-review-diff.cmd"
 
 def _resolve_repo_root(explicit: str) -> Path | None:
     """Resolve the repo root: --repo-root verbatim if supplied, else the git
@@ -395,4 +414,18 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        _argv = recover_windows_argv(sys.argv[1:], _LAUNCHER_CMD_NAME)
+    except UnsoundRawCmdlineTransport:
+        # Remediation names a runnable command line, not a slash command and not
+        # a bare basename: this fires before argv is trustworthy, so it cannot
+        # assume a cwd. `_SCRIPT_DIR` resolves to wherever this file is actually
+        # installed. → CLAUDE.md § Runtime conventions (cold-path remediation).
+        print(
+            f"{_PROG}: the invoking shell stripped characters from this command "
+            f'line before this process started — run `python "{_SCRIPT_DIR / "freeze-review-diff.py"}" '
+            "...` instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    sys.exit(main(_argv))

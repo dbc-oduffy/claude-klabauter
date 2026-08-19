@@ -46,9 +46,26 @@ own ``cwd`` kwarg AND used as the subprocess ``cwd`` for the
 ``store``'s own git-common-dir walk resolves the session hub relative to).
 ``cwd`` omitted resolves against the current process cwd.
 
+``category``/``summary`` (2026-08-19, plan
+docs/plans/2026-08-19-promote-fills-its-own-placeholders.md) are optional
+params carrying context the caller already has in hand at the earning
+event, threaded verbatim into C1's ``--category``/``--summary`` flags on
+the SAME ``coordinator-doc-new`` seam — this op still never scaffolds
+frontmatter itself. Neither falls back to the baton record the way
+``title`` does: an absent field means no context existed, which the DR-173
+gate below exists to record. The gating decision is made once, here, from
+what the caller supplied: both present promotes ordinary
+(``ready_to_fire``/``pickup_ready: true``, no ``blocking_notes``); either
+absent passes C1's ``--gated-open`` with notes naming WHICH field is
+unfilled, so the promoted artifact is born ``awaiting_gate`` /
+``pickup_ready: false`` rather than advertising a placeholder as available
+work.
+
 Negative-spec:
     - Does NOT scaffold frontmatter directly — ``coordinator-doc-new`` stays
-      the only writer of ``state/handoffs/`` frontmatter.
+      the only writer of ``state/handoffs/`` frontmatter. ``category`` and
+      ``summary`` reach the artifact only via C1's CLI flags, same as every
+      other field this op threads through.
     - Does NOT decide WHEN to fire. D-A's earning-event set (pickup adoption,
       the three ceremony tails) is enforced by each CALLER, not by this op —
       this op is unconditionally idempotent either way, so a caller that
@@ -97,12 +114,25 @@ def _err(msg: str) -> dict:
     }
 
 
-def _scaffold_via_doc_new(title: str, branch: Optional[str], cwd: str) -> str:
+def _scaffold_via_doc_new(
+    title: str,
+    branch: Optional[str],
+    cwd: str,
+    category: Optional[str] = None,
+    summary: Optional[str] = None,
+    gated_open: Optional[str] = None,
+) -> str:
     """Invoke ``coordinator-doc-new --type handoff`` — same subprocess
     pattern as ``coordinator_core.baton_assemble.apply.
     _dispatch_coordinator_doc_new``. Returns the scaffolded file's path
     exactly as printed to stdout (coordinator-doc-new's own output
-    contract)."""
+    contract).
+
+    ``category``/``summary`` and ``gated_open`` are C1's flags
+    (``--category``/``--summary``/``--gated-open``) — this function is a
+    pure pass-through, never resolving or gating any of them itself; see
+    ``_handler``'s own docstring for the gating decision that produces
+    ``gated_open``."""
     from coordinator_core.resolution.facade import resolve_operator_config
 
     claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
@@ -110,6 +140,12 @@ def _scaffold_via_doc_new(title: str, branch: Optional[str], cwd: str) -> str:
     args = ["--type", "handoff", "--title", title]
     if branch:
         args += ["--branch", branch]
+    if category:
+        args += ["--category", category]
+    if summary:
+        args += ["--summary", summary]
+    if gated_open:
+        args += ["--gated-open", gated_open]
     proc = subprocess.run(
         [sys.executable, cli, *args],
         cwd=cwd,
@@ -164,6 +200,13 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
                     default (``"Session <sid>"``).
         branch      (str, optional) — handoff frontmatter branch;
                     auto-detected by coordinator-doc-new when omitted.
+        category    (str, optional) — handoff frontmatter category. No
+                    fallback to the baton record — absent means no context
+                    existed at the call site. Absence (either this or
+                    ``summary``) bears on the gating decision below.
+        summary     (str, optional) — handoff frontmatter summary,
+                    replacing the placeholder. Same no-fallback contract
+                    as ``category``.
         cwd         (str, optional) — working directory to resolve the
                     session hub AND the coordinator-doc-new subprocess's own
                     cwd from; threaded verbatim into store's ``cwd`` kwarg.
@@ -197,6 +240,14 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     if cwd is not None and not isinstance(cwd, str):
         return _err("session_baton.promote: cwd must be a string when supplied")
 
+    category = params.get("category")
+    if category is not None and not isinstance(category, str):
+        return _err("session_baton.promote: category must be a string when supplied")
+
+    summary = params.get("summary")
+    if summary is not None and not isinstance(summary, str):
+        return _err("session_baton.promote: summary must be a string when supplied")
+
     record = store.read_baton(session_id, cwd)
     existing = record.get("promoted_to")
     if existing:
@@ -211,9 +262,30 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     resolved_title = title or record.get("title") or f"Session {session_id}"
     resolved_cwd = cwd if cwd is not None else "."
 
+    # Gating decision (DR-173), made once from what the caller supplied. No
+    # fallback to the baton record for category/summary the way title falls
+    # back above -- an absent field here means no context existed at the
+    # call site, which is exactly what the gate exists to record. Both
+    # present -> born ordinary (no --gated-open). Either absent -> the
+    # residual case, gated with notes naming WHICH field is unfilled so a
+    # reader can tell what clears the gate.
+    if category and summary:
+        gated_open = None
+    elif not category and not summary:
+        gated_open = "category and summary are unfilled placeholders"
+    elif not category:
+        gated_open = "category is an unfilled placeholder"
+    else:
+        gated_open = "summary is an unfilled placeholder"
+
     try:
         handoff_path_str = _scaffold_via_doc_new(
-            resolved_title, branch, resolved_cwd
+            resolved_title,
+            branch,
+            resolved_cwd,
+            category=category,
+            summary=summary,
+            gated_open=gated_open,
         )
     except Exception as exc:  # noqa: BLE001 -- surfaced to the caller, never raised
         return _err(f"session_baton.promote: scaffold failed: {exc}")

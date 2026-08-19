@@ -58,6 +58,7 @@ Port of: register-discovered-repos.sh (DoE b644d5a9, 2026-07-22)
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import shutil
@@ -65,7 +66,7 @@ import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core import launchable
 from coordinator_core._settings_home import home_dir
@@ -153,6 +154,45 @@ def _resolve_machine_local(self_dir: Path) -> Optional[str]:
     return None
 
 
+def _registry_snapshot(ml_argv: List[str]) -> Optional[Dict[str, str]]:
+    """One `dump --prefix repos --format json` call resolving every
+    `repos.*` key at once — batch counterpart to the per-candidate `has`
+    check the main() loop used to spawn once per discovered repo (T3
+    h4-ops-b deferred item; same primitive already proven in
+    `coordinator/bin/coordinator-doc-new.py` and
+    `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos`).
+
+    Returns None (never {}) on any spawn/parse failure or non-zero
+    returncode — deliberately distinct from "dump ran and the registry is
+    empty". None is a signal to the caller to fall back to the reliable
+    per-key `has` check rather than treat an INDETERMINATE dump as a
+    confident "nothing is registered yet": this function's only consumer
+    gates an unconditional `set` (registration), and only-if-absent is a
+    clobber-prevention invariant (module docstring) — guessing "absent" on
+    a failed dump would let this bridge overwrite a manually-registered
+    path, exactly what only-if-absent forbids.
+    """
+    try:
+        result = subprocess.run(
+            [*ml_argv, "dump", "--prefix", "repos", "--format", "json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {k: v for k, v in data.items() if isinstance(v, str)}
+
+
 def _machine_local_launch_argv(ml_bin: str) -> List[str]:
     """Interpreter-prefix `ml_bin` for a bare-exec launch: `machine-local` is an
     extensionless coordinator/bin sibling, so `resolve_launchable()` is POSIX-bare
@@ -213,6 +253,16 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         _journal_registered([])
         return 0
 
+    # Batched already-registered check (T3 h4-ops-b deferred item): ONE
+    # `dump --prefix repos --format json` call up front instead of one `has`
+    # spawn per candidate below. `snapshot is None` means the dump was
+    # indeterminate (spawn/parse failure or non-zero exit) — the per-key
+    # `has` fallback preserves the pre-batch fail-closed guarantee for
+    # exactly the candidates reached while indeterminate, rather than
+    # guessing "absent" and risking the only-if-absent clobber the module
+    # docstring forbids.
+    snapshot = _registry_snapshot(ml_argv)
+
     to_register: List[Tuple[str, str]] = []
     for repo_path in candidates:
         key = _derive_key(os.path.basename(repo_path.rstrip("/")))
@@ -226,13 +276,17 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
                 file=sys.stderr,
             )
             continue
-        has_rc = subprocess.run(
-            [*ml_argv, "has", f"repos.{key}"],
-            capture_output=True,
-            check=False,
-            **no_console_creationflags(),
-        ).returncode
-        if has_rc == 0:
+        if snapshot is not None:
+            already_registered = f"repos.{key}" in snapshot
+        else:
+            has_rc = subprocess.run(
+                [*ml_argv, "has", f"repos.{key}"],
+                capture_output=True,
+                check=False,
+                **no_console_creationflags(),
+            ).returncode
+            already_registered = has_rc == 0
+        if already_registered:
             continue
         to_register.append((key, repo_path))
 

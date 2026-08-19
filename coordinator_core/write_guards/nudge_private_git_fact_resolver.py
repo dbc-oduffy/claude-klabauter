@@ -31,12 +31,13 @@ really produce this text" whole-file fidelity DR-077 established, and
 importing keeps the two guards' reconstruction plumbing in lockstep by
 construction.
 
-FIRE-SET — exactly the three WALK-BACKED forms
+FIRE-SET — exactly the four WALK-ONLY forms
 (`coordinator_core.git.repo_root`'s own docstring, "Non-spawning
 parent-walk vs spawn, honestly per form"):
-  - `--show-toplevel`  -> offer `coordinator_core.git.repo_root.show_toplevel`
-  - `--git-dir`        -> offer `coordinator_core.git.repo_root.git_dir`
-  - `--git-common-dir` -> offer `coordinator_core.git.repo_root.git_common_dir`
+  - `--show-toplevel`     -> offer `coordinator_core.git.repo_root.show_toplevel`
+  - `--git-dir`           -> offer `coordinator_core.git.repo_root.git_dir`
+  - `--git-common-dir`    -> offer `coordinator_core.git.repo_root.git_common_dir`
+  - `--absolute-git-dir`  -> offer `coordinator_core.git.repo_root.absolute_git_dir`
 ...and ONLY when the proposed file lives in a hot-path module (`write_guards/`,
 `bash_guards/`, `hooks/`, `ops/session/`) — a test-tree site never runs in a
 live session (`spawn_policy.is_test_tree_site`, chunk D2, `c88496d6b`) and is
@@ -54,48 +55,57 @@ in the same call — a positional assumption would silently miss this exact
 form, which is why the discriminating flag is tested via `in`, never via
 index.
 
-SILENT SET — the three forms `coordinator_core.git.repo_root`'s own
+SILENT SET — the two forms `coordinator_core.git.repo_root`'s own
 docstring states ALWAYS spawn, deliberately:
-  - `--show-prefix` / `--absolute-git-dir` — the offered seam is
-    fork-EQUAL on first call, not cheaper (repo_root.py's per-form
-    docstring). A "fork-equal on first call, zero thereafter" memoization
-    claim is a DIFFERENT property than "cheaper in the ordinary case" — see
-    `_alternative_liveness`'s 2026-07-29 false-capability catch, which is
-    exactly the mixing this guard must not repeat.
+  - `--show-prefix` — the offered seam is fork-EQUAL on first call, not
+    cheaper (repo_root.py's per-form docstring). A "fork-equal on first
+    call, zero thereafter" memoization claim is a DIFFERENT property than
+    "cheaper in the ordinary case" — see `_alternative_liveness`'s
+    2026-07-29 false-capability catch, which is exactly the mixing this
+    guard must not repeat. `--absolute-git-dir` sat in this set for the same
+    reason until 2026-08-19, when `repo_root.absolute_git_dir` became
+    walk-only; it is now in the FIRE-SET.
   - `--is-inside-work-tree` — deriving it from walk state is a documented
     semantic trap (`repo_root.is_inside_work_tree`'s own docstring: a bare
     repo has no working tree and no toplevel, but for DIFFERENT reasons a
     truthiness check on `show_toplevel()` would conflate), not a refactor
     opportunity.
 
-AC5 HONESTY: the offer text says "cheaper in the ordinary case, never more
-expensive" — NEVER "eliminates the spawn". `show_toplevel()` still falls
-back to a spawn for the no-`.git`-found case; the walk DOES recognise a
-`.git` FILE as well as a directory (so `--separate-git-dir` clones and
-submodules are handled by the walk, not a walk gap) — see
-`coordinator_core/git/repo_root.py`'s own "Non-spawning parent-walk vs
-spawn, honestly per form" section, which this guard's offer text mirrors
-rather than oversells.
+AC5 HONESTY: the offer text says the offered seam never spawns. That became
+TRUE on 2026-08-19 and would have been a mis-claim before it — until then
+`show_toplevel()` fell back to a spawn when the walk found no `.git`, so the
+text was deliberately limited to "cheaper in the ordinary case, never more
+expensive". The fallback is now gone for all four FIRE-SET forms, which makes
+the older wording UNDERSTATE the seam; understating is its own dishonesty,
+and is why this text was rewritten rather than left standing. The walk
+recognises a `.git` FILE as well as a directory (so `--separate-git-dir`
+clones and submodules are handled by the walk), and a bare repo by its own
+HEAD/objects/refs markers. Re-read `coordinator_core/git/repo_root.py`'s
+"Non-spawning parent-walk vs spawn, honestly per form" section before
+editing this text: it is the source this mirrors, and the point is that it
+must not drift from it again.
 
 `--git-common-dir` absolute-path confirmation (per this chunk's brief):
 `coordinator_core.git.repo_root.git_common_dir` is the offered symbol, NOT
-`coordinator_core.git.git_dir.resolve_git_common_dir` directly —
-`repo_root.git_common_dir()` normalizes the spawn-fallback path against the
-resolved cwd before returning (see its own docstring's "Asymmetry" section),
-so it is absolute in every path this guard's offer would replace, unlike the
-lower-level `resolve_git_common_dir`, which builds a Path via join/normpath
-with no `.resolve()` and is only absolute if ITS OWN caller's `repo_root`
-already is. Offering the seam-level function, not the primitive, is what
-keeps this guard's "cheaper, never more expensive" claim true regardless of
-what a hypothetical private resolver's own `repo_root` value would have been.
+`coordinator_core.git.git_dir.resolve_git_common_dir` directly — the seam
+resolves against an absolute walk anchor, so it is absolute in every path
+this guard's offer would replace, unlike the lower-level
+`resolve_git_common_dir`, which builds a Path via join/normpath with no
+`.resolve()` and is only absolute if ITS OWN caller's `repo_root` already is.
+Offering the seam-level function, not the primitive, is what keeps this
+guard's claim true regardless of what a hypothetical private resolver's own
+`repo_root` value would have been. (Before 2026-08-19 the seam earned this
+by normalizing its SPAWN-fallback output against the resolved cwd; the
+fallback is gone, and the guarantee now comes from the walk anchor itself.)
 
 Negative-spec:
   - Does NOT deny/block anything — CLASS is "advisory"; the envelope carries
     only `additionalContext`, never `permissionDecision`.
-  - Does NOT fire on `--show-prefix`, `--absolute-git-dir`, or
-    `--is-inside-work-tree` — see SILENT SET above. A future author widening
-    the fire-set to include one of these must first establish (and state,
-    not assume) that the offered seam is at least as cheap for that form.
+  - Does NOT fire on `--show-prefix` or `--is-inside-work-tree` — see SILENT
+    SET above. A future author widening the fire-set to include one of these
+    must first establish (and state, not assume) that the offered seam is at
+    least as cheap for that form. `--absolute-git-dir` left this set on
+    2026-08-19 by exactly that route: its seam stopped spawning.
   - Does NOT fire outside a hot-path module (`write_guards/`, `bash_guards/`,
     `hooks/`, `ops/session/`) or inside a test-tree site
     (`spawn_policy.is_test_tree_site`) — neither runs in a live session, so
@@ -132,26 +142,27 @@ PRIORITY = 200  # advisory/deny-offer band; next slot after nudge_shell_shaped_s
 #: in a live session, so is never a culprit this detector's remit covers.
 _HOT_PATH_MARKERS = ("write_guards/", "bash_guards/", "hooks/", "ops/session/")
 
-#: FIRE-SET: the three walk-backed forms, each mapped to its offered
-#: importable symbol. See module docstring "FIRE-SET".
+#: FIRE-SET: the four walk-only forms, each mapped to its offered importable
+#: symbol. See module docstring "FIRE-SET". `--absolute-git-dir` joined this
+#: set on 2026-08-19: it was silent while `repo_root.absolute_git_dir` always
+#: spawned, and that function is now walk-only, so staying silent would hide a
+#: real elimination rather than avoid a false claim.
 _FIRE_FLAG_TO_OFFER: Dict[str, str] = {
     "--show-toplevel": "coordinator_core.git.repo_root.show_toplevel",
     "--git-dir": "coordinator_core.git.repo_root.git_dir",
     "--git-common-dir": "coordinator_core.git.repo_root.git_common_dir",
+    "--absolute-git-dir": "coordinator_core.git.repo_root.absolute_git_dir",
 }
 
-#: SILENT SET: the three always-spawning forms. Named here (not merely
+#: SILENT SET: the two forms that genuinely still spawn. Named here (not merely
 #: absent from `_FIRE_FLAG_TO_OFFER`) so a reader — and the guard's own
 #: self-tests — can see this is a deliberate exclusion, not an oversight.
-_SILENT_FLAGS = frozenset(
-    {"--show-prefix", "--absolute-git-dir", "--is-inside-work-tree"}
-)
+_SILENT_FLAGS = frozenset({"--show-prefix", "--is-inside-work-tree"})
 
 _OFFER_TEMPLATE = (
-    "OFFER: {symbol} walks the parent directories for `.git` (dir or file) "
-    "instead of spawning `git rev-parse {flag}` — cheaper in the ordinary "
-    "case, never more expensive (it still falls back to a spawn when no "
-    "`.git` entry is found on the walk). See coordinator_core/git/repo_root.py "
+    "OFFER: {symbol} walks the parent directories instead of spawning "
+    "`git rev-parse {flag}` — it never spawns, on any path. See "
+    "coordinator_core/git/repo_root.py "
     "\"Non-spawning parent-walk vs spawn, honestly per form\".\n"
     "Found a private `git rev-parse {flag}` call in {file_path}."
 )

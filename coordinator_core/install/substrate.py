@@ -1044,8 +1044,25 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
 # (DoE-claude tree) and docs/decisions/DR-303-windows-spawn-economics-is-a-fix-not-a-desig.md
 # § Residual uncertainty ("Caret recovery ... reasoned from code on macOS").
+# 2026-08-19: `freeze-review-diff.py`, `parallel-review-gate-decision.py`,
+# `parallel-review-orthogonality-guard.py`, and `wsc-coverage-gate-runner.py`
+# added -- same caret-eating exposure as the three above (each takes an
+# arbitrary git rev/range directly from an agent's typed CLI invocation, and
+# `^` is reachable via the `sha^..sha` predecessor-range shape). See
+# `gen-launcher-shim.py::_RAW_CMDLINE_ENTRYPOINTS`'s own comment for the
+# full survey and what was deliberately left out. Extend BOTH sets together
+# -- `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_
+# substrate_targets` is the drift guard.
 _RAW_CMDLINE_TARGETS = frozenset(
-    {"coordinator-write-review-trail.py", "scoped-git-commit", "cross-repo-memo.py"}
+    {
+        "coordinator-write-review-trail.py",
+        "scoped-git-commit",
+        "cross-repo-memo.py",
+        "freeze-review-diff.py",
+        "parallel-review-gate-decision.py",
+        "parallel-review-orthogonality-guard.py",
+        "wsc-coverage-gate-runner.py",
+    }
 )
 
 

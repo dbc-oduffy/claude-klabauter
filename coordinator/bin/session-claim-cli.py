@@ -236,7 +236,7 @@ def _import_holder_evidence_module():
     claude_klabauter_root = _resolve_claude_klabauter_root()
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
-    import coordinator_core.pickup_assemble.holder_evidence as _mod
+    import coordinator_core.session.holder_evidence as _mod
 
     return _mod
 
