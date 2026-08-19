@@ -10,18 +10,20 @@ pathspec matcher (`git log --no-walk --format=%H <shas>... -- <scope_paths>`),
 applied as a post-filter over the already-derived SHAs rather than at
 derivation time.
 
-These tests monkeypatch `cov._derive_dag_chain_set` to return a fixed
-`_DagChainResult` over a small real git history, so the scope-filter logic
-under test runs against git's real pathspec engine without needing to build
-the full handoff-DAG / archival.reverse_membership machinery that
-`_derive_dag_chain_set` itself depends on -- that machinery is exercised by
-test_coverage_dag_chain_set_cross_branch.py and is not the subject here.
-
 K-001 note (state/kill-ledger.md): `run_coverage_gate` and its verdict were
 removed under kill-ledger entry K-001. The four DAG-scope-filter tests that
 drove `run_coverage_gate` end-to-end were deleted as dead code; the real
 subject under test — `cov._filter_shas_by_scope_paths`'s git-pathspec
 matching — is still exercised directly by the two tests remaining below.
+
+2026-08-19 note (state/kill-ledger.md, DAG-fixpoint cut orphaned by K-007):
+this module previously also carried a `scoped_repo` fixture and a
+`_patch_dag_chain_set` helper that monkeypatched `cov._derive_dag_chain_set`
+to return a fixed `_DagChainResult` — leftover scaffolding for the four
+`run_coverage_gate`-driven tests K-001 already removed above; neither the
+fixture nor the helper was referenced by the two tests remaining in this
+file. Both were dead code and are removed along with `_derive_dag_chain_set`
+itself.
 """
 
 from __future__ import annotations
@@ -29,8 +31,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import List
-
-import pytest
 
 from coordinator_core import coverage as cov
 
@@ -64,40 +64,6 @@ def _write_and_commit(repo: Path, rel_paths: List[str], message: str) -> str:
         _git(["add", rel], repo)
     _git(["commit", "-m", message], repo)
     return _git(["rev-parse", "HEAD"], repo).stdout.strip()
-
-
-@pytest.fixture()
-def scoped_repo(tmp_path: Path):
-    """A small real repo with four commits spanning in-scope, out-of-scope,
-    directory-prefix, and mixed-path shapes, plus a fake (never-read) handoff
-    path -- _derive_dag_chain_set is monkeypatched per-test, so the handoff
-    file itself never needs to exist or be well-formed.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-
-    c_out = _write_and_commit(repo, ["docs/readme.md"], "out-of-scope commit")
-    c_dir = _write_and_commit(repo, ["tests/unit/test_a.py"], "dir-prefix commit")
-    c_in = _write_and_commit(repo, ["src/foo.py"], "in-scope commit")
-    c_mixed = _write_and_commit(
-        repo, ["src/bar.py", "docs/other.md"], "mixed in+out commit"
-    )
-
-    fake_handoff = str((repo / "state" / "handoffs" / "closing.md"))
-    return repo, fake_handoff, {
-        "out": c_out,
-        "dir": c_dir,
-        "in": c_in,
-        "mixed": c_mixed,
-    }
-
-
-def _patch_dag_chain_set(monkeypatch, shas: List[str]) -> None:
-    def _fake(from_handoff, repo_root, closing_session_id=""):
-        return cov._DagChainResult(shas=list(shas), indeterminate=False, notes=[])
-
-    monkeypatch.setattr(cov, "_derive_dag_chain_set", _fake)
 
 
 def test_filter_shas_by_scope_paths_normalizes_abbreviated_shas(tmp_path: Path) -> None:

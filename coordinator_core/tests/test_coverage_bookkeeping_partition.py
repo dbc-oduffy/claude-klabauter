@@ -44,9 +44,19 @@ K-001. Every test here that drove the verdict end-to-end (via
 deleted as dead code covering a removed function — that formatting lived
 inside `run_coverage_gate` itself, not in any surviving helper. The tests
 that remain call `cov._classify_bookkeeping_shas` directly; that helper
-survives K-001 (see `_derive_dag_chain_set`'s live consumer,
-`review_brightline_gate.py::_compute_chain_oracle`, for the unrelated
-reason this module as a whole is still load-bearing).
+survives K-001 for its own reason — it is unrelated to DAG-mode chain
+derivation.
+
+2026-08-19 correction (state/kill-ledger.md, DAG-fixpoint cut orphaned by
+K-007): the parenthetical above previously cited `_derive_dag_chain_set`'s
+"live consumer, `review_brightline_gate.py::_compute_chain_oracle`" as the
+reason this module stayed load-bearing. That was already stale when this
+correction was written — `_compute_chain_oracle` was itself removed by
+K-007, and the measured liveness walk for this cut found zero production
+call sites for `_derive_dag_chain_set`. `_classify_bookkeeping_shas`'s real
+live consumer is elsewhere in this module; it has no dependency on DAG-mode
+chain derivation and this file needed no code change for the K-007-orphaned
+cut.
 """
 
 from __future__ import annotations

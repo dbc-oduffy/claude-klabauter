@@ -40,8 +40,6 @@ import pytest
 
 from coordinator_core.workstream_complete.directives_review import (
     _record_membership_shas,
-    chain_partition_uncovered_shas,
-    chain_partition_verdict_discharged,
     verify_trail_range_termination,
 )
 

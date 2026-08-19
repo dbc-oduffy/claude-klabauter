@@ -198,7 +198,9 @@ def _scan_handoff_dir(handoffs_dir: Path) -> list[dict[str, Any]]:
 _SEND_MESSAGE_ADDRESS_UNAVAILABLE = "peer-messaging-unavailable"
 
 
-def _resolve_send_message_addresses(candidates: list[dict[str, Any]]) -> None:
+def _resolve_send_message_addresses(
+    candidates: list[dict[str, Any]], *, snapshot: Optional[dict] = None
+) -> None:
     """Shared advisory-resolution core for `compute_competing_claim` and
     `compute_successor_handoffs` -- stamps `send_message_address`,
     `send_message_address_unavailable_reason`, and `send_message_address_
@@ -250,6 +252,15 @@ def _resolve_send_message_addresses(candidates: list[dict[str, Any]]) -> None:
     injecting into the wrong session's context. `claimed_by` (the UUID) is
     the one durable identity a caller may hold onto; `send_message_address`
     is valid only for the caller that just computed this brief, and
+
+    `snapshot`, when given, is ONE ALREADY-TAKEN `harness_registry.
+    snapshot()` read the caller hoisted above its own loop (C5,
+    `coordinator_core.ops.fleet.work_state` -- the peer registry is
+    machine-global, the same fact for every sibling repo in a fleet-wide
+    aggregation, not a per-repo fact re-earned by a fresh scan each time).
+    When `None` (every existing single-repo caller), this function takes
+    its own fresh snapshot via `resolve_addresses_bulk_with_availability`,
+    unchanged from its pre-C5 behaviour.
     `send_message_address_resolved_at` (one UTC ISO-8601 stamp per call,
     shared by every candidate in this batch) exists so a reader of a
     PERSISTED copy of this dict (e.g. `pickup_assemble.apply`'s
@@ -267,9 +278,13 @@ def _resolve_send_message_addresses(candidates: list[dict[str, Any]]) -> None:
     try:
         from coordinator_core.session import reachability
 
-        address_by_sid, messaging_available = reachability.resolve_addresses_bulk_with_availability(
-            holder_sids
-        )
+        if snapshot is None:
+            address_by_sid, messaging_available = reachability.resolve_addresses_bulk_with_availability(
+                holder_sids
+            )
+        else:
+            address_by_sid = reachability._resolve_addresses_bulk_from_snapshot(holder_sids, snapshot)
+            messaging_available = reachability.messaging_available(snapshot)
     except Exception:
         address_by_sid = {}
         messaging_available = True  # unknown on failure -- never claim box-wide unavailability we didn't observe
@@ -302,7 +317,9 @@ def _gate_notes(fm: dict[str, Any]) -> dict[str, Any]:
     return {"present": bool(text), "text": text if text else None, "passed": None}
 
 
-def build_work_state(repo_root: Path) -> dict[str, Any]:
+def build_work_state(
+    repo_root: Path, *, messaging_snapshot: Optional[dict] = None
+) -> dict[str, Any]:
     """`{"held": [...], "unclaimed": [...]}` over this repo's
     `state/handoffs/` corpus (AC1) — the corpus-keyed entry point over the
     relocated C1a primitives, plus `derive_readiness_batch` (C1 of the
@@ -311,6 +328,15 @@ def build_work_state(repo_root: Path) -> dict[str, Any]:
     dependency-direction and import-cycle discipline this function's own
     deferred `coordinator_core.ops.*` imports exist to preserve (AC13).
 
+    `messaging_snapshot` (C5, in-scope signature addition): an already-taken
+    `harness_registry.snapshot()` read, forwarded verbatim to
+    `_resolve_send_message_addresses`. `None` (the single-repo `session.
+    work_state` call site, unchanged) takes a fresh snapshot per call, same
+    as before C5. `coordinator_core.ops.fleet.work_state`'s per-sibling loop
+    is the one caller that passes a non-`None` value — ONE snapshot hoisted
+    above that loop, since the peer registry is machine-global, not a
+    per-repo fact.
+
     HELD rows carry exactly: `path`, `claimed_by`, `holder_live`,
     `liveness_basis`, `last_activity_age_sec`, `send_message_address`,
     `send_message_address_unavailable_reason`,
@@ -318,6 +344,13 @@ def build_work_state(repo_root: Path) -> dict[str, Any]:
     `scope_overlap`, NO `recent_paths` — those are the THIS-ARTIFACT frame
     (`compute_competing_claim`'s own job) and their absence here is the
     point (AC1), not an oversight.
+
+    REVIEW_DUE rows carry `path`, `deliverable_id` when present, and
+    `gate_notes` — the records whose producer `basis` is `review-due`, where
+    the engine returned `deployment_state=None`/`pickup_ready=None` because it
+    declined to judge. They are their own bucket (AC3a), never folded into
+    `unclaimed` and never reported as blocked: the row exists to prompt a human
+    recheck, so omitting it would delete the prompt.
 
     UNCLAIMED rows carry `path`, `deliverable_id` when present,
     `gate_notes` (verbatim producer shape, AC3b), and `stamp_disagrees:
@@ -404,6 +437,7 @@ def build_work_state(repo_root: Path) -> dict[str, Any]:
 
     held: list[dict[str, Any]] = []
     unclaimed: list[dict[str, Any]] = []
+    review_due: list[dict[str, Any]] = []
 
     for handoff, ready in zip(live_handoffs, readiness):
         raw_path = handoff.get("_path")
@@ -438,9 +472,28 @@ def build_work_state(repo_root: Path) -> dict[str, Any]:
             continue
 
         basis = ready.get("basis")
-        if basis in ("review-due", "off-gate-axis"):
-            # Own bucket by omission — never unclaimed, never blocked (see
-            # docstring FOUR BUCKETS above).
+        if basis == "off-gate-axis":
+            # A lifecycle POSITION (in_flight/shipped/continued/closed), not a
+            # readiness verdict -- these never reach the readiness axis at all
+            # (AC3a), so omission is the correct handling and there is nothing
+            # to emit.
+            continue
+        if basis == "review-due":
+            # NOT the same disposition as off-gate-axis, and must not share its
+            # branch: here the engine deliberately declines to judge, returning
+            # a null verdict on both axes, and the row IS the prompt for a
+            # human recheck. Dropping it destroys the prompt --
+            # a reader asking which batons are free would never learn that N
+            # records were declined judgement. Its own bucket, per AC3a
+            # ("review_due is its own bucket") -- never `unclaimed` (an EM must
+            # not be handed "free" for a record the engine declined to judge),
+            # never blocked.
+            review_row: dict[str, Any] = {"path": display_path}
+            review_deliverable_id = handoff.get("deliverable_id")
+            if review_deliverable_id:
+                review_row["deliverable_id"] = review_deliverable_id
+            review_row["gate_notes"] = _gate_notes(handoff)
+            review_due.append(review_row)
             continue
         if ready.get("pickup_ready") is not True:
             # still-blocked -> not unclaimed.
@@ -456,6 +509,6 @@ def build_work_state(repo_root: Path) -> dict[str, Any]:
             row["stamp_disagrees"] = True
         unclaimed.append(row)
 
-    _resolve_send_message_addresses(held)
+    _resolve_send_message_addresses(held, snapshot=messaging_snapshot)
 
-    return {"held": held, "unclaimed": unclaimed}
+    return {"held": held, "unclaimed": unclaimed, "review_due": review_due}

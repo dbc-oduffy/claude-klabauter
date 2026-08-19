@@ -238,6 +238,24 @@ try:
 except ImportError:  # noqa: BLE001 -- best-effort import; unresolvable engine degrades to None
     _canonical_kind = None
 
+# `derive_readiness` — the ONE readiness-deriving predicate set (C1,
+# docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md).
+# --gated-open (C3 below) feeds it a scaffold-time `blocked_by` guess — the
+# flag DECLARES THE BLOCKER, it does not hardcode the readiness trio itself;
+# C1 derives deployment_state/pickup_ready from that declared blocker. The
+# no-flag (`blocked_by: []`) path also routes through this same function so
+# there is exactly one place that decides readiness — not a hardcoded literal
+# duplicating C1's empty-blocked_by rule. Same best-effort degrade-to-None
+# posture as the two imports above: an unresolvable engine costs --gated-open
+# specifically (it fails loud at the point of use, see _scaffold_handoff) and
+# falls back to the pre-C1 hardcoded ready_to_fire default for the no-flag
+# path (no engine dependency for the byte-identical majority case), not every
+# other doc type.
+try:
+    from coordinator_core.reconcile.gate_eval import derive_readiness as _derive_readiness  # noqa: E402
+except ImportError:  # noqa: BLE001 -- best-effort import; unresolvable engine degrades to None
+    _derive_readiness = None
+
 
 def _no_console_creationflags() -> dict:
     """``subprocess`` kwargs that suppress a console window on Windows.
@@ -1636,6 +1654,7 @@ def _scaffold_handoff(
     additional_predecessors: list[str] | None = None,
     summary: str | None = None,
     gated_open: str | None = None,
+    gate_note: str | None = None,
 ) -> str:
     """Generate validator-clean handoff frontmatter + canonical section skeleton.
 
@@ -1699,17 +1718,34 @@ def _scaffold_handoff(
     here rather than the scaffolder authoring frontmatter the validator will
     then reject.
 
-    gated_open (--gated-open) emits the DR-173 trio as one unit when supplied:
-    deployment_state: awaiting_gate, pickup_ready: false, and
-    blocking_notes: <gated_open>. Omitted → today's ready_to_fire /
-    pickup_ready: true / no blocking_notes, byte-identical. One parameter
-    rather than three separate ones because schema_validate.py's
-    _cf_awaiting_gate_needs_dependency and _cf_awaiting_gate_not_pickup_ready
-    cross-field rules make only this one combination legal — encoding it once
-    here is cheaper than validating three independently-suppliable fields.
-    Refused fail-loud when blank.
+    gated_open (--gated-open) DECLARES THE BLOCKER, it does not author the
+    readiness trio directly (C3, docs/plans/2026-08-19-gate-notes-are-
+    advisory-blocked-by-derives-readiness.md). Supplying it writes
+    `blocked_by: [<gated_open>]` and readiness (deployment_state/
+    pickup_ready) is DERIVED from that via `reconcile.gate_eval
+    .derive_readiness` (C1) — the same one-evaluator seam every other reader
+    of `blocked_by` goes through, rather than this scaffolder hardcoding
+    awaiting_gate/pickup_ready:false itself. Against an empty resolution
+    index (scaffold time has no corpus to check) an unresolved id derives
+    awaiting_gate/pickup_ready:false, matching the pre-C3 DR-173-trio output
+    for the common case. Omitted → `blocked_by: []` derives ready_to_fire/
+    pickup_ready:true, byte-identical to today (AC2). Refused fail-loud when
+    blank. Refused fail-loud (not silently degraded) when the engine is
+    unresolvable, since a caller supplying --gated-open needs the derivation
+    to actually run — the no-flag path degrades gracefully instead (see
+    body), because it must not gain an engine dependency it never had.
+
+    gate_note (--gate-note) sets `blocking_notes` ONLY — it is advisory
+    prose and, per the 2026-08-19 ruling, must NEVER flip readiness; only
+    `blocked_by` may. Two flags because they are two concepts: --gated-open
+    declares the mechanical blocker, --gate-note carries the human-readable
+    reason. Legal alone (leaves the baton pickup_ready — this is the CLI-
+    surface assertion of the ruling, AC4) and legal together with
+    --gated-open (a blocked baton that also carries a note). Refused
+    fail-loud when blank.
 
     Spec backlink: docs/plans/2026-08-19-promote-fills-its-own-placeholders.md
+    Spec backlink: docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md § C3
 
     Supplying predecessor_id WITHOUT predecessor is refused (fail-loud). The two
     are the ID and path representations of one edge, and the referential-integrity
@@ -1829,20 +1865,53 @@ def _scaffold_handoff(
             file=sys.stderr,
         )
         sys.exit(1)
-    # --gated-open is the DR-173 trio's single entry point (see docstring) —
-    # blank is refused for the same reason as --summary above: blocking_notes
-    # must be a non-empty string naming the gate.
+    # --gated-open declares the blocker (blocked_by), not the readiness (see
+    # docstring) — blank is refused for the same reason as --summary above:
+    # blocked_by must be a non-empty id naming what this baton is blocked by.
     if gated_open is not None and not gated_open.strip():
         print(
             "coordinator-doc-new: --gated-open was supplied an empty or whitespace-only "
-            "value. blocking_notes must be a non-empty string naming the gate; omit "
+            "value. blocked_by must be a non-empty id naming the blocker; omit "
             "--gated-open entirely to scaffold ready_to_fire instead.",
             file=sys.stderr,
         )
         sys.exit(1)
+    # --gate-note is advisory prose only (blocking_notes) — it must NEVER
+    # flip readiness (2026-08-19 ruling); see docstring.
+    if gate_note is not None and not gate_note.strip():
+        print(
+            "coordinator-doc-new: --gate-note was supplied an empty or whitespace-only "
+            "value. blocking_notes must be a non-empty string naming the reason; omit "
+            "--gate-note entirely, or pass real note text.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     _summary_value = summary if summary else placeholder_summary
-    _deployment_state = "awaiting_gate" if gated_open else "ready_to_fire"
-    _pickup_ready = "false" if gated_open else "true"
+    _blocked_by = [gated_open] if gated_open else []
+    if gated_open:
+        if _derive_readiness is None:
+            print(
+                "coordinator-doc-new: --gated-open needs the readiness derivation "
+                "engine (coordinator_core.reconcile.gate_eval.derive_readiness, C1) "
+                "and it could not be resolved. Omit --gated-open to scaffold "
+                "ready_to_fire instead, or fix engine resolution "
+                "(_ensure_engine_on_path).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        _readiness = _derive_readiness({"blocked_by": _blocked_by}, [])
+        _deployment_state = _readiness["deployment_state"] or "awaiting_gate"
+        _pickup_ready = "true" if _readiness["pickup_ready"] else "false"
+    elif _derive_readiness is not None:
+        _readiness = _derive_readiness({"blocked_by": _blocked_by}, [])
+        _deployment_state = _readiness["deployment_state"] or "ready_to_fire"
+        _pickup_ready = "true" if _readiness["pickup_ready"] else "false"
+    else:
+        # Engine unresolvable and no --gated-open: the no-flag path must not
+        # gain an engine dependency it never had, so it keeps the pre-C1
+        # hardcoded default rather than failing loud like --gated-open does.
+        _deployment_state = "ready_to_fire"
+        _pickup_ready = "true"
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
@@ -1857,8 +1926,11 @@ def _scaffold_handoff(
         f"summary: {_yaml_quote(_summary_value)}",
         f"pickup_ready: {_pickup_ready}",
     ]
-    if gated_open:
-        lines.append(f"blocking_notes: {_yaml_quote(gated_open)}")
+    if _blocked_by:
+        lines.append("blocked_by:")
+        lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in _blocked_by)
+    if gate_note:
+        lines.append(f"blocking_notes: {_yaml_quote(gate_note)}")
     lines += [
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
@@ -2041,6 +2113,20 @@ def _scaffold_spinoff(
     _ini = _yaml_quote(initiative) if initiative else "null"
     _category = category if category else "infra"
     _validate_category(_category)
+    # Spinoff takes no blocker input at all, so this is always the empty-
+    # blocked_by leg of C1's derive_readiness (docs/plans/2026-08-19-gate-
+    # notes-are-advisory-blocked-by-derives-readiness.md § C3) -- one
+    # evaluator deciding readiness rather than a second hardcoded literal
+    # duplicating its own empty-blocked_by rule. Same degrade-to-hardcoded
+    # posture as _scaffold_handoff's no-flag path: an unresolvable engine
+    # must not break spinoff scaffolding, which never depended on it before.
+    if _derive_readiness is not None:
+        _readiness = _derive_readiness({"blocked_by": []}, [])
+        _deployment_state = _readiness["deployment_state"] or "ready_to_fire"
+        _pickup_ready = "true" if _readiness["pickup_ready"] else "false"
+    else:
+        _deployment_state = "ready_to_fire"
+        _pickup_ready = "true"
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
@@ -2049,10 +2135,10 @@ def _scaffold_spinoff(
         "status: open",
         "predecessor: none",
         "kind: spinoff",
-        "deployment_state: ready_to_fire",
+        f"deployment_state: {_deployment_state}",
         f"category: {_category}",
         f"summary: {_yaml_quote(placeholder_summary)}",
-        "pickup_ready: true",
+        f"pickup_ready: {_pickup_ready}",
         "authoring_session: PLACEHOLDER",
         "workstream: PLACEHOLDER",
         f"deliverable_id: {_dlv}",
@@ -4498,18 +4584,34 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         "--gated-open",
         dest="gated_open",
         default=None,
-        metavar="NOTES",
+        metavar="BLOCKED_BY_ID",
         help=(
-            "(handoff) Scaffold as a gated-open baton: emits deployment_state: "
-            "awaiting_gate, pickup_ready: false, and blocking_notes: <NOTES> as "
-            "one unit -- the DR-173 trio. Omitted -> today's ready_to_fire / "
-            "pickup_ready: true / no blocking_notes, byte-identical. One flag "
-            "rather than three: the handoff schema's "
-            "_cf_awaiting_gate_needs_dependency and "
-            "_cf_awaiting_gate_not_pickup_ready cross-field rules make only this "
-            "one combination legal. Refused fail-loud when blank. Handoff-scoped: "
-            "refused fail-loud for every other --type. "
-            "Spec: docs/plans/2026-08-19-promote-fills-its-own-placeholders.md"
+            "(handoff) Declare the blocker, not the readiness: writes "
+            "blocked_by: [BLOCKED_BY_ID] and DERIVES deployment_state/"
+            "pickup_ready from it via reconcile.gate_eval.derive_readiness "
+            "(C1) -- an unresolved id derives awaiting_gate/pickup_ready:false. "
+            "Omitted -> blocked_by: [] derives ready_to_fire/pickup_ready:true, "
+            "byte-identical to today. Prose reasons belong in --gate-note "
+            "instead (advisory only, never flips readiness -- 2026-08-19 "
+            "ruling); the two are independent and may be combined. Refused "
+            "fail-loud when blank. Handoff-scoped: refused fail-loud for every "
+            "other --type. "
+            "Spec: docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md § C3"
+        ),
+    )
+    parser.add_argument(
+        "--gate-note",
+        dest="gate_note",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "(handoff) Advisory gate note: writes blocking_notes: <TEXT> ONLY -- "
+            "it is prose and per the 2026-08-19 ruling must NEVER flip readiness; "
+            "only --gated-open may. Legal alone (baton stays pickup_ready) and "
+            "legal combined with --gated-open (a blocked baton that also carries "
+            "a note). Refused fail-loud when blank. Handoff-scoped: refused "
+            "fail-loud for every other --type. "
+            "Spec: docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md § C3"
         ),
     )
     parser.add_argument(
@@ -5320,11 +5422,16 @@ def main() -> None:
     # 2026-08-18-example-retrieval-repo-em-doc-new-silently-drops-type-inapplicable-flags.md
     # offered warn-or-refuse; refuse matches the existing
     # --additional-predecessor precedent, so no third posture is invented).
-    if (args.summary or args.gated_open) and doc_type != "handoff":
-        _bad_flag = "--summary" if args.summary else "--gated-open"
+    if (args.summary or args.gated_open or args.gate_note) and doc_type != "handoff":
+        if args.summary:
+            _bad_flag = "--summary"
+        elif args.gated_open:
+            _bad_flag = "--gated-open"
+        else:
+            _bad_flag = "--gate-note"
         print(
             f"coordinator-doc-new: {_bad_flag} is not accepted for --type {doc_type}. "
-            "Both --summary and --gated-open are handoff-only fields.",
+            "--summary, --gated-open, and --gate-note are handoff-only fields.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -5344,6 +5451,7 @@ def main() -> None:
             additional_predecessors=args.additional_predecessors,
             summary=args.summary,
             gated_open=args.gated_open,
+            gate_note=args.gate_note,
         )
     elif doc_type == "recovery":
         content = _scaffold_recovery(

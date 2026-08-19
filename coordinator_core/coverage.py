@@ -14,23 +14,26 @@ Asymmetric scope filter:
     reviewed_set is NEVER path-scoped — all sessions' trail records credit toward
     coverage regardless of which paths those records were scoped to.
 
-Inverted-intuition warning for _derive_dag_chain_set's fixpoint: EXCLUDING a
-node from closing_set is the FAIL-OPEN direction, not the conservative one. A
-blocker there is a deferral, not a rejection — the excluded ancestor's commits
-simply never enter chain_commits, so they are never counted, never flagged
-uncovered, and never waived. Deferral in a coverage gate is subtraction from
-the denominator: "blocked" reads as "stricter" in almost every other gate
-shape, but here a wider blocker set shrinks closing_set, which shrinks
-chain_commits, which tilts the verdict toward COVERED. Any future change that
-gates membership in closing_set must be checked against this direction before
-it is assumed to be the safe one.
+Inverted-intuition warning for the (now-removed) DAG-mode fixpoint
+(`_derive_dag_chain_set`, cut 2026-08-19 — orphaned by K-007, see
+state/kill-ledger.md): EXCLUDING a node from closing_set was the FAIL-OPEN
+direction, not the conservative one. A blocker there was a deferral, not a
+rejection — the excluded ancestor's commits simply never entered
+chain_commits, so they were never counted, never flagged uncovered, and never
+waived. Deferral in a coverage gate is subtraction from the denominator:
+"blocked" reads as "stricter" in almost every other gate shape, but there a
+wider blocker set shrank closing_set, which shrank chain_commits, which
+tilted the verdict toward COVERED. Retained here as design history for any
+future DAG-mode replacement; there is no closing_set in this module today.
 
 Three fidelity guards that a naive port silently drops — all three implemented here:
     (1) Session-Id UUID-shape validation BEFORE git grep interpolation.
         A Session-Id containing regex metacharacters (e.g. '.*') would over-match
         commits belonging to other sessions → false COVERED verdict. Guard: validate
-        UUID shape; malformed → INDETERMINATE (never FALSE COVERED). See _UUID_RE
-        and _derive_dag_chain_set segment-attribution section.
+        UUID shape; malformed → INDETERMINATE (never FALSE COVERED). This guard
+        (`_UUID_RE`) lived in the now-removed DAG-mode segment-attribution section
+        (`_derive_dag_chain_set`, cut 2026-08-19 — see state/kill-ledger.md); the
+        flat-mode path below has no equivalent interpolation site.
     (2) exit-0-with-empty-stdout → INDETERMINATE.
         A has-live-children check that signals "blocked" but cannot enumerate blockers
         is a contract violation — treat as INDETERMINATE rather than vacuously coverable
@@ -103,12 +106,6 @@ from coordinator_core.ops.review_trail_write import (
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.claim_state import resolve_claim_state
 
-# Import archival seam (C0 interface pin; C4 fills the body).
-# At import time this resolves cleanly — NotImplementedError surfaces only at call-time
-# when _derive_dag_chain_set runs the fixpoint. That is the documented contract.
-from coordinator_core.archival import reverse_membership
-
-from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
@@ -180,12 +177,10 @@ def _record_range_has_stored_head(sha_range: str) -> bool:
     return bool(_STORED_HEAD_ENDPOINT_RE.match(left) or _STORED_HEAD_ENDPOINT_RE.match(right))
 
 
-#: UUID shape pattern for Session-Id validation (fidelity guard 1).
-#: ^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$
-_UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
-
 #: Deliverable-Id shape pattern (fidelity guard 1, deliverable-attribution
-#: variant). Mirrors _UUID_RE's purpose: a malformed deliverable_id containing
+#: variant). Mirrored the retired `_UUID_RE`'s purpose (Session-Id UUID-shape
+#: validation; see kill-ledger for the DAG-fixpoint cut that removed it) — a
+#: malformed deliverable_id containing
 #: regex metacharacters interpolated raw into `git log --grep` would
 #: over-match commits outside this deliverable → false COVERED. Matches the
 #: two real mint shapes from coordinator_core.ops.mint_deliverable_id
@@ -205,59 +200,10 @@ _UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
 #: malformed Session-Id.
 _DELIVERABLE_ID_RE = re.compile(r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$")
 
-#: Leg (b) (the deliverable-attribution legacy-history fallback in
-#: `_derive_dag_chain_set` Step 3) fans out from a node's add-commit
-#: Session-Id to EVERY commit that session ever made on HEAD carrying no
-#: (walked) Deliverable-Id. That is correct when the add-commit is really
-#: this node's own author committing it in the ordinary way, but wrong when
-#: the add-commit is a BULK SWEEP — some other session's routine
-#: multi-hundred-file safety/auto commit that happened to include this one
-#: handoff among many unrelated files. A bulk sweep is not evidence that the
-#: sweeping session authored (or should review-inherit) this node's work; it
-#: is evidence the sweep merely passed over the file.
-#:
-#: File-touch-count on the add-commit is the chosen structural signal, not
-#: the commit subject: an ordinary handoff add-commit in this corpus touches
-#: a small number of files (the handoff itself, occasionally an index or a
-#: sibling artifact); the observed sweep commits touch 56-290. Subject-string
-#: matching ("safety-commit", "auto-commit:") is not used deliberately — it
-#: is corpus-specific prose that drifts, whereas file count is intrinsic git
-#: structure available on every commit regardless of author or convention.
-#: `deliverable_id`-on-add-commit was also considered and rejected: legacy
-#: (pre-trailer) add-commits legitimately lack a Deliverable-Id trailer too,
-#: so requiring one would falsely suppress leg (b) for exactly the
-#: genuinely-authored history it exists to keep attributing.
-#:
-#: False-negative risk: a legitimately-authored add-commit that happens to
-#: bundle more than this many files (e.g. a large batched multi-artifact
-#: close) has its leg (b) segment suppressed too, under-crediting that
-#: chain. This is the accepted direction — § "fail toward current
-#: behaviour, not away from it" only binds when suppressing does not corrupt
-#: leg (a) or turn the node INDETERMINATE; under-crediting a legitimately
-#: bulky close is a narrower, correctable-on-review miss, not a fabricated
-#: over-attribution. Leg (a) (Deliverable-Id-stamped commits) is completely
-#: unaffected by this threshold in either direction.
-_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD = 20
-
-
-def _add_commit_touched_file_count(add_sha: str, repo_root: str) -> Optional[int]:
-    """Return the number of files touched by commit `add_sha`, or None if the
-    count cannot be determined (git failure / unparsable output) — the caller
-    treats None the same as "below threshold" (fail toward current
-    behaviour: an unresolvable count must never itself suppress leg (b)).
-
-    Uses `git show --stat --format=` and counts stat lines carrying the
-    `" | "` file/changes separator, which the trailing "N files changed, ..."
-    summary line never contains — avoids an off-by-one from that line.
-    """
-    rc, out, _ = _run(
-        ["git", "show", "--stat", "--format=", add_sha],
-        cwd=repo_root,
-    )
-    if rc != 0:
-        return None
-    return sum(1 for line in out.splitlines() if " | " in line)
-
+# `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD` and `_add_commit_touched_file_count`
+# (the leg-(b) bulk-sweep guard for the DAG-mode fixpoint's deliverable
+# attribution) were removed 2026-08-19 along with `_derive_dag_chain_set`,
+# their only caller — see state/kill-ledger.md.
 
 #: Verdict filter:
 #:   pending  → EXCLUDED (review not complete; counting pending as coverage would allow
@@ -2243,34 +2189,12 @@ def build_reviewed_set(
 
 # ---------------------------------------------------------------------------
 # Handoff-level utilities for the DAG-mode fixpoint
+#
+# `_build_dag_index` (the in-memory handoff-path index for the archival seam)
+# was removed 2026-08-19 along with `_derive_dag_chain_set`, its only caller —
+# see state/kill-ledger.md. The functions below have their own live consumers
+# and survive independently.
 # ---------------------------------------------------------------------------
-
-
-def _build_dag_index(repo_root: str) -> List[str]:
-    """Build the in-memory handoff path list for the archival seam.
-
-    Collects all handoff paths (live + archived). This list is passed as dag_index
-    to coordinator_core.archival.reverse_membership; C4's implementation will use it
-    as the in-memory frontmatter index (replacing the query-records.js double-spawn).
-
-    Paths scanned:
-        <repo_root>/state/handoffs/*.md        — live handoffs
-        <repo_root>/archive/handoffs/**/*.md   — archived handoffs
-    """
-    paths: List[str] = []
-    root = Path(repo_root)
-
-    live_dir = root / "state" / "handoffs"
-    if live_dir.is_dir():
-        for p in sorted(live_dir.glob("*.md")):
-            paths.append(str(p))
-
-    archive_dir = root / "archive" / "handoffs"
-    if archive_dir.is_dir():
-        for p in sorted(archive_dir.rglob("*.md")):
-            paths.append(str(p))
-
-    return paths
 
 
 def _parse_handoff_consumed_by(
@@ -2714,7 +2638,13 @@ class _DagNodeAttribution:
 
 @dataclass
 class _DagChainResult:
-    """Internal result of _derive_dag_chain_set.
+    """Internal result of the now-removed `_derive_dag_chain_set` (cut
+    2026-08-19, orphaned by K-007 — see state/kill-ledger.md). This dataclass
+    has no production constructor left in this tree; it is retained solely
+    because `coordinator_core/tests/test_review_brightline_gate.py` still
+    imports the name (unused by any test there) — deleting it would break an
+    out-of-scope test file's collection. Do not build new functionality on
+    this type without re-checking that import first.
 
     shas:              Flat union of every coverable node's attributed commits
                        — unchanged pre-existing contract; callers that only
@@ -2741,8 +2671,10 @@ class _DagChainResult:
     node_attribution: Dict[str, _DagNodeAttribution] = field(default_factory=dict)
     #: C2 (AC3): commits seen in a coverable node's Session-Id segment but
     #: EXCLUDED from that node's leg (b) because the add-commit that would
-    #: have seeded leg (b) was judged a bulk sweep (see
-    #: _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD). Never a member of `shas` —
+    #: have seeded leg (b) was judged a bulk sweep (the threshold constant
+    #: this compared against, `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD`, was
+    #: removed 2026-08-19 with its only caller — see state/kill-ledger.md).
+    #: Never a member of `shas` —
     #: these are "in range, unattributable to this chain", not "this
     #: chain's inheritance". Reported so a closer sees they exist and are
     #: someone else's, rather than the report silently shrinking. Additive
@@ -2750,814 +2682,16 @@ class _DagChainResult:
     #: unaffected.
     unattributable_shas: List[str] = field(default_factory=list)
     #: walk_forward's own `terminatedEarly` discriminator ('' | 'lineage-cycle'
-    #: | 'missing-link'), threaded through from `dag.walk_forward` via
-    #: `_derive_dag_chain_set`. No current reader in this tree; retained for
-    #: callers that may want it.
+    #: | 'missing-link'), formerly threaded through from `dag.walk_forward`
+    #: via the now-removed `_derive_dag_chain_set` (cut 2026-08-19, see
+    #: state/kill-ledger.md). No current reader in this tree.
     terminated_early: str = ""
 
 
-@dataclass
-class _DagChainSetContext:
-    """Optional cross-call cache for _derive_dag_chain_set (C6b), amortising
-    the per-call dag_index build (_build_dag_index) and the batched HEAD
-    Session-Id/Deliverable-Id git-log walk across multiple invocations that
-    share the same repo_root within one process run — e.g. a future caller
-    computing one oracle per baton, where every baton's fixpoint walks the
-    same repo history from scratch today.
-
-    Lifetime: construct ONE instance per repo_root per run (e.g. once at the
-    top of a multi-baton driver loop), pass it to every _derive_dag_chain_set
-    call for that repo_root, and discard it at the end of the run. It is NOT
-    safe to persist across processes or across a long-lived daemon's tick
-    boundary — git history and archived handoffs can change between runs,
-    and a stale dag_index or stale sid_to_shas/did_to_shas/sha_to_did map
-    would silently under- or over-count ancestors. Passing the same instance
-    across two DIFFERENT repo_root values is a caller bug this function does
-    not detect or guard against.
-
-    Fields are populated lazily: the first _derive_dag_chain_set call that
-    receives an instance with `dag_index is None` (unfilled) performs the
-    normal per-call build and stores the result back onto the instance;
-    every subsequent call sharing that same instance skips both the
-    dag_index build (_build_dag_index) and the batched `git log HEAD
-    --no-merges` walk entirely, reading the already-populated dicts instead.
-
-    MUST NOT hold a `dag.GitHistoryCache` (dag.py:924's `set` subclass
-    carrying `.complete`, read via `getattr(..., False)` in
-    `_memoized_ever_tracked`) or anything shaped to satisfy that contract —
-    this context is unrelated to it. In particular this class does NOT
-    adopt `dag.as_history_membership_set`'s "strip to a bare set before
-    reuse" requirement, because none of these fields are ever passed to a
-    `GitHistoryCache`-consuming seam; do not widen that association by
-    adding a cache-shaped field here without re-reading both contracts.
-    """
-
-    dag_index: Optional[List[str]] = None
-    sid_to_shas: Optional[Dict[str, List[str]]] = None
-    did_to_shas: Optional[Dict[str, List[str]]] = None
-    sha_to_did: Optional[Dict[str, str]] = None
-
-
-def _resolve_closing_handoff_disk_path(from_handoff_abs: str, repo_root: str) -> str:
-    """Return the actual on-disk path for the closing handoff, following it
-    into ``archive/handoffs/`` (flat or month-nested) when the caller-supplied
-    path has since been swept out of ``state/handoffs/`` by the fleet's
-    routine post-close archival — e.g. a diagnostic re-run of this gate
-    against a handoff path recorded before that handoff's own archival commit
-    landed.
-
-    Latent-bug fix (this dispatch, C2): ``walk_forward``'s edge-target
-    resolution (``dag.resolve_target``) already walks this same
-    state→archive→month-nested search for every ANCESTOR edge it follows, but
-    the START node it is given (``closing_abs`` in ``_derive_dag_chain_set``)
-    was passed through verbatim with no equivalent fallback. When the closing
-    handoff itself had already been archived, ``walk_forward`` could not read
-    its frontmatter at all — the DFS found zero edges, ``ordered_ancestry``
-    collapsed to the single closing node, and every downstream per-node read
-    in this module (``_parse_handoff_deliverable_id``,
-    ``_resolve_add_commit_session_id`` et al) silently degraded to its
-    conservative-None/live-default fallback. The net effect: the entire
-    weak-authorship/leg-(b) split this module exists to perform (AC1-AC4)
-    never engaged, and C2's unattributable-in-range reporting had nothing to
-    report — not because there was nothing foreign, but because the one node
-    that would have surfaced it (the archived ancestor baton) was never
-    walked. Returns the original ``from_handoff_abs`` unchanged whenever it
-    still exists on disk (the overwhelmingly common case) or no archived
-    counterpart can be found — never raises, never widens resolution beyond
-    an exact basename match under ``archive/handoffs/``.
-    """
-    if os.path.exists(from_handoff_abs):
-        return from_handoff_abs
-    basename = os.path.basename(from_handoff_abs)
-    archive_dir = os.path.join(repo_root, "archive", "handoffs")
-    flat_candidate = os.path.join(archive_dir, basename)
-    if os.path.exists(flat_candidate):
-        return flat_candidate
-    if os.path.isdir(archive_dir):
-        try:
-            for entry in sorted(os.listdir(archive_dir), reverse=True):
-                if re.match(r"^\d{4}-\d{2}$", entry):
-                    candidate = os.path.join(archive_dir, entry, basename)
-                    if os.path.exists(candidate):
-                        return candidate
-        except OSError:
-            pass
-    return from_handoff_abs
-
-
-def _derive_dag_chain_set(
-    from_handoff: str,
-    repo_root: str,
-    closing_session_id: str = "",
-    shared_context: Optional["_DagChainSetContext"] = None,
-) -> _DagChainResult:
-    """Derive the DAG-mode chain_set via ancestor walk + coverable-set fixpoint.
-
-    Step 1 — Walk: dag.walk_forward from the closing handoff, following
-        predecessor + additional_predecessors edges only (forked_from EXCLUDED —
-        review obligation follows continuation edges, not fork ancestry; plan B.0).
-        Mirrors: node "$WALK_DAG" --start "$closing_abs"
-                   --edge-kinds "predecessor,additional_predecessors" --format paths
-
-    Step 2 — Fixpoint: iteratively add ancestors to closing_set when they have no
-        live blockers outside closing_set. Converges when a full sweep adds nothing
-        new. Uses archival.reverse_membership as the has-live-children seam per
-        ancestor.
-
-    Step 3 — Segment attribution: for each coverable node, find its add-commit
-        Session-Id trailer (--follow -M100% exact-rename), then use git log --grep
-        to enumerate all commits in that session. When the node's handoff carries
-        a `deliverable_id` frontmatter field (the durable fleet artifact-spine
-        join key — see handoff.schema.json), attribution instead becomes the
-        UNION of (a) commits whose `Deliverable-Id` trailer equals that id, and
-        (b) commits matching the node's Session-Id that carry NO `Deliverable-Id`
-        trailer at all, or one that no WALKED node (this closing_set) holds
-        (leg (b) is the legacy-history fallback: it is what keeps every
-        existing untrailered commit attributed exactly as before, while a
-        commit stamped with a deliverable a *different walked* node holds is
-        now correctly excluded — an UNWALKED node's deliverable stamp does
-        NOT exclude, or the commit becomes a member of no segment at all, see
-        AC0 — the fix for Session-Id over-attribution, see improvement-queue
-        2026-07-01/2026-07-03 chain-end-coverage-gate entries and the 2026-07-27
-        example-retrieval-repo / example-cockpit-repo reports of the same defect). Nodes without
-        a `deliverable_id` keep the plain Session-Id segment, byte-identical to
-        pre-existing behaviour.
-
-    Fidelity guards implemented (all three from the C3 spec):
-        Guard 1 (UUID-shape): validate Session-Id before git grep interpolation.
-            A malformed SID with regex metacharacters would over-match → false COVERED.
-            Malformed SID → INDETERMINATE (never FALSE COVERED).
-        Guard 2 (exit-0-empty): any exception from reverse_membership
-            (including the C4-stub NotImplementedError) → INDETERMINATE.
-            This guards "exit-0-with-empty-stdout → INDETERMINATE": if we cannot safely
-            enumerate blockers, we fail closed rather than vacuously coverable.
-        Guard 3 (all-stale-blockers): if every blocker's consuming session is
-            non-live, that ancestor is coverable (not actively blocked).
-
-    Args:
-        from_handoff:       Absolute path to the closing handoff.
-        repo_root:          Repository root for git calls.
-        closing_session_id: Active session ID of the closing handoff (D3 case 3 —
-                            equates to $CLAUDE_CODE_SESSION_ID in the bash gate).
-        shared_context:     Optional (C6b). When absent (default), this call
-                            builds and discards its own dag_index and
-                            sid_to_shas/did_to_shas/sha_to_did exactly as
-                            before — existing callers are unaffected. When a
-                            caller threads a shared `_DagChainSetContext`
-                            across multiple calls for the same repo_root,
-                            this call reuses the context's already-populated
-                            fields (skipping _build_dag_index and the batched
-                            git log HEAD walk) and, on first use with an
-                            unfilled context, populates it for later callers.
-                            See `_DagChainSetContext` for its lifetime rules.
-    """
-    closing_abs = _resolve_closing_handoff_disk_path(
-        os.path.abspath(from_handoff), repo_root
-    )
-    result = _DagChainResult()
-
-    # Step 1: walk ancestors from closing handoff.
-    walk_result = walk_forward(
-        closing_abs,
-        edge_kinds=set(_CONTINUATION_EDGE_KINDS),
-        # Pass the true repo_root explicitly — do NOT let walk_forward infer it two-dirs-up
-        # from the closing handoff's own dir, which is WRONG when that handoff was swept to a
-        # month-nested archive/handoffs/YYYY-MM/ path (collapses the DAG → INDETERMINATE).
-        repo_root=repo_root,
-    )
-
-    # A lineage-cycle is always INDETERMINATE — cannot safely determine coverage.
-    if walk_result.get("terminatedEarly") == "lineage-cycle":
-        result.indeterminate = True
-        result.notes.append(
-            f"walkForward detected lineage-cycle from {closing_abs}"
-        )
-        return result
-
-    ancestors: List[str] = walk_result.get("orderedPaths", [])
-    # Threaded through verbatim (AC1) — see _DagChainResult.ordered_ancestry.
-    result.ordered_ancestry = list(ancestors)
-    # Threaded through verbatim — see _DagChainResult.terminated_early.
-    result.terminated_early = walk_result.get("terminatedEarly", "")
-
-    # Build dag_index once for all reverse_membership calls in the fixpoint.
-    # C4's reverse_membership will use this list as the in-memory frontmatter index.
-    # C6b: reuse a caller-threaded shared_context's dag_index when present and
-    # already populated, instead of rebuilding it every call.
-    if shared_context is not None and shared_context.dag_index is not None:
-        dag_index = shared_context.dag_index
-    else:
-        dag_index = _build_dag_index(repo_root)
-        if shared_context is not None:
-            shared_context.dag_index = dag_index
-
-    # Step 2: fixpoint.
-    # closing_set: ancestors determined to be coverable. The closing handoff itself is
-    # always coverable (it is the current workstream's chain end).
-    closing_set: Set[str] = {closing_abs}
-
-    changed = True
-    while changed:
-        changed = False
-
-        # Re-resolve live_sids once per SWEEP (not once globally before the loop,
-        # and not once per ancestor). A single global snapshot goes stale if a
-        # blocker's owning session dies partway through the fixpoint's own
-        # execution (crash, or a concurrent session legitimately closing that
-        # handoff mid-walk) — later sweeps would keep checking liveness against
-        # a dead session's still-live snapshot, so `all_stale` (guard 3, below)
-        # never flips and the ancestor is wrongly kept not-coverable
-        # (false-UNCOVERED). Per-sweep re-resolution bounds the shell-out cost to
-        # O(sweeps) rather than O(ancestors) — the cost the original hoist-once
-        # comment was avoiding — while still observing a mid-walk session death
-        # on the very next sweep instead of never.
-        # --- Tier 2 (behaviour change -- PM sign-off required) ---
-        # Previously: except Exception: live_sids = frozenset() — continuing the
-        # fixpoint on an empty live-session set is NOT fail-closed: a blocker whose
-        # consumed_by session IS actually live has `sid in live_sids` false against
-        # the empty set, so _handoff_session_live reports it non-live, which can
-        # flip all_stale to True and mark an ancestor coverable that a correct
-        # lookup would have kept blocked — a fail-OPEN effect hiding behind a
-        # conservative-looking default. Matches Guard-2 (:856/:864): capture the
-        # exception text and fail the whole fixpoint closed to INDETERMINATE
-        # instead of silently computing on a false-empty live-session set.
-        try:
-            live_sids: FrozenSet[str] = resolve_live_session_ids()
-        except Exception as exc:
-            result.indeterminate = True
-            result.notes.append(
-                f"resolve_live_session_ids raised {type(exc).__name__}: {exc} — INDETERMINATE"
-            )
-            return result
-        # --- end Tier 2 ---
-
-        for ancestor in ancestors:
-            if ancestor == closing_abs:
-                continue  # closing handoff always in closing_set; skip
-            if ancestor in closing_set:
-                continue  # already determined coverable
-
-            # has-live-children check via archival seam (fidelity guard 2).
-            # Any exception → INDETERMINATE (fail closed). This mirrors the bash
-            # "exit-0-with-empty-stdout → INDETERMINATE" guard (:292-298): if we
-            # cannot enumerate blockers safely, do NOT vacuously treat as coverable.
-            # Edge-symmetric with Step 1's walk BY CONSTRUCTION, not by
-            # coincidence. `reverse_membership` defaults to the ARCHIVAL edge
-            # set — see `dag.ARCHIVAL_EDGE_KINDS` / `dag.CONTINUATION_
-            # EDGE_KINDS` for why that default is wrong for the CONCLUSION-
-            # shaped question asked here. Taking that default lets a live
-            # spinoff veto an ancestor whose commits Step 1 already decided
-            # the spinoff does not inherit, dropping them out of
-            # chain_commits with no note -> false COVERED. Origin:
-            # cross-repo/inbox/2026-08-05-example-cockpit-repo-em-wsc-leg-b-counts-
-            # spinoffs-as-live-children.md.
-            try:
-                children: FrozenSet[str] = reverse_membership(
-                    ancestor, dag_index, edge_kinds=set(_CONTINUATION_EDGE_KINDS)
-                )
-            except NotImplementedError:
-                # C4 body not yet filled; reverse_membership is a stub (C0 seam).
-                # INDETERMINATE — cannot determine coverage (guard 2).
-                result.indeterminate = True
-                result.notes.append(
-                    f"{ancestor}: reverse_membership not yet implemented (C4 pending) — INDETERMINATE"
-                )
-                return result
-            except Exception as exc:
-                # Runtime error or contract violation — guard 2.
-                result.indeterminate = True
-                result.notes.append(
-                    f"{ancestor}: reverse_membership raised {type(exc).__name__}: {exc} — INDETERMINATE"
-                )
-                return result
-
-            # blockers = live children outside closing_set (already-coverable nodes
-            # cannot block an ancestor from being coverable).
-            blockers = [c for c in children if c not in closing_set]
-
-            if not blockers:
-                # No live blockers outside closing_set → ancestor is coverable.
-                closing_set.add(ancestor)
-                changed = True
-                continue
-
-            # Has live blockers → check if ALL their sessions are stale (guard 3).
-            all_stale = True
-            for blocker in blockers:
-                is_live, live_note = _handoff_session_live(blocker, live_sids)
-                # --- Tier 2 (behaviour change -- PM sign-off required) ---
-                # Previously: a read/parse exception inside _get_handoff_consumed_by
-                # was swallowed there and surfaced only as the ordinary
-                # conservative-live return, indistinguishable from a legitimately-
-                # unconsumed handoff. Matches Guard-2 (:856/:864): capture the
-                # exception text and fail the whole fixpoint closed to
-                # INDETERMINATE rather than let one unreadable handoff silently
-                # steer an ancestor's coverability.
-                if live_note is not None:
-                    result.indeterminate = True
-                    result.notes.append(live_note)
-                    return result
-                # --- end Tier 2 ---
-                if is_live:
-                    all_stale = False
-                    break
-
-            if all_stale:
-                # Guard 3: all-stale-blockers → coverable.
-                closing_set.add(ancestor)
-                changed = True
-            # else: ancestor has at least one live blocker → not yet coverable
-
-    # Step 3: segment attribution.
-    # For each coverable ancestor, find its Session-Id trailer from the add-commit,
-    # then enumerate all commits in that session.
-    # -M100% exact-rename: archival is a 100%-identical git mv; fuzzy rename detection
-    # (default 50%) falsely chains content-similar but distinct handoffs, misattributing
-    # the segment to an unrelated older handoff. Exact-rename kills the false match
-    # while preserving archival tracking. (AC16)
-    # Pre-pass (AC0, 2026-07-31): collect every WALKED node's deliverable_id
-    # before the per-node loop below. This closes a fail-open in leg (b):
-    # `trailers.get(sha)` used to be a truthiness test on ANY Deliverable-Id,
-    # not on a *different* one, so a commit carrying node A's Session-Id and
-    # some OTHER (possibly unwalked) node's Deliverable-Id was dropped from
-    # A's segment outright. It was recovered only if that other node was
-    # itself walked and reached leg (a)'s grep -- an unwalked node's grep
-    # never runs, so the commit became a member of no node's segment at all
-    # and silently vanished from chain_set with no note, no miscount, never a
-    # candidate. Scoping the exclusion to WALKED deliverable_ids only (this
-    # set) means an unwalked node's deliverable stamp no longer excludes
-    # anything -- only a deliverable another walked node actually holds does.
-    # `_parse_handoff_deliverable_id` reads handoff frontmatter from disk, not
-    # git -- no new subprocess spawns added by this pre-pass.
-    # Review: code-reviewer — plain accumulator loop, matching this file's
-    # existing for/if idiom (no walrus operator appears elsewhere here),
-    # rather than the singleton-tuple trick that only existed to avoid a
-    # second _parse_handoff_deliverable_id call.
-    # Join key canonicalized (C6b/AC11) -- `walked_deliverable_ids`,
-    # `did_to_shas`, and `sha_to_did` below all key/compare on
-    # `deliverable_id`; a declared fork pair (state/deliverable-equivalence
-    # .yaml) must not silently split one node's segment across two ids.
-    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-    _coverage_equivalence_map = load_equivalence_map(Path(repo_root))
-
-    walked_deliverable_ids: Set[str] = set()
-    for node_path in closing_set:
-        did = _parse_handoff_deliverable_id(node_path)
-        if did is not None:
-            walked_deliverable_ids.add(canonicalize(did, _coverage_equivalence_map))
-
-    # C6a batching (this chunk): the per-node segment-attribution loop below
-    # used to spawn THREE separate git processes per coverable node —
-    # (a) `git log HEAD --no-merges --grep=^Session-Id: <sid>$` (segment
-    #     enumeration), (b) `git log HEAD --no-merges --grep=^Deliverable-Id:
-    #     <did>$` (leg-a deliverable match), and (c)
-    #     `_commit_deliverable_id_trailers(seg, repo_root)` (leg-b legacy
-    #     fallback, itself already one batched call, but one PER node).
-    # All three read the SAME ref (HEAD) with no negative endpoint — a single
-    # positive walk, not a multi-range subtraction, so this is outside the
-    # set-algebra trap the module docstring warns about (reachable(positives)
-    # \ reachable(negatives) collapsing a linear chain to its tip): there is
-    # exactly one positive endpoint (HEAD) and zero negatives here. One
-    # `git log HEAD --no-merges` walk, reading both trailers per commit in
-    # the same `--format=`, replaces all three per-node call sites with a
-    # single spawn shared by the whole loop — segment/deliverable membership
-    # then becomes an in-memory dict lookup. This does NOT touch the
-    # `--follow -M100%` add-commit resolution above (still per-node,
-    # unavoidable — see module Out-of-scope) nor its own single-commit
-    # Session-Id trailer read (still per add_sha — batching that needs the
-    # add_sha values known ahead of the per-node `--follow` walk, which would
-    # mean restructuring THAT loop's early-exit ordering; out of scope here).
-    # `%(trailers:key=...,valueonly)` always emits its OWN trailing newline
-    # as part of the placeholder's own expansion (empirically verified on
-    # this repo: `A[%(trailers:key=Session-Id,valueonly)]B` renders as
-    # `A[<value>\n]B`, not `A[<value>]B`) — a per-record joined single line
-    # therefore does NOT stay one line; splitting the whole batched output on
-    # newlines (as `_commit_touched_paths` does for `--name-only`, which has
-    # no such embedded-newline placeholder) would silently shear each record
-    # into two ragged lines. Per-record framing instead uses
-    # `_COMMIT_HEADER_SENTINEL` and splits the WHOLE batched stdout on that
-    # sentinel, never on "\n".
-    #
-    # Field separator is `\x01` (SOH), deliberately NOT `\x1f` (Unit
-    # Separator, the choice this module's other batched-trailer helper
-    # `_commit_deliverable_id_trailers` uses): `_run`'s blanket
-    # `result.stdout.strip()` operates over Python's Unicode whitespace
-    # definition, which — surprisingly — classifies U+001C-U+001F
-    # (File/Group/Record/Unit Separator) as White_Space=Yes. When the LAST
-    # record in a batch has an empty trailing field (e.g. no Deliverable-Id
-    # trailer), that record's tail is `...<sid>\n\x1f\n` — an unbroken run of
-    # Unicode-whitespace at the very end of the whole string — and `_run`'s
-    # `.strip()` eats straight through the `\x1f` separator along with the
-    # surrounding newlines, silently truncating the batch's last record
-    # (empirically verified: reproduces on this repo's own two-commit
-    # fixture, confirmed via `'\x1f'.isspace() == True`). `\x01` is not
-    # White_Space, so it survives `.strip()` at any position, including the
-    # very end of the batched output.
-    # C6b: reuse a caller-threaded shared_context's batched-walk dicts when
-    # present and already populated (all three, since they're filled
-    # together from one spawn), instead of re-spawning `git log HEAD` here.
-    if (
-        shared_context is not None
-        and shared_context.sid_to_shas is not None
-        and shared_context.did_to_shas is not None
-        and shared_context.sha_to_did is not None
-    ):
-        sid_to_shas = shared_context.sid_to_shas
-        did_to_shas = shared_context.did_to_shas
-        sha_to_did = shared_context.sha_to_did
-    else:
-        rc_head, head_out, _ = _run(
-            [
-                "git", "log", "HEAD", "--no-merges",
-                f"--format={_COMMIT_HEADER_SENTINEL}%H\x01"
-                "%(trailers:key=Session-Id,valueonly)"
-                "\x01%(trailers:key=Deliverable-Id,valueonly)",
-            ],
-            cwd=repo_root,
-        )
-        sid_to_shas = {}
-        did_to_shas = {}
-        sha_to_did = {}
-        if rc_head == 0:
-            for record in head_out.split(_COMMIT_HEADER_SENTINEL):
-                if not record.strip():
-                    continue
-                fields = record.split("\x01", 2)
-                if len(fields) != 3:
-                    continue
-                h, sid_v, did_v = fields[0].strip(), fields[1].strip(), fields[2].strip()
-                if not h:
-                    continue
-                if sid_v:
-                    sid_to_shas.setdefault(sid_v, []).append(h)
-                did_v_canonical = canonicalize(did_v, _coverage_equivalence_map) if did_v else did_v
-                sha_to_did[h] = did_v_canonical
-                if did_v_canonical:
-                    did_to_shas.setdefault(did_v_canonical, []).append(h)
-        # On rc_head != 0, all three dicts stay empty — every per-node lookup
-        # below then sees zero matches, exactly the same degraded shape the
-        # old per-node `rc3/rc4 != 0 -> []` branches produced, so the existing
-        # vacuous-match guard (INDETERMINATE, never silently COVERED) still
-        # fires downstream unchanged.
-        if shared_context is not None:
-            shared_context.sid_to_shas = sid_to_shas
-            shared_context.did_to_shas = did_to_shas
-            shared_context.sha_to_did = sha_to_did
-
-    def _resolve_add_commit_session_id(node_path: str) -> Tuple[str, str]:
-        """Resolve (add_sha, Session-Id) for the commit that originally added
-        `node_path` — the exact two-`git log`-call derivation the `else`
-        branch below has always performed. Factored out so the `closing_abs`
-        branch reuses it verbatim instead of a second, divergent copy.
-        Returns ("", "") when either call fails or the add-commit/trailer
-        cannot be resolved.
-
-        Used for TWO purposes on the `closing_abs` path, not one: it detects
-        the pickup (author != runner, recorded on
-        `_DagNodeAttribution.attribution_disagrees`), AND on the claim-gated
-        branch its resolved Session-Id becomes the attributed `sid` (DR-286).
-        An earlier revision of this docstring said "observation path", which
-        was true of C1 alone and understated the helper's role after C2.
-
-        COST, stated because the obvious summary understates it: the
-        `closing_abs` branch calls this UNCONDITIONALLY whenever
-        `closing_session_id` is truthy — not only on a detected pickup — so
-        every ordinary DAG-mode gate run now pays these two `git log` spawns,
-        where it previously took a zero-spawn shortcut. The cost is O(1) per
-        gate run, NOT O(nodes): "no new PER-NODE spawn" is true but is a
-        weaker claim than "no new spawn", and the difference is this. Accepted
-        deliberately — detecting a pickup requires resolving the author, and
-        there is no cheaper signal that is also trustworthy (frontmatter
-        `authoring_session` is self-declared; the add-commit trailer is
-        git-truth). Revisit only if gate-run frequency makes a fixed
-        two-spawn tax material on this machine's load norm.
-        """
-        rc, add_sha_out, _ = _run(
-            [
-                "git", "log", "--follow", "-M100%",
-                "--diff-filter=A", "--format=%H", "--", node_path,
-            ],
-            cwd=repo_root,
-        )
-        add_sha_lines = (
-            [s.strip() for s in add_sha_out.splitlines() if s.strip()]
-            if rc == 0
-            else []
-        )
-        # Take the OLDEST add-commit (last line — git log is newest-first)
-        add_sha = add_sha_lines[-1] if add_sha_lines else ""
-        if rc != 0 or not add_sha:
-            return "", ""
-        rc2, sid_raw, _ = _run(
-            ["git", "log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", add_sha],
-            cwd=repo_root,
-        )
-        resolved_sid = sid_raw.strip().strip("\r\n") if rc2 == 0 else ""
-        return add_sha, resolved_sid
-
-    seen_sha: Set[str] = set()
-    for node in closing_set:
-        sid = ""
-        authored_sid: Optional[str] = None
-        attribution_disagrees = False
-        # Captured in both branches below so the leg (b) bulk-sweep check
-        # (deliverable_id union, further down) has this node's add-commit
-        # regardless of which branch resolved `sid` — see
-        # _add_commit_touched_file_count / _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD.
-        add_sha = ""
-
-        if node == closing_abs and closing_session_id:
-            # D3 case 3: the closing handoff's session is the currently-active session.
-            # The add-commit trailer trail might not yet exist (unpublished handoff).
-            sid = closing_session_id
-            # Resolve the node's own add-commit Session-Id (the same
-            # derivation the `else` branch performs) and record whether it
-            # disagrees with the closing_session_id shortcut above — a
-            # disagreement IS a detected pickup. See
-            # _DagNodeAttribution.attribution_disagrees.
-            #
-            # `sid` is reassigned below ONLY on the claim-gated pickup path
-            # (DR-286). When author == runner — the ordinary close, and the
-            # overwhelming majority — this block records nothing and `sid`
-            # keeps `closing_session_id`, so attribution, `result.shas`, and
-            # the verdict are byte-identical to pre-C1 behaviour. That
-            # byte-identity is asserted by
-            # test_same_session_author_runner_control_MUST_NOT_CHANGE; if it
-            # ever fails, this code is wrong, not the test.
-            add_sha, authored_sid_raw = _resolve_add_commit_session_id(node)
-            if authored_sid_raw:
-                authored_sid = authored_sid_raw
-                if authored_sid_raw != closing_session_id:
-                    attribution_disagrees = True
-                    # DR-286: a detected pickup (disagreement above) attributes
-                    # the handoff's authoring session — gated on the pickup
-                    # claim record. Fail closed on any non-positive resolution
-                    # (unreadable/absent/ambiguous/third-party claim): `sid`
-                    # stays `closing_session_id`, today's behaviour. Only a
-                    # claim positively held by `closing_session_id` flips it.
-                    # `_get_handoff_consumed_by` already degrades read/parse
-                    # failures to `None` (conservative), which is the correct
-                    # fail-closed direction for this gate too — a failure must
-                    # never widen attribution.
-                    claim_holder = _get_handoff_consumed_by(
-                        node, repo_root=repo_root
-                    )
-                    if claim_holder == closing_session_id:
-                        sid = authored_sid_raw
-                        result.notes.append(
-                            f"{node}: pickup detected — claim on this handoff "
-                            f"held by running session {closing_session_id!r}; "
-                            f"attributing authoring session {authored_sid_raw!r} "
-                            "(DR-286)"
-                        )
-                    else:
-                        result.notes.append(
-                            f"{node}: OBSERVATION — add-commit Session-Id "
-                            f"{authored_sid_raw!r} disagrees with closing_session_id "
-                            f"{closing_session_id!r} (attribution unchanged this run)"
-                        )
-        else:
-            # Find the commit that originally added this handoff file.
-            # tail -1 equivalent: git log outputs newest→oldest; last line = oldest = add-commit.
-            add_sha, sid = _resolve_add_commit_session_id(node)
-            authored_sid = sid or None
-            if not add_sha:
-                if node == closing_abs:
-                    # Preserved safety guard: the CLOSING/current session's own
-                    # node must still hard-fail INDETERMINATE when its own
-                    # add-commit is unresolvable — this is the node THIS run
-                    # is responsible for reviewing, not an inherited
-                    # ancestor's segment.
-                    result.indeterminate = True
-                    result.notes.append(f"{node}: no add-commit found (attribution gap)")
-                    return result
-                # Inherited ANCESTOR node whose add-commit cannot be resolved
-                # (e.g. `--follow` broken by a provenance-losing move/rename,
-                # or history predating this clone) does NOT poison the whole
-                # chain verdict — mirrors the untrailered-add-commit carve-out
-                # below. Skip this node's segment attribution (it contributes
-                # nothing to `covered`/`shas` — never a falsely-COVERED
-                # verdict) and continue the walk; the gap is recorded in
-                # `notes`, never silently absorbed into "walked and clean".
-                result.notes.append(
-                    f"{node}: no add-commit found (attribution gap) — "
-                    "ancestor segment skipped (attributed to its own closing session)"
-                )
-                result.node_attribution[node] = _DagNodeAttribution(
-                    path=node,
-                    session_id="",
-                    deliverable_id=_parse_handoff_deliverable_id(node),
-                    shas=frozenset(),
-                )
-                continue
-
-            # Session-Id trailer already resolved by
-            # _resolve_add_commit_session_id above (`sid`) — no second
-            # extraction call here (that would double the per-node spawn
-            # count the batched-git-surface tests police).
-            if not sid:
-                if node == closing_abs:
-                    # Preserved safety guard: the CLOSING/current session's own
-                    # node (the --from-handoff node itself) must still hard-fail
-                    # INDETERMINATE if its own add-commit is untrailered — this
-                    # is the node THIS run is responsible for reviewing, not an
-                    # inherited ancestor's segment.
-                    result.indeterminate = True
-                    result.notes.append(
-                        f"{node}: add-commit {add_sha} has no Session-Id trailer"
-                    )
-                    return result
-                # Inherited ANCESTOR node with an untrailered add-commit (e.g. a
-                # spinoff-add commit authored outside the Session-Id-stamping
-                # path) does NOT poison the whole chain verdict. Skip this
-                # node's segment attribution (it contributes nothing to
-                # `covered` — never a falsely-COVERED verdict) and continue the
-                # walk; the ancestor's own commits are presumed reviewed by
-                # whatever session actually closed that ancestor's handoff.
-                result.notes.append(
-                    f"{node}: ancestor add-commit {add_sha} untrailered — "
-                    "segment skipped (attributed to its own closing session)"
-                )
-                # Attribution entry with no segment (AC1/AC2) — the node still
-                # belongs in the rendered ancestry chain; it simply contributes
-                # no commits (never falsely credited via a fabricated segment).
-                result.node_attribution[node] = _DagNodeAttribution(
-                    path=node,
-                    session_id="",
-                    deliverable_id=_parse_handoff_deliverable_id(node),
-                    shas=frozenset(),
-                )
-                continue
-
-        # Fidelity guard 1: UUID-shape validation BEFORE git grep interpolation.
-        # A Session-Id containing regex metacharacters (e.g. '.*') interpolated
-        # raw into git log --grep would over-match commits not in this session →
-        # false COVERED verdict. Validate first; malformed → INDETERMINATE.
-        if not _UUID_RE.match(sid):
-            result.indeterminate = True
-            result.notes.append(
-                f"{node}: Session-Id {sid!r} failed UUID validation (fidelity guard 1)"
-            )
-            return result
-
-        # Enumerate all commits in this session via Session-Id trailer grep.
-        # --no-merges mirrors flat-range rationale: a merge commit carrying this
-        # session's trailer must not enter the segment
-        # and cause false UNCOVERED for chain commits that would otherwise be covered.
-        #
-        # Scoped to HEAD, not --all (2026-07-26 fix — see improvement-queue
-        # 2026-07-01-chain-end-coverage-gate-dag-mode-over-at.yaml and
-        # 2026-07-03-coverage-gate-dag-mode-misfires-on-prede.yaml). --all walks
-        # EVERY ref in the repository -- every other local/remote branch, every
-        # worktree's branch, every tag -- not just the history this DAG-mode
-        # evaluation is actually reasoning about. A session-id trailer match on a
-        # commit that lives on a wholly unrelated branch (a different feature
-        # branch, an abandoned spike, another concurrent EM's worktree branch)
-        # has no business entering THIS handoff's chain_set: it is not an
-        # ancestor of the commit being closed out, so build_reviewed_set's
-        # git-ancestry-based reviewed-set can never cover it, guaranteeing a
-        # false UNCOVERED. HEAD is the correct reachability bound: DAG mode always
-        # runs against the checkout that is mid-close, and every commit legitimately
-        # attributable to this workstream must be an ancestor of HEAD by construction.
-        # Does not by itself resolve same-branch concurrent-session contamination
-        # (a sibling EM's commits interleaved on a shared work/* branch remain
-        # reachable from HEAD too) -- that class is bounded by correct
-        # Session-Id attribution instead, see closing_session_id threading below.
-        seg = sid_to_shas.get(sid, [])
-
-        if not seg:
-            # Vacuous-match guard (mirrors bash AC14 logic): valid SID, zero commits
-            # → INDETERMINATE (never silently COVERED on an empty match).
-            result.indeterminate = True
-            result.notes.append(
-                f"{node}: Session-Id {sid!r} matched 0 commits (vacuous-match guard)"
-            )
-            return result
-
-        # Deliverable-Id attribution (2026-07-27 fix): if this node's handoff
-        # names a deliverable_id, prefer it over the plain Session-Id segment.
-        # A Session-Id records who typed `git commit`, not what work the
-        # commit was — a session that spins off a baton and also ships
-        # unrelated work donates all of it to the spinoff's review obligation
-        # under the old rule. See improvement-queue
-        # 2026-07-01-chain-end-coverage-gate-dag-mode-over-at.yaml,
-        # 2026-07-03-coverage-gate-dag-mode-misfires-on-prede.yaml, and the
-        # 2026-07-27 example-retrieval-repo / example-cockpit-repo reports of the same shape.
-        deliverable_id = _parse_handoff_deliverable_id(node)
-
-        if deliverable_id is None:
-            # No deliverable_id on this node — unchanged legacy behaviour.
-            for sha in seg:
-                seen_sha.add(sha)
-            # AC1/AC2: record this node's own segment alongside the flat
-            # union above — computed once, here, never recomputed by a caller.
-            result.node_attribution[node] = _DagNodeAttribution(
-                path=node,
-                session_id=sid,
-                deliverable_id=None,
-                shas=frozenset(seg),
-                authored_session_id=authored_sid,
-                attribution_disagrees=attribution_disagrees,
-            )
-            continue
-
-        # Fidelity guard 1 (deliverable-attribution variant): shape-validate
-        # BEFORE interpolating into `git log --grep`, exactly as for
-        # Session-Id above — an unvalidated id is the same injection hazard.
-        # Malformed → INDETERMINATE, never fail-open to COVERED.
-        if not _DELIVERABLE_ID_RE.match(deliverable_id):
-            result.indeterminate = True
-            result.notes.append(
-                f"{node}: deliverable_id {deliverable_id!r} failed shape "
-                "validation (fidelity guard 1, deliverable variant)"
-            )
-            return result
-
-        # Leg (a): commits directly stamped with THIS deliverable_id. Scoped
-        # to HEAD + --no-merges for the same reachability/merge-commit
-        # reasons as the Session-Id segment query above. Canonicalized
-        # (C6b/AC11) -- `did_to_shas` above is keyed on the canonical id.
-        deliv_seg = did_to_shas.get(canonicalize(deliverable_id, _coverage_equivalence_map), [])
-
-        # Leg (b): legacy-history fallback — commits already matched by
-        # Session-Id that carry no Deliverable-Id trailer AT ALL, or that
-        # carry one no WALKED node holds. This is the leg that makes the
-        # change no-regression: every commit this gate has always attributed
-        # via Session-Id keeps being attributed that way UNLESS it is now
-        # stamped with a deliverable a *different walked* node holds (that
-        # exclusion is the entire fix -- see the pre-pass comment above for
-        # why "walked" is the correct scope, not "any"). A deliverable
-        # belonging to an UNWALKED handoff does not exclude: this node's own
-        # deliverable_id, if any, is also in `walked_deliverable_ids`, but a
-        # commit stamped with it is already carried via `deliv_seg` above, so
-        # excluding it here too is redundant, not incorrect -- the union
-        # below is unaffected either way. One batched trailer-lookup call for
-        # all of `seg`, not one subprocess per commit.
-        # sha_to_did already covers every commit in `seg` (seg is itself
-        # sourced from the same `git log HEAD --no-merges` walk that built
-        # sha_to_did) — no separate `_commit_deliverable_id_trailers` spawn
-        # needed per node any more (see the batched pre-pass above).
-        #
-        # Weak-authorship guard (AC1/AC2): an add-commit that touched more
-        # than _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD files is a bulk sweep,
-        # not this node's authorship record — its Session-Id must not seed
-        # leg (b). Only computed here (lazily, per node with a
-        # deliverable_id) since it is only leg (b) that this guards; leg (a)
-        # is untouched either way. `add_sha` is always populated by this
-        # point for a node that reached here (both branches above resolve
-        # it before `sid` can be truthy).
-        is_bulk_sweep_add = False
-        if add_sha:
-            touched = _add_commit_touched_file_count(add_sha, repo_root)
-            if touched is not None and touched > _BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD:
-                is_bulk_sweep_add = True
-
-        candidate_legacy_leg = [
-            sha
-            for sha in seg
-            if not sha_to_did.get(sha) or sha_to_did[sha] not in walked_deliverable_ids
-        ]
-
-        if is_bulk_sweep_add:
-            # AC4: fail toward current behaviour — the node itself does NOT
-            # become INDETERMINATE, and leg (a) is untouched. Leg (b) simply
-            # contributes nothing from this add-commit's session.
-            legacy_leg: List[str] = []
-            unattributable = candidate_legacy_leg
-            if unattributable:
-                # AC3/C2: report rather than drop — a distinct note category
-                # ("unattributable-in-range") so a closer can tell "this
-                # chain's inheritance" apart from "in range, foreign".
-                result.notes.append(
-                    f"{node}: add-commit {add_sha} touched more than "
-                    f"{_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD} files (bulk sweep) — "
-                    f"leg (b) suppressed for session {sid!r}; "
-                    f"{len(unattributable)} commit(s) unattributable-in-range "
-                    f"(not this chain's, not dropped): {sorted(unattributable)}"
-                )
-                result.unattributable_shas.extend(
-                    sha for sha in unattributable if sha not in result.unattributable_shas
-                )
-        else:
-            legacy_leg = candidate_legacy_leg
-
-        node_shas = set(deliv_seg) | set(legacy_leg)
-        for sha in node_shas:
-            seen_sha.add(sha)
-        # AC1/AC2: record this node's own (deliverable-attributed) segment
-        # alongside the flat union above — computed once, here.
-        result.node_attribution[node] = _DagNodeAttribution(
-            path=node,
-            session_id=sid,
-            deliverable_id=deliverable_id,
-            shas=frozenset(node_shas),
-            authored_session_id=authored_sid,
-            attribution_disagrees=attribution_disagrees,
-        )
-
-    result.shas = list(seen_sha)
-    return result
+# `_DagChainSetContext` (the optional cross-call cache for `_derive_dag_chain_set`)
+# and `_resolve_closing_handoff_disk_path` (its closing-handoff archive-path
+# resolver) were removed 2026-08-19 along with `_derive_dag_chain_set`, their
+# only caller — see state/kill-ledger.md.
 
 
 # ---------------------------------------------------------------------------

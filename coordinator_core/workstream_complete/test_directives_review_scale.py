@@ -49,8 +49,6 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
 )
 from coordinator_core.workstream_complete import directives_review, judgments
 from coordinator_core.workstream_complete.directives_review import (
-    CHAIN_SLICES_CAVEAT,
-    build_chain_slices,
     decide_review_scale,
 )
 
@@ -1278,17 +1276,5 @@ def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_
         assert gross_loc == 31
         assert code_loc == 31
         assert surface_count == 1
-
-
-# ---------------------------------------------------------------------------
-# build_chain_slices -- C7, docs/plans/2026-08-15-chain-scope-review-gets-a-
-# discharging-artifact.md Pinned interfaces Seam 2 / AC4. Direct unit
-# coverage of the pure decorator over chain_partition_uncovered_shas'
-# output; no gate-runner spawn, no git.
-# ---------------------------------------------------------------------------
-
-_FAKE_SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-_FAKE_SHA_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-_FAKE_SHA_C = "c" * 40
 
 

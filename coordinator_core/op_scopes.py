@@ -819,6 +819,27 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # this engine-injected repo_root kwarg.
     # Spec: state/handoffs/2026-08-13-live-peer-roster.md § 1-2.
     "session.peer_roster":                    "none",
+    # session.work_state — read-only held/unclaimed corpus read over
+    # state/handoffs/, which is main-worktree-rooted repo state -- exactly
+    # the case this table's own header comment names for "common_dir"
+    # (git_common_dir(resolved_worktree), shared across linked worktrees).
+    # Deliberately DIFFERENT from session.peer_roster's "none" just above:
+    # the harness peer registry is machine-global, but this op's own
+    # state/handoffs/ scan is not. Takes the engine-injected repo_root
+    # kwarg verbatim; no wire param of the same name.
+    # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C3.
+    "session.work_state":                     "common_dir",
+    # fleet.work_state — fleet-generic aggregation of session.work_state's
+    # per-repo held/unclaimed core across every registered ACTIVE sibling
+    # (C5). Deliberately DIFFERENT from session.work_state's "common_dir"
+    # just above: this op is not scoped to the calling repo's own tree at
+    # all — it reaches across every registered sibling via
+    # _memo_resolver.read_registry_repos(), the same fleet-generic
+    # target-resolution convention session.reap_claims_for_repos /
+    # session.record_pickup / session.scope_report already use → "none".
+    # repo_root arrives as None (unused) for this op.
+    # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
+    "fleet.work_state":                       "none",
     # session.artifact_owner — read-only "who's on this?" read, keyed on an
     # artifact path rather than a UUID or a repo. Its own file read is the
     # caller-supplied artifact_path param, never repo_root-prefixed, and its

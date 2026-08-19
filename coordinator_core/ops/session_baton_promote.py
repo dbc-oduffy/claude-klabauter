@@ -54,12 +54,15 @@ the SAME ``coordinator-doc-new`` seam — this op still never scaffolds
 frontmatter itself. Neither falls back to the baton record the way
 ``title`` does: an absent field means no context existed, which the DR-173
 gate below exists to record. The gating decision is made once, here, from
-what the caller supplied: both present promotes ordinary
-(``ready_to_fire``/``pickup_ready: true``, no ``blocking_notes``); either
-absent passes C1's ``--gated-open`` with notes naming WHICH field is
+what the caller supplied — a predicate over ``category``/``summary``
+presence, not a carrier of ``blocking_notes`` text: both present promotes
+ordinary (``ready_to_fire``/``pickup_ready: true``, no ``blocking_notes``);
+either absent passes C1's ``--gated-open`` with notes naming WHICH field is
 unfilled, so the promoted artifact is born ``awaiting_gate`` /
 ``pickup_ready: false`` rather than advertising a placeholder as available
-work.
+work. ``blocking_notes`` is output the decision WRITES (the reason text for
+a human reader), never an input it reads — deleting that note would not
+unpark the baton, because the unfilled fields are what park it.
 
 Negative-spec:
     - Does NOT scaffold frontmatter directly — ``coordinator-doc-new`` stays
@@ -269,6 +272,13 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     # present -> born ordinary (no --gated-open). Either absent -> the
     # residual case, gated with notes naming WHICH field is unfilled so a
     # reader can tell what clears the gate.
+    #
+    # This decision is a predicate over category/summary, not a carrier of
+    # blocking_notes text: the branch taken here is what parks the baton
+    # (awaiting_gate + pickup_ready: false). gated_open below is written
+    # AFTER the decision, as the human-readable reason for it -- deleting
+    # or blanking that text would not unpark the baton, because the empty
+    # fields are what park it, not the note describing why.
     if category and summary:
         gated_open = None
     elif not category and not summary:

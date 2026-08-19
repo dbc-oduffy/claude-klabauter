@@ -2164,6 +2164,40 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"rows": [...]} only.
     "session.peer_roster": OpClass.COMPUTE_ONLY,
+    # session.work_state — COMPUTE_ONLY: reads state/handoffs/*.md and the
+    # claim-state ledger via build_work_state() (coordinator_core.session.
+    # work_state), which itself only reads disk (frontmatter, claim ledger,
+    # live-session verdicts) and writes nothing anywhere on any path.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      build_work_state() and its helpers (_scan_handoff_dir,
+    #      _resolve_ledger_first_holder, derive_readiness_batch) are all pure
+    #      readers; no write call anywhere in the chain.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"held": [...], "unclaimed": [...], "review_due": [...]} only.
+    # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C3.
+    "session.work_state": OpClass.COMPUTE_ONLY,
+    # fleet.work_state — COMPUTE_ONLY: fans build_work_state() out across
+    # every registered active sibling (read via _memo_resolver.
+    # read_registry_repos(), itself read-only) and returns the aggregated
+    # answer verbatim. Unlike fleet.aggregate_capability_index (MUTATING —
+    # persists state/capabilities/fleet-index.json), this op persists
+    # nothing.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Every per-repo call is build_work_state() (pure reader, see
+    #      session.work_state's own affirmation above); the walk-only git-repo
+    #      pre-check and the harness_registry.snapshot() hoist are both reads.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"repos": {...}, "errors": [...]} only.
+    # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
+    "fleet.work_state": OpClass.COMPUTE_ONLY,
     # session.artifact_owner — COMPUTE_ONLY: opens the caller-supplied
     # artifact_path for READ ONLY, extracts owner id(s) via frontmatter
     # primitives, and resolves each through reachability.resolve_address()

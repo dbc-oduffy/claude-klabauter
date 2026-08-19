@@ -157,7 +157,7 @@ Body.
     )
 
     result = ws.build_work_state(tmp_path)
-    assert result == {"held": [], "unclaimed": []}
+    assert result == {"held": [], "unclaimed": [], "review_due": []}
 
 
 def test_build_work_state_scan_root_is_single_glob_no_second_filter():
@@ -280,7 +280,7 @@ Body.
     )
 
     result = ws.build_work_state(tmp_path)
-    assert result == {"held": [], "unclaimed": []}
+    assert result == {"held": [], "unclaimed": [], "review_due": []}
 
 
 def test_off_gate_axis_never_reaches_readiness_axis(tmp_path):
@@ -297,12 +297,16 @@ Body.
     )
 
     result = ws.build_work_state(tmp_path)
-    assert result == {"held": [], "unclaimed": []}
+    assert result == {"held": [], "unclaimed": [], "review_due": []}
 
 
-def test_review_due_basis_excluded_from_both_buckets(tmp_path, monkeypatch):
-    """`basis="review-due"` is its own bucket by omission — never `unclaimed`,
-    never blocked. Stubbing the producer isolates this module's OWN
+def test_review_due_basis_emits_its_own_bucket(tmp_path, monkeypatch):
+    """AC3a: `basis="review-due"` is EMITTED in its own `review_due` bucket —
+    never `unclaimed`, never blocked, and never merely omitted. Omission was
+    the original defect: the engine declined to judge these records, so the row
+    IS the prompt for a human recheck, and dropping it deletes the prompt. A
+    reader asking which batons are free would never learn that N records went
+    unjudged. Stubbing the producer isolates this module's OWN
     dispatch-on-`basis` contract from `gate_eval`'s own review-due trigger
     conditions (deadline-elapsed `gate_evidence` legs), which this module
     never constructs on its own."""
@@ -328,7 +332,16 @@ Body.
     monkeypatch.setattr(ws, "derive_readiness_batch", _fake_derive_readiness_batch)
 
     result = ws.build_work_state(tmp_path)
-    assert result == {"held": [], "unclaimed": []}
+    assert result["held"] == []
+    assert result["unclaimed"] == []
+    assert [row["path"] for row in result["review_due"]] == ["state/handoffs/review.md"]
+    # Carries the same identifying fields an unclaimed row would, so a reader
+    # can act on the prompt without a second lookup.
+    assert result["review_due"][0]["gate_notes"] == {
+        "present": False,
+        "text": None,
+        "passed": None,
+    }
 
 
 # ---------------------------------------------------------------------------
