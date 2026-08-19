@@ -143,6 +143,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -976,11 +977,125 @@ def _resolve_chain_attribution_window(repo_root: str | None) -> "ChainAttributio
     return result
 
 
+#: Module-level memo for `_resolve_chain_descendants`, keyed on `(repo_root,
+#: frozenset(chain_dag_shas))` -- a chain-terminal close resolves this
+#: exactly once per process (see that function's own docstring). Mirrors
+#: `_CHAIN_ATTRIBUTION_WINDOW_CACHE`'s shape; a distinct cache because the
+#: key includes the chain-DAG sha set itself, not just `repo_root`.
+_CHAIN_DESCENDANTS_CACHE: "dict[tuple[str, frozenset[str]], Mapping[str, frozenset[str]] | None]" = {}
+
+
+def _resolve_chain_sha_descendants(chain_sha: str, repo_root: str) -> "frozenset[str] | None":
+    """One `git rev-list --ancestry-path --all ^<chain_sha>` spawn -- every
+    commit, reachable from ANY current ref (`--all`: every branch, tag, and
+    remote-tracking ref this repo currently knows about), that has
+    `chain_sha` as an ancestor. `chain_sha` itself is added back into the
+    returned set by the caller, never here -- `^<chain_sha>` excludes
+    `chain_sha` and its own ancestors from the walk, so this function's raw
+    output is EXCLUSIVE of `chain_sha`; a commit trivially reaches itself
+    (the same fact the single-commit short-circuit in `directives_review.
+    _record_membership_shas` already relies on: `git rev-list <sha>^..<sha>`
+    == `{<sha>}`), so the caller must union `{chain_sha}` in.
+
+    `--all` rather than a HEAD-bound range: this fleet runs many concurrent
+    sessions, on more than one branch over time (`_resolve_chain_tip_sha`'s
+    own docstring covers the same shared-branch fact for a different
+    question) -- bounding the forward walk to `HEAD` alone risks missing a
+    genuine descendant that lives only on another still-live ref (a peer's
+    branch, `origin/main`), which would make this function UNDER-report
+    `chain_sha`'s descendants. Under-reporting here is the one direction
+    this whole optimization must never take: `directives_review.
+    _range_provably_excludes_chain_shas` treats "not a descendant" as
+    provable exclusion, so a false negative here would silently skip a
+    record that genuinely reviewed this chain sha -- the exact failure
+    direction Half 1's governing baton (state/handoffs/2026-08-18-wsc-
+    brightline-gate-per-record-git-spawn.md) forbids. `--all` is not a
+    perfect bound (a commit that lives ONLY on a since-deleted, never-
+    merged ref is invisible to it, same as anywhere else `git rev-list
+    --all` is used in this codebase) but is strictly more complete than a
+    single-ref bound, and is the same class of trade this file's own
+    `_resolve_chain_attribution_window` already makes for a materially
+    similar reachability question.
+
+    Verified against a fixture repo with a diverged, unmerged sibling
+    branch (Half 1's fixture-first equivalence pass): a commit on that
+    branch, forked off a chain sha, correctly appears in that chain sha's
+    descendant set and correctly does NOT appear in an unrelated chain
+    sha's descendant set on the same branch.
+
+    Returns `None` (never raises) on any git failure -- the caller degrades
+    the WHOLE precompute to `None` (disabling this optimization entirely
+    for this pass, never serving a partial/unsound descendant map) rather
+    than guess, per this module's fail-closed posture on anything this
+    correctness-critical gate cannot positively confirm."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-list", "--ancestry-path", "--all", f"^{chain_sha}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repo_root,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    descendants = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    descendants.add(chain_sha)
+    return frozenset(descendants)
+
+
+def _resolve_chain_descendants(
+    chain_dag_shas: "Iterable[str]", repo_root: "str | None",
+) -> "Mapping[str, frozenset[str]] | None":
+    """Half 1 wiring (state/handoffs/2026-08-18-wsc-brightline-gate-per-
+    record-git-spawn.md): resolves ONE descendant set per chain-DAG sha for
+    THIS close -- 9 spawns (the measured chain DAG size) instead of one per
+    surviving trail record. Threaded to `chain_partition_uncovered_shas` /
+    `chain_partition_verdict_discharged` at the SAME call sites as `chain_
+    window` (below), as `chain_descendants`, which those functions pass
+    straight through to `_record_membership_shas`.
+
+    Returns `None` (never a partial dict) on an unresolvable `repo_root`,
+    an empty `chain_dag_shas`, or if ANY single chain sha's descendant walk
+    fails. `directives_review._range_provably_excludes_chain_shas` requires
+    an entry for EVERY member of the chain-DAG sha set to prove exclusion
+    soundly -- a dict missing even one member could not be told apart, at
+    that call site, from "this sha was never a chain member" without
+    re-deriving the chain-DAG set there too. Failing the whole precompute on
+    any single failure is simpler than serving a partial dict and exactly as
+    safe: every caller already treats `chain_descendants=None` as
+    byte-identical to the pre-existing per-record resolver path (see
+    `_record_membership_shas`'s own docstring for that fallback).
+
+    Memoized per `(repo_root, frozenset(chain_dag_shas))` in `_CHAIN_
+    DESCENDANTS_CACHE` for the lifetime of this process, mirroring every
+    other resolver cache in this file."""
+    chain_dag_sha_set = frozenset(str(s).lower() for s in chain_dag_shas)
+    key = (repo_root or "", chain_dag_sha_set)
+    if key in _CHAIN_DESCENDANTS_CACHE:
+        return _CHAIN_DESCENDANTS_CACHE[key]
+    result: "Mapping[str, frozenset[str]] | None" = None
+    if repo_root and chain_dag_sha_set:
+        descendants: "dict[str, frozenset[str]] | None" = {}
+        for chain_sha in chain_dag_sha_set:
+            resolved = _resolve_chain_sha_descendants(chain_sha, repo_root)
+            if resolved is None:
+                descendants = None
+                break
+            descendants[chain_sha] = resolved
+        result = descendants
+    _CHAIN_DESCENDANTS_CACHE[key] = result
+    return result
+
+
 def _clear_process_caches() -> None:
     """Test-only reset hook for every module-level, never-cleared-in-
     production process cache this file owns (`_RANGE_SHAS_CACHE`,
     `_DAG_SHAS_CACHE`, `_FOREIGN_SHAS_CACHE`, `_GREP_ATTRIBUTED_SHAS_CACHE`,
-    `_CHAIN_ATTRIBUTION_WINDOW_CACHE`) — review-integrator finding N2.
+    `_CHAIN_ATTRIBUTION_WINDOW_CACHE`, `_CHAIN_DESCENDANTS_CACHE`) —
+    review-integrator finding N2.
     `_resolve_attested_shas` (2026-08-18 § C3) carries no module-level
     cache of its own — it reads a value already persisted onto the record
     it is called with, so there is nothing here to clear for it; the
@@ -1001,6 +1116,7 @@ def _clear_process_caches() -> None:
     _FOREIGN_SHAS_CACHE.clear()
     _GREP_ATTRIBUTED_SHAS_CACHE.clear()
     _CHAIN_ATTRIBUTION_WINDOW_CACHE.clear()
+    _CHAIN_DESCENDANTS_CACHE.clear()
 
 
 def _describe_uncovered_shas(shas: list[str], repo_root: str | None) -> list[str]:
@@ -1875,6 +1991,16 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
         # takes the per-record `narrow_foreign_shas` spawn path unchanged.
         chain_repo_root = dag_resolved[0] if dag_resolved is not None else _resolve_repo_root()
         chain_window = _resolve_chain_attribution_window(chain_repo_root)
+        # Half 1 wiring (state/handoffs/2026-08-18-wsc-brightline-gate-per-
+        # record-git-spawn.md): the ONE descendant-set-per-chain-sha
+        # precompute that lets `_record_membership_shas` decline a record
+        # whose range provably cannot intersect `chain_dag_shas`, without a
+        # per-record `git rev-list` spawn. `None` (an unresolvable repo root,
+        # an empty chain DAG, or any single chain sha's descendant walk
+        # failing) degrades byte-identically to every pre-Half-1 caller:
+        # `chain_partition_uncovered_shas` below takes the resolver-backed
+        # per-record path unchanged.
+        chain_descendants = _resolve_chain_descendants(chain_dag_shas, chain_repo_root)
         if chain_owes_no_code_review:
             uncovered: list[str] = []
             discharged = True
@@ -1886,6 +2012,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     attested_shas=_resolve_attested_shas,
                     chain_planning_shas=chain_planning_shas,
                     chain_window=chain_window,
+                    chain_descendants=chain_descendants,
                 )
                 if chain_code_shas and chain_dag_shas
                 else []

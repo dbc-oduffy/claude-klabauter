@@ -6,10 +6,24 @@ document) and resolves the effective `{target_ms, tolerance}` budget for a given
 `overrides` entry wins if present, else the manifest falls back to the op's `OpClass`-tier
 default (`defaults.COMPUTE_ONLY` / `defaults.MUTATING`).
 
-At Phase-0 (this chunk), every default and override in the manifest is a PLACEHOLDER value
-marked `"_provisional": true` — C9 (the Phase-0 measurement pass, qsub-01 plan) overwrites them
-with honest budgets measured from real per-op latency distributions. Do not treat provisional
-values as SLA-authoritative.
+**`_provisional` — what it means and who reads it.** C9 (the Phase-0 measurement pass, qsub-01
+plan) has RUN: it measured `defaults.COMPUTE_ONLY` and every entry in `overrides` from real per-op
+latency distributions and stripped their `"_provisional": true` markers. `defaults.MUTATING` still
+carries the marker, and that is deliberate, not leftover — MUTATING was define-only in wave-1
+(qsub-01 AC7) and remains unmeasured. The manifest's own `_phase0_baseline.note` records this.
+
+`resolve_budget()` does NOT branch on `_provisional`, by design: it is measurement-state metadata
+for readers of the manifest, not an input to budget resolution. Its live readers are
+`tests/test_budget.py` (`test_provisional_flags_match_phase0_measurement_state` asserts MUTATING
+carries it and COMPUTE_ONLY does not; `test_measured_overrides_carry_no_provisional_marker` asserts
+no override carries it) and `ipc.py`'s `_MAX_DECLARED_TOUCH_PATHS` headroom analysis, which cites it
+as the reason to treat the 300ms MUTATING target as not yet settled (DR-276).
+
+**Negative spec:** do not delete `_provisional` as dead metadata. It was assessed as unread under
+op-proportionality cluster C-17 and the assessment was refuted — see
+`state/roadmap/op-proportionality/OVERVIEW.md` § *A flag nothing reads*. It is the only
+machine-checked record of which tier is still unmeasured. Do not treat a `_provisional` value as
+SLA-authoritative.
 
 **Third tier, forward-binding only (do NOT populate):** a future per-tool-call (hook-port) budget
 tier is anticipated — see qsub-01 plan § Out of scope, "A future per-tool-call (hook-port) budget

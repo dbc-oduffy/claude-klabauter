@@ -55,6 +55,7 @@ from coordinator_core.contract import apply_base
 from coordinator_core.merge_assemble import (
     GATE_DIRECTIVE_IDS,
     NODE_CEREMONY_TEST_RELPATH,
+    _CEREMONY_NAME,
     brief,
     build_gate_verdicts_scaffold,
     normalize_decisions,
@@ -165,6 +166,87 @@ def _dispatch_orphan_branch_sweep(args: list[str], repo_root: Path) -> dict[str,
     return _dispatch_result("orphan-branch-sweep", proc)
 
 
+def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """`d_grant_write` / `d_grant_handback` — the ceremony's Tier-U token,
+    minted after the ceremony gate and handed back at its close
+    (cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-grants-belong-in-
+    code-not-prose.md § 3).
+
+    IN-PROCESS, unlike every other handler in this table, and that is the
+    point. The grant is a single small JSON write into
+    `.git/coordinator-sessions/<sid>/`; spawning an interpreter for it
+    would add two cold starts to a ceremony whose per-composition cost is
+    already the thing being attacked
+    (`state/handoffs/2026-08-19-the-320-second-ceremony.md`). Spawning also
+    buys nothing here: `session.core.resolve_session_id` reads env vars
+    only (`COORDINATOR_SESSION_ID` / `CLAUDE_SESSION_ID` /
+    `CLAUDE_CODE_SESSION_ID`), which a child inherits, so a subprocess
+    resolves the SAME sid this process already has.
+
+    Exit-code contract, mapped onto this dispatcher's raise/return split:
+    exit 1 is an infra condition (unresolvable sid) and DEGRADES — the
+    layer-5 guard fails closed, so an unminted grant refuses the Tier-U
+    consumer rather than authorizing it, and aborting the whole ceremony
+    over it would be strictly worse than the prose this replaced. Exit 2 is
+    a wrong argv shape built by `build_directives` in this same repo, i.e. a
+    defect, and RAISES.
+
+    Negative-spec: do not "make this consistent" by routing it through
+    `_run_py_script`/`_dispatch_result`. Consistency with the other handlers
+    is not worth two cold spawns, and the raise-on-exit-1 that would come
+    with it reintroduces "a grant that could not be minted takes the
+    ceremony down with it"."""
+    from coordinator_core.session.grant_directive import EXIT_USAGE, run_grant_directive
+
+    code, message = run_grant_directive(args)
+    if code == EXIT_USAGE:
+        raise RuntimeError(f"tier-u-grant: {message}")
+    result: dict[str, Any] = {"cli": "tier-u-grant", "returncode": code, "stdout": ""}
+    if code != 0:
+        result["degraded_reason"] = (
+            f"tier-u-grant {args[0] if args else '<no verb>'}: {message} — the "
+            "layer-5 guard fails closed, so no Tier-U consumer is authorized by "
+            "its absence"
+        )
+    return result
+
+
+def _compensate_grant_write(
+    directive: dict[str, Any], repo_root: Path, detail: Optional[dict[str, Any]]
+) -> Any:
+    """Hand the grant back when the ceremony dies before reaching
+    `d_grant_handback`.
+
+    Without this, the handback is only as reliable as the ceremony's
+    completion: `apply_base.execute_directives` returns
+    `APPLY_EXIT_PARTIAL_MUTATION` the moment a handler raises, so every
+    later directive — including the handback — never dispatches, and the
+    grant outlives the ceremony that minted it. It stays bounded by session
+    liveness either way, so the leak degrades to the pre-handback behaviour
+    rather than past it; this closes it rather than documenting it.
+
+    Uses the SAME guarded call as the directive it compensates, so the
+    compensation cannot destroy a PM grant (or another ceremony's, under
+    `/workweek-complete` -> `/merging-to-main` nesting) that the abort
+    happened to leave live. Idempotent by construction: revoking an absent
+    grant is success, so this running after a handback that already fired
+    is a no-op, not a second effect."""
+    from coordinator_core.session.grant_directive import run_grant_directive
+
+    return run_grant_directive(["revoke", "--only-ceremony", _CEREMONY_NAME])
+
+
+#: Per-directive-id compensators, fired in reverse landing order by
+#: `apply_base.execute_directives` when a handler raises. Only the grant
+#: write registers one: it is the single directive here whose effect
+#: OUTLIVES the run (a token in `.git/coordinator-sessions/<sid>/` that a
+#: later Tier-U consumer reads), so it is the only one an aborted run can
+#: strand.
+_COMPENSATORS: dict[str, Any] = {
+    "d_grant_write": _compensate_grant_write,
+}
+
+
 #: THE closed dispatch table — every key is a literal string written here
 #: by hand, matching `merge_assemble.build_directives`'s `cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
@@ -175,6 +257,7 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "check-no-illegal-paths": _dispatch_check_no_illegal_paths,
     "merge-release-notes-derive": _dispatch_merge_release_notes_derive,
     "orphan-branch-sweep": _dispatch_orphan_branch_sweep,
+    "tier-u-grant": _dispatch_tier_u_grant,
 }
 
 
@@ -302,6 +385,7 @@ def apply(
                 _CLI_DISPATCH,
                 decisions=effective_decisions,
                 composition_budget=composition_budget,
+                compensators=_COMPENSATORS,
             )
             if exit_code == apply_base.APPLY_EXIT_OK:
                 outcome = "success"

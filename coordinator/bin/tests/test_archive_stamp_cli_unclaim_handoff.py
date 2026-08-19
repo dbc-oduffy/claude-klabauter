@@ -108,6 +108,36 @@ class UnclaimHandoffArgvParsingTest(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(self.stub.calls, [])
 
+    def test_unrecognized_flag_never_becomes_the_note(self):
+        """Generalization of Finding 1, observed live on 2026-08-19: an EM
+        typing the plausible `--note "<text>"` (the note is POSITIONAL here)
+        exited 0 having written `park_note: '--note'` into a baton's
+        frontmatter and silently discarded the real text. Any unrecognized
+        `--flag` in the tail must be a usage error, never a note."""
+        rc = _cli.main(
+            ["unclaim-handoff", "state/handoffs/h.md", "--note", "the real note text"]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.calls, [])
+
+    def test_extra_positional_note_is_usage_error(self):
+        """An unquoted multi-word note arrived as several positionals and
+        every one after the first was dropped without a word — the same
+        silent-corruption class, by a different route."""
+        rc = _cli.main(
+            ["unclaim-handoff", "state/handoffs/h.md", "first", "second"]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.calls, [])
+
+    def test_a_legitimate_note_with_dashes_inside_still_passes(self):
+        """Only a LEADING `--` is rejected. A note containing dashes mid-text
+        — which real park notes routinely do — must still forward verbatim."""
+        note = "items (a), (c), (d) discharged -- (b) is the residue"
+        rc = _cli.main(["unclaim-handoff", "state/handoffs/h.md", note])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.stub.calls[-1], ("state/handoffs/h.md", note, None))
+
     def test_duplicate_reaped_from_is_usage_error(self):
         """Regression test for Finding 1: a repeated flag must no longer
         silently drop the second sid and corrupt note into the literal

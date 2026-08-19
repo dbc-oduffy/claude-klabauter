@@ -399,7 +399,17 @@ def _tier_a() -> List[str]:
     # Optional hermetic-test seam: POSIX filesystem root that decoded paths
     # are existence-tested against. Empty in production (real drive roots).
     fs_root = os.environ.get("COORDINATOR_TIER_A_FS_ROOT", "")
-    projects_dir = Path.home() / ".claude" / "projects"
+    # Optional hermetic-test seam: overrides the activity-record directory
+    # itself. Empty in production (real `~/.claude/projects`) — without this,
+    # `main()` always reads the live machine's activity record, which is
+    # exactly the non-hermeticity that kept the whole-op spawn count
+    # unmeasured (see this module's spawn-budget test).
+    projects_dir_override = os.environ.get("COORDINATOR_TIER_A_PROJECTS_DIR", "")
+    projects_dir = (
+        Path(projects_dir_override)
+        if projects_dir_override
+        else Path.home() / ".claude" / "projects"
+    )
     try:
         entries = [p for p in projects_dir.iterdir() if p.is_dir()]
     except OSError:

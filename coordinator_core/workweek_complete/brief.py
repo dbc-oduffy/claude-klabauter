@@ -135,6 +135,27 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "emit-cadence",
     "workweek-complete-doc-staleness",
     "workweek-complete-doc-verify",
+    "tier-u-grant-cli",
+)
+
+
+#: The canonical dashed ceremony name — the `coordinator.local.md` key
+#: `coordinator-ceremony-hook` resolves, AND the `ceremony` field the Tier-U
+#: grant carries. One constant so the handback's `--only-ceremony` guard can
+#: never drift from the value the write stamped: a mismatch would silently
+#: turn every handback into a no-op and leave the grant live past the
+#: ceremony, the exact unbounded-grant defect the write exists to bound.
+_CEREMONY_NAME = "workweek-complete"
+
+#: Stored VERBATIM in the grant record's `note` (write_tier_u_grant never
+#: normalizes it). Names the ceremony's Tier-U consumers so an auditor
+#: reading a live grant can tell what it was minted for: Step 2's
+#: `plugin-ecosystem/run.js` and Step 8's `/parallel-code-review` Test-Output
+#: Capture, both of which fire before Step 16's nested `/merge-to-main`.
+_TIER_U_GRANT_NOTE = (
+    "implicit ceremony grant: /workweek-complete Step 0.9 — bounds Step 2 "
+    "(plugin-ecosystem suite) and Step 8 (/parallel-code-review Test-Output "
+    "Capture); handed back at d_step13_7_tier_u_grant_handback"
 )
 
 
@@ -457,6 +478,17 @@ def _build_directives(
     stale_docs = stale_docs or []
     doc_verify_findings_by_doc = doc_verify_findings_by_doc or {}
     directives = [
+        _directive(
+            "d_step0_9_tier_u_grant_write",
+            cli="tier-u-grant-cli",
+            args=[
+                "grant",
+                "ceremony",
+                _TIER_U_GRANT_NOTE,
+                "--ceremony",
+                _CEREMONY_NAME,
+            ],
+        ),
         _directive("d_step1a_list_changelog", cli="list-week-changelog", args=[]),
         _directive(
             "d_step1b_backfill_changelog_gaps",
@@ -576,13 +608,32 @@ def _build_directives(
         *build_ceremony_close_tail(
             post_command_hook_id="d_step13_5_post_command_hook",
             emit_cadence_id="d_step13_6_emit_cadence",
-            ceremony_name="workweek-complete",
+            ceremony_name=_CEREMONY_NAME,
+        ),
+        _directive(
+            "d_step13_7_tier_u_grant_handback",
+            cli="tier-u-grant-cli",
+            args=["revoke", "--only-ceremony", _CEREMONY_NAME],
         ),
     ]
     # `hard_block` is metadata only — the halt contract in apply.py does not
     # read it; it exists so the skill-body render (C6) can preserve
     # hard-block-vs-advisory granularity per AC9/C8 (see C4's census note on
     # which of the 4b-4k gates are hard-blocking).
+    # A grant that could not be minted (or handed back) must not turn a
+    # ceremony that otherwise fully succeeded into `PARTIAL_MUTATION`,
+    # whose contract tells the operator to stop and reconcile. Both legs
+    # are best-effort for the same reason `merge_assemble.apply`'s handler
+    # tolerates exit 1: `write_tier_u_grant`/`revoke_tier_u_grant` return
+    # False on an INFRA condition (unresolvable sid — routine on a box
+    # running dozens of concurrent sessions), and the DR-088 layer-5 guard
+    # fails CLOSED, so an unminted grant refuses the Tier-U consumer rather
+    # than authorizing it. The failure still reaches the operator, in
+    # `report["degraded"]`.
+    best_effort_ids = {
+        "d_step0_9_tier_u_grant_write",
+        "d_step13_7_tier_u_grant_handback",
+    }
     hard_block_ids = {
         "d_step4c_ubt_pending_merge_gate",
         "d_step4b_4k_schema_drift",
@@ -595,6 +646,8 @@ def _build_directives(
             "not a member of CONSUMES_MANIFEST (AC15c: no phantom verbs)"
         )
         entry["hard_block"] = entry["id"] in hard_block_ids
+        if entry["id"] in best_effort_ids:
+            entry["best_effort"] = True
     return directives
 
 

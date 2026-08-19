@@ -353,7 +353,24 @@ def _write_repo_identity_advisory_log(
         from datetime import datetime, timezone
 
         log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
-        log_dir.mkdir(parents=True, exist_ok=True)
+        # NEVER mkdir here. This used to be `mkdir(parents=True,
+        # exist_ok=True)`, which let an ADVISORY log line MINT a session
+        # directory for whatever `session_id` it was handed — including test
+        # fixture ids exercising this guard against the real repo root. Nine
+        # such dirs (`sess-1`, `sess-abc`, `test-session-abc123`, the
+        # `sess-msys-*` dispatcher slugs) had accumulated in this repo's real
+        # hub by 2026-08-19, and `liveness.live_session_ids` enumerates every
+        # non-denylisted child as a SESSION — so an advisory write was
+        # manufacturing phantom sessions into the corpus that claim
+        # attribution and scope computation both read.
+        #
+        # A real session's directory is created by `core.init`. If it does not
+        # exist, there is no session here to annotate and the correct action
+        # is to drop the line — an advisory log has no business creating
+        # session state. Pinned by
+        # `test_advisory_log_never_creates_a_session_dir`.
+        if not log_dir.is_dir():
+            return
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(log_dir / "repo-identity-gate.log", "a", encoding="utf-8") as fh:
             fh.write(

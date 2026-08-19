@@ -545,16 +545,20 @@ class TestEntrypointGateDataLists:
         # cc_invoke env/registry rungs the gate's hermetic env strips.
         # Re-pinned here, entrants not code drift.
         #
-        # Five as authored, four now: `coordinator/bin/coordinator-ensure-
+        # Five as authored, one now. `coordinator/bin/coordinator-ensure-
         # hooks-fleet` drained 2026-08-16 -- it started CLEAN against a
         # published payload and the gate fails closed on a waiver that no
         # longer fires, so the entry itself blocked the round (doe-claude-em,
-        # claude-klabauter `f0009090d`). Same self-draining rule as the two removals
-        # noted above, not a regression.
+        # claude-klabauter `f0009090d`). `coordinator-queue-close`, `plan-tasks-resolve`
+        # and `plan-tasks-stamp` drained 2026-08-19 the same way, in the round
+        # that completed the `claude-klabauter-coordinator-bin` allowlist:
+        # that allowlist had drifted to 708 of 948 tracked entries, so the
+        # `coordinator/bin` siblings these three resolve through were never in
+        # the published payload. Shipping the full set let them start cleanly.
+        # Same self-draining rule as the removals noted above, not a
+        # regression. `with-suite-mutex` alone remains, and it is inert (see
+        # its note in the constant).
         measured_2026_08_14 = {
-            "coordinator/bin/coordinator-queue-close",
-            "coordinator/bin/plan-tasks-resolve",
-            "coordinator/bin/plan-tasks-stamp",
             "coordinator/bin/with-suite-mutex",
         }
         assert set(pct_engine._ENTRYPOINT_GATE_WAIVERS) == (

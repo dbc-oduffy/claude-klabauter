@@ -302,6 +302,15 @@ _NON_SESSION_DIR_NAMES = frozenset(
         "no-session",
         "decisions",
         "reconcile-history",
+        # A cross-session hook-observation sink (ConfigChange.jsonl etc.),
+        # keyed by event rather than by session — its rows carry their own
+        # `session_id` field. Genuinely not a session directory, which is
+        # exactly what this denylist is for. Added 2026-08-19 alongside the
+        # writer fixes that stopped audit/advisory logs minting real
+        # phantom session dirs; those were DELETED rather than named here,
+        # per `test_every_non_uuid_real_child_is_denylisted_or_a_file`'s own
+        # instruction not to quiet a stray dir with a passlist entry.
+        "hook-observations",
     }
 )
 

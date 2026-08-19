@@ -26,7 +26,12 @@ Spec backlink: docs/wiki/cost-budgets-and-the-kill-disposition.md
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from coordinator_core.benchmarks.budget import load_manifest
+
+_THIS_FILE = Path(__file__).resolve()
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Each op's high-water mark, one entry per named key inside its
 # `spawn_count_budget` dict. A value may be LOWERED freely -- that is the
@@ -62,9 +67,6 @@ _SPAWN_COUNT_HIGH_WATER = {
         "n_tokens": 1,
         "no_tokens": 0,
     },
-    "coverage.diagnose_open_review_loop_dag_mode": {
-        "many_pending_records": 1,
-    },
     "percolate.functional_identifier_output_drift_in_tree": {
         "no_dest_publish_time": 0,
         "with_dest_publish_time_n_files": 1,
@@ -86,8 +88,39 @@ _SPAWN_COUNT_HIGH_WATER = {
     "execute_plan_assemble.sibling_committed_chunk_ids_memo": {
         "second_call_identical_inputs": 0,
     },
+    # `per_call` was raised 0 -> 1 on 2026-08-19 (opro-03 C-04). The argument
+    # this table exists to force: NO SPAWN WAS ADDED. The old 0 was asserted
+    # only after the test monkeypatched out `_sort_unique` -- the single
+    # function on this path that spawns -- so it was a true statement about a
+    # stubbed op and a false one about this op. The 1 is `_tier_a5`'s tail
+    # call to `_sort_unique`, which shells to `sort -u` once per call
+    # regardless of key count. It is irreducible here because it is a
+    # SANCTIONED carve-out, named in
+    # `coordinator_core/tests/test_no_bash_dependency.py` for byte-parity with
+    # the bash oracle -- retiring it is a carve-out decision, not a budget
+    # one. A re-baseline against newly visible truth, not a raise fitted to an
+    # unreduced spawn set. `machine_local_cli_elimination_calls` keeps the
+    # original assertion at its original 0: it isolates `_merged_flat_registry`'s
+    # elimination of the per-key `machine-local` CLI spawns, and legitimately
+    # stubs `_sort_unique` to do so.
+    # The `op_total_*` marks are the OP (main() end-to-end, nothing stubbed);
+    # `per_call` and `machine_local_cli_elimination_calls` are SUB-PATHS and
+    # are not the op total. First measured 2026-08-19, so these three are a
+    # new floor rather than a raise -- there was no prior mark to exceed.
+    # Three, not one, because `_sort_unique` shells to `sort -u` once per
+    # NON-EMPTY call and `main()` reaches it three times (`_tier_a`'s tail,
+    # `_tier_a5`'s tail, `main`'s own merge tail); the all-empty shape is 0
+    # because `_sort_unique` early-returns on an empty list without spawning.
+    # Irreducible for the same reason `per_call` is: the shell-out is a
+    # sanctioned carve-out named in `test_no_bash_dependency.py` for
+    # byte-parity with the bash oracle. Lowering any of these means removing
+    # a real call, which is what this table wants and will not block.
     "ops.discover_working_repos": {
-        "per_call": 0,
+        "per_call": 1,
+        "machine_local_cli_elimination_calls": 0,
+        "op_total_tier_a_non_empty": 3,
+        "op_total_tier_b_fallback": 3,
+        "op_total_all_empty": 0,
     },
 }
 
@@ -115,6 +148,67 @@ def _stale_high_water_ops(live: dict) -> list:
     """Ops named in `_SPAWN_COUNT_HIGH_WATER` with no `spawn_count_budget` row
     left in the live manifest at all -- an orphaned mark governing nothing."""
     return [op for op in _SPAWN_COUNT_HIGH_WATER if op not in live]
+
+
+def _op_leaf(op: str) -> str:
+    """The subject-bearing tail of a manifest op key.
+
+    `coverage.diagnose_open_review_loop_dag_mode` -> `diagnose_open_review_loop_dag_mode`;
+    `bin.workday_complete_step2_5_dirty_tree.classify_main_pass` -> `classify_main_pass`.
+    Deliberately the leaf, not the full dotted key -- several legitimately-live
+    rows are never spelled out as their full manifest key anywhere outside this
+    module. `changelog.cited_in_range_count`'s real function is
+    `_cited_in_range_count`; the string `"changelog.cited_in_range_count"`
+    appears nowhere but this file and the manifest, while `cited_in_range_count`
+    (the leaf) appears throughout `changelog_ops.py` and its spawn-bound test.
+    Substring containment (not exact match) is deliberate for the same reason:
+    it catches both the bare function name and any leading-underscore private
+    spelling of it.
+    """
+    return op.rsplit(".", 1)[-1]
+
+
+def _live_test_corpus_text() -> str:
+    """Concatenated source of every live (non-cache) `.py` file that is part
+    of the test surface -- lives under a `tests/` directory or is named
+    `test_*.py` -- excluding this module itself.
+
+    Excluding this file matters: `_SPAWN_COUNT_HIGH_WATER` and the manifest
+    op-key literals below name every op by construction, so leaving it in
+    would make every row look "referenced" regardless of whether anything
+    OUTSIDE this file still exercises it -- exactly the check this function
+    exists to make meaningful.
+    """
+    chunks = []
+    for path in _REPO_ROOT.rglob("*.py"):
+        parts = path.parts
+        if "__pycache__" in parts or ".git" in parts:
+            continue
+        if path.resolve() == _THIS_FILE:
+            continue
+        if "tests" not in parts and not path.name.startswith("test_"):
+            continue
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+    return "\n".join(chunks)
+
+
+def _ops_with_no_live_test_reference(live: dict) -> list:
+    """Manifest `spawn_count_budget` rows whose leaf subject name (`_op_leaf`)
+    appears in NO live test file outside this module.
+
+    A sweep for a live *reader*, not an import/introspection check on the op
+    itself -- deliberately, per the FIX-B brief: a manifest key like
+    `bin.workday_complete_step2_5_dirty_tree.classify_main_pass` names a call
+    shape, not an importable symbol, so "does this dotted path import" cannot
+    be made to work uniformly across the table without faking it for that
+    shape of key. See this test module's own docstring for the design options
+    weighed and rejected in favor of this one.
+    """
+    corpus = _live_test_corpus_text()
+    return [op for op in live if _op_leaf(op) not in corpus]
 
 
 def test_spawn_count_budget_never_ratchets_upward():
@@ -177,6 +271,63 @@ def test_spawn_count_high_water_table_covers_every_override():
         f"_SPAWN_COUNT_HIGH_WATER carries op(s) with no spawn_count_budget row "
         f"left in the live manifest: {sorted(stale)}. Delete each entry from "
         f"_SPAWN_COUNT_HIGH_WATER -- an orphaned mark governs nothing."
+    )
+
+
+def test_spawn_count_budget_rows_name_a_subject_that_still_exists():
+    """Every live `spawn_count_budget` row must name a subject some live test
+    outside this module still reads -- the converse of the two ratchet checks
+    above, which both key off `_SPAWN_COUNT_HIGH_WATER` and so can only ever
+    catch a mark that outlived its row, never a row that outlived its subject.
+
+    Not hypothetical: `coverage.diagnose_open_review_loop_dag_mode` has been
+    in exactly that state since 2026-08-16 -- its function lost its last
+    caller and its enforcing test was deleted in the same commit that removed
+    the coverage-gate feature, and both the manifest row and this module's
+    `_SPAWN_COUNT_HIGH_WATER` mark survived untouched. Nothing failed.
+    Evidence: state/audits/2026-08-19-opro-03-c08-budgeted-op-spawn-trace.md,
+    EM verification addendum.
+
+    Design chosen over two rejected alternatives (see module docstring for
+    the ratchet's own worked-example lineage):
+
+    - Require each row to carry an explicit pointer field (its enforcing test
+      path and/or subject symbol) and assert the pointer resolves. Rejected:
+      correct in principle, but `budget-manifest.json` is EM-owned this pass
+      (a concurrent session holds it too, per this fix's own dispatch brief)
+      and every existing row would need a new field added by hand before this
+      check could even run -- a one-file test fix has no business forcing a
+      manifest-wide edit as its price of entry.
+    - Attempt to import/resolve each key as a dotted symbol path. Rejected
+      outright, not just costed: several keys (e.g.
+      `bin.workday_complete_step2_5_dirty_tree.classify_main_pass`) name a
+      call *shape* inside a function, not an importable symbol -- there is no
+      uniform way to turn a manifest key into an import that does not silently
+      degrade to false-negative-prone special-casing per key, which is the
+      "faked into working" trap the brief calls out by name.
+
+    What this check does NOT catch (state plainly, not left implicit): a
+    leaf name colliding with unrelated live source that mentions the same
+    word for a different reason would false-negative (report "referenced"
+    when the real subject is still gone) -- a substring sweep confirms a
+    word survives somewhere in the test tree, not that the row's own subject
+    does. It also cannot tell a genuinely-reachable subject from a subject
+    that is reachable but dead code no test actually exercises at runtime
+    (a `test_*.py` file that merely imports the name without calling it would
+    still count as "found"). Both are false-negative risks, not false-positive
+    ones -- this check can miss a still-dead row, but coming back green never
+    means a live row is wrong, only that nothing currently proves it.
+    """
+    live = _manifest_spawn_count_overrides()
+    orphaned = _ops_with_no_live_test_reference(live)
+    assert not orphaned, (
+        f"spawn_count_budget row(s) with no live test referencing their "
+        f"subject anywhere outside this module: {sorted(orphaned)}. Each row "
+        f"budgets a subject that reads as governed coverage to any reviewer "
+        f"while governing nothing once its last caller/test is gone -- "
+        f"either restore a live caller+test or drop the row (manifest is "
+        f"EM-owned; report the exact row to the EM rather than editing it "
+        f"here)."
     )
 
 

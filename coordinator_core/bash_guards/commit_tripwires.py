@@ -818,6 +818,9 @@ def _extract_commit_trailing_pathspecs(seg: str) -> Optional[List[str]]:
     return paths
 
 
+from coordinator_core.bash_guards._override_log_path import _override_log_path
+
+
 def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: str) -> None:
     """Append one audit line to `.git/coordinator-sessions/<sid>/overrides.log`,
     same path convention and one-line format `check_blanket_git_add` uses for
@@ -829,11 +832,9 @@ def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: 
         git_root = root_out.strip() if rc_root == 0 else (cwd or "")
         if not git_root:
             return
-        override_log = os.path.join(
-            git_root, ".git", "coordinator-sessions",
-            session_id or "no-session", "overrides.log",
-        )
-        os.makedirs(os.path.dirname(override_log), exist_ok=True)
+        override_log = _override_log_path(git_root, session_id)
+        if override_log is None:
+            return
         with open(override_log, "a", encoding="utf-8") as fh:
             fh.write(
                 "%s | %s | OVERRIDE-PATHSPEC-DIVERGENCE | %s\n"

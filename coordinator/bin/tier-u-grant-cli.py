@@ -33,11 +33,17 @@
 #   check                                      -> grant.check_tier_u_grant(): the
 #                                                  liveness-gated authorization boolean —
 #                                                  the one a guard calls. bool->exit
-#   revoke                                     -> grant.revoke_tier_u_grant(): hands the
+#   revoke [--only-ceremony <name>]            -> grant.revoke_tier_u_grant(): hands the
 #                                                  calling session's own grant back
 #                                                  (unlink, never a glob). Idempotent —
 #                                                  revoking an absent grant is success.
-#                                                  bool->exit
+#                                                  --only-ceremony is the GUARDED handback
+#                                                  every ceremony must use: unlinks only a
+#                                                  grant whose granted_by == "ceremony" and
+#                                                  whose ceremony names <name>, leaving a PM
+#                                                  grant (or another ceremony's, under
+#                                                  workweek->merge nesting) alone and still
+#                                                  exiting 0. bool->exit
 #
 # Exit codes: the mapped bool-returning function maps True->0, False->1
 # (matches session-liveness-cli's / session-claim-cli's convention). A
@@ -73,7 +79,7 @@ def _import_module():
     return _mod
 
 
-_SUBCOMMANDS = "subcommands: grant | read | check | revoke"
+_SUBCOMMANDS = "subcommands: grant | read | check | revoke [--only-ceremony <name>]"
 
 _HELP_FLAGS = ("--help", "-h", "help")
 
@@ -87,27 +93,25 @@ def _bool_to_exit(result: bool) -> int:
     return 0 if result else 1
 
 
-def _parse_grant_args(rest: list[str]):
-    """Hand-rolled parse of the `grant` subcommand's argv: two positionals
-    (granted_by, note) plus an optional `--ceremony <name>` flag anywhere in
-    the remaining argv. Returns (granted_by, note, ceremony) or None on a
-    malformed arg list (caller emits usage)."""
-    ceremony = None
-    positional: list[str] = []
-    i = 0
-    while i < len(rest):
-        if rest[i] == "--ceremony":
-            if i + 1 >= len(rest):
-                return None
-            ceremony = rest[i + 1]
-            i += 2
-            continue
-        positional.append(rest[i])
-        i += 1
-    if len(positional) != 2:
-        return None
-    granted_by, note = positional
-    return granted_by, note, ceremony
+def _grant_directive_module():
+    """`coordinator_core.session.grant_directive` — the one owner of the
+    `grant`/`revoke` argv grammar, shared with the ceremony assemblers that
+    dispatch these same directives in-process. Resolved through the same
+    CLAUDE_KLABAUTER_ROOT trampoline as `_import_module`, so a missing engine still
+    exits `_TRANSPORT_FAIL` rather than ImportError-ing here."""
+    try:
+        import coordinator_core.session.grant_directive as _mod
+    except ImportError:
+        # Cold shell call: coordinator_core is not on the path yet. The
+        # in-process callers (workweek_complete.apply loads this file as a
+        # module and calls main()) already have it imported, so they never
+        # pay the CLAUDE_KLABAUTER_ROOT resolution below.
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        import coordinator_core.session.grant_directive as _mod
+
+    return _mod
 
 
 def main(argv: list[str]) -> int:
@@ -128,16 +132,20 @@ def main(argv: list[str]) -> int:
         print(f"tier-u-grant-cli: coordinator_core.session.grant not importable: {exc}", file=sys.stderr)
         return _TRANSPORT_FAIL
 
-    if subcmd == "grant":
-        parsed = _parse_grant_args(rest)
-        if parsed is None:
-            return _usage("tier-u-grant-cli grant <granted_by> <note> [--ceremony <name>]")
-        granted_by, note, ceremony = parsed
+    if subcmd in ("grant", "revoke"):
         try:
-            return _bool_to_exit(mod.write_tier_u_grant(granted_by, note, ceremony=ceremony))
-        except ValueError as exc:
-            print(f"tier-u-grant-cli: grant: {exc}", file=sys.stderr)
-            return 2
+            directive = _grant_directive_module()
+        except (RuntimeError, ImportError) as exc:
+            print(
+                f"tier-u-grant-cli: coordinator_core.session.grant_directive not "
+                f"importable: {exc}",
+                file=sys.stderr,
+            )
+            return _TRANSPORT_FAIL
+        code, message = directive.run_grant_directive([subcmd, *rest])
+        if message:
+            print(f"tier-u-grant-cli: {message}", file=sys.stderr)
+        return code
 
     if subcmd == "read":
         if rest:
@@ -152,11 +160,6 @@ def main(argv: list[str]) -> int:
             return _usage("tier-u-grant-cli check")
         granted, _record = mod.check_tier_u_grant()
         return _bool_to_exit(granted)
-
-    if subcmd == "revoke":
-        if rest:
-            return _usage("tier-u-grant-cli revoke")
-        return _bool_to_exit(mod.revoke_tier_u_grant())
 
     print(f"tier-u-grant-cli: unknown subcommand {subcmd!r}", file=sys.stderr)
     return _usage("tier-u-grant-cli")

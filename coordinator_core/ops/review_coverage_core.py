@@ -701,8 +701,7 @@ def classify_pending_records(
     else:
         # Batch pre-scan for the default resolver (no caller-injected
         # resolve_range — i.e. no single graph_range window exists to walk
-        # in one shot, see _make_chain_range_resolver's own docstring for
-        # when that is): resolve every DISTINCT range across pending AND
+        # in one shot): resolve every DISTINCT range across pending AND
         # non_pending in ONE bounded-parallel sweep, instead of the
         # closers/pending loops below triggering one `git rev-list` spawn
         # per distinct range each as they walk their own inputs in series.

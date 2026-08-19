@@ -1257,6 +1257,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         attributed_session_id=owner_session_id,
     )
 
+    # W3b (2026-08-19), split out of the `committed` expression below so the
+    # two lookups can have DIFFERENT strictness -- they are guarding different
+    # things and collapsing them into one `getattr` chain was a review finding
+    # (Review: coordinator:code-reviewer -- Q2, 2026-08-19).
+    #   `commit` via getattr: legitimately absent on the partial
+    #     `SimpleNamespace` doubles this module's own tests construct, and
+    #     declared `Optional[CommitOutcome]` besides -- absence is a real
+    #     state to tolerate.
+    #   `.landed` via a BARE read gated on `is not None`: a rename or
+    #     restructure of `CommitOutcome` must raise `AttributeError` loudly,
+    #     not degrade to `False`. Degrading is precisely the defect W3b
+    #     exists to repair -- a landed commit silently reported as not
+    #     landed -- and a `getattr` here would have re-opened it one field
+    #     over, which is what the review caught.
+    _commit_outcome = getattr(result, "commit", None)
+    _commit_landed = _commit_outcome is not None and _commit_outcome.landed
+
     response: Dict[str, Any] = {
         # W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
         # `committed_sha is not None` used to be the WHOLE predicate, so a
@@ -1278,7 +1295,37 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # None)`) reach that probe but never this constructor, so the strict
         # read costs them nothing. Verified: relaxing this to `getattr` breaks
         # nothing, tightening the probe below to a bare read breaks three.
-        "committed": result.committed_sha is not None or result.sha_unverified,
+        # W3b (2026-08-19): W3 widened this to cover ONE of the pipeline's
+        # landed-but-no-sha shapes, `sha_unverified`. It is not the only one.
+        # `CommitOutcome.landed` is the git layer's own answer to the exact
+        # question this key asks -- its docstring commits it to True on
+        # "every path where commit_scoped() succeeded ... because in every one
+        # of those cases `git commit` already created the commit; only
+        # `committed_sha` is unknown" -- and that flag is NOT mirrored onto
+        # `PipelineResult`, so this predicate could not see it. The remaining
+        # uncovered paths (empty message subject, zero-or-ambiguous
+        # commit-token match) therefore still rendered `committed: False` over
+        # a commit that exists in history, and the caller's next stop is
+        # `_classify_uncommitted`, which finds the tree clean BECAUSE the
+        # commit landed and reports the benign `reason: "empty-commit-set"` --
+        # a landed commit reported to the operator as "no commit landed".
+        # Observed live: a462af36d/11d1db069 (state/sizings/, 2026-08-19).
+        # Reached through `result.commit` (declared `Optional[CommitOutcome]`)
+        # rather than a mirrored field, so nothing new has to be threaded
+        # through the pipeline. `_commit_landed` is resolved just above this
+        # dict, where its two lookups get the different strictness each one
+        # needs -- see that block for why the `commit` lookup tolerates
+        # absence while the `.landed` read deliberately does not.
+        # Mirroring `landed` onto `PipelineResult` as a first-class field is
+        # the structurally better repair and is filed as follow-up work
+        # (Review: coordinator:code-reviewer -- Q3, 2026-08-19); it is NOT
+        # load-bearing for this predicate's correctness, which the same
+        # review verified by tracing every `CommitOutcome` construction site.
+        "committed": (
+            result.committed_sha is not None
+            or result.sha_unverified
+            or _commit_landed
+        ),
         "sha": result.committed_sha,
         "pushed": result.pushed,
     }

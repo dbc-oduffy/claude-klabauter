@@ -1140,6 +1140,104 @@ def test_landed_but_sha_unverified_reports_committed_true_not_false(tmp_path, mo
     assert result.get("reason") != "empty-commit-set"
 
 
+def test_landed_via_commit_outcome_reports_committed_not_empty_commit_set(
+    tmp_path, monkeypatch
+):
+    """W3b (2026-08-19): the sibling of the W3 case above, for the landed-but-
+    no-sha shapes W3 did NOT cover.
+
+    `CommitOutcome.landed` is True on every path where `commit_scoped()`
+    succeeded -- including the post-success verification failures that are
+    NOT `sha_unverified` (empty message subject; zero-or-ambiguous
+    commit-token match). That flag is not mirrored onto `PipelineResult`, so
+    before this fix the `committed` predicate could not see it and rendered
+    `committed: False` over a commit that exists in history. The operator-
+    visible damage is the SECOND-ORDER effect, which is why this test asserts
+    on `reason`: a `committed: False` response falls through to
+    `_classify_uncommitted`, which probes `git status`, finds the tree clean
+    BECAUSE the commit landed, and returns the benign `"empty-commit-set"` --
+    so the CLI tells the operator "no commit landed" about a commit that did.
+    A caller trusting that either redoes the work or reports it lost.
+
+    Mechanism check: dropping the `getattr(result.commit, "landed", ...)`
+    disjunct from the predicate makes `committed` False here and flips
+    `reason` to `"empty-commit-set"`, failing the first and last assertions.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # The shape the git layer returns when the commit landed but the token
+    # match was ambiguous: landed=True, no resolvable sha, and -- crucially --
+    # sha_unverified False, so W3's widening does not fire.
+    fake_result = SimpleNamespace(
+        committed_sha=None,
+        pushed=None,
+        push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
+        commit_failed=False,
+        integrity_breach=False,
+        sha_unverified=False,
+        commit=SimpleNamespace(landed=True),
+        diagnostics=["commit: landed but commit-token match was ambiguous"],
+    )
+    monkeypatch.setattr(
+        scoped_git_commit, "run_commit_pipeline", lambda *a, **k: fake_result
+    )
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["README.md"],
+            "message": "add notes",
+        }
+    )
+
+    assert result["committed"] is True
+    assert result["sha"] is None
+    # The operator-facing failure this closes: never "nothing landed".
+    assert result.get("reason") != "empty-commit-set"
+
+
+def test_genuinely_uncommitted_still_reports_empty_commit_set(tmp_path, monkeypatch):
+    """Negative half of W3b -- the widening must not swallow the real no-op.
+
+    A pipeline result carrying `commit=None` (no commit was attempted or the
+    commit genuinely failed) must still render `committed: False` and reach
+    the ordinary `empty-commit-set` classification. Without this, the fix
+    above would convert every benign already-committed no-op into a phantom
+    success, which is a strictly worse defect than the one it repairs.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    fake_result = SimpleNamespace(
+        committed_sha=None,
+        pushed=None,
+        push_status=scoped_git_commit.PUSH_STATUS_NOT_ATTEMPTED,
+        commit_failed=False,
+        integrity_breach=False,
+        sha_unverified=False,
+        commit=None,
+        diagnostics=[],
+    )
+    monkeypatch.setattr(
+        scoped_git_commit, "run_commit_pipeline", lambda *a, **k: fake_result
+    )
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["README.md"],
+            "message": "add notes",
+        }
+    )
+
+    assert result["committed"] is False
+
+
 def _commit_and_fake_pipeline(
     tmp_path, monkeypatch, *, with_remote: bool, push_status=None
 ):

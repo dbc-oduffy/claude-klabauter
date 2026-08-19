@@ -107,4 +107,9 @@ def test_this_repos_live_discovery_matches_the_eleven_known_brief_packages() -> 
         "workday_complete",
         "workstream_complete",
         "workweek_complete",
+        # Landed after the 2026-07-27 generalization pass, so the "eleven"
+        # in this test's name is now thirteen. Both are verified
+        # resolves-free in test_phantom_resolves_id_sweep.py.
+        "plan_assemble",
+        "quick_wrap_assemble",
     }

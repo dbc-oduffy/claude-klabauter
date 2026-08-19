@@ -368,6 +368,84 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "session/scope.py", "_drop_owned_agent_dirs", "os.rename", "os.rename(agent_dir, archive_dest)", 1): "agent_dir lives under .git/coordinator-sessions/.agents/, categorically outside claimable space -- same reasoning as this module's own already-allowlisted archive() entry",
     ("coordinator_core", "tests/test_locked_write_held_lock.py", "test_git_dir_rename_succeeds_when_lock_sidecar_is_outside_it", "os.rename", "os.rename(str(renamed_repo / '.git'), str(staging / '.git'))", 1): "test fixture: renamed_repo/staging both resolve under pytest tmp_path -- not the process's real worktree",
     ("coordinator_core", "workstream_complete/directives_review.py", "record_gate_memo", "os.replace", "os.replace(tmp_str, str(path))", 1): "atomic tmp->final write of a gate memoisation marker; temp source (tempfile.mkstemp in the same dir) never claimed",
+
+    # --- 2026-08-19: sites that landed after this allow-list was last
+    # --- curated. All classified no-strand (atomic tmp->final writes whose
+    # --- temp source no session ever touched, git-internal telemetry sinks,
+    # --- a directory publish-swap, and machine-managed notice files).
+    ('coordinator_core', 'benchmarks/shim_fanin_measure.py', 'run_and_record', 'os.replace', 'os.replace(tmp_path, RECORD_PATH)', 1):
+        "atomic tmp->final benchmark-record write (C3 no-strand class) -- "
+        "the temp source is created by this function microseconds earlier "
+        "and was never touched by any session, so there is no claim to "
+        "restate onto the destination",
+    ('coordinator_core', 'benchmarks/shim_inprocess_measure.py', 'run_and_record', 'os.replace', 'os.replace(tmp_path, RECORD_PATH)', 1):
+        "atomic tmp->final benchmark-record write (C3 no-strand class) -- "
+        "same shape as shim_fanin_measure.run_and_record above; unclaimed "
+        "temp source",
+    ('coordinator_core', 'benchmarks/shim_prototype_measure.py', 'run_and_record', 'os.replace', 'os.replace(tmp_path, RECORD_PATH)', 1):
+        "atomic tmp->final benchmark-record write (C3 no-strand class) -- "
+        "same shape as shim_fanin_measure.run_and_record above; unclaimed "
+        "temp source",
+    ('coordinator_core', 'install/fleet_env.py', '_atomic_write_registry_unlocked', 'os.replace', 'os.replace(tmp_path, str(registry_path))', 1):
+        "atomic tmp->final registry write (C3 no-strand class) -- the temp "
+        "source is this function's own, never session-touched; routing it "
+        "through relocate_touched_path would also re-enter the session "
+        "engine from inside the fleet-env install path, which must stay "
+        "self-contained",
+    ('coordinator_core', 'install/fleet_env.py', '_swap_in_new_env', 'os.rename', 'os.rename(build_dir, env_root)', 1):
+        "publish-by-rename of an environment DIRECTORY tree, not a tracked "
+        "file -- the two os.rename calls are the metadata-only swap that "
+        "keeps a concurrent reader executing out of the old tree coherent "
+        "(see the function's own docstring); neither operand is a repo path "
+        "a session can hold a T-claim on",
+    ('coordinator_core', 'install/fleet_env.py', '_swap_in_new_env', 'os.rename', 'os.rename(env_root, stale_dir)', 1):
+        "publish-by-rename of an environment DIRECTORY tree, not a tracked "
+        "file -- the two os.rename calls are the metadata-only swap that "
+        "keeps a concurrent reader executing out of the old tree coherent "
+        "(see the function's own docstring); neither operand is a repo path "
+        "a session can hold a T-claim on",
+    ('coordinator_core', 'install/fleet_env.py', '_write_pth_unlocked', 'os.replace', 'os.replace(tmp_path, str(dest))', 1):
+        "atomic tmp->final .pth write (C3 no-strand class) -- unclaimed "
+        "temp source, same reasoning as _atomic_write_registry_unlocked "
+        "above",
+    ('coordinator_core', 'ops/app_session.py', '_write_handle', 'Path.replace', 'tmp.replace(_handle_path(repo_root, key))', 1):
+        "atomic tmp->final app-session handle write (C3 no-strand class) -- "
+        "unclaimed temp source",
+    ('coordinator_core', 'ops/peer_notice_send.py', '_peer_notice_send', 'Path.replace', 'tmp_path.replace(notice_path)', 1):
+        "atomic tmp->final peer-notice write (C3 no-strand class) -- the "
+        "tmp file is created and replaced inside this call so a concurrent "
+        "reader never sees a partial notice; the temp source is never "
+        "session-touched",
+    ('coordinator_core', 'ops/tests/test_peer_notice_channel.py', 'test_delivered_notice_excluded_from_unread', 'Path.replace', 'notice_path.replace(delivered_dir / notice_path.name)', 1):
+        "test fixture -- moves a notice into .delivered/ to set up the "
+        "excluded-from-unread assertion; a fixture arranging its own tmp "
+        "corpus has no claim to strand",
+    ('coordinator_core', 'ops/workflow_fire/fire.py', '_write_record', 'os.replace', 'os.replace(tmp, path)', 1):
+        "atomic tmp->final workflow-fire record write (C3 no-strand class) "
+        "-- unclaimed temp source",
+    ('coordinator_core', 'telemetry/log_rotation.py', 'rotate_if_needed', 'os.replace', 'os.replace(sink, _generation_path(sink, 1))', 1):
+        "log-generation cascade under .git/coordinator-sessions/logs/ -- "
+        "git-internal telemetry sinks, never a tracked repo path, so no "
+        "T-claim can exist on either operand; this also runs on the "
+        "op-latency hot path, where re-entering the session engine per "
+        "rotation is exactly the amplification this repo's cost doctrine "
+        "forbids",
+    ('coordinator_core', 'telemetry/log_rotation.py', 'rotate_if_needed', 'os.replace', 'os.replace(src, dst)', 1):
+        "log-generation cascade under .git/coordinator-sessions/logs/ -- "
+        "git-internal telemetry sinks, never a tracked repo path, so no "
+        "T-claim can exist on either operand; this also runs on the "
+        "op-latency hot path, where re-entering the session engine per "
+        "rotation is exactly the amplification this repo's cost doctrine "
+        "forbids",
+    ('coordinator_core', 'write_guards/nudge_peer_notice_unread.py', '_deliver', 'Path.replace', 'path.replace(delivered_dir / path.name)', 1):
+        "machine-managed notice sink moved into .delivered/ from inside a "
+        "PreToolUse hook -- the notice is written by peer_notice.send and "
+        "consumed by this guard, never touched by an EM session, so there "
+        "is no claim to restate; and this runs on the hook hot path where "
+        "pulling in the session engine is the cost the guard chain is built "
+        "to avoid. The move is already fully fail-open (OSError swallowed) "
+        "so a bookkeeping failure could not surface here anyway",
+
 }
 
 _METHODS = {"move", "rename", "replace"}

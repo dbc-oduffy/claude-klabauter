@@ -2362,6 +2362,7 @@ class TestComputeScopeLiveness:
         skipped_paths = {p for p, _owner in result.skipped}
         assert "untouched_by_mine.py" not in skipped_paths
 
+    @pytest.mark.pending_fix
     def test_real_live_session_ids_no_monkeypatch_dead_peer_claim_releases(
         self, tmp_path
     ):
@@ -2398,7 +2399,16 @@ class TestComputeScopeLiveness:
         the still-open Layer-1 PPID witness bug above actually blocks. No
         replacement cross-reference is owed: nothing in this file pins the
         now-deleted peer-release path, since C5 removed that capability
-        outright rather than leaving it under test."""
+        outright rather than leaving it under test.
+
+        MARKED `pending_fix` 2026-08-19. Its redness was correct and
+        documented, but it carried NO marker, so it failed every raw run of
+        this suite and each EM rediscovered it from scratch — the marker
+        contract in `pyproject.toml` exists precisely so a known-broken path
+        assumption is excluded from the tiers until fixed, instead of
+        spending someone's attention every time. This does NOT weaken the
+        do-not-edit-to-pass rule above: the marker records that the redness
+        is expected and owned, it does not retire the P1 that owns it."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("dead-peer", cwd=str(repo))

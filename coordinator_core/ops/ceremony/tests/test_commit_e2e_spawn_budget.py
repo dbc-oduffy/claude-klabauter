@@ -16,17 +16,27 @@ which is exactly the regression class this budget exists to catch (an
 accidental +5 landing unmeasured, the way C5's own +1/+2 nearly did).
 
 COUNTING MECHANISM: reuses `test_commit_gate_budget.py`'s approach (wrap
-`git_native._git`, the sole native-git choke point this whole op's
-staging/commit/push pipeline routes through -- see `git_native.py`'s own
-docstring, "the single choke point every native git call ... routes
-through") rather than inventing a second counting dialect. That mechanism
-generalises cleanly from the gate leg alone to the whole op: every spawn
-mechanism reachable from `_handler` (there is no `asyncio.create_
-subprocess_exec` or bare `subprocess.run` call anywhere on this op's own
-path -- `commit_pipeline.py`'s own module docstring: "every subprocess in
-this module ... routes through `git_native._git`") is covered by wrapping
-this one function. It does not itself spawn per-path -- it counts real
-calls the pipeline already makes, it never issues extra ones.
+`git_native._git`, the choke point for the staging and commit calls the
+gate leg issues) rather than inventing a second counting dialect. It does
+not itself spawn per-path -- it counts real calls the pipeline already
+makes, it never issues extra ones.
+
+BLIND SPOT: `git_native._git` is NOT the sole spawn mechanism reachable
+from `_handler`. The push-drain leg (`run_commit_pipeline` ->
+`commit_pipeline._drain_pending_push_after_sync` ->
+`auto_push.drain_pending_push` -> four bare `subprocess.run` sites in
+`coordinator_core/hooks/auto_push.py`), claim release
+(`session/scope.py :: _git_run`), `git/divergence.py :: _run_git`, and
+`git/repo_root.py :: _spawn_rev_parse` all spawn git without going
+through `_git()`, so wrapping `_git()` cannot see them.
+
+MEASURED-SHAPES CAVEAT: the `green_path: 17` figure and its siblings
+below are not miscounts -- this fixture builds a repo with no remote and
+no upstream, so `_resolve_push_report` short-circuits and the drain path
+above never executes; the numbers are correct for the shapes this fixture
+measures. What is wrong is treating that as completeness: the drain path
+is invisible to this budget by mechanism, not by shape -- it could grow
+without bound and this assertion would never move.
 
 MEASURED SHAPES (re-baselined 2026-08-18, this repo, matching
 `budget-manifest.json`'s `overrides["ceremony.scoped_git_commit"].

@@ -163,6 +163,29 @@ def flush_composition_record(
         print(f"composition-record: flush skipped ({exc})", file=sys.stderr)
 
 
+def _resolve_sid() -> Optional[str]:
+    """This session's id, or `None` when nothing is set.
+
+    Precedence `COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID` >
+    `CLAUDE_CODE_SESSION_ID`, matching
+    `baton_assemble/__init__.py`'s copy and `ops/handoff_correct_body.py`'s
+    gate. Those two record that duplicating this small env-resolution helper
+    (rather than importing one) is the established shape on this path; this is
+    the third copy and follows it. If the precedence chain ever changes,
+    update all three -- they must never independently drift.
+
+    Returns `None` rather than a placeholder sentinel: an unattributable row
+    must stay visibly unattributed, never carry a value a reader could join on
+    by accident.
+    """
+    return (
+        os.environ.get("COORDINATOR_SESSION_ID")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or None
+    )
+
+
 def _flush_or_raise(
     budget: CompositionBudget,
     outcome: str,
@@ -201,6 +224,22 @@ def _flush_or_raise(
     `coordinator_core.lifecycle.git_common_dir`'s callers make elsewhere on
     this path). Tests inject `repo_root` explicitly to avoid depending on
     the test runner's own cwd.
+
+    `sid` resolves from the environment on the same argument and for the same
+    reason: the pinned two-argument call shape threads no session id either,
+    so leaving it to the caller wrote `"sid": null` on every composition row
+    the fleet produced while ordinary op rows carried 416 distinct real ids.
+    That is not cosmetic -- `sid` plus `pid` is the only key joining a
+    composition to the child ops it ran, so its absence makes C4's falsifiable
+    `ceremony.scoped_git_commit` cross-check (docs/plans/
+    2026-08-18-arm-the-composition-budget.md § C4) undecidable and leaves
+    per-directive attribution with nothing but a recycled Windows pid. Same
+    class of defect as the missing `t_start` fixed earlier in this function,
+    and found the same way -- by reading the sink rather than the writer.
+
+    NEGATIVE-SPEC: an explicitly passed `sid=None` is NOT preserved as null.
+    A caller wanting an unattributed row must not call this function. Tests
+    pass an explicit sid; nothing in the repo depends on a null sid column.
     """
     if outcome not in VALID_OUTCOMES:
         raise ValueError(
@@ -229,5 +268,5 @@ def _flush_or_raise(
         outcome=outcome,
         t_start=float(t_start),
         repo_root=repo_root if repo_root is not None else Path(os.getcwd()),
-        sid=sid,
+        sid=sid if sid is not None else _resolve_sid(),
     )

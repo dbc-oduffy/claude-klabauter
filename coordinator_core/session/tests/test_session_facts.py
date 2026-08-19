@@ -48,20 +48,28 @@ def _fake_result(returncode: int, stdout: str = "", stderr: str = "") -> subproc
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+
+def _fake_commits(count: int) -> list[dict]:
+    """`session.commits` primitive rows — only the numstat fields the derived
+    producers read. Stubbed at the primitive rather than at `_git_run` because
+    `session_commit_count_attributed` derives from the primitive (its C5
+    migration), so a `_git_run` stub no longer reaches it."""
+    return [{"sha": f"sha{i:03d}", "added": 1, "deleted": 0} for i in range(count)]
+
 def test_computed_record_is_distinguishable_from_a_degraded_record(tmp_path, monkeypatch):
     """The whole point of the posture: a degraded read and a genuinely-zero read must
     not collapse into the same value at the call site."""
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
+        "_cached_session_commits",
+        lambda root, sid: _fake_commits(0),
     )
     zero_record = session_facts.session_magnitude_attributed(tmp_path, _SID)
 
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="fatal: not a git repository"),
+        "_cached_session_commits",
+        lambda root, sid: None,
     )
     degraded_record = session_facts.session_magnitude_attributed(tmp_path, _SID)
 
@@ -81,8 +89,8 @@ def test_computed_record_carries_every_required_key_never_a_fabricated_default(t
     present, not merely that `.get()` returns something plausible."""
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout="abc123 one\ndef456 two\n"),
+        "_cached_session_commits",
+        lambda root, sid: _fake_commits(2),
     )
     record = session_facts.session_magnitude_attributed(tmp_path, _SID)
 
@@ -102,8 +110,8 @@ def test_collision_key_is_present_unconditionally_on_a_computed_record(tmp_path,
     forbids."""
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
+        "_cached_session_commits",
+        lambda root, sid: _fake_commits(0),
     )
     record = session_facts.session_magnitude_attributed(tmp_path, _SID)
     assert "collision" in record
@@ -136,18 +144,19 @@ def test_served_fact_carries_no_verdict_field(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout="abc123 one\n"),
+        "_cached_session_commits",
+        lambda root, sid: _fake_commits(1),
     )
     computed = session_facts.session_magnitude_attributed(tmp_path, _SID)
     assert forbidden.isdisjoint(computed), f"computed record leaked a verdict key: {set(computed) & forbidden}"
 
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(1, stderr="boom"),
+        "_cached_session_commits",
+        lambda root, sid: None,
     )
     degraded = session_facts.session_magnitude_attributed(tmp_path, _SID)
+    assert degraded["degraded"] is True, "fixture no longer produces a degraded record"
     assert forbidden.isdisjoint(degraded), f"degraded record leaked a verdict key: {set(degraded) & forbidden}"
 
 
@@ -155,8 +164,8 @@ def test_computed_shape_is_exactly_the_dr319_key_set(tmp_path, monkeypatch):
     """No shape other than DR-319's two is legal, regardless of internal consistency."""
     monkeypatch.setattr(
         branch_resolution,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout="abc123 one\n"),
+        "_cached_session_commits",
+        lambda root, sid: _fake_commits(1),
     )
     record = session_facts.session_magnitude_attributed(tmp_path, _SID)
     assert set(record) == {"degraded", "value", "source", "collision"}
@@ -1439,13 +1448,13 @@ class TestPerFactRequiredFieldDeclaration:
 
     def test_session_magnitude_attributed_satisfies_declaration(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            branch_resolution, "_git_run", lambda args, cwd: _fake_result(0, stdout="abc123 one\n")
+            branch_resolution, "_cached_session_commits", lambda root, sid: _fake_commits(1)
         )
         computed = session_facts.session_magnitude_attributed(tmp_path, _SID)
         _assert_dr319_computed_record("session_magnitude_attributed", computed)
 
         monkeypatch.setattr(
-            branch_resolution, "_git_run", lambda args, cwd: _fake_result(1, stderr="boom")
+            branch_resolution, "_cached_session_commits", lambda root, sid: None
         )
         degraded = session_facts.session_magnitude_attributed(tmp_path, _SID)
         _assert_dr319_degraded_record(degraded)
@@ -1613,3 +1622,61 @@ def test_scope_mode_absent_key_reads_as_none_not_as_a_default(tmp_path: Path):
         '---\ntitle: "a plan"\nstatus: approved\n---\n\nbody\n', encoding="utf-8"
     )
     assert session_facts._read_frontmatter_scope_mode(path) is None
+
+
+# ---------------------------------------------------------------------------
+# Slice-A review finding (P1) — `kind:` and `status:` carried the identical
+# trailing-comment defect the `scope_mode:` fix closed, and are fixed with it.
+# ---------------------------------------------------------------------------
+
+
+def test_kind_survives_a_trailing_comment(tmp_path: Path):
+    """A `kind:` line carrying a `# comment` must read as its declared value.
+
+    The regression this pin exists for is worse than a None: `session_pickup_kind`
+    falls back to a DEFAULT classification when the kind read returns None, so a
+    commented `kind:` silently misclassified the session rather than degrading.
+    A misread that picks a plausible value is invisible to DR-319's contract test,
+    which can only see the record's shape — which is why this is pinned at the
+    reader rather than left to the fact-level assertions.
+    """
+    path = tmp_path / "handoff.md"
+    path.write_text(
+        '---\ntitle: "a handoff"\nkind: session-handoff  # continuation\n---\n\nbody\n',
+        encoding="utf-8",
+    )
+    assert session_facts._read_frontmatter_kind(path) == "session-handoff"
+
+
+def test_status_survives_a_trailing_comment(tmp_path: Path):
+    """A `status:` line carrying a `# comment` must read as its declared value.
+
+    Same defect class as `kind:` above, with a different consequence: a genuinely
+    terminal sizing whose `status:` carried a comment was excluded from the
+    terminal scan, so `session_terminal_sizings` reported a clean, smaller scan
+    instead of degrading or counting it.
+    """
+    path = tmp_path / "sizing.yaml"
+    path.write_text(
+        '---\nstatus: shipped  # landed today\ntitle: "a sizing"\n---\n', encoding="utf-8"
+    )
+    assert session_facts._read_frontmatter_status(path) == "shipped"
+
+
+def test_the_three_frontmatter_readers_share_one_parser(tmp_path: Path):
+    """Negative-spec pin: all three readers must agree with the canonical parser.
+
+    They were three independently-declared regexes carrying one defect; a future
+    "simplification" back to a local regex on any one of them re-opens it on that
+    field alone, which is how the `scope_mode` fix left `kind`/`status` behind in
+    the first place. Asserting them together is what makes the divergence loud.
+    """
+    body = (
+        '---\nkind: session-handoff  # c\nstatus: shipped  # c\n'
+        'scope_mode: spec-dispatch  # c\n---\n\nbody\n'
+    )
+    path = tmp_path / "all-three.md"
+    path.write_text(body, encoding="utf-8")
+    assert session_facts._read_frontmatter_kind(path) == "session-handoff"
+    assert session_facts._read_frontmatter_status(path) == "shipped"
+    assert session_facts._read_frontmatter_scope_mode(path) == "spec-dispatch"

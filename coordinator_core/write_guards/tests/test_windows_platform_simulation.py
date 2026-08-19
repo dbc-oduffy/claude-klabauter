@@ -392,6 +392,18 @@ def test_to_repo_relative_mismatched_root_returns_none():
 # ─── The hard-gated boundary, pinned as an executable fact ─────────────────
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "Asserts a POSIX-interpreter property: constructing a concrete "
+        "WindowsPath raises NotImplementedError only on non-Windows. On "
+        "Windows -- this repo's first-class platform -- it constructs "
+        "fine, so the test is unsatisfiable here rather than failing to "
+        "detect anything. The claim it pins (that .resolve() Windows-path "
+        "logic is genuinely hardware-gated, not merely unauthored) is a "
+        "statement ABOUT POSIX runs and is only meaningful on one."
+    ),
+)
 def test_windows_path_resolve_is_hardware_gated(monkeypatch):
     """Proves — rather than merely asserts in a docstring — that the ONE
     remaining class of Windows-path logic this suite does NOT attempt to

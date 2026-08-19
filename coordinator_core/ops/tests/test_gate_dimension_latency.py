@@ -55,7 +55,7 @@ def _restore_dimension_registry():
     yield
     _DIMENSION_REGISTRY.clear()
     _DIMENSION_REGISTRY.update(original)
-    latency_dim._REENTRANCY_GUARD = False
+    latency_dim._REENTRANCY_GUARD.set(False)
 
 
 def _record(op="fake.op", verdict_source="pass", sample_count=10, code_sha="a" * 40):
@@ -147,28 +147,28 @@ def test_only_validator_changed_yields_unavailable_not_gating():
 
 
 def test_reentrant_call_raises_loudly():
-    latency_dim._REENTRANCY_GUARD = True
+    latency_dim._REENTRANCY_GUARD.set(True)
     try:
         with pytest.raises(latency_dim.LatencyDimensionReentrancyError):
             latency_dim._check_latency(["x.py"], None, None)
     finally:
-        latency_dim._REENTRANCY_GUARD = False
+        latency_dim._REENTRANCY_GUARD.set(False)
 
 
 def test_reentrant_call_via_run_dimension_reads_as_error_not_silent_pass():
-    latency_dim._REENTRANCY_GUARD = True
+    latency_dim._REENTRANCY_GUARD.set(True)
     try:
         result = _run_dimension("latency", ["x.py"], None, None)
     finally:
-        latency_dim._REENTRANCY_GUARD = False
+        latency_dim._REENTRANCY_GUARD.set(False)
     assert result.verdict is Verdict.ERROR
     assert "LatencyDimensionReentrancyError" in result.detail
 
 
 def test_guard_is_reset_after_a_normal_call():
-    assert latency_dim._REENTRANCY_GUARD is False
+    assert latency_dim._REENTRANCY_GUARD.get() is False
     latency_dim._check_latency([], None, None)
-    assert latency_dim._REENTRANCY_GUARD is False
+    assert latency_dim._REENTRANCY_GUARD.get() is False
 
 
 # ---------------------------------------------------------------------------

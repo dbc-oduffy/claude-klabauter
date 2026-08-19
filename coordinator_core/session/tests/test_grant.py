@@ -464,6 +464,103 @@ class TestRevokeTierUGrant:
         assert ok is False
 
 
+class TestGuardedCeremonyHandback:
+    """`revoke_tier_u_grant(only_ceremony=...)` — the guarded handback a
+    ceremony must use (cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-
+    grants-belong-in-code-not-prose.md § 1). Takes back only what THIS
+    ceremony minted; anything else survives and the call still succeeds."""
+
+    def test_handback_removes_own_ceremony_grant(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _live_session(repo, "s1")
+        grant.write_tier_u_grant(
+            "ceremony", "note", ceremony="workweek-complete", session_id="s1", cwd=str(repo)
+        )
+        ok = grant.revoke_tier_u_grant(
+            cwd=str(repo), session_id="s1", only_ceremony="workweek-complete"
+        )
+        assert ok is True
+        assert not _grant_file(repo, "s1").exists()
+
+    def test_handback_never_destroys_a_pm_grant(self, tmp_path):
+        """The defect the guard exists to prevent: a bare ceremony-end
+        `revoke` unlinks whatever the session holds, silently destroying a
+        live PM grant."""
+        repo = _make_repo(tmp_path)
+        _live_session(repo, "s1")
+        grant.write_tier_u_grant("pm", "the PM said run it", session_id="s1", cwd=str(repo))
+
+        ok = grant.revoke_tier_u_grant(
+            cwd=str(repo), session_id="s1", only_ceremony="workweek-complete"
+        )
+        assert ok is True, "a guarded no-op is success, not a failed directive"
+
+        granted, record = grant.check_tier_u_grant(cwd=str(repo), session_id="s1")
+        assert granted is True
+        assert record["note"] == "the PM said run it"
+
+    def test_handback_leaves_another_ceremonys_grant_alone(self, tmp_path):
+        """The `/workweek-complete` -> `/merging-to-main` nesting case: one
+        grant file per session means the nested write REPLACED workweek's
+        record, so workweek's outer handback must find merge's grant and
+        no-op rather than revoking it."""
+        repo = _make_repo(tmp_path)
+        _live_session(repo, "s1")
+        grant.write_tier_u_grant(
+            "ceremony", "note", ceremony="merging-to-main", session_id="s1", cwd=str(repo)
+        )
+
+        outer = grant.revoke_tier_u_grant(
+            cwd=str(repo), session_id="s1", only_ceremony="workweek-complete"
+        )
+        assert outer is True
+        granted, record = grant.check_tier_u_grant(cwd=str(repo), session_id="s1")
+        assert granted is True
+        assert record["ceremony"] == "merging-to-main"
+
+        inner = grant.revoke_tier_u_grant(
+            cwd=str(repo), session_id="s1", only_ceremony="merging-to-main"
+        )
+        assert inner is True
+        assert not _grant_file(repo, "s1").exists()
+
+    def test_handback_absent_grant_is_idempotent_success(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _live_session(repo, "s1")
+        ok = grant.revoke_tier_u_grant(
+            cwd=str(repo), session_id="s1", only_ceremony="workweek-complete"
+        )
+        assert ok is True
+
+    def test_handback_leaves_an_unattributable_record_alone(self, tmp_path):
+        """Malformed JSON cannot be attributed to this ceremony, so the
+        guard's default — leave it — applies rather than destroying a record
+        whose provenance is unknown."""
+        repo = _make_repo(tmp_path)
+        _live_session(repo, "s1")
+        grant_file = _grant_file(repo, "s1")
+        grant_file.parent.mkdir(parents=True, exist_ok=True)
+        grant_file.write_text("{not json", encoding="utf-8")
+
+        ok = grant.revoke_tier_u_grant(
+            cwd=str(repo), session_id="s1", only_ceremony="workweek-complete"
+        )
+        assert ok is True
+        assert grant_file.exists()
+
+    def test_unguarded_revoke_shape_is_unchanged(self, tmp_path):
+        """`only_ceremony=None` is the pre-existing PM/session-owner path:
+        unconditional unlink, whoever minted it."""
+        repo = _make_repo(tmp_path)
+        _live_session(repo, "s1")
+        grant.write_tier_u_grant(
+            "ceremony", "note", ceremony="merging-to-main", session_id="s1", cwd=str(repo)
+        )
+        ok = grant.revoke_tier_u_grant(cwd=str(repo), session_id="s1")
+        assert ok is True
+        assert not _grant_file(repo, "s1").exists()
+
+
 class TestReadTierUGrant:
     def test_returns_none_when_absent(self, tmp_path):
         repo = _make_repo(tmp_path)

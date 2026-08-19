@@ -191,49 +191,67 @@ def test_sessions_dir_outside_repo_still_empty(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sessions_dir_explicit_cwd_spawns_once_across_repeat_calls(tmp_path, monkeypatch):
-    """N calls with the same explicit cwd must produce exactly ONE
-    subprocess spawn and the same return value every time."""
+# These three pin `sessions_dir()`'s CACHING contract by counting calls into
+# `core.git_common_dir` -- the seam `_sessions_dir_resolve` actually resolves
+# through -- not by counting `subprocess.run`.
+#
+# They previously counted spawns via `monkeypatch.setattr(core.subprocess,
+# "run", ...)`, which stopped measuring anything once resolution moved to
+# `coordinator_core.git.repo_root.git_common_dir`: that resolver answers from
+# a filesystem walk and only falls back to a spawn when no `.git` entry is
+# found, and caches the fallback besides. The counters read 0 where they
+# asserted 1 and 3, so all three failed -- red because the code got CHEAPER,
+# which is the opposite of what a red test should mean.
+#
+# Counting resolver calls instead keeps exactly the property these tests
+# exist for (explicit cwd is memoized, `cwd=None` never is, `cache_clear()`
+# forces re-resolution) and stops asserting a spawn that the engine
+# deliberately no longer makes.
+
+
+def test_sessions_dir_explicit_cwd_resolves_once_across_repeat_calls(tmp_path, monkeypatch):
+    """N calls with the same explicit cwd must hit the resolver exactly ONCE
+    and return the same value every time."""
     core.reset_sessions_dir_cache()
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_repo(repo)
 
-    real_run = subprocess.run
+    real_resolver = core.git_common_dir
     calls = []
 
-    def counting_run(cmd, *args, **kwargs):
-        calls.append(cmd)
-        return real_run(cmd, *args, **kwargs)
+    def counting_resolver(cwd=None):
+        calls.append(cwd)
+        return real_resolver(cwd)
 
-    monkeypatch.setattr(core.subprocess, "run", counting_run)
+    monkeypatch.setattr(core, "git_common_dir", counting_resolver)
 
     first = core.sessions_dir(cwd=str(repo))
     for _ in range(5):
         assert core.sessions_dir(cwd=str(repo)) == first
     assert first == str(repo / ".git" / "coordinator-sessions")
-    assert len(calls) == 1, f"expected exactly one spawn, got {len(calls)}: {calls}"
+    assert len(calls) == 1, f"expected exactly one resolution, got {len(calls)}: {calls}"
     core.reset_sessions_dir_cache()
 
 
-def test_sessions_dir_cwd_none_not_cached_still_spawns_per_call(monkeypatch):
+def test_sessions_dir_cwd_none_not_cached_resolves_per_call(monkeypatch):
     """cwd=None resolves against the live process cwd, which can legitimately
     change mid-process (mirrors git_root()'s documented contract) — it must
-    NOT be cached, and must spawn on every call."""
+    NOT be cached, and must re-resolve on every call."""
     core.reset_sessions_dir_cache()
-    real_run = subprocess.run
+    real_resolver = core.git_common_dir
     calls = []
 
-    def counting_run(cmd, *args, **kwargs):
-        calls.append(cmd)
-        return real_run(cmd, *args, **kwargs)
+    def counting_resolver(cwd=None):
+        calls.append(cwd)
+        return real_resolver(cwd)
 
-    monkeypatch.setattr(core.subprocess, "run", counting_run)
+    monkeypatch.setattr(core, "git_common_dir", counting_resolver)
 
     core.sessions_dir()
     core.sessions_dir()
     core.sessions_dir()
-    assert len(calls) == 3, f"expected one spawn per call, got {len(calls)}: {calls}"
+    assert len(calls) == 3, f"expected one resolution per call, got {len(calls)}: {calls}"
 
 
 def test_sessions_dir_failed_resolution_not_cached(tmp_path, monkeypatch):
@@ -252,20 +270,20 @@ def test_sessions_dir_failed_resolution_not_cached(tmp_path, monkeypatch):
     core.reset_sessions_dir_cache()
 
 
-def test_sessions_dir_cache_clear_forces_respawn(tmp_path, monkeypatch):
+def test_sessions_dir_cache_clear_forces_reresolution(tmp_path, monkeypatch):
     core.reset_sessions_dir_cache()
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_repo(repo)
 
-    real_run = subprocess.run
+    real_resolver = core.git_common_dir
     calls = []
 
-    def counting_run(cmd, *args, **kwargs):
-        calls.append(cmd)
-        return real_run(cmd, *args, **kwargs)
+    def counting_resolver(cwd=None):
+        calls.append(cwd)
+        return real_resolver(cwd)
 
-    monkeypatch.setattr(core.subprocess, "run", counting_run)
+    monkeypatch.setattr(core, "git_common_dir", counting_resolver)
 
     core.sessions_dir(cwd=str(repo))
     core.sessions_dir(cwd=str(repo))

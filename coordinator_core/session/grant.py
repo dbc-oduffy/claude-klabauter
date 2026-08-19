@@ -52,7 +52,10 @@ Public functions:
                            absent grant is success, not an error. No
                            expiry, no use-counter, no new record field —
                            the schema is DoE-owned and stays
-                           ``schema_version`` 1.
+                           ``schema_version`` 1. A CEREMONY passes
+                           ``only_ceremony=<its own name>`` so it can only
+                           take back what it minted; the unguarded form is
+                           for the PM/session-owner path alone.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 2
 Spec backlink: DoE-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
@@ -245,8 +248,38 @@ def read_tier_u_grant(
     return record
 
 
+def _grant_is_own_ceremony(grant_file: Path, ceremony: str) -> bool:
+    """Is the persisted grant at ``grant_file`` one that ``ceremony`` minted
+    and is therefore entitled to hand back?
+
+    True only for a readable JSON object carrying ``granted_by ==
+    "ceremony"`` and ``ceremony == <ceremony>``. Absent, unreadable,
+    malformed, PM-minted, or another ceremony's grant all read False — the
+    guard's default is "not mine, leave it alone," so an unattributable
+    record is never destroyed by a ceremony that cannot prove it wrote it.
+
+    Deliberately does NOT route through ``read_tier_u_grant``: that reader
+    resolves the calling session's own sid, while this guard must inspect
+    the exact file the caller already resolved (``session_id`` may have
+    been passed explicitly)."""
+    try:
+        raw = grant_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(record, dict):
+        return False
+    return record.get("granted_by") == "ceremony" and record.get("ceremony") == ceremony
+
+
 def revoke_tier_u_grant(
-    cwd: Optional[str] = None, *, session_id: Optional[str] = None
+    cwd: Optional[str] = None,
+    *,
+    session_id: Optional[str] = None,
+    only_ceremony: Optional[str] = None,
 ) -> bool:
     """Hand the token back: unlink the CALLING (or given) session's own
     grant file, and ONLY that session's — routes through ``_grant_file``,
@@ -262,9 +295,26 @@ def revoke_tier_u_grant(
     condition for "nothing to revoke," only for an infra failure while
     trying.
 
-    Returns True when, after this call, no grant file exists for the
-    session (whether it was removed just now or was already absent).
-    Returns False only on an actual infra failure (session dir
+    ``only_ceremony`` is the GUARDED handback a ceremony must use
+    (cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-grants-belong-in-
+    code-not-prose.md § 1). When set, the grant is unlinked only if it was
+    minted by a ceremony (``granted_by == "ceremony"``) AND that ceremony
+    is this one (``ceremony == only_ceremony``). Anything else — an
+    explicit ``granted_by == "pm"`` grant, or a grant minted by a DIFFERENT
+    ceremony (the ``/workweek-complete`` -> ``/merging-to-main`` nesting
+    case, where one grant file per session means the inner write replaced
+    the outer one) — is left in place and reported as success: the guard
+    did its job, and the outer ceremony's handback correctly no-ops.
+
+    Negative-spec: a ceremony must NEVER call this with ``only_ceremony``
+    omitted. The unguarded form unlinks whatever grant the session holds
+    regardless of who minted it, so a bare ceremony-end revoke silently
+    destroys a live PM grant that happens to be held by the same session.
+
+    Returns True when, after this call, no grant file this call was
+    entitled to remove exists for the session (removed just now, already
+    absent, or — under ``only_ceremony`` — present but not this ceremony's
+    to take). Returns False only on an actual infra failure (session dir
     unresolvable, or the file exists but could not be removed).
     """
     sid = session_id or core.resolve_session_id(cwd)
@@ -274,6 +324,10 @@ def revoke_tier_u_grant(
     grant_file = _grant_file(sid, cwd)
     if grant_file is None:
         return False
+    if only_ceremony is not None and not _grant_is_own_ceremony(
+        grant_file, only_ceremony
+    ):
+        return True
     try:
         # Review: coordinator:code-reviewer — unlink(missing_ok=True) inside
         # the try/except closes the TOCTOU window between an existence check

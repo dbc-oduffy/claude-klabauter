@@ -4095,6 +4095,9 @@ def _bt_blanket_add_dash_c_cwd(cmd: str) -> str:
     return os.path.normpath(os.path.join(os.getcwd(), dash_c_val))
 
 
+from coordinator_core.bash_guards._override_log_path import _override_log_path
+
+
 def check_blanket_git_add(
     cmd: str,
     session_id: str = "",
@@ -4118,8 +4121,9 @@ def check_blanket_git_add(
 
     if _override("COORDINATOR_OVERRIDE_BLANKET_ADD") or _override("_COORDINATOR_SAFE_COMMIT_INTERNAL_BLANKET"):
         try:
-            override_log = os.path.join(git_root, ".git", "coordinator-sessions", session_id or "no-session", "overrides.log")
-            os.makedirs(os.path.dirname(override_log), exist_ok=True)
+            override_log = _override_log_path(git_root, session_id)
+            if override_log is None:
+                raise OSError("could not resolve an overrides.log path")
             with open(override_log, "a", encoding="utf-8") as fh:
                 fh.write(
                     "%s | %s | OVERRIDE-BLANKET-GIT-ADD | %s\n"

@@ -493,3 +493,120 @@ def test_flush_composition_record_stamps_t_start_at_composition_start(tmp_path):
     assert len(rows) == 1
     assert rows[0]["t_start"] == pytest.approx(started, abs=5.0)
     assert rows[0]["name"] == "some_ceremony"
+
+
+def test_flush_composition_record_resolves_sid_from_the_environment(tmp_path, monkeypatch):
+    """A composition row carries the session that produced it.
+
+    Negative-spec: the pinned two-argument call shape
+    (`flush_composition_record(budget, outcome)`) threads no sid, so leaving
+    the default at `None` wrote `"sid": null` on all 521 composition rows the
+    fleet produced between `a360c54eb1c2` and this fix, while ordinary op rows
+    over the same window carried 416 distinct real ids. `sid` + `pid` is the
+    only key joining a composition to the child ops it ran; without it C4's
+    `ceremony.scoped_git_commit` cross-check is undecidable and per-directive
+    attribution has nothing but a Windows pid that gets recycled. This test
+    exists so the field cannot silently go null again.
+    """
+    from coordinator_core.telemetry.composition_record import (
+        flush_composition_record,
+        make_fleet_budget,
+    )
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-from-env")
+
+    budget = make_fleet_budget("some_ceremony")
+    budget.record_invocation("op.one")
+    flush_composition_record(budget, "success", repo_root=tmp_path)
+
+    rows = _composition_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["sid"] == "sess-from-env"
+
+
+def test_flush_composition_record_sid_precedence_matches_the_fleet_chain(tmp_path, monkeypatch):
+    """`COORDINATOR_SESSION_ID` wins over `CLAUDE_SESSION_ID`, which wins over
+    `CLAUDE_CODE_SESSION_ID` — the same chain `baton_assemble/__init__.py` and
+    `ops/handoff_correct_body.py` resolve on. Three copies of this precedence
+    exist by documented precedent; this pins the one that dates the sink so it
+    cannot drift from the other two unnoticed."""
+    from coordinator_core.telemetry.composition_record import (
+        flush_composition_record,
+        make_fleet_budget,
+    )
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-lowest")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-middle")
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-highest")
+
+    budget = make_fleet_budget("some_ceremony")
+    flush_composition_record(budget, "success", repo_root=tmp_path)
+    assert _composition_rows(tmp_path)[0]["sid"] == "sess-highest"
+
+
+def test_pinned_flush_shape_leaves_no_field_null(tmp_path, monkeypatch):
+    """THE CLASS PIN: the pinned two-argument flush writes a row with no null
+    field -- including any field added after this test was written.
+
+    Negative-spec, and the reason this is a loop over `row.items()` rather
+    than a list of named assertions: `record_composition_span` has now shipped
+    TWICE with a field the flush never threaded, so the field landed `null` on
+    every production row while the writer looked correct in isolation.
+    `t_start` (fixed 2026-08-18) made C4's calendar-day partition underivable;
+    `sid` (fixed 2026-08-19, `c2cb17186`) made its `ceremony.scoped_git_commit`
+    cross-check undecidable across 521 rows. Both were found by reading the
+    sink, months of fleet traffic after the fact -- never by a test.
+
+    A per-field assertion would not have caught either one, because neither
+    field existed when the earlier tests were written. This test fails on the
+    NEXT such field without being updated: add a key to the row that the
+    pinned call shape cannot populate, and this goes red immediately.
+
+    `flush_composition_record(budget, outcome)` is called with exactly the two
+    positional arguments the 8 `apply.py` call sites pass (§ PINNED-INTERFACE);
+    `repo_root` is injected only because the test runner's cwd is not the
+    fixture repo. A field that cannot be resolved from that shape is a field
+    the fleet will write as null.
+    """
+    from coordinator_core.telemetry.composition_record import (
+        flush_composition_record,
+        make_fleet_budget,
+    )
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-production-like")
+
+    budget = make_fleet_budget("some_ceremony")
+    budget.record_invocation("op.one")
+    flush_composition_record(budget, "success", repo_root=tmp_path)
+
+    rows = _composition_rows(tmp_path)
+    assert len(rows) == 1
+    nulls = sorted(k for k, v in rows[0].items() if v is None)
+    assert not nulls, (
+        f"composition row fields are null under the pinned call shape: {nulls}. "
+        "Every field must be resolvable from flush_composition_record(budget, outcome) "
+        "alone -- the 8 apply.py call sites thread nothing else. Give the field a "
+        "default inside _flush_or_raise (see repo_root and sid) rather than adding a "
+        "parameter no production caller passes."
+    )
+
+
+def test_flush_composition_record_explicit_sid_still_wins(tmp_path, monkeypatch):
+    """An explicitly passed sid is never overridden by the environment — the
+    env chain is a DEFAULT for the pinned call shape, not a substitution."""
+    from coordinator_core.telemetry.composition_record import (
+        flush_composition_record,
+        make_fleet_budget,
+    )
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-from-env")
+
+    budget = make_fleet_budget("some_ceremony")
+    flush_composition_record(budget, "success", repo_root=tmp_path, sid="sess-explicit")
+    assert _composition_rows(tmp_path)[0]["sid"] == "sess-explicit"

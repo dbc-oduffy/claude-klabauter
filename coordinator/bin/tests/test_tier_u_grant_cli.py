@@ -62,13 +62,32 @@ class _StubGrant:
 
 @pytest.fixture()
 def stub_import_module():
-    orig = _cli._import_module
+    """Binds a `_StubGrant` to both seams the CLI reaches through.
+
+    `read`/`check` still call `_import_module` directly. `grant`/`revoke`
+    delegate to `coordinator_core.session.grant_directive` — the one owner
+    of that argv grammar, shared with the ceremony assemblers that dispatch
+    the same directives in-process — so the stub is bound onto THAT module's
+    two grant functions as well. Both seams are restored on teardown.
+
+    The CLI's argv forwarding is still what these tests assert; only the
+    module the forwarded call lands in moved."""
+    from coordinator_core.session import grant_directive
+
+    orig_import = _cli._import_module
+    orig_write = grant_directive.write_tier_u_grant
+    orig_revoke = grant_directive.revoke_tier_u_grant
 
     def _apply(stub_grant):
         _cli._import_module = lambda: stub_grant
+        _cli._grant_directive_module = lambda: grant_directive
+        grant_directive.write_tier_u_grant = stub_grant.write_tier_u_grant
+        grant_directive.revoke_tier_u_grant = stub_grant.revoke_tier_u_grant
 
     yield _apply
-    _cli._import_module = orig
+    _cli._import_module = orig_import
+    grant_directive.write_tier_u_grant = orig_write
+    grant_directive.revoke_tier_u_grant = orig_revoke
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +188,49 @@ def test_revoke_extra_args_exits_2(stub_import_module):
     stub_import_module(_StubGrant())
     rc = _cli.main(["revoke", "unexpected"])
     assert rc == 2
+
+
+def test_bare_revoke_passes_no_ceremony_guard(stub_import_module):
+    """The unguarded PM/session-owner path must keep reaching
+    `revoke_tier_u_grant` with `only_ceremony=None` — a bare `revoke` that
+    silently acquired a guard would stop handing back PM grants."""
+    seen = {}
+    stub_import_module(
+        _StubGrant(revoke_tier_u_grant=lambda *a, **k: seen.update(k) or True)
+    )
+    rc = _cli.main(["revoke"])
+    assert rc == 0
+    assert seen == {"only_ceremony": None}
+
+
+def test_revoke_only_ceremony_forwards_the_name(stub_import_module):
+    seen = {}
+    stub_import_module(
+        _StubGrant(revoke_tier_u_grant=lambda *a, **k: seen.update(k) or True)
+    )
+    rc = _cli.main(["revoke", "--only-ceremony", "workweek-complete"])
+    assert rc == 0
+    assert seen == {"only_ceremony": "workweek-complete"}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["revoke", "--only-ceremony"],
+        ["revoke", "--only-ceremony", ""],
+        ["revoke", "--only-ceremony", "a", "b"],
+        ["revoke", "workweek-complete"],
+    ],
+)
+def test_malformed_only_ceremony_exits_2_without_revoking(argv, stub_import_module):
+    """A malformed guard argv must NOT fall through to an unguarded revoke —
+    that would turn a typo into the destructive form."""
+    called = []
+    stub_import_module(
+        _StubGrant(revoke_tier_u_grant=lambda *a, **k: called.append(k) or True)
+    )
+    assert _cli.main(argv) == 2
+    assert called == []
 
 
 def test_revoke_listed_in_usage_string(stub_import_module):

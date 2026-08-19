@@ -18,8 +18,13 @@ commit_scoped()` (C3/C4 -- the computed commit-mechanism selector, an
 EXPLICIT pathspec ALWAYS, AC5 -- never a bare `git commit`), captures the
 post-commit HEAD SHA, and runs a push-with-retry loop (reject-detect ->
 fetch -> rebase --onto -> re-push, bounded, never `--force`). Every `git`
-subprocess in this module (directly, or transitively via `commit_scoped()`)
-routes through `git_native._git` (AC2/AC3) -- no bare `subprocess.run`.
+subprocess this module issues directly, or transitively via
+`commit_scoped()`, routes through `git_native._git` (AC2/AC3) -- no bare
+`subprocess.run` written in this file. That does NOT make `_git()` this
+module's sole spawn path end to end: `_drain_pending_push_after_sync`
+(below) calls `auto_push.drain_pending_push`, which issues its own bare
+`subprocess.run` calls in `coordinator_core/hooks/auto_push.py`, unrouted
+through `git_native._git`.
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C4 (AC5).
 Spec backlink: docs/plans/2026-07-27-computed-commit-mechanism-selection.md

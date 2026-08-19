@@ -134,14 +134,9 @@ _SOURCE_SESSION_DIFF_BRIGHTLINE = (
     "coordinator_core/ops/ceremony/branch_resolution.py::session_commit_count_attributed"
 )
 
-#: Local re-declaration of `quick_wrap_assemble`'s `_KIND_RE` (kept private, not
-#: imported): the facade must not depend on `quick_wrap_assemble` — that dependency
-#: runs the other direction post-C7 (DR-323 § (a), coexistence-then-cut) — and this is
-#: a two-line regex, not infrastructure worth a shared module over.
-_KIND_RE = re.compile(r"^kind:\s*['\"]?([A-Za-z_-]+)['\"]?\s*$", re.MULTILINE)
-
-#: Local re-declarations of `quick_wrap_assemble`'s doc-only carve-out, for the same
-#: dependency-direction reason as `_KIND_RE` above: `_novel_loc_split` and the surface
+#: Local re-declarations of `quick_wrap_assemble`'s doc-only carve-out: the facade
+#: must not depend on `quick_wrap_assemble` — that dependency runs the other
+#: direction post-C7 (DR-323 § (a), coexistence-then-cut). `_novel_loc_split` and the surface
 #: carve-out both need them, and the facade must not import from `quick_wrap_assemble`.
 _DOC_ONLY_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown", ".rst", ".txt"})
 _DOC_ONLY_PREFIXES: tuple[str, ...] = (
@@ -152,42 +147,49 @@ _DOC_ONLY_PREFIXES: tuple[str, ...] = (
     "tasks/",
 )
 
-#: Local re-declarations of `quick_wrap_assemble`'s Fact-4 constants, for the same
-#: dependency-direction reason as `_KIND_RE` above.
+#: Local re-declaration of `quick_wrap_assemble`'s Fact-4 constant, for the same
+#: dependency-direction reason as the doc-only carve-out above.
 _TERMINAL_SIZING_STATUSES: frozenset[str] = frozenset({"shipped", "declined", "superseded"})
-_STATUS_RE = re.compile(r"^status:\s*['\"]?([A-Za-z_-]+)['\"]?\s*$", re.MULTILINE)
 
 
 def _read_frontmatter_kind(path: Path) -> str | None:
     """Read the `kind:` frontmatter scalar off `path`, tolerant of a malformed body.
 
-    Deliberately a regex over the first document, not a YAML parse — mirrors
-    `quick_wrap_assemble._read_frontmatter_field`'s own rationale, re-declared here
-    rather than imported for the same reason as `_KIND_RE` above.
+    Delegates to `frontmatter.primitives.read_fm_field_unquoted` for the same
+    reason `_read_frontmatter_scope_mode` does: the local `\\s*$`-anchored regex
+    it replaced did not tolerate a trailing `# comment`, so `kind: session-handoff
+    # continuation` read as None and the fact fell back to a default
+    classification rather than degrading. A misread that silently picks a
+    plausible value is invisible to DR-319's contract test, which can only see
+    the record's shape.
+
+    Negative-spec: do NOT re-introduce a local regex here or on
+    `_read_frontmatter_status` below. Both were fixed together with
+    `_read_frontmatter_scope_mode` precisely because they are one defect class.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     head = text.split("\n---", 2)[0] if text.startswith("---") else text[:4096]
-    match = _KIND_RE.search(head)
-    return match.group(1).strip() if match else None
+    return read_fm_field_unquoted(head, "kind")
 
 
 def _read_frontmatter_status(path: Path) -> str | None:
     """Read the `status:` frontmatter scalar off `path`, tolerant of a malformed body.
 
-    Same rationale as `_read_frontmatter_kind` above — a sibling regex read, not a
-    second general-purpose parser, and re-declared here for the same dependency-
-    direction reason as `_STATUS_RE`.
+    Same rationale and same negative-spec as `_read_frontmatter_kind` above. The
+    failure this closes is narrower than it looks: a sizing whose `status:` line
+    carries a trailing comment read as None, so a genuinely terminal record was
+    excluded from the terminal scan and the fact reported a clean, smaller scan
+    rather than degrading.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     head = text.split("\n---", 2)[0] if text.startswith("---") else text[:4096]
-    match = _STATUS_RE.search(head)
-    return match.group(1).strip() if match else None
+    return read_fm_field_unquoted(head, "status")
 
 
 def session_magnitude_attributed(worktree_root: Path, sid: str) -> dict:

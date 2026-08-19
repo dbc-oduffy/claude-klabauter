@@ -434,6 +434,27 @@ def build_judgment_points(
 #: to know at compute time. A caller with real rationale to attach threads
 #: it via `decisions["ship_verdict"]["value"]` (same override shape as
 #: `version_bump_final`, see `_resolve_ship_verdict_text`).
+#: The canonical dashed ceremony name, stamped into the grant record's
+#: `ceremony` field by `d_grant_write` and matched by `d_grant_handback`'s
+#: `--only-ceremony` guard. One constant so the two can never drift: a
+#: mismatch turns the handback into a silent no-op and leaves the grant live
+#: past the ceremony — the unbounded-grant defect the write exists to bound.
+_CEREMONY_NAME = "merging-to-main"
+
+#: Stored VERBATIM in the grant record's `note` (`write_tier_u_grant` never
+#: normalizes it), so an auditor reading a live grant can tell what minted
+#: it. Under `/workweek-complete` Step 16's nested invocation this write
+#: REPLACES workweek's grant (one grant file per session); the guard then
+#: resolves the nesting correctly — this ceremony's handback matches and
+#: fires, and workweek's outer handback finds nothing of its own and
+#: no-ops. Both of workweek's Tier-U consumers fire before Step 16, so
+#: nothing downstream of the replacement needs the outer grant.
+_TIER_U_GRANT_NOTE = (
+    "implicit ceremony grant: /merging-to-main — minted after the node "
+    "ceremony gate, handed back at d_grant_handback once the post-merge "
+    "re-verify has run"
+)
+
 _DEFAULT_SHIP_VERDICT_TEXT = (
     "Ship — every hard gate reported and the ship_verdict judgment point "
     "resolved to \"ship\"."
@@ -556,6 +577,19 @@ def build_directives(
     return [
         node_gate,
         {
+            "id": "d_grant_write",
+            "cli": "tier-u-grant",
+            "args": [
+                "grant",
+                "ceremony",
+                _TIER_U_GRANT_NOTE,
+                "--ceremony",
+                _CEREMONY_NAME,
+            ],
+            "depends_on": None,
+            "already_satisfied": False,
+        },
+        {
             "id": "d1",
             "cli": "merge-recovery-and-tag-cut",
             "args": ["resolve-tag-prefix", "--config", "coordinator.local.md"],
@@ -603,6 +637,13 @@ def build_directives(
             "id": "d8",
             "cli": "orphan-branch-sweep",
             "args": ["--format", "text", "--severity-min", "warning"],
+            "depends_on": None,
+            "already_satisfied": False,
+        },
+        {
+            "id": "d_grant_handback",
+            "cli": "tier-u-grant",
+            "args": ["revoke", "--only-ceremony", _CEREMONY_NAME],
             "depends_on": None,
             "already_satisfied": False,
         },

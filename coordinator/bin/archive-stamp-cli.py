@@ -538,6 +538,26 @@ def main(argv: list[str]) -> int:
                     f"archive-stamp-cli {subcmd} <handoff_path> [note] [--reaped-from <sid>]"
                     " — --reaped-from may only be given once"
                 )
+        # The same silent-corruption class the --reaped-from repeat fix above
+        # closed, generalized: ANY unrecognized `--flag` left in the tail
+        # became the note verbatim, and any further positional was dropped
+        # without a word. `unclaim-handoff <path> --note "<text>"` — a
+        # plausible mistyping of a positional-note CLI — therefore exited 0
+        # having written `park_note: '--note'` into the baton's frontmatter
+        # and thrown the real text away. A note is load-bearing substrate;
+        # writing a flag name into it is worse than refusing.
+        flagged = [token for token in tail if token.startswith("--")]
+        if flagged:
+            return _usage(
+                f"archive-stamp-cli {subcmd} <handoff_path> [note] [--reaped-from <sid>]"
+                f" — unrecognized flag(s) {flagged!r}; the note is POSITIONAL"
+                " (a note whose own text begins with '--' cannot be passed here)"
+            )
+        if len(tail) > 1:
+            return _usage(
+                f"archive-stamp-cli {subcmd} <handoff_path> [note] [--reaped-from <sid>]"
+                f" — {len(tail)} positional notes given; quote the note as ONE argument"
+            )
         note = tail[0] if tail else None
         return mod.cs_unclaim_handoff(handoff_path, note, reaped_from)
 

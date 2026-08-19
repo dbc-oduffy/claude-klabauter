@@ -282,10 +282,24 @@ async def _empty_private_index_breach(
     resolving it in the pathspec direction reintroduces FORWARD-B.
 
     Deliberately trigger-independent: it does not care WHY the index went
-    missing (still open as of 2026-08-18), only that a commit is about to erase
-    the repo. Cost is one `write-tree` spawn per batch commit — per sweep, not
-    per item — which is the price of the failure mode being otherwise
-    undetectable.
+    missing, only that a commit is about to erase the repo. Cost is one
+    `write-tree` spawn per batch commit — per sweep, not per item — which is
+    the price of the failure mode being otherwise undetectable.
+
+    TIME-OF-CHECK/TIME-OF-USE — read this before trusting it. As of 2026-08-19
+    the trigger IS known (a dispatch-timeout cancellation unlinks the private
+    index mid-commit; see `_kill_orphaned_commit`), and this check does NOT
+    close that path: it runs BEFORE `git commit` is spawned, while the unlink
+    lands AFTER, inside the commit's pre-commit-hook window. Replayed against
+    the 2026-08-18 sequence, this guard PASSES and the empty tree is still
+    committed at rc=0 — had it existed that day, `fbfbd061d` would still have
+    happened.
+
+    NEGATIVE-SPEC: that is NOT a reason to remove or weaken it. It still
+    catches an index already absent at commit-decision time — a class
+    `_kill_orphaned_commit` does not cover — and it is the last line before the
+    repo is deleted. Keep both. What must stop is describing this function as
+    closing the cancellation race; it does not.
     """
     proc = await asyncio.create_subprocess_exec(
         "git", "write-tree",
@@ -319,6 +333,66 @@ async def _empty_private_index_breach(
             "Refused; nothing was committed." % EMPTY_TREE_SHA
         )
     return None
+
+
+def _kill_orphaned_commit(
+    proc: Optional["asyncio.subprocess.Process"],
+    caller: str,
+) -> None:
+    """Terminate a still-running private-index `git commit` before its index is unlinked.
+
+    Call this from the `finally:` that cleans up `GIT_INDEX_FILE`, BEFORE the
+    `os.unlink`. A no-op unless the child is genuinely still running.
+
+    WHY THIS EXISTS — the root cause behind `fbfbd061d` and `0a3462b72`, which
+    `_empty_private_index_breach` refuses but cannot prevent (see its
+    NEGATIVE-SPEC on why it stays anyway):
+
+    1. Op dispatch wraps async handlers in `asyncio.wait_for`
+       (`ipc.py :: dispatch_message`, budget from `_timeout_for`). On expiry the
+       handler is cancelled at whatever `await` it is sitting on — which, for a
+       sweep that has reached its commit, is `await proc.communicate()`.
+    2. asyncio does NOT terminate the child when `communicate()` is cancelled.
+       The spawned `git commit` is orphaned and keeps running.
+    3. The handler's `finally:` then runs during that unwind and unlinks the
+       private index out from under it. git resolves `GIT_INDEX_FILE` and
+       writes the tree AFTER the pre-commit hook returns, and this repo's hook
+       spawns a Python interpreter that — under the 50–70-concurrent-session
+       load norm — holds that window open for seconds. An unlink landing inside
+       it makes `git write-tree` yield `EMPTY_TREE_SHA` at rc=0, and the
+       pathspec-less commit deletes every tracked file.
+
+    Killing the child first closes the race at the seam: a dead git writes no
+    tree and updates no ref, so the unlink that follows cannot be observed by
+    anyone. `proc.kill()` is synchronous and safe to call while a cancellation
+    is unwinding — unlike `await proc.wait()`, which would raise `CancelledError`
+    again and skip the unlink entirely.
+
+    NEGATIVE-SPEC: `asyncio.shield` around the commit does NOT substitute for
+    this. The awaiting coroutine still receives `CancelledError`, so the
+    `finally:` still runs and still unlinks a live child's index.
+
+    Cancellation at any OTHER await in these seams is already harmless: the
+    `finally:` unlinks and the coroutine exits before a commit is ever spawned.
+    The commit's own await is the only window this needs to cover.
+    """
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError) as exc:
+        _LOG.warning(
+            "%s: could not kill orphaned git commit before unlinking the "
+            "private index: %s",
+            caller, exc,
+        )
+    else:
+        _LOG.error(
+            "%s: killed an orphaned `git commit` that was still running when "
+            "the private index was about to be unlinked — the handler was "
+            "cancelled mid-commit (dispatch timeout). Nothing was committed.",
+            caller,
+        )
 
 
 async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> Optional[str]:
@@ -1369,6 +1443,11 @@ async def archive_and_commit(
     idx_fd, idx_path = tempfile.mkstemp(prefix="fleet-git-idx-")
     os.close(idx_fd)
 
+    # Holder for the in-flight pathspec-less commit, read by the `finally:`
+    # below. Declared out here so it survives into the cancellation unwind.
+    # See `_kill_orphaned_commit`.
+    commit_proc: Optional["asyncio.subprocess.Process"] = None
+
     try:
         # Hardened allowlist env: strips GIT_SSH_COMMAND, GIT_EXEC_PATH,
         # GIT_PROXY_COMMAND, GIT_TEMPLATE_DIR and all other GIT_* execution/hook
@@ -1593,6 +1672,10 @@ async def archive_and_commit(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            # Publish the child to the `finally:` BEFORE awaiting it: this await
+            # is the one cancellation point that can produce an empty-tree
+            # commit. See `_kill_orphaned_commit`.
+            commit_proc = proc
             _out, stderr = await proc.communicate()
             commit_rc = proc.returncode
             err_msg = stderr.decode(errors="replace").strip()
@@ -1698,6 +1781,10 @@ async def archive_and_commit(
         return acted, failed
 
     finally:
+        # Order is load-bearing: kill any still-running commit BEFORE the
+        # unlink, or the unlink deletes the index out from under it and the
+        # pathspec-less commit erases the repo. See `_kill_orphaned_commit`.
+        _kill_orphaned_commit(commit_proc, "archive_and_commit")
         # Always clean up the private index temp file.
         try:
             os.unlink(idx_path)
@@ -1854,6 +1941,11 @@ async def rm_and_commit(
     idx_fd, idx_path = tempfile.mkstemp(prefix="fleet-git-idx-")
     os.close(idx_fd)
 
+    # Holder for the in-flight pathspec-less commit, read by the `finally:`
+    # below. Declared out here so it survives into the cancellation unwind.
+    # See `_kill_orphaned_commit`.
+    commit_proc: Optional["asyncio.subprocess.Process"] = None
+
     try:
         base_env = _make_git_env(idx_path=idx_path)
 
@@ -1951,6 +2043,10 @@ async def rm_and_commit(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            # Publish the child to the `finally:` BEFORE awaiting it: this await
+            # is the one cancellation point that can produce an empty-tree
+            # commit. See `_kill_orphaned_commit`.
+            commit_proc = proc
             _out, stderr = await proc.communicate()
             commit_rc = proc.returncode
             err_msg = stderr.decode(errors="replace").strip()
@@ -2046,6 +2142,9 @@ async def rm_and_commit(
         return reaped, failed
 
     finally:
+        # Order is load-bearing — see archive_and_commit's matching `finally:`
+        # and `_kill_orphaned_commit`.
+        _kill_orphaned_commit(commit_proc, "rm_and_commit")
         # Always clean up the private index temp file; already gone is not an error.
         try:
             os.unlink(idx_path)

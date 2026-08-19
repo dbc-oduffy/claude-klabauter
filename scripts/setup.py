@@ -130,6 +130,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -2316,6 +2317,75 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         print(f"  Remediation: run manually: machine-local set engine.warm.enabled {value}", file=sys.stderr)
         return
     print(f"PASS [registration] engine.warm.enabled = {value}")
+
+    if want_warm:
+        start_warm_engine(repo_root)
+
+
+def start_warm_engine(repo_root: Path) -> None:
+    """Bring a warm server up as part of the install and PROVE it serves,
+    rather than leaving `engine.warm.enabled = true` as an unbacked claim.
+
+    WHY THIS EXISTS. Registering the key only makes a warm engine
+    *permitted*; it does not make one *exist*. Every path that creates one
+    is demand-driven — the client's lazy `_spawn_once` on its first
+    FileNotFoundError, and (once coordinator-claude ships it) a SessionStart
+    trigger — so a freshly installed box has no resident engine until some
+    later op happens to miss the pipe, and that op pays the full ~500 ms
+    spawn cold. Worse, the install reports PASS either way, so a warm engine
+    that can never come up on this box (an unreachable engine root, a
+    generation that rotates faster than a server boots) is indistinguishable
+    at install time from one that works. This step collapses that gap: it
+    spawns, then dispatches a real `ping` through the ordinary client and
+    only claims success on a served response.
+
+    Best-effort by construction — an install must never fail over an
+    optional performance feature, so every failure here degrades to an
+    advisory naming the runnable remediation and returns. `is_warm_enabled`
+    stays true regardless: a box that could not start one now still starts
+    one lazily on demand.
+
+    NEGATIVE-SPEC:
+      - Does NOT decide whether warmth is wanted — `offer_warm_opt_in` owns
+        that and calls this only on the ON branch.
+      - Does NOT keep the server alive or supervise it: idle demotion
+        (`coordinator_core.warm.idle`) still retires it after its deadline,
+        which is the intended lifecycle, not a failure of this step.
+      - Does NOT fabricate a warm result from a successful spawn — an
+        unserved ping is reported as an advisory, never as PASS.
+    """
+    try:
+        from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+        from coordinator_core.warm.client import SERVER_ENTRY_SCRIPT, try_warm_dispatch
+    except Exception as exc:  # noqa: BLE001 — never fail an install on an import
+        print(f"[ADVISORY] warm engine not started (engine import failed: {exc!r}).", file=sys.stderr)
+        return
+
+    engine_root = str(repo_root)
+    try:
+        spawn_detached(engine_root, SERVER_ENTRY_SCRIPT)
+    except Exception as exc:  # noqa: BLE001 — spawn_detached is best-effort itself
+        print(f"[ADVISORY] warm engine spawn failed: {exc!r}", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        return
+
+    # A server takes ~0.5-1 s to bind its pipe; poll rather than sleeping a
+    # fixed worst case, and stop at the first served response.
+    deadline = time.monotonic() + 15.0
+    served = None
+    while time.monotonic() < deadline:
+        served = try_warm_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
+        if served is not None:
+            break
+        time.sleep(0.25)
+
+    if served is None:
+        print("[ADVISORY] warm engine started but did not serve a ping within 15s.", file=sys.stderr)
+        print("  Warmth stays enabled; a server will be started lazily by the first op that misses the pipe.", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        return
+
+    print("PASS [warm engine] resident server started and served a ping")
 
 
 def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, engine_py: str, import_names: list[str]) -> None:

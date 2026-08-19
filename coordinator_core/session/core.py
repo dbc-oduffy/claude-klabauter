@@ -168,11 +168,22 @@ def git_root(cwd: Optional[str] = None) -> str:
 
 
 def _sessions_dir_resolve(cwd: Optional[str]) -> str:
-    """Uncached ``git rev-parse --path-format=absolute --git-common-dir``
-    spawn — the sole place this repo shells out for the session hub path.
-    Shared by ``sessions_dir()``'s ``cwd is None`` branch and by
+    """Uncached resolution of the session hub path, shared by
+    ``sessions_dir()``'s ``cwd is None`` branch and by
     ``_sessions_dir_cached()``; see ``sessions_dir`` docstring for the
     caching policy layered on top of this.
+
+    Delegates to ``coordinator_core.git.repo_root.git_common_dir``, which
+    answers from a filesystem walk and only falls back to a
+    ``git rev-parse --git-common-dir`` spawn when no ``.git`` entry is
+    found (and caches that fallback). This function therefore usually makes
+    NO subprocess call at all — it previously spawned inline and its
+    docstring still claimed to be "the sole place this repo shells out for
+    the session hub path", which outlived the delegation. Three tests in
+    ``tests/test_core.py`` were written against that claim and counted
+    ``core.subprocess.run``; they now count resolver calls, because the
+    property worth pinning here is the CACHE, not a spawn the engine
+    deliberately stopped making.
     """
     common = git_common_dir(cwd)
     if not common:

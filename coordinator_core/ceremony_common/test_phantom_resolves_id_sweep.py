@@ -116,7 +116,55 @@ def _verify_learn_lessons_assemble_never_resolves(tmp_path: Path) -> None:
     )
 
 
-_VERIFIED_RESOLVES_FREE = frozenset({"orient_assemble", "learn_lessons_assemble"})
+def _assert_package_source_never_resolves(package_name: str) -> None:
+    """Static source scan for a `resolves` key anywhere in *package_name*.
+
+    The RULE this module states allows a static scan where a dynamic call
+    would need disk/git fixtures disproportionate to the risk, and both
+    callers are exactly that case: `plan_assemble.residue.brief()` loads
+    DoE's `coordinator/skills/plan/residue` segment directory, which the
+    autouse `_quarantine_real_home` fixture stubs away, and
+    `quick_wrap_assemble.brief()` raises without a git worktree AND a
+    resolvable session id. Calling either under a stub would return early
+    without inspecting a single disposition — a check that passes because
+    it did nothing, which is worse than no check.
+
+    Scanning source instead is strictly stronger here: it fails on a
+    `resolves` added down ANY branch, including one this repo's fixtures
+    could not reach. It is a coarser signal (a `resolves` in a docstring or
+    a comment trips it), and that is the correct direction to be wrong in —
+    the remedy is to register a real sweep provider, which is what the
+    package would then need anyway."""
+    package_root = _COORDINATOR_CORE_ROOT / package_name
+    assert package_root.is_dir(), f"{package_name}: package directory not found"
+    offenders = []
+    for source in sorted(package_root.rglob("*.py")):
+        if source.name.startswith("test_") or "tests" in source.parts:
+            continue
+        text = source.read_text(encoding="utf-8")
+        if '"resolves"' in text or "'resolves'" in text:
+            offenders.append(str(source.relative_to(_COORDINATOR_CORE_ROOT)))
+    assert not offenders, (
+        f"{package_name}: a `resolves` key now appears in {offenders} — this package "
+        "was registered as verified resolves-free, so its judgment points were never "
+        "swept for phantom directive ids. Register a real sweep provider in "
+        "_phantom_sweep_providers.py rather than widening this scan."
+    )
+
+
+_VERIFIED_RESOLVES_FREE = frozenset(
+    {
+        "orient_assemble",
+        "learn_lessons_assemble",
+        # Both landed after the 2026-07-27 fleet-wide generalization and were
+        # never registered, so `test_every_discovered_package_is_registered_
+        # or_allowlisted` had been failing by name — working exactly as
+        # designed. Verified resolves-free rather than allowlisted: neither
+        # emits a `resolves` anywhere in its source.
+        "plan_assemble",
+        "quick_wrap_assemble",
+    }
+)
 
 #: Packages that emit `brief(` but are deliberately NOT swept here, with a
 #: concrete, non-appetite reason each -- never a silent skip.
@@ -170,6 +218,11 @@ def test_orient_assemble_verified_resolves_free() -> None:
 
 def test_learn_lessons_assemble_verified_resolves_free(tmp_path) -> None:
     _verify_learn_lessons_assemble_never_resolves(tmp_path)
+
+
+@pytest.mark.parametrize("package_name", ["plan_assemble", "quick_wrap_assemble"])
+def test_source_verified_resolves_free(package_name: str) -> None:
+    _assert_package_source_never_resolves(package_name)
 
 
 def test_pickup_assemble_sweep_covers_every_classification_and_memo_kind(monkeypatch, tmp_path) -> None:

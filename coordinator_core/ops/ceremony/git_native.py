@@ -1,11 +1,20 @@
 """
 coordinator_core.ops.ceremony.git_native — Windows-safe shared git-subprocess helper.
 
-Purpose: every native `git` subprocess invocation in the `wsc_tail` rebuild routes
-through the single `_git()` helper in this module, so the Windows-safe subprocess
-flags are carried exactly once instead of being re-typed (and re-forgotten) at each
-of the ~13 call sites the OLD `wsc_commit.py` scattered them across with none of
-these flags present (the portability gap this chunk closes).
+Purpose: every native `git` subprocess invocation the `wsc_tail` rebuild issues for
+staging and commit routes through the single `_git()` helper in this module, so the
+Windows-safe subprocess flags are carried exactly once instead of being re-typed
+(and re-forgotten) at each of the ~13 call sites the OLD `wsc_commit.py` scattered
+them across with none of these flags present (the portability gap this chunk
+closes).
+
+NOT the sole native-git spawn path for `ceremony.scoped_git_commit` as a whole:
+`_handler`'s push-drain leg (`commit_pipeline._drain_pending_push_after_sync` ->
+`auto_push.drain_pending_push` -> `coordinator_core/hooks/auto_push.py`'s
+`_run_git`/`push_once`/`_is_ancestor`/`_invoke_cockpit_publish`), claim release
+(`coordinator_core/session/scope.py :: _git_run`), `coordinator_core/git/
+divergence.py :: _run_git`, and `coordinator_core/git/repo_root.py ::
+_spawn_rev_parse` all spawn `git` without going through this module's `_git()`.
 
 Flags carried by every invocation (AC3):
     creationflags=CREATE_NO_WINDOW — sourced from `coordinator_core.win_portability.

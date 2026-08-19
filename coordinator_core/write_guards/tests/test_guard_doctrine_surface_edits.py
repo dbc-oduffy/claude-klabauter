@@ -330,6 +330,12 @@ def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path, monke
     unprotected = repo_root / "some_file.py"
     unprotected.write_text("x = 1\n", encoding="utf-8")
 
+    # A real session's hub directory is created by `core.init`; the advisory
+    # logger no longer creates one itself (it used to `mkdir(parents=True)`,
+    # which let an advisory line mint a phantom session for any id). Stand one
+    # up here so this test still exercises the logging path it exists to pin.
+    (repo_root / ".git" / "coordinator-sessions" / "sess-mismatch").mkdir(parents=True)
+
     payload = {
         "tool_name": "Write",
         "tool_input": {"file_path": str(unprotected)},
@@ -401,3 +407,49 @@ def test_advisory_log_not_written_without_repo_root(monkeypatch):
     }
     guard.check(payload)
     assert calls == []
+
+
+def test_advisory_log_never_creates_a_session_dir(tmp_path, monkeypatch):
+    """An advisory log line must never MINT session state.
+
+    `_log_repo_identity_gate` used to `mkdir(parents=True, exist_ok=True)` its
+    target, so any `session_id` it was handed -- including the fixture ids
+    tests exercise this guard with -- became a real directory under
+    `.git/coordinator-sessions/`. `liveness.live_session_ids` enumerates every
+    non-denylisted child there as a SESSION, so those dirs entered the corpus
+    that claim attribution and scope computation read. Nine had accumulated in
+    this repo's own hub by 2026-08-19 and were still accruing writes, which is
+    why deleting them without fixing this writer would not have held.
+
+    The decision must stay ALLOW either way -- dropping the line is not
+    allowed to change what the guard permits."""
+    repo_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _make_repo(repo_root)
+    _make_repo(foreign_root)
+    sessions_dir = tmp_path / "sessions"
+    _write_registry_record(sessions_dir, "9002.json", "sess-phantom", 9002, foreign_root)
+    monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+    _patch_pid_env(monkeypatch, 9002)
+    monkeypatch.setattr(
+        "coordinator_core.pickup_assemble._session_core.stable_pid_alive",
+        lambda pid, stored_start_epoch="": True,
+    )
+    monkeypatch.setattr(guard, "_git_root", lambda: str(repo_root))
+
+    unprotected = repo_root / "some_file.py"
+    unprotected.write_text("x = 1\n", encoding="utf-8")
+
+    result = guard.check(
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(unprotected)},
+            "session_id": "sess-phantom",
+        }
+    )
+
+    assert result is None, "dropping the advisory line must not change the decision"
+    assert not (repo_root / ".git" / "coordinator-sessions" / "sess-phantom").exists(), (
+        "the advisory logger minted a session directory for a session that has "
+        "none -- live_session_ids will enumerate it as a phantom session"
+    )

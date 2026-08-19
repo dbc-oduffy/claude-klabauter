@@ -167,6 +167,18 @@ class TestUnrelatedPaths:
 
 
 class TestHardwareGatedBoundary:
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "Asserts a POSIX-interpreter property: constructing a concrete "
+            "WindowsPath raises NotImplementedError only on non-Windows. On "
+            "Windows -- this repo's first-class platform -- it constructs "
+            "fine, so the test is unsatisfiable here rather than failing to "
+            "detect anything. The claim it pins (that .resolve() Windows-path "
+            "logic is genuinely hardware-gated, not merely unauthored) is a "
+            "statement ABOUT POSIX runs and is only meaningful on one."
+        ),
+    )
     def test_windows_path_resolve_is_hardware_gated(self, monkeypatch):
         """Proves (rather than merely asserts) that a genuine Windows-shaped
         path's `.resolve()` -- the primitive `contained_path` calls -- is
