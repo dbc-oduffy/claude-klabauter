@@ -6876,6 +6876,194 @@ def _dest_repo_root(dest_dir: Path) -> Optional[Path]:
     return None
 
 
+#: The `git status --porcelain=v1 -z` status codes that emit TWO NUL-separated
+#: path fields (new path, then old path). Every other code emits exactly one.
+_PORCELAIN_TWO_PATH_CODES = ("R", "C")
+
+
+def _parse_porcelain_z(stdout: str) -> "List[str]":
+    """Parse `git status --porcelain=v1 -z` output into a de-duplicated path
+    list, preserving first-seen order.
+
+    Split out from its caller so the parsing is testable without a git repo,
+    and so `_dirty_paths_under` reduces to "ask the engine, parse the answer"
+    with no branching of its own."""
+    fields = stdout.split("\0")
+    paths: "List[str]" = []
+    index = 0
+    while index < len(fields):
+        record = fields[index]
+        index += 1
+        if not record:
+            continue
+        # Porcelain v1 is a fixed 2-char status code, one space, then the
+        # path — sliced by position rather than split on whitespace, which
+        # would mis-parse both the leading-space codes (` M`) and any path
+        # containing a space.
+        code, path = record[:2], record[3:]
+        if not path:
+            continue
+        paths.append(path)
+        if code[:1] in _PORCELAIN_TWO_PATH_CODES:
+            # Rename/copy: the next field is the OLD path. Its deletion is
+            # part of the same dirty state, so it belongs in the same commit
+            # — omitting it commits the addition and leaves the removal
+            # behind, which reads to the next round as residue.
+            if index < len(fields) and fields[index]:
+                paths.append(fields[index])
+            index += 1
+    return list(dict.fromkeys(paths))
+
+
+def _dirty_paths_under(repo_root: Path, scope_dirs: Sequence[Path]) -> Optional["List[str]"]:
+    """Enumerate every dirty path beneath `scope_dirs` as repo-root-relative
+    FILE paths — the commit pathspec `_commit_published_dests` hands
+    `commit_pipeline.run_commit_pipeline` as its `stage_paths`.
+
+    Derived from `git status`, NOT from this run's own `changed_files_sink`/
+    `visited_files_sink` accumulators, because those record what the sync
+    WROTE and a publish round also DELETES: a deletion appears in neither
+    sink, and a pathspec missing it leaves the mirror dirty after its own
+    commit — reproducing the exact confusion this step exists to end
+    (state/sizings/2026-08-19-percolate-auto-commits-its-own-successfu.yaml).
+
+    `-uall` is load-bearing, not cosmetic: without it git collapses a wholly
+    new directory into a single `dir/` entry, and `ceremony.scoped_git_commit`
+    refuses a pathspec containing a directory element (§ `percolate-round.
+    _build_commit_pathspec`, which carries the same constraint on its side of
+    this seam).
+
+    Returns `None` when the probe itself failed — deliberately distinct from
+    `[]` ("clean"): committing nothing under an unknown state is the silent-
+    drop shape this driver's exit-code contract exists to prevent.
+
+    Negative-spec: does NOT widen to the whole repo root. The pathspec is
+    scoped to the dest dirs this run actually swapped, so a mirror carrying
+    unrelated operator edits outside those subtrees keeps them uncommitted
+    rather than having them swept into a publish commit.
+    """
+    from coordinator_core.ops.ceremony import git_native  # noqa: PLC0415 - lazy, see module header
+
+    probe = git_native.status_porcelain_scoped(
+        repo_root, [str(scope) for scope in scope_dirs]
+    )
+    if not probe.ok:
+        return None
+    return _parse_porcelain_z(probe.stdout)
+
+
+def _commit_published_dests(
+    published_dest_dirs_by_repo_root: "dict[Path, set[Path]]",
+    *,
+    succeeded_row_names: Sequence[str],
+) -> bool:
+    """Commit each destination repo's synced bytes, once, at the successful
+    conclusion of a percolation. Returns `True` when every destination either
+    committed or had nothing to commit.
+
+    WHY THIS EXISTS. A bare `coordinator-publish` run used to exit 0 with
+    every gate green and leave the mirror holding its own certified output as
+    uncommitted changes. `percolate-round` then refused on its dest-
+    cleanliness precondition, naming `--reconcile-dest=discard` as the
+    remedy — which resets the mirror to HEAD and destroys exactly those
+    certified bytes. Committing here is what makes "dest is dirty" mean
+    "a predecessor crashed" again, which is the only thing that precondition
+    was ever meant to detect.
+
+    COMMIT, NOT PUBLISH (PM ruling, 2026-08-19). This step ends at a local
+    commit. It never pushes a branch and never merges — publishing the mirror
+    stays a separate deliberate act. The pipeline's own push leg enforces a
+    `work/*`-only branch policy (`push_with_retry`), and a publish mirror sits
+    on `candidate`/`main`, so that leg DECLINES rather than pushing. This
+    function therefore does not pass (and the pipeline does not offer) a
+    push-suppressing flag — it relies on that policy, and says so here so a
+    future change to the policy is read against this requirement rather than
+    silently turning every percolation into a publication.
+
+    Calls `run_commit_pipeline` in-process rather than spawning the
+    `scoped-git-commit` CLI over it. Same mechanism, same agree-case /
+    private-index discriminator (SC-DR-015) — the CLI is a trampoline over
+    this exact function — but one fewer Python interpreter start per
+    destination, and no per-item process amplification inside this loop
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`).
+
+    Negative-spec: NOT called under `--dry-run`, NOT called when any row
+    failed, and NOT called when an end-of-run gate failed — a gate failure
+    means this run's published bytes are unverified (AC15 fail-closed), and
+    committing unverified bytes would hand the next round a clean dest that
+    certifies nothing.
+
+    Negative-spec: does NOT run when `percolate-round` drives the publish
+    (it passes `--no-commit`). The round owns its own
+    commit -> CI-smoke -> push sequence (DR-301) and moving the commit ahead
+    of its CI smoke would reorder that contract.
+    """
+    import uuid  # noqa: PLC0415 - lazy, keeps this driver's import cost off every run
+
+    from coordinator_core.ops.ceremony import commit_pipeline  # noqa: PLC0415
+
+    all_ok = True
+    for repo_root, scope_dirs in published_dest_dirs_by_repo_root.items():
+        if not scope_dirs or not _is_git_repo(repo_root):
+            continue
+        paths = _dirty_paths_under(repo_root, sorted(scope_dirs))
+        if paths is None:
+            print(
+                f"publish.py: could not enumerate dirty paths under '{repo_root}' "
+                "(git status probe failed) — refusing to commit under an unknown "
+                "state; the mirror is left dirty and this run exits non-zero.",
+                file=sys.stderr,
+            )
+            all_ok = False
+            continue
+        if not paths:
+            print(f"  {repo_root}: already clean — nothing to commit.")
+            continue
+        rows = ", ".join(succeeded_row_names) if succeeded_row_names else "no named rows"
+        subject = f"percolate: sync {len(paths)} path(s) to {repo_root.name} ({rows})"
+        result = commit_pipeline.run_commit_pipeline(
+            repo_root,
+            # Private per-invocation nonce, never an attribution — the same
+            # shape `ceremony.scoped_git_commit` mints for its own call
+            # (`scoped-git-commit-<uuid4>`); this parameter is unread by the
+            # pipeline and exists only to key its own reconcile probe.
+            session_id=f"publish-percolate-{uuid.uuid4().hex}",
+            subject=subject,
+            stage_paths=paths,
+            # Load-bearing, not decorative: `explicit_stage` derives its
+            # `StageOutcome.deletion_paths` from the CALLER's own pathspec,
+            # and without this a path the sync deleted is silently dropped
+            # from the commit set (`ceremony.scoped_git_commit`'s 2026-08-04
+            # defect A/B, whose own call site passes exactly this). Measured
+            # here before the fix: a deleted file stayed `D` in the mirror
+            # after a "successful" commit — i.e. still dirty, which is the
+            # whole failure this step exists to end.
+            caller_paths=set(paths),
+        )
+        if result.commit_failed:
+            print(
+                f"publish.py: commit of '{repo_root}' failed — the published "
+                "bytes ARE on disk but are not committed; reconcile by hand "
+                "before the next round.",
+                file=sys.stderr,
+            )
+            all_ok = False
+            continue
+        sha = result.committed_sha or "(sha unverified)"
+        print(f"  {repo_root}: committed {len(paths)} path(s) as {sha[:12]}.")
+        if result.integrity_breach:
+            # The commit landed locally but its push genuinely FAILED (a
+            # branch-policy decline is not a breach — § `PipelineResult`).
+            # Not this driver's failure: the bytes are published and
+            # committed. Say it once and let the exit code stay 0.
+            print(
+                f"publish.py: '{repo_root}' committed locally but its push "
+                "failed — the mirror is committed, not published.",
+                file=sys.stderr,
+            )
+    return all_ok
+
+
 def _ensure_dest_ready(target: ResolvedTarget, totals: RunTotals, *, out: IO[str] = sys.stdout) -> bool:
     """Basic sync-dispatch precondition (NOT one of the C-W1d2 gates): the
     dest path must be, or be creatable inside, a real destination repo. One
@@ -8865,6 +9053,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--no-commit",
+        dest="commit",
+        action="store_false",
+        default=True,
+        help=(
+            "Opt out of committing each destination repo at the successful "
+            "conclusion of the percolation (default ON, PM ruling 2026-08-19). "
+            "COMMIT ONLY — this driver never pushes a branch and never merges "
+            "either way. Passed by `percolate-round`, which owns its own "
+            "commit -> CI-smoke -> push sequence (DR-301); a bare "
+            "`coordinator-publish` run wants the default, since exiting 0 with "
+            "green gates and a dirty mirror is what makes the next round refuse "
+            "on its dest-cleanliness precondition."
+        ),
+    )
+    p.add_argument(
         "--no-delta",
         dest="delta",
         action="store_false",
@@ -9000,7 +9204,7 @@ def _assert_klabauter_parity_group_ordering(rows: Sequence[str]) -> bool:
 def main(argv: Optional[List[str]] = None) -> int:
     """Exit-code contract (state/bug-backlog/2026-08-10-coordinator-publish-s-
     exit-code-is-not-a-542c9750e55a.yaml): a caller may trust the exit code
-    alone to distinguish these three outcomes, without parsing the "Rows
+    alone to distinguish these four outcomes, without parsing the "Rows
     succeeded"/"Rows FAILED" summary or scanning stdout for FATAL text —
 
       0 — every requested row's bytes landed (or, under --dry-run, every row
@@ -9016,6 +9220,13 @@ def main(argv: Optional[List[str]] = None) -> int:
           verification gate failed — distinct from 1 on purpose: this is
           "bytes landed, verification incomplete," never "bytes did not
           land." Never fires under --dry-run (those gates never run there).
+      3 — every requested row's bytes landed AND every gate passed, but the
+          end-of-run COMMIT of a destination repo did not complete (§
+          `_commit_published_dests`). Distinct from 2 for the same reason 2
+          is distinct from 1: the bytes are published and verified, and what
+          is outstanding is only that the mirror is still dirty — the state
+          the next `percolate-round` reads as a crashed predecessor. Never
+          fires under --dry-run, nor under `--no-commit`.
 
     Previously (both directions confirmed live, see the bug-backlog entry):
     --dry-run unconditionally returned 0 even when rows were reported
@@ -9908,6 +10119,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             # land" (1) from "bytes landed, but verification did not
             # complete" (2) from the exit code alone.
             return 2
+
+        # Successful conclusion of the percolation — every requested row
+        # landed and every end-of-run gate passed. This is the ONLY point
+        # from which the commit runs (§ `_commit_published_dests`'s own
+        # negative-spec block): both non-zero returns above are ahead of it,
+        # and `--dry-run` returned further up.
+        if args.commit:
+            print("=== publish.py — commit ===")
+            if not _commit_published_dests(
+                end_of_run_published_dest_dirs_by_repo_root,
+                succeeded_row_names=succeeded_row_names,
+            ):
+                # Exit 3, not 0: the bytes landed and verified, but the
+                # destination is still dirty — which is precisely the state
+                # the next `percolate-round` reads as a crashed predecessor.
+                # Reporting it as success is what let that confusion exist.
+                return 3
 
         return 0
     finally:

@@ -1543,7 +1543,15 @@ def _cmd_round_default(
 
             # --- Step 1: real run (sync) -- no dry run by default ----------
             print(f"=== percolate-round {target} — Step 1: real run (sync) ===")
-            real_cmd = [sys.executable, str(_PUBLISH), target]
+            # `--no-commit`: this round owns the commit itself, as Step 5
+            # below, so that DR-301's commit -> CI smoke -> push order holds
+            # (§ this module's header). `publish.py` commits its own
+            # successful percolation by default — correct for a bare
+            # `coordinator-publish`, which otherwise exits 0 with green gates
+            # and leaves the mirror dirty, but here it would move the commit
+            # ahead of `_run_ci_smoke` and make this round's own commit leg a
+            # no-op.
+            real_cmd = [sys.executable, str(_PUBLISH), target, "--no-commit"]
             if not args.delta:
                 real_cmd.append("--no-delta")
             import os as _os
@@ -2162,7 +2170,15 @@ def _cmd_round(args: argparse.Namespace) -> int:
 
                 # --- Step 4: real run --------------------------------------
                 print(f"=== percolate-round {target} — Step 4: real run ===")
-                real_cmd = [sys.executable, str(_PUBLISH), target]
+                # `--no-commit` for the same reason as `_cmd_round_default`'s
+                # Step-1 spawn, and it must stay in lockstep with it: this
+                # branch owns its own commit step below, and the
+                # `--dry-run-first` help text above promises every verdict
+                # path behaves identically either way. Omitting it here
+                # double-commits (publish.py commits, then this round's own
+                # commit leg finds nothing) and moves the commit ahead of
+                # `_run_ci_smoke` for this path alone.
+                real_cmd = [sys.executable, str(_PUBLISH), target, "--no-commit"]
                 if not args.delta:
                     real_cmd.append("--no-delta")
                 # Inherited-holder handoff (§ `_INHERITED_LOCK_ROOTS_ENV`

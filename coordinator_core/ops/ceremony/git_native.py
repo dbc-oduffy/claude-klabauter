@@ -453,6 +453,47 @@ def status_porcelain(cwd: Union[str, Path]) -> GitResult:
     return _git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd)
 
 
+def status_porcelain_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
+    """`git status --porcelain=v1 -z -uall -- <paths>` — the dirty set beneath
+    an explicit pathspec, NUL-separated, with untracked directories expanded
+    to their individual files.
+
+    Companion to `status_porcelain` above, for the caller that needs a
+    COMMITTABLE path list rather than a dirty/clean verdict. Three
+    differences, each load-bearing:
+
+      `-z`      — a path containing a space, a quote, or a non-ASCII byte is
+                  emitted raw rather than C-quoted, so the caller never has to
+                  unquote (and never silently mis-unquotes) a real filename.
+      `-uall`   — without it git collapses a wholly-new directory into ONE
+                  `dir/` entry. A pathspec carrying a directory element is
+                  refused downstream (`commit_pipeline.explicit_stage`), so
+                  the collapsed form is not merely lossy here, it is unusable.
+      `<paths>` — scopes the answer to the subtrees the caller names, leaving
+                  unrelated dirt elsewhere in the worktree out of the result
+                  (and therefore out of any commit built from it).
+
+    `--no-optional-locks` for the same reason as `status_porcelain`: read-only
+    call, no reason to contend for `.git/index.lock` on a shared worktree.
+
+    Negative-spec: does NOT parse its own output — the porcelain-v1 record
+    format (2-char code, space, path; a second NUL-separated field for `R`/`C`)
+    is the caller's to read, same as every other wrapper in this module returns
+    raw `stdout`."""
+    return _git(
+        [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "-uall",
+            "--",
+            *paths,
+        ],
+        cwd=cwd,
+    )
+
+
 def diff_cached_name_status(
     cwd: Union[str, Path], *, find_renames: bool = True
 ) -> GitResult:

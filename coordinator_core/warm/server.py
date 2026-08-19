@@ -17,6 +17,12 @@ WHAT THIS MODULE OWNS, and only this:
   - per-connection framed-NDJSON read, dispatch into the existing engine
     core (`coordinator_core.ipc.dispatch_message`), and framed response
     write;
+  - the accept-and-queue boundary between the two: acceptance (bounded by
+    `PENDING_LISTENER_POOL_SIZE`) is decoupled from dispatch (bounded by
+    `WORKER_POOL_SIZE`) via one `queue.Queue` every accept chain enqueues
+    onto and a fixed pool of worker threads drains -- see
+    `_ServerContext._enqueue_connection` / `_worker_loop` and DRAIN
+    SEMANTICS below for the guarantee this buys (R6/R7);
   - boot identity: `warm.skew.ServerVersionState` constructed ONCE at boot,
     held for the pipe's own generation token and for skew responses.
 
@@ -69,7 +75,11 @@ already uses -- verified end-to-end on this box before landing (throwaway
 probe, discarded). One thread per connection is what gives "a wedged op
 does not stall the next" for free: a hung dispatch wedges only its own
 thread's `readline`/dispatch/`write`, never the accept loop or any other
-connection's thread.
+connection's thread -- true today for the bounded `WORKER_POOL_SIZE` pool
+of connection-handling threads exactly as it was for the unbounded set of
+accept-chain threads that used to double as handlers: a wedge on one
+worker stalls only that worker, and the other `WORKER_POOL_SIZE - 1`
+workers keep draining the queue.
 
 PER-REQUEST STATE IS NOT OPTIONAL. `_run_dispatch` opens
 `coordinator_core.warm.entry_seam.per_request_state()` around every call
@@ -90,6 +100,44 @@ server process's OWN environment (whoever spawned it) must never leak into
 see `session.core.session_identity_override`'s docstring for the full
 defect this closes.
 
+DISPATCH CONCURRENCY MODEL -- ADDED 2026-08-19, chunk C6 of docs/plans/
+2026-08-19-the-fired-path-reaches-the-engine.md, gated on C1's verdict
+(docs/research/warm-engine-premise/c1-binding-constraint.md). C1's Arm A
+isolated dispatch from transport entirely (`dispatch_message` called
+in-process, no pipe, no accept chain, no second process) and reproduced the
+serialization curve anyway -- p50 1.25ms -> 29.17ms across 1->32 concurrent
+Python THREADS, throughput plateaued ~1000-1100/s from 4 threads up. That is
+GIL contention inside dispatch, not a transport artifact, and no amount of
+restructuring the per-connection thread/event-loop shape removes it: the GIL
+serializes CPU-bound bytecode execution across THREADS in one process
+regardless of how the calling code is organized. `_worker_loop` therefore
+does not call `_run_dispatch` (in-process) for a REAL accept loop; it calls
+`_ServerContext._pool_dispatch`, which submits the request to a
+`DISPATCH_PROCESS_POOL_SIZE`-worker `concurrent.futures.ProcessPoolExecutor`
+(`_pool_dispatch_worker`, `_worker_process_init`) and blocks the connection's
+own thread for the result. The listener/accept/queue layers above this are
+UNCHANGED -- this row does not touch transport (anti-scope, C6's own body) --
+only what backs the dispatch call a queued connection's worker thread makes.
+`_run_dispatch` itself is UNCHANGED and stays the default `dispatch=` this
+module's own test suite (and any other in-process caller) exercises directly.
+
+DRAIN SEMANTICS (P5, AC8) -- `in_flight` increments at ENQUEUE, not at
+worker pickup: `_ServerContext._enqueue_connection` calls `in_flight.enter()`
+before the connection's `io` object is ever put on the queue, so a request
+that has been accepted off the wire and is sitting behind a busy worker
+already counts as in-flight. `warm.lifecycle.drain_and_exit`'s wait-for-zero
+therefore never returns while accepted-but-not-yet-dispatched work remains
+queued -- a drain waits for the QUEUE TO EMPTY, never merely for the workers
+that happen to be busy right now to finish. This is one step later than
+`_handle_connection`'s own increment (`in_flight.enter()` called again,
+guarded by `already_entered=True` on the queue path so the slot is not
+double-counted, before `io.readline()`) -- enqueue precedes worker pickup,
+which precedes the first byte being read. AC7 (bounded dispatch) and AC8
+(no queued-but-unstarted work dropped at shutdown) are the same mechanism
+observed from two ends: a fixed `WORKER_POOL_SIZE` pool is what makes
+acceptance and dispatch independently bounded, and enqueue-time counting is
+what makes that boundedness safe to drain.
+
 NEVER FAIL A CALLER. Every fault below the frame-parse boundary --
 malformed JSON, a non-object frame, a raised handler exception -- returns a
 well-formed JSON-RPC error envelope over the SAME connection rather than
@@ -105,8 +153,10 @@ gap found and named during C15 execution, 2026-08-18.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
+import queue
 import sys
 import threading
 from pathlib import Path
@@ -116,7 +166,13 @@ from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
 from coordinator_core.warm.entry_seam import per_request_state
 
-__all__ = ["InFlightCounter", "PENDING_LISTENER_POOL_SIZE", "main"]
+__all__ = [
+    "InFlightCounter",
+    "PENDING_LISTENER_POOL_SIZE",
+    "WORKER_POOL_SIZE",
+    "DISPATCH_PROCESS_POOL_SIZE",
+    "main",
+]
 
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
@@ -162,6 +218,52 @@ _PIPE_BUFFER_BYTES = 65536
 # cheap against the alternative this row exists to close: contention being
 # misread as "no server" and converted into spawns (problem 2).
 PENDING_LISTENER_POOL_SIZE = 30
+
+# WORKER POOL SIZE -- the accept-and-queue chunk's own bound (docs/plans/
+# 2026-08-19-the-fired-path-reaches-the-engine.md § C5, R6/R7): the
+# committed baseline (`931d50905`) bounds ACCEPTANCE to
+# `PENDING_LISTENER_POOL_SIZE` pending listeners, but each accept chain
+# still handles its own connection's dispatch inline on the SAME thread
+# that just accepted it, while a fresh replacement thread is spawned
+# immediately for the next accept -- so the set of threads doing dispatch
+# work grows by one per connection under load, unbounded, exactly the
+# shape AC7 forbids ("bounded to a named worker count rather than growing
+# one handler thread per accepted connection"). This constant is that
+# named bound: `_ServerContext._enqueue_connection` puts every accepted
+# connection's `io` object on one `queue.Queue`, and exactly
+# `WORKER_POOL_SIZE` long-lived worker threads (`_worker_loop`) drain it,
+# so dispatch concurrency is capped independently of how fast connections
+# are accepted.
+#
+# Sized against the same `docs/wiki/machine-load-norm.md` standing
+# assumption `PENDING_LISTENER_POOL_SIZE` reuses ("estimate lock hold time
+# as though 30 callers are queued") -- this is the sibling question for
+# the OTHER shared, short-lived resource (a dispatch worker rather than a
+# pending listener): how many simultaneous dispatches should this server
+# be built to absorb before excess arrivals wait in the queue rather than
+# being dropped or spawning an unbounded thread. Reusing the number rather
+# than deriving a second one keeps the fleet's concurrency assumptions in
+# one place. Per this row's own body (P4): the queue's product is
+# guaranteed acceptance and bounded fan-out damage, NOT lower latency --
+# p50 still rises at every worker count P4's prototype swept (1/2/4/8), so
+# this value is a damage bound, not a throughput tune.
+WORKER_POOL_SIZE = 30
+
+# DISPATCH PROCESS POOL SIZE -- C6's own row (docs/plans/2026-08-19-the-fired-
+# path-reaches-the-engine.md), gated on C1's verdict
+# (docs/research/warm-engine-premise/c1-binding-constraint.md): Arm A proved
+# the p50 rise (1.25ms -> 29.17ms across 1->32 threads) reproduces with ZERO
+# transport in the loop -- it is GIL contention inside `dispatch_message`
+# itself running on N concurrent Python THREADS, not the accept/pipe chain.
+# Restructuring the per-request `asyncio.run()` call cannot remove this: the
+# GIL serializes CPU-bound bytecode execution regardless of how many event
+# loops or threads submit work to it, so bytecode-level dispatch concurrency
+# needs OS-level process isolation, not a different threading shape. Reusing
+# `WORKER_POOL_SIZE` keeps one bound instead of a second independently-tuned
+# constant -- the process pool replaces the SAME dispatch-concurrency budget
+# `WORKER_POOL_SIZE` already names (C5's accept-and-queue chunk), it does not
+# add a second one on top of it.
+DISPATCH_PROCESS_POOL_SIZE = WORKER_POOL_SIZE
 
 
 class InFlightCounter:
@@ -301,6 +403,50 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     return response
 
 
+def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
+    """The `DISPATCH_PROCESS_POOL_SIZE` worker-process target -- identical
+    body to `_run_dispatch`, factored out as its own top-level (picklable)
+    function because `concurrent.futures.ProcessPoolExecutor.submit` needs
+    an importable `__module__`/`__qualname__` target, not a closure or a
+    bound method. Runs entirely inside a WORKER PROCESS, so this is the one
+    piece of C6's fix that actually gets dispatch off the accept process's
+    GIL (see `DISPATCH_PROCESS_POOL_SIZE`'s own comment): the OS, not the
+    interpreter lock, schedules concurrent calls to this function across
+    `DISPATCH_PROCESS_POOL_SIZE` separate processes.
+
+    `entry_seam.per_request_state`'s contextvars and `coordinator_core.ipc`'s
+    own declared-writes scoping are per-PROCESS state, so opening them here
+    (inside the worker) is exactly as safe as opening them on the accept
+    process's own connection thread was -- each worker process has entirely
+    its own contextvar storage, with no cross-process sharing to guard
+    against.
+    """
+    import asyncio
+
+    from coordinator_core.ipc import dispatch_message
+
+    diagnostics: list = []
+    with per_request_state(session_id=session_id, diagnostics=diagnostics):
+        response = asyncio.run(dispatch_message(msg))
+
+    if diagnostics and isinstance(response, dict):
+        response = {**response, "_stderr": "\n".join(diagnostics)}
+    return response
+
+
+def _worker_process_init() -> None:
+    """`ProcessPoolExecutor`'s `initializer=` -- runs once per worker
+    process, before that process ever dispatches a request, so the
+    703ms-first-dispatch op-registry import (`_preload_op_registry`'s own
+    docstring) is paid by a process nobody is waiting for rather than by
+    whichever request happens to land on a freshly-started worker first.
+    Mirrors the main process's own boot-time preload (`main()` step, before
+    `_ServerContext.serve_forever`) for the SAME reason, on the process that
+    now actually does the dispatching.
+    """
+    _preload_op_registry()
+
+
 def _serve_line(
     raw_line: bytes,
     *,
@@ -402,6 +548,7 @@ def _handle_connection(
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[[str], None] = lambda reason: None,
+    already_entered: bool = False,
 ) -> None:
     """One connection's request/response lifecycle, run on its own thread.
 
@@ -409,8 +556,18 @@ def _handle_connection(
     _try_warm_dispatch_inner`'s own shape (one write, one read, close) --
     there is no live client that keeps a connection open past its single
     request, so this does not loop reading further lines.
+
+    `already_entered`, when True, skips this function's own `in_flight.
+    enter()` call because the caller already claimed this request's slot at
+    a point that must count as in-flight earlier than this function runs --
+    the bounded worker pool's enqueue point (`_ServerContext.
+    _enqueue_connection`), per the module docstring's DRAIN SEMANTICS.
+    Default False preserves this function's original one-call-does-both
+    contract for every direct caller (tests, and any future single-shot
+    caller that has not itself already entered).
     """
-    in_flight.enter()
+    if not already_entered:
+        in_flight.enter()
     exited = False
 
     def _exit_once() -> None:
@@ -548,10 +705,20 @@ class _ServerContext:
         self.engine_root = engine_root
         self.in_flight = InFlightCounter()
         self.telemetry = telemetry.ServerTelemetry()
+        self._queue: "queue.Queue[Any]" = queue.Queue()
         self._listening_lock = threading.Lock()
         self._listening = True
         self._stopped = threading.Event()
         self._idle_watchdog_stop = threading.Event()
+        # Lazily constructed -- see `_ensure_dispatch_pool`. Left `None`
+        # until a real worker thread actually dispatches through it, so a
+        # test that constructs a `_ServerContext` (or even starts the
+        # worker-thread pool) without ever letting a request reach
+        # `_pool_dispatch` -- the common shape across this module's own
+        # test suite, which monkeypatches `_handle_connection` directly --
+        # never pays for real OS process spawns it does not exercise.
+        self._dispatch_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
+        self._dispatch_pool_lock = threading.Lock()
 
     def close_listener(self) -> None:
         with self._listening_lock:
@@ -567,6 +734,35 @@ class _ServerContext:
     def record_exit(self, reason: str) -> None:
         self.telemetry.record_exit(reason)
 
+    def _ensure_dispatch_pool(self) -> "concurrent.futures.ProcessPoolExecutor":
+        """Build the `DISPATCH_PROCESS_POOL_SIZE`-worker-process pool on
+        first use, double-checked-locking style, so concurrent worker
+        THREADS racing to dispatch their first request each see the SAME
+        pool rather than each starting their own.
+        """
+        if self._dispatch_pool is None:
+            with self._dispatch_pool_lock:
+                if self._dispatch_pool is None:
+                    self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
+                        max_workers=DISPATCH_PROCESS_POOL_SIZE,
+                        initializer=_worker_process_init,
+                    )
+        return self._dispatch_pool
+
+    def _pool_dispatch(self, msg: dict, *, session_id: Optional[str] = None) -> dict:
+        """The `dispatch=` callable a real accept-loop worker thread
+        (`_worker_loop`) hands to `_handle_connection` -- submits the call
+        to `DISPATCH_PROCESS_POOL_SIZE` worker PROCESSES and blocks this
+        connection's own thread for the result, exactly where `_run_dispatch`
+        used to run dispatch in-process. See `DISPATCH_PROCESS_POOL_SIZE`'s
+        own comment for why this is the fix C1's Arm A evidence names: GIL
+        contention inside `dispatch_message` cannot be removed by any
+        in-process threading restructure, only by moving the CPU-bound work
+        off this process's interpreter lock entirely.
+        """
+        future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, session_id)
+        return future.result()
+
     def _ctx_shutdown(self) -> None:
         """Step 3 of `warm.lifecycle`'s sequence: flush the log, unlink the
         breadcrumb, close pipe handles. `os._exit(0)` (step 4, run
@@ -579,6 +775,15 @@ class _ServerContext:
         self._idle_watchdog_stop.set()
         self.telemetry.flush(engine_root=self.engine_root)
         breadcrumb.unlink_breadcrumb(self.engine_root)
+        if self._dispatch_pool is not None:
+            # Best-effort, mirroring every other step in this method's own
+            # "never raises" contract -- `os._exit(0)` (lifecycle's next
+            # step) reclaims the worker processes at the OS level regardless
+            # of whether this shutdown call itself completes cleanly.
+            try:
+                self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001
+                pass
         return None
 
     def _drain(self) -> None:
@@ -617,11 +822,19 @@ class _ServerContext:
             self._idle_tick()
 
     def serve_forever(self, first_handle: int) -> None:
-        """Kick off `PENDING_LISTENER_POOL_SIZE` independent self-
-        replenishing accept chains -- `first_handle` (election's own
-        instance) plus `PENDING_LISTENER_POOL_SIZE - 1` further instances
-        created here -- and the idle watchdog, each on its own thread, then
-        block for the life of the process.
+        """Kick off `WORKER_POOL_SIZE` bounded dispatch workers,
+        `PENDING_LISTENER_POOL_SIZE` independent self-replenishing accept
+        chains -- `first_handle` (election's own instance) plus
+        `PENDING_LISTENER_POOL_SIZE - 1` further instances created here --
+        and the idle watchdog, each on its own thread, then block for the
+        life of the process.
+
+        Workers are started FIRST so the queue has consumers the instant
+        the first connection is accepted -- an accept chain never blocks on
+        a full queue either way (`queue.Queue()` here is unbounded, per
+        `_enqueue_connection`'s own docstring), but starting workers first
+        avoids an avoidable warm-up gap between "accepted" and "a worker is
+        available to notice."
 
         Each chain already replenishes itself one-for-one on every accept
         (`_accept_and_replenish`'s own docstring); the only change this row
@@ -644,9 +857,58 @@ class _ServerContext:
         them are counted in `InFlightCounter`, so a pool of unconnected
         listeners can never stall the drain wait.
         """
+        self._start_worker_pool()
         self._start_pending_listener_pool(first_handle)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
         self._stopped.wait()
+
+    def _start_worker_pool(self, *, pool_size: int = WORKER_POOL_SIZE) -> None:
+        """Start `pool_size` long-lived dispatch worker threads, each
+        running `_worker_loop` forever. Split out of `serve_forever` for
+        the same isolated-exercise reason `_start_pending_listener_pool`
+        is: a boot-time step that should be drivable in a test without also
+        blocking on `self._stopped.wait()`.
+        """
+        for _ in range(pool_size):
+            threading.Thread(target=self._worker_loop, daemon=True).start()
+
+    def _worker_loop(self) -> None:
+        """One bounded dispatch worker's whole life: block on the shared
+        queue, hand the next `io` off to `_handle_connection`, repeat.
+        `already_entered=True` because `_enqueue_connection` already
+        claimed this request's `in_flight` slot -- see that method's and
+        `_handle_connection`'s own docstrings for why a second `enter()`
+        here would double-count the slot. A wedged dispatch stalls only
+        this one worker thread (module docstring's TRANSPORT MODEL note);
+        the other `pool_size - 1` workers keep draining the queue.
+        """
+        while True:
+            io = self._queue.get()
+            _handle_connection(
+                io,
+                version_state=self.version_state,
+                server_sha=self.version_state.server_sha,
+                close_listener=self.close_listener,
+                drain=self._drain,
+                in_flight=self.in_flight,
+                dispatch=self._pool_dispatch,
+                record_invocation=self.record_invocation,
+                record_exit=self.record_exit,
+                already_entered=True,
+            )
+
+    def _enqueue_connection(self, io: Any) -> None:
+        """Claim this connection's `in_flight` slot and hand its `io` off
+        to the shared queue -- the accept-and-queue boundary's ENQUEUE
+        point the module docstring's DRAIN SEMANTICS names. Called from an
+        accept-chain thread (`_accept_and_replenish`), never from a worker
+        thread. `queue.Queue()` is unbounded here, so this never blocks the
+        accept chain -- acceptance stays bounded by
+        `PENDING_LISTENER_POOL_SIZE` alone, dispatch by `WORKER_POOL_SIZE`
+        alone, and neither bound can starve the other.
+        """
+        self.in_flight.enter()
+        self._queue.put(io)
 
     def _start_pending_listener_pool(
         self, first_handle: int, *, pool_size: int = PENDING_LISTENER_POOL_SIZE
@@ -678,8 +940,8 @@ class _ServerContext:
 
         Ordering is the whole point: posting the replacement first is what
         keeps a pending instance listening continuously rather than only
-        after a connection has already been wrapped and dispatched. A
-        fully-serial create -> connect -> handle -> repeat loop leaves a
+        after a connection has already been wrapped and enqueued. A
+        fully-serial create -> connect -> enqueue -> repeat loop leaves a
         real (if narrow -- CreateNamedPipe is a single syscall) window
         between one instance being claimed and the next being posted,
         during which a simultaneous client sees FileNotFoundError instead
@@ -688,7 +950,17 @@ class _ServerContext:
         is "THE ONLY SPAWN TRIGGER, then cold"), but narrowing it costs
         nothing here since replenishment is a single fast syscall dispatched
         to its own thread rather than serialized after this connection's
-        full read/dispatch/write lifecycle.
+        full enqueue step.
+
+        This thread's own job ends at enqueue (`_enqueue_connection`) --
+        dispatch happens on one of the `WORKER_POOL_SIZE` bounded worker
+        threads instead, per the accept-and-queue split the module
+        docstring's DRAIN SEMANTICS section names. Before this row, this
+        thread called `_handle_connection` directly, which is exactly the
+        "one handler thread per accepted connection, unbounded" shape AC7
+        forbids -- accepting fast under load meant spawning dispatch
+        threads without limit; `WORKER_POOL_SIZE`'s own constant docstring
+        has the full accounting.
         """
         try:
             _connect_pipe(handle)
@@ -712,16 +984,7 @@ class _ServerContext:
                 ).start()
 
         io = _wrap_handle(handle)
-        _handle_connection(
-            io,
-            version_state=self.version_state,
-            server_sha=self.version_state.server_sha,
-            close_listener=self.close_listener,
-            drain=self._drain,
-            in_flight=self.in_flight,
-            record_invocation=self.record_invocation,
-            record_exit=self.record_exit,
-        )
+        self._enqueue_connection(io)
 
 
 def _self_stable_pid_start_epoch() -> Optional[int]:

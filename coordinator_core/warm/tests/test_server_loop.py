@@ -739,3 +739,121 @@ def test_serve_line_with_no_carried_identity_falls_back_to_the_servers_own_env(m
 
     assert observed == [session_a]
     assert session_core.resolve_session_id() == session_a
+
+
+# ---------------------------------------------------------------------------
+# Accept-and-queue (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md
+# § C5, AC7/AC8): `_enqueue_connection` claims the in-flight slot at ENQUEUE,
+# then hands `io` to one `queue.Queue` a fixed `WORKER_POOL_SIZE` pool of
+# worker threads (`_worker_loop`) drains -- dispatch concurrency is bounded
+# independently of how fast connections are accepted, and a drain must wait
+# for accepted-but-not-yet-dispatched work, never merely for the workers
+# that happen to be busy right now.
+# ---------------------------------------------------------------------------
+
+
+def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs():
+    """`_enqueue_connection`'s own claim (module docstring's DRAIN
+    SEMANTICS): the in-flight slot is taken at enqueue time, before any
+    worker thread has even been started -- a request sitting in the queue
+    with nothing consuming it yet must still count as in-flight."""
+    ctx = server._ServerContext(name="pipe-enqueue", sid="sid-enqueue", version_state=_FakeVersionState())
+    assert ctx.in_flight() == 0
+    ctx._enqueue_connection("io-obj")
+    assert ctx.in_flight() == 1
+    assert ctx._queue.get_nowait() == "io-obj"
+
+
+def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
+    """The refutation criterion AC7 names directly: dispatch concurrency
+    must be capped at `WORKER_POOL_SIZE` (here a small test pool) rather
+    than growing one handler thread per accepted connection -- five
+    connections enqueued against a two-worker pool must never show more
+    than two running at once."""
+    running: list[str] = []
+    max_running = [0]
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def _fake_handle_connection(io, **kwargs):
+        with lock:
+            running.append(io)
+            max_running[0] = max(max_running[0], len(running))
+        release.wait(timeout=5)
+        with lock:
+            running.remove(io)
+
+    monkeypatch.setattr(server, "_handle_connection", _fake_handle_connection)
+
+    ctx = server._ServerContext(name="pipe-bound", sid="sid-bound", version_state=_FakeVersionState())
+    ctx._start_worker_pool(pool_size=2)
+
+    for i in range(5):
+        ctx._enqueue_connection(f"io-{i}")
+
+    deadline = time.monotonic() + 5
+    while len(running) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(running) == 2  # bounded at the pool size, not the 5 enqueued
+
+    release.set()  # let every held and future call through without blocking
+
+    deadline = time.monotonic() + 5
+    while not ctx._queue.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert max_running[0] == 2  # never exceeded the worker pool size
+
+
+def test_drain_waits_for_queued_but_not_yet_dispatched_work():
+    """AC8's own refutation criterion: a request queued behind a busy
+    worker must not be dropped at shutdown -- `drain_and_exit` must block
+    until the queued item is actually dispatched and released, not merely
+    until the currently-busy worker's own request finishes."""
+    started_first = threading.Event()
+    hold_first = threading.Event()
+    dispatched_second = threading.Event()
+
+    def _fake_handle_connection(io, *, in_flight, **kwargs):
+        if io == "first":
+            started_first.set()
+            hold_first.wait(timeout=5)
+        else:
+            dispatched_second.set()
+        in_flight.exit()
+
+    ctx = server._ServerContext(name="pipe-drain", sid="sid-drain", version_state=_FakeVersionState())
+    orig_handle_connection = server._handle_connection
+    server._handle_connection = _fake_handle_connection
+    try:
+        ctx._start_worker_pool(pool_size=1)
+
+        ctx._enqueue_connection("first")
+        assert started_first.wait(timeout=5)
+        ctx._enqueue_connection("second")
+
+        # Both are already counted in-flight -- "second" is queued, unstarted.
+        assert ctx.in_flight() == 2
+
+        exit_calls: list[int] = []
+        drain_thread = threading.Thread(
+            target=lambda: lifecycle.drain_and_exit(
+                in_flight_count=ctx.in_flight,
+                ctx_shutdown=lambda: None,
+                exit_fn=exit_calls.append,
+            )
+        )
+        drain_thread.start()
+
+        time.sleep(0.2)
+        assert exit_calls == []  # "second" is still queued -- must not have drained yet
+        assert not dispatched_second.is_set()
+
+        hold_first.set()
+        drain_thread.join(timeout=5)
+
+        assert dispatched_second.is_set()
+        assert exit_calls == [0]
+        assert ctx.in_flight() == 0
+    finally:
+        server._handle_connection = orig_handle_connection

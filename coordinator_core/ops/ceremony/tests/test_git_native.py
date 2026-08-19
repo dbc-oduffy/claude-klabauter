@@ -63,6 +63,8 @@ def _make_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
 #: Each call must reach subprocess.run exactly once with the Windows-safe flags.
 _WRAPPER_INVOCATIONS = [
     (git_native.status_porcelain, ("/tmp/repo",), {}),
+    (git_native.status_porcelain_scoped, ("/tmp/repo", ["sub"]), {}),
+    (git_native.patch_touched_paths, ("/tmp/patch.diff", "/tmp/repo"), {}),
     (git_native.diff_cached_name_status, ("/tmp/repo",), {}),
     (git_native.diff_cached_name_only, ("/tmp/repo",), {}),
     (git_native.diff_quiet, ("/tmp/repo",), {}),
@@ -113,7 +115,23 @@ _WRAPPER_INVOCATIONS = [
 #: `_git()` calls also carries the same Windows-safe flag set as the thin
 #: single-call wrappers above -- which is genuinely new coverage, not a
 #: restatement of the behavioural tests.
-_COMPOSITE_ENTRYPOINTS = {"commit_scoped", "commit_authored_content"}
+#: `stage_from_patch` / `stage_from_patch_cas_refusal` are the same shape of
+#: exclusion for the same reason (added 2026-08-19, closing a standing red in
+#: `test_all_public_wrappers_are_covered`): `stage_from_patch` issues a whole
+#: `apply --numstat` / `ls-files --cacheinfo` / `apply --cached` sequence of
+#: `_git()` calls internally, and `stage_from_patch_cas_refusal` composes a
+#: refusal envelope over `_head_blobs()` -- neither is the single-mocked-
+#: return-value shape the (a) harness expresses. Their behavioural coverage
+#: lives in `test_commit_pipeline.py` / `test_scoped_git_commit.py`; the AC3
+#: mechanical property this module exists to enforce is covered for them by
+#: `test_composite_entrypoints_never_call_subprocess_run_directly` below,
+#: which is genuinely new coverage rather than a blanket exemption.
+_COMPOSITE_ENTRYPOINTS = {
+    "commit_scoped",
+    "commit_authored_content",
+    "stage_from_patch",
+    "stage_from_patch_cas_refusal",
+}
 
 #: Public functions deliberately excluded from `_WRAPPER_INVOCATIONS` for a
 #: DIFFERENT reason than `_COMPOSITE_ENTRYPOINTS`: `directory_pathspecs()`
@@ -128,10 +146,19 @@ _COMPOSITE_ENTRYPOINTS = {"commit_scoped", "commit_authored_content"}
 #: `test_directory_pathspec_diagnostic_*`), not through this parametrized
 #: harness -- see `directory_pathspecs()`'s own docstring for what incident
 #: this predicate exists to close.
+#: `deferred_publisher_span` (added 2026-08-19, same standing-red closure as
+#: the `_COMPOSITE_ENTRYPOINTS` additions above) belongs here rather than
+#: there: it is a `@contextmanager` that sets and resets a ContextVar and
+#: issues NO `git` call of any kind, composite or otherwise, so both the (a)
+#: harness and the composite `subprocess.run`-absence check are inapplicable
+#: — the former would assert a call count of 1 against a function that never
+#: spawns. Its actual behaviour (including the nested-span reset contract) is
+#: covered by `test_sole_publisher_suppression.py`.
 _NON_SUBPROCESS_HELPERS = {
     "directory_pathspecs",
     "directory_pathspec_diagnostic",
     "parse_check_ignore_stdin_z",
+    "deferred_publisher_span",
 }
 
 #: `check_ignore()` is a thin single-`git`-call wrapper like everything in
@@ -262,6 +289,7 @@ def test_flags_present_on_every_wrapper(fn, args, kwargs):
 #: list.
 _NO_OPTIONAL_LOCKS_WRAPPERS = [
     (git_native.status_porcelain, ("/tmp/repo",), {}, "status"),
+    (git_native.status_porcelain_scoped, ("/tmp/repo", ["sub"]), {}, "status"),
 ]
 
 #: `diff_quiet` is the deliberate EXCLUSION, pinned here so a future
@@ -738,6 +766,33 @@ def test_parse_check_ignore_stdin_z_multiple_matches():
 # ---------------------------------------------------------------------------
 
 
+def test_composite_entrypoints_never_call_subprocess_run_directly():
+    """AC3 for every `_COMPOSITE_ENTRYPOINTS` member: a composite is exempt
+    from the (a) harness because it issues MANY `_git()` calls, not one — it
+    is NOT exempt from routing all of them through `_git()`.
+
+    The (a) harness enforces the Windows-safe flag set per call. `_git()` is
+    the single choke point that carries it (`CREATE_NO_WINDOW`, DEVNULL
+    stdin, `text=True`), so a composite that reached `subprocess.run`
+    directly would bypass that contract with nothing to catch it — the
+    exemption would have become a hole. Asserted over the SET rather than
+    per-named-function so a member added to `_COMPOSITE_ENTRYPOINTS` later
+    inherits the check instead of silently escaping it.
+
+    Source-level, not behavioural: a composite's real-git behaviour is
+    covered in `test_commit_scoped.py` / `test_commit_pipeline.py` /
+    `test_scoped_git_commit.py`. What no behavioural test can assert is the
+    ABSENCE of a direct spawn on a branch that test happened not to take.
+    """
+    for name in sorted(_COMPOSITE_ENTRYPOINTS):
+        source = inspect.getsource(getattr(git_native, name))
+        assert "subprocess.run" not in source, (
+            f"{name}() calls subprocess.run directly — every composite "
+            "entrypoint must route through git_native._git(), which is the "
+            "sole carrier of the Windows-safe flag set this module enforces."
+        )
+
+
 def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_wrapper(tmp_path):
     """`commit_authored_content()` never reaches `subprocess.run` directly --
     every step of its `rev-parse`/`ls-tree`/`hash-object`/`read-tree`/
@@ -1012,7 +1067,7 @@ def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resol
     msg_file = tmp_path / "msg.txt"
     msg_file.write_text("a commit message\n", encoding="utf-8")
 
-    def _fake_compute_missing_trailer_args(_msg_file, _root, paths=None):
+    def _fake_compute_missing_trailer_args(_msg_file, _root, paths=None, session_id_override=None):
         return ["--trailer", "Session-Id: session-resolved-session-id", "--trailer",
                 "Deliverable-Id: session-resolved-deliverable-id"]
 

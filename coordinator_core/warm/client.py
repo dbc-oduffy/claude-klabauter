@@ -126,6 +126,49 @@ Negative-spec:
       optional, earlier-available `response`.
 
 Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C15
+
+AC3/AC4 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
+    - The in-process path above (`try_warm_dispatch`) keeps its existing
+      module-level `election`/`is_warm_enabled` names UNCHANGED: both are
+      the pinned monkeypatch surface `warm/tests/test_client_fallback.py`
+      patches by attribute (`client.is_warm_enabled`, `client.election.
+      pipe_name`) on every test in that module, and caching or deferring
+      either import here would either silently defeat that per-test
+      monkeypatch (a cached result surviving across tests) or require
+      editing that test file, which sits outside this chunk's `writes:`
+      scope. The P2 cost these two calls carry on the in-process path is
+      therefore NOT eliminated here -- it is a follow-up that needs the
+      test file in scope alongside `client.py`.
+    - The fourth P2 cost -- `op_latency`'s two NDJSON disk appends inside
+      `ipc.dispatch_message` -- is likewise not edited here: that file is
+      outside this chunk's `writes:` scope (C4 owns it). Per staff-data-sci
+      review M6, `COORDINATOR_OP_LATENCY_DISABLE=1` is a ready-made CONTROL
+      for that cost's own measurement (`op_latency._write_entry` checks it
+      first and cheaply, hard-disabling both row kinds) -- named here as
+      the control an AC4 measurement should use, not a fix landed in this
+      file, and not itself usable to measure the instrument it disables.
+    - The `_cli_*`/`_cli_main` section at the bottom of this file is the
+      separate, stdlib-only, `-S -E`-runnable CLI artifact AC3 asks for.
+      It is a pure ADDITION -- nothing above it calls into it and it calls
+      nothing above it -- so it carries none of the in-process path's P2
+      costs (no `election`/`settings` import at all, cached or not) without
+      touching that path's pinned shape. See that section's own docstring
+      for why it duplicates rather than imports `election`/`settings`/
+      `skew`.
+    - The `election`/`is_warm_enabled` import below is guarded on
+      `__name__ != "__main__"` rather than moved inside a function: run as
+      `import coordinator_core.warm.client` (every existing caller and
+      test), `__name__` is the dotted module path, so this executes exactly
+      as before -- unconditionally, at import time -- and every attribute
+      `warm/tests/test_client_fallback.py` monkeypatches
+      (`client.is_warm_enabled`, `client.election.pipe_name`) still exists
+      to patch. Run DIRECTLY as a script (`python -S -E client.py ...`),
+      `__name__` is `"__main__"`, so this import is SKIPPED -- which is the
+      only way `-S -E` (no site, no `coordinator_core` on `sys.path`) can
+      reach the `if __name__ == "__main__":` block at the bottom of this
+      file at all: an unconditional `import coordinator_core....` here
+      would raise `ModuleNotFoundError` under `-S -E` before that block
+      ever ran.
 """
 
 from __future__ import annotations
@@ -137,8 +180,9 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.warm import election
-from coordinator_core.warm.settings import is_warm_enabled
+if __name__ != "__main__":
+    from coordinator_core.warm import election
+    from coordinator_core.warm.settings import is_warm_enabled
 
 __all__ = [
     "ERROR_PIPE_BUSY",
@@ -483,8 +527,15 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     if not is_warm_enabled():
         return None
 
-    pipe = election.pipe_name(engine_token())
-    request = {**msg, "_engine_token": engine_token()}
+    # P2 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
+    # `engine_token()` was called TWICE per dispatch -- once to build the
+    # pipe name, once to stamp the request -- paying `skew.compute_client_token()`
+    # (two file stats) a second time for a value that cannot have changed
+    # between the two call sites within one preamble invocation. Computed
+    # once and reused below.
+    token = engine_token()
+    pipe = election.pipe_name(token)
+    request = {**msg, "_engine_token": token}
     caller_sid = _caller_session_id()
     if caller_sid:
         request["_session_id"] = caller_sid
@@ -634,3 +685,219 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
         return response
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# AC3: a stdlib-only, `-S -E`-runnable CLI fast path.
+#
+# Everything above this line is `try_warm_dispatch` -- the in-process API
+# `invoke/__main__.py` and `scripts/setup.py` call today, imported as
+# `coordinator_core.warm.client`. That import path pays whatever
+# `sys.path`/`site` machinery got this process to `coordinator_core` in the
+# first place; it is not itself `-S -E`-runnable, because `-S -E` skips site
+# initialization and this file's own directory is not the repo root, so
+# `import coordinator_core...` cannot resolve under those flags.
+#
+# `_cli_main` below is the OTHER shape AC3 asks for: this file run DIRECTLY
+# (`python -S -E coordinator_core/warm/client.py '<json-request>'`), never
+# `import`ed as part of `coordinator_core`. Executing a `.py` file as a
+# script does not import its parent packages -- only an explicit
+# `import coordinator_core....` statement would, and this section is
+# deliberately written to never issue one. Every name `_cli_main` needs
+# (pipe name, warm-enabled check, engine token) is a small, INLINED
+# duplicate of the equivalent logic in `election.py` / `settings.py` /
+# `skew.py`, not a call into them -- that duplication is the point: it is
+# what makes `python -S -E client.py` avoid `coordinator_core`'s own
+# `__init__.py` chain (and, transitively, `machine_resolver`'s
+# `_settings_home` import) entirely, at the cost of tracking those three
+# modules by hand if their logic changes.
+#
+# NEGATIVE SPEC -- this fast path only honors the `COORDINATOR_WARM` env-var
+# rung of `settings.is_warm_enabled`'s three-rung precedence (module
+# docstring, rung 1), not the `engine.warm.enabled` machine-local TOML
+# registry rung (rung 2): reading that registry without importing
+# `coordinator_core.machine_resolver` would mean re-deriving
+# `registry_dir()`'s settings-home resolution ladder by hand, in a form that
+# silently drifts from the real one the next time that ladder changes. A
+# machine that opted into warmth ONLY via the registry key (no
+# `COORDINATOR_WARM` env var set) is UNROUTED by this fast path and falls to
+# `False` -- i.e. this path degrades to "warmth disabled", never to a wrong
+# answer, matching `is_warm_enabled()`'s own unset-default. Not general
+# routing (that is C4's job for the fired path); this is the CLI-scoped
+# artifact AC3 asks for.
+#
+# Never called from `try_warm_dispatch` or `_try_warm_dispatch_inner` above,
+# and nothing above this line calls into it -- the two paths are siblings,
+# not layers.
+# ---------------------------------------------------------------------------
+
+CLI_TRUTHY = frozenset({"1", "true", "yes", "on"})
+CLI_FALSY = frozenset({"0", "false", "no", "off"})
+
+
+def _cli_is_warm_enabled() -> bool:
+    """`COORDINATOR_WARM`-only re-derivation of `settings.is_warm_enabled`'s
+    rung 1 -- see this section's own negative-spec above for why rung 2 (the
+    TOML registry) is deliberately not consulted here."""
+    import os
+
+    value = os.environ.get("COORDINATOR_WARM", "").strip().lower()
+    return value in CLI_TRUTHY
+
+
+def _cli_user_sid() -> str:
+    """Re-derivation of `election.current_user_sid()`, stdlib `ctypes` only
+    -- see `election.py` for the annotated original this mirrors."""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    token_query = 0x0008
+    token_user = 1
+
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.GetCurrentProcess.argtypes = []
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    htoken = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(
+        kernel32.GetCurrentProcess(), token_query, ctypes.byref(htoken)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        size = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(htoken, token_user, None, 0, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetTokenInformation(
+            htoken, token_user, buf, size.value, ctypes.byref(size)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sid_ptr = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]
+        str_sid = wintypes.LPWSTR()
+        if not advapi32.ConvertSidToStringSidW(sid_ptr, ctypes.byref(str_sid)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return str_sid.value
+        finally:
+            kernel32.LocalFree(str_sid)
+    finally:
+        kernel32.CloseHandle(htoken)
+
+
+def _cli_engine_token(repo_root) -> str:
+    """Re-derivation of `skew.compute_client_token`'s LIVE-WORKING-TREE
+    branch only (stat pair of `.git/HEAD` and the ref it names) -- the
+    PUBLISHED-tree `_engine_stamp` branch is not duplicated here because
+    reading it needs no more than a `read_bytes()`, so this fast path reads
+    it the same way `skew.py` does, inline, rather than skip it."""
+    import hashlib
+
+    root = Path(repo_root)
+    stamp = root / "coordinator_core" / "_engine_stamp"
+    try:
+        stamp_bytes = stamp.read_bytes()
+    except OSError:
+        stamp_bytes = None
+    if stamp_bytes is not None:
+        return hashlib.sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
+
+    git_dir = root / ".git"
+
+    def _stat_pair(p: Path):
+        try:
+            st = p.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return (0, 0)
+
+    head = git_dir / "HEAD"
+    ref_path = None
+    try:
+        content = head.read_text(encoding="utf-8").strip()
+        if content.startswith("ref:"):
+            ref_path = git_dir / content[len("ref:"):].strip()
+    except OSError:
+        pass
+    signal = (_stat_pair(head), _stat_pair(ref_path) if ref_path is not None else (0, 0))
+    return hashlib.sha1(repr(signal).encode("utf-8")).hexdigest()[:16]
+
+
+def _cli_pipe_name(repo_root) -> str:
+    """Re-derivation of `election.pipe_name` -- see that function's own
+    docstring for the pipe-name shape this reproduces."""
+    import hashlib
+
+    clone_hash = hashlib.sha1(str(Path(repo_root).resolve()).encode("utf-8")).hexdigest()[:16]
+    sid = _cli_user_sid()
+    token = _cli_engine_token(repo_root)
+    return f"\\\\.\\pipe\\coordinator-core.{sid}.{clone_hash}.{token}"
+
+
+def _cli_main(argv) -> int:
+    """Entry point when this file is run directly (`python -S -E
+    coordinator_core/warm/client.py '<json-request>'`). Reads the JSON-RPC
+    request from argv[0] (or stdin if argv is empty), attempts ONE pipe
+    round trip with no retry and no server-spawn (this fast path never
+    spawns -- see the module docstring's anti-storm table; a
+    `FileNotFoundError` here is simply "no warm server", printed as `null`),
+    and prints the response (or `null` on any non-response outcome) as
+    compact JSON to stdout. Never raises: any unanticipated exception is
+    caught, `null` is printed, and 0 is still returned -- this fast path
+    exists to be cheap, not to replace `try_warm_dispatch`'s full anti-storm
+    and fail-open discipline, which stays the in-process API's job."""
+    try:
+        raw = argv[0] if argv else sys.stdin.buffer.read().decode("utf-8")
+        msg = json.loads(raw)
+
+        if not _cli_is_warm_enabled():
+            print("null")
+            return 0
+
+        repo_root = Path(__file__).resolve().parents[2]
+        pipe = _cli_pipe_name(repo_root)
+        payload = json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
+
+        try:
+            fh = open(pipe, "r+b")
+        except OSError:
+            print("null")
+            return 0
+        try:
+            fh.write(payload)
+            fh.flush()
+            line = fh.readline()
+        finally:
+            try:
+                fh.close()
+            except OSError:
+                pass
+
+        if not line or not line.strip():
+            print("null")
+            return 0
+        try:
+            response = json.loads(line)
+        except json.JSONDecodeError:
+            print("null")
+            return 0
+        print(json.dumps(response, ensure_ascii=False))
+        return 0
+    except Exception:  # noqa: BLE001 -- never fail the caller, see docstring
+        print("null")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main(sys.argv[1:]))
