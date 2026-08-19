@@ -2799,7 +2799,7 @@ class TestHolderEvidence:
             },
         )
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         evidence = holder_evidence("s-live", repo, want_activity=False)
 
@@ -2826,7 +2826,7 @@ class TestHolderEvidence:
         monkeypatch.delenv("HOME", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         evidence = holder_evidence("s-recency", repo, want_activity=True)
 
@@ -2865,7 +2865,7 @@ class TestHolderEvidence:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         evidence = holder_evidence("peer-sid", repo, want_activity=True)
         # read_meta_field degrades corrupt JSON to "" per its own contract —
@@ -2899,7 +2899,7 @@ class TestHolderEvidence:
         _write_holder_meta(repo, "s-no-transcript", {"pid": "1", "last_activity": pa._session_core.now_iso()})
         monkeypatch.setenv("HOME", str(tmp_path / "fake-home-no-transcript"))
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         evidence = holder_evidence(
             "s-no-transcript", repo, scope=["state/handoffs/touched.md"], want_activity=True
@@ -2923,7 +2923,7 @@ class TestHolderEvidence:
         _write_holder_meta(repo, "s-scoped", {"pid": "1", "last_activity": pa._session_core.now_iso()})
         _write_touched(repo, "s-scoped", [_touch_line("T", "state/handoffs/touched.md")])
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         evidence = holder_evidence(
             "s-scoped", repo, scope=["state/handoffs/touched.md"], want_activity=True
@@ -2951,7 +2951,7 @@ class TestHolderEvidence:
         _init_repo(repo)
         _write_holder_meta(repo, "s-any", {"pid": "1", "last_activity": pa._session_core.now_iso()})
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         unresolvable = holder_evidence("s-any", repo, scope=None, want_activity=True)
         assert unresolvable["scope_overlap"] is None
@@ -2987,7 +2987,7 @@ class TestHolderEvidence:
         _write_holder_meta(repo, "peer-sid", {"pid": "1", "last_activity": pa._session_core.now_iso()})
         _write_touched(repo, "peer-sid", [_touch_line("T", "state/handoffs/touched.md")])
 
-        from coordinator_core.pickup_assemble import holder_evidence as he_mod
+        from coordinator_core.session import holder_evidence as he_mod
 
         monkeypatch.setattr(
             he_mod.claim_neighbours.liveness, "session_live",
@@ -3017,7 +3017,7 @@ class TestHolderEvidence:
         )
         _write_holder_meta(repo, "peer-sid", {"pid": "1", "last_activity": pa._session_core.now_iso()})
 
-        from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
+        from coordinator_core.session.holder_evidence import holder_evidence
 
         evidence = holder_evidence(
             "peer-sid", repo, artifact_path=str(handoff_path), want_activity=True
