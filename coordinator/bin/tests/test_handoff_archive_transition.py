@@ -559,19 +559,21 @@ class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
 
 
 class RoadmapBatonGateOrderingTest(unittest.TestCase):
-    """Pins the intentional gate ORDER inside the `if mode == "supersede":`
-    block when a target is simultaneously `kind: roadmap-baton` AND
-    `deployment_state: closed`: the roadmap-baton `blocked_by` gate (module
-    docstring § roadmap-baton blocked_by gate) runs BEFORE the closed-baton
-    gate (§ closed-baton-is-terminal gate) and wins unconditionally, per
-    DR-126 — the roadmap-baton refusal fires on `kind` alone, with no
-    dependents condition, so it is unconditional relative to
-    `deployment_state` and the closed-baton gate never gets evaluated for
-    this target. Until now this ordering was intent-only (asserted in prose
-    in both gates' comments, never in a test); this pins it so a future
-    reorder of the two gates is caught, not silently accepted — same defect
-    class (unstated precedence between two gates) closed repeatedly in
-    `baton_assemble` this session."""
+    """RETIRED-GATE RE-POINT (DR-172, 2026-08-18, plan
+    a-session-always-has-a-baton chunk C10): this class used to pin the
+    intentional gate ORDER inside the `if mode == "supersede":` block for a
+    target simultaneously `kind: roadmap-baton` AND `deployment_state:
+    closed` — the roadmap-baton `blocked_by` gate ran BEFORE the
+    closed-baton gate and won unconditionally, per the now-retired DR-126 §
+    Clarifications C-1. That gate is gone: `reconcile/gate_eval.py` resolves
+    `blocked_by` by `stub_id`, never file path, so the refusal's own
+    rationale did not hold. For this same fixture (kind: roadmap-baton AND
+    deployment_state: closed), the closed-baton-is-terminal gate is now the
+    ONLY refusal in play — kept as a class name (not deleted, per this
+    chunk's own re-point-don't-delete instruction) with its assertions
+    flipped from "the roadmap-baton gate's message" to "the closed-baton
+    gate's message", the same fixture proving there is exactly one gate
+    left to fire, not zero."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -596,7 +598,7 @@ class RoadmapBatonGateOrderingTest(unittest.TestCase):
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_roadmap_baton_gate_wins_over_closed_baton_gate(self):
+    def test_closed_baton_gate_fires_now_the_roadmap_baton_gate_is_retired(self):
         from coordinator_core.ops.handoff_archive_transition import _handler
 
         before = self.handoff_path.read_text(encoding="utf-8")
@@ -615,9 +617,10 @@ class RoadmapBatonGateOrderingTest(unittest.TestCase):
         self.assertIs(result.get("superseded"), False)
         self.assertEqual(result.get("exit_code"), 1)
         error = result.get("error") or ""
-        # The roadmap-baton gate's message, not the closed-baton gate's.
-        self.assertIn("roadmap-baton", error)
-        self.assertNotIn("closed_reason", error)
+        # The closed-baton gate's message -- the only gate left for this
+        # fixture now the kind-first roadmap-baton refusal is retired.
+        self.assertIn("closed", error)
+        self.assertIn("displaced", error)
         after = self.handoff_path.read_text(encoding="utf-8")
         self.assertEqual(before, after)
 

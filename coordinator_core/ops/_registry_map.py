@@ -307,6 +307,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "diagnostics.always_refuses":             "coordinator_core.ops.diagnostics_probes",
     "diagnostics.always_structural_pin":      "coordinator_core.ops.diagnostics_probes",
     "ceremony.chunk_commits":                 "coordinator_core.ops.ceremony.chunk_commits",
+    "session.commits":                        "coordinator_core.ops.session_commits",
     "gate.validate_invocable":                 "coordinator_core.ops.gate_validate_invocable",
     "install.detect_cmd_autorun_coverage":    "coordinator_core.ops.cmd_autorun_guard",
     "install.write_cmd_autorun_guard":        "coordinator_core.ops.cmd_autorun_guard",

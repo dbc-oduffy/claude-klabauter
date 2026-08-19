@@ -445,56 +445,79 @@ def main() -> None:
     if args.op in WORKTREE_SCOPED_OPS:
         msg["_origin_worktree"] = str(repo_root)
 
+    # 6a. Warm preamble (C15) — try the warm engine's pipe before paying a
+    #     cold spawn-per-call. NO CLIENT EVER WAITS FOR A SERVER TO BOOT:
+    #     `try_warm_dispatch` returns a JSON-RPC response only when a live
+    #     warm server actually served this request (any well-formed
+    #     response, including an error envelope, counts — see
+    #     coordinator_core.warm.client's module docstring for the full
+    #     anti-storm table); it returns None for every other outcome
+    #     (warmth disabled, no pipe, busy, someone else's pipe, a stale
+    #     ENGINE_SKEW server, or read-deadline expiry), including on the
+    #     FileNotFoundError path where it best-effort spawns a warm server
+    #     for NEXT time and still returns None for THIS call. Never raises
+    #     — Backstop 2, "the cold path is a SUCCESS path". Everything below
+    #     this point is the pre-existing cold dispatch path, unchanged: it
+    #     only runs when `response` is not already set here.
+    from coordinator_core.warm.client import try_warm_dispatch
+
+    response = try_warm_dispatch(msg)
+
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
     #    path (P1#5): asyncio.run() calls loop.shutdown_default_executor() which joins
     #    any live threads — a handler that asyncio.to_thread'd and then timed out leaves
     #    a live executor thread that would cause asyncio.run() to block indefinitely.
     #    os._exit() below terminates the process before that join happens.
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    # Stdout is the JSON-RPC transport this process's caller (cc_invoke and
-    # every coordinator/bin/ CLI built on it) parses: exactly one JSON value,
-    # written after dispatch completes (step 8 below). redirect_stdout rebinds
-    # the sys.stdout name for the duration of the block, so it captures every
-    # Python-level write that resolves sys.stdout during dispatch — print(),
-    # sys.stdout.write(...), anything else looking the name up inside the
-    # block — e.g. a CLI-shaped helper called in-process, such as
-    # close_out_and_stamp._stamp_plan_landed's status line. Without this,
-    # such a write would interleave onto the transport stream and corrupt it
-    # for every caller, not just the offending op. Handler-level stdout is
-    # captured here and relayed to stderr (never discarded — it is a genuine
-    # diagnostic, just on the wrong stream) so the transport cannot be
-    # corrupted by a stray write in handler code the dispatch loop does not
-    # control.
     #
-    # Negative-spec — two known bypass classes, neither observed at a live
-    # call site today:
-    #   - fd-level: a handler that writes via a raw OS file descriptor
-    #     (os.write(1, ...)) or spawns a subprocess inheriting fd 1 bypasses
-    #     this capture entirely — this is not an fd-level fix.
-    #   - pre-bound reference: a handler holding a reference to the original
-    #     stdout object captured before this redirect was entered (e.g. a
-    #     module-level `_stdout = sys.stdout` bound at import time) writes to
-    #     the real stream — redirect_stdout only rebinds the *name*
-    #     `sys.stdout`, not references already taken from it.
-    _handler_stdout = io.StringIO()
-    with contextlib.redirect_stdout(_handler_stdout):
-        response = loop.run_until_complete(dispatch_message(msg))
-    # Deliberately DO NOT call loop.close() / shutdown_default_executor() here:
-    # a handler that internally asyncio.to_thread'd and then timed out leaves a
-    # live executor thread the graceful drain would block on (P1#5). os._exit below
-    # terminates the process without that join.
-    _captured = _handler_stdout.getvalue()
-    if _captured:
-        # Best-effort: the envelope below is the thing that must survive.
-        # A raised BrokenPipeError from a caller that closed stderr early
-        # must not prevent print(output) from running.
-        try:
-            sys.stderr.write(_captured)
-            sys.stderr.flush()
-        except OSError:
-            pass
+    #    Gated on `response is None` (C15): the warm preamble above already
+    #    supplied a served response, so this whole cold-dispatch block —
+    #    unchanged from before C15 — is skipped entirely on a warm hit.
+    if response is None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        # Stdout is the JSON-RPC transport this process's caller (cc_invoke and
+        # every coordinator/bin/ CLI built on it) parses: exactly one JSON value,
+        # written after dispatch completes (step 8 below). redirect_stdout rebinds
+        # the sys.stdout name for the duration of the block, so it captures every
+        # Python-level write that resolves sys.stdout during dispatch — print(),
+        # sys.stdout.write(...), anything else looking the name up inside the
+        # block — e.g. a CLI-shaped helper called in-process, such as
+        # close_out_and_stamp._stamp_plan_landed's status line. Without this,
+        # such a write would interleave onto the transport stream and corrupt it
+        # for every caller, not just the offending op. Handler-level stdout is
+        # captured here and relayed to stderr (never discarded — it is a genuine
+        # diagnostic, just on the wrong stream) so the transport cannot be
+        # corrupted by a stray write in handler code the dispatch loop does not
+        # control.
+        #
+        # Negative-spec — two known bypass classes, neither observed at a live
+        # call site today:
+        #   - fd-level: a handler that writes via a raw OS file descriptor
+        #     (os.write(1, ...)) or spawns a subprocess inheriting fd 1 bypasses
+        #     this capture entirely — this is not an fd-level fix.
+        #   - pre-bound reference: a handler holding a reference to the original
+        #     stdout object captured before this redirect was entered (e.g. a
+        #     module-level `_stdout = sys.stdout` bound at import time) writes to
+        #     the real stream — redirect_stdout only rebinds the *name*
+        #     `sys.stdout`, not references already taken from it.
+        _handler_stdout = io.StringIO()
+        with contextlib.redirect_stdout(_handler_stdout):
+            response = loop.run_until_complete(dispatch_message(msg))
+        # Deliberately DO NOT call loop.close() / shutdown_default_executor() here:
+        # a handler that internally asyncio.to_thread'd and then timed out leaves a
+        # live executor thread the graceful drain would block on (P1#5). os._exit below
+        # terminates the process without that join.
+        _captured = _handler_stdout.getvalue()
+        if _captured:
+            # Best-effort: the envelope below is the thing that must survive.
+            # A raised BrokenPipeError from a caller that closed stderr early
+            # must not prevent print(output) from running.
+            try:
+                sys.stderr.write(_captured)
+                sys.stderr.flush()
+            except OSError:
+                pass
 
     # 8. Print result as indented JSON to stdout.
     #    Review: code-reviewer (nit) — an unguarded json.dumps that raises TypeError/ValueError
