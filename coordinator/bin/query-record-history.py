@@ -94,11 +94,9 @@ def _supported_types_hint() -> str:
     message still stands on its own without this hint.
     """
     try:
-        from cc_invoke import _resolve_claude_klabauter_root
+        from cc_invoke import require_dispatch_engine_on_path
 
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        require_dispatch_engine_on_path()
         from coordinator_core.ops.record_history import supported_record_types
 
         return ", ".join(sorted(supported_record_types()))
@@ -185,7 +183,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = cc_invoke.route("records.history", params, repo_root, _no_legacy)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: any failure -> diagnostic + exit 2
-        print(f"query-record-history: records.history invocation failed: {exc}", file=sys.stderr)
+        msg = f"query-record-history: records.history invocation failed: {exc}"
+        # The op raises UnsupportedRecordTypeError across the seam as a bare
+        # -32603, so the supported set the exception itself carries never
+        # reaches stderr. Re-derive it here rather than let an unknown --type
+        # read as a transport failure.
+        hint = _supported_types_hint()
+        if hint and args.type_ not in hint.split(", "):
+            msg += f"\nquery-record-history: --type {args.type_!r} is not a supported type; supported: {hint}"
+        print(msg, file=sys.stderr)
         return 2
 
     records = result.get("records", []) if isinstance(result, dict) else []

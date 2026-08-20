@@ -335,4 +335,11 @@ OP_MODULE_MAP: Dict[str, str] = {
     "session.warm_start":                     "coordinator_core.ops.session.warm_start",
     "session_baton.mint":                     "coordinator_core.ops.session_baton_mint",
     "session_baton.promote":                  "coordinator_core.ops.session_baton_promote",
+    # eol.* — declared-vs-actual line-ending drift census/audit/repair, each op
+    # its own owning module (census.py, audit_producers.py, repair.py) under
+    # the coordinator_core.ops.eol package.
+    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C5
+    "eol.census":                              "coordinator_core.ops.eol.census",
+    "eol.audit_producers":                     "coordinator_core.ops.eol.audit_producers",
+    "eol.repair":                              "coordinator_core.ops.eol.repair",
 }

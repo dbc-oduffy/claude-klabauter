@@ -222,8 +222,14 @@ def untracked_record_paths(
 # matter for a type, not for the extractor itself.
 #
 # Measured on this corpus 2026-08-20 (pairing `-`/`+` within a commit,
-# comment-stripped, wipe commits excluded, per C1b): `sizing-object` shows
-# 315 real transitions; `decision` shows 14 — `proposed->accepted` x9,
+# comment-stripped, wipe commits excluded, per C1b), ACROSS ALL HISTORY:
+# `sizing-object` shows 319 real transitions and `decision` shows 14. This
+# surface reports the CURRENT-RECORDS-ONLY subset, so the sizing figure it
+# returns is ~202, not ~319 -- 114 belong to paths archived out of
+# `state/sizings/`. Two scopes, two numbers, both correct; see the
+# CURRENT-RECORDS-ONLY SCOPE note in the module docstring. `decision` is 14
+# under both scopes. Earlier drafts cited 315 for the all-history sizing
+# count with no scope qualifier; 319 is the re-measured value — `proposed->accepted` x9,
 # `accepted->superseded` x3, `superseded->accepted` x1, `draft->proposed` x1.
 # The asymmetry is a volume fact (14 vs 315), not a presence fact — a
 # type-policy branch that suppressed `decision` `status` transitions would
@@ -298,7 +304,17 @@ def _iter_commit_blocks(raw: str):
         try:
             sha, author, committed_at = header.split(_FIELD_SEP)
         except ValueError:
-            continue
+            # A header that does not split into exactly three fields means the
+            # frame is not what we think it is (an author name carrying the
+            # separator byte, a corrupted object). Dropping it silently would let
+            # a record whose whole history was excluded report `events: []` --
+            # indistinguishable from a record that genuinely never changed. A
+            # wrong-but-plausible history is worse than a loud failure.
+            raise ValueError(
+                'record_history: unparseable commit header in the git log frame '
+                f'({header[:120]!r}) -- refusing to silently drop the commit, '
+                'because a dropped commit is indistinguishable from a quiet record'
+            )
         yield sha, author, committed_at, diff_text
 
 
@@ -325,10 +341,16 @@ def _normalize_field_value(raw_value: str) -> str:
     normalizes to ``sized`` so a comment-only edit compares equal to its
     prior value and is dropped as a non-transition by the caller.
     """
-    value = raw_value.split("#", 1)[0].strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    return value.strip()
+    stripped = raw_value.strip()
+    quote = stripped[0] if stripped[:1] in ("'", '"') else None
+    if quote:
+        # Quoted: the comment can only start after the CLOSING quote, so a '#'
+        # inside the quotes is data. Splitting on '#' first would truncate
+        # `status: "url#fragment"` to `"url` and call it a value change.
+        end = stripped.find(quote, 1)
+        if end != -1:
+            return stripped[1:end]
+    return stripped.split("#", 1)[0].strip()
 
 
 def _maybe_capture_field(content: str, line_no: int | None, out: dict[str, str]) -> None:
@@ -435,6 +457,10 @@ def derive_type_history(worktree_root: Path, record_type: str) -> list[dict]:
     # C1c's table is field SELECTION, not a gate on whether a type emits
     # transitions at all -- the extractor above stays uniform for every
     # type, and a type with no policy entry keeps every field it finds.
+    # Membership, never truthiness: an absent entry means "keep every field",
+    # while an entry mapping to () would mean "track none" -- an empty tuple is
+    # falsy, so a truthiness test silently turns the second into the first.
+    has_policy = record_type in _FIELD_POLICY
     tracked = frozenset(fields_of_interest(record_type))
     raw = _run_git_log_pass(worktree_root, pathspec)
 
@@ -473,7 +499,7 @@ def derive_type_history(worktree_root: Path, record_type: str) -> list[dict]:
         if info["is_deleted"]:
             continue
         changes = _pair_field_transitions(info["removed"], info["added"])
-        if tracked:
+        if has_policy:
             changes = {f: c for f, c in changes.items() if f in tracked}
         if changes:
             group["events"].append({
@@ -588,19 +614,31 @@ def derive_across_roots(roots: list[Path], record_type: str) -> dict:
     were skipped (AC10's "never presented as a 31-repo fleet claim").
 
     Returns ``{"record_type", "queried_root_count", "roots_walked",
-    "roots_skipped", "repos"}`` where ``repos`` maps each walked root's
-    POSIX path to that root's `derive_type_history` result, and
-    ``roots_skipped`` is a list of ``{"root", "reason"}``.
+    "roots_skipped", "roots_failed", "repos"}`` where ``repos`` maps each
+    walked root's POSIX path to that root's `derive_type_history` result, and
+    ``roots_skipped``/``roots_failed`` are lists of ``{"root", "reason"}``.
+
+    A root whose git pass RAISES is recorded in ``roots_failed`` and does not
+    abort the pass: losing every already-walked root to one bad sibling would
+    make a multi-root answer all-or-nothing. ``roots_failed`` is deliberately
+    distinct from ``roots_skipped`` -- skipped means "not a worktree, never
+    walked", failed means "walked and errored", and collapsing them would
+    reintroduce the over-report AC10 exists to prevent.
     """
     walked: list[str] = []
     skipped: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
     repos: dict[str, list[dict]] = {}
     for candidate in roots:
         root = Path(candidate)
         if not _is_git_worktree(root):
             skipped.append({"root": root.as_posix(), "reason": "not a git worktree"})
             continue
-        repos[root.as_posix()] = derive_type_history(root, record_type)
+        try:
+            repos[root.as_posix()] = derive_type_history(root, record_type)
+        except Exception as exc:  # noqa: BLE001 -- one root's failure is not the pass's
+            failed.append({"root": root.as_posix(), "reason": f"{type(exc).__name__}: {exc}"})
+            continue
         walked.append(root.as_posix())
 
     return {
@@ -608,6 +646,7 @@ def derive_across_roots(roots: list[Path], record_type: str) -> dict:
         "queried_root_count": len(walked),
         "roots_walked": walked,
         "roots_skipped": skipped,
+        "roots_failed": failed,
         "repos": repos,
     }
 
@@ -626,9 +665,33 @@ def _records_history(params: dict, repo_root: Path | None = None) -> dict:
             "records.history requires 'record_type'; supported: "
             + ", ".join(sorted(supported_record_types()))
         )
-    root = Path(params.get("root") or repo_root or Path.cwd())
+    # No Path.cwd() fallback: warm-served handlers run in a shared server
+    # process, so cwd is the SERVER's, not the caller's worktree -- a missing
+    # root would silently derive against the wrong repo and return a
+    # plausible answer. Fail loudly instead.
+    root_arg = params.get("root") or repo_root
+    if not root_arg:
+        raise ValueError(
+            "records.history requires an explicit 'root' (or a dispatched repo_root); "
+            "refusing to fall back to the process cwd, which under a warm engine is "
+            "the server's directory rather than the caller's worktree"
+        )
+    root = Path(root_arg)
+    records = derive(record_type=record_type, worktree_root=root)
+    # AC5b needs both halves: what is on disk now, and what the git pass
+    # actually reported history for. A record in the first and not the second
+    # is untracked, not quiet.
+    on_disk = resolve_record_files(root, record_type)
+    with_history = frozenset(
+        r["path"] for r in records if r.get("created_at") is not None
+    )
+    untracked = sorted(untracked_record_paths(on_disk, with_history))
     return {
         "record_type": record_type,
         "root": root.as_posix(),
-        "records": derive(record_type=record_type, worktree_root=root),
+        "records": records,
+        # AC5b: a record present on disk but untracked has NO history, which is
+        # not the same fact as a tracked record that never changed. Both would
+        # otherwise read as `events: []`; this names the first explicitly.
+        "untracked": untracked,
     }

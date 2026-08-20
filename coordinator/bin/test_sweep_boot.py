@@ -31,11 +31,9 @@ _LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import RouteMutationError, _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import RouteMutationError, require_dispatch_engine_on_path  # noqa: E402
 
-_CLAUDE_KLABAUTER_ROOT = _resolve_claude_klabauter_root()
-if _CLAUDE_KLABAUTER_ROOT not in sys.path:
-    sys.path.insert(0, _CLAUDE_KLABAUTER_ROOT)
+_CLAUDE_KLABAUTER_ROOT = require_dispatch_engine_on_path()
 
 from coordinator_core.ops.ceremony.detached_spawn import housekeeping_failures_log_path  # noqa: E402
 from coordinator_core.ops.ceremony.housekeeping_liveness import (  # noqa: E402

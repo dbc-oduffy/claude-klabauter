@@ -71,7 +71,7 @@ import json
 import time
 from pathlib import Path
 
-from coordinator_core.locked_write import locked_rmw
+from coordinator_core.locked_write import MutateAbort, locked_rmw
 
 # NOTE: `coordinator_core.ops.emit._slug.machine_slug` is NOT imported at
 # module scope. `coordinator_core.ops.emit` is a submodule of
@@ -635,64 +635,78 @@ def rotate_month(*, repo_root: Path, month: str, machine: str | None = None) -> 
 
     Locks the live shard through the same ``locked_rmw`` target
     ``append_event`` uses, so rotation never races a concurrent append.
+
+    Negative-spec — the candidate scan MUST read the same locked snapshot
+    the trim decides from. Scanning outside the lock and trimming by month
+    inside it loses any event a concurrent writer appends for *month*
+    between the two reads: absent from the scan, so never copied to the
+    rotated file, yet matched by the trim, so removed from the live shard.
+    It survives in neither place, and an append-only truth store has
+    nothing to revert to (DR-241 bound (iii)). Both the copy source and the
+    trim therefore run inside ``_rotate``, on the one ``old_text``
+    ``locked_rmw`` hands it under the lock.
     """
     slug = machine if machine is not None else machine_slug()
     live = shard_path(repo_root, machine=slug)
     if not live.exists():
         return 0
 
-    candidates = [
-        line
-        for line in _split_lines(live.read_text(encoding="utf-8"))
-        if _event_month(line) == month
-    ]
-    if not candidates:
-        return 0
-
     rotated_dir = repo_root / EVENTS_DIR_RELPATH / month
-    rotated_dir.mkdir(parents=True, exist_ok=True)
     rotated_path = rotated_dir / f"events.{slug}.jsonl"
+    relocated = 0
 
-    existing_ids: set = set()
-    existing_text = ""
-    if rotated_path.exists():
-        existing_text = rotated_path.read_text(encoding="utf-8")
-        for line in _split_lines(existing_text):
+    def _rotate(old_text: str) -> str:
+        nonlocal relocated
+        candidates = [
+            line for line in _split_lines(old_text) if _event_month(line) == month
+        ]
+        if not candidates:
+            raise MutateAbort
+
+        existing_ids: set = set()
+        existing_text = ""
+        if rotated_path.exists():
+            existing_text = rotated_path.read_text(encoding="utf-8")
+            for line in _split_lines(existing_text):
+                try:
+                    existing_record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(existing_record, dict) and existing_record.get("id"):
+                    existing_ids.add(existing_record["id"])
+
+        new_lines: list[str] = []
+        for line in candidates:
             try:
-                existing_record = json.loads(line)
+                record = json.loads(line)
             except json.JSONDecodeError:
+                record = None
+            record_id = record.get("id") if isinstance(record, dict) else None
+            if record_id is not None and record_id in existing_ids:
                 continue
-            if isinstance(existing_record, dict) and existing_record.get("id"):
-                existing_ids.add(existing_record["id"])
+            new_lines.append(line)
 
-    new_lines: list[str] = []
-    for line in candidates:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            record = None
-        record_id = record.get("id") if isinstance(record, dict) else None
-        if record_id is not None and record_id in existing_ids:
-            continue
-        new_lines.append(line)
+        if new_lines:
+            rotated_dir.mkdir(parents=True, exist_ok=True)
+            if existing_text and not existing_text.endswith("\n"):
+                existing_text += "\n"
+            rotated_path.write_text(
+                existing_text + "".join(line + "\n" for line in new_lines),
+                encoding="utf-8",
+                newline="\n",
+            )
 
-    if new_lines:
-        if existing_text and not existing_text.endswith("\n"):
-            existing_text += "\n"
-        rotated_path.write_text(
-            existing_text + "".join(line + "\n" for line in new_lines),
-            encoding="utf-8",
-            newline="\n",
-        )
-
-    def _mutate(old_text: str) -> str:
+        relocated = len(candidates)
         remaining = [
             line for line in _split_lines(old_text) if _event_month(line) != month
         ]
         return "".join(line + "\n" for line in remaining)
 
-    locked_rmw(live, _mutate, repo_root=repo_root, missing_ok=True)
-    return len(candidates)
+    try:
+        locked_rmw(live, _rotate, repo_root=repo_root, missing_ok=True)
+    except MutateAbort:
+        return 0
+    return relocated
 
 
 def _prefix_digest(event_ids: list[str]) -> str:

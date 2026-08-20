@@ -62,7 +62,7 @@ from pathlib import Path
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 _VALID_INVOKERS = (
     "workday-start", "update-docs", "workstream-complete", "handoff", "quick-wrap", "sweep-boot",
@@ -78,9 +78,7 @@ def _import_orientation_module():
     transport (cc_invoke()/route()) is deliberately NOT used here (same shape
     as `normalize-snippet`, per the recipe's explicit disposition for this script).
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.orientation import regenerate_cache as mod
 
     return mod

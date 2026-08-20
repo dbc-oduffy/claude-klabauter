@@ -4027,6 +4027,44 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # paper-trail dir; module docstring confirms this is a native replacement
     # for a shell `mv`-based fence. MUTATING.
     "research.restructure_for_repeat_topic": OpClass.MUTATING,
+    # eol.census — reads only (three batched read-only git spawns plus
+    # Path.read_bytes()); a reviewer's explicit COMPUTE_ONLY affirmation was
+    # not made at registration time (this plan's C5 leaves that call to
+    # review, per its own instruction), so it defaults fail-closed to
+    # MUTATING per this file's own default-to-MUTATING discipline above.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      check-attr and status --porcelain are read-only git subcommands; no ref
+    #      moves, no object is created, no working-tree file is touched.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Path.read_bytes() only, never opened for write.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      Returns the census dict verbatim; no disk write.
+    # Not elevated to COMPUTE_ONLY here — left to reviewer affirmation per C5.
+    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C2, C5
+    "eol.census": OpClass.MUTATING,
+    # eol.audit_producers — reads only (pathlib.Path.rglob / Path.read_text,
+    # ast.parse; no subprocess, no open-for-write). Same reviewer-affirmation
+    # deferral as eol.census above.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Path.read_text() only, never opened for write; no subprocess of any kind.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      Returns the audit report dict verbatim; no disk write.
+    # Not elevated to COMPUTE_ONLY here — left to reviewer affirmation per C5.
+    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C4, C5
+    "eol.audit_producers": OpClass.MUTATING,
+    # eol.repair — writes normalized bytes to disk when `mutate: true` is
+    # passed (defaults to dry-run reporting, but the op CAN write). MUTATING,
+    # unambiguously — no affirmation question applies since question 1 is
+    # answered Yes for the mutate=true path.
+    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C3, C5
+    "eol.repair": OpClass.MUTATING,
 })
 
 

@@ -1,5 +1,5 @@
 """coordinator_core.write_guards.block_consumed_handoff_edit — hard-deny guard
-(mixed-shape: the claim-holder continuation leg advises non-blocking, the
+(mixed-shape: the claim-holder continuation leg is SILENT, the
 non-holder/close-intent legs still hard-deny).
 
 Python engine-ification of DoE's retired
@@ -56,15 +56,22 @@ distinguishes that case from a genuine non-holder edit had been sitting
 inside this module the whole time, used only to reorder deny prose. A
 session editing its OWN claimed handoff is not the audit-trail-corruption
 case this guard exists to stop; it is normal in-flight progress on a baton
-the session legitimately holds. The holder leg now returns a non-blocking
-``additionalContext`` envelope (no ``permissionDecision``) naming the same
-chain-aware routes instead of denying — CLASS stays ``hard-deny`` (the
-close-intent leg and the non-holder leg both still hard-deny; this module
-mixes blocking and non-blocking outputs from one ``CLASS = "hard-deny"``
-registration, the same shape ``validate_frontmatter_schema_deny.py`` uses
-for its own advisory-shaped ``additionalContext`` returns). The non-holder
-leg is UNCHANGED — genuine audit-trail corruption by a session that does
-not hold the claim is still hard-denied.
+the session legitimately holds. The holder leg stopped denying — CLASS stays
+``hard-deny`` (the close-intent leg and the non-holder leg both still
+hard-deny; one ``CLASS = "hard-deny"`` registration whose legs do not all
+block). The non-holder leg is UNCHANGED — genuine audit-trail corruption by
+a session that does not hold the claim is still hard-denied.
+
+HOLDER LEG IS SILENT (2026-08-20 PM ruling, relayed via example-retrieval-repo-ue-addon-em
+memo ``cross-repo/inbox/2026-08-20-example-retrieval-repo-ue-addon-em-holder-edit-warn-
+is-friction-not-guidance.md``): C18a left the holder leg emitting a
+non-blocking ``additionalContext`` naming the chain-aware routes. Guidance
+addressed to the one session the guard has already decided it is not for is
+friction wearing guidance's clothes — the holder arm exists for ERGONOMICS,
+not safety, so it now returns ``None`` and the holder sees nothing. Every
+route it used to name stays reachable and stays named in the non-holder deny.
+Do not reintroduce a holder-facing message here; the deny arms are where
+this guard speaks.
 
 A fourth named route, also continuation-branch-only, covers a `blocked_by`
 edge on a roadmap baton: ``roadmap.link_stubs``, the first op that authors
@@ -107,6 +114,12 @@ file. Removed 2026-07-28 (example-retrieval-repo-em memo,
 pre-building it.
 
 Negative-spec:
+  - Does NOT speak to the claim holder at all on a continuation edit — no
+    deny, no ``additionalContext``, no envelope (see HOLDER LEG IS SILENT
+    above; pinned by ``test_holder_edit_is_silent``). A holder's CLOSE-intent
+    edit is still denied: the close-intent branch runs before the holder
+    predicate, and hand-stamping a terminal disposition is the audit-trail
+    case, not the ergonomics one.
   - Does NOT check ``tool_input.notebook_path`` for ``NotebookEdit`` — the
     reference hook's jq extraction only reads ``.tool_input.file_path`` /
     ``.tool_input.edits[].file_path``, which is empty for a bare
@@ -507,36 +520,27 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             is_holder = bool(session_id) and session_id == claimed_by
             if is_holder:
                 # The predicate this guard already computed (the Staff Engineer F4/AC7)
-                # is now load-bearing, not just prose-ordering: a session
-                # that IS the claim holder is not the case this guard exists
-                # to stop — appending progress to its own claimed baton is
-                # exactly what the SUCCESSOR-chain mechanics assume happens
-                # before `/handoff`, not the audit-trail corruption the
-                # non-holder path denies. Five widenings, two friction
-                # memos, a new op (`handoff.correct_body`) and a ratified DR
-                # were built to route around this guard's deny for the
-                # holder case; this leg is the actual fix (2026-08-06
-                # apply-guard-class-census plan, C18a). Non-blocking:
-                # `additionalContext`, no `permissionDecision` — the holder
-                # can proceed, this is guidance, not a stop.
-                reason = (
-                    "Claimed handoff: you hold this claim. Prefer the "
-                    "chain-aware routes over a hand-edit — correct/deliver: "
-                    "`handoff.correct_body` (`possession-gated`) via "
-                    "`coordinator_core.invoke`, or `handoff.propagate`. "
-                    "Continue: `/handoff`. Close: "
-                    f"`archive-stamp-cli ship-handoff {file_path}` (stamps "
-                    "`shipped_in`+`deployment_state: shipped`). Roadmap "
-                    "dependency edge: `roadmap.link_stubs` (writes "
-                    "`blocked_by`/`blocks` on a roadmap baton only). Ops "
-                    "list: `docs/reference/em-callable-ops.md`."
-                )
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "additionalContext": reason,
-                    }
-                }
+                # is load-bearing, not prose-ordering: a session that IS the
+                # claim holder is not the case this guard exists to stop —
+                # appending progress to its own claimed baton is exactly
+                # what the SUCCESSOR-chain mechanics assume happens before
+                # `/handoff`, not the audit-trail corruption the non-holder
+                # path denies. Five widenings, two friction memos, a new op
+                # (`handoff.correct_body`) and a ratified DR were built to
+                # route around this guard's deny for the holder case
+                # (2026-08-06 apply-guard-class-census plan, C18a).
+                #
+                # SILENT, not advisory (2026-08-20 PM ruling, relayed via
+                # example-retrieval-repo-ue-addon-em memo `holder-edit-warn-is-friction-
+                # not-guidance`): C18a stopped the deny but kept speaking to
+                # the holder on every edit. Addressing guidance to the one
+                # session this guard has already decided it is not for is
+                # friction, not guidance — the holder arm is an ERGONOMICS
+                # arm, not a safety one, so it emits nothing. The routes it
+                # used to name (`handoff.correct_body`, `handoff.propagate`,
+                # `/handoff`, `ship-handoff`, `roadmap.link_stubs`) are all
+                # still reachable and still named in the non-holder deny.
+                return None
             _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
             reason = (
                 "Claimed handoff: paper trail, not a live journal; edit "

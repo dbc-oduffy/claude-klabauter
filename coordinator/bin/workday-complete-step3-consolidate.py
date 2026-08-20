@@ -57,7 +57,7 @@ import sys
 # path is fakeable by a symlinked entrypoint (test9 relies on this to force exit 5).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 import workday_ceremony_lib as wc  # noqa: E402
-from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path, child_env  # noqa: E402
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BIN_SYNC_MAIN = os.environ.get("STEP3_SYNC_MAIN") or os.path.join(PLUGIN_ROOT, "bin", "sync-main.py")
@@ -93,9 +93,7 @@ def _git_stream(*args: str) -> int:
 
 def _compute_machine() -> str:
     """Native cs_compute_machine equivalent — coordinator_core.machine_resolver.compute_machine."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.machine_resolver import compute_machine
     return compute_machine()
 
@@ -106,9 +104,7 @@ def _parse_branch_span(branch: str) -> str | None:
     Returns 'start end' (space-joined) or None on parse failure, matching the retired
     bash bridge's stdout shape so downstream .split() call sites are unchanged.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.daily_branch import parse_branch_span
     span = parse_branch_span(branch)
     if span is None:
@@ -163,9 +159,7 @@ def main(argv: list[str]) -> int:
 
     # Native-module availability guard.
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.daily_day import local_day
     except RuntimeError as exc:
         _err(f"[step3] ERROR: lib not found — CLAUDE_KLABAUTER_ROOT resolution failed: {exc}")

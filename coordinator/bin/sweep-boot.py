@@ -89,7 +89,7 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import RouteMutationError, _no_console_kw, _resolve_claude_klabauter_root, route_mutation  # noqa: E402
+from cc_invoke import RouteMutationError, _no_console_kw, _resolve_claude_klabauter_root, require_dispatch_engine_on_path, route_mutation  # noqa: E402
 from sweep_argv import parse_repo_root_argv  # noqa: E402
 
 _OP = "session.boot_sweep"
@@ -111,9 +111,7 @@ def _import_housekeeping_seam():
     forensics, never a reason to fail the sweep itself louder than it already fails.
     """
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
         from coordinator_core.ops.ceremony.housekeeping_liveness import (
             ARCHIVE_SWEEPS,
@@ -203,9 +201,7 @@ def _resolve_repo_root(explicit: str | None) -> str | None:
     if explicit:
         return explicit
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.git.repo_root import show_toplevel
 
         return show_toplevel()

@@ -22,9 +22,7 @@ from __future__ import annotations
 
 import functools
 import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
 
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections._shared import _validate_review_trail_file
@@ -77,33 +75,6 @@ def _relativize_path(ctx: EmitContext, filepath: str) -> str:
         return filepath
 
 
-_COORDINATOR_ROOT_ENV = "COORDINATOR_ROOT"
-
-
-@contextmanager
-def _coordinator_root_env_override(value: Optional[str]) -> Iterator[None]:
-    """Temporarily set/restore ``COORDINATOR_ROOT`` for an in-process native call.
-
-    Mirrors the old subprocess ``env={**os.environ, "COORDINATOR_ROOT": ...}`` override —
-    ``list_review_trail_records._resolve_state_root`` reads the var from ``os.environ``
-    directly (test-isolation seam), so an in-process caller must stage/restore it around
-    the call rather than pass it as a subprocess-local env dict.
-    """
-    if value is None:
-        yield
-        return
-    had_prior = _COORDINATOR_ROOT_ENV in os.environ
-    prior = os.environ.get(_COORDINATOR_ROOT_ENV)
-    os.environ[_COORDINATOR_ROOT_ENV] = value
-    try:
-        yield
-    finally:
-        if had_prior:
-            os.environ[_COORDINATOR_ROOT_ENV] = prior  # type: ignore[assignment]
-        else:
-            os.environ.pop(_COORDINATOR_ROOT_ENV, None)
-
-
 def _list_review_trail_paths(ctx: EmitContext) -> list[str]:
     """Return the live+archived review-trail file paths via the native lister.
 
@@ -111,12 +82,16 @@ def _list_review_trail_paths(ctx: EmitContext) -> list[str]:
     stderr/exceptions discarded, any resolution failure tolerated (empty result is valid),
     exactly matching the oracle's ``… 2>/dev/null`` tolerance posture.
 
-    Scoping: always pins ``COORDINATOR_ROOT`` to ``ctx.subprocess_root`` (frozen-fixture
-    test isolation) when set, else ``ctx.central_state_root`` — the state root
-    ``resolve_context()`` already resolved for THIS emission (repo_root/state for a
-    per-repo emission, CLAUDE_KLABAUTER_ROOT/state or the CLAUDE_HOME fallback for the legacy
-    meta-repo path). Never falls through to the bare "no override" case, unlike the old
-    subprocess bridge (which, lacking an explicit ``cwd=``, inherited the calling
+    Scoping: always passes ``ctx.subprocess_root`` (frozen-fixture test isolation) when
+    set, else ``ctx.central_state_root`` — the state root ``resolve_context()`` already
+    resolved for THIS emission (repo_root/state for a per-repo emission, CLAUDE_KLABAUTER_ROOT/state
+    or the CLAUDE_HOME fallback for the legacy meta-repo path) — as
+    ``list_paths``'s ``state_root_override`` param, never through an
+    ``os.environ["COORDINATOR_ROOT"]`` write. A resident warm server serves many
+    concurrent requests in one process; mutating process-global env to steer this
+    caller's own downstream read is visible to every other request that process is
+    concurrently serving. Never falls through to the bare "no override" case, unlike the
+    old subprocess bridge (which, lacking an explicit ``cwd=``, inherited the calling
     process's ambient cwd) — a bare in-process call reads ``os.environ``/``git
     rev-parse`` against THIS process's cwd, which has no relationship to the repo being
     emitted for and would leak a real tree's state into an isolated-context caller
@@ -125,8 +100,7 @@ def _list_review_trail_paths(ctx: EmitContext) -> list[str]:
     """
     override = str(ctx.subprocess_root if ctx.subprocess_root is not None else ctx.central_state_root)
     try:
-        with _coordinator_root_env_override(override):
-            return _native_list_paths()
+        return _native_list_paths(state_root_override=override)
     except ReviewTrailListError:
         return []
 

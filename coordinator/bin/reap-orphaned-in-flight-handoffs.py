@@ -140,7 +140,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from handoff_lifecycle import is_claimed_status  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
@@ -155,9 +155,7 @@ def _resolve_session_live():
     In-process import (no subprocess, no bash) — mirrors the direct-import
     trampoline shape used by aggregate-chain-loe.py / query-completions.py.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.session.liveness import session_live
     return session_live
 
@@ -174,9 +172,7 @@ def _resolve_find_archived_twin_by_handoff_id():
     ``_handoff_id_archived_twin`` below for the thin wrapper that preserves
     this script's own str-path-or-"" return shape.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.handoff_creation_guard import find_archived_twin_by_handoff_id
     return find_archived_twin_by_handoff_id
 
@@ -192,9 +188,7 @@ def _resolve_claim_state():
     ``source: "mirror"``/``"none"``, never ``"ledger"``. See
     ``_claim_holder`` below for how this reaper consumes it.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.claim_state import resolve_claim_state
     return resolve_claim_state
 
@@ -223,9 +217,7 @@ def _resolve_handoff_has_live_children():
     subprocess — the CLI veneer got this for free from its router; calling
     the op directly means resolving it ourselves.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.git.repo_root import git_common_dir
     from coordinator_core.ops.handoff_children import _handoff_has_live_children
     return _handoff_has_live_children, git_common_dir
@@ -241,9 +233,7 @@ def _resolve_canonical_kind():
     not a hand-rolled retired/canonical pair (see that module's own
     "Vocabulary bridge" section).
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.frontmatter.baton_class import canonical_kind
     return canonical_kind
 

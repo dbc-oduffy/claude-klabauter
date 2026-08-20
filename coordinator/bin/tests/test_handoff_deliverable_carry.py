@@ -63,7 +63,7 @@ _spec = importlib.util.spec_from_file_location("handoff_deliverable_carry", _CLI
 _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)  # type: ignore[union-attr]
 
-from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path, child_env  # noqa: E402
 
 
 def _write_frontmatter(path, **fields):
@@ -77,9 +77,7 @@ def _write_frontmatter(path, **fields):
 
 
 def _load_ops():
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
     from coordinator_core.ops.mint_deliverable_id import mint
 

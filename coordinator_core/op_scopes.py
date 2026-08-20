@@ -1427,6 +1427,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # per-session implicit repo state (no common_dir/show_top resolution).
     # Spec: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1
     "gate.validate_invocable":                  "none",
+    # eol.census / eol.audit_producers / eol.repair — "none": DECISION, not the
+    # closest-fitting default. All three take an explicit `target_root` wire
+    # param naming the tree to scan/repair; the injected repo_root/caller's own
+    # tree is ignored entirely (this plan's anti-scope: "Do not resolve the
+    # target root from the environment"). An op key missing from this table
+    # silently degrades to repo_root=None — see this module's own scope-table
+    # caveat above for why that would be a silent behavior change, not a no-op.
+    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C5
+    "eol.census":                               "none",
+    "eol.audit_producers":                      "none",
+    "eol.repair":                               "none",
 }
 
 # ---------------------------------------------------------------------------

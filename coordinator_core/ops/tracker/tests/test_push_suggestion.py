@@ -30,6 +30,7 @@ pytest-asyncio dependency.
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ops import _EAGER_OP_MODULES
 from coordinator_core.ops._registry_map import OP_MODULE_MAP
 from coordinator_core.ops.tracker.push_suggestion import (
+    PushSuggestionDuplicateDeliveryError,
     PushSuggestionMalformedError,
     PushSuggestionRefused,
     PushSuggestionSchemaStaleError,
@@ -197,8 +199,7 @@ def test_handler_local_target_writes_via_the_local_write_arm(monkeypatch, tmp_pa
         )
     )
     assert result["delivered"] == "local"
-    assert result["event"]["id"].startswith("evt-")
-    assert push_suggestion.machine_slug() in result["event"]["id"]
+    assert re.fullmatch(r"evt-[a-z0-9-]+-[0-9a-f]{12}", result["event"]["id"])
 
     events = list((repo / "state" / "sovereign-tracker").glob("events.*.jsonl"))
     assert events, "expected an appended shard file under the caller's own worktree"
@@ -242,6 +243,10 @@ def test_handler_peer_target_delivers_committed_envelope(monkeypatch, tmp_path):
 
 
 def test_handler_peer_delivery_collision_refuses(monkeypatch, tmp_path):
+    """C1 (review-driven correction, 2026-08-20): the peer arm addresses on
+    the minted `event['id']`, which is only stable across a retry when
+    `idempotency_key` is supplied — so this collision test must supply one
+    to reach the same filename twice."""
     repo = _make_git_repo(tmp_path / "repo")
     peer = _make_git_repo(tmp_path / "peer")
     monkeypatch.setattr(
@@ -257,15 +262,23 @@ def test_handler_peer_delivery_collision_refuses(monkeypatch, tmp_path):
     monkeypatch.setattr(
         tracker_holder, "_claude_klabauter_source_tree", lambda: tmp_path / "claude-klabauter"
     )
-    event = _event(item_id="collide-me")
-    _run(_handler({"event": event}, repo_root=repo))
-    with pytest.raises(PushSuggestionRefused):
-        _run(_handler({"event": event}, repo_root=repo))
+    params = {"event": _event(item_id="collide-me"), "idempotency_key": "collide-key"}
+    _run(_handler(dict(params), repo_root=repo))
+    with pytest.raises(PushSuggestionDuplicateDeliveryError) as excinfo:
+        _run(_handler(dict(params), repo_root=repo))
+    assert excinfo.value.refusal_class == push_suggestion._REFUSAL_CLASS_DUPLICATE_DELIVERY
 
 
-def test_item_addressing_key_required():
-    with pytest.raises(PushSuggestionRefused):
-        push_suggestion._item_addressing_key({"id": "evt-1", "observed_at": "x"})
+def test_no_addressing_key_required_on_either_arm():
+    """C1 (review-driven correction, 2026-08-20) removed the addressing-key
+    requirement entirely — an event carrying neither `item_id` nor
+    `event_id` behaves identically on both arms, since `_deliver_envelope`
+    now addresses the peer-arm filename on the minted `event['id']`, never
+    a caller-supplied field. The old `_item_addressing_key`-driven
+    `PushSuggestionMalformedError` (arm-dependent — it fired on the peer
+    arm only, and only reachable when the resolved target differs from the
+    caller's own worktree) is gone with that function."""
+    assert not hasattr(push_suggestion, "_item_addressing_key")
 
 
 # ---------------------------------------------------------------------------
@@ -451,11 +464,14 @@ def test_refusal_class_survives_dispatch_message_response_not_just_exception_typ
     assert message.startswith("refusal_class=malformed: ")
 
 
-def test_refusal_class_absent_for_unclassified_peer_delivery_refusal(
+def test_refusal_class_present_for_d2_4_duplicate_delivery_refusal(
     monkeypatch, tmp_path
 ):
-    """A D2(4)/D2(7) unclassified PushSuggestionRefused must NOT gain a
-    refusal_class prefix — only the three named C12 classes do."""
+    """C3 (review-driven correction, 2026-08-20): the D2(4) peer-delivery
+    collision IS now classified — addressed on the minted event id, a
+    collision is evidence of a successful prior delivery, and cockpit must
+    be able to tell it apart from an unclassified refusal by
+    `refusal_class` alone."""
     repo = _make_git_repo(tmp_path / "repo")
     peer = _make_git_repo(tmp_path / "peer")
     monkeypatch.setattr(
@@ -471,14 +487,20 @@ def test_refusal_class_absent_for_unclassified_peer_delivery_refusal(
     monkeypatch.setattr(
         tracker_holder, "_claude_klabauter_source_tree", lambda: tmp_path / "claude-klabauter"
     )
-    event = _event(item_id="unclassified-collide")
-    _run(_handler({"event": event}, repo_root=repo))
+    params = {
+        "event": _event(item_id="classified-collide"),
+        "idempotency_key": "classified-collide-key",
+    }
+    _run(_handler(dict(params), repo_root=repo))
     with pytest.raises(PushSuggestionRefused) as excinfo:
-        _run(_handler({"event": event}, repo_root=repo))
+        _run(_handler(dict(params), repo_root=repo))
+    assert isinstance(excinfo.value, PushSuggestionDuplicateDeliveryError)
     assert not isinstance(excinfo.value, PushSuggestionMalformedError)
     assert not isinstance(excinfo.value, PushSuggestionUnauthorizedError)
     assert not isinstance(excinfo.value, PushSuggestionSchemaStaleError)
-    assert not str(excinfo.value).startswith("refusal_class=")
+    assert str(excinfo.value).startswith(
+        f"refusal_class={push_suggestion._REFUSAL_CLASS_DUPLICATE_DELIVERY}: "
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +631,205 @@ def test_handler_peer_delivery_passes_through_sensitivity_tier(monkeypatch, tmp_
     delivered_path = Path(result["path"])
     text = delivered_path.read_text(encoding="utf-8")
     assert 'sensitivity_tier: "restricted"' in text
+
+
+# ---------------------------------------------------------------------------
+# C5 (review-driven correction, 2026-08-20) — tests the design turns on that
+# were previously untested: the digest is content-derived (not key-derived),
+# field-reordering stability, peer-arm idempotency surviving a date
+# boundary, minted-id grammar with a non-circular assertion, the traversal
+# defect the peer arm's old addressing key opened, and that a caller's own
+# `id` can never leak into a stored record, a delivered envelope, or the
+# caller's own dict.
+# ---------------------------------------------------------------------------
+
+
+def test_mint_event_id_different_payload_same_key_mints_different_ids():
+    """Pins DR-241 bound (i): the digest is content-derived, not merely
+    key-derived. Replacing the digest input with the key alone (dropping
+    the event) would pass the whole rest of the suite — this is the one
+    test that catches that mutation."""
+    key = "same-idempotency-key"
+    id_a = push_suggestion._mint_event_id({"item_id": "a"}, idempotency_key=key)
+    id_b = push_suggestion._mint_event_id({"item_id": "b"}, idempotency_key=key)
+    assert id_a != id_b
+
+
+def test_mint_event_id_reordered_keys_same_payload_same_key_mints_same_id():
+    """Pins the `sort_keys=True` guarantee: field order must not affect the
+    minted id for an otherwise-identical payload+key."""
+    key = "reorder-key"
+    id_a = push_suggestion._mint_event_id({"a": 1, "b": 2}, idempotency_key=key)
+    id_b = push_suggestion._mint_event_id({"b": 2, "a": 1}, idempotency_key=key)
+    assert id_a == id_b
+
+
+def test_mint_event_id_grammar_and_machine_slug_component(monkeypatch):
+    """Non-circular replacement for the old `machine_slug() in id` assertion
+    (which called the implementation to check the implementation and would
+    keep passing if the slug component were dropped to a constant). Pins
+    the shape via regex, then independently proves a known, monkeypatched
+    slug actually appears."""
+    minted = push_suggestion._mint_event_id({"item_id": "x"}, idempotency_key="k")
+    assert re.fullmatch(r"evt-[a-z0-9-]+-[0-9a-f]{12}", minted)
+
+    monkeypatch.setattr(push_suggestion, "machine_slug", lambda: "known-slug-xyz")
+    minted = push_suggestion._mint_event_id({"item_id": "x"}, idempotency_key="k")
+    assert "known-slug-xyz" in minted
+
+
+def test_peer_arm_idempotency_key_retry_survives_date_boundary(monkeypatch, tmp_path):
+    """C1's fix: the peer arm addresses on the minted id, which — given
+    `idempotency_key` — is independent of wall-clock date entirely. A retry
+    landing on a different UTC date must still collide via O_EXCL instead
+    of silently delivering a second envelope (the exact midnight-boundary
+    scenario the Staff Engineer's review verified empirically)."""
+    repo = _make_git_repo(tmp_path / "repo")
+    peer = _make_git_repo(tmp_path / "peer")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "tracker.holder_repo": "peer_key",
+                "repos.peer_key": str(peer),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        tracker_holder, "_claude_klabauter_source_tree", lambda: tmp_path / "claude-klabauter"
+    )
+
+    real_datetime = push_suggestion.datetime.datetime
+    utc = push_suggestion.datetime.timezone.utc
+    dates = iter(
+        [
+            real_datetime(2026, 8, 20, 23, 59, 58, tzinfo=utc),
+            real_datetime(2026, 8, 21, 0, 0, 3, tzinfo=utc),
+        ]
+    )
+
+    class _FakeDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(dates)
+
+    monkeypatch.setattr(push_suggestion.datetime, "datetime", _FakeDateTime)
+
+    params = {
+        "event": _event(item_id="midnight-item"),
+        "idempotency_key": "midnight-key",
+    }
+    first = _run(_handler(dict(params), repo_root=repo))
+    assert first["delivered"] == "peer"
+    with pytest.raises(PushSuggestionDuplicateDeliveryError):
+        _run(_handler(dict(params), repo_root=repo))
+
+    envelopes = list((peer / "cross-repo" / "inbox").glob("*.md"))
+    assert len(envelopes) == 1, (
+        f"expected exactly one envelope delivered across the simulated "
+        f"midnight boundary, found: {envelopes}"
+    )
+
+
+def test_traversal_in_item_id_cannot_escape_receiver_inbox(monkeypatch, tmp_path):
+    """Path-traversal regression test for the exact defect the review
+    verified empirically: a caller-controlled `item_id` must never be able
+    to compose a delivery path outside the receiver's `cross-repo/inbox/`.
+    After C1, `item_id` no longer feeds the delivery path at all, and the
+    confinement assertion in `_deliver_envelope` is the independent
+    hardening backstop. Assert both the refusal AND that no file appeared
+    anywhere outside the inbox."""
+    repo = _make_git_repo(tmp_path / "repo")
+    peer = _make_git_repo(tmp_path / "peer")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "tracker.holder_repo": "peer_key",
+                "repos.peer_key": str(peer),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        tracker_holder, "_claude_klabauter_source_tree", lambda: tmp_path / "claude-klabauter"
+    )
+
+    def _tracked_files() -> set:
+        return {
+            p.relative_to(peer)
+            for p in peer.rglob("*")
+            if p.is_file() and ".git" not in p.relative_to(peer).parts
+        }
+
+    before = _tracked_files()
+
+    event = _event(item_id="../../../../escaped")
+    result = _run(_handler({"event": event}, repo_root=repo))
+
+    # The minted-id addressing means the traversal string never reaches the
+    # delivery path at all — the delivery succeeds, harmlessly, inside the
+    # inbox. Confirm no file landed outside it regardless.
+    assert result["delivered"] == "peer"
+    delivered_path = Path(result["path"])
+    assert delivered_path.parent == peer / "cross-repo" / "inbox"
+
+    after = _tracked_files()
+    new_files = after - before
+    for rel in new_files:
+        assert str(rel).startswith("cross-repo"), (
+            f"file {rel} landed outside the receiver's cross-repo/inbox/: "
+            f"traversal escaped confinement"
+        )
+    assert not (peer / "escaped.md").exists()
+    assert not (peer.parent / "escaped.md").exists()
+
+
+def test_deliver_envelope_refuses_path_outside_inbox_directly():
+    """Direct unit test of the confinement assertion itself, bypassing
+    minted-id addressing entirely — proves the backstop fires even if a
+    future editor reintroduces a traversal-hostile filename component."""
+    import tempfile as _tempfile
+
+    with _tempfile.TemporaryDirectory() as tmp:
+        target_root = Path(tmp)
+        (target_root / "cross-repo" / "inbox").mkdir(parents=True)
+        event = {"id": "evt-x-deadbeefcafe", "observed_at": "x"}
+        with pytest.raises(PushSuggestionRefused):
+            # Simulate a hostile filename by monkeypatching event['id'] to a
+            # traversal string directly — _deliver_envelope must refuse
+            # regardless of where the hostile string would have come from.
+            hostile_event = dict(event, id="../../../../escaped")
+            push_suggestion._deliver_envelope(target_root, None, hostile_event)
+
+
+def test_callers_own_id_never_reaches_store_or_envelope_and_dict_is_not_mutated(
+    monkeypatch, tmp_path
+):
+    """The caller's own dict is copied, never mutated, and a caller-supplied
+    `id` (refused before this point) can never leak — the local arm's
+    stored record and the peer arm's delivered envelope both carry only the
+    claude-klabauter-minted id."""
+    repo = _make_git_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "repo_slug.acme/self": "self_key",
+                "repos.self_key": str(repo),
+            }
+        ),
+    )
+    caller_event = _event(repo="acme/self")
+    caller_event_snapshot = dict(caller_event)
+    result = _run(_handler({"event": caller_event}, repo_root=repo))
+    assert caller_event == caller_event_snapshot, (
+        "the caller's own dict must never be mutated by the handler"
+    )
+    assert "id" not in caller_event
+    assert result["event"]["id"].startswith("evt-")
 
 
 # ---------------------------------------------------------------------------

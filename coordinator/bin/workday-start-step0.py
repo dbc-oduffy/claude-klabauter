@@ -89,7 +89,7 @@ from pathlib import Path
 try:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
     import workday_ceremony_lib as wc  # noqa: E402
-    from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+    from cc_invoke import child_env, require_dispatch_engine_on_path  # noqa: E402
 except Exception:
     import traceback
     print("CRASH")
@@ -123,9 +123,7 @@ def _err(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _ensure_claude_klabauter_on_path() -> None:
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
 
 
 # ---------------------------------------------------------------------------

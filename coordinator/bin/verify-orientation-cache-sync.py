@@ -55,7 +55,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
@@ -85,9 +85,7 @@ def _resolve_state_root() -> str:
     transport failure (CLAUDE_KLABAUTER_ROOT unresolvable, module not importable, or
     the seam's own StateRootError/CrossCuttingStateRoot).
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     try:
         from coordinator_core.state_root import coordinator_state_root as _native_state_root
     except ImportError as exc:
@@ -99,9 +97,7 @@ def _resolve_state_root() -> str:
 
 
 def _import_op_main():
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.verify_orientation_cache_sync import main as _op_main
 
     return _op_main

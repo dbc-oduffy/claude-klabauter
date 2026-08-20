@@ -83,11 +83,9 @@ def _no_console_kwargs() -> dict:
     never turn a quiet spawn into a visible console window.
     """
     try:
-        from cc_invoke import _resolve_claude_klabauter_root
+        from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path
 
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.win_portability import no_console_creationflags
 
         return no_console_creationflags()
@@ -161,9 +159,7 @@ def _import_registry_deps():
     """
     from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core import machine_resolver
 
     return machine_resolver

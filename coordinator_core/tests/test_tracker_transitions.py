@@ -1133,3 +1133,85 @@ def test_emit_batch_duplicate_retract_does_not_advance_counter_for_later_payload
     # payload stamps generation 1 (count of retracts stored BEFORE this
     # batch), not 2.
     assert result[1]["generation"] == 1
+
+
+# ---------------------------------------------------------------------------
+# C3 — withdrawal_event: a kind-discriminated event naming a queued event's
+# id, same-shard prefix-validated at construction.
+# ---------------------------------------------------------------------------
+
+
+def test_withdrawal_event_appends_and_names_the_withdrawn_id(repo_root):
+    queued = tt.emit_transition(
+        "item-withdraw-1",
+        "qa_verified",
+        "verified",
+        actor="human",
+        evidence=None,
+        tier="deferred",
+        source_observation_id="obs-withdraw-1",
+        repo_root=repo_root,
+    )
+
+    payload = tt.withdrawal_event(queued["id"], actor="human")
+    assert payload == {
+        "kind": "withdrawal",
+        "withdraws": queued["id"],
+        "actor": "human",
+    }
+
+    withdrawal = tt.emit_withdrawal_event(payload, repo_root=repo_root)
+
+    assert withdrawal["kind"] == "withdrawal"
+    assert withdrawal["withdraws"] == queued["id"]
+    assert withdrawal["applied_at"] == withdrawal["observed_at"]
+    assert withdrawal["id"] != queued["id"]
+
+    stored_ids = {event["id"] for event in tracker_store.read_events(repo_root=repo_root)}
+    # `read_events` filters to `applied_at`-populated events; the queued
+    # (deferred-tier) row is invisible there by construction, but the
+    # withdrawal row (a direct, always-applied append) is visible.
+    assert withdrawal["id"] in stored_ids
+
+
+def test_withdrawal_event_rejects_a_foreign_shard_id():
+    with pytest.raises(tt.TrackerTransitionError):
+        tt.withdrawal_event("evt-other-machine-abc123", actor="human")
+
+
+def test_withdrawal_event_rejects_a_fold_marker_shaped_id():
+    # Fold-marker ids are shaped `<slug>-fold-<digest>`, with NO `evt-`
+    # prefix — a generic "split on `-` and take the second segment" would
+    # misparse this as same-shard; the prefix test must not.
+    with pytest.raises(tt.TrackerTransitionError):
+        tt.withdrawal_event("this-machine-fold-abc123", actor="human")
+
+
+def test_withdrawal_event_accepts_a_same_shard_id(monkeypatch):
+    monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
+    payload = tt.withdrawal_event("evt-this-machine-abc123", actor="human")
+    assert payload["withdraws"] == "evt-this-machine-abc123"
+
+
+def test_withdrawal_and_withdrawn_row_both_present_in_shard(repo_root):
+    queued = tt.emit_transition(
+        "item-withdraw-2",
+        "manual_close",
+        "closed",
+        actor="human",
+        evidence=None,
+        tier="deferred",
+        source_observation_id="obs-withdraw-2",
+        repo_root=repo_root,
+    )
+    withdrawal = tt.emit_withdrawal_event(
+        tt.withdrawal_event(queued["id"], actor="human"), repo_root=repo_root
+    )
+
+    shard_lines = tracker_store.shard_path(repo_root).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert any(f'"id": "{queued["id"]}"' in line for line in shard_lines if line.strip())
+    assert any(
+        f'"id": "{withdrawal["id"]}"' in line for line in shard_lines if line.strip()
+    )

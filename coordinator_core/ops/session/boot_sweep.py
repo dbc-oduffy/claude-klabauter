@@ -144,6 +144,22 @@ The sweeps, in order:
       rather than failing the composite boot sweep.
       `check-auto-reconcile.py` is UNTOUCHED — this adds a trigger, it does
       not move or replace DoE's probe.
+  11. eol.census cadence rider (C8, docs/plans/2026-08-20-every-repo-
+      detects-its-own-eol-drift.md § C8) — fires `eol.census` against this
+      repo's own worktree, throttled by `_claim_cadence_slot` to at-most-
+      once-per-15-minutes on its OWN marker (same mechanism/window as
+      sweep 10's reconcile-open cadence, a separate marker so the two never
+      contend). Degrade-safe like every rider above: any exception folds
+      into `warnings[]`, never raised, never changes exit_code. Verdict
+      written to a per-machine JSON sentinel inside the git common dir
+      (untracked by construction — never `state/`, so the detector is
+      never a producer of the churn it detects). Never dispatches
+      `eol.repair` — an automated tree mutation on the boot path is out of
+      scope; repair stays operator-invoked (C8 negative spec).
+  12. eol.audit_producers cadence rider (C8) — same shape as bullet 11, on
+      its own 24h-window marker (an AST walk over `.py`, not a per-boot
+      cost, so a 24h window is the right cadence). Read-only reporting only
+      (C8 negative spec) — never modifies tracked producer files.
 
 session.reap (Class-B untracked .git/ substrate, 12h cadence) is invoked
 SEPARATELY by session-init.sh — NOT part of this sweep.
@@ -206,6 +222,7 @@ MUTATES = [
 import sys
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -280,6 +297,8 @@ from coordinator_core.ops.handoff_archive_transition import (
     _handler as _archive_transition_handler,
 )
 from coordinator_core.ops.handoff_archive_transition import _handler as _archive_transition_handler
+from coordinator_core.ops.eol.audit_producers import audit_producers as _eol_audit_producers
+from coordinator_core.ops.eol.census import census as _eol_census
 from coordinator_core.ops.handoff_reconcile import _handler as _reconcile_open_handler
 from coordinator_core.ops.priority_drain import drain as _drain_priority_intents
 from coordinator_core.ops.tracker.fold_observed_set import run_fold_observed_set
@@ -339,6 +358,27 @@ _RECONCILE_CADENCE_MARKER_NAME = "coordinator-reconcile-open-cadence.marker"
 # wide gate-cascade scan is not re-run on every one of dozens of boots in
 # that same window.
 _RECONCILE_CADENCE_WINDOW_SECONDS: float = 15 * 60.0
+
+# C8 (docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C8):
+# eol.census cadence rider — "the existing 15-minute O_CREAT|O_EXCL marker,
+# as before" means the SAME mechanism/window as the reconcile-open cadence
+# above, not the same file: this rider gets its OWN marker so census firing
+# never contends with / is gated by the unrelated reconcile-open cadence.
+_EOL_CENSUS_MARKER_NAME = "coordinator-eol-census-cadence.marker"
+_EOL_CENSUS_CADENCE_WINDOW_SECONDS: float = 15 * 60.0
+
+# eol.audit_producers cadence rider — an AST walk over .py, not a per-boot
+# cost, so a 24h window is the right shape (C8): same degrade contract, same
+# sentinel mechanism as the census rider, its own marker.
+_EOL_AUDIT_PRODUCERS_MARKER_NAME = "coordinator-eol-audit-producers-cadence.marker"
+_EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS: float = 24 * 60 * 60.0
+
+# Per-machine verdict sentinel filenames (JSON), written inside common_dir —
+# untracked by construction (.git/ is never a tracked path), never state/:
+# C8 negative spec — writing the verdict into tracked substrate would make
+# the detector a producer of the churn it detects.
+_EOL_CENSUS_SENTINEL_NAME = "coordinator-eol-census-last-run.json"
+_EOL_AUDIT_PRODUCERS_SENTINEL_NAME = "coordinator-eol-audit-producers-last-run.json"
 
 
 # ----------------------------------------------------------------------
@@ -426,15 +466,23 @@ async def _archive_shipped_unarchived(
     }
 
 
-def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None) -> bool:
-    """Return True iff THIS boot is the one that fires handoff.reconcile_open.
+def _claim_cadence_slot(
+    common_dir: Path, marker_name: str, window_seconds: float, now: Optional[float] = None
+) -> bool:
+    """Return True iff THIS boot is the one that fires the rider gated by
+    `marker_name`/`window_seconds`.
+
+    Generalized (C8, docs/plans/2026-08-20-every-repo-detects-its-own-eol-
+    drift.md § C8) from the reconcile-open-only original of this function —
+    every caller supplies its OWN marker filename and window, so N riders
+    sharing this mechanism never contend with or gate one another.
 
     Age-based, not identity-based: unlike day_branch_cut_lock's mutex (which
     must never let two sessions win at once), overlap here is tolerated by
-    design — see the constant block above. `O_CREAT | O_EXCL` still resolves
-    the common "N boots wake up at once" race to exactly one winner on the
-    file's FIRST creation; once the marker exists, eligibility is decided by
-    its age alone (mtime older than the window → due; touch it and fire).
+    design. `O_CREAT | O_EXCL` still resolves the common "N boots wake up at
+    once" race to exactly one winner on the file's FIRST creation; once the
+    marker exists, eligibility is decided by its age alone (mtime older than
+    the window → due; touch it and fire).
 
     A benign multi-winner race at the age boundary (two peers both read an
     expired mtime before either touches it) is accepted, not engineered
@@ -448,7 +496,7 @@ def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None)
     or a raised exception on the session-boot path.
     """
     now = time.time() if now is None else now
-    marker = common_dir / _RECONCILE_CADENCE_MARKER_NAME
+    marker = common_dir / marker_name
 
     try:
         fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -468,7 +516,7 @@ def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None)
     except OSError:
         return False
 
-    if age < _RECONCILE_CADENCE_WINDOW_SECONDS:
+    if age < window_seconds:
         return False
 
     try:
@@ -476,6 +524,46 @@ def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None)
     except OSError:
         return False
     return True
+
+
+def _claim_reconcile_cadence_slot(common_dir: Path, now: Optional[float] = None) -> bool:
+    """Return True iff THIS boot is the one that fires handoff.reconcile_open.
+
+    Thin wrapper over `_claim_cadence_slot`, bound to the reconcile-open
+    marker/window (module-level constants above) — kept as its own name
+    because sweep 10 below and this module's own docstring bullet 10 refer
+    to it by name; see `_claim_cadence_slot` for the mechanism's full
+    docstring.
+    """
+    return _claim_cadence_slot(
+        common_dir, _RECONCILE_CADENCE_MARKER_NAME, _RECONCILE_CADENCE_WINDOW_SECONDS, now=now
+    )
+
+
+def _write_eol_sentinel(common_dir: Path, name: str, verdict: dict) -> None:
+    """Best-effort write of one eol rider's verdict to a per-machine sentinel
+    file inside the git common dir.
+
+    common_dir (not state/) is the write target on purpose: `.git/` is never
+    a tracked path, so this sentinel is untracked by construction — no
+    `.gitignore` entry needed, and the detector never becomes a producer of
+    the churn it detects (C8 negative spec, docs/plans/2026-08-20-every-
+    repo-detects-its-own-eol-drift.md § C8).
+
+    Fails silently on any I/O error — best-effort, mirrors every other
+    degrade-safe helper in this module (e.g. `_set_deployment_state`).
+    """
+    sentinel_path = common_dir / name
+    payload = {
+        "written_at": datetime.now(tz=timezone.utc).isoformat(),
+        "verdict": verdict,
+    }
+    try:
+        sentinel_path.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
+    except OSError as exc:
+        _LOG.debug("boot_sweep: could not write eol sentinel %s: %s", sentinel_path, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -2713,6 +2801,65 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "result": None,
         }
 
+    # --- Sweep 11: eol.census cadence rider (C8, docs/plans/2026-08-20-
+    # every-repo-detects-its-own-eol-drift.md § C8) ---
+    # Own worktree ONLY, exactly like sweeps 7/8/10 above — the census scans
+    # this repo's own tracked substrate against its own .gitattributes, never
+    # state_worktree. `_claim_cadence_slot` uses the SAME mechanism/window as
+    # sweep 10's reconcile-open cadence ("the existing 15-minute O_CREAT|
+    # O_EXCL marker, as before") but its OWN marker, so census firing never
+    # contends with or is gated by reconcile-open's cadence.
+    #
+    # Degrade-safe: any exception (including inside eol.census's own git
+    # spawns) is caught here and folded into warnings[], never raised out of
+    # this composite boot sweep and never changing exit_code — mirrors every
+    # other rider above. NEGATIVE SPEC (C8): this rider dispatches eol.census
+    # only, never eol.repair — an automated mutation of a tree on the boot
+    # path is the one outcome nobody wants; repair stays operator-invoked.
+    eol_census_warnings: List[dict] = []
+    if _claim_cadence_slot(common_dir, _EOL_CENSUS_MARKER_NAME, _EOL_CENSUS_CADENCE_WINDOW_SECONDS):
+        try:
+            eol_census_verdict = _eol_census(worktree)
+        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
+            _LOG.warning("session.boot_sweep: eol.census cadence rider errored: %s", exc)
+            eol_census_warnings.append(
+                {"scope": "eol_census", "reason": f"eol.census call errored: {exc}"}
+            )
+            eol_census_result = {"ran": True, "reason": "error", "result": None}
+        else:
+            eol_census_result = {"ran": True, "reason": "cadence window elapsed", "result": eol_census_verdict}
+            _write_eol_sentinel(common_dir, _EOL_CENSUS_SENTINEL_NAME, eol_census_verdict)
+    else:
+        eol_census_result = {"ran": False, "reason": "within cadence window", "result": None}
+
+    # --- Sweep 12: eol.audit_producers cadence rider (C8) ---
+    # An AST walk over .py, not a per-boot cost, so a 24h window is the right
+    # shape — same degrade contract, same sentinel mechanism as sweep 11,
+    # its own marker. Own worktree ONLY, same rationale as sweep 11 above.
+    # NEGATIVE SPEC (C8): eol.audit_producers pins its default mode as
+    # read-only reporting; it does not modify tracked producer files.
+    eol_audit_producers_warnings: List[dict] = []
+    if _claim_cadence_slot(
+        common_dir, _EOL_AUDIT_PRODUCERS_MARKER_NAME, _EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS
+    ):
+        try:
+            eol_audit_producers_verdict = _eol_audit_producers(worktree)
+        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
+            _LOG.warning("session.boot_sweep: eol.audit_producers cadence rider errored: %s", exc)
+            eol_audit_producers_warnings.append(
+                {"scope": "eol_audit_producers", "reason": f"eol.audit_producers call errored: {exc}"}
+            )
+            eol_audit_producers_result = {"ran": True, "reason": "error", "result": None}
+        else:
+            eol_audit_producers_result = {
+                "ran": True, "reason": "cadence window elapsed", "result": eol_audit_producers_verdict,
+            }
+            _write_eol_sentinel(
+                common_dir, _EOL_AUDIT_PRODUCERS_SENTINEL_NAME, eol_audit_producers_verdict
+            )
+    else:
+        eol_audit_producers_result = {"ran": False, "reason": "within cadence window", "result": None}
+
     # index-resync-residue warnings (2026-08-02 fix): fold in ANY family whose
     # archive_and_commit/rm_and_commit call landed the commit but exhausted
     # its main-index resync retry budget — see _index_resync_warnings for the
@@ -2734,7 +2881,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         unintegrated_reaped, unintegrated_skipped, unintegrated_failed,
         consumed_warnings + shipped_warnings + priority_intent_warnings
         + observed_set_fold_warnings + index_resync_warnings
-        + reconcile_cadence_warnings,
+        + reconcile_cadence_warnings + eol_census_warnings
+        + eol_audit_producers_warnings,
         priority_drained=priority_drained,
         priority_rejected=priority_rejected,
         priority_failed=priority_failed,
@@ -2744,4 +2892,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
     result["observed_set_fold"] = observed_set_fold_result
     result["reconcile_cadence"] = reconcile_cadence_result
+    result["eol_census"] = eol_census_result
+    result["eol_audit_producers"] = eol_audit_producers_result
     return result

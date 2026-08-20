@@ -1065,6 +1065,85 @@ def snapshot_axis_if_due(
     return emit_snapshot_event(payload, repo_root=repo_root)
 
 
+def _mint_withdrawal_event_id(withdraws: str) -> str:
+    """Mint a withdrawal event's `id` — content-addressed on `("withdrawal",
+    withdraws)`, mirroring `_mint_transition_event_id`/`_mint_snapshot_event_id`'s
+    no-nonce, digest-of-identity shape (module docstring "Event-id
+    minting"): two racing withdrawals of the SAME target id mint the SAME
+    withdrawal id, so the slower `tracker_store.append_event` call collides
+    on `TrackerStoreDuplicateIdError` rather than double-appending.
+    """
+    canonical = json.dumps(["withdrawal", withdraws], sort_keys=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
+        :_EVENT_ID_DIGEST_LEN
+    ]
+    return f"evt-{tracker_store.machine_slug()}-withdraw-{digest}"
+
+
+def withdrawal_event(withdraws: str, *, actor: str) -> dict:
+    """Construct a `kind: "withdrawal"` payload (pure — no `id`/
+    `applied_at`/`observed_at`/`schema_version`; those are stamped by
+    `emit_withdrawal_event`, mirroring `transition_event`'s split from
+    `_emit` and `build_snapshot_event`'s split from `emit_snapshot_event`).
+
+    A sibling of `build_snapshot_event`, following this module's own
+    `kind`-discriminator convention (director review, Q2) — NOT a parallel
+    constructor riding `transition_event`'s closed field set. Returns
+    `{"kind": "withdrawal", "withdraws": withdraws, "actor": actor}`. Does
+    NOT ride `axis`/`TRANSITION_AXES` — a withdrawal is not a completion
+    dimension.
+
+    Raises `TrackerTransitionError` if *withdraws* does not name an event
+    minted on THIS machine's own shard. This is a prefix test against
+    `tracker_store.machine_slug()`, not a store read and not a generic
+    segment split: `_mint_transition_event_id` mints ids shaped
+    `evt-{machine_slug()}-{digest}`, so this checks *withdraws* starts with
+    that exact prefix. A fold-marker id (`<slug>-fold-<digest>`, no `evt-`
+    prefix) fails this prefix test by construction rather than being
+    silently misparsed as a foreign-shard id. A withdrawal naming a foreign
+    shard's event is rejected here rather than silently ignored at
+    reconcile — the reconcile-side non-suppression (C4/AC8) is the second
+    line, not the only one.
+    """
+    own_prefix = f"evt-{tracker_store.machine_slug()}-"
+    if not withdraws.startswith(own_prefix):
+        raise TrackerTransitionError(
+            f"cannot construct withdrawal event for {withdraws!r} — it does "
+            f"not name an event in this machine's own shard (expected "
+            f"prefix {own_prefix!r})"
+        )
+    return {
+        "kind": "withdrawal",
+        "withdraws": withdraws,
+        "actor": actor,
+    }
+
+
+def emit_withdrawal_event(payload: dict, *, repo_root: Path) -> dict:
+    """Append a `withdrawal_event` payload as ONE
+    `tracker_store.append_event` call — an ordinary row in its shard's
+    sequence, exactly as a queued event is (this chunk's own framing): the
+    shard, sequence, and id-minting machinery are reused unchanged, and
+    this function performs a plain append, never a mutation of the row it
+    names.
+
+    Stamps `observed_at`/`applied_at` (equal — a withdrawal is a direct
+    actor action, never `suggest`/`deferred`-tier; it carries no `tier`
+    field at all), `schema_version`, and mints `id` via
+    `_mint_withdrawal_event_id` (content-addressed on `("withdrawal",
+    withdraws)`, no nonce — two racing withdrawals of the same target
+    collide on `TrackerStoreDuplicateIdError` rather than double-appending,
+    mirroring `_mint_snapshot_event_id`'s race guard).
+    """
+    observed_at = _stamp_applied_at()
+    event = dict(payload)
+    event["observed_at"] = observed_at
+    event["applied_at"] = observed_at
+    event["schema_version"] = _SCHEMA_VERSION
+    event["id"] = _mint_withdrawal_event_id(payload["withdraws"])
+    return tracker_store.append_event(event, repo_root=repo_root)
+
+
 def reopen_cascade(item_id: str, *, actor: str, repo_root: Path) -> list[dict]:
     """Reopen `item_id` (F2): append a `manual_close: reopened` marker plus
     whatever `code_complete` / `qa_verified` retracts the CURRENT projected

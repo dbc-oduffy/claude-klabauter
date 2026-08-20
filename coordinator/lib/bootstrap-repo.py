@@ -56,7 +56,7 @@ _BIN_LIB_DIR = os.path.join(_COORDINATOR_ROOT, "bin", "lib")
 
 if _BIN_LIB_DIR not in sys.path:
     sys.path.insert(0, _BIN_LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
@@ -74,9 +74,7 @@ def _import_main():
     DoE clone rather than falling through its ~/.claude-install-layout rungs.
     """
     os.environ.setdefault("COORDINATOR_ROOT", _COORDINATOR_ROOT)
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.bootstrap_repo import main as _op_main
 
     return _op_main

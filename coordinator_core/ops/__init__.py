@@ -138,6 +138,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_plans", 'registers "fleet.archive_completed_plans"'),
     ("coordinator_core.ops.fleet.plan_handoffs", 'registers "fleet.handoffs_for_plan"'),
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
+    ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
     ("coordinator_core.ops.fleet.archive_handoffs", 'registers "fleet.archive_completed_handoffs"'),
     ("coordinator_core.ops.fleet.prune_bugs", 'registers "fleet.prune_closed_bugs"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
@@ -518,6 +519,21 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "app_session.launch", "app_session.census", '
         '"app_session.teardown" (docs/plans/2026-08-15-app-session-launch-'
         "census-teardown-ops.md § C3)",
+    ),
+    (
+        "coordinator_core.ops.eol.census",
+        'registers "eol.census" (docs/plans/2026-08-20-every-repo-detects-'
+        "its-own-eol-drift.md § C2)",
+    ),
+    (
+        "coordinator_core.ops.eol.audit_producers",
+        'registers "eol.audit_producers" (docs/plans/2026-08-20-every-repo-'
+        "detects-its-own-eol-drift.md § C4)",
+    ),
+    (
+        "coordinator_core.ops.eol.repair",
+        'registers "eol.repair" (docs/plans/2026-08-20-every-repo-detects-'
+        "its-own-eol-drift.md § C3)",
     ),
 ]
 

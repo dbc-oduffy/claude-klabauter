@@ -885,14 +885,23 @@ class TestAC4PlacementAndDurablePlaneIsolation:
 #   (i)   id content-derived AND globally unique — `push_suggestion.py ::
 #         _mint_event_id` mints `evt-<machine_slug()>-<digest12>`,
 #         `digest12` a SHA-256 hexdigest prefix (12 hex chars) over the
-#         canonical JSON of the caller's event content plus a fresh
-#         microsecond timestamp folded in as the per-event nonce.
-#         Content-derived (digest over the event) satisfies the base half;
-#         the `<machine>-` component satisfies the global-uniqueness half.
-#         A caller-supplied `event.id` is refused loud
-#         (`PushSuggestionMalformedError`), never silently overwritten —
-#         `push_suggestion.py`'s handler body, the `if "id" in event:`
-#         check immediately after the event-shape validation.
+#         canonical JSON of the caller's event content plus a per-event
+#         nonce: the caller's `idempotency_key` when supplied, a fresh
+#         microsecond timestamp otherwise (C6, review-driven correction,
+#         2026-08-20 — amended at `f86c06c43432`, which replaced the
+#         unconditional timestamp with this two-arm nonce; the key is an
+#         INPUT to our derivation, never a stored key, so claude-klabauter still
+#         mints the id itself either way). Content-derived (digest over the
+#         event plus the nonce) satisfies the base half; the `<machine>-`
+#         component, hostname-derived via `machine_slug()`, satisfies the
+#         global-uniqueness half — non-injective (distinct hostnames can
+#         collapse to the same slug) and an unresolvable hostname yields
+#         the shared literal `"unknown"`, so this is a practical
+#         uniqueness aid, not a mathematical guarantee. A caller-supplied
+#         `event.id` is refused loud (`PushSuggestionMalformedError`),
+#         never silently overwritten — `push_suggestion.py`'s handler
+#         body, the `if "id" in event:` check immediately after the
+#         event-shape validation.
 #   (ii)  commutative modulo total order — this op performs exactly ONE
 #         `tracker_store.append_event` call per invocation (local arm,
 #         `_write_local`) or delivers exactly one envelope (peer arm,
@@ -927,6 +936,8 @@ _ALLOWED_TRACKER_STORE_REFERENCERS = frozenset(
         "coordinator_core/tracker_entities.py",
         "coordinator_core/tracker_projection.py",
         "coordinator_core/tracker_transitions.py",
+        # DR-241 § Amendment (2026-08-20) — reconcile pass, C4.
+        "coordinator_core/tracker_reconcile.py",
     }
 )
 
@@ -4007,6 +4018,42 @@ class TestRotateMonthRelocatesClosedMonth:
             for r in _read_raw_lines(repo / EVENTS_DIR_RELPATH / "events.host-a.jsonl")
         ]
         assert live_ids == []
+
+    def test_rotate_month_rotates_an_event_that_lands_before_the_lock(self, tmp_path, monkeypatch):
+        # A concurrent writer appending a same-month event between the
+        # candidate scan and the trim: it must be relocated, never trimmed
+        # out of existence. Reproduced deterministically by landing the
+        # append at the one instant the race needs it — after rotate_month
+        # has entered, before locked_rmw reads under the lock.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-07-15T00:00:00Z"), "sequence": 1}],
+        )
+        live = shard_path(repo, machine="host-a")
+        real_locked_rmw = ts.locked_rmw
+
+        def _append_then_lock(target, mutate, **kwargs):
+            with live.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    json.dumps({**_event("evt-late", "2026-07-31T23:59:59Z"), "sequence": 2})
+                    + "\n"
+                )
+            return real_locked_rmw(target, mutate, **kwargs)
+
+        monkeypatch.setattr(ts, "locked_rmw", _append_then_lock)
+
+        moved = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert moved == 2
+
+        rotated_path = repo / EVENTS_DIR_RELPATH / "2026-07" / "events.host-a.jsonl"
+        rotated_ids = [r["id"] for r in _read_raw_lines(rotated_path)]
+        assert rotated_ids == ["evt-1", "evt-late"], (
+            "an event appended before the lock must be copied to the rotated "
+            "file, not trimmed from the live shard into nowhere"
+        )
+        assert [r["id"] for r in _read_raw_lines(live)] == []
 
     def test_rotate_month_no_op_when_month_has_no_events(self, tmp_path):
         repo = _make_git_repo(tmp_path / "repo")

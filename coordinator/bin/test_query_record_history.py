@@ -179,5 +179,66 @@ class QueryRecordHistoryTests(unittest.TestCase):
         self.assertEqual(out.strip(), "[]")
 
 
+class SupportedTypesHintTests(unittest.TestCase):
+    """T9/T10 — the supported-type hint must actually be reachable.
+
+    `_supported_types_hint` catches bare `Exception` and returns "" on any
+    failure, which is correct for a best-effort hint and also means an
+    unbound name inside it degrades to a permanently empty hint that every
+    message-text assertion still passes. T9 therefore checks name binding
+    statically rather than asserting on stderr: it is the only leg that
+    distinguishes "the hint could not resolve the engine on this box" from
+    "the hint can never work anywhere".
+    """
+
+    def test_hint_references_no_unbound_global(self) -> None:
+        import ast
+        import builtins
+
+        source = _MODULE_PATH.read_text(encoding="utf-8")
+        fn = next(
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_supported_types_hint"
+        )
+        bound = {
+            alias.asname or alias.name.split(".")[0]
+            for node in ast.walk(fn)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+        bound |= {
+            target.id
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        referenced = {
+            node.id
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+        unbound = {
+            name
+            for name in referenced - bound
+            if not hasattr(builtins, name) and not hasattr(qrh, name)
+        }
+        self.assertEqual(unbound, set())
+
+    def test_missing_type_message_carries_the_hint_when_available(self) -> None:
+        original = qrh._supported_types_hint
+        qrh._supported_types_hint = lambda: "decision, sizing-object"
+        try:
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = qrh.main([])
+        finally:
+            qrh._supported_types_hint = original
+        self.assertEqual(code, 2)
+        self.assertIn("supported: decision, sizing-object", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

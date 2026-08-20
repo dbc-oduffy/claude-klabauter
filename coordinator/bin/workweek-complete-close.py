@@ -86,11 +86,9 @@ def _import_rel_id():
     # construction through the single sanctioned wire_paths.rel_id helper
     # instead of a hand-rolled .as_posix() that would silently drift if
     # rel_id's contract is ever extended.
-    from cc_invoke import _resolve_claude_klabauter_root  # noqa: WPS433 (deferred, mirrors house style)
+    from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: WPS433 (deferred, mirrors house style)
 
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.wire_paths import rel_id
 
     return rel_id
@@ -103,9 +101,7 @@ def _ensure_claude_klabauter_root_on_path() -> None:
     symbols (``resolve_session_id`` and ``relocate_touched_path``), not one."""
     from cc_invoke import _resolve_claude_klabauter_root  # noqa: WPS433 (deferred, mirrors house style)
 
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
 
 
 def _resolve_session_id_for_relocate() -> str:

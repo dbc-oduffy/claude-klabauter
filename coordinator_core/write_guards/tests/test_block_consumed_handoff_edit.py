@@ -390,10 +390,7 @@ class TestSessionIdentityResolution:
         payload = _payload(repo_root, "state/handoffs/2026-07-20_120000_abc.md")
 
         result = guard.check(payload)
-        assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        reason = result["hookSpecificOutput"]["additionalContext"]
-        assert "you hold this claim" in reason.lower()
+        assert result is None, "the holder leg is silent (2026-08-20 PM ruling)"
 
     def test_holder_via_claude_session_id(self, tmp_path, monkeypatch):
         repo_root, handoff_path = _make_repo(tmp_path)
@@ -402,10 +399,7 @@ class TestSessionIdentityResolution:
         payload = _payload(repo_root, "state/handoffs/2026-07-20_120000_abc.md")
 
         result = guard.check(payload)
-        assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        reason = result["hookSpecificOutput"]["additionalContext"]
-        assert "you hold this claim" in reason.lower()
+        assert result is None, "the holder leg is silent (2026-08-20 PM ruling)"
 
     def test_coordinator_session_id_takes_precedence(self, tmp_path, monkeypatch):
         # COORDINATOR_SESSION_ID (tier 1) wins over a mismatched lower tier.
@@ -416,10 +410,7 @@ class TestSessionIdentityResolution:
         payload = _payload(repo_root, "state/handoffs/2026-07-20_120000_abc.md")
 
         result = guard.check(payload)
-        assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        reason = result["hookSpecificOutput"]["additionalContext"]
-        assert "you hold this claim" in reason.lower()
+        assert result is None, "the holder leg is silent (2026-08-20 PM ruling)"
 
     def test_non_holder_when_no_session_env_set(self, tmp_path, monkeypatch):
         repo_root, handoff_path = _make_repo(tmp_path)
@@ -436,11 +427,13 @@ class TestSessionIdentityResolution:
 # ---------------------------------------------------------------------------
 # 2d. C18a reshape pin (2026-08-06 apply-guard-class-census, C18a): the guard
 # splits on the holder predicate it already computed -- deny where the
-# calling session is NOT the claim holder, advise (non-blocking) where it
-# IS. Both directions pinned explicitly and side by side so a regression on
-# either leg (e.g. accidentally denying the holder again, or accidentally
-# advising a non-holder) fails loudly here rather than only via the
-# `additionalContext`/`permissionDecision` assertions scattered above.
+# calling session is NOT the claim holder, silence where it IS (the warn
+# that leg carried was dropped 2026-08-20 per the PM ruling relayed in
+# `cross-repo/inbox/2026-08-20-example-retrieval-repo-ue-addon-em-holder-edit-warn-is-
+# friction-not-guidance.md`). Both directions pinned explicitly and side by
+# side so a regression on either leg (e.g. accidentally denying the holder
+# again, or accidentally denying/warning where it should stay silent) fails
+# loudly here rather than only via the assertions scattered above.
 # ---------------------------------------------------------------------------
 
 
@@ -451,7 +444,12 @@ class TestHolderSplitBothDirections:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
-    def test_holder_edit_is_advisory_not_blocking(self, tmp_path, monkeypatch):
+    def test_holder_edit_is_silent(self, tmp_path, monkeypatch):
+        # 2026-08-20 PM ruling (example-retrieval-repo-ue-addon-em memo `holder-edit-
+        # warn-is-friction-not-guidance`): the holder arm emits NOTHING --
+        # not a deny, not an `additionalContext`. Silence discriminates: a
+        # session-id resolution regression would classify this holder a
+        # non-holder and produce a deny envelope here.
         repo_root, _ = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "some-prior-session")
@@ -459,13 +457,9 @@ class TestHolderSplitBothDirections:
 
         result = guard.check(payload)
 
-        assert result is not None, "holder edit must still surface guidance"
-        hso = result["hookSpecificOutput"]
-        assert "permissionDecision" not in hso, (
-            "holder's own claimed handoff must not be hard-denied"
+        assert result is None, (
+            "holder's own claimed handoff must produce no envelope at all"
         )
-        assert "additionalContext" in hso
-        assert "handoff.correct_body" in hso["additionalContext"]
 
     def test_non_holder_edit_is_still_hard_denied(self, tmp_path, monkeypatch):
         repo_root, _ = _make_repo(tmp_path)
@@ -568,15 +562,15 @@ class TestNoUnlockExistsStatement:
         assert "recovery" not in reason.lower()
         assert "pretooluse-write-guards.md" not in reason
 
-    def test_holder_advisory_carries_no_mechanism_for_subagent(self, tmp_path, monkeypatch):
+    def test_holder_edit_is_silent_for_subagent_too(self, tmp_path, monkeypatch):
+        # The mechanism-suppression question is moot on the holder arm now
+        # that it emits nothing; pinned so a reintroduced holder message
+        # cannot arrive un-suppressed through the subagent path.
         repo_root, _ = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "some-prior-session")
         result = guard.check(self._subagent_payload(repo_root))
-        assert result is not None
-        reason = result["hookSpecificOutput"]["additionalContext"]
-        assert "recovery" not in reason.lower()
-        assert "pretooluse-write-guards.md" not in reason
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

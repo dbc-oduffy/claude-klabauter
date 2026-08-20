@@ -56,7 +56,7 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -65,9 +65,7 @@ _USAGE = "Usage: day-coverage-sweep.py <YYYY-MM-DD>"
 
 
 def _import_day_coverage_sweep():
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.completion_ops import day_coverage_sweep as _sweep
     return _sweep
 

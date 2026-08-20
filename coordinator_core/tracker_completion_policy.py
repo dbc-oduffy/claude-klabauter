@@ -87,9 +87,9 @@ from pathlib import Path
 from typing import Literal
 
 from coordinator_core import tracker_transitions
+from coordinator_core.tracker_transitions import _SUGGEST_TIER
 
 _AUTO_TIER: Literal["auto"] = "auto"
-_SUGGEST_TIER: Literal["suggest"] = "suggest"
 _RETRACTED_TO_STATE = "retracted"
 _ASSERTED_STATE = "asserted"
 
@@ -119,7 +119,7 @@ class CodeCompleteEvidence:
 
 def classify_code_complete_tier(
     evidence: CodeCompleteEvidence,
-) -> Literal["auto", "suggest"]:
+) -> str:
     """Classify a `code_complete` observation's tier (AC1, AC2).
 
     Returns `"auto"` iff `evidence.trailer_bound` is true AND
@@ -127,6 +127,13 @@ def classify_code_complete_tier(
     check against `True`, not a truthy check, so that `None` (indeterminate)
     never satisfies the condition. Returns `"suggest"` for every other
     input, including `reachable_on_default_branch is None`. Never raises.
+
+    The return annotation is `str`, not a two-value `Literal`, because
+    `tracker_transitions.TRANSITION_TIERS` (this module's SSOT for the tier
+    vocabulary) is a 4-value closed set (`auto`/`suggest`/`direct`/
+    `deferred`, C2/C1) — this function still only ever produces `"auto"` or
+    `"suggest"` (unchanged by this widening; see the two branches above),
+    it is only the TYPE that no longer over-asserts a two-value universe.
     """
     if evidence.trailer_bound and evidence.reachable_on_default_branch is True:
         return _AUTO_TIER
@@ -156,7 +163,7 @@ class QaVerifiedEvidence:
     confidence: float | None = None
 
 
-def classify_qa_verified(evidence: QaVerifiedEvidence) -> Literal["suggest"]:
+def classify_qa_verified(evidence: QaVerifiedEvidence) -> str:
     """Always `"suggest"` — no auto path exists for this axis (AC3).
 
     This is a PINNED CONTRACT, not an unimplemented stub: `qa_verified`
@@ -166,6 +173,17 @@ def classify_qa_verified(evidence: QaVerifiedEvidence) -> Literal["suggest"]:
     and this docstring are the negative-spec that keeps a future editor
     from wiring an auto path in. Confirmed even against a maximally-strong
     evidence payload (AC3's test).
+
+    The return annotation is `str`, not `Literal["suggest"]` (C2) — same
+    widening rationale as `classify_code_complete_tier`: this function's
+    OWN behavior is unchanged and stays `"suggest"`-only, per this
+    docstring's pinned contract above; only the type no longer hardcodes a
+    narrower vocabulary than `tracker_transitions.TRANSITION_TIERS` (C1's
+    SSOT) actually has. This function still cannot produce `"queued"`
+    (`tracker_transitions`' `"deferred"` spelling) or `"direct"` — those
+    describe a human's deferred assertion and a reopen cascade
+    respectively, not machine evidence classification (see this chunk's
+    dispatch brief); it stays `"suggest"`-only.
     """
     return _SUGGEST_TIER
 

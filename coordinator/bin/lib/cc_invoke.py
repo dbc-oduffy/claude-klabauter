@@ -935,6 +935,17 @@ def _resolve_claude_klabauter_root() -> str:
     raise RuntimeError(_CLAUDE_KLABAUTER_ROOT_REMEDIATION)
 
 
+
+# Dual-read window for the engine-root rename (docs/plans/2026-08-20-an-engine-
+# root-is-not-named-for-the-repo.md). The PUBLISHED engine is transformed on the
+# way out -- every `claude-klabauter` identifier becomes `claude_klabauter` -- but it still
+# imports THIS module from the live tree, which is not transformed. So a published
+# workstream_complete asks for `_resolve_claude_klabauter_root` and finds only
+# `_resolve_claude_klabauter_root`, and the ceremony tail dies on ImportError for every
+# session on the box. Exporting both names costs nothing and closes that window.
+# In the mirror this line transforms into a self-assignment, which is a harmless
+# no-op. Remove it only once no published engine references the old spelling.
+_resolve_claude_klabauter_root = _resolve_claude_klabauter_root
 def resolve_colocated_claude_klabauter_root(script_file: str) -> str:
     """Resolve CLAUDE_KLABAUTER_ROOT for a CLI that lives INSIDE the engine checkout itself.
 

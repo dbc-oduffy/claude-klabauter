@@ -108,7 +108,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
@@ -133,9 +133,7 @@ def _resolve_session_live():
     In-process import (no subprocess, no bash) — same trampoline shape as
     reap-orphaned-in-flight-handoffs.py's _resolve_session_live.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.session.liveness import session_live
     return session_live
 

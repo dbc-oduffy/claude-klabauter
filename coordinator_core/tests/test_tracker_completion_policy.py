@@ -153,6 +153,32 @@ def test_ac9_policy_module_imports_no_subprocess_or_git():
 
 
 # ---------------------------------------------------------------------------
+# C2 — anti-drift assertion: the policy module's `_SUGGEST_TIER` is the
+# SAME object as `tracker_transitions`' SSOT, not a redeclared duplicate.
+# Guards against the two-tier-vocabulary drift this chunk collapses.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_suggest_tier_is_c1_ssot_not_a_redeclaration():
+    assert tcp._SUGGEST_TIER is tt._SUGGEST_TIER
+
+
+def test_c2_classifiers_return_unchanged_values():
+    evidence = tcp.CodeCompleteEvidence(
+        sha="a" * 40, trailer_bound=True, reachable_on_default_branch=True
+    )
+    assert tcp.classify_code_complete_tier(evidence) == "auto"
+
+    evidence_suggest = tcp.CodeCompleteEvidence(
+        sha="b" * 40, trailer_bound=False, reachable_on_default_branch=True
+    )
+    assert tcp.classify_code_complete_tier(evidence_suggest) == "suggest"
+
+    qa_evidence = tcp.QaVerifiedEvidence(source="ci", confidence=1.0)
+    assert tcp.classify_qa_verified(qa_evidence) == "suggest"
+
+
+# ---------------------------------------------------------------------------
 # AC12 — a qa_verified suggestion with NO prior code_complete observation:
 # render_status reads "open" (code_complete's None state fails the closed
 # conjunct regardless of qa_verified). Asserted explicitly.

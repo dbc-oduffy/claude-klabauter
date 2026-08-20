@@ -93,7 +93,7 @@ def _resolve_claude_klabauter_root() -> str:
     _bin_lib_dir = os.path.join(_coordinator_root, "bin", "lib")
     if _bin_lib_dir not in sys.path:
         sys.path.insert(0, _bin_lib_dir)
-    from cc_invoke import _resolve_claude_klabauter_root as _resolve  # noqa: E402
+    from cc_invoke import _resolve_claude_klabauter_root as _resolve, require_dispatch_engine_on_path  # noqa: E402
 
     return _resolve()
 
@@ -106,9 +106,7 @@ def _import_state_root():
     failures the CLI maps to exit code 1, distinct from the module's own
     StateRootError/CrossCuttingStateRoot business-logic failures.
     """
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.state_root import (  # noqa: E402
         CrossCuttingStateRoot as _CrossCuttingStateRoot,
         StateRootError as _StateRootError,

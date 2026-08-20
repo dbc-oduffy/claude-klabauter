@@ -3,11 +3,27 @@ coordinator_core.ops.handoff_correct_body — JSON-RPC "handoff.correct_body" op
 
 Purpose: an authorized, bounded body-correction door for a `status: claimed` (or
 legacy `status: consumed`) `state/handoffs/*.md` file. `block_consumed_handoff_edit`
-correctly denies every `Write`/`Edit` against such a file's body — this op applies
+denies a NON-HOLDER's `Write`/`Edit` against such a file's body — this op applies
 the correction as a guard-safe node-write instead, so the guard never sees it and is
-never asked to allow anything. It exists solely for the case the guard's own deny
-text concedes is legitimate: an author fixing a factual error in a body they wrote,
-after a peer session claimed the baton before the fix landed.
+never asked to allow anything.
+
+POSSESSION FIRST, AUTHORSHIP SECOND — read the gate below, not this line alone.
+The handler's first arm is POSSESSION: a caller whose session id matches the
+resolved claim holder (ledger-first via `resolve_claim_state`) is authorized with
+`basis = "holder"`, whatever `authoring_session` says. The authorship arm is the
+FALLBACK, reached only when no holder resolves or the holder is someone else; there
+the D2(viii) `authoring_session` equality gate applies. A claim holder is therefore
+eligible even on a baton another session authored — the label the guard prints
+(`possession-gated`, pinned by `test_correct_body_labeled_possession_not_authorship`)
+is the accurate one. This paragraph exists because the pre-possession framing ("this
+op exists solely for an author fixing a body they wrote") outlived the widening and
+sent at least one reader — example-retrieval-repo-ue-addon-em, 2026-08-20 memo — to conclude
+they were ineligible when the holder arm covered them. Do not restore an
+authorship-first summary above the possession arm.
+
+The original narrow case the guard's deny text conceded is legitimate — an author
+fixing a factual error in a body they wrote, after a peer session claimed the baton
+before the fix landed — is now one of two authorized bases, not the only one.
 
 Authority: docs/decisions/DR-247-bounded-body-write-carveout-for-claimed-handoff.md
 (D1/D2, all eight bounds). This op is the ONLY `handoff.*` verb DR-212 D2(iii)/D4's
@@ -32,7 +48,8 @@ under `asyncio.to_thread` — the SAME seam `coordinator_core.ops.handoff_stamp`
 and `main_worktree_root` are the same reused primitives `handoff_stamp` uses for its
 own `state/handoffs/`-only containment and worktree derivation.
 
-THE AUTHORSHIP GATE IS ANTI-ACCIDENT, NOT ANTI-ADVERSARY (DR-247 § 3 — record this
+THE AUTHORSHIP GATE (the fallback arm — see POSSESSION FIRST above) IS
+ANTI-ACCIDENT, NOT ANTI-ADVERSARY (DR-247 § 3 — record this
 honestly, it is silently breakable otherwise). `authoring_session` resolution is a
 pure caller-controlled environment-variable lookup (`COORDINATOR_SESSION_ID` >
 `CLAUDE_SESSION_ID` > `CLAUDE_CODE_SESSION_ID`), performed inside a subprocess the

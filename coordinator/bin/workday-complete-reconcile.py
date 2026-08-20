@@ -70,7 +70,7 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
-from cc_invoke import _resolve_claude_klabauter_root, child_env  # noqa: E402
+from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path, child_env  # noqa: E402
 
 
 def _no_console_kw() -> dict:
@@ -255,9 +255,7 @@ def _resolve_session_id() -> str:
     deleted by PM directive 2026-07-15 — no production writer survives.
     """
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.session.core import resolve_session_id
 
         return resolve_session_id()
@@ -275,9 +273,7 @@ def _resolve_live_session_ids() -> frozenset[str]:
     entries," never a hard failure of the whole sweep.
     """
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.session.liveness import resolve_live_session_ids
 
         return resolve_live_session_ids()

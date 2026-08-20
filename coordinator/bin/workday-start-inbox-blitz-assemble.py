@@ -89,11 +89,9 @@ def _no_console_kw() -> dict:
     window (Review: code-reviewer P2 — matched to the pattern ccbdbecc2 applied
     to sweep-boot.py/standup.py/render-project-tracker/refresh-plugin-live-install.py)."""
     try:
-        from cc_invoke import _resolve_claude_klabauter_root
+        from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path
 
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.win_portability import no_console_creationflags
 
         return no_console_creationflags()
@@ -439,9 +437,7 @@ def _resolve_repo_root() -> str:
     try:
         from cc_invoke import _resolve_claude_klabauter_root
 
-        claude_klabauter_root = _resolve_claude_klabauter_root()
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.git.repo_root import show_toplevel
 
         # `show_toplevel`'s own spawn fallback bounds its wait at 2s (see

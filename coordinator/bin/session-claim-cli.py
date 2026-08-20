@@ -162,7 +162,7 @@ from pathlib import Path
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 _TRANSPORT_FAIL = 3
 _NOT_LIVE = 1
@@ -170,9 +170,7 @@ _MALFORMED_SID = 4
 
 
 def _import_module():
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.claims as _mod
 
     return _mod
@@ -181,9 +179,7 @@ def _import_module():
 def _import_liveness_module():
     """Separate seam from ``_import_module`` (claims) so ``is-session-live``
     tests can stub liveness in isolation without touching the claims stub."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.liveness as _mod
 
     return _mod
@@ -192,9 +188,7 @@ def _import_liveness_module():
 def _import_stale_claims_module():
     """Separate seam from ``_import_module`` (claims) so
     ``list-stale-claim-handoffs`` tests can stub the enumerator in isolation."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.stale_claims as _mod
 
     return _mod
@@ -207,9 +201,7 @@ def _import_core_module():
     above. Only reads ``core.sessions_dir`` — the SAME public path-arithmetic
     ``claims.clear_claim_if_dead`` itself calls, never a second liveness
     parser."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.core as _mod
 
     return _mod
@@ -221,9 +213,7 @@ def _import_claim_index_module():
     PATH-TOUCH plane independently of the artifact-claim store and the
     liveness verdict, mirroring the existing per-functional-area seam
     split above."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.claim_index as _mod
 
     return _mod
@@ -233,9 +223,7 @@ def _import_holder_evidence_module():
     """Separate seam from ``_import_liveness_module`` so ``is-session-live``'s
     AC7 basis line can be stubbed independently of the live/dead verdict in
     tests, mirroring the claims/liveness/stale_claims seam split above."""
-    claude_klabauter_root = _resolve_claude_klabauter_root()
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.holder_evidence as _mod
 
     return _mod

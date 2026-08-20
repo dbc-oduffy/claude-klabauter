@@ -110,14 +110,17 @@ onto the dispatched JSON-RPC response at a fixed path
 `dispatch_message`, not exception-type introspection:
   - `PushSuggestionMalformedError` — the request or event fails shape/schema
     validation (missing/wrong-typed `event`, `event.scope == "fleet-authored"`
-    missing `authority.emitter_repo`, a missing addressing key, a D3
-    `repo_root` mismatch, a non-int `contract_version`, or a caller-supplied
-    `event.id` — claude-klabauter mints the event id itself, RULING 2026-08-20 C4;
-    see `_mint_event_id`). Multiply inherits
-    `ValueError` (existing handler-level callers already assert `ValueError`)
-    AND `PushSuggestionRefused` (existing `_resolve_owning_repo`/
-    `_item_addressing_key` callers already assert `PushSuggestionRefused`) —
-    a narrowing of both pre-existing types, never a widening.
+    missing `authority.emitter_repo`, a D3 `repo_root` mismatch, a non-int
+    `contract_version`, or a caller-supplied `event.id` — claude-klabauter mints the
+    event id itself, RULING 2026-08-20 C4; see `_mint_event_id`). Multiply
+    inherits `ValueError` (existing handler-level callers already assert
+    `ValueError`) AND `PushSuggestionRefused` (existing
+    `_resolve_owning_repo` callers already assert `PushSuggestionRefused`) —
+    a narrowing of both pre-existing types, never a widening. C1 (review-
+    driven correction, 2026-08-20) removed the addressing-key requirement
+    entirely — `_deliver_envelope` now addresses on the minted `event["id"]`,
+    never a caller-supplied field, so an event with neither `item_id` nor
+    `event_id` behaves identically on both arms.
   - `PushSuggestionUnauthorizedError` — the request names an owning-repo slug
     that does not resolve to a `repos.*` registry member. Reuses C5's own
     refusal (`tracker_holder._resolve_repos_key_for_slug`'s "is not a known
@@ -217,6 +220,13 @@ from coordinator_core import tracker_store
 _REFUSAL_CLASS_MALFORMED = "malformed"
 _REFUSAL_CLASS_UNAUTHORIZED = "unauthorized"
 _REFUSAL_CLASS_SCHEMA_STALE = "schema_stale"
+#: C3 (review-driven correction, 2026-08-20) — the D2(4) peer-delivery
+#: collision, addressed on the minted event id after C1, is now evidence of
+#: a successful prior delivery, not a malformed request; cockpit must be
+#: able to treat it as success-on-retry. Pinned alongside the three C12
+#: classes so a rename is caught by the same `test_refusal_class_values_
+#: are_pinned` this joins.
+_REFUSAL_CLASS_DUPLICATE_DELIVERY = "duplicate_delivery"
 
 
 class PushSuggestionRefused(RuntimeError):
@@ -238,15 +248,26 @@ class PushSuggestionRefused(RuntimeError):
     is the JSON-RPC error object printed to stdout — `_exit_code_for_response`
     collapses every non-structural-pin error to exit 1, so the three C12
     classes are NOT distinguishable by exit code alone. `refusal_class`
-    (None on this base — the D2(4)/D2(7) unclassified refusals carry none)
-    is folded into `str(self)` by the override below, which is the only
-    field of the exception `ipc._handler_exception_error` preserves onto the
-    wire (`error.message = str(exc)`, length-bounded) — so the discriminator
-    is reachable at a FIXED path (`error["message"]`'s leading
+    (None on this base — the D2(7) unclassified refusal carries none) is
+    folded into `str(self)` by the override below, which is the only field
+    of the exception `ipc._handler_exception_error` preserves onto the wire
+    (`error.message = str(exc)`, length-bounded) — so the discriminator is
+    reachable at a FIXED path (`error["message"]`'s leading
     `refusal_class=<value>: ` token) in the dispatched response, not just to
-    an in-process Python caller inspecting the exception's type."""
+    an in-process Python caller inspecting the exception's type.
+
+    C3 (review-driven correction, 2026-08-20): `caller_facing_validation`
+    is set True on THIS base class, not only the three C12 subclasses below.
+    `ipc._handler_exception_error` only preserves an exception's own message
+    when that flag is set — leaving it unset on the base collapsed the
+    D2(4)/D2(7) refusals to the generic "Internal error: PushSuggestionRefused"
+    shape at the wire, contradicting this module's own docstring claim that
+    they carry "its own distinguishable message". `refusal_class` stays
+    `None` on the base regardless — unclassified means no discriminator
+    token, never a lost message."""
 
     refusal_class: Optional[str] = None
+    caller_facing_validation = True
 
     def __str__(self) -> str:
         base = super().__str__()
@@ -258,17 +279,18 @@ class PushSuggestionRefused(RuntimeError):
 class PushSuggestionMalformedError(PushSuggestionRefused, ValueError):
     """C12 class 1/3 — MALFORMED: the request or event fails shape/schema
     validation (missing/wrong-typed `event`, `fleet-authored` scope missing
-    `authority.emitter_repo`, a missing item/event addressing key, a D3
-    `params.repo_root` mismatch, a non-int `contract_version`). Raised
-    BEFORE any ownership resolution or write is attempted.
+    `authority.emitter_repo`, a D3 `params.repo_root` mismatch, a non-int
+    `contract_version`). Raised BEFORE any ownership resolution or write is
+    attempted. No addressing-key requirement remains (C1, review-driven
+    correction, 2026-08-20) — `_deliver_envelope` addresses the peer-arm
+    filename on the minted `event["id"]`, never a caller-supplied field.
 
     Multiply inherits `ValueError` (pre-existing handler-level callers of
     this module already assert `pytest.raises(ValueError, ...)`) and
-    `PushSuggestionRefused` (pre-existing `_resolve_owning_repo`/
-    `_item_addressing_key` callers already assert
-    `pytest.raises(PushSuggestionRefused, ...)`) — narrows both, widens
-    neither. `caller_facing_validation = True` (module docstring § Rejection
-    contract) makes this class's own message the one
+    `PushSuggestionRefused` (pre-existing `_resolve_owning_repo` callers
+    already assert `pytest.raises(PushSuggestionRefused, ...)`) — narrows
+    both, widens neither. `caller_facing_validation = True` (module
+    docstring § Rejection contract) makes this class's own message the one
     `coordinator_core.ipc._handler_exception_error` surfaces.
 
     `refusal_class = _REFUSAL_CLASS_MALFORMED` (F1) — pinned so a rename is
@@ -306,6 +328,26 @@ class PushSuggestionSchemaStaleError(PushSuggestionRefused):
 
     caller_facing_validation = True
     refusal_class = _REFUSAL_CLASS_SCHEMA_STALE
+
+
+class PushSuggestionDuplicateDeliveryError(PushSuggestionRefused):
+    """C3 (review-driven correction, 2026-08-20) — D2(4) PEER-DELIVERY
+    COLLISION: `_deliver_envelope` addresses the delivered envelope's
+    filename on the minted `event["id"]` (C1), so a collision on that path
+    means an envelope carrying this exact id has already been delivered —
+    evidence of a successful PRIOR delivery, never a malformed request.
+    Cockpit (or any peer-arm caller) can treat this refusal as
+    success-on-retry rather than something to work around.
+
+    Distinct from the three C12 classes (malformed/unauthorized/
+    schema-stale, all raised BEFORE any write is attempted) — this fires
+    only on the peer arm, only after `_write_envelope_file` finds the exact
+    target path already exists.
+
+    `refusal_class = _REFUSAL_CLASS_DUPLICATE_DELIVERY`."""
+
+    caller_facing_validation = True
+    refusal_class = _REFUSAL_CLASS_DUPLICATE_DELIVERY
 
 
 #: This op's own wire-contract version (module docstring § Rejection
@@ -361,21 +403,6 @@ def _resolve_owning_repo(event: dict) -> Optional[str]:
             f"string or null, got {owning!r}"
         )
     return owning
-
-
-def _item_addressing_key(event: dict) -> str:
-    """The addressing key a peer-delivery envelope's filename is keyed on.
-    Required non-empty (AC17-adjacent shape check; C12 owns the full
-    malformed/unauthorized/schema-stale taxonomy) — an event with neither
-    `item_id` nor `event_id` cannot be addressed to a stable inbox filename.
-    """
-    key = event.get("item_id") or event.get("event_id")
-    if not isinstance(key, str) or not key.strip():
-        raise PushSuggestionMalformedError(
-            "tracker.push_suggestion: event must carry a non-empty "
-            "'item_id' or 'event_id' string to address the delivery"
-        )
-    return key.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -564,14 +591,69 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
     cross-tree write (D4). `target_root` is always registry-resolved by
     `tracker_holder.write_root_for` before this function is ever called
     (D2(2), registry-enumerated receiver only — never wire-derived).
+
+    Addressed on the MINTED `event["id"]`, never a caller-supplied field
+    (C1, review-driven correction, 2026-08-20). `_push_suggestion_sync`
+    assigns `event["id"]` before routing, so it is guaranteed present here
+    — asserted, not defaulted. Two reasons this is the only correct
+    addressing key:
+
+      - Idempotency, date-independently. `event["id"]` is itself
+        content-derived and (with `idempotency_key` supplied) stable across
+        a same-payload retry — see `_mint_event_id`. Addressing the
+        filename on it means a retry re-derives the SAME filename and
+        `O_EXCL` refuses the duplicate delivery regardless of which UTC day
+        each attempt lands on. The prior `{today}-...-{item_id}` shape
+        broke exactly this across a midnight boundary: same payload, same
+        key, different date prefix, different filename, no collision, a
+        second envelope silently delivered.
+      - Confinement. The caller-supplied `item_id`/`event_id` this filename
+        used to be built from received no path-hostile treatment beyond
+        `.strip()` — a value like `"../../../../escaped"` composes real
+        `..` path segments that `mkdir(parents=True)` and `os.open` both
+        resolve, verified to escape the receiver repository entirely.
+        `event["id"]` is machine-minted with a fixed, grammar-constrained
+        shape (`evt-<machine_slug>-<12 hex>`, see `_mint_event_id`) and was
+        never caller-supplied text in the first place — a caller-supplied
+        `event.id` is refused loud before this function is ever reached
+        (the handler's `if "id" in event` check). This is not a sanitizer
+        bolted onto a caller-controlled string; it is removing the
+        caller-controlled string from the path entirely. See also the
+        `target_path.resolve()` confinement assertion below, which exists
+        so a future editor cannot reintroduce a caller-controlled path
+        component here without an explicit, loud failure.
     """
-    item_key = _item_addressing_key(event)
-    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    filename = f"{today}-tracker-event-{item_key}.md"
+    event_id = event.get("id")
+    if not isinstance(event_id, str) or not event_id:
+        raise PushSuggestionRefused(
+            "tracker.push_suggestion: _deliver_envelope reached with no "
+            "minted event['id'] — _push_suggestion_sync must mint it "
+            "before routing; refusing rather than composing a delivery "
+            "path from an absent addressing key"
+        )
+    filename = f"tracker-event-{event_id}.md"
     rel_path = f"cross-repo/inbox/{filename}"
     target_path = target_root / "cross-repo" / "inbox" / filename
 
+    # Confinement: the composed path must resolve inside the receiver's
+    # inbox and nowhere else. Hardens against a future editor reintroducing
+    # a caller-controlled path component into `filename` above — this
+    # assertion, not just the minted-id addressing, is what a regression
+    # trips (P1-2, review-driven correction, 2026-08-20).
+    inbox_root = (target_root / "cross-repo" / "inbox").resolve()
+    if target_path.resolve().parent != inbox_root:
+        raise PushSuggestionRefused(
+            f"tracker.push_suggestion: composed delivery path "
+            f"{target_path} resolves outside the receiver's inbox "
+            f"{inbox_root} — refusing; nothing was written"
+        )
+
     # D2(7) gitignore delivery guard — refuse-on-ignored, BEFORE any write.
+    # `check_ignore`'s own contract is three-valued: 0 = ignored,
+    # 1 = evaluated and not ignored, >=2 = could not evaluate. Admitting on
+    # anything but 1 (review-driven correction, 2026-08-20) means a
+    # receiver mid-rebase or holding an `index.lock` — ordinary at this
+    # box's documented load norm — no longer silently loses the guard.
     ignore_result = check_ignore(target_root, [rel_path])
     if ignore_result.returncode == 0:
         raise PushSuggestionRefused(
@@ -579,15 +661,25 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
             f"gitignored in the receiver repo {target_root} — refusing "
             "(D2(7)); nothing was written"
         )
+    if ignore_result.returncode != 1:
+        raise PushSuggestionRefused(
+            f"tracker.push_suggestion: could not evaluate gitignore state "
+            f"for delivery path {rel_path!r} in the receiver repo "
+            f"{target_root} (check-ignore exit {ignore_result.returncode}) "
+            "— refusing rather than admitting on an unevaluated guard "
+            "(D2(7)); nothing was written"
+        )
 
     content = _compose_envelope(owning_repo, event)
     try:
         _write_envelope_file(target_path, content)
     except FileExistsError as exc:
-        raise PushSuggestionRefused(
+        raise PushSuggestionDuplicateDeliveryError(
             f"tracker.push_suggestion: delivery target {target_path} "
             "already exists — refusing to clobber (D2(4) fail-loud on "
-            "collision)"
+            "collision). Addressed on the minted event id, this is "
+            "evidence of a successful prior delivery, not a malformed "
+            "request; safe to treat as success-on-retry."
         ) from exc
 
     outcome = _commit_envelope(target_root, rel_path)
@@ -637,17 +729,31 @@ def _mint_event_id(event: dict, idempotency_key: Optional[str] = None) -> str:
     into the digest IN PLACE OF the wall-clock nonce, so a same-payload,
     same-key retry re-derives the SAME id and collides on
     `tracker_store.append_event`'s own duplicate-id guard instead of
-    double-appending. Bound (i) stays satisfied either way — the digest
-    stays content-derived and machine-qualified; `idempotency_key` is an
-    INPUT to that derivation, never a stored key (the caller-supplied `id`
-    refusal is unchanged — different field, different role). Absent
-    `idempotency_key`, today's wall-clock nonce behaviour is unchanged.
+    double-appending. Bound (i) stays satisfied either way — the DIGEST
+    stays content-derived (P3-3, review-driven correction, 2026-08-20: it
+    is the *id*, not the digest, that is machine-qualified — the
+    `<machine>-` prefix carries that half, applied outside the digest
+    below); `idempotency_key` is an INPUT to the digest's derivation, never
+    a stored key (the caller-supplied `id` refusal is unchanged — different
+    field, different role). Absent `idempotency_key`, today's wall-clock
+    nonce behaviour is unchanged. Two machines pushing an identical payload
+    with an identical key therefore produce the SAME digest and DIFFERENT
+    ids — correct, and the reason the digest/id distinction above matters.
+
+    P3-1 (review-driven correction, 2026-08-20): the two nonce arms are
+    tagged (`("k", idempotency_key)` vs `("t", timestamp)`) so they cannot
+    alias onto the same digest input — without the tag, a caller whose
+    `idempotency_key` happened to equal an ISO-8601 microsecond timestamp
+    would collide with the wall-clock arm's derivation for that instant.
     """
     if idempotency_key:
-        nonce: Any = idempotency_key
+        nonce: Any = ("k", idempotency_key)
     else:
-        nonce = datetime.datetime.now(datetime.timezone.utc).isoformat(
-            timespec="microseconds"
+        nonce = (
+            "t",
+            datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="microseconds"
+            ),
         )
     canonical = json.dumps((event, nonce), sort_keys=True)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
