@@ -382,3 +382,74 @@ def test_disposition_to_verdict_mapping_refuses_on_live_peer_and_live_unrelated(
         result = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
         assert result["disposition"] == disposition
         assert result["verdict"] == verdict, disposition
+
+
+# ---------------------------------------------------------------------------
+# (a2) the cardinality gate — the target does not unify with itself
+# ---------------------------------------------------------------------------
+
+
+def test_only_the_picked_up_baton_held_does_not_unify(tmp_path, monkeypatch):
+    """The DoE-claude 2026-08-20 incident, as a decision-level repro.
+
+    `brief()` claims the target BEFORE routing here, so the ledger already
+    holds it by the time the held set resolves. Without the cardinality
+    gate the target is its own "pre-existing held baton", the verdict reads
+    `proceed`, and C5 mints an empty `pickup_ready: true` successor two
+    seconds after the claim.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "target.md", baton_role="work")
+    _make_ledger_claim(repo, "target.md", SELF_SID)
+    monkeypatch.setattr(
+        pa._liveness, "live_session_verdicts", lambda root: {SELF_SID: (True, "meta")}
+    )
+
+    result = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
+
+    assert result["verdict"] == "no-unification"
+    assert result["reason"] == "only-target-held"
+    # The baton IS held and IS inheritable — the refusal is about cardinality,
+    # not about the baton being ineligible. Asserting `inheritable == []` here
+    # would conflate this with `nothing-inheritable`.
+    assert result["held"]["primary"] == TARGET_PATH
+    assert result["disposed_skipped"] == []
+    assert result["unstamped_skipped"] == 0
+
+
+def test_target_plus_one_preexisting_baton_still_proceeds(tmp_path, monkeypatch):
+    """The gate is on the PRE-EXISTING set, never on the parent set: with a
+    genuine fan-in the target is still absorbed as a leg, which is C5's
+    whole point. A gate written against the parent set instead would turn
+    every two-baton unification into a one-baton one."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "target.md", baton_role="work")
+    _seed_handoff(repo, "prior.md", baton_role="work")
+    _make_ledger_claim(repo, "target.md", SELF_SID)
+    _make_ledger_claim(repo, "prior.md", SELF_SID)
+    monkeypatch.setattr(
+        pa._liveness, "live_session_verdicts", lambda root: {SELF_SID: (True, "meta")}
+    )
+    monkeypatch.setattr(pa, "_primary_held_disposition", lambda *a, **k: "handover")
+
+    result = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
+
+    assert result["verdict"] == "proceed"
+    parents = pa._unification_parents(result["held"])
+    assert TARGET_PATH in parents
+    assert "state/handoffs/prior.md" in parents
+
+
+def test_archived_held_leg_matches_the_target_by_basename(tmp_path, monkeypatch):
+    """A held leg that a boot sweep already moved to `archive/handoffs/` is
+    still the SAME baton as the `state/handoffs/` path being picked up. A
+    path-equality gate would read the two as distinct and re-open the
+    self-unification the basename comparison closes."""
+    assert pa._is_same_artifact(
+        "archive/handoffs/2026-01/target.md", "state/handoffs/target.md"
+    )
+    assert not pa._is_same_artifact("state/handoffs/other.md", "state/handoffs/target.md")
+    # `unify_run_batons` picks nothing up — an empty target narrows nothing.
+    assert not pa._is_same_artifact("state/handoffs/target.md", "")

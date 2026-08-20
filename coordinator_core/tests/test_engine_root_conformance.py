@@ -246,6 +246,23 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "CLAUDE_KLABAUTER_ROOT-only rung short-circuits and returns CLAUDE_KLABAUTER_ROOT's value "
     "(<OTHER_REPO> in this case) rather than REPO_CLAUDE_KLABAUTER's — the two "
     "entrypoints disagree with EACH OTHER, not just with DoE's expectation.",
+    # Added 2026-08-20 (session fc8834f1) on doe-claude-em's request, landed
+    # with the fixture in their `fa0bfb6d9`. Reproduced here before entering it
+    # rather than taken on their report.
+    "coordinator-engine-root-beats-claude-klabauter-root-when-both-set": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
+        cid="coordinator-engine-root-beats-claude-klabauter-root-when-both-set"
+    )
+    + " NOTE THE DISCRIMINANT THIS CASE PINS IS CONFORMANT, and that is what "
+    "separates this entry from every other one in this table: the wrapper "
+    "returns (<LIVE_TREE>, 'live-working-tree') — DoE's expectation exactly — "
+    "so COORDINATOR_ENGINE_ROOT's precedence over CLAUDE_KLABAUTER_ROOT is verified, not "
+    "waived. What fails is the shim==wrapper equality assertion above it: the "
+    "shim, having no env rungs at all, never sees either name and raises "
+    "ClaudeKlabauterResolutionError. Same divergence as "
+    "'live-tree-env-var-precedence-repo-claude-klabauter-first', which fails "
+    "identically. `strict=True` is load-bearing here — give the shim an env "
+    "rung and this XPASSes loudly, which is the signal that the C4a wrapper's "
+    "carve-out can retire.",
 }
 
 

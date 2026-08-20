@@ -284,6 +284,41 @@ class ClaudeKlabauterPercolate:
     percolate_engine_module: object
 
 
+def _describe_engine_import_failure(engine_root: "Optional[str]", exc: Exception) -> str:
+    """Failure text for `_import_claude_klabauter_percolate`'s AC15 catch-all, discriminating
+    the ONE misdiagnosable shape from every other import failure.
+
+    A publish MIRROR is a destination, not a publisher: `setup/publish-targets.
+    portable` field 7 carries explicit `!ops/percolate_*.py` negations, so a
+    published tree deliberately carries no percolate engine. Because
+    `resolve_engine_root()` walks up from the SCRIPT'S OWN location, running the
+    mirror's copy of this driver resolves the engine root TO that mirror and
+    dies on `No module named coordinator_core.ops.percolate_run` — which reads
+    as "publish is broken fleet-wide" when the source repo's own copy publishes
+    normally. That misreading survived 9 days as
+    `state/bug-backlog/2026-08-11-klabauter-mirror-ships-the-ops-registry-
+    287f6526da3a` and was escalated to a P1 outage that was never true.
+
+    Detected structurally — the resolved root has no `coordinator_core/ops/
+    percolate_run.py` on disk — rather than by matching the exception text, so a
+    renamed module or a genuine ImportError inside a PRESENT percolate_run.py
+    still falls through to the generic message with its real cause attached.
+
+    Returns the generic text unchanged when `engine_root` is None (the root was
+    never resolved: the failure happened at or before `require_engine_on_path`).
+    """
+    if engine_root is not None:
+        root = Path(engine_root)
+        if not (root / "coordinator_core" / "ops" / "percolate_run.py").is_file():
+            return (
+                f"resolved engine root {root} is a publish destination, not a "
+                f"publisher — it carries no percolate engine by design. Run the "
+                f"source repo's own copy of this driver, or point CLAUDE_KLABAUTER_ROOT at "
+                f"that checkout."
+            )
+    return f"claude-klabauter percolate engine import failed: {exc}"
+
+
 def _import_claude_klabauter_percolate() -> ClaudeKlabauterPercolate:
     """Resolve the engine root via the same `cc_invoke.resolve_engine_root()` shim
     (§ module docstring), then import the engine repo's percolate-engine
@@ -307,6 +342,7 @@ def _import_claude_klabauter_percolate() -> ClaudeKlabauterPercolate:
             "cc_invoke.py not found on any of the 3 search rungs — cannot resolve the engine root"
         )
 
+    engine_root: Optional[str] = None
     try:
         spec = importlib.util.spec_from_file_location("_publish_cc_invoke_pct", cc_invoke_path)
         if spec is None or spec.loader is None:
@@ -319,7 +355,7 @@ def _import_claude_klabauter_percolate() -> ClaudeKlabauterPercolate:
             sys.modules.pop(spec.name, None)
             raise
 
-        module.require_engine_on_path(__file__)
+        engine_root = module.require_engine_on_path(__file__)
 
         from coordinator_core.frontmatter.schema_validate import (  # type: ignore[import-not-found]
             SchemaVersionError as _SchemaVersionError,
@@ -363,7 +399,9 @@ def _import_claude_klabauter_percolate() -> ClaudeKlabauterPercolate:
     except EngineUnavailableError:
         raise
     except Exception as exc:  # noqa: BLE001 - fail-closed catch-all, AC15
-        raise EngineUnavailableError(f"claude-klabauter percolate engine import failed: {exc}") from exc
+        raise EngineUnavailableError(
+            _describe_engine_import_failure(engine_root, exc)
+        ) from exc
 
     return ClaudeKlabauterPercolate(
         run_percolate=_run_percolate,

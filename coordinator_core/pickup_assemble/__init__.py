@@ -4660,6 +4660,27 @@ def _primary_held_disposition(
     return "live-peer"
 
 
+def _is_same_artifact(held_path: str, artifact_path: str) -> bool:
+    """Whether a ledger-derived held path and the artifact being picked up
+    name the SAME baton. Compared by BASENAME, deliberately: the claim
+    ledger is basename-keyed, while `artifact_path` arrives repo-relative
+    and a held leg may resolve through `state/handoffs/` or
+    `archive/handoffs/<YYYY-MM>/` depending on whether a boot sweep has run
+    — a path-equality test would read the same baton as two different ones
+    across that move and re-open the defect this predicate closes.
+
+    An empty `artifact_path` (`unify_run_batons`, which is not picking
+    anything up) matches nothing, so that caller's held set is never
+    narrowed by this.
+    """
+    if not artifact_path:
+        return False
+    return (
+        held_path.replace("\\", "/").rsplit("/", 1)[-1]
+        == artifact_path.replace("\\", "/").rsplit("/", 1)[-1]
+    )
+
+
 def compute_baton_unification_verdict(
     root: Path, fm: dict[str, Any], artifact_path: str
 ) -> dict[str, Any]:
@@ -4718,6 +4739,25 @@ def compute_baton_unification_verdict(
         silent-zero shape AC10 names for the `/mise-en-place` fallback,
         one level down. No backfill and no default is invented here to
         dodge the count.
+
+    (a2) CARDINALITY GATE — the inheritable set must contain a baton that
+    is NOT the artifact being picked up. `brief()` claims the target
+    (`acquire_brief_claim`) BEFORE routing here, so by the time the held
+    set is resolved off the ledger the target is already in it: a first-
+    and-only pickup therefore reads as "this session already holds an
+    inheritable baton" and unifies a set of ONE with itself. That minted an
+    empty `pickup_ready: true` successor two seconds after the claim, which
+    then held the genuine successor's `deliverable_id` and advertised
+    itself to the pickup index as available work (DoE-claude 2026-08-20,
+    `cross-repo/inbox/2026-08-20-doe-claude-em-pickup-mints-a-phantom-
+    successor.md`; session `b1578cac`, claim `14:14:56Z`, mint `98b95686e`
+    at `14:15:00Z`).
+
+    The gate is on the PRE-EXISTING set, not on the parent set: when a
+    genuine fan-in exists, the target is still absorbed as a leg, which is
+    C5's whole point. `verdict: "no-unification"` / `reason:
+    "only-target-held"` falls through to `_adopt_into_baton`'s plain
+    advisory append — the pre-C5 behaviour for the only-one-baton case.
 
     (b) Four-arm refusal (`_primary_held_disposition`), evaluated against
     D-F's PRIMARY held baton — "the extant baton", the primary input to
@@ -4780,8 +4820,12 @@ def compute_baton_unification_verdict(
         elif _role_axis_is_unknown(role_raw):
             unstamped_skipped += 1
 
-    if not inheritable:
-        if unstamped_skipped:
+    preexisting = [p for p in inheritable if not _is_same_artifact(p, artifact_path)]
+
+    if not inheritable or not preexisting:
+        if inheritable and not preexisting:
+            no_unify_reason = "only-target-held"
+        elif unstamped_skipped:
             no_unify_reason = "unstamped-role-skipped"
         elif disposed_skipped:
             no_unify_reason = "all-held-disposed"
@@ -4797,14 +4841,19 @@ def compute_baton_unification_verdict(
             "unstamped_skipped": unstamped_skipped,
             "disposition": None,
             "message": (
-                f"{unstamped_skipped} held baton(s) skipped — role axis absent, "
-                "not yet stamped (C7 pending)."
-                if unstamped_skipped
+                "The only inheritable held baton IS the artifact being picked "
+                "up — a set of one is not a fan-in; nothing to unify."
+                if no_unify_reason == "only-target-held"
                 else (
-                    f"{len(disposed_skipped)} held baton(s) already disposed — "
-                    "nothing left to unify."
-                    if disposed_skipped
-                    else "No inheritable held baton — nothing to unify."
+                    f"{unstamped_skipped} held baton(s) skipped — role axis absent, "
+                    "not yet stamped (C7 pending)."
+                    if unstamped_skipped
+                    else (
+                        f"{len(disposed_skipped)} held baton(s) already disposed — "
+                        "nothing left to unify."
+                        if disposed_skipped
+                        else "No inheritable held baton — nothing to unify."
+                    )
                 )
             ),
         }
