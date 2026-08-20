@@ -64,7 +64,12 @@ Coverage:
       and an unterminated fence protects to EOF rather than falling back to
       prose. Inline `code` spans are deliberately NOT carved out (the corpus
       measurement that decides it is on the test itself), front matter is
-      not a fence, and fence tracking is markdown-only.
+      not a fence, and fence tracking is markdown-only. A closing run
+      carrying a trailing info string does not close; a fenced hit in a
+      live-doctrine file outranks that file's incident-evidence MARKER
+      (both non-rewriting, so only the reported reason differs); and the
+      whole carve-out holds over CRLF, pinning the shared-`splitlines()`
+      design all three line-numbering call sites depend on.
 
 Every offending literal below carries a same-line `abs-path-ok:` marker with
 a reason so THIS file itself can be written past the live
@@ -824,6 +829,96 @@ def test_python_triple_quote_is_not_a_fence(tmp_path: Path) -> None:
         if f.outcome == REPORT_ONLY
     )
     assert result.files_rewritten == []
+
+
+def test_closing_fence_with_trailing_text_does_not_close() -> None:
+    """A closing fence carries NO info string. A run followed by anything
+    other than whitespace opens nothing and closes nothing -- it is just a
+    line inside the current block.
+
+    Distinct path from `test_fenced_longer_run_and_shorter_inner_run_does_not_close`,
+    which reaches the same non-close outcome via run LENGTH. This one
+    reaches it via trailing content at the SAME length, which is the clause
+    `fenced_line_numbers` implements as `line.strip()[len(run):].strip()`.
+    """
+    text = (
+        "prose\n"
+        + BT * 3 + "sh\n"
+        "inside\n"
+        + BT * 3 + " extra\n"      # same run length, trailing text -> not a close
+        "still inside\n"
+        + BT * 3 + "\n"            # bare run -> this is the real close
+        "after\n"
+    )
+    fenced = fenced_line_numbers(text)
+    assert {2, 3, 4, 5, 6} <= fenced
+    assert 1 not in fenced
+    assert 7 not in fenced, "the bare run on line 6 is what closes the block"
+
+
+def test_fence_beats_live_doctrine_incident_marker(tmp_path: Path) -> None:
+    """Pins `classify`'s branch order where two conditions are both true.
+
+    A live-doctrine file whose offending line also reads like incident
+    evidence normally classifies MARKER -- "needs a human-written
+    abs-path-ok: reason". Inside a fence it classifies REPORT_ONLY instead,
+    because the fence ALREADY protects it and no human marker is owed.
+    Neither outcome rewrites, so `--apply` behaviour is identical either
+    way; this pins which reason a reader is given.
+    """
+    wiki_dir = tmp_path / "coordinator" / "docs" / "wiki"
+    wiki_dir.mkdir(parents=True)
+    target = wiki_dir / "some-incident.md"
+    target.write_text(
+        "the corrupted path was /Users/example-operator/X/claude-klabauter/coordinator/a.py\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\n"
+        "the corrupted path was /Users/example-operator/X/claude-klabauter/coordinator/b.py\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\n",
+        encoding="utf-8",
+    )
+    before = target.read_bytes()
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(
+        ["coordinator/docs/wiki/some-incident.md"]))
+
+    by_line = {f.hit.line: f for f in result.findings}
+    assert by_line[1].outcome == MARKER, "unfenced incident evidence still asks for a human marker"
+    assert by_line[3].outcome == REPORT_ONLY
+    assert "fenced code block" in by_line[3].reason
+    # Both are non-rewriting, so the file is untouched either way.
+    assert result.files_rewritten == []
+    assert target.read_bytes() == before
+
+
+def test_fenced_carve_out_survives_crlf(tmp_path: Path) -> None:
+    """The tracker keys off `str.splitlines()`, as do `_raw_hits_in_text`
+    and `_split_keeping_endings`, so all three agree on line numbering for
+    any terminator. Pins that shared-primitive design: a future refactor of
+    `fenced_line_numbers` to a `\n`-only splitter would desync the fence
+    set from the hit line numbers and silently protect the wrong lines.
+    """
+    target = tmp_path / "note.md"
+    body = (
+        "authored /Users/example-operator/X/claude-klabauter/coordinator/a.py\r\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\r\n"
+        "/Users/example-operator/X/claude-klabauter/coordinator/b.py\r\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\r\n"
+    )
+    with open(target, "w", encoding="utf-8", newline="") as fh:
+        fh.write(body)
+
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["note.md"]))
+    subs = [f for f in result.findings if f.outcome == SUBSTITUTE]
+    fenced_reports = [
+        f for f in result.findings
+        if f.outcome == REPORT_ONLY and "fenced code block" in f.reason
+    ]
+    assert len(subs) == 1 and subs[0].hit.line == 1
+    assert len(fenced_reports) == 1 and fenced_reports[0].hit.line == 3
+    # CRLF preserved exactly -- no terminator flipped by the rewrite.
+    raw = target.read_bytes()
+    assert b"\r\n" in raw
+    assert raw.count(b"\r\n") == 4
+    assert b"\n\n" not in raw.replace(b"\r\n", b"")
 
 
 def test_fenced_carve_out_is_idempotent(tmp_path: Path) -> None:

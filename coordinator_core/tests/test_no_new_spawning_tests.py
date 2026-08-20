@@ -657,29 +657,43 @@ def _func_reaches_spawn_indirectly_excluding_patched(
 # into a function-scope (Rules 2/4, unmodified `WrapperResolver`) query for
 # the identical pair -- the collision D2 named for (a), re-emerging here if
 # the caches were shared. See module docstring "(d)".
+#
+# Sited on `_WRAPPER_RESOLVER._promote_unknown_wrapper_cache` (staff-eng
+# F4), not a module-level global -- `wrapper_resolution.py`'s own docstring
+# ("NOT A SINGLETON -- no module-level mutable cache here") governs this
+# caller too, and the disjointness above is unaffected: it is still a
+# separate dict from `_wrapper_cache`, just owned by the same resolver
+# instance rather than duplicated at module scope.
 # ---------------------------------------------------------------------------
-
-_MODULE_SCOPE_WRAPPER_CACHE: dict[tuple[Path, str], bool] = {}
 
 
 def _target_reaches_spawn_promoting_unknown(
     info, target: tuple, visiting: frozenset
 ) -> bool:
+    result, _truncated = _target_reaches_spawn_promoting_unknown_ex(info, target, visiting)
+    return result
+
+
+def _target_reaches_spawn_promoting_unknown_ex(
+    info, target: tuple, visiting: frozenset
+) -> tuple[bool, bool]:
+    """Like `_target_reaches_spawn_promoting_unknown`, plus a `truncated`
+    bool -- see `_func_is_wrapper_promoting_unknown_ex` for the invariant."""
     if target[0] == "name":
         name = target[1]
         if name in info.top_level_funcs:
-            return _func_is_wrapper_promoting_unknown(info.path, name, visiting)
+            return _func_is_wrapper_promoting_unknown_ex(info.path, name, visiting)
         binding = info.imports.get(name)
         if binding is not None and binding.kind == "func":
-            return _func_is_wrapper_promoting_unknown(
+            return _func_is_wrapper_promoting_unknown_ex(
                 binding.module_path, binding.orig_name, visiting
             )
     elif target[0] == "attr":
         obj_name, attr = target[1], target[2]
         binding = info.imports.get(obj_name)
         if binding is not None and binding.kind == "module":
-            return _func_is_wrapper_promoting_unknown(binding.module_path, attr, visiting)
-    return False
+            return _func_is_wrapper_promoting_unknown_ex(binding.module_path, attr, visiting)
+    return False, False
 
 
 def _func_is_wrapper_promoting_unknown(
@@ -691,29 +705,51 @@ def _func_is_wrapper_promoting_unknown(
     Cycle-safe via `visiting`, exactly like `WrapperResolver.func_is_wrapper`
     -- reach is `_target_reaches_spawn`'s existing transitive walk, no new
     bound. REACH IS ALREADY DEFINED -- ADD NO NEW BOUND."""
+    result, _truncated = _func_is_wrapper_promoting_unknown_ex(module_path, func_name, visiting)
+    return result
+
+
+def _func_is_wrapper_promoting_unknown_ex(
+    module_path: Path, func_name: str, visiting: frozenset
+) -> tuple[bool, bool]:
+    """`_func_is_wrapper_promoting_unknown`'s real body, plus a `truncated`
+    bool: True if this answer passed through a `key in visiting` cycle
+    guard anywhere on the path (staff-eng F3, mirroring
+    `WrapperResolver._func_is_wrapper_ex`, which this was copied from
+    verbatim including the flaw). A cycle-truncated `False` is a
+    placeholder to break the recursion, not a proven fact about `key`, and
+    must never be written into the cache -- caching it lets a mutually-
+    recursive function's answer depend on which function in the cycle was
+    resolved first. A `True` result is never truncation-tainted."""
+    cache = _WRAPPER_RESOLVER._promote_unknown_wrapper_cache
     key = (module_path, func_name)
-    if key in _MODULE_SCOPE_WRAPPER_CACHE:
-        return _MODULE_SCOPE_WRAPPER_CACHE[key]
+    if key in cache:
+        return cache[key], False
     if key in visiting:
-        return False
+        return False, True
     info = _get_module_info(module_path)
     if info is None or func_name not in info.top_level_funcs:
-        _MODULE_SCOPE_WRAPPER_CACHE[key] = False
-        return False
+        cache[key] = False
+        return False, False
     scanner = info.scanner
-    if scanner.func_spawns.get(func_name) or getattr(
-        scanner, "func_unknown_spawns", {}
-    ).get(func_name):
-        _MODULE_SCOPE_WRAPPER_CACHE[key] = True
-        return True
+    if scanner.func_spawns.get(func_name) or scanner.func_unknown_spawns.get(func_name):
+        cache[key] = True
+        return True, False
     next_visiting = visiting | {key}
     result = False
+    truncated = False
     for target in scanner.generic_calls.get(func_name, []):
-        if _target_reaches_spawn_promoting_unknown(info, target, next_visiting):
+        target_result, target_truncated = _target_reaches_spawn_promoting_unknown_ex(
+            info, target, next_visiting
+        )
+        if target_truncated:
+            truncated = True
+        if target_result:
             result = True
             break
-    _MODULE_SCOPE_WRAPPER_CACHE[key] = result
-    return result
+    if not truncated:
+        cache[key] = result
+    return result, truncated
 
 
 def _is_main_guard_test(test: ast.expr) -> bool:
@@ -1313,7 +1349,13 @@ def test_module_scope_unknown_argv0_promotes_a_routed_wrapper_for_rule1() -> Non
     fake_path = Path("<fixture-d-module>")
     info = ModuleInfo(fake_path, scanner, {}, {"_helper"})
     resolved = fake_path.resolve()
-    _MODULE_SCOPE_WRAPPER_CACHE.clear()
+    cache_key = (fake_path, "_helper")
+    # Instance-dict cache (staff-eng F4): pop only this fixture's own key,
+    # not a wholesale `.clear()` -- the prior module-global shape discarded
+    # every legitimately-computed entry process-wide on every test run;
+    # this mirrors the targeted save/restore already used for
+    # `_module_info_cache` immediately below.
+    _WRAPPER_RESOLVER._promote_unknown_wrapper_cache.pop(cache_key, None)
     prior = _WRAPPER_RESOLVER._module_info_cache.get(resolved, "<absent>")
     _WRAPPER_RESOLVER._module_info_cache[resolved] = info
     try:
@@ -1325,7 +1367,7 @@ def test_module_scope_unknown_argv0_promotes_a_routed_wrapper_for_rule1() -> Non
             del _WRAPPER_RESOLVER._module_info_cache[resolved]
         else:
             _WRAPPER_RESOLVER._module_info_cache[resolved] = prior
-        _MODULE_SCOPE_WRAPPER_CACHE.clear()
+        _WRAPPER_RESOLVER._promote_unknown_wrapper_cache.pop(cache_key, None)
 
 
 def test_module_scope_unknown_promotion_is_contained_to_module_scope() -> None:
@@ -1345,6 +1387,51 @@ def test_module_scope_unknown_promotion_is_contained_to_module_scope() -> None:
     assert not scanner.func_spawns.get("test_thing"), (
         "Rules 2/4 must never see a promoted UNKNOWN route -- func_spawns "
         "stays empty regardless of module- or function-scope call site"
+    )
+
+
+def test_wrapper_resolver_agrees_on_a_cycle_regardless_of_query_order(
+    tmp_path: Path,
+) -> None:
+    """staff-eng F3: mutually-recursive module-level wrappers `a`/`b`, where
+    `a` reaches a real spawn (via `helper`) and `b` reaches a spawn ONLY
+    through `a`, must resolve `b` to `True` regardless of which of `a`/`b`
+    is queried first. Before the fix, querying `a` first cached `b: False`:
+    `a` recurses into `b`, `b` recurses into `a`, hits the `key in visiting`
+    cycle guard on `a` and returns False, so `b` has no other route and
+    caches `False` -- permanently wrong, since calling `b` does reach
+    `helper` by way of `a`. Querying `b` first happens to resolve both
+    correctly, which is what makes the defect order-dependent. A fresh `WrapperResolver` per order, matching
+    real usage (one resolver per test-collection run), not the shared
+    module-level `_WRAPPER_RESOLVER` -- this fixture must not depend on nor
+    pollute that singleton's cache."""
+    module = tmp_path / "mutual_recursion.py"
+    module.write_text(
+        "import subprocess\n"
+        "def a():\n"
+        "    b()\n"
+        "    helper()\n"
+        "def b():\n"
+        "    a()\n"
+        "def helper():\n"
+        "    subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+
+    resolver_a_first = WrapperResolver(tmp_path, _build_scanner)
+    a_first_a = resolver_a_first.func_is_wrapper(module, "a")
+    a_first_b = resolver_a_first.func_is_wrapper(module, "b")
+
+    resolver_b_first = WrapperResolver(tmp_path, _build_scanner)
+    b_first_b = resolver_b_first.func_is_wrapper(module, "b")
+    b_first_a = resolver_b_first.func_is_wrapper(module, "a")
+
+    assert (a_first_a, a_first_b) == (True, True), (
+        "querying a-then-b: both reach helper's real spawn"
+    )
+    assert (b_first_a, b_first_b) == (True, True), (
+        "querying b-then-a must agree with a-then-b -- b reaches a spawn "
+        "through a's cycle regardless of query order"
     )
 
 

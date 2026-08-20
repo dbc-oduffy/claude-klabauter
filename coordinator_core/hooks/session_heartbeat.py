@@ -121,7 +121,12 @@ def _bootstrap_meta(session_id: str, git_root: str) -> None:
     try:
         from coordinator_core.session import core as _session_core
 
-        _session_core.init(session_id, cwd=git_root or None)
+        # `ensure_meta` is the single named owner of "create the record if
+        # the directory exists without one" (session/core.py); it performs
+        # exactly the idempotent `init` CREATE this function used to call
+        # inline, behind the same absent-file precondition. Routed through
+        # it so the heal has one definition rather than a copy per consumer.
+        _session_core.ensure_meta(session_id, git_root or None)
     except Exception:
         pass
 

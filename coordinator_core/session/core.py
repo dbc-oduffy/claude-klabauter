@@ -288,6 +288,62 @@ def session_dir(sid: str, cwd: Optional[str] = None) -> str:
     return str(Path(base) / sid)
 
 
+def ensure_meta(sid: str, cwd: Optional[str] = None) -> str:
+    """Return the session directory for ``sid``, creating its ``meta.json``
+    session RECORD first if the directory exists without one.
+
+    Exists because a session directory has no single owner. ``init`` is the
+    only writer of ``meta.json``, but many bookkeeping writers reach a
+    session directory into being with ``mkdir(parents=True, exist_ok=True)``
+    and drop their own file in it (``write_bump_launch_cwd``,
+    ``push-failures-cursor.txt``, ``session-shape.json``, ``baton.json``,
+    ``dispatched-agents.txt``, ``touched.txt``, ...). So a directory
+    routinely exists with no record in it, and every writer that goes
+    through ``update_meta_field`` then silently no-ops -- that function
+    returns False on an absent file by contract, matching the bash original
+    which requires ``cs_init`` to have run first.
+
+    The field that made this visible is ``goal``: ``meta.json`` is its only
+    source, there is no harness-registry substitute, and a claim whose goal
+    write no-ops renders to every peer as ``holder_goal_state: undeclared``
+    -- which is exactly what a peer's claim-contention check reads when it
+    asks what a live holder is doing.
+
+    Call this instead of ``session_dir`` at any site that is about to write
+    a meta.json field on a session it did not itself initialize.
+
+    Negative-spec:
+        - Does NOT convert the many directory-creating writers to route
+          through one owner. That is the actual constructor fix (one
+          ``ensure_session`` producing dir+record together or neither), it
+          touches every per-session writer on the hook hot path, and it is
+          sized as its own plan. This function makes the WRITE path
+          self-sufficient; it does not stop record-less directories from
+          being created.
+        - Does NOT repair an existing meta.json that is unreadable, non-JSON,
+          or not a dict. ``init`` is an idempotent CREATE here, never a
+          read-modify-write, so it cannot clobber a concurrent writer's
+          ``last_activity`` stamp -- the same bounded exception
+          ``hooks/session_heartbeat._bootstrap_meta`` already relies on.
+          ``update_meta_field`` still returns False for those cases and the
+          caller still handles it.
+        - Does NOT raise on a failed create. A session dir that cannot be
+          initialized returns the resolved path anyway, so the caller's
+          existing no-op-and-warn branch stays reachable rather than turning
+          a diagnostic field into a new failure mode.
+    """
+    sdir = session_dir(sid, cwd)
+    if not sdir:
+        return ""
+    if (Path(sdir) / "meta.json").is_file():
+        return sdir
+    try:
+        init(sid, cwd=cwd)
+    except Exception:  # noqa: BLE001 -- best-effort; caller handles a still-absent record
+        pass
+    return sdir
+
+
 # ---------------------------------------------------------------------------
 # Clock helpers
 # ---------------------------------------------------------------------------

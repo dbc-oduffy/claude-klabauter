@@ -1022,6 +1022,48 @@ def _resolve_from_repo() -> str:
     return _em_id_for_root(root, paths_dict)
 
 
+def _resolve_plan_author() -> str:
+    """Stamp a plan's `author:` with the MINTING SESSION's own resolvable
+    name (e.g. `claude-klabauter-76`), not the repo-wide EM role string
+    `_resolve_from_repo()` returns.
+
+    Reads `coordinator_core.session.harness_registry.self_record()` — the O(1)
+    single-file read of this process's own registry record, keyed off
+    `CLAUDE_PID` — and takes its `name` field directly. That name is the
+    harness's own per-session identity (`slug(basename(cwd)) + "-" +
+    one-random-byte-hex`, see `coordinator_core.session.reachability`'s module
+    docstring), generated independently of whether cross-session messaging is
+    bound, so it is present far more often than a `SendMessage`-ready
+    `name [ref]` address would be (that bracketed form additionally requires
+    `messaging_socket_path`, which is off by default — see
+    `harness_registry.self_record`'s own docstring, "44/44 records on this box
+    omit the field"). The bracketed ref exists to disambiguate CONCURRENT live
+    peers for messaging, not to stamp a durable file; the bare name is already
+    session-specific and traces back through `ListAgents`/registry history.
+
+    Falls back to `_resolve_from_repo()` — today's repo-level EM identity —
+    when the registry seam is unavailable, `CLAUDE_PID` doesn't resolve, or the
+    record carries no `name`. This is an honest degrade: it never fabricates a
+    session number, it reuses the same deterministic-but-coarser identity the
+    field already carried before this change.
+    """
+    try:
+        _ensure_engine_on_path()
+        from coordinator_core.session import harness_registry as _harness_registry
+    except Exception:  # noqa: BLE001 -- engine seam absent; degrade to repo-level identity
+        return _resolve_from_repo()
+    try:
+        self_info = _harness_registry.self_record()
+    except Exception:  # noqa: BLE001 -- registry read failed; degrade to repo-level identity
+        return _resolve_from_repo()
+    if self_info is None:
+        return _resolve_from_repo()
+    _sid, record = self_info
+    if not record.name:
+        return _resolve_from_repo()
+    return record.name
+
+
 # ---------------------------------------------------------------------------
 # Branch detection
 # ---------------------------------------------------------------------------
@@ -5273,10 +5315,12 @@ def main() -> None:
     if doc_type == "memo":
         from_id = args.from_repo if args.from_repo else _resolve_from_repo()
 
-    # Resolve author (for plan) — repo identity, not a hardcoded central-EM literal (D1 authorship).
+    # Resolve author (for plan) — the MINTING SESSION's own name (e.g.
+    # claude-klabauter-76), not a repo-wide EM role string, and never the
+    # hardcoded central-EM literal this replaced (D1 authorship).
     plan_author: str = ""
     if doc_type == "plan":
-        plan_author = _resolve_from_repo()
+        plan_author = _resolve_plan_author()
 
     # Resolve deliverable-spine fields (handoff, spinoff, roadmap-baton, plan) — C3b.
     # Session context inheritance: DELIVERABLE_ID env var is the mechanism by which the

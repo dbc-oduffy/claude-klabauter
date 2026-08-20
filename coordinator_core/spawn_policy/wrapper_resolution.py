@@ -178,6 +178,15 @@ class WrapperResolver:
         self._build_scanner = build_scanner
         self._module_info_cache: dict[Path, ModuleInfo | None] = {}
         self._wrapper_cache: dict[tuple[Path, str], bool] = {}
+        # A second, disjoint instance cache (never `_wrapper_cache`) for a
+        # differently-scoped "does this reach a spawn" question over the
+        # SAME (module, func) key shape -- e.g. the ratchet's own
+        # module-scope UNKNOWN-argv0 promotion (staff-eng F4,
+        # docs/plans/2026-08-20-the-spawn-ratchet-stops-accumulating-
+        # arrears.md § C6). Siting it here, rather than as a caller-owned
+        # module-level global, keeps it owned by the same resolver whose
+        # `visiting`/cycle-truncation invariants it must honour.
+        self._promote_unknown_wrapper_cache: dict[tuple[Path, str], bool] = {}
         self.unresolved_imports: set[str] = set()
 
     def get_module_info(self, path: Path) -> ModuleInfo | None:
@@ -204,19 +213,29 @@ class WrapperResolver:
     def target_reaches_spawn(
         self, info: ModuleInfo, target: tuple, visiting: frozenset
     ) -> bool:
+        result, _truncated = self._target_reaches_spawn_ex(info, target, visiting)
+        return result
+
+    def _target_reaches_spawn_ex(
+        self, info: ModuleInfo, target: tuple, visiting: frozenset
+    ) -> tuple[bool, bool]:
+        """Like `target_reaches_spawn`, plus a second `truncated` bool: True
+        if this answer passed through a `key in visiting` cycle guard
+        anywhere on the path, meaning it must NOT be cached (staff-eng F3).
+        See `_func_is_wrapper_ex` for the invariant this maintains."""
         if target[0] == "name":
             name = target[1]
             if name in info.top_level_funcs:
-                return self.func_is_wrapper(info.path, name, visiting)
+                return self._func_is_wrapper_ex(info.path, name, visiting)
             binding = info.imports.get(name)
             if binding is not None and binding.kind == "func":
-                return self.func_is_wrapper(binding.module_path, binding.orig_name, visiting)
+                return self._func_is_wrapper_ex(binding.module_path, binding.orig_name, visiting)
         elif target[0] == "attr":
             obj_name, attr = target[1], target[2]
             binding = info.imports.get(obj_name)
             if binding is not None and binding.kind == "module":
-                return self.func_is_wrapper(binding.module_path, attr, visiting)
-        return False
+                return self._func_is_wrapper_ex(binding.module_path, attr, visiting)
+        return False, False
 
     def func_is_wrapper(
         self, module_path: Path, func_name: str, visiting: frozenset = frozenset()
@@ -225,26 +244,53 @@ class WrapperResolver:
         or transitively (through other module-level wrappers, local or
         imported) contains a real spawn site. Memoized; cycle-safe via
         `visiting`."""
+        result, _truncated = self._func_is_wrapper_ex(module_path, func_name, visiting)
+        return result
+
+    def _func_is_wrapper_ex(
+        self, module_path: Path, func_name: str, visiting: frozenset
+    ) -> tuple[bool, bool]:
+        """`func_is_wrapper`'s real body, plus a `truncated` bool.
+
+        `truncated` is True when this call's answer depends on a `key in
+        visiting` cycle guard -- i.e. some OTHER function currently being
+        resolved recurses back into `key` before `key` itself has a real
+        answer. That `False` is a placeholder to break the recursion, not a
+        proven fact about `key`, so it must never be written into
+        `_wrapper_cache` (staff-eng F3): caching it would let the answer for
+        a mutually-recursive function permanently depend on which function
+        in the cycle was resolved first. A `True` result is never
+        truncation-tainted -- once any route proves a real spawn, that
+        proof holds regardless of which other routes were cycle-truncated
+        -- so only a truncated `False` withholds the cache write.
+        """
         key = (module_path, func_name)
         if key in self._wrapper_cache:
-            return self._wrapper_cache[key]
+            return self._wrapper_cache[key], False
         if key in visiting:
-            return False
+            return False, True
         info = self.get_module_info(module_path)
         if info is None or func_name not in info.top_level_funcs:
             self._wrapper_cache[key] = False
-            return False
+            return False, False
         if info.scanner.func_spawns.get(func_name):
             self._wrapper_cache[key] = True
-            return True
+            return True, False
         next_visiting = visiting | {key}
         result = False
+        truncated = False
         for target in info.scanner.generic_calls.get(func_name, []):
-            if self.target_reaches_spawn(info, target, next_visiting):
+            target_result, target_truncated = self._target_reaches_spawn_ex(
+                info, target, next_visiting
+            )
+            if target_truncated:
+                truncated = True
+            if target_result:
                 result = True
                 break
-        self._wrapper_cache[key] = result
-        return result
+        if not truncated:
+            self._wrapper_cache[key] = result
+        return result, truncated
 
     def func_reaches_spawn_indirectly(self, info: ModuleInfo, func_name: str) -> bool:
         """True if any call made directly inside `func_name` (any nesting

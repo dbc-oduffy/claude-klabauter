@@ -1757,7 +1757,13 @@ def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str
 
         value = f"pickup: {value_source}"[:_SESSION_GOAL_MAX_CHARS]
 
-        sdir = _session_core.session_dir(sid, str(worktree))
+        # `ensure_meta`, not `session_dir`: a session directory is routinely
+        # created by a bookkeeping writer that never wrote the meta.json
+        # record, and `update_meta_field` no-ops on an absent file by
+        # contract -- so this write reported "did not complete" on every
+        # claim in such a session and `goal` stayed permanently unset, which
+        # is what a peer's claim-contention check reads.
+        sdir = _session_core.ensure_meta(sid, str(worktree))
         if not sdir:
             return
         if not _session_core.update_meta_field(sdir, "goal", value):

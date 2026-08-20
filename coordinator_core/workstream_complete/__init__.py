@@ -536,6 +536,45 @@ class SessionShapeGate(NamedTuple):
     detection: Optional[dict[str, Any]] = None
 
 
+def _detector_c_attribution_is_uncorroborated(detection: dict[str, Any]) -> bool:
+    """True when a Detector C (crash-recovery) attribution rests on ZERO
+    exact path matches — every matched `scope:` entry was a directory
+    prefix.
+
+    Narrower than `_session_shape_is_uncertain` on purpose, and the two are
+    not interchangeable: that predicate decides whether to RAISE
+    `jp-session-shape` (an alarm), this one decides whether to ADOPT the
+    predecessor at all (a write). The `exact_match_count == 1 and
+    scope_size >= 2` case is uncertain enough to flag but still carries a
+    real path hit, so it keeps its attribution and only raises the point.
+    Zero exact matches carries nothing: a `scope:` entry naming a bare
+    package directory (`coordinator_core/`, `docs/decisions/`) matches any
+    session that touched that tree at all, which is not evidence about
+    WHOSE workstream this is.
+
+    Spec backlink: state/bug-backlog/2026-08-19-jp-session-shape-resolution-
+    is-inert-a-p-fe5b38e42795.yaml, which records why refusing the adoption
+    is the correct shape of this fix rather than making `jp-session-shape`'s
+    disposition load-bearing: the judgment point stays an alarm nobody has
+    to answer correctly for the ceremony to be SAFE, and the damage path
+    closes without a second way to resolve a shape.
+
+    Negative-spec: this is NOT a liveness check and NOT a general
+    predecessor validator. It reads one structured field on one detector
+    leg. An `exact_match_count`-absent record (an older
+    `wsc-session-disposition.py` that never computed it) returns False --
+    presence-vs-absence selects the branch, exactly as
+    `_session_shape_is_uncertain` documents for the same field, so a
+    partially-updated tree degrades to today's behaviour rather than
+    silently refusing every predecessor.
+    """
+    if detection.get("deciding_leg") != "detector-c":
+        return False
+    if detection.get("detector_c_status") != "crash-recovery":
+        return False
+    return detection.get("exact_match_count") == 0
+
+
 def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     """Steps 0 of `/workstream-complete`: resolve this session's id and
     chain-terminal-vs-single-session disposition via the ported detector
@@ -544,6 +583,20 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     sid = mod.resolve_session_id(repo_root)
     resolution = mod.resolve_disposition(repo_root, sid)
     disposition, consumed_handoff, diagnostics, consumed_handoff_paths = resolution
+    detection = dict(getattr(resolution, "detection", None) or {})
+    if consumed_handoff and _detector_c_attribution_is_uncorroborated(detection):
+        diagnostics = list(diagnostics) + [
+            "REFUSED: Detector C (crash-recovery) attributed this session to "
+            f"{consumed_handoff} on {detection.get('matched_scope_entry_count')} of "
+            f"{detection.get('scope_size')} scope entries with ZERO exact path matches "
+            "-- every hit was a directory prefix. Falling back to single-session rather "
+            "than adopting a predecessor on that evidence; nothing is stamped, "
+            "ledger-appended, or filed against that handoff or its plan. Re-run after "
+            "correcting the handoff's scope: if this session genuinely consumed it."
+        ]
+        disposition = SINGLE_SESSION
+        consumed_handoff = ""
+        consumed_handoff_paths = ()
     return SessionShapeGate(
         sid=sid,
         disposition=disposition,
@@ -552,10 +605,14 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
         consumed_handoff_paths=tuple(consumed_handoff_paths),
         # `.detection` is an ATTRIBUTE on that module's tuple subclass, not a
         # fifth element — the unpack above stays four-wide on purpose (see
-        # `DispositionResolution`). `getattr` with a default so an older
-        # copy of the bin script on a partially-updated tree degrades to
-        # "no structured detection" rather than raising.
-        detection=dict(getattr(resolution, "detection", None) or {}),
+        # `DispositionResolution`). Bound once above, with a `getattr`
+        # default, so an older copy of the bin script on a partially-updated
+        # tree degrades to "no structured detection" rather than raising.
+        # Emitted UNCHANGED even when the adoption above was refused: the
+        # refusal moves `disposition`, never the evidence it was read from,
+        # so `jp-session-shape` and the diagnostics still show what the
+        # detector actually saw.
+        detection=detection,
     )
 
 
@@ -732,6 +789,45 @@ def _session_shape_is_uncertain(detection: dict[str, Any]) -> bool:
         detection.get("scope_size", 0) >= 2
         or detection.get("single_match_kind") == "prefix"
     )
+
+
+def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> Optional[str]:
+    """AC3 (docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md,
+    item 2 / state/bug-backlog/2026-08-19-jp-session-shape-resolution-is-
+    inert-a-p-fe5b38e42795.yaml): when the caller has already answered
+    `jp-session-shape`, `gates.session_shape.disposition` should read that
+    resolved value on a re-`brief`, not silently replay the detector chain's
+    original verdict — today all four dispositions carry `resolves: []`, so
+    the decision is honoured by `wsc-tail` but invisible here, leaving
+    "accepted" and "discarded" indistinguishable to the operator deciding
+    whether to retry.
+
+    Reads `decisions["jp-session-shape"]["disposition"]` only — the same key
+    `build_decisions_template` pre-keys for this judgment point — and
+    canonicalizes it through `wsc_disposition.canonicalize` (both spellings
+    permanently recognised, see that module). Returns `None` on anything
+    absent, non-`dict`, non-`str`, empty, or unrecognised, so a malformed or
+    legacy-typo'd value never corrupts the emitted gate: the detector's own
+    verdict is kept unchanged in that case.
+
+    Deliberately does NOT attach a `resolves` set to the judgment point's
+    own dispositions (see this chunk's dispatch brief) — `d-coverage-gate`,
+    the directive these dispositions used to resolve, was removed under
+    K-001 (state/kill-ledger.md, LANDED `55e64be13`). This function only
+    changes what `brief` REPORTS back through `gates.session_shape`, never
+    what `directives[]` dispatches — the mutation path stays exactly where
+    `wsc-tail` already reads the decision from, unchanged by this chunk.
+    """
+    entry = decisions.get("jp-session-shape")
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get("disposition")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return canonicalize(value)
+    except ValueError:
+        return None
 
 
 def build_session_shape_judgment_point(gate: SessionShapeGate) -> Optional[dict[str, Any]]:
@@ -4004,6 +4100,16 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # shape for "no structured detection" stays `{}`, so consumers never have
     # to distinguish null from empty.
     session_shape_fact = {**gate._asdict(), "detection": dict(gate.detection or {})}
+    # AC3: a supplied `jp-session-shape` decision recomputes into the
+    # emitted `disposition` field on this same re-`brief` — see
+    # `_session_shape_disposition_from_decisions` for why (a resolved
+    # judgment point must read resolved, not indistinguishable from a
+    # discarded one). Only the reported fact changes; `gate` itself, and
+    # every earlier `canonicalize(gate.disposition)` read above, are
+    # untouched.
+    _decided_session_shape_disposition = _session_shape_disposition_from_decisions(decisions)
+    if _decided_session_shape_disposition is not None:
+        session_shape_fact["disposition"] = _decided_session_shape_disposition
 
     # AC5 — the ONLY three free-value keys `build_decisions_template`
     # pre-fills from data this SAME run already resolved (`DECISIONS_

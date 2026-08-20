@@ -263,6 +263,13 @@ _RAW_CMDLINE_ENTRYPOINTS = frozenset(
         "coordinator/bin/parallel-review-gate-decision.py",
         "coordinator/bin/parallel-review-orthogonality-guard.py",
         "coordinator/bin/wsc-coverage-gate-runner.py",
+        "coordinator/bin/backlog-grind-assemble.py",
+        "coordinator/bin/baton-assemble.py",
+        "coordinator/bin/consolidate-assemble.py",
+        "coordinator/bin/merge-assemble.py",
+        "coordinator/bin/pickup-assemble.py",
+        "coordinator/bin/workday-complete-assemble.py",
+        "coordinator/bin/workstream-complete-assemble.py",
     }
 )
 

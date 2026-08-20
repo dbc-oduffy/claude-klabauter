@@ -67,12 +67,19 @@ NEGATIVE-SPEC:
     binary on disk, must still be flagged as an install-surface-completeness
     gap -- `registry_get` found the local.toml value directly and wrongly
     treated it as "ladder resolved", collapsing the very distinction Check 2
-    exists to draw). Correctness boundary per this dispatch's brief -- left
-    as the sole read-side EXCEPTION in the inventory below, not converted.
+    exists to draw). Correctness boundary as of that dispatch. SUPERSEDED
+    2026-08-20: the site (renamed `_ladder_snapshot`) was later refactored to
+    a single batched `machine-local dump --prefix repos --format json` call
+    (W6/C6, 2026-08-19 amplification burn-down) instead of a per-key `get`
+    probe -- `dump` is not `get`/`keys`, so it no longer matches this
+    collector's brief at all and carries no inventory row (see the burn-down
+    comment's "2026-08-20 C3 WIDENING -- DROPPED ROWS" note, and
+    `test_collector_silent_on_regeneratability_now_dump_shaped` below).
 """
 from __future__ import annotations
 
 import ast
+import copy
 import pathlib
 
 import pytest
@@ -113,23 +120,53 @@ _SURFACE_MODULES = frozenset(
 # fix is to convert the site and remove its row, never to add rows freely.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/claude-doe.py:358",
-        "coordinator/bin/claude-doe.py:379",
+        "coordinator/bin/claude-doe.py:368",
+        "coordinator/bin/claude-doe.py:389",
         "coordinator/bin/lib/git_hook_install.py:159",
         "coordinator/lib/percolate/resolve_target.py:215",
         "coordinator/lib/percolate/targets.py:120",
-        "coordinator/lib/resolve-coordinator-clone.py:225",
-        "coordinator_core/engine_root.py:179",
-        "coordinator_core/ops/check_machine_local_regeneratability.py:277",
+        "coordinator/lib/resolve-coordinator-clone.py:223",
+        "coordinator_core/engine_root.py:191",
         "coordinator_core/ops/gen_claude_doe_shim.py:414",
         "coordinator_core/ops/gen_doe_root_pointer.py:127",
         "coordinator_core/ops/new_project_scaffold.py:159",
-        "coordinator_core/ops/render_template_tree.py:96",
+        "coordinator_core/ops/render_template_tree.py:97",
         "coordinator_core/ops/repo_bootstrap.py:141",
         "coordinator_core/resolve_coordinator_clone.py:143",
-        "coordinator_core/tests/test_engine_root_conformance.py:71",
+        # 2026-08-20 C3 (resolver-call-indirection widening) -- this file's own
+        # two sites, see "2026-08-20 C3 WIDENING" note below.
+        "coordinator/bin/lib/coordinator_registry.py:140",
+        "coordinator/bin/lib/coordinator_registry.py:411",
+        # 2026-08-20 C3 widening also surfaced the pre-existing `_machine_local_get`
+        # helper family below -- same shape, previously invisible. See note below.
+        "coordinator/bin/coordinator-doc-new.py:481",
+        "coordinator/bin/coordinator-doc-new.py:523",
+        "coordinator/bin/coordinator-lesson-add.py:109",
+        "coordinator/bin/fan-out-dispatch.py:360",
+        "coordinator/bin/gen-claude-klabauter-root-pointer.py:139",
+        "coordinator/bin/lib/cc_invoke.py:396",
+        "coordinator/bin/lib/cli_shared.py:100",
+        "coordinator/bin/lib/cli_shared.py:148",
+        "coordinator/bin/tests/test_claude_machine_local.py:110",
+        "coordinator/bin/workday-start-step0.py:145",
+        "coordinator_core/ops/check_arch_audit_staleness.py:118",
+        "coordinator_core/ops/check_weekly_staleness.py:119",
+        "coordinator_core/ops/deliverable_rollup.py:133",
+        "coordinator_core/ops/list_review_trail_records.py:127",
+        "coordinator_core/ops/list_week_changelog.py:100",
+        "coordinator_core/ops/queue_append.py:754",
+        "coordinator_core/ops/workday_complete_backfill_scan.py:202",
+        "coordinator_core/orientation/regenerate_cache.py:282",
+        "coordinator_core/pyresolve.py:168",
+        "coordinator_core/roadmap/audit.py:173",
     }
 )
+# Burn-down inventory (33 sites, 2026-08-20 census -- 13 carried forward from
+# the 2026-08-16 census below, minus 2 that dropped out (see "2026-08-20 C3
+# WIDENING -- DROPPED ROWS" at the end of this comment), plus 20 newly-visible
+# under the C3 resolver-call-indirection widening -- see "2026-08-20 C3
+# WIDENING" at the end of this comment for the new rows' disposition).
+#
 # Burn-down inventory (15 sites, 2026-08-16 census, post C7+C7b+C8 conversion,
 # the same-day parallel-review-integration census widening below, AND the
 # same-day repos.* ladder-loss fix below that -- 10 rows + 5 new rows).
@@ -302,6 +339,100 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # those keys "must be set in registry.local.toml" as a deliberate
 # fail-loud diagnostic contract -- autodiscovery masking an unset key would
 # defeat this manual tool's purpose, not serve it.
+#
+# 2026-08-20 C3 WIDENING -- DROPPED ROWS (code churn, not this dispatch's
+# doing -- landed by `9245fd0d5`-adjacent and `b12a51e75` ("C14: port
+# claude_klabauter_root fixture and replace machine-local CLI calls") between the
+# 2026-08-16 census and this one):
+#
+# `coordinator_core/ops/check_machine_local_regeneratability.py:277`
+# (`_ladder_resolves`, the sole permanent correctness exception) is GONE from
+# the live census: the site was refactored to `_ladder_snapshot`, which now
+# spawns `machine-local dump --prefix repos --format json` (one batched call
+# replacing the old per-key `get` probe -- see that function's own docstring,
+# "W6/C6, 2026-08-19 amplification burn-down"). `dump` is not `get`/`keys`, so
+# `_is_read_subcommand` no longer matches it -- correctly: it is a different
+# subcommand this collector's brief was never scoped to (see module
+# docstring, "WHAT COUNTS AS A HIT"). Verified only one `subprocess.run` call
+# remains in that file and it is the `dump` call. Removed from the inventory;
+# `test_collector_still_flags_regeneratability_ladder_probe_exception` below
+# updated to pin the new zero-hit reality instead of the stale line.
+#
+# `coordinator_core/tests/test_engine_root_conformance.py:71` is GONE from
+# the live census: its own `_machine_local_get` (now just `registry_get(key)`
+# at line 63) was converted to a pure in-process read -- the test module's
+# own docstring states this is deliberate, "so the module-scope
+# `_resolve_doe_root()` call below stays zero-spawn without a spawn-shaped
+# call node anywhere in this file." The production site it used to pin,
+# `coordinator_core/engine_root.py` (now line 191, held by the one-engine
+# plan per this file's Out of scope), is UNCHANGED and still spawns --
+# the "lockstep" pairing this comment used to describe is broken (test
+# converted, production site did not), but that is upstream code churn this
+# dispatch's writes-scope (this file only) cannot correct by re-coupling
+# them; noted here rather than silently dropped.
+#
+# 2026-08-20 C3 WIDENING (this dispatch): the collector's binary-marker text
+# match previously ran on the `subprocess.<fn>` call's own unparsed source
+# only, so a call whose binary token reached it through a local variable --
+# `impl = _machine_local_impl()` then `subprocess.run([sys.executable, impl,
+# "get", key])`, or a `for`-loop target bound to a resolver call -- was
+# invisible: the unparsed call text contains the bare name `impl` (or
+# `_ml_cand`), not any `_BINARY_MARKERS` substring. C3 widened the matcher to
+# resolve same-scope, single-assignment local bindings (incl. a `for`-loop
+# target's iterable) one level into the call's first positional argument,
+# feeding both `_is_read_subcommand` and `_names_machine_local` a resolved
+# copy of the call (see the resolver-call-indirection block above
+# `_spawn_func_name`). This surfaced 22 new sites (line numbers per this
+# census; no conversion performed, all writes-scoped to this file only):
+#
+# `coordinator/bin/lib/coordinator_registry.py:140` (`_registry_machine_local_get`,
+# the `cmd = [sys.executable, impl, "get", key]` -> `subprocess.run(cmd)` shape)
+# and `coordinator/bin/lib/coordinator_registry.py:411` (the module-scope
+# `for _ml_cand in _mlir_machine_local_bin_candidates(): ... subprocess.run(
+# [_ml_cand, "get", "repos.doe_claude"])` bootstrap loop) are this dispatch's
+# own two named targets (this plan's § Problem). Both already try
+# `machine_resolver`/`machine_local_impl_resolve`'s in-process reader FIRST
+# (`_mlir_registry_get`) and only fall through to the CLI spawn on a miss --
+# reason: "ladder-preserving fallback composition," the same reason the five
+# `repos.*` rows above carry (this plan's own § Anti-scope pins this reason
+# for these exact two sites; NOT converted further per this plan's own
+# Anti-scope: "Do not convert the CLI spawn away entirely").
+#
+# The remaining 20 newly-visible sites are a DIFFERENT, pre-existing shape --
+# independently reinvented `_machine_local_get`-shaped helpers this module's
+# own docstring already names ("~15 independently reinvented
+# `_machine_local_get`-shaped helpers"), each following the identical
+# `impl = _machine_local_impl()` (or an equivalent resolver-returning
+# variable); `subprocess.run([sys.executable, impl, "get"/"keys", ...])`
+# shape inline in the call, with no `cmd`-named intermediate:
+# `coordinator/bin/coordinator-doc-new.py:481`, `:523`,
+# `coordinator/bin/coordinator-lesson-add.py:109`,
+# `coordinator/bin/fan-out-dispatch.py:360`,
+# `coordinator/bin/gen-claude-klabauter-root-pointer.py:139`,
+# `coordinator/bin/lib/cc_invoke.py:396`,
+# `coordinator/bin/lib/cli_shared.py:100`, `:148`,
+# `coordinator/bin/tests/test_claude_machine_local.py:110`,
+# `coordinator/bin/workday-start-step0.py:145`,
+# `coordinator_core/ops/check_arch_audit_staleness.py:118`,
+# `coordinator_core/ops/check_weekly_staleness.py:119`,
+# `coordinator_core/ops/deliverable_rollup.py:133`,
+# `coordinator_core/ops/list_review_trail_records.py:127`,
+# `coordinator_core/ops/list_week_changelog.py:100`,
+# `coordinator_core/ops/queue_append.py:754`,
+# `coordinator_core/ops/workday_complete_backfill_scan.py:202`,
+# `coordinator_core/orientation/regenerate_cache.py:282`,
+# `coordinator_core/pyresolve.py:168`,
+# `coordinator_core/roadmap/audit.py:173`.
+# Reason: NOT converted -- this plan's own § Out of scope names this exact
+# class ("The other 15 rows in the collector's burn-down inventory. Widening
+# the matcher may surface more; converting the pre-existing 15 is not this
+# plan's deliverable (C3 dispositions newly-visible sites only)") -- these 20
+# are that same pre-existing-helper family, simply not individually visible
+# to the collector before this widening. Converting each to
+# `machine_resolver.registry_get` in-process-first, one file at a time, with
+# its own test-shape audit (per the C7b precedent: a site whose own test
+# fakes `machine-local` as a real subprocess stub needs a fixture rewrite,
+# not a blind swap), is a dedicated future pass' deliverable, not this one's.
 
 
 def _is_read_subcommand(call: ast.Call) -> bool:
@@ -334,6 +465,186 @@ def _spawn_func_name(call: ast.Call) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Resolver-call indirection widening (this dispatch, C3).
+#
+# The collector requires a binary marker AND a `"get"`/`"keys"` literal in
+# ONE unparsed call. Two real sites (`coordinator/bin/lib/coordinator_registry.py`
+# `_registry_machine_local_get` and its module-scope bootstrap loop) both
+# reach the binary marker through a name bound to a resolver call, one level
+# removed from the call expression -- `cmd = [sys.executable, impl, "get",
+# key]` then `subprocess.run(cmd, ...)`, and `for _ml_cand in
+# _mlir_machine_local_bin_candidates(): ... subprocess.run([_ml_cand, "get",
+# ...])`. Neither is visible to a scan of the call's own unparsed text alone.
+#
+# THE MECHANISM: before matching, build a map of simple local bindings for
+# the immediately-enclosing scope only (function or module body, same-scope,
+# single-assignment -- an `ast.Assign` to a bare `Name` target, or a `for`
+# loop's `Name` target bound to its iterable expression). A name assigned
+# more than once in scope is deliberately left unresolved (report it, don't
+# guess which assignment reached the call). When a `subprocess.<fn>` call's
+# first positional argument contains a bare `ast.Name` present in this map,
+# substitute its bound value; when that bound value itself is a bare `Name`
+# that substitution just produced (the `cmd` -> `impl` two-hop case), resolve
+# one further level and stop -- deeper chains are not walked. This feeds a
+# resolved COPY of the call node into BOTH existing legs -- `_is_read_subcommand`
+# (AST-based, walks `call.args`) and `_names_machine_local` (text-based, reads
+# the unparsed call source) -- not just the text leg, per this dispatch's
+# brief: resolving only for one leg leaves the site invisible for a different
+# reason than either named escape.
+#
+# NOT done: widening `_BINARY_MARKERS`. Both real sites' bound values already
+# contain the existing `machine_local` marker as a substring once resolved
+# (`_registry_machine_local_impl`, `_mlir_machine_local_bin_candidates`) --
+# widening the marker list would not have closed either site and was
+# considered and rejected for this dispatch (see this file's own inventory
+# notes for the rejected marker candidates).
+# ---------------------------------------------------------------------------
+
+
+def _record_binding(
+    name: str,
+    value: ast.expr,
+    bindings: dict[str, ast.expr],
+    multi: set[str],
+) -> None:
+    if name in multi:
+        return
+    if name in bindings:
+        del bindings[name]
+        multi.add(name)
+    else:
+        bindings[name] = value
+
+
+def _collect_scope_bindings(
+    stmts: list[ast.stmt],
+    bindings: dict[str, ast.expr],
+    multi: set[str],
+) -> None:
+    """Populate `bindings` with same-scope, single-assignment simple `Name`
+    bindings found in `stmts`, flattening control-flow blocks (`if`/`for`/
+    `while`/`try`/`with`) but never descending into a nested function or
+    class body -- that is a different scope, handled separately by the
+    caller."""
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+        ):
+            _record_binding(stmt.targets[0].id, stmt.value, bindings, multi)
+        if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
+            _record_binding(stmt.target.id, stmt.iter, bindings, multi)
+        for field in ("body", "orelse", "finalbody"):
+            child = getattr(stmt, field, None)
+            if isinstance(child, list):
+                _collect_scope_bindings(child, bindings, multi)
+        if isinstance(stmt, ast.Try):
+            for handler in stmt.handlers:
+                _collect_scope_bindings(handler.body, bindings, multi)
+
+
+class _CallCollector(ast.NodeVisitor):
+    """Collects `ast.Call` nodes within a statement, WITHOUT descending into
+    a nested function/class/lambda body -- those are separate scopes, walked
+    by `_scan_scope`'s own recursion, each with their own binding map."""
+
+    def __init__(self) -> None:
+        self.calls: list[ast.Call] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self.calls.append(node)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _substitute_descendant_names(node: ast.AST, bindings: dict[str, ast.expr]) -> ast.AST:
+    """One pass over a deep copy of `node`: replace every bare `Name`
+    descendant bound in `bindings` with its bound value. Does not revisit a
+    freshly-substituted replacement's own descendants -- that is the "one
+    further level" the caller applies explicitly, not open recursion."""
+
+    class _Sub(ast.NodeTransformer):
+        def visit_Name(self, n: ast.Name) -> ast.AST:
+            if n.id in bindings:
+                return copy.deepcopy(bindings[n.id])
+            return n
+
+    return _Sub().visit(copy.deepcopy(node))
+
+
+def _resolve_arg0(arg0: ast.expr, bindings: dict[str, ast.expr]) -> ast.expr:
+    resolved = _substitute_descendant_names(arg0, bindings)
+    if isinstance(arg0, ast.Name) and arg0.id in bindings:
+        # `arg0` itself was a bound Name (e.g. `cmd`) resolved to its bound
+        # value in the pass above -- that bound value's OWN descendant Names
+        # (e.g. `impl` inside `[sys.executable, impl, "get", key]`) were not
+        # visited by that pass (they belong to a value substituted IN, not
+        # walked as part of the original tree), so resolve one further level.
+        resolved = _substitute_descendant_names(resolved, bindings)
+    return resolved  # type: ignore[return-value]
+
+
+def _resolved_call(call: ast.Call, bindings: dict[str, ast.expr]) -> ast.Call:
+    if not call.args:
+        return call
+    resolved_arg0 = _resolve_arg0(call.args[0], bindings)
+    try:
+        unchanged = ast.dump(resolved_arg0) == ast.dump(call.args[0])
+    except Exception:
+        unchanged = False
+    if unchanged:
+        return call
+    new_call = copy.deepcopy(call)
+    new_call.args[0] = resolved_arg0
+    return new_call
+
+
+def _scan_scope(
+    stmts: list[ast.stmt],
+    bindings: dict[str, ast.expr],
+    hits: list[tuple[str, int]],
+    rel_posix: str,
+) -> None:
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            inner_bindings: dict[str, ast.expr] = {}
+            _collect_scope_bindings(stmt.body, inner_bindings, set())
+            _scan_scope(stmt.body, inner_bindings, hits, rel_posix)
+            continue
+        if isinstance(stmt, ast.ClassDef):
+            _scan_scope(stmt.body, {}, hits, rel_posix)
+            continue
+        collector = _CallCollector()
+        collector.visit(stmt)
+        for call in collector.calls:
+            if _spawn_func_name(call) is None:
+                continue
+            resolved = _resolved_call(call, bindings)
+            if not _is_read_subcommand(resolved):
+                continue
+            try:
+                unparsed = ast.unparse(resolved)
+            except Exception:
+                continue
+            if _names_machine_local(unparsed):
+                hits.append((rel_posix, call.lineno))
+
+
 def _scan_file(rel_posix: str, text: str) -> list[tuple[str, int]]:
     if rel_posix in _SURFACE_MODULES:
         return []
@@ -342,19 +653,9 @@ def _scan_file(rel_posix: str, text: str) -> list[tuple[str, int]]:
     except SyntaxError:
         return []
     hits: list[tuple[str, int]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if _spawn_func_name(node) is None:
-            continue
-        if not _is_read_subcommand(node):
-            continue
-        try:
-            unparsed = ast.unparse(node)
-        except Exception:
-            continue
-        if _names_machine_local(unparsed):
-            hits.append((rel_posix, node.lineno))
+    module_bindings: dict[str, ast.expr] = {}
+    _collect_scope_bindings(tree.body, module_bindings, set())
+    _scan_scope(tree.body, module_bindings, hits, rel_posix)
     return hits
 
 
@@ -394,6 +695,36 @@ def _tier_a5():
     assert hits, "collector failed to flag the known pre-conversion `machine-local get` shape"
 
 
+def test_collector_flags_call_bound_name_indirection() -> None:
+    """Real site-1 shape (`coordinator_registry.py::_registry_machine_local_get`):
+    a Call-bound Name (`impl`) reached through a list-literal local (`cmd`) --
+    two hops from the `subprocess.run` call to the binary-marker text."""
+    fixture = '''
+import subprocess
+
+def _registry_machine_local_get(key):
+    impl = _registry_machine_local_impl()
+    cmd = [sys.executable, impl, "get", key]
+    subprocess.run(cmd)
+'''
+    hits = _scan_file("coordinator_core/ops/_fixture_call_bound_name.py", fixture)
+    assert hits, "collector failed to flag the Call-bound-Name-through-a-list-literal shape"
+
+
+def test_collector_flags_for_loop_target_indirection() -> None:
+    """Real site-2 shape (module-scope bootstrap): a `for`-loop target
+    (`_cand`) reached through its iterable expression, inline inside the
+    `subprocess.run` argument list."""
+    fixture = '''
+import subprocess
+
+for _ml_cand in _mlir_machine_local_bin_candidates():
+    subprocess.run([_ml_cand, "get", key])
+'''
+    hits = _scan_file("coordinator_core/ops/_fixture_for_loop_target.py", fixture)
+    assert hits, "collector failed to flag the for-loop-target-through-its-iterable shape"
+
+
 def test_collector_silent_on_converted_discover_working_repos() -> None:
     """`discover_working_repos.py` was converted in `9245fd0d5` to
     `_merged_flat_registry` (zero subprocesses) -- the collector must not
@@ -403,13 +734,17 @@ def test_collector_silent_on_converted_discover_working_repos() -> None:
     assert hits == []
 
 
-def test_collector_still_flags_regeneratability_ladder_probe_exception() -> None:
-    """`_ladder_resolves` is the sole read-side EXCEPTION (see module
-    docstring): conversion to `registry_get` was attempted and reverted
-    because the CLI's ladder autodiscovers beyond the two-file TOML merge.
-    It must remain a live hit, and its row must stay in
-    `KNOWN_UNCONVERTED_SITES` -- this pins the exception so it cannot
-    silently drop out of the inventory."""
+def test_collector_silent_on_regeneratability_now_dump_shaped() -> None:
+    """`_ladder_resolves` was the sole read-side EXCEPTION as of the
+    2026-08-16 census (see the burn-down comment's "2026-08-20 C3 WIDENING --
+    DROPPED ROWS" note): it has since been refactored (`_ladder_snapshot`) to
+    a single batched `machine-local dump --prefix repos --format json` call,
+    not a per-key `get`. `dump` is not `get`/`keys`, so it is out of this
+    collector's brief by construction (module docstring, "WHAT COUNTS AS A
+    HIT") and must NOT be flagged -- this pins the post-refactor reality so a
+    future re-add of a `get`-shaped probe in this file is caught by
+    `test_inventory_is_exhaustive_and_matches_known_sites` below, not silently
+    re-exempted by a stale assertion here."""
     path = (
         _REPO_ROOT
         / "coordinator_core"
@@ -420,7 +755,7 @@ def test_collector_still_flags_regeneratability_ladder_probe_exception() -> None
         "coordinator_core/ops/check_machine_local_regeneratability.py",
         path.read_text(encoding="utf-8"),
     )
-    assert hits == [("coordinator_core/ops/check_machine_local_regeneratability.py", 277)]
+    assert hits == []
 
 
 def test_inventory_is_exhaustive_and_matches_known_sites() -> None:

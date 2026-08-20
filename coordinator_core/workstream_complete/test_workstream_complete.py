@@ -6201,3 +6201,201 @@ def test_completion_verdict_ac6_no_new_judgment_point_and_ids_unchanged(monkeypa
         "shared-schema-touch-check",
     }
     assert not any("completion-verdict" in jp_id or "completion_verdict" in jp_id for jp_id in jp_ids)
+
+
+# ---------------------------------------------------------------------------
+# Detector C uncorroborated-attribution refusal
+# (state/bug-backlog/2026-08-19-jp-session-shape-resolution-is-inert-a-p-fe5b38e42795.yaml)
+#
+# The predicate decides whether to ADOPT a predecessor, which is a narrower
+# question than `_session_shape_is_uncertain`'s "should we RAISE the alarm".
+# Both branches are pinned here because the two rules diverge deliberately on
+# the exact_match_count == 1 case, and a later "tidy-up" that unified them
+# would silently start refusing attributions that carry a real path hit.
+# ---------------------------------------------------------------------------
+
+
+def _detector_c(exact_match_count, **over):
+    rec = {
+        "deciding_leg": "detector-c",
+        "detector_c_status": "crash-recovery",
+        "exact_match_count": exact_match_count,
+        "matched_scope_entry_count": 1,
+        "scope_size": 9,
+        "single_match_kind": "prefix",
+    }
+    rec.update(over)
+    return rec
+
+
+def test_uncorroborated_when_every_scope_hit_was_a_directory_prefix():
+    """Zero exact matches is the live defect: a bare `docs/decisions/` scope
+    entry matches any session that wrote a decision record at all."""
+    assert wsc._detector_c_attribution_is_uncorroborated(_detector_c(0)) is True
+
+
+def test_a_single_exact_hit_still_carries_its_attribution():
+    """Deliberately NOT refused, though `_session_shape_is_uncertain` does
+    flag it: one real path match is evidence, so it raises the judgment
+    point and keeps the predecessor."""
+    assert wsc._detector_c_attribution_is_uncorroborated(_detector_c(1)) is False
+
+
+def test_absent_exact_match_count_degrades_to_todays_behaviour():
+    """Stale `wsc-session-disposition.py` that never computed the field --
+    presence-vs-absence selects the branch, never the value."""
+    rec = _detector_c(0)
+    del rec["exact_match_count"]
+    assert wsc._detector_c_attribution_is_uncorroborated(rec) is False
+
+
+def test_other_legs_and_statuses_are_untouched():
+    assert wsc._detector_c_attribution_is_uncorroborated(
+        _detector_c(0, deciding_leg="detector-a")
+    ) is False
+    assert wsc._detector_c_attribution_is_uncorroborated(
+        _detector_c(0, detector_c_status="indeterminate")
+    ) is False
+    assert wsc._detector_c_attribution_is_uncorroborated({}) is False
+
+
+def test_gate_falls_back_to_single_session_and_drops_the_stranger_handoff(monkeypatch, tmp_path):
+    """The damage path: without this, the ceremony files a completion entry
+    and appends a Session Ledger row against a live peer's baton."""
+
+    class _Resolution(tuple):
+        detection = _detector_c(0)
+
+    stranger = "state/handoffs/2026-08-20-sat-06-cockpit-consumption-seam.md"
+
+    class _Mod:
+        @staticmethod
+        def resolve_session_id(root):
+            return "testsid123"
+
+        @staticmethod
+        def resolve_disposition(root, sid):
+            return _Resolution(
+                (wsc.PREDECESSOR_CONSUMED, stranger, ["NOTE: chain-terminal resolved by Detector C"], [stranger])
+            )
+
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", lambda: _Mod)
+    gate = wsc.compute_session_shape_gate(tmp_path)
+
+    assert gate.disposition == wsc.SINGLE_SESSION
+    assert gate.consumed_handoff == ""
+    assert gate.consumed_handoff_paths == ()
+    # The evidence survives the refusal -- the alarm must still be readable.
+    assert gate.detection["exact_match_count"] == 0
+    assert any("REFUSED" in d and stranger in d for d in gate.diagnostics)
+
+
+def test_gate_keeps_a_corroborated_predecessor(monkeypatch, tmp_path):
+    class _Resolution(tuple):
+        detection = _detector_c(2)
+
+    real = "state/handoffs/2026-08-20_115441_the-rungs-get-writers.md"
+
+    class _Mod:
+        @staticmethod
+        def resolve_session_id(root):
+            return "testsid123"
+
+        @staticmethod
+        def resolve_disposition(root, sid):
+            return _Resolution((wsc.PREDECESSOR_CONSUMED, real, [], [real]))
+
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", lambda: _Mod)
+    gate = wsc.compute_session_shape_gate(tmp_path)
+
+    assert gate.disposition == wsc.PREDECESSOR_CONSUMED
+    assert gate.consumed_handoff == real
+    assert not any("REFUSED" in d for d in gate.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# `gates.session_shape` recomputes under a supplied `jp-session-shape`
+# decision (C3, docs/plans/2026-08-20-wsc-identity-gates-key-on-the-
+# deliverable.md, item 2 / AC3). All four dispositions carry `resolves: []`
+# (K-001 removed `d-coverage-gate`), so a supplied decision must be visible
+# in the emitted gate itself, not only honoured silently by `wsc-tail`.
+# ---------------------------------------------------------------------------
+
+
+def test_supplied_jp_session_shape_decision_recomputes_gates_session_shape(monkeypatch, tmp_path):
+    """A re-`brief` with the operator's answer already supplied must read
+    that resolved disposition back on `gates.session_shape.disposition`,
+    not silently replay the detector chain's original (uncertain) verdict."""
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            wsc.SINGLE_SESSION,
+            detection={"deciding_leg": "none", "detector_c_status": "indeterminate"},
+        ),
+    )
+    decision_object = wsc.brief(
+        decisions={"jp-session-shape": {"disposition": "single-session"}},
+        repo_root=tmp_path,
+    )
+    assert decision_object["gates"]["session_shape"]["disposition"] == wsc.SINGLE_SESSION
+    assert decision_object["preflight"]["session_shape"]["disposition"] == wsc.SINGLE_SESSION
+
+
+def test_supplied_jp_session_shape_decision_recomputes_to_predecessor_consumed(monkeypatch, tmp_path):
+    """The legacy spelling is accepted too, canonicalized on the way out —
+    `wsc_disposition.canonicalize` never narrows what it recognises."""
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            wsc.SINGLE_SESSION,
+            detection={"deciding_leg": "none", "detector_c_status": "ambiguous"},
+        ),
+    )
+    decision_object = wsc.brief(
+        decisions={"jp-session-shape": {"disposition": "chain-terminal"}},
+        repo_root=tmp_path,
+    )
+    assert decision_object["gates"]["session_shape"]["disposition"] == wsc.PREDECESSOR_CONSUMED
+
+
+def test_no_supplied_decision_keeps_the_detector_chains_own_disposition(monkeypatch, tmp_path):
+    """Absent decisions -- today's behaviour, byte-for-byte: the detector
+    chain's own verdict is emitted unchanged."""
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            wsc.SINGLE_SESSION,
+            detection={"deciding_leg": "none", "detector_c_status": "indeterminate"},
+        ),
+    )
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    assert decision_object["gates"]["session_shape"]["disposition"] == wsc.SINGLE_SESSION
+
+
+def test_unrecognised_supplied_decision_is_ignored(monkeypatch, tmp_path):
+    """A malformed/unknown token never corrupts the emitted gate -- the
+    detector's own verdict is kept."""
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            wsc.SINGLE_SESSION,
+            detection={"deciding_leg": "none", "detector_c_status": "indeterminate"},
+        ),
+    )
+    decision_object = wsc.brief(
+        decisions={"jp-session-shape": {"disposition": "not-a-real-value"}},
+        repo_root=tmp_path,
+    )
+    assert decision_object["gates"]["session_shape"]["disposition"] == wsc.SINGLE_SESSION
+
+
+def test_session_shape_disposition_from_decisions_direct():
+    assert wsc._session_shape_disposition_from_decisions({}) is None
+    assert wsc._session_shape_disposition_from_decisions({"jp-session-shape": {}}) is None
+    assert wsc._session_shape_disposition_from_decisions(
+        {"jp-session-shape": {"disposition": "single-session"}}
+    ) == wsc.SINGLE_SESSION
+    assert wsc._session_shape_disposition_from_decisions(
+        {"jp-session-shape": {"disposition": "bogus"}}
+    ) is None
+    assert wsc._session_shape_disposition_from_decisions({"jp-session-shape": "not-a-dict"}) is None

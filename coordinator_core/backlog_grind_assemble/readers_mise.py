@@ -283,7 +283,11 @@ from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatt
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
 from coordinator_core.ops.queue_family import UnknownQueueFamilyError, load_family_records
-from coordinator_core.ops.review_brightline_gate import _is_noise_path, classify_surface
+from coordinator_core.ops.review_brightline_gate import (
+    _is_noise_path,
+    _is_prose_bearing_path,  # 2026-08-20: code_loc stops counting prose, same predicate as the brightline gate's own mandate arms
+    classify_surface,
+)
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 from coordinator_core.workstream_complete.directives_review import (
     ReviewScaleDecision,
@@ -759,7 +763,7 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
     diff and resolve the verdict toward reviewing less.
 
     `gross_loc` is the added+deleted sum over the range's non-noise files
-    (2026-08-11 metric-wide noise exclusion, matching `_compute_chain_oracle`
+    (2026-08-11 metric-wide noise exclusion, matching the removed `_compute_chain_oracle`
     / `review_brightline_gate._session_scoped`'s contract — see
     `docs/plans/2026-08-11-brightline-gates-measure-reviewable-chan.md` AC3).
     Naming trap (review finding, 2026-08-11): `workstream_complete/__init__.py`'s
@@ -774,6 +778,19 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
     exclusion is not the same predicate as de-weighting a deletion or a
     planning artifact — see `_is_noise_path`'s own module docstring for the
     two-category noise list; nothing here exempts a deletion.
+    `code_loc` (2026-08-20, cross-repo/inbox/2026-08-20-example-retrieval-repo-em-
+    review-gate-doc-only-em-discretion.md) is `gross_loc`'s PROSE-excluded
+    sibling: markdown and YAML rows (`_is_prose_bearing_path`) contribute
+    nothing to it, while still counting toward `gross_loc` and toward
+    `surface_count`. Before this key existed, `_read_phase_6_review_scale`
+    passed `gross_loc` in as `code_loc`, so a doc-only mise run measured
+    thousands of lines of prose as reviewable code and tripped the row-4
+    brightline into `partition_mandatory` — the same defect the memo
+    reported against `workstream_complete`, at this second site. The two
+    keys are returned SEPARATELY rather than one being redefined, so the
+    Phase-6 directive's own `metrics` block now shows both numbers and a
+    reader can see which one the verdict was taken off.
+
     `surface_count` reuses `review_brightline_gate.classify_surface` (the
     module's public alias for what was `_classify_surface`, review finding
     2026-08-04) rather than inventing a second surface taxonomy — the gate
@@ -791,6 +808,7 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
         return None
 
     gross_loc = 0
+    code_loc = 0
     surfaces: set[str] = set()
     for line in numstat.splitlines():
         match = _NUMSTAT_ROW_RE.match(line)
@@ -799,21 +817,22 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
         added, deleted, path = match.groups()
         # 2026-08-12: resolve rename notation (`{old => new}`/`old => new`)
         # to the destination path before any path predicate sees it — same
-        # fix as `review_brightline_gate._compute_chain_oracle`'s, over
+        # fix as the removed `review_brightline_gate._compute_chain_oracle`'s (K-007), over
         # the identical bug (`_is_noise_path`'s anchored lifecycle-prefix
         # match never fires against the literal rename fragment). See
         # `_resolve_numstat_row_path`.
         path = _resolve_numstat_row_path(path)
         if _is_noise_path(path):
             continue
-        if added != "-":
-            gross_loc += int(added)
-        if deleted != "-":
-            gross_loc += int(deleted)
+        row_loc = (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0)
+        gross_loc += row_loc
+        if not _is_prose_bearing_path(path):
+            code_loc += row_loc
         surfaces.add(classify_surface(path))
 
     return {
         "gross_loc": gross_loc,
+        "code_loc": code_loc,
         "commit_count": commit_count,
         "surface_count": len(surfaces),
     }
@@ -1024,7 +1043,7 @@ def _read_phase_6_review_scale(run_id: Optional[str]) -> ReaderResult:
 
     decision = decide_review_scale(
         gross_loc=metrics["gross_loc"],
-        code_loc=metrics["gross_loc"],
+        code_loc=metrics["code_loc"],
         commit_count=metrics["commit_count"],
         surface_count=metrics["surface_count"],
         executor_dispatched=True,

@@ -2299,22 +2299,35 @@ def _wg_shell_shaped_spawn_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Di
 
 
 def _wg_unmarked_spawning_test_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
-    """A spawning test function carrying neither `spawns_process` nor a
-    module-level `pytestmark`. The `test_`-prefixed basename is
-    load-bearing twice over: it is what `_is_test_tree_path` gates on, and
-    it is the same filename test the ratchet's own `_iter_test_files` uses
-    to decide membership -- so `_wg_benign`'s `.txt` write stays a valid
-    non-firing control here for the path reason as well as the suffix one."""
+    """A spawning test file carrying TWO unmarked functions, neither
+    `spawns_process` nor a module-level `pytestmark`, at a realistic
+    ABSOLUTE path -- staff-eng F1: the guard's real `file_path` always
+    comes from the tool payload, which is always absolute, and a real
+    firing routinely names more than one function; a bare relative
+    `"test_thing.py"` with zero names was the smallest shape the guard can
+    render and hid the over-cap failure from this suite's own message-size
+    gate. `scratch_dir` gives a real absolute prefix without this row
+    needing a real repo tree on disk (the guard never reads this path for
+    a `Write`). The `test_`-prefixed basename is load-bearing twice over:
+    it is what `_is_test_tree_path` gates on, and it is the same filename
+    test the ratchet's own `_iter_test_files` uses to decide membership --
+    so `_wg_benign`'s `.txt` write stays a valid non-firing control here
+    for the path reason as well as the suffix one."""
+    file_path = str(scratch_dir / "coordinator_core" / "tests" / "test_no_new_spawning_tests.py")
     return {
         "tool_name": "Write",
         "tool_input": {
-            "file_path": "test_thing.py",
+            "file_path": file_path,
             "content": (
                 "import subprocess\n"
                 "\n"
                 "\n"
-                "def test_thing():\n"
+                "def test_rule2_new_spawning_files_ratchet():\n"
                 '    subprocess.run(["git", "status"], check=True)\n'
+                "\n"
+                "\n"
+                "def test_rule4_every_spawning_file_is_cadence_tiered():\n"
+                '    subprocess.run(["git", "log"], check=True)\n'
             ),
         },
     }

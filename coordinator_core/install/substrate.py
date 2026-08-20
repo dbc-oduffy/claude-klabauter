@@ -1062,6 +1062,13 @@ _RAW_CMDLINE_TARGETS = frozenset(
         "parallel-review-gate-decision.py",
         "parallel-review-orthogonality-guard.py",
         "wsc-coverage-gate-runner.py",
+        "backlog-grind-assemble.py",
+        "baton-assemble.py",
+        "consolidate-assemble.py",
+        "merge-assemble.py",
+        "pickup-assemble.py",
+        "workday-complete-assemble.py",
+        "workstream-complete-assemble.py",
     }
 )
 

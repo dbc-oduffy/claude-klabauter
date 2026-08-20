@@ -1882,9 +1882,70 @@ class TestMisePhase6ReviewScaleVerdict:
         assert directive["range"] == f"{_MISE_START_SHA}..HEAD"
         assert directive["metrics"] == {
             "gross_loc": 3200,
+            # 2026-08-20: `code_loc` is now a separate, prose-excluded key
+            # rather than `gross_loc` passed in under a second name. These
+            # rows are all `coordinator_core/a.py`, so the two numbers agree
+            # here — see the doc-only test below for where they diverge.
+            "code_loc": 3200,
             "commit_count": 12,
             "surface_count": 1,
         }
+
+    def test_doc_only_mise_run_is_not_forced_into_a_mandatory_partition(
+        self, monkeypatch, tmp_path
+    ):
+        """2026-08-20, cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-
+        doc-only-em-discretion.md, second site. This reader used to pass
+        `gross_loc` in as `code_loc`, so a mise run whose whole range was
+        markdown measured thousands of lines of "code" and tripped row 4 into
+        `partition_mandatory` — mandating a per-slice code review over prose.
+        `code_loc` is now prose-excluded, so the brightline's proxy arms
+        (commits/surfaces) cannot mandate a partition off a resolved zero."""
+        self._arrange(
+            monkeypatch,
+            tmp_path,
+            git=_fake_git(
+                commits=16,
+                numstat_rows=[
+                    (2342, 0, "state/research/lane-findings.md"),
+                    (104, 0, "state/decisions/DR-999.md"),
+                    (153, 0, "docs/notes/prose.md"),
+                ],
+            ),
+        )
+
+        directive = bga.readers_mise_en_place._read_phase_6_review_scale(
+            _MISE_RUN_ID
+        ).directives[0]
+
+        assert directive["metrics"]["gross_loc"] == 2599
+        assert directive["metrics"]["code_loc"] == 0
+        assert directive["verdict"]["partition_mandatory"] is False
+        assert directive["verdict"]["scale"] != "partitioned"
+
+    def test_doc_only_run_carrying_any_code_still_measures_that_code(
+        self, monkeypatch, tmp_path
+    ):
+        """The prose exclusion must not swallow a code row sharing the range:
+        only the prose rows drop out, and `gross_loc` still reports the lot."""
+        self._arrange(
+            monkeypatch,
+            tmp_path,
+            git=_fake_git(
+                commits=2,
+                numstat_rows=[
+                    (2000, 0, "state/research/lane-findings.md"),
+                    (40, 10, "coordinator_core/a.py"),
+                ],
+            ),
+        )
+
+        directive = bga.readers_mise_en_place._read_phase_6_review_scale(
+            _MISE_RUN_ID
+        ).directives[0]
+
+        assert directive["metrics"]["gross_loc"] == 2050
+        assert directive["metrics"]["code_loc"] == 50
 
     def test_brightline_hit_on_surface_count_alone(self, monkeypatch, tmp_path):
         # A tidy multi-baton mise run: small per-wave commits, few LOC, but

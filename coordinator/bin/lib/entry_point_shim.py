@@ -109,6 +109,94 @@ BY_PATH_TARGETS = frozenset({"workday-start-inbox-blitz-assemble"})
 _TRANSPORT_FAIL = 3
 _USAGE_FAIL = 2
 
+# Targets whose argv can carry a JSON payload (`--decisions <json>`), and so
+# cannot survive a `.cmd` forwarder's `%*` intact on Windows: cmd.exe strips
+# the payload's double quotes during its OWN command-line parse, before the
+# launcher body or Python ever runs, and the CLI then rejects a payload that
+# was well-formed when sent. Shape W (the `.cmd` sibling through the call
+# operator) is the rung `resolve-coordinator-bin.md` mandates on a Windows
+# host, so without recovery the documented invocation shape and the
+# JSON-argument surface are mutually exclusive there
+# (cross-repo/inbox/2026-08-20-doe-claude-em-cmd-forwarder-eats-json-and-two-
+# smaller-seams.md, item 1).
+#
+# Narrow and named on purpose, mirroring `gen-launcher-shim.py`'s own
+# `_RAW_CMDLINE_ENTRYPOINTS` discipline: enrolment costs every invocation a
+# capture file, so a target earns a row only when a quote-bearing argument is
+# genuinely reachable in normal use. The three sets are kept in sync by
+# convention -- this one, `gen-launcher-shim.py::_RAW_CMDLINE_ENTRYPOINTS`,
+# and `coordinator_core/install/substrate.py::_RAW_CMDLINE_TARGETS` -- and
+# `test_raw_cmdline_json_payload_enrolment.py` fails if they drift.
+#: The JSON-valued flags recovered from the raw command line. Both spellings
+#: of the inline form are listed because `--decisions` is the flag every
+#: current parse site names; the `-file` sibling carries a PATH, which is
+#: quote-and-space-free by construction and never needed recovery.
+_JSON_PAYLOAD_FLAGS = ("--decisions",)
+
+_JSON_PAYLOAD_TARGETS = frozenset(
+    {
+        "backlog-grind-assemble",
+        "baton-assemble",
+        "consolidate-assemble",
+        "merge-assemble",
+        "pickup-assemble",
+        "workday-complete-assemble",
+        "workstream-complete-assemble",
+    }
+)
+
+
+def _recover_json_payload_argv(name: str, argv: List[str]) -> List[str]:
+    """Returns `argv` with a `.cmd`-mangled JSON payload restored from the
+    raw invoking command line, or `argv` unchanged when recovery does not
+    apply or cannot be vouched for.
+
+    Never raises and never refuses. `recover_windows_argv` raises
+    `UnsoundRawCmdlineTransport` for a transport whose capture it cannot
+    vouch for (git-bash/MSYS, `subprocess.run([...])` list-form) -- the
+    consumers that REFUSE on it are low-traffic, agent-typed CLIs where a
+    corrupt argument silently discharges nothing. These ceremony CLIs are
+    not that shape: they are called by tests and by in-repo `subprocess`
+    callers on the very transports that classify as unsound, and those
+    callers pass argv that was never mangled in the first place. Turning
+    that into a fleet-wide refusal would break working invocations to
+    protect a payload most of them do not carry.
+
+    So the posture here is recover-or-fall-through: PowerShell's
+    outer-quoted `cmd /c ""<exe>" <args>"` form -- the documented Shape W
+    rung, and the shape the reported break arrived on -- recovers and the
+    inline payload now parses. Every other transport keeps exactly today's
+    behaviour, and a payload that really did lose its quotes still fails at
+    the JSON parse, where `ceremony_common.json_payload_flag` names the
+    forwarder as the likely vehicle and points at `--decisions-file`.
+
+    Negative-spec:
+        - Does NOT apply to targets outside `_JSON_PAYLOAD_TARGETS`. An
+          unenrolled target's launcher emits no capture file at all, so the
+          call would be a no-op anyway; keeping the set test explicit means
+          the enrolment sets stay the single place the question is answered.
+        - Does NOT parse, validate, or inspect the payload. Whether the
+          recovered token is well-formed JSON stays entirely the parse
+          site's business.
+    """
+    if name not in _JSON_PAYLOAD_TARGETS:
+        return argv
+    try:
+        _lib = str(Path(__file__).resolve().parent)
+        if _lib not in sys.path:
+            sys.path.insert(0, _lib)
+        from raw_cmdline_recovery import (  # noqa: PLC0415 -- optional, Windows-only
+            recover_json_flag_argv,
+        )
+    except Exception:  # noqa: BLE001 -- module absent/unimportable: no recovery
+        return argv
+
+    try:
+        return list(recover_json_flag_argv(list(argv), f"{name}.cmd", _JSON_PAYLOAD_FLAGS))
+    except Exception:  # noqa: BLE001 -- recovery must never break an invocation
+        return argv
+
+
 
 class UnknownTargetError(LookupError):
     """Raised when a requested subcommand name is not one of ASSEMBLE_TARGETS."""
@@ -644,6 +732,8 @@ def run_target(name: str, argv: List[str]) -> int:
         raise UnknownTargetError(name)
 
     _record_invocation(name)
+
+    argv = _recover_json_payload_argv(name, list(argv))
 
     if name in BY_PATH_TARGETS:
         path = _target_path(name)

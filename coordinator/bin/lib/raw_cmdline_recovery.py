@@ -78,8 +78,10 @@ a-git-rev-6679bf76eb8a.yaml
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import Sequence
 
 #: Env var the .cmd launcher exports (gen-launcher-shim.py's
 #: `_RAW_CMDLINE_ENTRYPOINTS`, opt-in per state/bug-backlog/2026-08-08-cmd-
@@ -230,6 +232,163 @@ def spawn_shape_prefix(raw: str) -> str:
     return raw[:_UNKNOWN_SPAWN_SHAPE_CAP].strip()
 
 
+def _consume_raw_capture() -> str:
+    """Reads the `%CMDCMDLINE%` capture file named by `RAW_CMDLINE_FILE_ENV`
+    and removes it, returning its text (empty string when unavailable).
+
+    Single owner of the read-and-clean-up half, shared by
+    `recover_windows_argv` and `recover_json_flag_argv`, so the temp-file
+    lifetime is defined in exactly one place. Consumes on read: the file is
+    removed whether or not the text turns out usable, because a leaked
+    capture under `%TEMP%` outlives the invocation that made it.
+
+    Only removes a parent directory this mechanism created (the
+    `_coordinator_launcher_` prefix that `gen-launcher-shim.py::
+    _cmd_raw_cmdline_block` and `substrate.py::_agent_cmd_raw_cmdline_block`
+    both emit). An unguarded rmdir of `os.path.dirname(raw_file)` would
+    blind-trust an environment variable -- a malformed or adversarial value
+    naming, say, a test's own tmp_path (measured: this module's own
+    caret-recovery test constructs `raw_file` directly under tmp_path) would
+    silently delete a directory this mechanism never made.
+    Review: staff-eng (Finding 3).
+    """
+    raw_file = os.environ.get(RAW_CMDLINE_FILE_ENV)
+    if not raw_file:
+        return ""
+    try:
+        return Path(raw_file).read_text(encoding="utf-8", errors="replace").rstrip("\r\n")
+    except OSError:
+        return ""
+    finally:
+        try:
+            os.remove(raw_file)
+        except OSError:
+            pass  # best-effort cleanup -- a leaked temp file is not fatal
+        parent = os.path.dirname(raw_file)
+        if os.path.basename(parent).startswith("_coordinator_launcher_"):
+            try:
+                os.rmdir(parent)
+            except OSError:
+                pass  # best-effort -- non-empty (a peer's dir, unlikely) or gone
+
+
+def _extract_balanced_json(text: str) -> "str | None":
+    """Returns the balanced JSON container starting at ``text``'s first
+    ``{``/``[``, or None when the text does not open one or never closes it.
+
+    String-aware: a brace inside a JSON string literal (``{"note": "}"}``)
+    does not change depth, and a backslash-escaped quote does not end the
+    string. Without that, the first ``}`` inside any payload value would
+    truncate the extraction to invalid JSON.
+
+    Deliberately NOT a parser. It finds the value's EXTENT in raw text so a
+    caller can lift it out verbatim; whether the result is well-formed is
+    decided by the caller running ``json.loads`` on it, which is the only
+    check this recovery path trusts before substituting anything into argv.
+    """
+    start = None
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            start = i
+            break
+        if not ch.isspace() and ch != '"':
+            return None
+    if start is None:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def recover_json_flag_argv(
+    argv: list[str], launcher_cmd_name: str, flags: "Sequence[str]"
+) -> list[str]:
+    """Restore JSON-valued flag arguments that a `.cmd` forwarder's ``%*``
+    stripped the double quotes from, using the raw ``%CMDCMDLINE%`` capture.
+
+    Why this exists next to ``recover_windows_argv`` rather than inside it:
+    that function recovers the WHOLE argv by re-tokenizing the raw tail with
+    ``shlex`` and bails whenever the recovered token count disagrees with the
+    mangled ``argv``. A JSON payload defeats it by construction -- the raw
+    text holds ``--decisions "{"k": {"d": "v"}}"``, whose nested quotes
+    ``shlex`` splits into several tokens where ``argv`` has one, so the
+    count-disagreement fail-safe fires and the caret-era recovery returns the
+    mangled argv unchanged (measured, not assumed). Recovering ONE named
+    flag's value by extent, never by tokenization, sidesteps that entirely.
+
+    Substitution is conditional on the extracted text parsing as JSON. A
+    payload this function cannot vouch for leaves ``argv`` exactly as it
+    found it, so the caller's own parse still fails in its usual vocabulary
+    rather than on some half-recovered string.
+
+    Unlike ``recover_windows_argv`` this NEVER raises: an unsound transport
+    returns ``argv`` unchanged. Its consumers are ceremony CLIs also called
+    from tests and in-repo ``subprocess`` callers, on the very transports
+    that classify unsound while passing argv that was never mangled; a
+    refusal there would break working invocations to protect a payload most
+    of them do not carry. See
+    ``entry_point_shim._recover_json_payload_argv`` for that posture.
+
+    Consumes the capture file the same way ``recover_windows_argv`` does --
+    read once, then best-effort remove the file and its
+    ``_coordinator_launcher_``-prefixed directory. Call one or the other for
+    a given invocation, never both.
+    """
+    if os.name != "nt":
+        return argv
+    raw = _consume_raw_capture()
+    if not raw:
+        return argv
+    status, _remainder = _classify_raw_cmdline_transport(raw)
+    if status != "SOUND":
+        return argv
+    idx = raw.lower().find(launcher_cmd_name.lower())
+    if idx == -1:
+        return argv
+    tail = raw[idx + len(launcher_cmd_name):]
+
+    out = list(argv)
+    for flag in flags:
+        pos = tail.find(flag)
+        if pos == -1:
+            continue
+        candidate = _extract_balanced_json(tail[pos + len(flag):])
+        if candidate is None:
+            continue
+        try:
+            json.loads(candidate)
+        except ValueError:
+            continue
+        try:
+            at = out.index(flag)
+        except ValueError:
+            continue
+        if at + 1 >= len(out):
+            continue
+        out[at + 1] = candidate
+    return out
+
+
 def recover_windows_argv(argv: list[str], launcher_cmd_name: str) -> list[str]:
     """Recover un-mangled argv from the raw invoking cmdline on Windows.
 
@@ -251,33 +410,7 @@ def recover_windows_argv(argv: list[str], launcher_cmd_name: str) -> list[str]:
     """
     if os.name != "nt":
         return argv
-    raw_file = os.environ.get(RAW_CMDLINE_FILE_ENV)
-    if not raw_file:
-        return argv
-    try:
-        raw = Path(raw_file).read_text(encoding="utf-8", errors="replace").rstrip("\r\n")
-    except OSError:
-        return argv
-    finally:
-        try:
-            os.remove(raw_file)
-        except OSError:
-            pass  # best-effort cleanup — a leaked temp file is not fatal
-        # Review: staff-eng (Finding 3) — only rmdir a directory THIS
-        # mechanism created (named "_coordinator_launcher_<...>" by
-        # gen-launcher-shim.py::_cmd_raw_cmdline_block /
-        # substrate.py::_agent_cmd_raw_cmdline_block). An unguarded rmdir of
-        # os.path.dirname(raw_file) blind-trusts an environment variable —
-        # a malformed/adversarial RAW_CMDLINE_FILE_ENV value naming, say, a
-        # test's own tmp_path (measured: this module's own caret-recovery
-        # test constructs raw_file directly under tmp_path) would silently
-        # delete a directory this mechanism never made.
-        parent = os.path.dirname(raw_file)
-        if os.path.basename(parent).startswith("_coordinator_launcher_"):
-            try:
-                os.rmdir(parent)
-            except OSError:
-                pass  # best-effort — non-empty (a peer's dir, unlikely) or gone
+    raw = _consume_raw_capture()
     if not raw:
         return argv
     status, _remainder = _classify_raw_cmdline_transport(raw)

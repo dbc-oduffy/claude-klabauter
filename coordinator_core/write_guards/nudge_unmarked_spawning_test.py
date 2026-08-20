@@ -38,7 +38,12 @@ covered by a marker."
 
 WHOLE-FILE RECONSTRUCTION is REUSED, not re-derived, from
 `nudge_windows_subprocess_popup` — identical fidelity requirement to
-`nudge_shell_shaped_spawn`'s own reuse of the same helpers.
+`nudge_shell_shaped_spawn`'s own reuse of the same helpers. `_extract_content`
+is itself fail-open to an EDIT FRAGMENT (unreadable/oversized file, or an
+unresolvable `old_string`) — `has_module_level_pytestmark` is a whole-file
+property that always reads False on a fragment, so this guard's `check`
+detects that fallback (staff-eng F6) and stays silent rather than risk a
+false-positive nudge on a file the fragment cannot prove is unmarked.
 
 SCOPE is the TEST TREE ONLY (`test_*.py` / `conftest.py`), matching the
 ratchet's own `_iter_test_files` target set — a non-test `.py` write
@@ -86,6 +91,7 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
     _MAX_WHOLE_FILE_BYTES,
     _extract_content,
     _extract_file_path,
+    _extract_fragment,
 )
 
 CLASS = "advisory"
@@ -130,14 +136,79 @@ def _decorators_by_enclosing(tree: ast.Module) -> Dict[str, list[ast.expr]]:
     return out
 
 
+#: Local mirror of `coordinator_core.bash_guards._message_size.
+#: MESSAGE_PROSE_CAP_BYTES` -- deliberately NOT imported: that module pulls
+#: in `dispatch.py`'s full guard-registration chain, a cost this write-time
+#: guard cannot afford on every Write/Edit/MultiEdit (see this guard's own
+#: F5 hot-path finding). A drift between this mirror and the SSOT constant
+#: is caught by `guard_message_corpus.py`'s own render of this guard's
+#: real fire row against the SSOT, not by this local copy agreeing with
+#: itself.
+_MESSAGE_PROSE_CAP_BYTES = 220
+
+#: Hard ceiling on the rendered basename, bytes -- so a pathological
+#: filename cannot itself eat the whole cap and leave `_fit_unmarked_names`
+#: no budget at all (measured: a bare "no names" render already costs 159
+#: bytes of fixed prose/template, leaving 61 for basename+names; this
+#: caps the basename's share, always leaving room for at least a "+N more"
+#: fallback -- see `_reason_for`).
+_BASENAME_MAX_BYTES = 40
+
+
+def _cap_basename(basename: str, max_bytes: int) -> str:
+    """Truncate `basename` to at most `max_bytes` UTF-8 bytes (ellipsis
+    included), dropping one character at a time -- basenames are short, so
+    this loop is cheap; never raises on an empty/tiny `max_bytes`."""
+    if len(basename.encode("utf-8")) <= max_bytes:
+        return basename
+    truncated = basename
+    while truncated and len((truncated + "…").encode("utf-8")) > max_bytes:
+        truncated = truncated[:-1]
+    return truncated + "…" if truncated else ""
+
+
+def _fit_unmarked_names(names: list[str], budget_bytes: int) -> str:
+    """Greedily render as many of `names` (already sorted) as fit, UTF-8
+    measured, within `budget_bytes` -- staff-eng F1: the prior
+    `", ".join(sorted(unmarked_enclosings))` had no cap at all, and an
+    absolute `file_path` plus two-or-more real function names routinely
+    clears `MESSAGE_PROSE_CAP_BYTES`. Budget-based rather than a fixed
+    name-count cap, because `budget_bytes` itself shrinks with a long
+    basename -- a fixed "first two" cap can still overflow on a long
+    basename plus two long names. Degrades to a bare "+N more" (itself
+    budget-checked) if not even one name fits, and to "" if that too does
+    not fit -- never renders past `budget_bytes`."""
+    if not names or budget_bytes <= 0:
+        return ""
+    shown: list[str] = []
+    for name in names:
+        remaining = len(names) - len(shown) - 1
+        tail = f", +{remaining} more" if remaining > 0 else ""
+        rendered = ", ".join(shown + [name]) + tail
+        if len(rendered.encode("utf-8")) > budget_bytes:
+            break
+        shown.append(name)
+    if shown:
+        remaining = len(names) - len(shown)
+        tail = f", +{remaining} more" if remaining > 0 else ""
+        return ", ".join(shown) + tail
+    fallback = f"+{len(names)} more"
+    return fallback if len(fallback.encode("utf-8")) <= budget_bytes else ""
+
+
 def _reason_for(file_path: str, unmarked_enclosings: list[str]) -> str:
-    plural = "function" if len(unmarked_enclosings) == 1 else "functions"
-    names = ", ".join(sorted(unmarked_enclosings))
-    return (
+    ordered = sorted(unmarked_enclosings)
+    plural = "function" if len(ordered) == 1 else "functions"
+    basename = _cap_basename(os.path.basename(file_path), _BASENAME_MAX_BYTES)
+    prefix = (
         f"OFFER: mark it (@{SPAWNS_PROCESS_MARKER}, plus @pytest.mark.cadence) "
         "or stub the spawn instead of calling a real process.\n"
-        f"Unmarked spawning {plural} in {file_path}: {names}."
+        f"Unmarked spawning {plural} in {basename}: "
     )
+    budget = _MESSAGE_PROSE_CAP_BYTES - len(prefix.encode("utf-8")) - 1  # trailing "."
+    names = _fit_unmarked_names(ordered, budget)
+    tail = f"{names}." if names else "(see file)."
+    return prefix + tail
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -164,7 +235,32 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not content:
             return None
 
+        if tool_name in ("Edit", "MultiEdit") and content == _extract_fragment(
+            tool_name, tool_input
+        ):
+            # Whole-file reconstruction fell back to the edit fragment
+            # (staff-eng F6) -- has_module_level_pytestmark is a whole-file
+            # property and always reads False on a fragment, which would
+            # false-positive-nudge a file that already carries a covering
+            # pytestmark elsewhere. Stay silent rather than risk a wrong
+            # nudge; `Write` always supplies the true whole file and never
+            # takes this branch.
+            return None
+
         if len(content.encode("utf-8", errors="replace")) > _MAX_WHOLE_FILE_BYTES:
+            return None
+
+        # Cheapest, whole-file veto first (staff-eng F5): a single
+        # `ast.parse` plus a module-level-statements-only walk, before the
+        # more expensive `sites_in_source` site collection -- a correctly
+        # `pytestmark`-covered file returns here after one parse instead of
+        # paying for site collection it will discard anyway.
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return None
+
+        if has_module_level_pytestmark(tree):
             return None
 
         try:
@@ -172,14 +268,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except SpawnParseError:
             return None
         if not sites:
-            return None
-
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            return None
-
-        if has_module_level_pytestmark(tree):
             return None
 
         decorators_by_enclosing = _decorators_by_enclosing(tree)
