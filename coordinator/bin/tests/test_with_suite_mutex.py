@@ -395,3 +395,29 @@ def test_owner_label_forwarded(tmp_path):
     assert meta["owner"] == "my-custom-label-pid-%d" % meta["pid"] or meta["owner"].startswith(
         "my-custom-label"
     )
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="PATHEXT resolution is a Windows-only concern: POSIX execvp already "
+    "searches PATH for a bare name, so this regression cannot reproduce there.",
+)
+def test_bare_name_resolves_a_cmd_shim_on_windows(tmp_path):
+    """A bare `pnpm`-style name naming a `.cmd` shim must run, not WinError 2.
+
+    Reported independently by three sibling repos (2026-08-11, 2026-08-16 x2)
+    against `main`'s `subprocess.Popen(command)`: CreateProcess performs no
+    PATHEXT resolution, so every `.cmd` shim on PATH -- pnpm, npm, yarn, npx --
+    failed here while resolving fine from a shell.
+    """
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    (shim_dir / "fakepnpm.cmd").write_text("@echo off\r\nexit /b 7\r\n", encoding="ascii")
+
+    env = _base_env(tmp_path)
+    env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+
+    result = _run(["--", "fakepnpm"], env=env)
+
+    assert "WinError 2" not in result.stderr, result.stderr
+    assert result.returncode == 7, (result.returncode, result.stdout, result.stderr)

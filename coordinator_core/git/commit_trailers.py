@@ -652,6 +652,49 @@ def _has_trailer_line(commit_msg_file: Union[str, Path], prefix: str) -> bool:
     return False
 
 
+def read_trailer_value(
+    commit_msg_file: Union[str, Path], prefix: str
+) -> Optional[str]:
+    """Return the value of the FIRST `prefix` line in `commit_msg_file`'s
+    trailer block (see `_extract_trailer_block`), stripped, or `None` when
+    the block carries no such line -- the value-reading counterpart to
+    `_has_trailer_line`'s presence-only check.
+
+    Exists because presence and correctness are different questions, and
+    this module previously only ever asked the first. `compute_missing_
+    trailer_args` treats an already-present `Deliverable-Id:` as settled and
+    resolves nothing further -- correct for idempotency, but it means a
+    value an AGENT typed into the message it hands to `commit_scoped` reaches
+    the commit object having been read by nobody. `commit_scoped`'s own
+    `_validate_explicit_deliverable_id` guards only the caller-supplied
+    `deliverable_id` PARAMETER, so the message-authored route was the one
+    unvalidated door into the same trailer (cross-repo/inbox/2026-08-20-
+    example-retrieval-repo-em-wave-commit-deliverable-id-is-per-session.md: a wave
+    commit agent wrote a BRANCH NAME, `work/machine-a/2026-08-16to18`, into
+    this trailer and the commit exited 0).
+
+    A blank value returns `None`, not `""` -- a `Deliverable-Id:` line with
+    nothing after it carries no claim to check, and callers guarding on
+    truthiness must not have to distinguish the two.
+
+    Any read failure -> `None`, the same degrade-gracefully contract
+    `_has_trailer_line` documents. A caller must therefore NOT read `None`
+    as "the message asserts no id"; it means "no id was legible here", and
+    the only safe action on it is to fall through to the ordinary
+    resolution ladder, never to refuse.
+    """
+    try:
+        with open(commit_msg_file, encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return None
+    for line in _extract_trailer_block(text):
+        if line.startswith(prefix):
+            value = line[len(prefix) :].strip()
+            return value or None
+    return None
+
+
 def compute_missing_trailer_args(
     commit_msg_file: Union[str, Path],
     cwd: Union[str, Path],

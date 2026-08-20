@@ -52,7 +52,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
-from coordinator_core.git.commit_trailers import compute_missing_trailer_args
+from coordinator_core.git.commit_trailers import (
+    compute_missing_trailer_args,
+    read_trailer_value,
+)
 from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
@@ -2793,6 +2796,53 @@ def commit_scoped(
         rejection = _validate_explicit_deliverable_id(deliverable_id, root)
         if rejection is not None:
             return GitResult(returncode=-1, stdout="", stderr=rejection)
+
+    # The message-authored route into the SAME trailer, which the guard
+    # immediately above does not cover: `compute_missing_trailer_args` treats
+    # an already-present `Deliverable-Id:` as settled and resolves nothing,
+    # so a value the caller typed into `msg_file` itself reaches the commit
+    # object unread. Reported by example-retrieval-repo-em (cross-repo/inbox/2026-08-20-
+    # example-retrieval-repo-em-wave-commit-deliverable-id-is-per-session.md): a wave
+    # commit agent wrote the BRANCH NAME `work/machine-a/2026-08-16to18` into
+    # this trailer and the commit exited 0, and `close-out-and-stamp`'s
+    # trailer join then silently could not reach the chunk.
+    #
+    # SHAPE ONLY -- deliberately NOT the existence half
+    # `_validate_explicit_deliverable_id` also applies. That half is known
+    # over-tight (state/bug-backlog/2026-08-11-scoped-git-commit-rejects-the-
+    # deliverabl-4a41eace3946.yaml: its four-path artifact corpus excludes
+    # `state/sizings/`, so it refuses ids `coordinator-doc-new` itself
+    # mints), and this guard sits on the commit path EVERY concurrent
+    # session on this shared worktree runs. Widening a check with an open
+    # false-refusal defect onto that surface trades a silent wrong trailer
+    # for a loud wrong refusal, fleet-wide. The shape half carries no such
+    # risk in either direction: no legitimate commit has ever carried a
+    # `Deliverable-Id:` that is neither `dlv-` nor `pln-` prefixed, because
+    # no minter produces one.
+    #
+    # This therefore does NOT catch the second malformed shape that memo
+    # reports -- a real but FOREIGN `dlv-` id, which passes shape and
+    # existence alike. Only equality against the EXECUTING plan's
+    # `deliverable_id` catches that, and this seam does not know which plan
+    # is executing; threading it from the emitter is tracked in
+    # state/bug-backlog/2026-08-20-workflow-commit-agent-stamps-deliverable-
+    # e783825207c3.yaml and is not closed here.
+    if not deliverable_id:
+        authored = read_trailer_value(msg_file, "Deliverable-Id:")
+        if authored is not None and not (
+            authored.startswith("dlv-") or authored.startswith("pln-")
+        ):
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    f"commit_scoped: Deliverable-Id trailer {authored!r} in the "
+                    "commit message rejected -- does not match the 'dlv-' or "
+                    "'pln-' shape convention. Remove the hand-written trailer "
+                    "line and let the engine resolve it, or pass a minted id "
+                    "as --deliverable-id."
+                ),
+            )
 
     # Layer-1 CAS snapshot (2026-08-14, state/audits/2026-08-14-scoped-
     # commit-partial-stage-sweep.md "Recommended fix shape" § Layer 1) --

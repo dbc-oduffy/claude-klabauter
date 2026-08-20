@@ -557,69 +557,6 @@ def get_poisoned_modules() -> Dict[str, BaseException]:
     return dict(_POISONED_MODULES)
 
 
-#: The op modules `setup/publish-targets.portable`'s engine row (`claude-klabauter`,
-#: field 7) deliberately EXCLUDES from the published mirror, as explicit `!ops/*.py`
-#: negations. The mirror is a publish DESTINATION, not a publisher — the row's own
-#: comment block states the intent ("the publish machinery, deliberately absent from
-#: field 7") — but the same row ships this `__init__.py`, registry rows and all. Their
-#: absence THERE is therefore expected, not breakage.
-#:
-#: Kept in lockstep with field 7 by
-#: `coordinator/tests/test_ops_registry_unpublished_modules.py`, which re-derives this
-#: set from the store and fails on drift in either direction. That test lives under
-#: `coordinator/tests/` — not `coordinator_core/tests/` — because it reads claude-klabauter's own
-#: `setup/publish-targets.portable`, which the mirror does not carry; the engine row
-#: excluded `tests/test_published_mirror_carries_shipped_symbols.py` for exactly that
-#: reason on 2026-08-19, and this follows that precedent rather than adding a seventh
-#: negation.
-#:
-#: Consumed ONLY to suppress the per-invocation stderr traceback for a module that is
-#: expected-absent (§ `_is_expected_absent_on_mirror`). It does NOT relax the dispatch
-#: boundary: the module still lands in `_POISONED_MODULES`, so invoking one of its ops
-#: still re-raises the real cause rather than degrading to "unknown op". That
-#: distinction is what keeps this off the module docstring's Negative-spec — the
-#: rejected anti-pattern makes a failure INVISIBLE at dispatch, and this changes only
-#: whether a KNOWN, DECLARED absence is reprinted on every unrelated invocation.
-_UNPUBLISHED_ON_MIRROR = frozenset(
-    {
-        "coordinator_core.ops.percolate_run",
-        "coordinator_core.ops.percolate_validate",
-        "coordinator_core.ops.percolate_preflight_scratch_publish",
-        "coordinator_core.ops.percolate_check_inverse_drift",
-        "coordinator_core.ops.percolate_ci_smoke_check",
-        "coordinator_core.ops.percolate_identity_check",
-    }
-)
-
-
-def _is_expected_absent_on_mirror(module_path: str, exc: BaseException) -> bool:
-    """Whether `module_path`'s import failure is the DECLARED mirror exclusion
-    (§ `_UNPUBLISHED_ON_MIRROR`) rather than a defect worth printing.
-
-    Three conditions, all required — each one closes a way this could hide a real
-    failure:
-
-      1. `module_path` is declared unpublished. An undeclared module is always loud.
-      2. The exception is a `ModuleNotFoundError` naming `module_path` ITSELF. A
-         broken import INSIDE a present module raises with the inner module's name,
-         so it stays loud.
-      3. The `.py` file is genuinely absent next to this `__init__.py`. In claude-klabauter,
-         where these files are present, every condition-1 module still imports — so a
-         deletion or rename in the SOURCE tree is loud here, not silently excused.
-
-    Deliberately not a check on "am I the mirror": no marker file is trusted, and the
-    same code path is exercised in both trees. The predicate is about THIS module on
-    THIS disk.
-    """
-    if module_path not in _UNPUBLISHED_ON_MIRROR:
-        return False
-    if not isinstance(exc, ModuleNotFoundError) or exc.name != module_path:
-        return False
-    leaf = module_path.rsplit(".", 1)[-1]
-    here = _os.path.dirname(_os.path.abspath(__file__))
-    return not _os.path.isfile(_os.path.join(here, f"{leaf}.py"))
-
-
 def _eager_import_all() -> None:
     """Import every production op module, firing each one's register_op(...)
     side-effect. This is the exact set of imports that used to run
@@ -643,20 +580,6 @@ def _eager_import_all() -> None:
             importlib.import_module(module_path)
         except Exception as exc:  # noqa: BLE001 — intentional broad catch, see docstring
             _POISONED_MODULES[module_path] = exc
-            if _is_expected_absent_on_mirror(module_path, exc):
-                # DECLARED absence (§ _UNPUBLISHED_ON_MIRROR), not a defect: this
-                # tree is a publish destination that deliberately carries no
-                # percolate engine. Recorded in _POISONED_MODULES above like any
-                # other failure — dispatching one of these ops still re-raises the
-                # real cause — but not reprinted on every unrelated invocation,
-                # which is what made this ~40 lines of stderr per invocation on
-                # every mirror install for 9 days.
-                _logger.debug(
-                    "coordinator_core.ops: %r absent (declared unpublished on this "
-                    "tree) — its op(s) will NOT be registered",
-                    module_path,
-                )
-                continue
             # ERROR-severity logging call (§ FUNCTION gate C4C brief "make the
             # silent swallow observable") ALONGSIDE the pre-existing stderr
             # print below — control flow is UNCHANGED (still resilient: no

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git import commit_trailers
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.session.claimed_plan import list_held_plan_claims
 from coordinator_core.win_portability import no_console_creationflags
@@ -829,3 +830,74 @@ def test_emergency_pathspec_with_no_deliverable_id_anywhere_commits_untrailered(
     joined = " ".join(args)
     assert "Deliverable-Id:" not in joined
     assert f"Session-Id: {_SID}" in joined
+
+
+# --- message-authored Deliverable-Id trailer: read, and shape-guard ------
+#
+# Closes the unvalidated door reported in cross-repo/inbox/2026-08-20-
+# example-retrieval-repo-em-wave-commit-deliverable-id-is-per-session.md. Deliberately
+# spawn-free: `commit_scoped`'s guard returns before `_index_blobs`, the
+# first leg that touches git.
+
+
+def _msg(tmp_path, text):
+    f = tmp_path / "COMMIT_EDITMSG"
+    f.write_text(text, encoding="utf-8")
+    return f
+
+
+def test_read_trailer_value_returns_the_trailer_block_value(tmp_path):
+    f = _msg(tmp_path, "C1: subject\n\nbody\n\nDeliverable-Id: dlv-a-b-123456\n")
+    assert commit_trailers.read_trailer_value(f, "Deliverable-Id:") == "dlv-a-b-123456"
+
+
+def test_read_trailer_value_ignores_a_body_line_outside_the_trailer_block(tmp_path):
+    # Same distinction `_has_trailer_line` draws: a colon-shaped line sitting
+    # in the BODY, above a real trailing block, is prose git never parses.
+    f = _msg(
+        tmp_path,
+        "C1: subject\n\nDeliverable-Id: dlv-in-the-body-999999\n\n"
+        "Session-Id: 11111111-1111-1111-1111-111111111111\n",
+    )
+    assert commit_trailers.read_trailer_value(f, "Deliverable-Id:") is None
+
+
+def test_read_trailer_value_treats_a_blank_value_as_absent(tmp_path):
+    f = _msg(tmp_path, "C1: subject\n\nbody\n\nDeliverable-Id:   \n")
+    assert commit_trailers.read_trailer_value(f, "Deliverable-Id:") is None
+
+
+def test_read_trailer_value_degrades_to_none_on_an_unreadable_file(tmp_path):
+    assert (
+        commit_trailers.read_trailer_value(tmp_path / "nope", "Deliverable-Id:") is None
+    )
+
+
+def test_commit_scoped_refuses_a_branch_name_in_the_deliverable_id_trailer(tmp_path):
+    # The exact malformed value observed on example-retrieval-repo's e78b55610.
+    from coordinator_core.ops.ceremony import git_native
+
+    (tmp_path / "f.txt").write_text("x\n", encoding="utf-8")
+    f = _msg(
+        tmp_path,
+        "C1: subject\n\nbody\n\nDeliverable-Id: work/machine-a/2026-08-16to18\n",
+    )
+    result = git_native.commit_scoped(["f.txt"], f, tmp_path)
+    assert result.returncode == -1
+    assert "work/machine-a/2026-08-16to18" in result.stderr
+    assert "dlv-" in result.stderr and "pln-" in result.stderr
+
+
+def test_commit_scoped_admits_a_pln_prefixed_authored_trailer(tmp_path):
+    # `--deliverable-id` is aliased to accept a `pln-` id (C10b, docs/plans/
+    # 2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md); the
+    # message-authored route must not be stricter than the parameter one.
+    # Passing the shape guard is all that is asserted -- the call proceeds
+    # into git and fails there on a non-repo tmp_path, which is precisely
+    # the evidence it was not refused BY THE GUARD.
+    from coordinator_core.ops.ceremony import git_native
+
+    (tmp_path / "f.txt").write_text("x\n", encoding="utf-8")
+    f = _msg(tmp_path, "C1: subject\n\nbody\n\nDeliverable-Id: pln-a-b-123456\n")
+    result = git_native.commit_scoped(["f.txt"], f, tmp_path)
+    assert "does not match the 'dlv-' or 'pln-' shape convention" not in result.stderr

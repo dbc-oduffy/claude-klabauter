@@ -381,6 +381,37 @@ git log -1 --format='%B' | git interpret-trailers --parse
 git log --format='%H%x09%(trailers:key=Plan-Id,valueonly,separator=%x2C)%x09%(trailers:key=Deliverable-Id,valueonly)%x09%(trailers:key=Nature,valueonly)%x09%(trailers:key=Session-Id,valueonly)' origin/main..HEAD
 ```
 
+#### Extraction is not verification
+
+Every command above answers *"is a trailer present and parseable?"* and nothing more. None of
+them answers *"is this value mine?"* — and a wrong `Deliverable-Id:` is well-formed by
+construction, so all of them pass cleanly on a commit carrying someone else's id, or a branch
+name, or a chunk id.
+
+This distinction is not academic. Example-retrieval-repo-em circulated
+
+```bash
+git log -1 --format='%B' <sha> | git interpret-trailers --parse | grep -i deliverable
+```
+
+to three sessions as a post-commit verification step, and it passed on both of the malformed
+commits it was meant to catch (`cross-repo/inbox/2026-08-20-example-retrieval-repo-em-wave-commit-
+deliverable-id-is-per-session.md`). A half-check in circulation is worse than no check: it
+converts an unexamined risk into a believed-examined one.
+
+To VERIFY, compare the extracted value against the executing plan's own `deliverable_id`:
+
+```bash
+test "$(git log -1 --format='%(trailers:key=Deliverable-Id,valueonly)' <sha>)" \
+  = "<the plan's deliverable_id>"
+```
+
+At write time this is `commit_scoped`'s job, not the operator's: it refuses a caller-supplied
+`--deliverable-id` failing shape or existence (`_validate_explicit_deliverable_id`), and refuses
+a message-authored `Deliverable-Id:` trailer failing shape. Equality against the executing plan
+is NOT yet enforced anywhere — that seam does not know which plan is executing. Tracked in
+`state/bug-backlog/2026-08-20-workflow-commit-agent-stamps-deliverable-e783825207c3.yaml`.
+
 ### 2.2 Worked example — commit trailer block
 
 A commit stamped by the `commit.anchors` op (all keys resolved):

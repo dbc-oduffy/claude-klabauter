@@ -93,6 +93,7 @@ Negative-spec — what this wrapper is NOT:
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -230,6 +231,19 @@ def main(argv: List[str]) -> int:
     # right call for a fire-and-forget background spawn (CLAUDE.md's Windows
     # console-subprocess-discipline default) but wrong here, where visible,
     # live output IS the requirement -- see the module docstring.
+    # CreateProcess does no PATHEXT resolution, so a bare `pnpm`/`npm`/`yarn`/
+    # `npx` -- all of which ship on Windows as `.cmd` shims -- raises
+    # WinError 2 here while resolving fine from a shell. shutil.which honours
+    # PATHEXT and returns the shim's real path. Resolution is deliberately
+    # fail-open: which() returning None leaves `command` untouched so a
+    # genuinely-absent binary still surfaces Popen's own FileNotFoundError
+    # naming it, rather than a substituted error from this lookup. shell=True
+    # is NOT the fix -- it would re-parse the already-split argv and mangle any
+    # argument containing a space or quote.
+    resolved = shutil.which(command[0])
+    if resolved is not None:
+        command = [resolved, *command[1:]]
+
     process = subprocess.Popen(command)
     try:
         ps_process = psutil.Process(process.pid)
