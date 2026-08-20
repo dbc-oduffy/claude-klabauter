@@ -569,12 +569,13 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     which want the authored lines; a caller needing the resolved scalar
     should parse the document with a YAML loader instead.
 
-    Negative-spec: trailing blank lines are dropped from ``lines``
-    unconditionally, INCLUDING under a ``+`` (keep) chomping indicator where
-    YAML counts them as part of the value. They are excluded from
-    ``end_offset`` for the appender's sake — an append past them would land
-    outside the block — so under ``+`` this reads back marginally less than
-    the authored body. Do not use this to round-trip a ``+``-chomped scalar.
+    Trailing blank lines follow the chomping indicator, for ``lines`` and
+    ``end_offset`` alike: under ``+`` (keep) YAML counts them as part of the
+    value, so the block ends after them; under ``-`` or none they are filler
+    between this field and the next, and the block ends before them. Do not
+    re-unify these into one unconditional trim — dropping them under ``+``
+    reads back less than the authored body, and keeping them under ``-``
+    lands an appended line outside the block.
 
     Negative-spec: recognises only a WELL-FORMED header. A malformed value
     that merely starts with ``|``/``>`` (``|abc``, ``|0``) reads as ``None``,
@@ -594,6 +595,7 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
         return None
 
     explicit = hm.group('indent') or hm.group('indent_b')
+    chomp = hm.group('chomp_a') or hm.group('chomp_b')
 
     # `_fm_key_line_pattern`'s trailing `.*$` already consumed any `\r` as
     # part of the key line (`.` matches `\r`; MULTILINE `$` matches before
@@ -615,8 +617,14 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     # block, unless a `+` chomping indicator claims them. Either way they must
     # not be counted into `end_offset`, or an append would land past them and
     # be separated from the block it is appending to.
-    while kept and not kept[-1].strip():
-        kept.pop()
+    # Under a `+` (keep) chomping indicator trailing blank lines ARE part of
+    # the scalar's value, so the block ends after them and they belong in
+    # `lines`. Under `-`/none they are document filler between this field and
+    # the next, and both the body and the append point stop before them.
+    # One rule, applied to both `lines` and `end_offset` together.
+    if chomp != '+':
+        while kept and not kept[-1].strip():
+            kept.pop()
 
     consumed = sum(len(line) for line in kept)
     raw = [line.rstrip('\r\n') for line in kept]

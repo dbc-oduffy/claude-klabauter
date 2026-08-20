@@ -1,6 +1,7 @@
 """
 coordinator_core.ops.migrate_state_to_claude_klabauter — two-phase state/docs migration
-from ~/.claude (CLAUDE_HOME) to the claude-klabauter sibling repo (CLAUDE_KLABAUTER_ROOT).
+from ~/.claude (CLAUDE_HOME) to the claude-klabauter sibling repo
+(COORDINATOR_ENGINE_SOURCE_ROOT).
 
 Purpose: DR-059 bash-to-naked-Python port of the DoE-owned script
 `coordinator/bin/migrate-state-to-claude-klabauter.sh` (~346 lines). Implements the
@@ -12,8 +13,9 @@ Two subcommands:
 
   --populate (C6a)
     COPY (do NOT remove) CLAUDE_HOME's state/ and docs/{plans,research,problems}/
-    (plus archive/ — see Negative-spec below) trees into CLAUDE_KLABAUTER_ROOT's matching
-    trees. Preserves directory structure and file modes (`shutil.copy2`,
+    (plus archive/ — see Negative-spec below) trees into
+    COORDINATOR_ENGINE_SOURCE_ROOT's matching trees. Preserves directory
+    structure and file modes (`shutil.copy2`,
     mirroring the bash oracle's `cp -p`). Idempotent: safe to re-run; existing
     destination files are overwritten.
     Originals stay UNTOUCHED.
@@ -132,7 +134,7 @@ def cmd_populate(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
     """--populate (C6a): copy source trees to claude-klabauter; originals untouched."""
     print("=== migrate-state-to-claude-klabauter --populate (C6a) ===", file=out)
     print(f"  Source (CLAUDE_HOME): {claude_home}", file=out)
-    print(f"  Destination (CLAUDE_KLABAUTER_ROOT): {claude_klabauter_root}", file=out)
+    print(f"  Destination (COORDINATOR_ENGINE_SOURCE_ROOT): {claude_klabauter_root}", file=out)
     print("", file=out)
 
     for src_rel, dst_rel in TREE_PAIRS:
@@ -157,7 +159,7 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
     """
     print("=== migrate-state-to-claude-klabauter --finalize (C6b) ===", file=out)
     print(f"  Source (CLAUDE_HOME): {claude_home}", file=out)
-    print(f"  Destination (CLAUDE_KLABAUTER_ROOT): {claude_klabauter_root}", file=out)
+    print(f"  Destination (COORDINATOR_ENGINE_SOURCE_ROOT): {claude_klabauter_root}", file=out)
     print("", file=out)
 
     # --- Step 1: Delta re-sync — copy any source file NEWER than its claude-klabauter
@@ -274,7 +276,8 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
 def _default_claude_klabauter_root() -> str:
     """This module's own repo root — coordinator_core/ops/<file>.py is two
     directories below the repo root (ops/, coordinator_core/), so
-    parents[2] is the repo root itself. Used as CLAUDE_KLABAUTER_ROOT unless overridden.
+    parents[2] is the repo root itself. Used as the source-checkout root
+    unless overridden via COORDINATOR_ENGINE_SOURCE_ROOT.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     return os.path.dirname(os.path.dirname(here))
@@ -293,8 +296,12 @@ def main(argv: List[str]) -> int:
     """CLI entry point.
 
     Environment overrides (mirror the bash oracle):
-      CLAUDE_KLABAUTER_ROOT  — override the claude-klabauter repo path (default: this module's
-                     own repo root, see `_default_claude_klabauter_root`).
+      COORDINATOR_ENGINE_SOURCE_ROOT  — override the claude-klabauter repo path
+                     (default: this module's own repo root, see
+                     `_default_claude_klabauter_root`). Read via
+                     `coordinator_engine_source_root_env`, which falls back
+                     to the dispatch variable (COORDINATOR_ENGINE_ROOT, or
+                     its legacy spelling CLAUDE_KLABAUTER_ROOT) during the transition.
       CLAUDE_HOME  — override the ~/.claude meta-repo path (default:
                      `~/.claude`).
     """

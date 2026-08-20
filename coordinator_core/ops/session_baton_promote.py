@@ -104,6 +104,15 @@ _ACCOMPLISHED_PLACEHOLDER = (
     "<!-- Replace with what was built, fixed, or shipped this session. -->"
 )
 
+#: The exact placeholder HTML comment coordinator-doc-new's handoff
+#: scaffolder emits under "## What I Learned"
+#: (coordinator/bin/coordinator-doc-new.py :: _scaffold_handoff). A template
+#: change upstream that renames/removes this comment degrades to a silent
+#: no-op below rather than risk corrupting the freshly-scaffolded file.
+_LEARNED_PLACEHOLDER = (
+    "<!-- What did you learn that you'd resent re-deriving? -->"
+)
+
 
 def _err(msg: str) -> dict:
     """Return an exit_code=1 setup-error reply (mirrors session_baton_mint's
@@ -195,6 +204,28 @@ def _write_first_prompt_into_body(
         "<!-- Session opened with this prompt: -->\n\n" + first_prompt.strip()
     )
     text = text.replace(_ACCOMPLISHED_PLACEHOLDER, replacement, 1)
+    try:
+        handoff_path.write_text(text, encoding="utf-8", newline="\n")
+    except OSError:
+        pass
+
+
+def _write_intent_into_body(handoff_path: Path, intent: Optional[str]) -> None:
+    """Post-scaffold body edit for the "## What I Learned" section — same
+    seam as ``_write_first_prompt_into_body``. Never touches frontmatter. A
+    no-op when ``intent`` is falsy (AC4: no intent leaves the placeholder in
+    place, unfilled, as the nudge itself) or the placeholder comment is
+    absent (upstream template drift) — degrade silently rather than risk
+    corrupting the freshly-scaffolded file."""
+    if not intent:
+        return
+    try:
+        text = handoff_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if _LEARNED_PLACEHOLDER not in text:
+        return
+    text = text.replace(_LEARNED_PLACEHOLDER, intent.strip(), 1)
     try:
         handoff_path.write_text(text, encoding="utf-8", newline="\n")
     except OSError:
@@ -321,6 +352,7 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
         handoff_path = Path(resolved_cwd) / handoff_path_str
 
     _write_first_prompt_into_body(handoff_path, record.get("first_prompt"))
+    _write_intent_into_body(handoff_path, record.get("intent"))
 
     merged = store.merge_baton(session_id, cwd, promoted_to=handoff_path_str)
     if merged is None:

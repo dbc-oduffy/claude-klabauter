@@ -10,10 +10,10 @@ scaffold taught authors the retired vocabulary before they could read the
 doctrine that would tell them otherwise. This suite asserts the scaffold now
 emits `disposition` rows, mentions `case_against` (the strongest-honest-case
 field required on `backlogged`/`wont_do`), and that the emitted sample rows
-still validate against the vendored plan-tasks schema (1.8.0).
+still validate against the vendored plan-tasks schema (1.9.0).
 
 Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-deferral-both-sides-adopted-three-legs-for-you.md
-Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 1.8.0)
+Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 1.9.0)
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
@@ -26,11 +26,20 @@ of authoring, not a stdin prompt.
 
 Run:
     pytest coordinator/bin/tests/test_coordinator_doc_new_plan_template_disposition.py -v
+
+Note: `test_sample_rows_validate_against_vendored_schema` pins the vendored
+schema's `x-schema-version` by equality, not `>=`. That pin is a deliberate
+tripwire, not a stray constant -- when the schema is re-vendored, the pin
+mismatch forces a re-look at this scaffold's sample rows against the new
+schema shape before the pin is bumped. Bump the pin when re-vendoring is
+verified additive to these rows; never relax it to a range or delete the
+assertion.
 """
 from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import re
 import unittest
 from pathlib import Path
@@ -104,11 +113,8 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
 
     def test_sample_rows_validate_against_vendored_schema(self):
         rows = _extract_task_spine_rows(_scaffolded_plan_text())
-        schema = yaml.safe_load(_SCHEMA_PATH.read_text())
-        import json
-
         schema = json.loads(_SCHEMA_PATH.read_text())
-        self.assertEqual(schema.get("x-schema-version"), "1.8.0")
+        self.assertEqual(schema.get("x-schema-version"), "1.9.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

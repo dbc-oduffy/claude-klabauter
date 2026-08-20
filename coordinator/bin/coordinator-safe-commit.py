@@ -4,7 +4,8 @@ Wave 2 of the coordinator-session-family-repoint-and-delete plan, chunk C2a).
 Port of the bash `coordinator-safe-commit` (Phase 3, scoped-safety-commits
 plan) onto `coordinator_core.session` (core/liveness/scope/claims), in-process
 imported via the `cc_invoke.resolve_engine_root` seam (self-location-first —
-CLAUDE_KLABAUTER_ROOT env -> walk-up to this script's own enclosing checkout -> the
+engine-root env (COORDINATOR_ENGINE_ROOT, or its legacy spelling
+CLAUDE_KLABAUTER_ROOT) -> walk-up to this script's own enclosing checkout -> the
 pointer-file/registry ladder) — the DR-047
 Python-caller-shape ruling (the Director of Engineering, 2026-07-22; see
 docs/plans/2026-07-22-coordinator-session-family-repoint-and-delete.md
@@ -586,7 +587,7 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     except RuntimeError as exc:
         return (
             "  # claude-klabauter root resolution failed (%s) — run from claude-klabauter's own\n"
-            "  # tree, or fix CLAUDE_KLABAUTER_ROOT resolution first, then:\n"
+            "  # tree, or fix the engine-root resolution first, then:\n"
             "  python3 -m coordinator_core.invoke ceremony.scoped_git_commit '%s' --repo %s --bare"
             % (exc, params, worktree_root)
         )

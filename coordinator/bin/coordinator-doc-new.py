@@ -2032,6 +2032,10 @@ def _scaffold_handoff(
         "",
         "<!-- Replace with what the next session should do first. -->",
         "",
+        "## What I Learned",
+        "",
+        "<!-- What did you learn that you'd resent re-deriving? -->",
+        "",
         *_require_session_ledger_block(),
     ])
     return "\n".join(lines)

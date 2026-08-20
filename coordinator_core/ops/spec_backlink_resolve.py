@@ -31,8 +31,9 @@ only when a queried id actually carries a `<repo>:` prefix, never eagerly,
 since most calls this plan drives before C7 (cross-repo citation) lands are
 local-only. The peer root is resolved via
 `coordinator/bin/lib/coordinator_registry.py::doe_root()` — NOT
-`cc_invoke.py::_resolve_claude_klabauter_root()`, which resolves CLAUDE_KLABAUTER_ROOT (this repo)
-and has zero peer-repo awareness (see the plan's enrich-once correction).
+`cc_invoke.py::_resolve_claude_klabauter_root()`, which resolves the engine root (this
+repo, dispatch axis) and has zero peer-repo awareness (see the plan's
+enrich-once correction).
 
 Typed outcomes: every resolve call returns exactly one of three discriminated
 shapes — HIT / MISS / AMBIGUITY — keyed by an `"outcome"` field so a
@@ -350,7 +351,7 @@ def _doe_root_path() -> Optional[Path]:
     Reuses coordinator/bin/lib/coordinator_registry.py::doe_root() rather
     than re-deriving a ladder — see this module's docstring for why
     cc_invoke.py::_resolve_claude_klabauter_root() is NOT the right function (it
-    resolves CLAUDE_KLABAUTER_ROOT, this repo, with zero peer-repo awareness).
+    resolves the engine root, this repo, with zero peer-repo awareness).
     """
     try:
         from coordinator.bin.lib.coordinator_registry import doe_root

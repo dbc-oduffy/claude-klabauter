@@ -285,7 +285,7 @@ class ClaudeKlabauterPercolate:
 
 
 def _import_claude_klabauter_percolate() -> ClaudeKlabauterPercolate:
-    """Resolve CLAUDE_KLABAUTER_ROOT via the same `cc_invoke.resolve_engine_root()` shim
+    """Resolve the engine root via the same `cc_invoke.resolve_engine_root()` shim
     (§ module docstring), then import the engine repo's percolate-engine
     surface this driver dispatches against. `resolve_engine_root()` adds a
     self-location walk-up rung ahead of the settings-home pointer / machine-
@@ -3069,9 +3069,9 @@ _UNSCANNED_EXCEPTIONS_PATH = Path(__file__).resolve().parent / "percolate-publis
 # `engine.run_parse_sweep`/`run_content_transform_sweep` also derive their own
 # copies from, so a name added there cannot drift out of sync with this
 # full-repo-walk leg. Resolved lazily inside `_is_structurally_never_published`
-# (via `_import_percolate_surface_module`, the same CLAUDE_KLABAUTER_ROOT-already-on-
+# (via `_import_percolate_surface_module`, the same engine-root-already-on-
 # sys.path idiom every other percolate import in this file uses) rather than at
-# module-import time, because CLAUDE_KLABAUTER_ROOT is not yet resolved when this module
+# module-import time, because the engine root is not yet resolved when this module
 # is first imported.
 # `__pycache__/` is a LOCALLY-GENERATED build artifact, not something any
 # row's sync ever copies into the destination (verified:
@@ -3176,7 +3176,7 @@ def _load_unscanned_exceptions() -> dict:
 
 def _import_percolate_surface_module():
     """Import `coordinator_core.percolate.surface` — by the time this is
-    called, `_import_claude_klabauter_percolate()` has already resolved CLAUDE_KLABAUTER_ROOT
+    called, `_import_claude_klabauter_percolate()` has already resolved the engine root
     onto `sys.path`, so this is a plain import, not a second
     spec_from_file_location dance. Kept as its own function (rather than a
     bare inline import at the call site) so the import failure path has one
@@ -3189,7 +3189,7 @@ def _import_percolate_surface_module():
 
 def _import_percolate_rewrite_basename_module():
     """Import `coordinator_core.percolate.rewrite_basename` — same idiom as
-    `_import_percolate_surface_module` (CLAUDE_KLABAUTER_ROOT is already on
+    `_import_percolate_surface_module` (the engine root is already on
     `sys.path` by the time this is called). Needed by `process_target` to
     read a mirror-mode row's rename-generation ledger BEFORE dispatching
     sync, so a directory this pass's rename is about to reproduce can be
@@ -3203,7 +3203,7 @@ def _import_percolate_rewrite_basename_module():
 
 def _import_percolate_store_resolve_target():
     """Import `coordinator_core.percolate.store.resolve_target` directly —
-    same CLAUDE_KLABAUTER_ROOT-already-on-sys.path idiom as
+    same engine-root-already-on-sys.path idiom as
     `_import_percolate_rewrite_basename_module`. `process_target`'s
     `renamed_dir_names` block (§ that block's own comment) needs the row's
     STATIC `basename_rename` section, which is a pure function of `store` +
@@ -3622,7 +3622,7 @@ def _resolve_percolate_root_and_rung(*, err: IO[str] = sys.stderr) -> "tuple[Pat
     longer depends on the registry having been populated on this machine.
 
     Fallback order on ANY native-resolver failure (missing cc_invoke.py,
-    unresolvable CLAUDE_KLABAUTER_ROOT, missing coordinator_core.percolate.runtime_root
+    an unresolvable engine root, missing coordinator_core.percolate.runtime_root
     module, or an exception raised by it):
       1. Native resolver (above) — preferred, resolves the true percolation
          source root. Post-C1/C4, this is the ONLY correctness mechanism in
@@ -3633,8 +3633,8 @@ def _resolve_percolate_root_and_rung(*, err: IO[str] = sys.stderr) -> "tuple[Pat
       2. This function's OWN `.doe-root` pointer read (`_read_doe_root_pointer()`),
          validated by the presence of `setup/publish-targets.portable` at the
          pointed-to root. This is a cold-start backstop for genuine
-         native-resolver failure (missing cc_invoke, unresolvable
-         CLAUDE_KLABAUTER_ROOT) — a case rung 1's in-process pointer rung structurally
+         native-resolver failure (missing cc_invoke, an unresolvable
+         engine root) — a case rung 1's in-process pointer rung structurally
          cannot cover, because this local read runs while LOCATING the engine
          root and so cannot depend on having already located it. It is not, and
          post-C1/C4 no longer reads as, the primary correctness mechanism —
@@ -3702,14 +3702,14 @@ def _resolve_percolate_root_and_rung(*, err: IO[str] = sys.stderr) -> "tuple[Pat
 
 
 def _claude_klabauter_coordinator_bin() -> Optional[Path]:
-    """Best-effort `<CLAUDE_KLABAUTER_ROOT>/coordinator/bin`, or None if unresolvable.
+    """Best-effort `<engine root>/coordinator/bin`, or None if unresolvable.
 
     Uses the same `cc_invoke.ensure_engine_on_path()` seam as
     `_import_claude_klabauter_percolate`, so it honours the self-location / registry /
     pointer resolution chain rather than guessing a sibling-directory layout.
     `ensure_engine_on_path` is itself best-effort (returns None rather than
     raising on failure), matching this function's own degrade posture:
-    it backs an optional lookup rung, and an unresolvable CLAUDE_KLABAUTER_ROOT should
+    it backs an optional lookup rung, and an unresolvable engine root should
     degrade to the caller's own diagnostic rather than crash target
     resolution.
     """
@@ -3754,7 +3754,7 @@ def coordinator_bin_default(percolate_root: Path) -> Path:
     # "version-consistency gate not found", which reads as a broken install
     # rather than a stale lookup path.
     #
-    # Resolved through the same CLAUDE_KLABAUTER_ROOT seam the rest of this module uses, so it
+    # Resolved through the same engine-root seam the rest of this module uses, so it
     # honours the registry/pointer chain rather than assuming a sibling-directory
     # layout.
     claude_klabauter_bin = _claude_klabauter_coordinator_bin()
@@ -6684,7 +6684,7 @@ def compute_delta_invalidation_signature(
     `coordinator_core.percolate` transform package and
     `coordinator_core.ops` phase-dispatch package, resolved via
     `inspect.getfile` off an already-resolved engine callable rather than
-    re-deriving CLAUDE_KLABAUTER_ROOT. `engine_ctx.engine_claude_klabauter is None` (engine
+    re-deriving the engine root. `engine_ctx.engine_claude_klabauter is None` (engine
     unavailable) folds in a sentinel that can never match a prior recorded
     signature — a delta skip decision must never trust a signature that
     could not actually verify engine-side transform code."""
@@ -8992,7 +8992,7 @@ def process_target(
             # earlier return): `engine_ctx.engine_claude_klabauter is not None` is the
             # real check -- when the engine failed to import and this driver
             # degraded to a sync-only preview (§ `main`'s own
-            # EngineUnavailableError/dry-run warning path), CLAUDE_KLABAUTER_ROOT may
+            # EngineUnavailableError/dry-run warning path), the engine root may
             # never have been placed on `sys.path` at all, and this module
             # import would raise instead of degrading gracefully, so the load
             # is defensive: an import failure, an unreadable ledger, or an

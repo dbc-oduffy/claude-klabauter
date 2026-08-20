@@ -2097,6 +2097,27 @@ class TestBlockScalarAppendEdgeCases:
         with pytest.raises(ValueError, match='block-scalar'):
             replace_fm_field(fm, 'note', 'x')
 
+    def test_keep_chomp_retains_trailing_blanks_as_content(self):
+        """Under `+` trailing blank lines ARE the value. An unconditional trim
+        read them back as absent and appended into the middle of the body;
+        the trim now follows the chomping indicator."""
+        fm = 'note: |+\n  one\n\n\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block.lines == ['one', '', '']
+        result = append_fm_block_scalar_line(fm, 'note', 'two')
+        assert yaml.safe_load(result)['note'] == 'one\n\n\ntwo\n'
+        assert yaml.safe_load(result)['status'] == 'open'
+
+    def test_strip_chomp_still_stops_before_trailing_blanks(self):
+        """The other half of the same rule — under `-`/none those blanks are
+        document filler and an append must land before them."""
+        fm = 'note: |-\n  one\n\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block.lines == ['one']
+        result = append_fm_block_scalar_line(fm, 'note', 'two')
+        assert yaml.safe_load(result)['note'] == 'one\ntwo'
+        assert yaml.safe_load(result)['status'] == 'open'
+
     def test_explicit_indicator_wider_than_the_body_pads_to_the_indicator(self):
         fm = 'note: |2\n  two\nstatus: open\n'
         result = append_fm_block_scalar_line(fm, 'note', 'appended')
