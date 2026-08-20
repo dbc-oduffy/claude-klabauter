@@ -12,8 +12,10 @@ CLAUDE_KLABAUTER_ROOT for callers already running inside the claude-klabauter en
 Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
 Windows portability rung: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C1
 
-Resolution chain (unchanged from the bash oracle), in order:
-  1. CLAUDE_KLABAUTER_ROOT env var — if already set, return it unchanged.
+Resolution chain (rung 1 renamed by C14; the rest unchanged from the bash oracle):
+  1. COORDINATOR_ENGINE_ROOT env var — if already set, return it unchanged. The
+     retired CLAUDE_KLABAUTER_ROOT is read at this rung only to report itself as retired
+     (see `coordinator_engine_root_env`); it never supplies a value.
   1.5. <settings-home>/machine-local/.claude-klabauter-root pointer file — a cheap direct-file-read,
        checked ahead of the expensive machine-local subprocess ladder so per-invoke
        resolution spawns zero subprocesses on Windows. Falls through to rung 2 if
@@ -583,23 +585,32 @@ def _reset_engine_root_env_advisories() -> None:
 
 
 def coordinator_engine_root_env(site: str) -> Optional[str]:
-    """Read accessor for the engine-root env var during the dual-read window.
+    """Read accessor for the engine-root env var. The dual-read window is CLOSED.
 
-    Prefers `COORDINATOR_ENGINE_ROOT`; falls back to `CLAUDE_KLABAUTER_ROOT` only if the
-    new name is unset. Returns `None` if neither is set — deliberately
-    unchanged from today's behaviour (this accessor does not invent a value
-    the caller didn't have before).
+    Answers from `COORDINATOR_ENGINE_ROOT` only. `CLAUDE_KLABAUTER_ROOT` is still READ
+    but never RETURNED: a set-but-retired old name produces the retired
+    advisory and a census row, then `None`. Returns `None` if neither is set —
+    this accessor does not invent a value the caller didn't have before.
 
-    `site` tags the reading call site for the fallback-used advisory below —
-    pass a short stable identifier (e.g. the calling module's `__name__`),
-    not a per-invocation value.
+    `site` tags the reading call site for the advisories below — pass a short
+    stable identifier (e.g. the calling module's `__name__`), not a
+    per-invocation value.
 
-    PRECEDENCE IS LOAD-BEARING: the new name wins whenever both are set — a
-    stale `CLAUDE_KLABAUTER_ROOT` inherited from an ancestor process must never
-    override a fresh `COORDINATOR_ENGINE_ROOT` set by the immediate parent.
+    PRECEDENCE IS LOAD-BEARING WHILE BOTH ARE SET: the new name wins, and the
+    disagreement advisory fires. A stale `CLAUDE_KLABAUTER_ROOT` inherited from an
+    ancestor process must never override a fresh `COORDINATOR_ENGINE_ROOT` set
+    by the immediate parent.
+
+    NEGATIVE SPEC — WHAT THIS SEAM DOES NOT COVER. Closing the window here did
+    NOT retire the old name across the engine, and reading this docstring as if
+    it did is the error a review caught on 2026-08-20. Eight `ops/` modules
+    still read `CLAUDE_KLABAUTER_ROOT` directly through a module-local `_CLAUDE_KLABAUTER_ROOT_ENV`
+    and never reach this function, and three sites still export it to children.
+    Until those are routed or carved out, "the old name no longer answers"
+    is true of THIS SEAM and false of the engine.
 
     See module-level "C10: dual-read env accessor" block for the negative
-    spec on why this fallback is a time-boxed window (closed by C14), not a
+    spec on why the fallback was a time-boxed window (closed by C14), not a
     permanent shim.
     """
     new_val = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")
@@ -611,22 +622,58 @@ def coordinator_engine_root_env(site: str) -> Optional[str]:
     if new_val:
         return new_val
     if old_val:
-        _maybe_emit_engine_root_fallback(site)
-        return old_val
+        # C14 CLOSED THE WINDOW: the old name no longer ANSWERS. It is still
+        # READ, for one reason — to say so. Returning None silently here would
+        # turn an operator's stale pin into a resolution failure several rungs
+        # downstream, reported against whatever surface happened to need the
+        # root; naming it at the point of the stale read is the difference
+        # between a named cause and a session spent bisecting.
+        _maybe_emit_engine_root_retired(site, old_val)
     return None
 
 
-def _maybe_emit_engine_root_fallback(site: str) -> None:
-    """Emit the fallback-used advisory (stderr, once per `site` per
-    process) — fires whenever `CLAUDE_KLABAUTER_ROOT` is what answered."""
+def _maybe_emit_engine_root_retired(site: str, root_value: str = "") -> None:
+    """Emit the old-name-is-retired advisory (stderr, once per `site` per
+    process) and append the same observation to the durable census.
+
+    C14 CHANGED WHAT THIS MEANS, and the change is the point. Before C14 this
+    fired when `CLAUDE_KLABAUTER_ROOT` ANSWERED, and the census existed to evidence that
+    nothing was reading it any more so the window could close. C14 closed the
+    window on the other three precondition items instead — the mirror ships the
+    new name, the deployed settings-home copies were re-provisioned and
+    validated live, and the sibling consumers acknowledged — so the old name
+    now answers NOTHING. This advisory therefore fires on a read that no longer
+    resolves: an operator or an ancestor process still exporting a name the
+    engine has retired.
+
+    That inverts the census from *evidence a window may close* into *a
+    regression detector for a stale pin*, which is the residual risk the
+    close-without-a-soak deliberately accepted. It is the more useful of the
+    two: a non-zero count here is now actionable at the point of the stale
+    read, naming both the site and the value, rather than surfacing several
+    rungs downstream as an unresolvable-root failure against whatever surface
+    happened to need it first.
+
+    The census import is LAZY and the call is WRAPPED: this runs on the
+    `scoped-git-commit` hot path, and an observability write that can raise
+    here turns every ceremony on this box into an outage. A process with no
+    stale pin never imports the census at all.
+    """
     if site in _ENGINE_ROOT_FALLBACK_EMITTED:
         return
     _ENGINE_ROOT_FALLBACK_EMITTED.add(site)
     print(
-        f"coordinator_engine_root_env[{site}]: read via CLAUDE_KLABAUTER_ROOT fallback "
-        "(dual-read window, closes C14).",
+        f"coordinator_engine_root_env[{site}]: {_ENGINE_ROOT_OLD_VAR} is set but "
+        f"is NO LONGER HONOURED — the dual-read window closed (C14). "
+        f"Export {_ENGINE_ROOT_NEW_VAR} instead.",
         file=sys.stderr,
     )
+    try:
+        from coordinator_core.engine_root_census import record_fallback_read
+
+        record_fallback_read(site, root_value=root_value)
+    except Exception:
+        pass
 
 
 def _maybe_emit_engine_root_conflict(new_val: str, old_val: str) -> None:
@@ -647,14 +694,28 @@ def _maybe_emit_engine_root_conflict(new_val: str, old_val: str) -> None:
 def coordinator_engine_root_env_exports(value: str) -> dict:
     """Write helper: the dict of env vars to export for `value`.
 
-    During the dual-read window this sets BOTH `COORDINATOR_ENGINE_ROOT` and
-    `CLAUDE_KLABAUTER_ROOT` to the same value, so a child running from a pre-rename
-    mirror (reading only the old name) and a child running from a
-    post-rename tree (reading the new name) both resolve correctly. C14
-    drops the old key once a publish round converges both trees on the new
-    name — see the module-level "C10" block above.
+    C14 CLOSED THE DUAL-WRITE WINDOW: this now exports the NEW NAME ONLY.
+
+    Until C14 it set both names, so a child running from a pre-rename mirror
+    (reading only the old name) and one from a post-rename tree both resolved.
+    That is no longer needed and is no longer harmless: continuing to export
+    the old name is what KEEPS a stale reader working, and therefore what kept
+    the precondition open — the 26 fallback reads measured on 2026-08-20 all
+    traced to the old name being exported or pinned, never to a consumer that
+    could not have used the new one.
+
+    Closed on the other three precondition items rather than on a soak: the
+    published mirror ships the new name (its own fallback is the transformed
+    `CLAUDE_KLABAUTER_ROOT`, never `CLAUDE_KLABAUTER_ROOT`), the deployed settings-home
+    copies were re-provisioned and validated by live execution under the new
+    name alone, and the sibling consumers acknowledged — DoE's PM ruled the old
+    name goes rather than being tolerated to the end of the window.
+
+    The accessor still READS the old name, solely to name it as retired; see
+    `_maybe_emit_engine_root_retired`. That is the residual-risk net this
+    close deliberately trades the soak for.
     """
-    return {_ENGINE_ROOT_NEW_VAR: value, _ENGINE_ROOT_OLD_VAR: value}
+    return {_ENGINE_ROOT_NEW_VAR: value}
 
 
 # --- C18: the two axes get two variables ----------------------------------
@@ -734,12 +795,20 @@ def coordinator_engine_source_root_env(site: str) -> Optional[str]:
     is exactly the misread C18 exists to retire, and C18's exit condition is
     evidence that it stopped happening rather than an assertion that it did.
 
+    The RETIRED name is not a rung here and never was a legitimate one. The C18
+    block below records DR-326's 2026-08-20 amendment as "the name is eliminated
+    outright and no axis inherits it"; a locator-axis fallback to it contradicted
+    that ruling in the same file that states it. It was invisible to every
+    precedence-ORDER check because it sat AFTER the new name, and it answered
+    without routing through `_maybe_emit_engine_root_retired`, so the census sink
+    built to observe exactly this could not see it.
+
     Returns None when neither is set: this accessor does not invent a checkout.
     """
     own = os.environ.get(_ENGINE_SOURCE_ROOT_VAR, "")
     if own:
         return own
-    shared = os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR, "")
+    shared = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")
     if not shared:
         return None
     _maybe_emit_locator_misread(site)

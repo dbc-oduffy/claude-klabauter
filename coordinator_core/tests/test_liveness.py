@@ -49,15 +49,26 @@ def _reset_cache(monkeypatch):
 
 
 def test_lib_path_resolves_via_engine_root_when_file_present(tmp_path, monkeypatch):
-    """CLAUDE_KLABAUTER_ROOT resolvable and coordinator/lib/coordinator_session.py present
-    under it -> that path is returned and cached."""
+    """COORDINATOR_ENGINE_ROOT resolvable and
+    coordinator/lib/coordinator_session.py present under it -> that path is
+    returned and cached.
+
+    C14 (docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md)
+    closed the engine-root dual-read window: `_lib_path()` resolves through
+    `coordinator_core.engine_root.coordinator_engine_root()`, whose Rung 1
+    reads via `coordinator_engine_root_env()` — that accessor no longer
+    answers with `CLAUDE_KLABAUTER_ROOT` at all (it only reads it to advise the name is
+    retired). Exporting `CLAUDE_KLABAUTER_ROOT` here therefore no longer resolves the
+    engine root; the test must export the surviving name,
+    `COORDINATOR_ENGINE_ROOT`, to prove the same contract this test always
+    asserted (an engine-root-anchored successor path)."""
     _reset_cache(monkeypatch)
 
     claude_klabauter_root = tmp_path / "claude-klabauter"
     script = claude_klabauter_root / "coordinator" / "lib" / "coordinator_session.py"
     script.parent.mkdir(parents=True)
     script.touch()
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     result = _liveness._lib_path()
 

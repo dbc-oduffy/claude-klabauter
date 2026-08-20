@@ -513,14 +513,57 @@ def test_close_gate_emits_every_named_field(repo: Path, monkeypatch):
 
 
 def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monkeypatch):
-    """Being asked whether to commit was itself the defect, by explicit PM ruling — so it
-    is emitted as a directive to run, never a decision to make."""
+    """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
+    § C5): being asked whether to commit was itself the defect, by explicit PM ruling —
+    so this is now an in-process `auto_commit_session_async` call, never a directive an
+    agent might not run and never a judgment point to decide."""
     _stub_facts_all_computed(monkeypatch, repo)
+
+    calls: list[tuple[str, str, object, str | None]] = []
+
+    async def _fake_auto_commit(session_id, cwd=None, groups=None, invoker=None):
+        calls.append((session_id, cwd, groups, invoker))
+        return {
+            "session_id": session_id,
+            "groups": [],
+            "excluded": [],
+            "failed_groups": [],
+            "dropped_groups": [],
+            "residue": {},
+            "outcome": {
+                "status": "empty",
+                "detail": "no claimed path(s) to commit this call.",
+                "committed_paths": [],
+                "conflicted_paths": [],
+            },
+        }
+
+    monkeypatch.setattr(qwa, "auto_commit_session_async", _fake_auto_commit)
 
     envelope = qwa.brief()
 
-    assert [d["cli"] for d in envelope["directives"]][0] == "safe-commit-offer"
+    assert calls == [(_SID, str(repo), None, "attended")]
+    assert "safe-commit-offer" not in [d["cli"] for d in envelope["directives"]]
     assert not any("commit" in p["question"].lower() for p in envelope["judgment_points"])
+    assert envelope["gates"]["commit_outcome"]["status"] == "empty"
+    assert envelope["gates"]["commit_outcome"]["residue"] == {}
+
+
+def test_auto_commit_failure_does_not_block_the_ceremony(repo: Path, monkeypatch):
+    """AC9: a failure inside the in-process auto-commit call must not prevent
+    `brief()` from completing and returning a valid decision object."""
+    _stub_facts_all_computed(monkeypatch, repo)
+
+    async def _boom(session_id, cwd=None, groups=None, invoker=None):
+        raise RuntimeError("simulated auto-commit failure")
+
+    monkeypatch.setattr(qwa, "auto_commit_session_async", _boom)
+
+    envelope = qwa.brief()
+
+    assert envelope["gates"]["commit_outcome"]["status"] == "error"
+    assert "simulated auto-commit failure" in envelope["gates"]["commit_outcome"]["detail"]
+    assert "next_move" in envelope
 
 
 def test_usage_error_exits_two_and_brief_is_the_only_subcommand():

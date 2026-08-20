@@ -2439,6 +2439,12 @@ _EXPECTED_TIMING_STEPS = {
     "postcommit.archive_sweeps_detached",
     "deferred_push_spawn",
     "cs_release_artifact",
+    # C7 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
+    # wrote.md): the session-artifact commit -- the ceremony committing what
+    # this session's ops declared they wrote. Membership registration only;
+    # the step's own behaviour is pinned by
+    # coordinator_core/ops/ceremony/tests/test_wsc_tail_artifact_commit.py.
+    "session_artifact_commit",
 }
 
 

@@ -171,6 +171,7 @@ def test_one_row_systemexit_does_not_kill_remaining_rows(monkeypatch, tmp_path):
     died," which is exactly the gap that let this ship. Assert on the SET of
     rows the loop actually reached instead."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     rc = publish.main([",".join(_ROW_NAMES)])
@@ -188,6 +189,7 @@ def test_failed_row_reported_separately_from_succeeded_rows(monkeypatch, tmp_pat
     remaining rows with it — each row's outcome is reported, and the final
     summary states which rows succeeded and which did not."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     publish.main([",".join(_ROW_NAMES)])
@@ -204,6 +206,7 @@ def test_all_rows_succeed_reports_full_count_and_zero_exit(monkeypatch, tmp_path
     succeeded and the run exits 0, so the new row-isolation path doesn't
     regress the happy path."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     def fake_process_target_all_ok(target, setup_dir, totals, **kwargs):

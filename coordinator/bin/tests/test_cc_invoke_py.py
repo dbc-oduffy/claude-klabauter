@@ -480,7 +480,16 @@ class TestRouteState2Success(unittest.TestCase):
         )
 
     def test_claude_klabauter_root_in_subprocess_env(self) -> None:
-        """State-2: subprocess env has CLAUDE_KLABAUTER_ROOT set and PYTHONPATH prepended."""
+        """State-2: subprocess env carries the ENGINE-ROOT name and PYTHONPATH.
+
+        INVERTED 2026-08-20, and left red until then. C14 stopped
+        `_build_subprocess_env` exporting the retired `CLAUDE_KLABAUTER_ROOT`, and the
+        same session inverted the other window-open tests but missed this one,
+        so it sat asserting an export C14 had deliberately removed. Kept rather
+        than deleted, on the same reasoning as the bootstrap-carve-out tripwire:
+        a test that pins WHICH name reaches a child is exactly the test that
+        catches the retired name creeping back into a child environment.
+        """
         success_envelope = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
         mock_proc = unittest.mock.Mock()
         mock_proc.returncode = 0
@@ -501,7 +510,12 @@ class TestRouteState2Success(unittest.TestCase):
             _mod.cc_invoke("op", {}, "/repo")
 
         env = captured_envs[0]
-        self.assertEqual(env.get("CLAUDE_KLABAUTER_ROOT"), "/fake/mr")
+        self.assertEqual(env.get("COORDINATOR_ENGINE_ROOT"), "/fake/mr")
+        self.assertIsNone(
+            env.get("CLAUDE_KLABAUTER_ROOT"),
+            "cc_invoke exported the retired name into a child environment; "
+            "C14 removed that export and this pin is what keeps it removed",
+        )
         self.assertIn("/fake/mr", env.get("PYTHONPATH", ""))
 
     def test_claude_klabauter_root_idempotency_in_pythonpath(self) -> None:

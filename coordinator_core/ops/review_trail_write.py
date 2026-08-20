@@ -151,6 +151,7 @@ from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.session import scope as session_scope
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 
 logger = logging.getLogger(__name__)
@@ -2572,6 +2573,28 @@ def write_review_trail_entry(
         session_id=resolved_session_id,
         sha_range=sha_range,
     )
+
+    # --- declare the write (after success, never speculatively) ---
+    # Mirrors coordinator_core/dispatch/provision.py's touch_written_path
+    # call sites (and coordinator_core/ops/ceremony/receipt_emit.py's C2
+    # sibling): declare the RAW resolved_session_id, never a re-resolved
+    # current session and never agent_id (see session_scope.
+    # touch_written_path's own docstring for why). Only possible when we
+    # know caller_worktree — the path the out_path is relative to — which
+    # test-isolation callers routing through REVIEW_TRAIL_OUTPUT_ROOT
+    # without a real caller_worktree do not supply, so declaration is
+    # skipped rather than guessed. touch_written_path's own phantom-live-
+    # peer guard additionally no-ops silently for a foreign/absent session
+    # dir — not re-checked here, per that function's own docstring.
+    if caller_worktree is not None:
+        try:
+            rel_out_path = out_path.relative_to(caller_worktree)
+        except ValueError:
+            pass
+        else:
+            session_scope.touch_written_path(
+                resolved_session_id, str(rel_out_path).replace(os.sep, "/"), str(caller_worktree)
+            )
 
     result = {
         "out_path": str(out_path),

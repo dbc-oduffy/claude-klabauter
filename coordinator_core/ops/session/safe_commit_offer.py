@@ -298,6 +298,82 @@ class DroppedGroup(TypedDict):
     matched: int
 
 
+class CommitOutcome(TypedDict):
+    """C4 (2026-08-20 the-close-ceremony-commits-what-the-session-wrote plan)
+    -- the structured, caller-renderable verdict for ONE
+    `auto_commit_session_async` call, additive alongside `groups`/
+    `failed_groups`/`residue` (never a replacement for any of them; those
+    still carry their own per-group detail). AC9's own requirement: "return
+    the outcome ... as a structured result the caller can render, not only a
+    log line" -- this is that result. C5 folds this into each ceremony's own
+    close output; this module only computes and returns it.
+
+    ``status`` -- exactly one of:
+      - ``"committed"`` -- at least one path landed in at least one group
+        this call. ``committed_paths`` names them.
+      - ``"empty"`` -- nothing to commit this call (no claimed paths, or
+        every claimed path was already committed / dropped) and no
+        degraded/conflict reason applied.
+      - ``"skipped_indeterminate"`` -- (a) `offer["indeterminate"]` was
+        `True` this call: `compute_scope` withheld at least one claim it
+        could not attribute, so this call commits NOTHING -- a degraded
+        claim read means attribution is untrustworthy call-wide, not that
+        the unattributed paths are free. Mirrors `compute_offer`'s own
+        `indeterminate` contract; see that field's docstring.
+      - ``"skipped_degraded"`` -- (a) `offer["ownership"]["degraded"]` was
+        `True` this call (same underlying `ScopeResult.indeterminate` signal,
+        read via the ownership readout instead) -- same fail-closed
+        response, nothing committed.
+      - ``"dirty_conflict_skipped"`` -- (c) at least one claimed path was
+        ALSO present in this same call's own `ownership["peer"]` bucket (a
+        co-resident peer claim on a path this session also claims -- see
+        `OwnershipReadout`'s own docstring: the two buckets are mutually
+        exclusive by construction today, so this is a defensive belt-and-
+        braces check against future drift in that invariant, not a path
+        expected to fire under the current `compute_scope` contract).
+        `conflicted_paths` names what was withheld; anything else this call
+        claimed still committed normally, so a call CAN be both
+        `"dirty_conflict_skipped"` (partial withhold) and still land some
+        paths -- see `committed_paths`.
+
+    ``detail`` -- one human-readable sentence naming why, never a bare
+    status word alone.
+
+    ``committed_paths`` -- every path that actually landed in a `committed`
+    group this call, across every group, flattened. Empty for every
+    non-``"committed"``-adjacent status (a `"dirty_conflict_skipped"` call
+    CAN still populate this if some paths committed alongside the
+    withhold -- see that status's own note above).
+
+    ``conflicted_paths`` -- populated ONLY by the (c) dirty-conflict check;
+    empty for every other status. A path here was in this call's OWN
+    computed `safe_paths` but ALSO named in `ownership["peer"]` -- withheld
+    from every group before any `ceremony.scoped_git_commit` call, never
+    partially staged then rolled back.
+
+    (b) post-stage verify (brief item (b): `git diff --cached --name-only`
+    after staging, compared against the expected claim set) is NOT
+    represented in this TypedDict -- staging itself is owned by
+    `ceremony.scoped_git_commit`, an op this module composes in-process
+    rather than reaching into (see this module's own docstring, "Composition,
+    not new computation"). Implementing a true post-STAGE (pre-commit) verify
+    would require observing that op's index state mid-call, which is outside
+    this chunk's `writes:` scope -- named here as a follow-up chunk against
+    `coordinator_core.ops.ceremony.scoped_git_commit` itself, not implemented
+    in this module."""
+
+    status: Literal[
+        "committed",
+        "empty",
+        "skipped_indeterminate",
+        "skipped_degraded",
+        "dirty_conflict_skipped",
+    ]
+    detail: str
+    committed_paths: List[str]
+    conflicted_paths: List[str]
+
+
 class AutoCommitReport(TypedDict):
     session_id: str
     groups: List[GroupResult]
@@ -331,6 +407,12 @@ class AutoCommitReport(TypedDict):
     # what any ceremony commits"). Empty is the common case and is not an
     # error -- an empty `residue` after a healthy commit is exactly what a
     # correctly-scoped ceremony should leave behind.
+    outcome: CommitOutcome  # C4 (2026-08-20 the-close-ceremony-commits-what-
+    # the-session-wrote plan, AC9) -- the structured, caller-renderable
+    # verdict for this call (committed / degraded-or-indeterminate skip /
+    # dirty-conflict fail-closed / empty). See `CommitOutcome`'s own
+    # docstring for the bucket contract. Additive: every other key on this
+    # TypedDict keeps its pre-existing shape and meaning.
 
 
 # ---------------------------------------------------------------------------
@@ -1164,9 +1246,69 @@ async def auto_commit_session_async(
     function's own docstring for the three-way split). A caller supplying
     explicit ``groups`` already authored its own framing in ``prose``, so
     ``invoker`` is inert there.
+
+    C4 hardening (a) — read ``offer["indeterminate"]``/
+    ``offer["ownership"]["degraded"]`` BEFORE building any group or calling
+    ``ceremony.scoped_git_commit`` at all: either being ``True`` means this
+    call's own claim reads were degraded call-wide, so attribution is
+    untrustworthy for EVERY path this call would otherwise claim as
+    "mine" — not merely that the unattributed paths are free to leave out.
+    Returns a ``"skipped_indeterminate"``/``"skipped_degraded"`` ``outcome``
+    with an empty ``groups``/``failed_groups``/``residue`` and NO
+    ``_commit_group`` call made at all. Non-blocking, same as every other
+    path here (DR-227): this reports why, it never raises.
+
+    C4 hardening (c) — fail closed on a claimed path that is ALSO present in
+    this same call's own ``ownership["peer"]`` bucket. The two buckets are
+    mutually exclusive by construction today (see ``OwnershipReadout``'s own
+    docstring) — this is belt-and-braces against future drift in that
+    invariant, per the brief's own note that this is "structurally
+    near-impossible for this pathspec specifically" — withheld from every
+    group BEFORE any ``ceremony.scoped_git_commit`` call, never partially
+    staged then rolled back. Named in the returned ``outcome`` as
+    ``conflicted_paths``.
     """
     offer = compute_offer(session_id, cwd)
     safe_set = set(offer["safe_paths"])
+
+    # (a) — degraded/indeterminate claim read: commit NOTHING this call.
+    if offer["indeterminate"] or offer["ownership"]["degraded"]:
+        status: Literal["skipped_indeterminate", "skipped_degraded"] = (
+            "skipped_indeterminate" if offer["indeterminate"] else "skipped_degraded"
+        )
+        detail = (
+            "Commit withheld call-wide for session %s: this call's own claim "
+            "reads were %s, so attribution for %d claimed path(s) cannot be "
+            "trusted this call and nothing was staged (see OwnershipReadout's "
+            "own docstring)."
+            % (
+                session_id,
+                "indeterminate" if status == "skipped_indeterminate" else "degraded",
+                len(safe_set),
+            )
+        )
+        return {
+            "session_id": session_id,
+            "groups": [],
+            "excluded": offer["excluded"],
+            "failed_groups": [],
+            "dropped_groups": [],
+            "residue": OrderedDict(),
+            "outcome": {
+                "status": status,
+                "detail": detail,
+                "committed_paths": [],
+                "conflicted_paths": [],
+            },
+        }
+
+    # (c) — defensive fail-closed check: a path this call claims as "mine"
+    # must never also appear in this same call's own `ownership["peer"]`
+    # bucket. Withheld from every group before any commit, not filtered
+    # post-hoc from a landed commit.
+    peer_paths = {p["path"] for p in offer["ownership"]["peer"]}
+    conflicted_paths = sorted(safe_set & peer_paths)
+    conflict_set = set(conflicted_paths)
 
     dropped_groups: List[DroppedGroup] = []
     if groups is None:
@@ -1199,12 +1341,59 @@ async def auto_commit_session_async(
                     {"paths": kept, "message": g["message"], "prose": g.get("prose", "")}
                 )
 
+    if conflict_set:
+        # (c) — strip conflicted paths out of every group BEFORE any of
+        # them reach `_commit_group`/`ceremony.scoped_git_commit`. A group
+        # that loses every one of its paths this way is dropped entirely,
+        # same as an empty-`kept` caller-supplied group above.
+        filtered_groups: List[CommitGroup] = []
+        for g in resolved_groups:
+            kept_paths = [p for p in g["paths"] if p not in conflict_set]
+            if kept_paths:
+                filtered_group: CommitGroup = dict(g)  # type: ignore[assignment]
+                filtered_group["paths"] = kept_paths
+                filtered_groups.append(filtered_group)
+        resolved_groups = filtered_groups
+
     worktree_root = core.git_root(cwd) or cwd or "."
     group_results = [
         await _commit_group(worktree_root, g, session_id) for g in resolved_groups
     ]
     failed_groups = [g for g in group_results if g.get("commit_failed")]
     residue = _compute_residue(session_id, group_results, worktree_root)
+
+    committed_paths: List[str] = []
+    for g in group_results:
+        if g.get("committed"):
+            committed_paths.extend(g["paths"])
+
+    if conflicted_paths:
+        outcome: CommitOutcome = {
+            "status": "dirty_conflict_skipped",
+            "detail": (
+                "%d claimed path(s) were also seen as a named peer claim this "
+                "call and were withheld from every commit group (fail-closed); "
+                "%d other path(s) still committed normally."
+                % (len(conflicted_paths), len(committed_paths))
+            ),
+            "committed_paths": committed_paths,
+            "conflicted_paths": conflicted_paths,
+        }
+    elif committed_paths:
+        outcome = {
+            "status": "committed",
+            "detail": "%d path(s) committed across %d group(s)."
+            % (len(committed_paths), sum(1 for g in group_results if g.get("committed"))),
+            "committed_paths": committed_paths,
+            "conflicted_paths": [],
+        }
+    else:
+        outcome = {
+            "status": "empty",
+            "detail": "no claimed path(s) to commit this call.",
+            "committed_paths": [],
+            "conflicted_paths": [],
+        }
 
     return {
         "session_id": session_id,
@@ -1213,6 +1402,7 @@ async def auto_commit_session_async(
         "failed_groups": failed_groups,
         "dropped_groups": dropped_groups,
         "residue": residue,
+        "outcome": outcome,
     }
 
 
@@ -1543,6 +1733,19 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
 
     if scope_module.normalize_diagnostic_fired():
         lines.append(_DEGRADED_SCOPE_NOTICE)
+
+    # C4 (AC9) — a short-circuit outcome (degraded/indeterminate skip, or a
+    # dirty-conflict withhold) produced no per-group lines below to carry the
+    # verdict; without this, those calls would otherwise render identically
+    # to a genuinely clean tree. A plain `"committed"`/`"empty"` outcome adds
+    # no line here — the per-group loop below already states that verdict.
+    outcome = report.get("outcome")
+    if outcome and outcome["status"] in (
+        "skipped_indeterminate",
+        "skipped_degraded",
+        "dirty_conflict_skipped",
+    ):
+        lines.append("OUTCOME (%s): %s" % (outcome["status"], outcome["detail"]))
 
     if excluded:
         owned = sum(1 for e in excluded if e["reason"].startswith("owned by session"))

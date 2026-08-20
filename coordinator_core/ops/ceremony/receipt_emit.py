@@ -27,6 +27,14 @@ Key rules (HARD, from the design §receipt):
   - Graceful-absent: read_receipt returns NOT_YET_RUN_SENTINEL when the file is
     absent; callers MUST test is_not_yet_run() rather than catching exceptions.
   - Creates state/ceremony/<ceremony>/ if absent (mkdir parents=True, exist_ok=True).
+  - Declares the written receipt path via session_scope.touch_written_path
+    AFTER the write succeeds (never speculatively), attributed to the RAW
+    `sid` argument -- never a re-resolved current session, never agent_id.
+    Follows coordinator_core/dispatch/provision.py's existing shape. Skipped
+    (no declaration) when `sid` or `repo_root` is unavailable, or when
+    `out_path` cannot be relativized to `repo_root` -- see emit_receipt's
+    inline comment. Inherits touch_written_path's phantom-live-peer guard
+    (returns silently when the session dir is absent).
   - Phase-1 (resolve) and phase-2 (commit) write to the SAME sid-keyed shard —
     phase-2 overwrites phase-1 in place (same sid → same shard path, resolved via
     resolve_latest_receipt_path()). Historical: this described the retired
@@ -78,6 +86,7 @@ from coordinator_core.ops.ceremony.receipt_schema import (
     compute_op_tail,
     make_receipt,
 )
+from coordinator_core.session import scope as session_scope
 
 # ---------------------------------------------------------------------------
 # Sentinel — returned by read_receipt when the file is absent
@@ -385,6 +394,25 @@ def emit_receipt(
 
     # --- atomic write: mkstemp in same dir → os.replace ---
     _atomic_write_json(out_path, receipt)
+
+    # --- declare the write (after success, never speculatively) ---
+    # Mirrors coordinator_core/dispatch/provision.py's touch_written_path
+    # call sites: declare the RAW sid as passed to this function, never a
+    # re-resolved current session and never agent_id (see
+    # session_scope.touch_written_path's own docstring for why). Only
+    # possible when we know both the session and the repo root the receipt
+    # path is relative to -- an explicit out_path call site (e.g. tests
+    # exercising the raw write path) without repo_root/sid supplies neither,
+    # so declaration is skipped rather than guessed.
+    if sid and repo_root is not None:
+        try:
+            rel_path = out_path.relative_to(repo_root)
+        except ValueError:
+            pass
+        else:
+            session_scope.touch_written_path(
+                sid, str(rel_path).replace(os.sep, "/"), str(repo_root)
+            )
 
     return out_path, op_tail
 

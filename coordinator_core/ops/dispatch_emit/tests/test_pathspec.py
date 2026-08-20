@@ -276,6 +276,47 @@ def test_terminal_test_scope_refuses_when_every_row_declares_empty_writes():
         terminal_test_scope(waves)
 
 
+def test_terminal_test_scope_resolves_a_data_fixture_to_its_driver_test(tmp_path):
+    # A config-only row alone in its wave used to be unemittable: the mapper
+    # returned None for every non-.py path, so terminal_test_scope refused a
+    # surface that IS covered by a driver test named for the fixture.
+    driver = tmp_path / "coordinator_core/install/tests/test_engine_root_conformance.py"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("", encoding="utf-8")
+    waves = [[_wave_row("C3", ["coordinator_core/install/engine-root-conformance.json"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator_core/install/tests/test_engine_root_conformance.py"]
+
+
+def test_terminal_test_scope_resolves_a_hyphenated_stem_to_an_importable_test_name(tmp_path):
+    # A hyphen cannot appear in an importable test module name, so a verbatim
+    # f"test_{stem}.py" derives a candidate that can never exist -- which would
+    # leave the non-.py rungs inert for exactly the paths they exist to resolve.
+    driver = tmp_path / "coordinator/bin/tests/test_compose_review_wave.py"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("", encoding="utf-8")
+    waves = [[_wave_row("C1", ["coordinator/bin/compose-review-wave.py"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator/bin/tests/test_compose_review_wave.py"]
+
+
+def test_terminal_test_scope_resolves_non_code_by_stem_not_by_proximity(tmp_path):
+    # Negative spec: an uncovered non-.py path resolves through the stem
+    # derivation ONLY. Neither a sibling test in the same tests/ directory nor
+    # a test that cites the written path in an assertion message makes it
+    # resolvable -- that looser cut resolved a wiki doc to an unrelated test.
+    neighbour = tmp_path / "docs/wiki/tests/test_something_else.py"
+    neighbour.parent.mkdir(parents=True)
+    neighbour.write_text(
+        'def test_x():\n    assert True, "docs/wiki/machine-load-norm.md"\n',
+        encoding="utf-8",
+    )
+    waves = [[_wave_row("C1", ["docs/wiki/machine-load-norm.md"])]]
+    with pytest.raises(NoTestTargetError) as excinfo:
+        terminal_test_scope(waves, repo_root=tmp_path)
+    assert "machine-load-norm.md" in str(excinfo.value)
+
+
 def test_terminal_test_scope_is_not_the_same_union_as_commit_pathspec():
     wave = [
         _wave_row(

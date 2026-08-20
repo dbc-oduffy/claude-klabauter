@@ -441,6 +441,7 @@ from coordinator_core.ops.ceremony.resolver import (
 )
 from coordinator_core.ops.fleet._common import main_worktree_root, rel_id
 from coordinator_core.ops.handoff_close_origin_stub import _handler as _close_origin_stub_handler
+from coordinator_core.ops.session.safe_commit_offer import auto_commit_session_async
 
 # Import side-effect only: register "commit.anchors" so get_op_handler() below
 # resolves it via a direct registry hit rather than paying its lazy-import
@@ -461,6 +462,11 @@ _GOVERNING_PLAN_ARTIFACT_CLASS = "plan"
 
 #: Tail-result label for step 5d (origin-stub close fold, see module docstring).
 OP_CLOSE_ORIGIN_STUB = "handoff.close_origin_stub"
+
+#: Tail-result label for the session-artifact commit (C7, docs/plans/2026-08-20-
+#: the-close-ceremony-commits-what-the-session-wrote.md § C5/C7) -- see
+#: `_run_session_artifact_commit` below.
+OP_SESSION_ARTIFACT_COMMIT = "session_artifact_commit"
 
 _SENTINEL_NAME = "wsc-tail-commit-landed"
 
@@ -930,6 +936,90 @@ def _commit_gap_reason(commit_failed: bool, sha_unverified: bool) -> str:
     return "commit-failed" if commit_failed else "nothing-to-commit"
 
 
+async def _run_session_artifact_commit(worktree_root: Path, sid: str) -> dict:
+    """C7 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
+    wrote.md § C5/C7): call C4's hardened `auto_commit_session_async`
+    in-process to commit this session's own claimed dirty artifact paths --
+    the `/workstream-complete` half of AC5/AC9 (`/quick-wrap`'s half landed
+    in C5, `_run_close_commit`, `quick_wrap_assemble/__init__.py`).
+
+    `cwd` is ALWAYS this op's own already-resolved `worktree_root`, passed
+    explicitly -- NEVER left to `auto_commit_session_async`'s `cwd=None`
+    default, which resolves to the ambient PROCESS cwd. `compute_offer`'s own
+    dirty-tree scan measured 0.069s against a fresh fixture worktree and
+    2.537s against this repo's real ~26k-file tree (2026-08-20) -- the 3.386s
+    that blocked this chunk's first dispatch was that ambient-cwd scan, not
+    the cost of attribution itself. `_handler` already resolves
+    `worktree_root` as the root the whole commit pipeline stages against;
+    this call reuses that SAME value rather than re-deriving or defaulting
+    it, so the KPI (`test_kpi_wsc_tail_blocking_path_under_2s`) holds with
+    room to spare and the in-process synchronous call (no `asyncio.to_thread`
+    detour, unlike step 5a's commit-pipeline call) is affordable within this
+    op's sub-2s invoke budget.
+
+    Fail-open by construction, same shape as `_run_close_commit`: any
+    exception here is swallowed into a synthesized `"error"`-status
+    `AutoCommitReport` rather than raised into `_handler`'s own sequencing --
+    a failure inside this call must never prevent the rest of the ceremony
+    (receipt emit, exit-code computation, sentinel clear) from completing
+    (AC9's "does not prevent the close" clause; standing § Anti-scope
+    constraint from this chunk's own brief).
+
+    Residue (whatever this call could not attribute to this session -- e.g.
+    a peer-claimed artifact beside this session's own) is returned unchanged
+    inside the report and stays dirty on disk: the next session's own
+    workstream-start dirty-tree read surfaces it structurally, without this
+    op writing anywhere new for it (AC9's second half, same mechanism
+    `_run_close_commit`'s own docstring documents).
+    """
+    try:
+        report = await auto_commit_session_async(sid, cwd=str(worktree_root), invoker="attended")
+        return dict(report)
+    except Exception as exc:  # noqa: BLE001 -- must never block the rest of this ceremony
+        return {
+            "session_id": sid,
+            "groups": [],
+            "excluded": [],
+            "failed_groups": [],
+            "dropped_groups": [],
+            "residue": {},
+            "outcome": {
+                "status": "error",
+                "detail": f"auto_commit_session_async raised {type(exc).__name__}: {exc}",
+                "committed_paths": [],
+                "conflicted_paths": [],
+            },
+        }
+
+
+def _session_artifact_commit_tail_result(report: dict) -> dict:
+    """Fold an `AutoCommitReport` into the {acted, skipped, failed} shape
+    every other `tail_results` label uses (see `_d_node`) -- committed
+    paths land in `acted`, an `"error"`/`failed_groups`-bearing outcome
+    lands in `failed` (soft-fail, contributes to `exit_code=2` at most --
+    never `failed_critical`, per this chunk's Standing Anti-scope
+    constraint), and every other outcome status is a `skipped` entry naming
+    why.
+    """
+    outcome = report.get("outcome") or {}
+    status = outcome.get("status", "")
+    committed_paths = outcome.get("committed_paths") or []
+    failed_groups = report.get("failed_groups") or []
+    failed: list[str] = []
+    if status == "error":
+        failed.append(f"{OP_SESSION_ARTIFACT_COMMIT}: {outcome.get('detail', '')}")
+    for g in failed_groups:
+        failed.append(f"{OP_SESSION_ARTIFACT_COMMIT}: {g.get('error') or 'commit failed'}")
+    skipped: list[str] = []
+    if status in ("skipped_indeterminate", "skipped_degraded", "empty"):
+        skipped.append(f"{OP_SESSION_ARTIFACT_COMMIT}:{status}: {outcome.get('detail', '')}")
+    return {
+        "acted": committed_paths,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
 def _d_node(node_id: str, resolving_op: str, tail_result: dict) -> dict:
     """Wrap a tail_ops-shaped {acted, skipped, failed[, failed_critical]}
     result dict into a schema-valid tail D-node -- feeds `compute_op_tail`.
@@ -1216,6 +1306,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
           "receipt_path":            str,
           "diagnostics":             list[str],
           "resumed_from_sentinel":   bool,
+          "artifact_commit":         dict,  # C7: {status, detail, committed_paths,
+                                          # conflicted_paths, residue} -- this
+                                          # session's own artifact-commit outcome
+                                          # (AC9), rendered as a named fact.
         }
 
     On error (exit_code=1): {"exit_code": 1, "error": str}
@@ -1915,6 +2009,21 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             }
     tail_results[tail_ops.OP_CS_RELEASE_ARTIFACT] = cs_release_result
 
+    # --- Session-artifact commit (C7, docs/plans/2026-08-20-the-close-
+    # ceremony-commits-what-the-session-wrote.md § C5/C7) -- runs
+    # unconditionally of the main ceremony commit's own outcome (fresh OR
+    # resumed pass alike), committing whatever THIS session itself claims as
+    # its own dirty artifact paths (receipts, review-trail records, roadmap
+    # callouts, ...). See `_run_session_artifact_commit`'s own docstring for
+    # the cwd-threading fix and the fail-open contract.
+    with timing.measure("session_artifact_commit"):
+        artifact_commit_report = await _run_session_artifact_commit(worktree_root, sid)
+    tail_results[OP_SESSION_ARTIFACT_COMMIT] = _session_artifact_commit_tail_result(
+        artifact_commit_report
+    )
+    artifact_commit_outcome = dict(artifact_commit_report.get("outcome") or {})
+    artifact_commit_outcome["residue"] = artifact_commit_report.get("residue") or {}
+
     # C8 (2026-07-23 wsc-tail-slim-down, AC7): name any failure among the two
     # tail_results labels that still resolve fully in-op (see
     # `_DIAGNOSTIC_NAMED_LABELS`'s own comment) in `diagnostics`, before that
@@ -2079,4 +2188,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "diagnostics": diagnostics,
         "resumed_from_sentinel": resumed,
         "timing": timing.as_list(),
+        "artifact_commit": artifact_commit_outcome,
     }

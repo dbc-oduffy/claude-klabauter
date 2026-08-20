@@ -65,6 +65,7 @@ from pathlib import Path
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.ceremony.records_query import query_records as _ceremony_query_records
 from coordinator_core.ops.emit.context import EmitContext
+from coordinator_core.ops.emit.deliverable_status import plan_review_verified
 
 from ._shared import normalize_frontmatter
 
@@ -289,6 +290,9 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                     "workstream_type": None,
                     "shipped_sha": None,
                     "deliverable_status": None,
+                    # Derives from frontmatter alone, so it resolves here rather than in the
+                    # enrich pass the two fields above wait for.
+                    "review_verified": plan_review_verified(fm),
                     "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
                 }
             )

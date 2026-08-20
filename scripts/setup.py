@@ -2743,7 +2743,15 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
 
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
+    # BOTH names, same value, for the duration of the rename window. Exporting
+    # only the retired name hands every child an environment where the variable
+    # IS set and the new readers have stopped reading it -- a resolution failure
+    # several rungs downstream rather than at the pin. Requested by doe-claude-em
+    # 2026-08-20: their PM ruled that DoE drops its CLAUDE_KLABAUTER_ROOT fallback, and
+    # this dual export is what makes that removal safe rather than breaking
+    # every DoE process launched through this forwarder.
     env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
+    env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)
 
     # Review: code-reviewer 2026-08-07 Finding 2 (P2) — mirror
     # install_precommit_hook's try/except-around-subprocess.run shape so a
@@ -3096,7 +3104,10 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
     print("--- Install: claude-doe launcher chain (coordinator/bin/*claude-doe*) ---")
 
     env = dict(os.environ)
+    # BOTH names, same value — see install_bin_forwarders for why the retired
+    # name alone is the worse failure shape for a DoE child.
     env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
+    env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)
 
     any_failed = False
     for label, cli_name, extra_argv in _CLAUDE_DOE_CHAIN_STEPS:

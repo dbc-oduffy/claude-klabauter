@@ -88,9 +88,22 @@ def _clean_sys_state():
 def test_second_call_returns_second_roots_own_answer_not_the_first(monkeypatch, tmp_path):
     """THE PIN. Two genuinely different candidate roots, same process, same
     (pre-rename) module spelling `coordinator_core.claude_klabauter_root`. The second
-    `_resolve_claude_klabauter_root()` call (reached via Rung 1's CLAUDE_KLABAUTER_ROOT
+    `_resolve_claude_klabauter_root()` call (reached via Rung 1's engine-root env
     candidate — the real production entry to `_delegate_to_gate`) must return
     the SECOND root's own answer, not the first call's cached module's.
+
+    C14 (docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md)
+    closed the dual-read window: `_resolve_claude_klabauter_root()`'s Rung 1 now reads
+    ONLY `COORDINATOR_ENGINE_ROOT` (see this module's own C14 comment above
+    the `existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")` line) — the old
+    `CLAUDE_KLABAUTER_ROOT` name no longer supplies the Rung 1 candidate at all. Setting
+    it here would fall through Rung 1 to the real ambient registry/pointer
+    rungs instead of the synthetic candidate root, which is exactly what this
+    test measured (an ambient published-engine path in place of
+    `root-a-answer`) before the env var was switched. Using the surviving name
+    reaches
+    `_delegate_to_gate` on the synthetic roots as before, so the module-name
+    cache collision C0 fixes is still directly observable.
 
     Must FAIL against the pre-C0 bare `importlib.import_module` implementation:
     the first call caches `sys.modules["coordinator_core.claude_klabauter_root"]` from
@@ -102,11 +115,11 @@ def test_second_call_returns_second_roots_own_answer_not_the_first(monkeypatch, 
     root_a = _build_candidate_root(tmp_path / "root-a", answer="root-a-answer")
     root_b = _build_candidate_root(tmp_path / "root-b", answer="root-b-answer")
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(root_a))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root_a))
     first = _mod._resolve_claude_klabauter_root()
     assert first == "root-a-answer"
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(root_b))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root_b))
     second = _mod._resolve_claude_klabauter_root()
     assert second == "root-b-answer", (
         f"expected the second call to answer from root B ({root_b!r}), "

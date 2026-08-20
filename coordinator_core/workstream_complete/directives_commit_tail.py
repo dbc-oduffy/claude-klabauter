@@ -170,6 +170,30 @@ def accumulate_session_paths(
     union already known by the time this step runs. Callers splice the
     result into `build_close_tail_args_directive`'s / `build_wsc_tail_
     directive`'s `--stage-paths` argument.
+
+    Reconciliation with C5's in-process auto-commit safety net
+    (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
+    wrote.md § C5, `coordinator_core.ops.ceremony.wsc_tail`'s post-commit
+    `session_auto_commit_safety_net` step): this function and that step
+    answer two genuinely different questions, not one question computed
+    twice, so keeping both is deliberate rather than duplicative.
+
+    This function (and `_peer_subagent_share_paths`/
+    `resolve_known_concurrent_paths` above it) run at ASSEMBLE time, before
+    any commit — they compute the explicit `--stage-paths` pathspec the WSC
+    commit is told to stage, from signals already known before the ceremony
+    starts (Step 2.67's session-authored-file tracking, the peer-exclusion
+    scan). C5's safety net runs AFTER that commit has already landed, via a
+    fresh `coordinator_core.ops.session.safe_commit_offer.compute_offer`
+    read taken at that later moment — it exists specifically to catch
+    session-claimed paths that became dirty (or were newly touched by a
+    dispatched sub-agent) DURING the ceremony's own pre-commit tail steps
+    (roadmap-callout render, review-trail write), after this module's
+    assemble-time pathspec was already fixed and handed to `wsc-tail`.
+    Folding the safety net's live re-scan into THIS function would require
+    re-deriving it at assemble time, which cannot see a file that does not
+    dirty until partway through the ceremony that follows — the two run at
+    different points in the pipeline and neither can subsume the other.
     """
     seen: dict[str, None] = {}
     for path in (*session_authored_paths, *deletion_paths, *sidecar_paths):

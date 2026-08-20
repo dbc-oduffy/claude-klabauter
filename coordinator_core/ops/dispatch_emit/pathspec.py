@@ -19,11 +19,12 @@ directory, or shells out to git status. Concretely, this module never calls
 ``os.walk``, ``glob.glob``, ``Path.glob``/``Path.rglob``/``Path.iterdir``,
 or any ``subprocess`` function. The two places this module DOES touch disk
 (``is_concrete_surface``'s no-suffix branch, ``_map_written_path_to_test_
-target``'s co-located-test-file check) each probe exactly ONE fully-derived
-candidate path with ``Path.is_file()`` — a targeted existence check on a
-path the caller already named, never a directory listing. That distinction
-matters: an existence check on a known path cannot discover anything the
-spine didn't already declare, so it can never smuggle tree-survey back in.
+target``'s co-located-test-file check) each probe only fully-derived
+candidate paths with ``Path.is_file()`` — targeted existence checks on
+paths derived from what the caller already named, never a directory
+listing. That distinction matters: an existence check on a known path
+cannot discover anything the spine didn't already declare, so it can never
+smuggle tree-survey back in.
 
 The tempting fix for an empty pathspec or an empty test scope is exactly
 the forbidden one — "just glob for what changed" or "ask git status" — and
@@ -44,16 +45,25 @@ pathspec union in would put ``coordinator_core/subagent_sandbox/
 CONTRACT.md`` and ``coordinator/bin/coordinator-doc-new.py`` — a markdown file
 and a shebang script — into a pytest invocation, which is not a thing that
 runs. ``terminal_test_scope`` therefore maps each written path through
-``_map_written_path_to_test_target`` (a doc or non-``.py`` path maps to
-nothing) rather than returning the written-path union itself.
+``_map_written_path_to_test_target`` (an uncovered path maps to nothing)
+rather than returning the written-path union itself.
 
 This package's own convention — the one this module encodes because no
 repo-wide "locate a module's tests" helper exists — is the co-located
-``tests/test_<stem>.py`` file next to the source module (see
+``tests/test_<stem>.py`` file next to the written path (see
 ``spine_read.py`` -> ``tests/test_spine_read.py``, ``wave_map.py`` ->
 ``tests/test_wave_map.py``, this very module -> ``tests/test_pathspec.py``).
-A path with no such file present, or with no ``.py`` suffix at all, maps to
-nothing.
+A path with no such file present maps to nothing.
+
+The derivation is by STEM, not by suffix: a data fixture whose driver test
+is named for it (``engine-root-conformance.json`` ->
+``tests/test_engine_root_conformance.py``) resolves the same way a module
+does, so a config-only row alone in its wave is emittable rather than
+refused on a surface that is in fact covered. What it must never become is
+resolution by directory proximity, or by scanning test bodies for a
+citation of the written path — that looser cut resolves a wiki doc to an
+unrelated test that merely names it in an assertion message. An uncovered
+doc still maps to nothing, and a row writing only such paths still refuses.
 
 ## The sharp edge AC16 exists for
 
@@ -195,8 +205,8 @@ class NoTestTargetError(ValueError):
 
     Distinct from ``NoWritesDeclaredError``: this fires even though
     ``writes:`` WAS declared (satisfying AC10's literal wording) because
-    every declared path is a doc or non-Python file with no co-located test
-    file — see module docstring § The sharp edge AC16 exists for.
+    no declared path has a co-located test file named for its stem — see
+    module docstring § The sharp edge AC16 exists for.
     """
 
 
@@ -394,30 +404,49 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     return paths
 
 
+def _normalized_test_name(stem: str) -> str:
+    """``engine-root-conformance`` -> ``test_engine_root_conformance.py``.
+
+    Separator normalization is the point: a hyphenated stem (a CLI script, a
+    JSON fixture) cannot appear in an importable Python test module name, so
+    a verbatim ``f"test_{stem}.py"`` derives a candidate that can never
+    exist on disk — the derivation would be inert for exactly the paths the
+    non-``.py`` rungs below exist to resolve.
+    """
+    return f"test_{stem.replace('-', '_')}.py"
+
+
 def _map_written_path_to_test_target(path: str, *, repo_root: Path | None = None) -> str | None:
     """Map one written path to its runnable test target, or ``None``.
 
     Encodes this package's own co-located ``tests/test_<stem>.py``
     convention (``spine_read.py`` -> ``tests/test_spine_read.py``, and so
     on) — no repo-wide "locate a module's tests" helper exists to defer to.
-    A non-``.py`` path (a doc, a shebang script) maps to ``None``
-    immediately: there is no Python test file that could exercise it under
-    this convention. A ``.py`` path with no co-located test file present
-    also maps to ``None`` — a single, targeted ``Path.is_file()`` probe on
-    the one derived candidate, never a directory listing (see module
-    docstring's negative spec).
+    A path with no such file present maps to ``None`` — a single, targeted
+    ``Path.is_file()`` probe per derived candidate, never a directory
+    listing (see module docstring's negative spec).
+
+    The same stem derivation runs for a data fixture as for a module. A
+    driver test bound to ``engine-root-conformance.json`` is named for that
+    fixture, so a config-only row resolves to it and becomes emittable
+    instead of refusing emission on a surface that IS covered.
+
+    Negative spec (DoE improvement-queue entry
+    ``2026-08-20-engine-s-map-written-path-to-test-target-72c8a48a56c7``): a
+    non-``.py`` path resolves ONLY through this stem derivation — never by
+    directory proximity, and never because some test cites the path in an
+    assertion message. An earlier cut of that rule scanned test bodies for a
+    citation and resolved a wiki doc to an unrelated test that merely
+    mentioned it. A doc with no test named for it still maps to ``None``, so
+    a row writing only uncovered non-code refuses rather than emitting an
+    empty terminal scope.
     """
     candidate = PurePosixPath(path)
-    if candidate.suffix != ".py":
-        return None
     root = repo_root or _REPO_ROOT
-    test_name = f"test_{candidate.stem}.py"
-    coloc_tests_dir = candidate.parent / "tests" / test_name
-    if (root / coloc_tests_dir).is_file():
-        return coloc_tests_dir.as_posix()
-    coloc_same_dir = candidate.parent / test_name
-    if (root / coloc_same_dir).is_file():
-        return coloc_same_dir.as_posix()
+    test_name = _normalized_test_name(candidate.stem)
+    for target in (candidate.parent / "tests" / test_name, candidate.parent / test_name):
+        if (root / target).is_file():
+            return target.as_posix()
     return None
 
 

@@ -441,7 +441,11 @@ def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path):
     assert ids == {"C1"}
 
 
-def test_external_gate_with_closure_evidence_does_not_exclude_row(tmp_path):
+def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path):
+    # INVERTED by the joint gate-reader bump (2026-08-20). `closure_evidence`
+    # is authored when the evidence has NOT arrived, so its natural content
+    # describes what is being awaited -- and under the retired rule that
+    # description cleared its own gate. Only `cleared: true` clears now.
     body = """\
 - id: C1
   title: gate cleared
@@ -455,7 +459,9 @@ def test_external_gate_with_closure_evidence_does_not_exclude_row(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set(), (
+        "a closure_evidence must no longer clear its own gate"
+    )
 
 
 def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
@@ -483,10 +489,11 @@ def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
     assert ids == set()
 
 
-def test_cleared_absent_leaves_closure_evidence_clearing_behaviour_unchanged(tmp_path):
-    # The 1.9.0 bump is the additive half only: `closure_evidence` still
-    # clears on its own, keeping this reader in sync with DoE-claude's
-    # `_uncleared_execution_gate`. Only the explicit negative is new.
+def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
+    # The 1.9.0 bump was the additive half only and left `closure_evidence`
+    # clearing on its own. The joint two-repo bump its x-bump-note deferred
+    # has now landed, so absence of `cleared` means UNCLEARED -- which is what
+    # the schema always said the field meant.
     body = """- id: C1
   title: gate cleared by evidence, no cleared key
   surface: some/surface
@@ -499,13 +506,16 @@ def test_cleared_absent_leaves_closure_evidence_clearing_behaviour_unchanged(tmp
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set(), (
+        "with no `cleared` key the gate is uncleared, whatever evidence it names"
+    )
 
 
-def test_cleared_non_false_value_does_not_disarm_the_override(tmp_path):
-    # Only the literal False is the explicit negative. A malformed value
-    # must not be read as one, matching this module's fail-closed posture
-    # for `blocks`.
+def test_cleared_non_true_value_does_not_clear(tmp_path):
+    # The fail-closed posture SURVIVES the bump and gets stronger. Before, a
+    # malformed `cleared` fell through to closure_evidence and the row was
+    # admitted; now only the literal True clears, so a malformed value cannot
+    # clear a gate at all -- matching this module's posture for `blocks`.
     body = """- id: C1
   title: malformed cleared value
   surface: some/surface
@@ -519,7 +529,9 @@ def test_cleared_non_false_value_does_not_disarm_the_override(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set(), (
+        "only the literal True clears; a malformed value cannot"
+    )
 
 
 def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):

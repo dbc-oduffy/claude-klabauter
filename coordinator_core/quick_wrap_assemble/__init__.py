@@ -49,13 +49,22 @@ peer emits its collision state. A terminal sizing carrying a peer's uncommitted 
 reported `dirty: true` — detection is ours, the decision to skip rather than sweep stays
 the EM's. `git mv` on a dirty record would drag in-flight work into `archive/`.
 
-READ-ONLY, by construction: this module only reads disk/git state. Every mutating action
-is returned as a `directives[]` entry naming an existing atomic CLI.
+READ-ONLY, by construction, WITH ONE NAMED CARVE-OUT (C5, see Negative-spec below): this
+module reads disk/git state, and `brief()` additionally calls C4's hardened
+`auto_commit_session_async` in-process to commit this session's own claimed dirty paths
+before returning. Every OTHER mutating action is still returned as a `directives[]` entry
+naming an existing atomic CLI.
 
 Negative-spec:
-    - Do NOT add a mutating code path here. A finding that "the assembler should just do
-      X" for any X that writes to disk belongs in a `directives[]` entry, not a function
-      body in this module. Quick-wrap's own anti-scope forbids deletes, force-pushes, and
+    - Do NOT add a mutating code path here, beyond the ONE narrow carve-out C5
+      (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md § C5)
+      already introduced: `_run_close_commit`'s in-process call to
+      `coordinator_core.ops.session.safe_commit_offer.auto_commit_session_async`,
+      replacing the former `safe-commit-offer` directive by explicit PM ruling (being
+      asked whether to commit was itself the defect). That carve-out is closed — do not
+      widen it into a general precedent for "the assembler should just do X" for any
+      other X that writes to disk; every other mutating finding still belongs in a
+      `directives[]` entry. Quick-wrap's own anti-scope forbids deletes, force-pushes, and
       history rewrites; this producer must not be the seam that reintroduces one.
     - Do NOT decide entry-test condition 4 ("work is finished"). It is genuine EM
       discretion — the carve-out the doctrine page explicitly preserves — and is emitted
@@ -73,6 +82,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -103,6 +113,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
+from coordinator_core.ops.session.safe_commit_offer import auto_commit_session_async
 from coordinator_core.ops.session_commits import resolve_session_commits
 from coordinator_core.session import session_facts
 from coordinator_core.session_baton.store import merge_baton
@@ -508,11 +519,15 @@ def _entry_test(
 
 
 def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[dict[str, Any]]:
-    """The ceremony's two unconditional CLI steps, plus sidecar disposal when present.
+    """The ceremony's unconditional CLI step(s), plus sidecar disposal when present.
 
-    Step 1's `safe-commit-offer` is unconditional by explicit PM ruling — being asked
-    whether to commit was itself the defect, so this is emitted as a directive to run,
-    never as a judgment point to decide.
+    C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
+    § C5): the former `safe-commit-offer` directive (step 1) is GONE from this list —
+    being asked whether to commit was itself the defect (PM ruling), and an agent
+    directive that may never actually run satisfies that ruling less completely than
+    calling `auto_commit_session_async` in-process does. `brief()` now makes that call
+    itself, before this function is invoked; see `_run_close_commit`. This function no
+    longer emits any commit-shaped directive at all — do not re-add one.
 
     `fold_degraded` exists because `present: False` is NOT self-describing here. The
     caller's degraded fallback for Fact 5 carries that same literal, so gating `d2` on
@@ -526,15 +541,7 @@ def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[di
     sidecars by hand. Negative-spec: do not "simplify" this parameter away by trusting
     `present` — the two states are only distinguishable here because it is passed.
     """
-    directives: list[dict[str, Any]] = [
-        {
-            "id": "d1",
-            "cli": "safe-commit-offer",
-            "args": [],
-            "already_satisfied": False,
-            "depends_on": None,
-        },
-    ]
+    directives: list[dict[str, Any]] = []
     if fold.get("present") and not fold_degraded:
         directives.append(
             {
@@ -551,7 +558,10 @@ def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[di
             "cli": "regenerate-orientation-cache",
             "args": ["--invoker", "quick-wrap"],
             "already_satisfied": False,
-            "depends_on": "d1",
+            # Was `depends_on: "d1"` (the former `safe-commit-offer` directive).
+            # C5 removed d1 in favor of an in-process call `brief()` makes
+            # itself before this function runs — nothing left to depend on.
+            "depends_on": None,
         }
     )
     return directives
@@ -676,8 +686,48 @@ def _judgment_points(
     return points
 
 
+def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
+    """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
+    wrote.md § C5): call C4's hardened `auto_commit_session_async` in-process
+    instead of emitting `safe-commit-offer` as an agent directive that may
+    never actually run. Engine-side and deterministic — no prompt, no EM
+    decision, no doctrine the operator has to remember.
+
+    Fail-open by construction: any exception here is swallowed into a
+    synthesized `"error"`-status `AutoCommitReport` rather than raised into
+    `brief()`'s own envelope computation — a failure inside this call must
+    never prevent the close ceremony's own decision-object computation from
+    completing (AC9's own "does not prevent the ceremony from completing").
+
+    Residue (whatever this call could not attribute to this session) is
+    returned unchanged inside the report and stays dirty on disk — the next
+    session's own workstream-start dirty-tree read surfaces it structurally,
+    without this module writing anywhere new for it (AC9's second half).
+    """
+    try:
+        report = asyncio.run(auto_commit_session_async(sid, str(root), invoker="attended"))
+        return dict(report)
+    except Exception as exc:  # noqa: BLE001 — must never block brief()'s own computation
+        return {
+            "session_id": sid,
+            "groups": [],
+            "excluded": [],
+            "failed_groups": [],
+            "dropped_groups": [],
+            "residue": {},
+            "outcome": {
+                "status": "error",
+                "detail": f"auto_commit_session_async raised {type(exc).__name__}: {exc}",
+                "committed_paths": [],
+                "conflicted_paths": [],
+            },
+        }
+
+
 def brief(worktree_root: Path | None = None) -> dict[str, Any]:
-    """Compute `/quick-wrap`'s decision object. READ-ONLY.
+    """Compute `/quick-wrap`'s decision object. READ-ONLY except for C5's named
+    carve-out (`_run_close_commit`, see module docstring) — this call commits this
+    session's own claimed dirty paths in-process before the envelope is emitted.
 
     Reads all five close-gate facts off `coordinator_core.session.session_facts`
     (DR-323's cutover, chunk C7 — see module docstring). Each DR-319 record's `value`
@@ -762,10 +812,18 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
             "This is a routing verdict, not an error."
         )
 
+    commit_report = _run_close_commit(root, sid)
+    commit_outcome = dict(commit_report.get("outcome") or {})
+    commit_outcome["residue"] = commit_report.get("residue") or {}
+
     envelope = build_envelope(
         artifact={"session_id": sid, "worktree_root": str(root), "ceremony": "quick-wrap"},
         preflight={},
-        gates={"close_gate": close_gate, "entry_test": entry_test},
+        gates={
+            "close_gate": close_gate,
+            "entry_test": entry_test,
+            "commit_outcome": commit_outcome,
+        },
         directives=_directives(fold, fold_degraded=fold_record["degraded"]),
         judgment_points=judgment_points,
         decisions={},

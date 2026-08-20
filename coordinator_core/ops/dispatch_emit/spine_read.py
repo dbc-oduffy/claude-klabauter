@@ -71,9 +71,9 @@ shipped (``disposition: coded``), explicitly deferred, or still waiting on
 a cross-repo blocker must never reach the dispatch-emit pipeline and re-run
 (or first-run) as a live ``coordinator:executor`` call. An
 ``external_gate`` entry excludes its row only when it is BOTH uncleared (no
-``closure_evidence``, or an empty one) AND its ``blocks`` resolves to
-``execution`` — the default when ``blocks`` is absent, per
-plan-tasks.schema.json. ``blocks: ac-closure`` never excludes the row: that
+explicit ``cleared: true`` — see ``_has_uncleared_execution_gate``) AND its
+``blocks`` resolves to ``execution`` — the default when ``blocks`` is
+absent, per plan-tasks.schema.json. ``blocks: ac-closure`` never excludes the row: that
 gate holds only a named acceptance criterion open, not the row's execution,
 and conflating the two stalls an executable chunk. ``depends_on`` referent
 resolution (AC6) still runs against the FULL row-id set, before this
@@ -157,30 +157,36 @@ _GATE_CLEARED_KEY = "cleared"
 
 def _has_uncleared_execution_gate(raw: dict) -> bool:
     """True if `raw`'s ``external_gate`` carries an entry that is both
-    uncleared (no ``closure_evidence``, or an empty one) and blocks
-    ``execution`` (the default when ``blocks`` is absent or None).
+    uncleared (no explicit ``cleared: true``) and blocks ``execution`` (the
+    default when ``blocks`` is absent or None).
 
     ``blocks: ac-closure`` entries never count here — that gate holds only
     a named acceptance criterion open, not the row's execution.
 
-    ``cleared: false`` is an explicit negative that OVERRIDES a truthy
-    ``closure_evidence``, per plan-tasks.schema.json 1.9.0's own wording:
-    the flag asserts whether the gate IS discharged, while
-    ``closure_evidence`` only names how that was or will be verified. Until
-    this was read, an author who wrote a status note into ``closure_evidence``
-    and set ``cleared: false`` to say "not actually discharged" got the gate
-    silently disarmed anyway — the schema promised an override the reader did
-    not implement. Found against sat-06 C4, a row that writes into a sibling
-    repo's tree, where the disarm would have scheduled a cross-tree write on a
-    DR that is still `status: proposed`.
+    A gate is cleared ONLY by an explicit ``cleared: true`` — the ONE
+    clearing path. ``closure_evidence`` is purely descriptive: it names how
+    a gate was or will be verified, and never by itself clears anything,
+    however truthy its content, and a ``cleared: false`` (or any value other
+    than the literal ``true``) leaves the gate exactly as uncleared as no
+    ``cleared`` key at all. A ``closure_evidence`` is typically authored at
+    plan-writing time, before the evidence has arrived, so its natural
+    content is a description of what is still being AWAITED — treating its
+    mere presence as clearing therefore self-cleared the exact gates it was
+    meant to describe. This is the retired half of the joint two-repo bump
+    (see the schema's own x-bump-note: 1.9.0 landed only the additive
+    ``cleared: false`` override as a first step; presence-as-cleared was
+    deferred pending this widening, matched on the same schedule against
+    DoE-claude's ``_uncleared_execution_gate``).
 
-    Only the ``false`` half is honoured here. ``cleared: true`` clears a gate
-    that names no evidence at all, which WIDENS what a wave admits, and this
-    reader is deliberately kept behaviourally in sync with DoE-claude's
-    ``_uncleared_execution_gate`` (see the schema's own x-bump-note: the 1.9.0
-    bump was "the additive half only ... retiring presence-as-cleared is a
-    separate, joint two-repo bump"). Widening is that joint bump's business,
-    not this fix's; refusing to admit is always safe unilaterally.
+    Before ``cleared`` was read at all, an author who wrote a status note
+    into ``closure_evidence`` and wanted to say "not actually discharged"
+    had no way to say so — the schema promised a ``cleared: false`` override
+    the reader did not yet implement, and any truthy ``closure_evidence``
+    silently disarmed the gate regardless. Found against sat-06 C4, a row
+    that writes into a sibling repo's tree, where the disarm would have
+    scheduled a cross-tree write on a DR that is still `status: proposed`.
+    ``cleared: false`` has been honoured since that fix, and this bump
+    subsumes it: both now fall out of the single ``cleared is True`` check.
 
     Tolerant of malformed shapes, matching this module's read posture for
     every field but its four fail-loud ones: a non-list ``external_gate``,
@@ -195,12 +201,10 @@ def _has_uncleared_execution_gate(raw: dict) -> bool:
     for entry in external_gate:
         if not isinstance(entry, dict):
             continue
-        closure_evidence = entry.get(_GATE_CLOSURE_EVIDENCE_KEY)
-        # `cleared: false` is the explicit negative and outranks evidence;
-        # only the literal False counts, so a malformed value cannot disarm
-        # the override any more than it can disarm the gate.
-        cleared_is_explicit_negative = entry.get(_GATE_CLEARED_KEY) is False
-        if closure_evidence and not cleared_is_explicit_negative:
+        # `cleared: true` is the ONLY clearing path; only the literal True
+        # counts, so a malformed or absent value never clears the gate no
+        # matter what `closure_evidence` says.
+        if entry.get(_GATE_CLEARED_KEY) is True:
             continue
         # Fail closed: only the literal ac-closure spares a row. An absent,
         # None, or unrecognized `blocks` resolves to execution, so a typo

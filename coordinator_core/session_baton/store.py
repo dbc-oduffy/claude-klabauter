@@ -29,6 +29,7 @@ the all-defaults skeleton from :func:`default_record`):
       "title": str | None,        # EM-supplied
       "intent": str | None,       # EM-supplied
       "adopted_artifacts": [str, ...],
+      "minted_artifacts": [str, ...],   # handed to the session, not picked up
       "commits": [str, ...],
       "promoted_to": str | None,  # nullable — set by C3's promotion op
     }
@@ -105,6 +106,23 @@ def default_record(session_id: str) -> Dict[str, Any]:
         "title": None,
         "intent": None,
         "adopted_artifacts": [],
+        # What this session was HANDED without asking, as opposed to
+        # `adopted_artifacts`' what-this-session-picked-up. Exists so an
+        # auto-mint is legible to the session accountable for it: DoE's
+        # `runtime-tripwire-em-check.py` announces a baton off this record at
+        # the next `UserPromptSubmit`, and could not announce a minted handoff
+        # because nothing wrote its path anywhere (their reply to
+        # `2026-08-20-claude-klabauter-em-handoff-mint-has-no-announce`; the
+        # advisory leg is theirs, this signal is ours).
+        #
+        # A list field rather than a sibling marker file deliberately: their
+        # hook already reads this whole record once per prompt for its own
+        # field gate, so a key costs it zero extra I/O, while a marker costs a
+        # stat and invents a second convention beside the one that exists.
+        # Additive and `.get()`-safe, so a reader that predates it is
+        # unaffected -- there is no JSON schema over this record, only this
+        # function.
+        "minted_artifacts": [],
         "commits": [],
         "promoted_to": None,
     }
@@ -259,6 +277,7 @@ def merge_baton(
     title: Any = _UNSET,
     intent: Any = _UNSET,
     adopted_artifacts: Optional[List[str]] = None,
+    minted_artifacts: Optional[List[str]] = None,
     commits: Optional[List[str]] = None,
     promoted_to: Any = _UNSET,
 ) -> Optional[Dict[str, Any]]:
@@ -275,7 +294,8 @@ def merge_baton(
     nullable by design and a caller must be able to explicitly (re)set it to
     ``None`` without that being indistinguishable from "leave it alone".
 
-    List fields (``adopted_artifacts``, ``commits``) are DEDUP-EXTENDED, not
+    List fields (``adopted_artifacts``, ``minted_artifacts``, ``commits``) are
+    DEDUP-EXTENDED, not
     replaced: passing a list appends any entries not already present
     (order-preserving), so two callers merging overlapping lists never lose
     or duplicate an entry. Passing ``None`` (the default) leaves the
@@ -326,6 +346,12 @@ def merge_baton(
                 if entry not in existing:
                     existing.append(entry)
             record["adopted_artifacts"] = existing
+        if minted_artifacts:
+            existing_m = list(record.get("minted_artifacts") or [])
+            for entry in minted_artifacts:
+                if entry not in existing_m:
+                    existing_m.append(entry)
+            record["minted_artifacts"] = existing_m
         if commits:
             existing_c = list(record.get("commits") or [])
             for entry in commits:

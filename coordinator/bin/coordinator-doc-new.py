@@ -1958,6 +1958,31 @@ def _scaffold_handoff(
         # hardcoded default rather than failing loud like --gated-open does.
         _deployment_state = "ready_to_fire"
         _pickup_ready = "true"
+    # An unnamed scaffold advertises nothing, so it is not pickup-ready --
+    # the same judgment `_is_placeholder_title` already enforces at the
+    # durable-id mint sites, applied to the field that decides whether the
+    # pickup index offers this baton as available work. A placeholder-titled
+    # record with `pickup_ready: true` is well-formed and meaningless in
+    # exactly that helper's sense: a future `/pickup` or `/workday-start`
+    # surfaces it as actionable and whoever takes it finds a comment-only
+    # skeleton. Reported live from DoE-claude 2026-08-20 (`cross-repo/inbox/
+    # 2026-08-20-doe-claude-em-pickup-mints-a-phantom-successor.md`), where
+    # one held the genuine successor's `deliverable_id` for three and a half
+    # hours.
+    #
+    # Negative-spec: this narrows ONLY the untitled case, and only ever
+    # toward `false`. A `--title`-bearing scaffold -- every roadmap and
+    # spinoff stub, and every `/handoff` that names its own continuation --
+    # keeps whatever `derive_readiness` decided, byte-identical to before,
+    # so nothing that reads `ready_to_fire`/`pickup_ready: true` off a named
+    # stub changes behaviour (`ops/handoff_close_origin_stub`, whose own
+    # docstring names that pairing, operates on stubs carrying real titles).
+    # It is also NOT a second gating mechanism: `deployment_state` is left
+    # exactly as derived, because the baton is not blocked on anything -- it
+    # is unwritten, which is a different fact and DR-173's ratified
+    # awaiting_gate trio must not be counterfeited to express it.
+    if _is_placeholder_title(title):
+        _pickup_ready = "false"
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",

@@ -635,17 +635,44 @@ def test_dual_boot_live_tree_wins_when_session_is_working_repo(_dual_boot_fixtur
     assert cls == "live-working-tree"
 
 
-def test_dual_boot_claude_klabauter_root_env_wins_unconditionally(_dual_boot_fixture, monkeypatch):
-    """AC3: `CLAUDE_KLABAUTER_ROOT` env (rung 1) continues to win unconditionally,
-    unchanged, regardless of the dual-boot registration below it."""
+def test_dual_boot_claude_klabauter_root_env_no_longer_wins(_dual_boot_fixture, monkeypatch):
+    """AC3 INVERTED by C14 (docs/plans/2026-08-20-an-engine-root-is-not-named-
+    for-the-repo.md): `CLAUDE_KLABAUTER_ROOT` env used to win unconditionally at rung 1,
+    regardless of the dual-boot registration below it. C14 closed the
+    dual-read window — `coordinator_engine_root_env()` no longer answers with
+    `CLAUDE_KLABAUTER_ROOT` at all, so rung 1 no longer short-circuits off it and
+    resolution must fall through to whatever the dual-boot gate below it
+    decides.
+
+    Asserted by COMPARISON, not by hardcoding the gate's answer: the
+    `test_dual_boot_published_wins_over_pointer_when_not_working_repo` sibling
+    (identical fixture, no env override) is itself one of the ~12
+    pre-existing failures tracked at
+    state/bug-backlog/2026-08-20-21-pre-existing-failures-in-test-engine-fe2ecacfb144.yaml
+    — the shim/gate currently answers `live-working-tree` there too, for a
+    reason unrelated to this rename. Pinning this test to `resolved-engine`
+    would make it fail for THAT bug, not for a C14 regression, and conflate
+    the two. What C14 actually changed is narrower and still checkable
+    without that gate bug: the explicit `CLAUDE_KLABAUTER_ROOT` override must produce
+    the IDENTICAL answer as no override at all, proving rung 1 is inert on
+    the old name. The old name is still read, but only to advise that it is
+    retired — see `engine_root._maybe_emit_engine_root_retired`."""
     fx = _dual_boot_fixture
     fx.write_registry(session_is_working_repo=False)
+
+    without_override = claude_klabauter_root.coordinator_engine_root_with_class()
+
+    claude_klabauter_root._reset_shim_cache()
+    claude_klabauter_root._reset_gate_memo()
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/explicit/claude-klabauter/root")
+    with_override = claude_klabauter_root.coordinator_engine_root_with_class()
 
-    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
-
-    assert root == "/explicit/claude-klabauter/root"
-    assert cls == "live-working-tree"
+    assert with_override == without_override, (
+        "a retired CLAUDE_KLABAUTER_ROOT must not change the resolution at all"
+    )
+    assert with_override[0] != "/explicit/claude-klabauter/root", (
+        "the retired env value must never itself be returned"
+    )
 
 
 def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, monkeypatch):

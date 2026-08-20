@@ -149,7 +149,12 @@ def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[
     claude_klabauter_root = _resolve_claude_klabauter_root()
 
     env = dict(os.environ)
+    # BOTH names, same value, for the duration of the rename window. Setting
+    # only the retired name gives the child an environment where the variable
+    # IS set and every post-C14 reader has stopped reading it, so the failure
+    # surfaces rungs downstream of the pin that caused it.
     env["CLAUDE_KLABAUTER_ROOT"] = claude_klabauter_root
+    env["COORDINATOR_ENGINE_ROOT"] = claude_klabauter_root
     sep = os.pathsep
     existing_pp = env.get("PYTHONPATH", "")
     if f"{sep}{claude_klabauter_root}{sep}" not in f"{sep}{existing_pp}{sep}":

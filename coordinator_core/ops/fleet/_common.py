@@ -1377,6 +1377,42 @@ async def _resync_main_index_for_reaps(
         )
 
 
+#: Per-spawn argv budget, in characters, for a batched `-- <paths>` pathspec.
+#: Windows caps a CreateProcess command line at 32767 characters TOTAL, and the
+#: batched spawns below pass ABSOLUTE paths, so the cap is reachable on a large
+#: sweep: 335 memos measured at 35,468 characters, overflowing with
+#: `FileNotFoundError: [WinError 206]`. The headroom under 32767 covers the
+#: git.exe path, the subcommand and flags, and the environment block. Same cap
+#: and same rationale as `coordinator/bin/scoped-git-commit`'s
+#: `--pathspec-from-file`, which solved this for the commit path.
+_ARGV_PATHSPEC_BUDGET = 24000
+
+
+def _argv_path_chunks(paths: list, budget: int = _ARGV_PATHSPEC_BUDGET) -> list:
+    """Split `paths` into groups each short enough to survive one spawn.
+
+    Chunking is semantics-preserving for all three call sites: the drift check
+    unions its per-chunk output into one set that is then membership-tested per
+    move, and the restage add / reset are all-or-error over the same path set
+    either way. A single path longer than `budget` still gets its own chunk
+    rather than being dropped -- an over-long single path is git's error to
+    report, not this helper's to swallow.
+    """
+    chunks: list = []
+    current: list = []
+    size = 0
+    for path in paths:
+        token = str(path)
+        if current and size + len(token) + 1 > budget:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(token)
+        size += len(token) + 1
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def archive_and_commit(
     worktree_root: Path,
     moves: List[Move],
@@ -1599,22 +1635,27 @@ async def archive_and_commit(
         drift_batch_error: Optional[str] = None
         drifted_ids: set = set()
         if plain_srcs:
-            diff_argv = ["git", "diff", "--name-only", "--"] + [str(s) for s in plain_srcs]
-            diff_proc = await asyncio.create_subprocess_exec(
-                *diff_argv,
-                cwd=str(worktree_root),
-                env=base_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            diff_out, diff_stderr = await diff_proc.communicate()
-            if diff_proc.returncode != 0:
-                err_msg = diff_stderr.decode(errors="replace").strip()
-                drift_batch_error = (
-                    f"drift-check-failed: {err_msg}" if err_msg else "drift-check-failed"
+            for chunk in _argv_path_chunks(plain_srcs):
+                diff_argv = ["git", "diff", "--name-only", "--"] + chunk
+                diff_proc = await asyncio.create_subprocess_exec(
+                    *diff_argv,
+                    cwd=str(worktree_root),
+                    env=base_env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-            else:
-                drifted_ids = {
+                diff_out, diff_stderr = await diff_proc.communicate()
+                if diff_proc.returncode != 0:
+                    err_msg = diff_stderr.decode(errors="replace").strip()
+                    drift_batch_error = (
+                        f"drift-check-failed: {err_msg}" if err_msg else "drift-check-failed"
+                    )
+                    # One failed chunk fails the whole drift check: a partial
+                    # drifted_ids set would read as "these moves are clean"
+                    # for every path the unrun chunks would have named.
+                    drifted_ids = set()
+                    break
+                drifted_ids |= {
                     line.strip()
                     for line in diff_out.decode(errors="replace").splitlines()
                     if line.strip()
@@ -1639,35 +1680,42 @@ async def archive_and_commit(
         restage_moves = [m for m in moves if m.restage_src]
         restage_batch_error: Optional[str] = None
         if restage_moves:
-            add_argv = ["git", "add", "--"] + [str(m.src) for m in restage_moves]
-            add_proc = await asyncio.create_subprocess_exec(
-                *add_argv,
-                cwd=str(worktree_root),
-                env=base_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _out, add_stderr = await add_proc.communicate()
-            if add_proc.returncode != 0:
-                err_msg = add_stderr.decode(errors="replace").strip()
-                restage_batch_error = (
-                    f"restage-src-failed: {err_msg}" if err_msg else "restage-src-failed"
-                )
-                reset_proc = await asyncio.create_subprocess_exec(
-                    "git", "reset", "--", *[str(m.src) for m in restage_moves],
+            for chunk in _argv_path_chunks([m.src for m in restage_moves]):
+                add_proc = await asyncio.create_subprocess_exec(
+                    "git", "add", "--", *chunk,
                     cwd=str(worktree_root),
                     env=base_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _out, reset_stderr = await reset_proc.communicate()
-                if reset_proc.returncode != 0:
-                    _LOG.warning(
-                        "archive_and_commit: could not reset private index "
-                        "entries for restage_src batch after batched git add "
-                        "failure: %s",
-                        reset_stderr.decode(errors="replace").strip(),
+                _out, add_stderr = await add_proc.communicate()
+                if add_proc.returncode != 0:
+                    err_msg = add_stderr.decode(errors="replace").strip()
+                    restage_batch_error = (
+                        f"restage-src-failed: {err_msg}" if err_msg else "restage-src-failed"
                     )
+                    break
+            if restage_batch_error is not None:
+                for chunk in _argv_path_chunks([m.src for m in restage_moves]):
+                    reset_proc = await asyncio.create_subprocess_exec(
+                        "git", "reset", "--", *chunk,
+                        cwd=str(worktree_root),
+                        env=base_env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _out, reset_stderr = await reset_proc.communicate()
+                    if reset_proc.returncode != 0:
+                        # Every chunk is still attempted: this reset is undoing
+                        # a PARTIAL stage, so stopping at the first failing
+                        # chunk would leave the rest of the partial stage in
+                        # the private index.
+                        _LOG.warning(
+                            "archive_and_commit: could not reset private index "
+                            "entries for restage_src batch after batched git add "
+                            "failure: %s",
+                            reset_stderr.decode(errors="replace").strip(),
+                        )
 
         for move in moves:
             # Create destination directory — git mv will not mkdir. Tracked so

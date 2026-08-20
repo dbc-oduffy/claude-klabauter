@@ -4,10 +4,11 @@ same tree, every `coordinator_core` top-level name it imports.
 
 ## The defect this closes
 
-`test_publish_allowlist_top_level_coverage.py` (sibling gate, same row)
-verifies that every top-level `coordinator_core` entry is a recorded
-decision — allowlisted, `!`-excluded, or named in
-`_ACKNOWLEDGED_TOP_LEVEL_PRIVATE`. It does not verify that decision was the
+`coordinator/bin/publish-allowlist-generate.py`'s AC15 coverage assertion
+(sibling gate, same row; declaration source of truth is
+`setup/publish-allowlist-declarations.yaml`) verifies that every top-level
+`coordinator_core` entry is a recorded decision — allowlisted, `!`-excluded,
+or deny-declared. It does not verify that decision was the
 RIGHT one: `chain_attribution.py` and `atomic_append.py` were both recorded
 as acknowledged-private while `ops/review_trail_write.py` (published) does
 `from coordinator_core import chain_attribution`, and
@@ -84,7 +85,7 @@ Negative-spec: this module never edits `coordinator/lib/percolate/allowlist.py`
 beyond what an import requires, never adds a bare top-level `!name` to any
 row's CSV, and never widens its subject past `coordinator_core` top-level
 names — all three are this plan's Anti-scope, shared with
-`test_publish_allowlist_top_level_coverage.py`.
+`coordinator/bin/publish-allowlist-generate.py`'s AC15 coverage assertion.
 """
 
 from __future__ import annotations

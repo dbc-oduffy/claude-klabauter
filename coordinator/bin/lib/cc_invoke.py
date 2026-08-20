@@ -821,12 +821,15 @@ def _resolve_engine_root() -> str:
 
     # Rung 1: already in environment — CANDIDATE only now, delegated through
     # the gate (see docstring's "DELEGATION" note) rather than answered here.
-    # C11 dual-read: COORDINATOR_ENGINE_ROOT wins when both are set, matching
-    # coordinator_engine_root_env()'s precedence (see this module's literal
-    # duplication note near _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR above).
-    existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR, "")
+    # C14 closed the dual-read window: the NEW name is the only one that
+    # answers here. This is an AC13 bootstrap carve-out site — it cannot import
+    # the accessor, because resolving the engine is what it does — so the
+    # precedence is duplicated by hand and MUST move in lockstep with
+    # coordinator_engine_root_env(). Pinned equal by test; see this module's
+    # literal duplication note near _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR.
+    existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")
     if existing:
-        return _delegate_to_gate(existing, source="CLAUDE_KLABAUTER_ROOT environment variable")
+        return _delegate_to_gate(existing, source=f"{_ENGINE_ROOT_NEW_VAR} environment variable")
 
     # Rung 1.5 (NEW): cheap direct-file-read pointer, checked ahead of the
     # expensive bash-spawn resolver below. On Windows this avoids spawning a
@@ -1063,9 +1066,9 @@ def resolve_engine_root(script_file: str) -> str:
     THIS function, not on ``ensure_engine_on_path`` — see that function's
     docstring for why the degrading form is the wrong choice there.
     """
-    # C11 dual-read: COORDINATOR_ENGINE_ROOT wins when both are set (see
+    # C14 closed the dual-read window: the NEW name only (see
     # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
-    env_root = os.environ.get(_ENGINE_ROOT_NEW_VAR) or os.environ.get(_ENGINE_ROOT_OLD_VAR) or ""
+    env_root = os.environ.get(_ENGINE_ROOT_NEW_VAR) or ""
     if env_root and os.path.isdir(env_root):
         return env_root
     walked = _walk_up_to_checkout(script_file)
@@ -1427,18 +1430,19 @@ def _build_subprocess_env(claude_klabauter_root: str) -> dict[str, str]:
     resolver that tries the `coordinator-settings-home` CLI before its disk
     fallback) hits rung 0 and skips that CLI call.
 
-    C11 (dual-read/dual-write rename window): sets BOTH `CLAUDE_KLABAUTER_ROOT` and
-    `COORDINATOR_ENGINE_ROOT` to `claude_klabauter_root` — the same additive-both-names
-    shape as `coordinator_core.engine_root.coordinator_engine_root_env_exports`,
+    C14 (dual-write window CLOSED): sets `COORDINATOR_ENGINE_ROOT` ONLY —
+    the same new-name-only shape as
+    `coordinator_core.engine_root.coordinator_engine_root_env_exports`,
     duplicated by hand here rather than imported (see the module-level literal
-    duplication note above this function's neighbours). A child running from a
-    pre-rename tree (reads only the old name) and a child running from a
-    post-rename tree (reads the new name) both resolve correctly. This routes
-    the NAME only — it still answers the DISPATCH question (which engine
-    executes), the axis split (C18) is not this function's concern.
+    duplication note above this function's neighbours) and pinned equal to it
+    by test. Until C14 this set both names so a child running from a pre-rename
+    tree still resolved; continuing to export the old name is precisely what
+    kept stale readers working and the precondition open. This routes the NAME
+    only — it still answers the DISPATCH question (which engine executes), the
+    axis split (C18) is not this function's concern.
     """
     env: dict[str, str] = _settings_home_env(
-        {**os.environ, _ENGINE_ROOT_OLD_VAR: claude_klabauter_root, _ENGINE_ROOT_NEW_VAR: claude_klabauter_root},
+        {**os.environ, _ENGINE_ROOT_NEW_VAR: claude_klabauter_root},
         claude_klabauter_root,
     )
     env.update(_locator_axis_export())
@@ -1474,11 +1478,9 @@ def _settings_home_env(base_env: dict[str, str], claude_klabauter_root: str | No
     if base_env.get("COORDINATOR_SETTINGS_HOME"):
         return base_env
 
-    # C11 dual-read: COORDINATOR_ENGINE_ROOT wins when both are set (see
+    # C14 closed the dual-read window: the NEW name only (see
     # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
-    _root = claude_klabauter_root if claude_klabauter_root is not None else (
-        os.environ.get(_ENGINE_ROOT_NEW_VAR) or os.environ.get(_ENGINE_ROOT_OLD_VAR)
-    )
+    _root = claude_klabauter_root if claude_klabauter_root is not None else os.environ.get(_ENGINE_ROOT_NEW_VAR)
     _injected = bool(_root) and _root not in sys.path
     if _injected:
         sys.path.insert(0, _root)

@@ -122,32 +122,50 @@ def test_locator_export_is_empty_when_unresolvable():
 
 def test_subprocess_env_adds_the_locator_without_touching_dispatch(cc_invoke, monkeypatch):
     """The whole chunk in one assertion: the child gains a locator variable and
-    the dispatch variable is byte-identical to what it was before."""
+    the dispatch variable is byte-identical to what it was before.
+
+    C14 CHANGED WHICH KEY CARRIES THE DISPATCH VALUE, and the change is
+    orthogonal to C18's split this file otherwise pins. Before C14
+    `_build_subprocess_env` exported the dispatch value under BOTH
+    `COORDINATOR_ENGINE_ROOT` and `CLAUDE_KLABAUTER_ROOT`; C14 closed that dual-write, so
+    the child now carries the value under the new name only (see
+    `cc_invoke._build_subprocess_env`'s own C14 docstring paragraph). This test
+    asserted the old key because it predates C14 — the invariant it exists to
+    prove ("the dispatch value itself doesn't change" untouched by the
+    locator's addition) still holds, just checked against the surviving key."""
     monkeypatch.setattr(cc_invoke, "_machine_local_get", lambda key: "/src/checkout")
     env = cc_invoke._build_subprocess_env("/engines/published")
-    assert env[_DISPATCH_OLD] == "/engines/published", "dispatch value must not change"
+    assert env[_DISPATCH] == "/engines/published", "dispatch value must not change"
+    assert _DISPATCH_OLD not in env, "C14 closed the dual-write; the old name is no longer exported"
     assert env[_LOCATOR] == "/src/checkout"
     assert env["PYTHONPATH"].startswith("/engines/published"), "PYTHONPATH still the engine"
 
 
 def test_subprocess_env_unchanged_when_the_locator_is_unresolvable(cc_invoke, monkeypatch):
+    """See test_subprocess_env_adds_the_locator_without_touching_dispatch's C14
+    note: the dispatch value now lives under the new name only."""
     monkeypatch.setattr(cc_invoke, "_machine_local_get", lambda key: None)
     env = cc_invoke._build_subprocess_env("/engines/published")
     assert _LOCATOR not in env
-    assert env[_DISPATCH_OLD] == "/engines/published"
+    assert env[_DISPATCH] == "/engines/published"
+    assert _DISPATCH_OLD not in env
 
 
 def test_locator_lookup_failure_never_breaks_the_spawn(cc_invoke, monkeypatch):
     """Best-effort by design: this runs on the commit hot path for every session
     on the box, so a registry read failure must degrade to "no locator export",
-    never to a raise."""
+    never to a raise.
+
+    See test_subprocess_env_adds_the_locator_without_touching_dispatch's C14
+    note: the dispatch value now lives under the new name only."""
     def _boom(key):
         raise RuntimeError("registry unreadable")
 
     monkeypatch.setattr(cc_invoke, "_machine_local_get", _boom)
     env = cc_invoke._build_subprocess_env("/engines/published")
     assert _LOCATOR not in env
-    assert env[_DISPATCH_OLD] == "/engines/published"
+    assert env[_DISPATCH] == "/engines/published"
+    assert _DISPATCH_OLD not in env
 
 
 def test_the_locator_resolves_off_the_registry_not_the_dispatch_ladder(cc_invoke, monkeypatch):

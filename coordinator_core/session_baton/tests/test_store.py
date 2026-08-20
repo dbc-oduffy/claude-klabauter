@@ -385,3 +385,67 @@ def test_adopt_into_baton_survives_frontmatter_less_artifact(tmp_path, monkeypat
         "state/handoffs/h3.md",
         "state/handoffs/h4.md",
     ]
+
+
+# ---------------------------------------------------------------------------
+# `minted_artifacts` — what the session was HANDED, as against
+# `adopted_artifacts`' what-it-picked-up. The signal half of the handoff-mint
+# advisory: DoE's UserPromptSubmit hook can only announce what it can read off
+# this record (their reply to cross-repo/inbox/2026-08-20-claude-klabauter-em-
+# handoff-mint-has-no-announce.md).
+# ---------------------------------------------------------------------------
+
+
+def test_minted_artifacts_dedup_extends_like_its_sibling(tmp_path):
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-mint")
+
+    store.merge_baton("sid-mint", cwd=str(repo), minted_artifacts=["state/handoffs/a.md"])
+    merged = store.merge_baton(
+        "sid-mint",
+        cwd=str(repo),
+        minted_artifacts=["state/handoffs/a.md", "state/handoffs/b.md"],
+    )
+
+    assert merged["minted_artifacts"] == ["state/handoffs/a.md", "state/handoffs/b.md"]
+
+
+def test_a_mint_never_lands_in_adopted_or_names_the_session(tmp_path):
+    """The two lists are opposites, and only `adopted_artifacts` is a basis for
+    naming a session's baton. Folding a mint into adopted would name a session
+    after an artifact it never chose, and make a mint indistinguishable from a
+    pickup to the advisory leg that has to word the two differently."""
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-mint-only")
+
+    merged = store.merge_baton(
+        "sid-mint-only", cwd=str(repo), minted_artifacts=["state/handoffs/minted.md"]
+    )
+
+    assert merged["minted_artifacts"] == ["state/handoffs/minted.md"]
+    assert merged["adopted_artifacts"] == []
+    assert merged["title"] is None
+
+
+def test_minted_artifacts_is_present_on_a_fresh_record(tmp_path):
+    """A reader gating on the key's presence (the announce leg does) must not
+    have to distinguish 'no mints yet' from 'this record predates the field'."""
+    assert store.default_record("sid-x")["minted_artifacts"] == []
+
+
+def test_a_record_written_before_the_field_existed_still_merges(tmp_path):
+    """Additive and `.get()`-safe: the field was added to an in-code record
+    shape with no JSON schema over it, so every baton.json already on disk
+    lacks the key entirely."""
+    repo = _make_repo(tmp_path)
+    sdir = _ensure_session_dir(repo, "sid-legacy")
+    (sdir / store.BATON_FILENAME).write_text(
+        json.dumps({"session_id": "sid-legacy", "commits": ["abc123"]}), encoding="utf-8"
+    )
+
+    merged = store.merge_baton(
+        "sid-legacy", cwd=str(repo), minted_artifacts=["state/handoffs/late.md"]
+    )
+
+    assert merged["minted_artifacts"] == ["state/handoffs/late.md"]
+    assert merged["commits"] == ["abc123"]

@@ -93,7 +93,10 @@ from coordinator_core.contract.apply_base import (
     APPLY_EXIT_TRANSPORT_FAIL,
     UnrecognizedDirective,
 )
-from coordinator_core.baton_assemble import validate_decisions_shape
+from coordinator_core.baton_assemble import (
+    _resolve_current_session_id,
+    validate_decisions_shape,
+)
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -1937,6 +1940,63 @@ def _scoped_commit(repo_root: Path, artifact_rel_path: str, kind: str, basename:
     return apply_base.scoped_commit(repo_root, artifact_rel_path, message, _run_git)
 
 
+def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
+    """Record a just-minted baton's own path into THIS session's
+    `baton.json` (`session_baton.store.merge_baton`, `minted_artifacts` --
+    dedup-extends, so a replayed or resumed `apply` of the same artifact is a
+    no-op here).
+
+    THE DEFECT THIS CLOSES. A mint is a silent write into the work-state of a
+    session that is then accountable for it. DoE-claude's `/pickup` minted a
+    successor two seconds after a claim and the session never knew: the first
+    signal was a `deliverable_id` collision three and a half hours later, and
+    only because the ids happened to clash (`cross-repo/inbox/2026-08-20-doe-
+    claude-em-auto-baton-should-not-surprise-its-session.md`). Their PM's
+    framing is that not-knowing outranks the mis-firing, and it survives
+    every fix to the firing rule: the next silent mutation is invisible
+    again.
+
+    WHY THE FIX IS SPLIT ACROSS TWO REPOS, and why this half is the one that
+    was missing. The announce leg is theirs -- `runtime-tripwire-em-check.py
+    :: _baton_advisory_text`, already emitting into the `UserPromptSubmit`
+    `additionalContext` envelope for the session baton. Their hook's ONLY
+    human-facing surface is that event (no `PostToolUse` registration), so it
+    can announce only what it can read off disk at the next prompt, and there
+    was nothing to read: `baton_assemble`'s single `merge_baton` call
+    (`_print_commits_into_baton`) passes `commits=` alone, so a minted
+    handoff's path was never written anywhere. This function is that missing
+    signal; the shape was ours to pick and they asked us to pick it.
+
+    Negative-spec: `minted_artifacts`, never `adopted_artifacts`. The two are
+    opposites -- adopted is what the operator chose to pick up and is the
+    basis for NAMING the session's baton, minted is what the engine handed
+    them unasked. Folding a mint into the adopted list would name a session
+    after an artifact it never chose, and would make a mint indistinguishable
+    from a pickup to every reader of the record, including the announce leg
+    that has to word the two differently.
+
+    Fail-open, matching `_print_commits_into_baton` and `session_baton.store`
+    throughout: an unresolvable session id or an unwritable store is
+    swallowed. This runs AFTER the artifact is committed, so raising here
+    would fail a run whose real work already landed -- and an advisory that
+    can break a mint is worse than one that occasionally misses.
+    """
+    if not artifact_rel_path:
+        return
+    try:
+        sid = _resolve_current_session_id()
+    except Exception:  # noqa: BLE001 — advisory write must never raise into apply()
+        return
+    if not sid:
+        return
+    try:
+        from coordinator_core.session_baton.store import merge_baton
+
+        merge_baton(sid, cwd=str(root), minted_artifacts=[artifact_rel_path])
+    except Exception:  # noqa: BLE001 — advisory write must never raise into apply()
+        pass
+
+
 def apply(
     kind: str,
     artifact_path: str,
@@ -2137,6 +2197,9 @@ def apply(
 
         if kind == "spinoff" and exit_code == APPLY_EXIT_OK:
             _warn_if_spinoff_mint_self_claimed(root, committed_artifact_path)
+
+        if exit_code == APPLY_EXIT_OK:
+            _record_mint_into_baton(root, committed_artifact_path)
 
         return _finalize_report(exit_code, report)
 

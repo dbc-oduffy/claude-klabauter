@@ -151,10 +151,11 @@ class PlanSummary(BaseModel):
     is recorded at C7's dispatch site (docs/plans/2026-08-20-the-rungs-get-writers.md § C7,
     AC16), not here.
 
-    NOT YET WIRED (C7 scope, out of scope here): the caller that constructs `PlanSummary`
-    instances at emit time does not yet populate this field from `plan_review_verified()` --
-    that wiring is a named follow-on, matching the `bridged_ids`/`envelope.emit` precedent
-    documented in `deliverable_status.stamp()`.
+    Wired 2026-08-20 in `ops/emit/sections/plans.py::collect`, which populates it from
+    `plan_review_verified(fm)` at collect time -- the predicate reads `review_verified_by`
+    off frontmatter, so it needs none of the cross-record state the enrich pass exists for.
+    Until that wiring landed the field was schema-required and never emitted, so every plan
+    record failed a strict consumer's required-key check from 3.13.0 onward.
     """
     content_hash: ContentHash | None = None
     """

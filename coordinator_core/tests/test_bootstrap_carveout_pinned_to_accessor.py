@@ -126,35 +126,62 @@ def test_carve_out_precedence_matches_accessor(monkeypatch):
     assert engine_root.coordinator_engine_root_env("test.ac13_precedence") == "new-name-answer"
 
     dual_reads = _dual_read_expressions(_CC_INVOKE)
-    assert dual_reads, (
-        "cc_invoke no longer contains any expression reading BOTH pinned names. The "
-        "dual-read window is open until C14, so both must still be consulted."
-    )
-    inverted = [first for first in dual_reads if first != "_ENGINE_ROOT_NEW_VAR"]
-    assert not inverted, (
-        f"{len(inverted)} of {len(dual_reads)} dual-read expressions in cc_invoke consult "
-        "the OLD engine-root name before the NEW one. The accessor gives the new name "
-        "precedence, so this inverts the contract for exactly the callers that cannot "
-        "import the accessor to get it right. Checked per-expression via AST: an earlier "
-        "version of this test compared string offsets of the two names across the whole "
-        "file, which a single inverted site does not change -- it passed against a "
-        "deliberately inverted carve-out."
+    assert not dual_reads, (
+        f"cc_invoke still has {len(dual_reads)} expression(s) reading BOTH pinned names "
+        f"(first-consulted: {dual_reads}). C14 CLOSED the dual-read window, so the "
+        "carve-out must consult the NEW name alone. Until C14 this assertion ran the "
+        "other way round and required both to be present.\n\n"
+        "This inversion caught a real miss: C14's first pass changed only the rung-1 "
+        "read and the child-env write, leaving TWO further dual-read rungs in this file "
+        "untouched. A precedence-order check cannot see that — both remaining sites put "
+        "the new name first and would have passed — which is why the post-C14 assertion "
+        "is PRESENCE, not order."
     )
 
 
-def test_accessor_falls_back_to_old_name_while_the_window_is_open(monkeypatch):
-    """Pins the window itself: with only the old name set, the accessor still answers.
+def test_accessor_no_longer_falls_back_now_the_window_is_closed(monkeypatch, capsys):
+    """Pins the window CLOSED. This test previously asserted the opposite, and its
+    docstring called its own failure "the signal that the fallback was dropped early".
 
-    C14 closes this window. Until it does, a reader must get the right answer from EITHER
-    name (AC14) -- so this failing is the signal that the fallback was dropped early, which
-    would strand every consumer that has not yet converged.
+    It fired exactly as designed when C14 dropped the fallback. That is a tripwire doing
+    its job, not a stale guard: the correct response is to invert it deliberately, here,
+    rather than to delete it -- which is what would have happened if it had been written
+    as a bare assertion with no explanation of what its failure MEANT.
+
+    C14 dropped the fallback on purpose, on precondition items 1-3 rather than item 4's
+    N-days-of-zero proxy (see the plan's C14 gate `cleared_evidence`). The old name is
+    still READ, solely to name itself retired, so a consumer that has not converged gets
+    a named cause instead of a silent None several rungs downstream.
     """
     from coordinator_core import engine_root
 
     monkeypatch.delenv(engine_root._ENGINE_ROOT_NEW_VAR, raising=False)
     monkeypatch.setenv(engine_root._ENGINE_ROOT_OLD_VAR, "old-name-answer")
+    engine_root._reset_engine_root_env_advisories()
 
-    assert engine_root.coordinator_engine_root_env("test.ac13_window") == "old-name-answer"
+    assert engine_root.coordinator_engine_root_env("test.ac13_window") is None
+    err = capsys.readouterr().err
+    assert "NO LONGER HONOURED" in err
+    assert engine_root._ENGINE_ROOT_NEW_VAR in err
+
+
+def test_carveout_precedence_pins_the_new_name_only():
+    """AC13's pin, POST-C14: cc_invoke's hand-duplicated rung must read the new name and
+    must NOT fall back -- the same edit the accessor took. Requested by doe-claude-em as
+    an engine-axis-suffix pin rather than a literal-equality one, because their own ladder
+    leads with REPO_CLAUDE_KLABAUTER on the LOCATOR axis and pinning them equal would pin
+    the wrong claim.
+    """
+    src = _CC_INVOKE.read_text(encoding="utf-8")
+
+    assert 'existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")\n' in src
+    assert (
+        'os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR'
+        not in src
+    ), "cc_invoke still falls back to the retired name; C14 removed that rung"
+    assert "_ENGINE_ROOT_OLD_VAR: claude_klabauter_root" not in src, (
+        "cc_invoke still exports the retired name into child environments"
+    )
 
 
 def test_accessor_returns_none_when_neither_name_is_set(monkeypatch):
