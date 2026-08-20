@@ -2359,6 +2359,282 @@ def _run_probe_commitments_recheck(claude_klabauter_root: Path | None) -> _Probe
         )
 
 
+_EOL_DRIFT_PROBE = "claude-klabauter.eol.audit_producers"
+_EOL_AUDIT_PRODUCERS_SENTINEL_NAME = "coordinator-eol-audit-producers-last-run.json"
+_EOL_CENSUS_PROBE = "claude-klabauter.eol.census"
+_EOL_CENSUS_SENTINEL_NAME = "coordinator-eol-census-last-run.json"
+
+
+def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.eol.census — OPTIONAL (required=False); DEGRADED-on-fail.
+
+    READS the per-machine sentinel that ``coordinator_core.ops.session.boot_sweep``'s
+    eol.census cadence rider (C8) writes to
+    ``<git-common-dir>/coordinator-eol-census-last-run.json``. Never re-runs the
+    census: doctor is not on its own timer, so computing here would only ever fire
+    when a human happened to run the doctor — the invocation gap this plan exists to
+    close. The cadence rider is the only writer.
+
+    AC10 names BOTH sentinels, and this is the census half. Without it only the
+    producer-audit verdict reaches an operator, and the census — the primary drift
+    verdict, and the number that goes out to the siblings — reaches nobody without
+    an invocation.
+
+    Verdict mapping:
+      sentinel absent / unreadable / claude_klabauter_root unresolved -> INFO (skipped=True) —
+        the rider has not run yet on this machine, not a fault.
+      verdict.violation_count > 0                           -> DEGRADED, named paths.
+      verdict.violation_count == 0                          -> PASS, reporting
+        declaration coverage alongside, because a clean verdict from a thinly
+        declared tree is the AC15 false negative, not a clean tree.
+
+    Negative-spec:
+      - Does NOT call coordinator_core.ops.eol.census.census itself.
+      - Does NOT gate: required=False, severity_if_fail="degraded"; an absent
+        sentinel is never BROKEN.
+
+    Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C10
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_EOL_CENSUS_PROBE,
+                status=_INFO,
+                detail="Cannot read the eol.census sentinel — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=False,
+                skipped=True,
+            )
+
+        root_str = str(claude_klabauter_root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+
+        try:
+            from coordinator_core.lifecycle import git_common_dir  # type: ignore[import]
+        except Exception as exc:
+            return _ProbeResult(
+                probe=_EOL_CENSUS_PROBE,
+                status=_INFO,
+                detail=(
+                    "Cannot import coordinator_core.lifecycle.git_common_dir from "
+                    f"{root_str!r}: {type(exc).__name__}: {exc}"
+                ),
+                remediation="See claude-klabauter.core.import probe — the engine tree is not importable.",
+                required=False,
+                skipped=True,
+            )
+
+        common_dir = git_common_dir(claude_klabauter_root)
+        sentinel_path = common_dir / _EOL_CENSUS_SENTINEL_NAME
+        if not sentinel_path.is_file():
+            return _ProbeResult(
+                probe=_EOL_CENSUS_PROBE,
+                status=_INFO,
+                detail=(
+                    f"No eol.census sentinel found at {sentinel_path} — the session-boot "
+                    "cadence rider has not run yet on this machine."
+                ),
+                remediation="Boot a session in this repo (SessionStart runs the cadence rider automatically).",
+                required=False,
+                skipped=True,
+            )
+
+        payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
+        verdict = payload.get("verdict") or {}
+        violations = verdict.get("violations") or []
+        violation_count = verdict.get("violation_count", len(violations))
+        coverage = verdict.get("declaration_coverage") or {}
+        declared = coverage.get("declared_count")
+        unspecified = coverage.get("unspecified_count")
+        total = None
+        if isinstance(declared, int) and isinstance(unspecified, int):
+            total = declared + unspecified
+        coverage_note = (
+            f" Declaration coverage: {declared}/{total} tracked paths declare an eol "
+            "attribute — the census can only see the declared ones."
+            if total
+            else ""
+        )
+        data = {
+            "written_at": payload.get("written_at"),
+            "violation_count": violation_count,
+            "dirty_violation_count": verdict.get("dirty_violation_count"),
+            "tracked_count": verdict.get("tracked_count"),
+            "declaration_coverage": coverage,
+            "violations": violations[:50],
+        }
+
+        if violation_count:
+            named = ", ".join(str(v.get("path", v)) for v in violations[:10])
+            more = f" (+{violation_count - 10} more)" if violation_count > 10 else ""
+            return _ProbeResult(
+                probe=_EOL_CENSUS_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"eol.census found {violation_count} tracked path(s) whose on-disk "
+                    f"bytes disagree with their declared eol attribute: {named}{more}."
+                    + coverage_note
+                ),
+                remediation=(
+                    "Run eol.repair against this tree to normalize toward the declared "
+                    "attribute (it refuses any dirty file and any file that is not "
+                    "provably an EOL-only change); see coordinator_core/ops/eol/repair.py."
+                ),
+                required=False,
+                data=data,
+            )
+
+        return _ProbeResult(
+            probe=_EOL_CENSUS_PROBE,
+            status=_PASS,
+            detail=(
+                "eol.census reports no declared-vs-actual line-ending drift as of the "
+                "last cadence run." + coverage_note
+            ),
+            remediation="—",
+            required=False,
+            data=data,
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_EOL_CENSUS_PROBE,
+            status=_INFO,
+            detail=f"Unexpected error in eol.census probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
+
+
+def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.eol.audit_producers — OPTIONAL (required=False); DEGRADED-on-fail.
+
+    READS the per-machine sentinel that ``coordinator_core.ops.session.boot_sweep``'s
+    eol.audit_producers cadence rider (C8) writes to
+    ``<git-common-dir>/coordinator-eol-audit-producers-last-run.json`` — this probe
+    never re-runs the census or the producer audit itself. Doctor is not on its own
+    timer, so a probe that computed here would only ever fire when a human happened
+    to run the doctor, which is exactly the invocation gap this plan (2026-08-20-
+    every-repo-detects-its-own-eol-drift) exists to close; the cadence rider is the
+    only writer.
+
+    Verdict mapping:
+      sentinel absent / unreadable / claude_klabauter_root unresolved -> INFO (skipped=True) —
+        the rider has not run yet on this machine, not a fault.
+      verdict.offender_count > 0                            -> DEGRADED, named offenders.
+      verdict.offender_count == 0                            -> PASS.
+
+    Negative-spec:
+      - Does NOT call coordinator_core.ops.eol.audit_producers.audit_producers itself
+        — read-only consumer of the rider's sentinel, never a second producer of the
+        walk it reports on.
+      - Does NOT gate: required=False, severity_if_fail="degraded" per the manifest;
+        an absent sentinel is never BROKEN.
+
+    Discharges AC10 via an existing consumer: coordinator_core/ops/
+    check_claude_klabauter_doctor_sentinel.py already renders doctor state into
+    /workday-start, so this verdict reaches an operator with zero new plumbing.
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions become an
+    INFO/skipped verdict, matching the optional-probe contract.
+
+    Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C10
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_EOL_DRIFT_PROBE,
+                status=_INFO,
+                detail="Cannot read the eol.audit_producers sentinel — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=False,
+                skipped=True,
+            )
+
+        root_str = str(claude_klabauter_root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+
+        try:
+            from coordinator_core.lifecycle import git_common_dir  # type: ignore[import]
+        except Exception as exc:
+            return _ProbeResult(
+                probe=_EOL_DRIFT_PROBE,
+                status=_INFO,
+                detail=(
+                    "Cannot import coordinator_core.lifecycle.git_common_dir from "
+                    f"{root_str!r}: {type(exc).__name__}: {exc}"
+                ),
+                remediation="See claude-klabauter.core.import probe — the engine tree is not importable.",
+                required=False,
+                skipped=True,
+            )
+
+        common_dir = git_common_dir(claude_klabauter_root)
+        sentinel_path = common_dir / _EOL_AUDIT_PRODUCERS_SENTINEL_NAME
+        if not sentinel_path.is_file():
+            return _ProbeResult(
+                probe=_EOL_DRIFT_PROBE,
+                status=_INFO,
+                detail=(
+                    f"No eol.audit_producers sentinel found at {sentinel_path} — the "
+                    "session-boot cadence rider has not run yet on this machine."
+                ),
+                remediation="Boot a session in this repo (SessionStart runs the cadence rider automatically).",
+                required=False,
+                skipped=True,
+            )
+
+        payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
+        verdict = payload.get("verdict") or {}
+        offenders = verdict.get("offenders") or []
+        offender_count = verdict.get("offender_count", len(offenders))
+        data = {
+            "written_at": payload.get("written_at"),
+            "offender_count": offender_count,
+            "offenders": offenders,
+            "scanned": verdict.get("scanned"),
+        }
+
+        if offender_count:
+            named = ", ".join(str(o) for o in offenders[:10])
+            more = f" (+{offender_count - 10} more)" if offender_count > 10 else ""
+            return _ProbeResult(
+                probe=_EOL_DRIFT_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"eol.audit_producers found {offender_count} text-mode write "
+                    f"call(s) omitting newline=: {named}{more}."
+                ),
+                remediation=(
+                    "Add newline=\"\\n\" (or the appropriate declared line ending) to "
+                    "the named write call(s); see coordinator_core/ops/eol/audit_producers.py "
+                    "module docstring for the ratchet's contract."
+                ),
+                required=False,
+                data=data,
+            )
+
+        return _ProbeResult(
+            probe=_EOL_DRIFT_PROBE,
+            status=_PASS,
+            detail="eol.audit_producers reports no text-mode write drift as of the last cadence run.",
+            remediation="—",
+            required=False,
+            data=data,
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_EOL_DRIFT_PROBE,
+            status=_INFO,
+            detail=f"Unexpected error in eol.audit_producers probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
+
+
 _STABLE_PID_MISS_PROBE = "claude-klabauter.session.stable_pid_miss"
 
 
@@ -4702,6 +4978,8 @@ def run_probes(
     _add(_GENERATOR_STALENESS_PROBE, _run_probe_generator_output_staleness, claude_klabauter_root)
     _add(_COMMITMENTS_RECHECK_PROBE, _run_probe_commitments_recheck, claude_klabauter_root)
     _add(_STABLE_PID_MISS_PROBE, _run_probe_stable_pid_miss, claude_klabauter_root)
+    _add(_EOL_DRIFT_PROBE, _run_probe_eol_audit_producers, claude_klabauter_root)
+    _add(_EOL_CENSUS_PROBE, _run_probe_eol_census, claude_klabauter_root)
     _add(_ROOT_POINTER_PROBE, _run_probe_root_pointer, claude_klabauter_root)
     _add(_PUBLISH_PROVENANCE_PROBE, _run_probe_publish_provenance, claude_klabauter_root)
     _add(_ENGINE_TARGET_ROLLOUT_PROBE, _run_probe_engine_target_rollout)

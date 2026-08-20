@@ -202,7 +202,7 @@ from typing import List, Optional
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # coordinator/lib/ (distinct from coordinator/bin/lib/ above — the two lib
@@ -221,15 +221,13 @@ if _COORDINATOR_LIB_DIR not in sys.path:
 from settings_home import settings_home as _coordinator_settings_home  # noqa: E402
 
 try:
-    _CLAUDE_KLABAUTER_ROOT = _resolve_claude_klabauter_root()
+    _CLAUDE_KLABAUTER_ROOT = require_dispatch_engine_on_path()
 except RuntimeError as _exc:
     sys.stderr.write(
         f"cruft-sweep: cannot resolve CLAUDE_KLABAUTER_ROOT for native coordinator_core "
         f"import: {_exc}\n"
     )
     sys.exit(1)
-if _CLAUDE_KLABAUTER_ROOT not in sys.path:
-    sys.path.insert(0, _CLAUDE_KLABAUTER_ROOT)
 
 from coordinator_core.state_root import (  # noqa: E402
     StateRootError,

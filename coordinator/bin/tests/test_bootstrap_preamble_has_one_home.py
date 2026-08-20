@@ -10,24 +10,34 @@ onto `cc_invoke.require_dispatch_engine_on_path()`. Without a guard the idiom
 grows back one CLI at a time: it is three obvious lines, and every new
 trampoline is written by copying the nearest existing one.
 
-WHAT THIS DOES NOT ASSERT, stated so a green run is not read as more than it is:
+TWO SHAPES ARE CHECKED, because two were collapsed:
 
-- Not "the symbol `_resolve_claude_klabauter_root` is unused". It has legitimate remaining
-  callers: the seam itself, the ladder, and tests that mock it.
-- **Not the variant tail.** The regex below matches the CANONICAL body only. At
-  the time of the collapse ~29 further files carried a preamble that does extra
-  work between the resolve and the insert -- a try/except, a class-aware call, a
-  validity probe. Those are C16's remaining work; this guard does not see them
-  and a green run here is not evidence they are done. `docs/reference/
-  engine-root-env-var-routing.md` is where the live count lives.
+1. The CANONICAL body above (regex).
+2. The TRY-WRAPPED variant (AST) --
 
-`_KNOWN_DIVERGENT` is for a file that must keep an inline copy for a stated
-reason, so an exemption stays visible and countable rather than dissolving into
-a widened regex.
+       try:
+           root = _resolve_claude_klabauter_root()
+       except RuntimeError:
+           ...never falls through...
+       if root not in sys.path:
+           sys.path.insert(0, root)
+
+   Collapsing this moves the insert inside the try, which is equivalent ONLY
+   when the handler cannot fall through. That condition is why shape 2 is an
+   AST check and not a second regex: a handler that falls through reaches the
+   insert with whatever it left in `root`, and the seam form does not.
+
+WHAT THIS DOES NOT ASSERT, so a green run is not read as more than it is. Not
+"the symbol `_resolve_claude_klabauter_root` is unused" -- it has legitimate remaining
+callers: the seam itself, the ladder, tests that mock it, and the files in
+`_KNOWN_DIVERGENT`. That map is the residual C16 did not collapse, each with the
+property that made it unsafe. It is a worklist, not an amnesty: a file leaves it
+by being collapsed, never by having its reason softened.
 """
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 
@@ -48,9 +58,26 @@ _INLINE_PREAMBLE = re.compile(
 # equivalent lives inside `_front_insert_on_path`.
 _SEAM_MODULE = "coordinator/bin/lib/cc_invoke.py"
 
-# Files whose preamble does extra work between the resolve and the insert, so the
-# collapse is not a mechanical no-op for them. C16's remaining tail.
-_KNOWN_DIVERGENT: dict[str, str] = {}
+# C16's residual: files whose preamble is NOT a mechanical no-op to collapse.
+# Each entry names the property that made it unsafe, so the next person can
+# re-check the property rather than re-derive the whole judgement.
+_KNOWN_DIVERGENT: dict[str, str] = {
+    "coordinator/bin/handoff-loe-summary.py":
+        "the except handler FALLS THROUGH (`claude_klabauter_root = None`) and the code after it "
+        "depends on that; the seam form would raise instead of yielding None",
+    "coordinator/bin/cutover-cli.py":
+        "second site guards with `if claude_klabauter_root and claude_klabauter_root not in sys.path` — the "
+        "truthiness leg is only dead code if _resolve_claude_klabauter_root never returns falsy, "
+        "which holds today but is a cross-module invariant no test asserts",
+    "coordinator/bin/reap-sessions.py":
+        "same truthiness-guarded shape as cutover-cli's second site",
+    "coordinator/bin/workday-complete-step9-append-changelog.py":
+        "deliberately verifies coordinator_core LIVES under the resolved root before "
+        "trusting the import, so the insert is not the whole of what it does",
+    "coordinator/scripts/install-maximalist.py":
+        "installs the engine FROM the resolved root (pip install -e) and re-execs under a "
+        "pinned interpreter; the root outlives the sys.path concern",
+}
 
 
 def _live_python_files():
@@ -59,6 +86,95 @@ def _live_python_files():
         if rel.startswith(_EXCLUDE_PREFIXES):
             continue
         yield rel, p
+
+
+def _never_falls_through(handler: ast.ExceptHandler) -> bool:
+    if not handler.body:
+        return False
+    last = handler.body[-1]
+    if isinstance(last, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
+        return True
+    if isinstance(last, ast.Expr) and isinstance(last.value, ast.Call):
+        fn = last.value.func
+        return (getattr(fn, "attr", None) or getattr(fn, "id", None)) == "exit"
+    return False
+
+
+def _resolve_only_try(node: ast.Try) -> str | None:
+    if len(node.body) != 1 or node.orelse or node.finalbody:
+        return None
+    stmt = node.body[0]
+    if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+        return None
+    if not isinstance(stmt.targets[0], ast.Name) or not isinstance(stmt.value, ast.Call):
+        return None
+    fn = stmt.value.func
+    if (getattr(fn, "id", None) or getattr(fn, "attr", None)) != "_resolve_claude_klabauter_root":
+        return None
+    if not node.handlers or not all(_never_falls_through(h) for h in node.handlers):
+        return None
+    return stmt.targets[0].id
+
+
+def _canonical_insert(node: ast.stmt, var: str) -> bool:
+    if not isinstance(node, ast.If) or node.orelse or len(node.body) != 1:
+        return False
+    test = node.test
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.NotIn):
+        return False
+    if not (isinstance(test.left, ast.Name) and test.left.id == var):
+        return False
+    cmp = test.comparators[0]
+    if not (isinstance(cmp, ast.Attribute) and cmp.attr == "path"):
+        return False
+    inner = node.body[0]
+    if not (isinstance(inner, ast.Expr) and isinstance(inner.value, ast.Call)):
+        return False
+    return isinstance(inner.value.func, ast.Attribute) and inner.value.func.attr == "insert"
+
+
+def _has_collapsible_try_variant(text: str) -> bool:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    for parent in ast.walk(tree):
+        body = getattr(parent, "body", None)
+        if not isinstance(body, list):
+            continue
+        for i, node in enumerate(body[:-1]):
+            if isinstance(node, ast.Try):
+                var = _resolve_only_try(node)
+                if var and _canonical_insert(body[i + 1], var):
+                    return True
+    return False
+
+
+@pytest.fixture(scope="module")
+def try_variant_offenders():
+    found = []
+    this_file = pathlib.Path(__file__).resolve().relative_to(_REPO_ROOT).as_posix()
+    for rel, p in _live_python_files():
+        if rel in (_SEAM_MODULE, this_file) or rel in _KNOWN_DIVERGENT:
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if "_resolve_claude_klabauter_root" not in text:
+            continue
+        if _has_collapsible_try_variant(text):
+            found.append(rel)
+    return found
+
+
+def test_no_cli_carries_a_collapsible_try_wrapped_preamble(try_variant_offenders):
+    """Shape 2: a try/except whose handler cannot fall through, then the canonical
+    insert. Provably equivalent to the seam, so there is no reason to keep one."""
+    assert not try_variant_offenders, (
+        "these wrap the resolve in a non-falling-through try and then do their own "
+        "sys.path insert; call require_dispatch_engine_on_path() inside the try "
+        "instead:\n  " + "\n  ".join(try_variant_offenders)
+    )
 
 
 @pytest.fixture(scope="module")

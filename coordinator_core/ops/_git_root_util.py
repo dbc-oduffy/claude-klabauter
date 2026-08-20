@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.telemetry import op_latency
 
 
 def git_root(cwd: Optional[Path] = None) -> Optional[str]:
@@ -57,7 +58,18 @@ def git_root_zero_spawn(start: Optional[Path] = None) -> Optional[str]:
 
     Resolution order:
       1. `CLAUDE_PROJECT_DIR` env var, if set AND it is a real directory —
-         honoured first, unconditionally, ahead of any walk.
+         honoured first, ahead of any walk, but ONLY when this process is
+         the one the caller ran in (``execution_route() == IN_PROCESS``).
+         `CLAUDE_PROJECT_DIR` is a property of a CALLING process; under the
+         warm engine this function can run in a long-lived server process
+         whose environment was inherited from whichever session happened to
+         spawn it, so trusting the raw read there would resolve a stranger's
+         project dir instead of the current caller's (see
+         `queue_append._output_root_override`'s docstring for the full
+         hazard on a sibling op). ``app_session.launch``/``census``/
+         ``teardown`` reach this function via `_resolve_repo_root` whenever
+         neither an explicit `repo_root` param nor an injected one is
+         supplied.
       2. Otherwise walk upward from `start` (default: cwd) looking for a
          `.git` entry at each level, stopping at the first hit.
 
@@ -75,7 +87,7 @@ def git_root_zero_spawn(start: Optional[Path] = None) -> Optional[str]:
     reaching the filesystem root.
     """
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
-    if project_dir:
+    if project_dir and op_latency.execution_route() == op_latency.IN_PROCESS:
         p = Path(project_dir)
         if p.is_dir():
             return str(p)

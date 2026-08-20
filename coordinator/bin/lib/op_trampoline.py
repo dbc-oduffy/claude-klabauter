@@ -102,15 +102,13 @@ def resolve_claude_klabauter_root_or_exit(cli_name: str) -> str | int:
     with) instead of raising or calling `sys.exit` itself -- this module
     never exits the process.
     """
-    from cc_invoke import _resolve_claude_klabauter_root
+    from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path
 
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"{cli_name}: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return 1
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
     return claude_klabauter_root
 
 

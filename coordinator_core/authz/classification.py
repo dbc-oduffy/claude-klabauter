@@ -4028,10 +4028,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # for a shell `mv`-based fence. MUTATING.
     "research.restructure_for_repeat_topic": OpClass.MUTATING,
     # eol.census — reads only (three batched read-only git spawns plus
-    # Path.read_bytes()); a reviewer's explicit COMPUTE_ONLY affirmation was
-    # not made at registration time (this plan's C5 leaves that call to
-    # review, per its own instruction), so it defaults fail-closed to
-    # MUTATING per this file's own default-to-MUTATING discipline above.
+    # Path.read_bytes()). COMPUTE_ONLY affirmed at review by claude-klabauter-em
+    # on 2026-08-20, which is where C5 routes this call ("make that call in
+    # review, not here"). Checked first, per C5's own precondition: no
+    # `eol.`-prefixed family guard exists — `classify()` is a plain lookup with
+    # no prefix override, unlike the tracker.* shape that forces MUTATING
+    # regardless of the answers. Grantability precedent for a read: e32b1ff2d
+    # registered records.history COMPUTE_ONLY on 2026-08-20.
+    # Affirmed against the running op, not only the source: invoked over the
+    # wire against claude-klabauter (28,216 tracked paths) and observed to spawn exactly
+    # three read-only git subcommands and write nothing.
     # DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
     #      check-attr and status --porcelain are read-only git subcommands; no ref
@@ -4042,12 +4048,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
     #      Returns the census dict verbatim; no disk write.
-    # Not elevated to COMPUTE_ONLY here — left to reviewer affirmation per C5.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C2, C5
-    "eol.census": OpClass.MUTATING,
+    "eol.census": OpClass.COMPUTE_ONLY,
     # eol.audit_producers — reads only (pathlib.Path.rglob / Path.read_text,
-    # ast.parse; no subprocess, no open-for-write). Same reviewer-affirmation
-    # deferral as eol.census above.
+    # ast.parse; no subprocess, no open-for-write). COMPUTE_ONLY affirmed at
+    # review on the same basis and by the same reviewer as eol.census above;
+    # invoked over the wire against claude-klabauter (1,669 sources scanned) and observed
+    # to write nothing.
     # DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
     #   2. Writes into rag's relational store?                                 No.
@@ -4056,9 +4063,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
     #      Returns the audit report dict verbatim; no disk write.
-    # Not elevated to COMPUTE_ONLY here — left to reviewer affirmation per C5.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C4, C5
-    "eol.audit_producers": OpClass.MUTATING,
+    "eol.audit_producers": OpClass.COMPUTE_ONLY,
     # eol.repair — writes normalized bytes to disk when `mutate: true` is
     # passed (defaults to dry-run reporting, but the op CAN write). MUTATING,
     # unambiguously — no affirmation question applies since question 1 is

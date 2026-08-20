@@ -63,7 +63,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cc_invoke  # noqa: E402  (sys.path mutated above)
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: E402
 
 GENERATES = []  # writes only to DoE-side cutover records (state/roadmap/lifecycle-vocab/cutovers/), never under this claude-klabauter checkout — see _repo_root_for's docstring
 
@@ -243,12 +243,10 @@ def _cmd_confirm_consumer(rest: list[str]) -> int:
     )
 
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"cutover-cli: confirm-consumer: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return _TRANSPORT_FAIL
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
     try:
         from coordinator_core.frontmatter import split_frontmatter, rebuild
     except ImportError as exc:

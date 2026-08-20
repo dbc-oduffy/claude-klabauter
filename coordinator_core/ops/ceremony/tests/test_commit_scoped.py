@@ -693,6 +693,67 @@ def test_file_mode_preserved(tmp_path):
     assert _committed_content_at_head(repo, "script.sh") == "#!/bin/sh\necho bye\n"
 
 
+def test_mode_only_delta_commits_via_commit_scoped(tmp_path):
+    """`commit_scoped()` itself (not `commit_authored_content`) must PRESERVE
+    a mode-only delta -- the gap `test_file_mode_preserved` (above) leaves
+    open: that test exercises `commit_authored_content`, which reads its
+    mode from `ls-tree HEAD` and so can neither lose nor change one.
+    `update-index --chmod=+x` on an otherwise-UNMODIFIED tracked path
+    (content untouched) leaves `diverging_paths()` reporting no divergence
+    -- staged and worktree content already agree -- so before the fix this
+    routed to the AGREE branch's path-restricted `git commit
+    --pathspec-from-file=...`, which silently discards the mode under
+    `core.fileMode=false` (DR-151). Pins that this path now lands `100755`
+    at HEAD."""
+    repo = real_git_repo(tmp_path)
+    script = repo / "script.sh"
+    script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    _git(["add", "--", "script.sh"], repo)
+    _git(["commit", "-q", "-m", "baseline"], repo)
+    assert _head_mode(repo, "script.sh") == "100644"
+
+    _git(["update-index", "--chmod=+x", "--", "script.sh"], repo)
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["script.sh"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert _head_mode(repo, "script.sh") == "100755"
+    assert _committed_content_at_head(repo, "script.sh") == "#!/bin/sh\necho hi\n"
+
+
+def test_mixed_batch_mode_only_and_content_edit_both_commit(tmp_path):
+    """The dangerous shape, not the loud one: a mode-only path ALONE in the
+    pathspec fails loud (`git commit --pathspec-from-file` reports nothing
+    to commit once the mode is discarded); a MIXED batch -- one path
+    re-moded only, one path content-edited -- succeeds, carried by the
+    content-edited path, while silently dropping the re-moded path's mode.
+    Pins both halves of the fix: the mode delta is preserved AND
+    `GitResult.worktree_excluded`/`stderr` do not misreport `script.sh` as
+    an excluded worktree edit (it has none -- only its mode differs from
+    HEAD)."""
+    repo = real_git_repo(tmp_path)
+    script = repo / "script.sh"
+    script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    (repo / "content.txt").write_text("original\n", encoding="utf-8")
+    _git(["add", "--", "script.sh", "content.txt"], repo)
+    _git(["commit", "-q", "-m", "baseline"], repo)
+    assert _head_mode(repo, "script.sh") == "100644"
+
+    _git(["update-index", "--chmod=+x", "--", "script.sh"], repo)
+    make_agree_path(repo, "content.txt", "edited\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["script.sh", "content.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert _head_mode(repo, "script.sh") == "100755"
+    assert _committed_content_at_head(repo, "script.sh") == "#!/bin/sh\necho hi\n"
+    assert _committed_content_at_head(repo, "content.txt") == "edited\n"
+    assert "script.sh" not in result.worktree_excluded
+    assert "worktree edits" not in result.stderr
+
+
 def test_nonexistent_head_fails_loud(tmp_path):
     root = tmp_path / "no_head_repo"
     root.mkdir()

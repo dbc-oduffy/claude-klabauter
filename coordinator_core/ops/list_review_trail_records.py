@@ -161,13 +161,20 @@ def _git_root() -> Optional[str]:
     return _show_toplevel()
 
 
-def _resolve_state_root() -> Optional[str]:
+def _resolve_state_root(explicit_override: Optional[str] = None) -> Optional[str]:
     """Resolve the coordinator state root.
 
     Precedence:
-        1. ``COORDINATOR_ROOT`` env var — verbatim if it ends in ``/state``,
+        1. *explicit_override* param, if given — same branching as the env
+           override below, but supplied by an in-process caller directly
+           rather than staged into ``os.environ``. Warm-server callers MUST
+           use this: an env write is process-global and visible to every
+           concurrently-served request (state/bug-backlog/2026-08-18-a-warm-
+           server-stamps-every-op-it-serves-eeb801fc6bee.yaml, ROOT half).
+        2. ``COORDINATOR_ROOT`` env var — verbatim if it ends in ``/state``,
            else ``+"/state"`` appended (oracle's exact override branching).
-        2. Rule 5 default: git root of cwd; meta-repo cwd routes to
+           Correct only for a cold, single-request process (the CLI path).
+        3. Rule 5 default: git root of cwd; meta-repo cwd routes to
            ``CLAUDE_KLABAUTER_ROOT/state``, sibling-repo cwd uses ``<git-root>/state``.
 
     Returns None on any unresolvable case (not a git repo, meta-repo but
@@ -175,7 +182,9 @@ def _resolve_state_root() -> Optional[str]:
     regardless of which sub-case fired (oracle parity, see module
     negative-spec).
     """
-    override = os.environ.get(_STATE_ROOT_OVERRIDE_ENV, "")
+    override = explicit_override if explicit_override is not None else os.environ.get(
+        _STATE_ROOT_OVERRIDE_ENV, ""
+    )
     if override:
         # Detect "already ends in a `state` path segment" by basename, not
         # by a literal ``.endswith("/state")`` string suffix check —
@@ -234,15 +243,21 @@ class ReviewTrailListError(RuntimeError):
     """Raised by ``list_paths`` on any oracle-parity failure (mirrors the CLI's exit 1)."""
 
 
-def list_paths(date_prefix: str = "") -> List[str]:
+def list_paths(date_prefix: str = "", state_root_override: Optional[str] = None) -> List[str]:
     """Programmatic (in-process) API: sorted live+archive review-trail file paths.
 
     Mirrors ``main()``'s non-``--print0`` success path — added so in-process callers
     (``coordinator_core.ops.emit.sections.review_trail`` / ``rollups``) invoke this
     module directly instead of spawning a subprocess against the CLI, retiring the
-    ``bash <script>`` bridge those callers used pre-migration. Honours the same
-    ``COORDINATOR_ROOT`` env-var override ``_resolve_state_root`` already reads (test
-    isolation / frozen-fixture callers set this env var exactly as before).
+    ``bash <script>`` bridge those callers used pre-migration.
+
+    ``state_root_override``, when given, takes ``_resolve_state_root``'s explicit-
+    override precedence rung directly — the caller-scoped alternative to staging
+    ``COORDINATOR_ROOT`` into ``os.environ`` (which a warm-served caller must not do:
+    an env write is process-global and visible to every other request the same
+    resident server is concurrently serving). ``None`` (the default) falls through to
+    the ``COORDINATOR_ROOT`` env var exactly as before — unchanged for the CLI/cold
+    path and for any existing caller not passing this param.
 
     Raises ``ReviewTrailListError`` (message = the CLI's stderr text) on any failure
     the CLI would have exited 1 for — in-process callers get an exception instead of
@@ -253,7 +268,7 @@ def list_paths(date_prefix: str = "") -> List[str]:
             f"{_PROG}: --date-prefix must be YYYY-MM-DD, got: {date_prefix}"
         )
 
-    state_root = _resolve_state_root()
+    state_root = _resolve_state_root(state_root_override)
     if not state_root:
         raise ReviewTrailListError(
             f"{_PROG}: cwd is not a git repo and COORDINATOR_ROOT is not set — "

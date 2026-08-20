@@ -206,6 +206,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
 from coordinator_core.win_portability import same_path
+from coordinator_core.telemetry import op_latency
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
     ARCHIVE_SWEEPS,
     REMEDY_COMMANDS,
@@ -288,9 +289,20 @@ def _machine_local_get(key: str) -> Optional[str]:
 
 
 def _claude_klabauter_root() -> Optional[str]:
-    """Resolve the claude-klabauter repo root: CLAUDE_KLABAUTER_ROOT env, else machine-local registry."""
+    """Resolve the claude-klabauter repo root: CLAUDE_KLABAUTER_ROOT env, else machine-local registry.
+
+    ``CLAUDE_KLABAUTER_ROOT`` is a property of a CALLING process. This module's op
+    (``orientation.regenerate_cache``) is warm-servable, so trusting the raw
+    read there would name the SPAWNER's root rather than the current
+    caller's when repo_root is the meta-repo (see
+    ``queue_append._output_root_override``'s docstring for the full hazard
+    on the sibling op). ``execution_route() == IN_PROCESS`` is true for every
+    non-server process, so the env var stays honoured everywhere except the
+    served route, which falls through to the machine-local registry lookup
+    instead.
+    """
     override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
-    if override:
+    if override and op_latency.execution_route() == op_latency.IN_PROCESS:
         return override
     val = _machine_local_get("repos.claude_klabauter")
     return val if val else None

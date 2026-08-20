@@ -81,6 +81,7 @@ from coordinator_core.warm.engine_root import current_engine_clone
 
 __all__ = [
     "SPAWN_DEBOUNCE_SECS",
+    "RUNTIME_BASE_ENV",
     "BREADCRUMB_FILENAME",
     "svc_dir",
     "breadcrumb_path",
@@ -155,6 +156,9 @@ def svc_dir(engine_root: Optional[Path] = None) -> Path:
     return _runtime_base() / "coordinator" / "warm" / clone_hash
 
 
+RUNTIME_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
+
+
 def _runtime_base() -> Path:
     """User-local, non-synced base for warm runtime state.
 
@@ -162,7 +166,28 @@ def _runtime_base() -> Path:
     `server.main` refuses to start elsewhere), falling back to
     `~/.cache` so this module stays importable and testable on any
     platform rather than raising at import or resolution time.
+
+    `RUNTIME_BASE_ENV` overrides both, and exists for ONE reason: test
+    isolation. Passing a `tmp_path` as `engine_root` varies only the
+    clone-hash component -- the base stays the operator's real one, so
+    every warm test run minted a fresh REAL directory under
+    `%LOCALAPPDATA%\coordinator\warm\` that nothing ever removed
+    (measured 2026-08-20: 1027 clone-key directories, 244 of them
+    holding obviously synthetic fixture content). The fix is a seam
+    here rather than a sweeper: a sweeper deletes what the next suite
+    run immediately re-creates.
+
+    Read at CALL time, never cached, so a fixture's `monkeypatch.setenv`
+    is honoured by code that imported this module earlier. Unset (the
+    operator's real case) leaves the resolution exactly as it was.
+    Setting it in a real shell would move a live server's breadcrumb and
+    telemetry with it, and a warm-served handler reads the SERVER's
+    environment rather than the caller's -- it is a test seam, not an
+    operator knob.
     """
+    override = os.environ.get(RUNTIME_BASE_ENV, "").strip()
+    if override:
+        return Path(override)
     local = os.environ.get("LOCALAPPDATA")
     if local:
         return Path(local)

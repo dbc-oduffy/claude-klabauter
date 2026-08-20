@@ -19,9 +19,9 @@ House convention (a)-(e), per this plan's C6 body:
       op_scopes.py entry would raise ValueError here demanding
       `_origin_worktree`, since this call deliberately omits that envelope
       field -- exactly the shape a sibling repo's caller sends.
-  (e) classification assertion -- eol.audit_producers is OpClass.MUTATING
-      (DR-208 affirmation left to reviewer per C5, not elevated to
-      COMPUTE_ONLY here).
+  (e) classification assertion -- eol.audit_producers is OpClass.COMPUTE_ONLY
+      -- the DR-208 affirmation granted at review per C5 (a read: rglob /
+      read_text / ast.parse, no subprocess and no open-for-write).
 
 No subprocess anywhere in this op (pure pathlib/ast) -- this module carries
 no spawns_process/cadence marker, unlike its census/repair siblings.
@@ -158,5 +158,5 @@ def test_dispatch_message_wire_smoke_without_origin_worktree(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_classified_mutating():
-    assert OP_CLASSIFICATION[_OP_NAME] is OpClass.MUTATING
+def test_classified_compute_only():
+    assert OP_CLASSIFICATION[_OP_NAME] is OpClass.COMPUTE_ONLY

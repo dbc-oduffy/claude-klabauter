@@ -650,7 +650,15 @@ def coordinator_engine_root_env_exports(value: str) -> dict:
 # box -- the direction this workstream is moving -- they differ, and a locator
 # consumer reading the dispatch answer is handed a build output where it wanted
 # a working tree. DR-326's 2026-08-19 refinement is explicit that the old name
-# survives on the LOCATOR axis and dies on the DISPATCH axis.
+# dies on the DISPATCH axis.
+#
+# ON THE OLD NAME'S FATE, corrected 2026-08-20: that refinement also said
+# CLAUDE_KLABAUTER_ROOT SURVIVES on the locator axis. It does not. DR-326's 2026-08-20
+# amendment supersedes that clause on PM ruling -- the name is eliminated
+# outright and no axis inherits it, so the locator axis gets its own token-free
+# spelling (COORDINATOR_ENGINE_SOURCE_ROOT) rather than the legacy one. The
+# dispatch/locator SPLIT the refinement draws is untouched and is what this
+# block implements; only which spelling survives changed.
 #
 # NEGATIVE SPEC -- THE INVARIANT THAT MAKES THIS LANDABLE:
 # **THE EXISTING VARIABLE NEVER CHANGES MEANING. THE LOCATOR EXPORT IS PURELY

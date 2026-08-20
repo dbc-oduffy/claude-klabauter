@@ -59,7 +59,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
 from machine_local_resolve import resolve_machine_local_bin  # noqa: E402
 
@@ -146,12 +146,10 @@ def main() -> None:
     mode = args[1] if len(args) > 1 else "verify"
 
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"verify-snippet-sync: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
     try:
         from coordinator_core.snippet_sync.verify import run
     except ImportError as exc:

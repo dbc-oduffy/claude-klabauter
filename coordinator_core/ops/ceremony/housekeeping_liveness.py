@@ -88,11 +88,13 @@ class InvalidLivenessRoot(ValueError):
 ARCHIVE_SWEEPS = "archive_sweeps"
 COMPLETION_SCAFFOLD = "completion_scaffold"
 ROADMAP_CALLOUT = "roadmap_callout"
+EOL_SWEEP = "eol_sweep"
 
 KNOWN_CLASSES: tuple = (
     ARCHIVE_SWEEPS,
     COMPLETION_SCAFFOLD,
     ROADMAP_CALLOUT,
+    EOL_SWEEP,
 )
 
 # Per-class on-demand remedy commands (C21 leg 2) -- see module negative-spec above: this
@@ -108,6 +110,7 @@ REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
     ),
     COMPLETION_SCAFFOLD: (),
     ROADMAP_CALLOUT: (),
+    EOL_SWEEP: (),
 }
 
 # Conservative uniform default — each shed class's actual expected cadence differs (daily

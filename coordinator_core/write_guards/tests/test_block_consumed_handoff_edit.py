@@ -796,3 +796,99 @@ class TestDocsWikiCitationsLive:
         claude_klabauter_root = Path(__file__).resolve().parents[3]
         for rel in cited:
             assert (claude_klabauter_root / rel).is_file(), f"dead citation: {rel}"
+
+
+# ---------------------------------------------------------------------------
+# 6. Holder CLOSE is silent too (2026-08-20 PM ruling, final shape).
+#
+# A handoff is a continuation artifact: it closes because the work moves to a
+# successor, so unticked acceptance criteria are the NORMAL state at close
+# time. An intermediate revision blocked the holder's close on that count --
+# these rows pin that it does not, so the misread cannot come back as a
+# plausible-looking "doneness check".
+#
+# The NON-holder close deny is untouched and pinned in
+# TestCloseIntentDiscrimination above; these rows are the holder half only.
+# ---------------------------------------------------------------------------
+
+
+def _ac_body(criteria: str, kind: str | None = None) -> str:
+    kind_line = f"kind: {kind}\n" if kind else ""
+    return (
+        "---\n"
+        "status: claimed\n"
+        "claimed_by: some-prior-session\n"
+        f"{kind_line}"
+        'title: "Ship the thing"\n'
+        "---\n\n"
+        "# Ship the thing\n\n"
+        "## Acceptance criteria\n\n"
+        f"{criteria}"
+    )
+
+
+_CLOSE_EDIT = "deployment_state: shipped"
+
+
+class TestHolderCloseIsSilent:
+    @pytest.fixture(autouse=True)
+    def _holder_session(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "some-prior-session")
+
+    def _check(self, tmp_path, monkeypatch, body: str):
+        repo_root, _ = _make_repo(tmp_path, body=body)
+        monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
+        return guard.check(
+            {
+                "tool_name": "Edit",
+                "tool_input": {
+                    "file_path": "state/handoffs/2026-07-20_120000_abc.md",
+                    "old_string": "x",
+                    "new_string": _CLOSE_EDIT,
+                },
+                "cwd": str(repo_root),
+            }
+        )
+
+    def test_unticked_criteria_do_not_block_the_close(self, tmp_path, monkeypatch):
+        # THE row that encodes the ruling: a handoff closing with work still
+        # open is the continuation case, not a premature close.
+        result = self._check(
+            tmp_path, monkeypatch, _ac_body("- [x] Landed\n- [ ] Not landed\n")
+        )
+
+        assert result is None, "unticked criteria are normal at handoff close"
+
+    def test_all_ticked_closes_in_silence(self, tmp_path, monkeypatch):
+        result = self._check(tmp_path, monkeypatch, _ac_body("- [x] One\n- [x] Two\n"))
+
+        assert result is None
+
+    def test_no_acceptance_criteria_heading_closes_in_silence(self, tmp_path, monkeypatch):
+        result = self._check(tmp_path, monkeypatch, _CONSUMED_BODY)
+
+        assert result is None
+
+    def test_session_handoff_kind_closes_in_silence(self, tmp_path, monkeypatch):
+        result = self._check(
+            tmp_path,
+            monkeypatch,
+            _ac_body("- [ ] Not landed\n", kind="session-handoff"),
+        )
+
+        assert result is None
+
+    def test_non_holder_close_is_still_denied(self, tmp_path, monkeypatch):
+        # The holder's silence is possession-scoped. A non-holder stamping
+        # someone else's baton terminal is audit-trail corruption whatever
+        # the checkboxes say.
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "a-different-session")
+        result = self._check(tmp_path, monkeypatch, _ac_body("- [x] One\n"))
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "corrupts the audit trail" in (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+        )

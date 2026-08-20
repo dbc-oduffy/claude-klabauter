@@ -57,6 +57,63 @@ def test_svc_dir_lives_outside_the_engine_clone(tmp_path: Path) -> None:
     assert breadcrumb.breadcrumb_path(tmp_path) == resolved / "warm.json"
 
 
+def test_runtime_base_honours_the_test_only_override(tmp_path: Path, monkeypatch) -> None:
+    """The seam that keeps a suite run out of the operator's real
+    `%LOCALAPPDATA%`. Passing `tmp_path` as `engine_root` varies only the
+    clone-hash component -- without this override the BASE stays real, so
+    every run minted a fresh real directory that nothing removed."""
+    override = tmp_path / "runtime-base"
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(override))
+    assert breadcrumb._runtime_base() == override
+    assert override in breadcrumb.svc_dir(tmp_path).parents
+
+
+def test_runtime_base_default_is_unchanged_when_the_override_is_unset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The operator's real resolution, untouched: `%LOCALAPPDATA%` first,
+    `~/.cache` when it is absent (the non-Windows importability fallback)."""
+    monkeypatch.delenv(breadcrumb.RUNTIME_BASE_ENV, raising=False)
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    assert breadcrumb._runtime_base() == tmp_path / "local-app-data"
+
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert breadcrumb._runtime_base() == Path.home() / ".cache"
+
+
+def test_an_empty_override_falls_through_rather_than_resolving_to_cwd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`Path("")` is the current directory -- an override set to empty or
+    whitespace must read as UNSET, not as "write beside wherever the
+    engine happens to be running from"."""
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, "   ")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    assert breadcrumb._runtime_base() == tmp_path / "local-app-data"
+
+
+def test_a_breadcrumb_write_lands_under_the_quarantined_base(tmp_path: Path) -> None:
+    """The suite-wide quarantine (`coordinator_core/conftest.py`'s
+    `_quarantine_real_home`) is what makes this hold for every warm test
+    rather than only the ones that remember to set the env themselves."""
+    import os as _os
+
+    quarantined = _os.environ.get(breadcrumb.RUNTIME_BASE_ENV, "")
+    assert quarantined, "the suite-wide warm runtime-base quarantine is not applied"
+
+    breadcrumb.write_breadcrumb(
+        pipe="p",
+        pid=1,
+        stable_pid_start_epoch=1,
+        engine_sha=None,
+        engine_root=tmp_path,
+    )
+    written = breadcrumb.breadcrumb_path(tmp_path)
+    assert written.exists()
+    assert Path(quarantined) in written.parents
+
+
 def test_svc_dir_is_deterministic_and_per_clone(tmp_path: Path) -> None:
     """Per-clone keying is the property the old in-clone path actually
     bought, and `warm-engine-stop.py` depends on it: it passes its OWN

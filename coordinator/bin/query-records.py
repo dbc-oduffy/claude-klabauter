@@ -118,15 +118,13 @@ def _reject_unported_flags(argv: list[str]) -> None:
 
 def _list_schemas() -> int:
     """Print the engine's queryable record types, one per line, sorted."""
-    from cc_invoke import _resolve_claude_klabauter_root
+    from cc_invoke import require_dispatch_engine_on_path
 
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"query-records: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return 3
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
     try:
         from coordinator_core.ops.records_query import _TYPE_TO_GLOB
     except ImportError as exc:

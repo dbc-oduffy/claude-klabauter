@@ -88,6 +88,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.telemetry import op_latency
 
 logger = logging.getLogger(__name__)
 
@@ -148,14 +149,27 @@ def _claude_klabauter_root() -> Optional[str]:
     """Resolve the claude-klabauter repo root.
 
     Resolution chain:
-        1. ``CLAUDE_KLABAUTER_ROOT`` env var — trusted as-is.
+        1. ``CLAUDE_KLABAUTER_ROOT`` env var — trusted as-is, but ONLY when this process is
+           the one the caller ran in (see below).
         2. ``machine-local get repos.claude_klabauter``.
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
+
+    ``CLAUDE_KLABAUTER_ROOT`` is a property of a CALLING process. Under the warm engine
+    this op executes in a long-lived server process whose environment was
+    inherited from whichever session happened to spawn it, so trusting the raw
+    read under warm serving would name the SPAWNER's root rather than the
+    current caller's — the write exits 0, prints a normal path, and lands
+    nowhere the caller can see (see ``queue_append._output_root_override``'s
+    docstring for the same hazard on the sibling op). ``execution_route() ==
+    IN_PROCESS`` is true for every non-server process, so the env var stays
+    honoured everywhere except the served route, which falls through to the
+    machine-local registry lookup instead (correct in both routes, since it
+    resolves the true repo root rather than a caller-scoped override).
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
-    if override:
+    if override and op_latency.execution_route() == op_latency.IN_PROCESS:
         # Review: code-reviewer — expand ~ and shell vars so users setting CLAUDE_KLABAUTER_ROOT=~/X/...
         # get the correct absolute path instead of a literal tilde that won't resolve.
         return os.path.expanduser(os.path.expandvars(override))

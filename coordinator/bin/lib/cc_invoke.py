@@ -402,6 +402,63 @@ def _machine_local_get(key: str) -> str | None:
     return result.stdout.strip()
 
 
+_IN_PROCESS_REGISTRY_MEMO: dict[str, str | None] = {}
+
+
+def _machine_local_get_in_process(key: str) -> str | None:
+    """Read a machine-local registry key WITHOUT spawning `_machine_local.py`.
+
+    Same answer as `_machine_local_get`, reached by importing the impl module
+    and calling its `resolve_one` — the accessor `cmd_get` itself delegates to,
+    so single-read semantics cannot diverge between the two paths (including
+    the `repos.<slug>` 4-rung sibling ladder, which `resolve_one` routes
+    internally when `layers=None`).
+
+    WHY THIS EXISTS. Every CLI invocation is a fresh process, so a per-process
+    memo never survives to a second call — the only way to stop paying for this
+    read is to not spawn for it. Measured 2026-08-20: 0.012s in-process (import
+    plus resolve) against 0.076s min / 0.219s median for the subprocess on a box
+    at its stated 50-70 concurrent-LLM load norm, where spawn cost is dominated
+    by contention rather than by the reader's work.
+
+    CATCHES `SystemExit` DELIBERATELY, and this is the whole reason the fallback
+    exists. `_machine_local.py` exits at MODULE TOP on an operational failure
+    (its version guard, malformed TOML) — see `cmd_get`'s own docstring. Under a
+    subprocess that is a non-zero rc the caller maps to `None`; imported
+    in-process it would terminate the CALLING CLI. Returning `None` here routes
+    such a box back to the subprocess path, which reports the same operational
+    failure the same way it does today.
+
+    Returns `None` on ANY failure — the caller treats that as "ask the
+    subprocess", never as "the key is absent".
+
+    Negative-spec: does NOT re-implement the resolution ladder, the TOML layer
+    stack, or the sibling-repo scan; it calls the impl's own `resolve_one`.
+    Does NOT replace `_machine_local_get` — that function keeps the
+    `_RegistryReadTimeout` contract the operator-facing resolution ladder
+    discriminates on, which has no in-process analogue.
+    """
+    if key in _IN_PROCESS_REGISTRY_MEMO:
+        return _IN_PROCESS_REGISTRY_MEMO[key]
+    value: str | None = None
+    try:
+        impl = _machine_local_impl_resolver().machine_local_impl_path(env_override=None)
+        if os.path.isfile(impl):
+            spec = importlib.util.spec_from_file_location("_cc_machine_local_impl", impl)
+            if spec is not None and spec.loader is not None:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                rc, resolved = module.resolve_one(key, layers=None)
+                if rc == 0 and resolved:
+                    value = str(resolved).strip() or None
+    except SystemExit:
+        value = None
+    except Exception:  # noqa: BLE001 - best-effort fast path; the caller falls back
+        value = None
+    _IN_PROCESS_REGISTRY_MEMO[key] = value
+    return value
+
+
 _CLAUDE_KLABAUTER_ROOT_REMEDIATION = (
     "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
     "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
@@ -1371,11 +1428,20 @@ def _locator_axis_export() -> dict[str, str]:
     is unset or the lookup fails -- a box with no registered checkout must keep
     spawning children exactly as it does now, so this is best-effort by design
     and never raises into the spawn path.
+
+    In-process first (`_machine_local_get_in_process`), subprocess only on its
+    miss. This function runs on EVERY `cc_invoke()` and `cc_invoke_bare()`, so
+    the subprocess it used to take unconditionally was a per-invocation,
+    fleet-wide process spawn for one unchanging key. The value is byte-identical
+    on both paths -- `resolve_one` is the accessor the spawned `cmd_get` itself
+    calls -- so the additive-only property above is unchanged.
     """
-    try:
-        source_root = _machine_local_get("repos.claude_klabauter")
-    except Exception:
-        return {}
+    source_root = _machine_local_get_in_process("repos.claude_klabauter")
+    if not source_root:
+        try:
+            source_root = _machine_local_get("repos.claude_klabauter")
+        except Exception:
+            return {}
     if not source_root:
         return {}
     return {"COORDINATOR_ENGINE_SOURCE_ROOT": source_root}

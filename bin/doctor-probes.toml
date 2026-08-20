@@ -716,6 +716,65 @@ remediation = "This probe reports 'cannot tell' (skipped) when route coverage is
 # `--cluster warm`'s membership) and attempts no connection at all -- a human
 # running `--cluster warm --include-live-roundtrip` is the only path that
 # exercises it for real.
+# ---------------------------------------------------------------------------
+# Cluster: install — eol.audit_producers drift addressability (C10)
+# ---------------------------------------------------------------------------
+
+# READ-ONLY probe: consumes the per-machine sentinel that the eol.audit_producers
+# cadence rider (coordinator_core/ops/session/boot_sweep.py, C8) writes to
+# <git-common-dir>/coordinator-eol-audit-producers-last-run.json. Does NOT re-run
+# the census or the producer audit itself — doctor is not on its own timer, so a
+# probe that computed here would only ever fire when a human happened to run the
+# doctor, which is the invocation gap this plan
+# (docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md) exists to close.
+#
+# triage=false: weight="standard" would satisfy the invariant, but this probe's
+# signal is cadence-driven (the rider's own 24h window), not per-invocation — it
+# is not a functional-headline probe and adds no value on every bare run.
+#
+# Discharges AC10 via an existing consumer: coordinator_core/ops/
+# check_claude_klabauter_doctor_sentinel.py already renders doctor state into
+# /workday-start, so both the census and eol.audit_producers verdicts reach an
+# operator with zero new plumbing.
+[[probe]]
+id = "claude-klabauter.eol.audit_producers"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (add newline= to the named write call(s); see coordinator_core/ops/eol/audit_producers.py)"
+symptom_keywords = ["text-mode write drift", "eol.audit_producers finding", "newline= omitted", "line-ending drift", "producer audit sentinel", "eol audit sentinel absent"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_eol_audit_producers"
+required = false
+severity_if_fail = "degraded"
+remediation = "Add newline=\"\\n\" (or the declared line ending) to the named write call(s) reported in the probe's data.offenders; see coordinator_core/ops/eol/audit_producers.py module docstring for the ratchet's contract. An absent sentinel means the session-boot cadence rider (C8) has not run yet on this machine — boot a session in this repo to populate it."
+
+# READ-ONLY probe: the CENSUS half of AC10. Consumes the per-machine sentinel the
+# eol.census cadence rider (C8, 15-minute window) writes to
+# <git-common-dir>/coordinator-eol-census-last-run.json. Same read-only contract as
+# its audit_producers sibling above — never re-runs the census, because doctor is
+# not on its own timer.
+#
+# Why both probes and not one: AC10 names BOTH sentinels. The audit_producers probe
+# alone surfaces the accrual verdict; without this one the census verdict — the
+# primary drift signal, and the figure carried to the siblings — reaches an operator
+# only if someone invokes it, which is the gap this plan closes.
+#
+# A PASS here reports declaration coverage alongside the zero: a clean verdict from
+# a thinly declared tree is the AC15 false negative, not a clean tree.
+[[probe]]
+id = "claude-klabauter.eol.census"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (run eol.repair against the tree; see coordinator_core/ops/eol/repair.py)"
+symptom_keywords = ["line-ending drift", "eol census finding", "crlf in an eol=lf path", "declared-vs-actual eol", "census sentinel absent", "declaration coverage"]
+triage = false
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_eol_census"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run eol.repair against this tree to normalize toward each path's DECLARED eol attribute — it refuses any file git reports dirty and any file whose index blob is not byte-identical to its normalized worktree content, so it can only make EOL-only changes. See coordinator_core/ops/eol/repair.py. An absent sentinel means the session-boot cadence rider (C8) has not run yet on this machine — boot a session in this repo to populate it."
+
 [[probe]]
 id = "claude-klabauter.warm.roundtrip"
 cluster = "warm"

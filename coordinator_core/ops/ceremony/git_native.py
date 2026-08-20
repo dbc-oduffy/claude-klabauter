@@ -177,6 +177,74 @@ def _diverging_paths_chunked(
     return diverged
 
 
+def _mode_delta_paths_chunked(
+    paths: Sequence[str],
+    cwd: str,
+    *,
+    timeout: float,
+) -> Set[str]:
+    """Chunked `git diff --cached --raw -- <paths>`, scoped to the subset of
+    `paths` whose STAGED (index) file mode differs from HEAD's while the
+    blob content is IDENTICAL -- the observation `commit_scoped()`'s own
+    divergence check (`_diverging_paths_chunked`, above) was missing, which
+    let a mode-only delta reach the agree branch's path-restricted commit
+    (`commit_with_message_file_pathspec_scoped`) and be silently discarded
+    under `core.fileMode=false` (DR-151 -- see that wrapper's own docstring,
+    and `ops/ceremony/commit_exec_bit.py`'s module docstring for the
+    original naming of this footgun). `--raw` emits `:<oldmode> <newmode>
+    <oldsha> <newsha> <status>\\t<path>` per changed path -- both the old
+    and new mode are already on ONE line, so no second call is needed the
+    way a sha-only read would require.
+
+    Same chunking seam as `_diverging_paths_chunked()` above (`_chunk_
+    paths()`), for the identical amplification-gate reason: this adds one
+    extra batched git read per `commit_scoped()` call, proportional to the
+    pathspec, never a per-path spawn
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`).
+
+    Restricted to `<oldsha> == <newsha>` -- a mode delta on a path whose
+    CONTENT also changed (e.g. a brand-new file's `A` status, which carries
+    an `<oldmode>` of `000000`) is not this defect's shape: that path is
+    already correctly handled by whichever branch the content divergence
+    itself selects. Only a pure mode toggle (same blob, different mode) --
+    exactly what `git update-index --chmod=+x` produces under `core.
+    fileMode=false` -- is what this function surfaces, so a caller adding
+    this set to `diverged` never reroutes a path for a reason unrelated to
+    the mode-preservation defect.
+
+    A `git diff` failure or timeout in ANY chunk raises `DivergenceCheckFailed`
+    (reusing `coordinator_core.git.divergence`'s own exception, already
+    imported into this module) rather than collapsing to "no delta found" --
+    same fail-loud posture as `_diverging_paths_chunked()` above, for the
+    same reason: `commit_scoped()` picks the commit MECHANISM off this
+    answer, so an indeterminate read must never be silently treated as
+    clean.
+    """
+    mode_delta: Set[str] = set()
+    for chunk in _chunk_paths(list(paths)):
+        result = _git(["diff", "--cached", "--raw", "--", *chunk], cwd=cwd, timeout=timeout)
+        if not result.ok:
+            raise DivergenceCheckFailed(
+                f"_mode_delta_paths_chunked: `git diff --cached --raw` failed or "
+                f"timed out (rc={result.returncode}) for {len(chunk)} path(s) -- "
+                "mode-delta indeterminate"
+            )
+        for line in result.stdout.splitlines():
+            if not line or not line.startswith(":"):
+                continue
+            meta, _, path = line.partition("\t")
+            fields = meta.split()
+            if len(fields) < 5:
+                continue
+            old_mode = fields[0][1:]
+            new_mode = fields[1]
+            old_sha = fields[2]
+            new_sha = fields[3]
+            if old_mode != new_mode and old_sha == new_sha:
+                mode_delta.add(path)
+    return mode_delta
+
+
 @dataclass(frozen=True)
 class GitResult:
     """Typed result of one `_git()` invocation.
@@ -1766,15 +1834,58 @@ _SOURCE_SUPPLIED = "supplied-blob"
 _SOURCE_STAGED = "staged-blob"
 _SOURCE_WORKTREE = "worktree"
 
-#: Mode recorded for a supplied-blob cacheinfo entry until a real producer
-#: exists. C2 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md)
-#: introduces `stage_from_patch()`, the first caller of `supplied_blobs`;
-#: this chunk only wires the resolution's plumbing through with an empty
-#: default, so no real mode has ever been observed here yet. `100644`
-#: (ordinary non-executable file) matches every path this repo's own
-#: `--stage-patch` use case targets; C2 owns deciding whether a supplied
-#: blob ever needs to preserve an executable bit.
+#: Fallback mode for a supplied-blob cacheinfo entry with no prior entry
+#: anywhere (a genuinely brand-new file) -- `_resolve_mode_for_paths()`,
+#: below, is consulted FIRST for every `supplied_paths` member, so this
+#: constant is reached only when a path has neither a real-index nor a
+#: HEAD-tree entry to inherit a mode from. Previously (until this fix)
+#: applied unconditionally to every supplied-blob path regardless of an
+#: existing entry's mode, which would have silently downgraded an
+#: already-`100755` path the first time a real `supplied_blobs` producer
+#: existed (`stage_from_patch()`, C2, has none yet -- this was latent, not
+#: the observed live incident). `100644` (ordinary non-executable file) is
+#: still the right default for a path with no prior entry to inherit from.
 _SUPPLIED_BLOB_MODE = "100644"
+
+
+def _resolve_mode_for_paths(root: Path, paths: Sequence[str]) -> Dict[str, str]:
+    """Mode string (e.g. `"100644"`/`"100755"`) for each of `paths`,
+    preferring the REAL index's currently-staged entry and falling back to
+    HEAD's tree entry for a path with no index entry -- the chmod-
+    preservation lookup a supplied-blob cacheinfo entry needs so
+    `_SUPPLIED_BLOB_MODE`'s hardcoded `100644` is used ONLY for a path with
+    no prior entry anywhere (a genuinely brand-new file), never to silently
+    downgrade an existing `100755`.
+
+    Read-only against the REAL repo state -- never the private temp index
+    `_commit_scoped_private_index` is mid-building when this is called --
+    same source `staged_paths`' own `ls-files -s` read (a few lines up in
+    that function) already uses, so a supplied-blob path and a staged-blob
+    path resolve their mode from the identical vantage point.
+
+    Unchunked -- `supplied_paths` is bounded by the same pathspec every
+    other real read in `_commit_scoped_private_index` is scoped to, never
+    the whole-repo scale `_diverging_paths_chunked()` exists for. A path
+    absent from BOTH the index and HEAD is simply absent from the returned
+    dict -- callers fall back to `_SUPPLIED_BLOB_MODE` for it, never a
+    guessed entry here.
+    """
+    if not paths:
+        return {}
+    modes: Dict[str, str] = {}
+    index_result = _git(["ls-files", "-s", "--", *paths], cwd=root)
+    if index_result.ok:
+        for mode, _sha, path in _parse_ls_files_cacheinfo(index_result.stdout):
+            modes[path] = mode
+    missing = [p for p in paths if p not in modes]
+    if missing:
+        head_result = _git(["ls-tree", "HEAD", "-z", "--", *missing], cwd=root)
+        if head_result.ok:
+            for parts, path in _parse_git_z_cacheinfo(head_result.stdout):
+                if len(parts) == 3:
+                    mode, _type, _sha = parts
+                    modes[path] = mode
+    return modes
 
 
 @dataclass(frozen=True)
@@ -2172,6 +2283,7 @@ def _commit_scoped_private_index(
     *,
     supplied_blobs: Optional[Dict[str, str]] = None,
     attributed_session_id: Optional[str] = None,
+    mode_only_paths: Optional[Set[str]] = None,
 ) -> GitResult:
     """The PRIVATE-INDEX branch of `commit_scoped()` -- see that function's
     docstring for when this runs and why. Builds a commit tree under a
@@ -2202,6 +2314,21 @@ def _commit_scoped_private_index(
     `session_id_override`. `None` (the default) reproduces the prior blind
     env-var resolution exactly. See `commit_scoped`'s own docstring for the
     caller-identity split this closes.
+
+    `mode_only_paths` (mode-preservation fix, this module's own `_mode_
+    delta_paths_chunked()`) -- OPTIONAL, the subset of `diverged` that
+    landed here PURELY because their staged mode differs from HEAD's while
+    their content is unchanged (never because of a real worktree/index
+    content divergence). These paths still resolve `_SOURCE_STAGED` and are
+    replayed via the same `cacheinfo_entries` route as any other
+    `staged_paths` member -- the ONLY thing this changes is the success
+    report: a mode-only path has no excluded WORKTREE edit (worktree and
+    staged content already agree for it), so it must never appear in the
+    `"worktree edits ... were NOT included"` message or `GitResult.
+    worktree_excluded`, or every publish round carrying a re-moded path
+    would emit a false exclusion warning. `None` (the default) reproduces
+    prior behaviour exactly -- every `staged_paths` member is reported,
+    same as before this parameter existed.
     """
     root = Path(cwd)
     supplied_blobs = supplied_blobs or {}
@@ -2235,13 +2362,15 @@ def _commit_scoped_private_index(
     # regardless of statement order (see `_resolve_content_sources`'s own
     # docstring for why this is now a stated property, not an ordering
     # accident).
+    supplied_modes = _resolve_mode_for_paths(root, supplied_paths)
     for p in supplied_paths:
         # Negative spec: a non-empty `supplied_paths` with no `supplied_blobs`
         # is a broken resolution, not a recoverable state -- KeyError here is
         # the loud failure. Never append a None sha: `update-index
         # --cacheinfo` would take it as a literal and stage garbage.
         blob = (supplied_blobs or {})[p]
-        cacheinfo_entries.append((_SUPPLIED_BLOB_MODE, blob, p))
+        mode = supplied_modes.get(p, _SUPPLIED_BLOB_MODE)
+        cacheinfo_entries.append((mode, blob, p))
 
     temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
 
@@ -2388,16 +2517,30 @@ def _commit_scoped_private_index(
         # excluded). With `supplied_blobs` empty (this chunk's only
         # exercised shape), `staged_paths == diverged` exactly, so this is
         # byte-identical to the prior behaviour.
+        #
+        # `mode_only_paths` are excluded from the reported set here (never
+        # from `cacheinfo_entries`/`staged_paths` above, which still commit
+        # them via the same staged-blob route) -- a mode-only path has no
+        # excluded WORKTREE edit (worktree and staged content already agree
+        # for it; only the MODE differs from HEAD), so reporting it as
+        # "worktree edits ... were NOT included" would be a false exclusion
+        # warning on every ordinary re-mode commit. See `mode_only_paths`'
+        # own docstring parameter above.
+        excluded_paths = [p for p in staged_paths if p not in (mode_only_paths or set())]
         return GitResult(
             returncode=0,
             stdout=new_sha,
             stderr=(
-                "commit_scoped: worktree edits to %s were NOT included -- "
-                "the staged (index) version was committed instead (private-"
-                "index branch; see GitResult.worktree_excluded)"
-                % (", ".join(staged_paths),)
+                (
+                    "commit_scoped: worktree edits to %s were NOT included -- "
+                    "the staged (index) version was committed instead (private-"
+                    "index branch; see GitResult.worktree_excluded)"
+                    % (", ".join(excluded_paths),)
+                )
+                if excluded_paths
+                else ""
             ),
-            worktree_excluded=tuple(staged_paths),
+            worktree_excluded=tuple(excluded_paths),
         )
     finally:
         temp_index.unlink(missing_ok=True)
@@ -2485,6 +2628,20 @@ def commit_scoped(
          MECHANISM from the answer, so an indeterminate result must never be
          silently read as "clean" -- see `DivergenceCheckFailed` in
          `coordinator_core.git.divergence` for the incident this closes.
+
+         The divergence set is then WIDENED (still before either branch
+         runs) by `_mode_delta_paths_chunked()`, this module's own -- any
+         path whose STAGED mode differs from HEAD's while its content is
+         unchanged (the shape `git update-index --chmod=+x` produces under
+         `core.fileMode=false`) is added to `diverged`, even though its
+         worktree content already agrees with the index and `diverging_
+         paths()` alone would answer "clean" for it. Without this widening
+         such a path would take the AGREE branch below, whose path-
+         restricted `git commit --pathspec-from-file=...` silently discards
+         a staged-only mode delta under `core.fileMode=false` (DR-151 -- see
+         `commit_with_message_file_pathspec_scoped`'s own docstring). Same
+         fail-loud posture on an indeterminate read; same chunked seam, no
+         new per-path spawn.
          - No divergence -> AGREE branch: FIRST re-verified by an
            intra-invocation compare-and-swap (`_agree_branch_cas_refusal`,
            Layer 1, state/audits/2026-08-14-scoped-commit-partial-stage-
@@ -2705,6 +2862,29 @@ def commit_scoped(
                     path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS
                 )
             )
+
+        # Mode-preservation fix: union in the subset of `path_list` whose
+        # STAGED mode differs from HEAD's while the content is unchanged
+        # (`_mode_delta_paths_chunked`'s own docstring) -- ADDITIVE
+        # observation only, computed AFTER the content-divergence answer
+        # above and unioned into the SAME `diverged` set that drives the
+        # branch selection below, never a separate selector. Without this,
+        # a pure `update-index --chmod=+x` toggle leaves `diverged` empty
+        # (staged content already equals worktree content, by construction
+        # of how the chmod was staged -- see `_mode_delta_paths_chunked`'s
+        # own docstring), routing to the agree branch's path-restricted
+        # `git commit`, which silently discards the mode under `core.
+        # fileMode=false` (DR-151). Scoped to `path_list`, chunked
+        # identically to the content check just above -- proportional cost,
+        # no per-path spawn. `mode_delta_paths` is kept separately (not
+        # just folded into `diverged` and discarded) so
+        # `_commit_scoped_private_index` can exclude these paths from its
+        # `worktree_excluded` reporting -- see that function's own
+        # `mode_only_paths` parameter docstring.
+        mode_delta_paths = _mode_delta_paths_chunked(
+            path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS
+        )
+        diverged = sorted(set(diverged) | mode_delta_paths)
     except DivergenceCheckFailed as exc:
         return GitResult(
             returncode=-1,
@@ -2853,6 +3033,7 @@ def commit_scoped(
         diverged, non_diverged, msg_file, root, deliverable_id,
         supplied_blobs=supplied_blobs,
         attributed_session_id=attributed_session_id,
+        mode_only_paths=mode_delta_paths,
     )
     # This branch lands via `commit-tree`/`update-ref`, which fire NO hooks --
     # so unlike the agree branch above there is no `post-commit` to stand down

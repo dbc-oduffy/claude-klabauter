@@ -73,6 +73,21 @@ route it used to name stays reachable and stays named in the non-holder deny.
 Do not reintroduce a holder-facing message here; the deny arms are where
 this guard speaks.
 
+A CLOSE IS NOT A DONENESS CLAIM (same 2026-08-20 ruling, second half). The
+close-intent leg used to deny every holder close on route-shaping grounds:
+hand-stamping a terminal disposition bypasses ``ship-handoff``. The PM's
+question was whether that block should instead fire on the baton not being
+done. It cannot: a handoff is a CONTINUATION artifact by construction — it
+closes precisely because the work moves to a successor — so unticked
+acceptance criteria are the normal state at close time, not evidence of a
+premature close. An intermediate revision of this leg blocked on that count
+and was wrong: leg A of ``consumed_handoff_completeness`` counts those boxes
+to ask whether a SUCCESSOR discharged what its predecessor listed, at
+``/workstream-complete``, of a chain. Different question, different subject,
+different time. No cheap signal contradicts a holder closing their own
+baton, so the holder leg asserts nothing on close-intent either — silent on
+every edit it sees.
+
 A fourth named route, also continuation-branch-only, covers a `blocked_by`
 edge on a roadmap baton: ``roadmap.link_stubs``, the first op that authors
 that field (2026-08-05 roadmap-dependency-graph-enforcement-gap plan, C5).
@@ -116,10 +131,19 @@ pre-building it.
 Negative-spec:
   - Does NOT speak to the claim holder at all on a continuation edit — no
     deny, no ``additionalContext``, no envelope (see HOLDER LEG IS SILENT
-    above; pinned by ``test_holder_edit_is_silent``). A holder's CLOSE-intent
-    edit is still denied: the close-intent branch runs before the holder
-    predicate, and hand-stamping a terminal disposition is the audit-trail
-    case, not the ergonomics one.
+    above; pinned by ``test_holder_edit_is_silent``). This includes a
+    CLOSE-intent edit — see A CLOSE IS NOT A DONENESS CLAIM above.
+  - Does NOT gate a holder's close on acceptance-criteria checkboxes, a
+    plan's ``status:``, or any other doneness proxy. The first is
+    chain-level and normal-when-unticked on a continuation artifact; the
+    second fails open (delivered plans sit at ``draft``), so a block keyed
+    on it refuses exactly the holders who are done.
+  - Does NOT re-check the live-children invariant on the holder close path.
+    ``handoff.archive_transition`` enforces it unconditionally before any
+    archive move and ``consumed_handoff_completeness`` leg B re-reads it at
+    ``/workstream-complete``; a hand-edit writes frontmatter only, so a
+    third copy here buys an async op dispatch on a PreToolUse hook and no
+    coverage.
   - Does NOT check ``tool_input.notebook_path`` for ``NotebookEdit`` — the
     reference hook's jq extraction only reads ``.tool_input.file_path`` /
     ``.tool_input.edits[].file_path``, which is empty for a bare
@@ -404,6 +428,50 @@ def _is_close_intent(payload: Dict[str, Any]) -> bool:
     return saw_terminal
 
 
+def _calling_session_is_holder(
+    text: str, disk_path: Path, git_root: Optional[str]
+) -> bool:
+    """Does the calling session hold this handoff's claim?
+
+    Ledger-first: a desynced baton (live ledger claim, reverted/empty
+    frontmatter mirror) must not silently read as "no holder" -- that used to
+    let this guard stay silent on an in-place edit to a claimed predecessor
+    (the exact negative-spec the pickup skill states). `resolve_claim_state`
+    is the one shared accessor (docs/plans/2026-08-07-claim-state-ledger-
+    first-authoritative-read.md, C1); a dead ledger holder already degrades
+    `source` to "mirror"/"none" inside it, so this guard need not
+    special-case liveness itself. Falls back to the pre-migration
+    mirror-only read (`_extract_fm_field`) on any resolution failure --
+    never regresses below what this guard already had.
+
+    Session identity is resolved via the SAME three-variable precedence chain
+    `handoff_correct_body._resolve_session_id_with_source` walks — both
+    consume the single canonical `coordinator_core.session.core.
+    SESSION_ENV_PRECEDENCE` rather than each inlining a copy (chain-review
+    slice D, F1: this guard previously read ONLY `COORDINATOR_SESSION_ID`,
+    the op's documented "explicit test override" tier, while the op it routes
+    to walked the full chain — a real, platform-injected session with only
+    `CLAUDE_CODE_SESSION_ID` set was classified a non-holder).
+    `session.core`'s import cost (~12ms, measured) is well under the ~138ms
+    `pickup_assemble`/`coordinator_core.ops` cost this guard's hot-path
+    budget was written to avoid.
+    """
+    claimed_by = _extract_fm_field(text, "claimed_by")
+    try:
+        state = resolve_claim_state(disk_path, repo_root=git_root)
+    except Exception:
+        pass
+    else:
+        if state.holder is not None:
+            claimed_by = state.holder
+    session_id = ""
+    for var in SESSION_ENV_PRECEDENCE:
+        session_id = os.environ.get(var, "")
+        if session_id:
+            break
+    return bool(session_id) and session_id == claimed_by
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         if os.environ.get(_OVERRIDE_ENV, "0") == "1":
@@ -458,7 +526,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # guard-message-size-discipline.md, chunk C8): each named route gets
         # its own "<verb> instead:" cue so its backtick command lands inside
         # an exempt cue window (coordinator_core.bash_guards._message_size).
+        is_holder = _calling_session_is_holder(text, disk_path, git_root)
+
         if close_intent:
+            if is_holder:
+                # A CLOSE IS NOT A DONENESS CLAIM (2026-08-20 PM ruling,
+                # final shape). A handoff is a continuation artifact by
+                # construction: it closes precisely because the work moves
+                # to a successor, so unticked acceptance criteria are the
+                # NORMAL state at close time, not evidence of a premature
+                # one. An earlier revision of this leg blocked the holder's
+                # close on that count; it misread a chain-level signal as a
+                # baton-level one. Leg A of `consumed_handoff_completeness`
+                # counts those boxes to ask whether a SUCCESSOR discharged
+                # what its predecessor listed, at `/workstream-complete`,
+                # of a chain — a different question, of a different subject,
+                # at a different time. There is no cheap signal that
+                # contradicts a holder closing their own baton, so this leg
+                # asserts nothing: the holder is silent on every edit,
+                # close-intent included.
+                return None
             _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
             reason = (
                 "Claimed-handoff close blocked: hand-editing the terminal "
@@ -474,50 +561,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # (AC7, the Staff Engineer F4): possession is acquirable through a
             # sanctioned door (claim the baton), authorship was not — so a
             # non-holder is led to the claim route before the recovery-only
-            # override, rather than to the override first. `claimed_by` is
-            # read via the guard's own `_extract_fm_field` (no new import;
-            # `pickup_assemble` measured ~138ms vs. this guard's ~8.4ms
-            # full-import budget, a ~16x regression on this hot path).
-            #
-            # Session identity is resolved via the SAME three-variable
-            # precedence chain `handoff_correct_body._resolve_session_id_
-            # with_source` walks — both now consume the single canonical
-            # `coordinator_core.session.core.SESSION_ENV_PRECEDENCE` rather
-            # than each inlining/copying it (chain-review slice D, F1: this
-            # guard previously read ONLY `COORDINATOR_SESSION_ID`, the op's
-            # documented "explicit test override" tier, while the op it
-            # routes to walked the full chain — a real, platform-injected
-            # session with only `CLAUDE_CODE_SESSION_ID` set was classified
-            # a non-holder). `session.core`'s import cost (~12ms, measured)
-            # is well under the ~138ms `pickup_assemble`/`coordinator_core.
-            # ops` cost this guard's hot-path budget was written to avoid —
-            # see that module's own import-cost comment above.
-            # Ledger-first: a desynced baton (live ledger claim, reverted/
-            # empty frontmatter mirror) must not silently read as "no
-            # holder" -- that used to let this guard stay silent on an
-            # in-place edit to a claimed predecessor (the exact negative-
-            # spec the pickup skill states). `resolve_claim_state` is the
-            # one shared accessor (docs/plans/2026-08-07-claim-state-
-            # ledger-first-authoritative-read.md, C1); a dead ledger holder
-            # already degrades `source` to "mirror"/"none" inside it, so
-            # this guard need not special-case liveness itself. Falls back
-            # to the pre-migration mirror-only read (`_extract_fm_field`)
-            # on any resolution failure -- never regresses below what this
-            # guard already had.
-            claimed_by = _extract_fm_field(text, "claimed_by")
-            try:
-                state = resolve_claim_state(disk_path, repo_root=git_root)
-            except Exception:
-                pass
-            else:
-                if state.holder is not None:
-                    claimed_by = state.holder
-            session_id = ""
-            for var in SESSION_ENV_PRECEDENCE:
-                session_id = os.environ.get(var, "")
-                if session_id:
-                    break
-            is_holder = bool(session_id) and session_id == claimed_by
+            # override, rather than to the override first. The holder
+            # predicate itself is `_calling_session_is_holder` above, hoisted
+            # out of this branch once the close-intent arm needed it too.
             if is_holder:
                 # The predicate this guard already computed (the Staff Engineer F4/AC7)
                 # is load-bearing, not prose-ordering: a session that IS the

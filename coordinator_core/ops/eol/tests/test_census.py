@@ -14,8 +14,9 @@ House convention (a)-(e), per this plan's C6 body:
       would raise ValueError here demanding `_origin_worktree`, since this
       call deliberately omits that envelope field -- exactly the shape a
       sibling repo's caller sends.
-  (e) classification assertion -- eol.census is OpClass.MUTATING (DR-208
-      affirmation left to reviewer per C5, not elevated to COMPUTE_ONLY here).
+  (e) classification assertion -- eol.census is OpClass.COMPUTE_ONLY, the
+      DR-208 affirmation granted at review per C5 (a read: three batched
+      read-only git spawns plus Path.read_bytes(), no write on any path).
 
 Spawns real `git` against a fixture repo -- tiered off the per-commit path
 per this repo's spawn ratchet (coordinator_core/tests/test_no_new_spawning_tests.py).
@@ -189,5 +190,5 @@ def test_dispatch_message_wire_smoke_without_origin_worktree(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_classified_mutating():
-    assert OP_CLASSIFICATION[_OP_NAME] is OpClass.MUTATING
+def test_classified_compute_only():
+    assert OP_CLASSIFICATION[_OP_NAME] is OpClass.COMPUTE_ONLY

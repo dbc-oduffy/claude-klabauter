@@ -396,6 +396,24 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # `coordinator_core.install.substrate._refuse_machine_mutation`.
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
 
+    # Same shape, second surface: the warm engine's runtime base is
+    # `%LOCALAPPDATA%`, which the HOME/USERPROFILE quarantine above does not
+    # touch. Warm tests pass a `tmp_path` as `engine_root` believing that
+    # isolates them; it varies only `svc_dir`'s clone-hash component, so each
+    # run minted a fresh REAL directory under
+    # `%LOCALAPPDATA%/coordinator/warm/` and populated it with breadcrumb and
+    # telemetry fixtures nothing ever removed (measured 2026-08-20 on the
+    # authoring box: 1027 clone-key directories, 244 holding synthetic fixture
+    # content). Redirect the base itself -- per-test, so two tests still get
+    # distinct trees, and suite-wide rather than in a warm-local conftest so a
+    # future writer anywhere under `coordinator_core/` inherits the isolation
+    # instead of rediscovering the defect.
+    from coordinator_core.warm import breadcrumb as _warm_breadcrumb
+
+    monkeypatch.setenv(
+        _warm_breadcrumb.RUNTIME_BASE_ENV, str(quarantine / "warm-runtime-base")
+    )
+
     # Make the throwaway home a FAITHFUL home rather than an empty one for the
     # one read the quarantine would otherwise break outright: the `.doe-root`
     # pointer that `coordinator_registry`'s import-time manifest bootstrap
