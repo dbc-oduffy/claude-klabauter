@@ -569,6 +569,72 @@ def test_derive_review_tier_returns_none_when_citation_does_not_resolve(tmp_path
     assert derive_review_tier(plan_path, repo_root=tmp_path) is None
 
 
+def test_derive_review_tier_resolves_a_citation_whose_sizing_was_archived(tmp_path):
+    """A terminal sizing moves to `archive/sizings/<month>/` and its citation
+    is never rewritten; the tier must still derive, or the emitted workflow
+    silently composes no review phase at all."""
+    archive_dir = tmp_path / "archive" / "sizings" / "2026-08"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "example.yaml").write_text(
+        "schema: sizing-object\nestimate:\n  tshirt: XL\n  provisional: false\n",
+        encoding="utf-8",
+    )
+
+    plan_path = tmp_path / "archived-sizing-plan.md"
+    plan_path.write_text(
+        '---\ntitle: "Archived"\n'
+        'sizing_object: "state/sizings/example.yaml"\n'
+        '---\n\n# Archived\n',
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) == "full"
+
+
+def test_derive_review_tier_returns_none_when_archive_match_is_ambiguous(tmp_path):
+    """Two same-basename archived records mean the resolver cannot say which
+    one the plan meant — it refuses rather than picking one."""
+    for month in ("2026-07", "2026-08"):
+        month_dir = tmp_path / "archive" / "sizings" / month
+        month_dir.mkdir(parents=True)
+        (month_dir / "example.yaml").write_text(
+            "schema: sizing-object\nestimate:\n  tshirt: XL\n  provisional: false\n",
+            encoding="utf-8",
+        )
+
+    plan_path = tmp_path / "ambiguous-sizing-plan.md"
+    plan_path.write_text(
+        '---\ntitle: "Ambiguous"\n'
+        'sizing_object: "state/sizings/example.yaml"\n'
+        '---\n\n# Ambiguous\n',
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) is None
+
+
+def test_derive_review_tier_prefers_the_live_sizing_over_an_archived_namesake(tmp_path):
+    live_dir = tmp_path / "state" / "sizings"
+    live_dir.mkdir(parents=True)
+    (live_dir / "example.yaml").write_text(
+        "schema: sizing-object\nestimate:\n  tshirt: XS\n  provisional: false\n",
+        encoding="utf-8",
+    )
+    archive_dir = tmp_path / "archive" / "sizings" / "2026-08"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "example.yaml").write_text(
+        "schema: sizing-object\nestimate:\n  tshirt: XXL\n  provisional: false\n",
+        encoding="utf-8",
+    )
+
+    plan_path = tmp_path / "live-wins-plan.md"
+    plan_path.write_text(
+        '---\ntitle: "Live wins"\n'
+        'sizing_object: "state/sizings/example.yaml"\n'
+        '---\n\n# Live wins\n',
+        encoding="utf-8",
+    )
+    assert derive_review_tier(plan_path, repo_root=tmp_path) == "lightweight"
+
+
 def test_derive_review_tier_returns_none_when_citation_traverses_outside_root(tmp_path):
     # (Review: code-reviewer S4-dispatch-emit, P2 finding 1 -- `../` is not
     # normalized by `Path.__truediv__`; a citation traversing outside

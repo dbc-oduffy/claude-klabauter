@@ -199,6 +199,8 @@ def test_is_sidecar_plan(basename, expected):
         ("/root/archive/completed/x.md", "completion"),
         ("/root/state/roadmap/sub/OVERVIEW.md", "roadmap"),
         ("/root/docs/ROADMAP.md", "roadmap"),
+        ("/root/state/sizings/x.yaml", "sizing"),
+        ("/root/archive/sizings/2026-08/x.yaml", "sizing"),
         ("/root/state/lessons/x.md", "unknown"),
     ],
 )

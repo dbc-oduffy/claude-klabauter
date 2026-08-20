@@ -258,7 +258,7 @@ from typing import Optional
 import yaml
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec, terminal_test_scope
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
@@ -824,13 +824,17 @@ def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Option
     if not cited or cited == "null":
         return None
 
+    # Live-then-archive, containment-checked, in one shared helper
+    # (`_sizing_citation.resolve_sizing_citation`) rather than hand-rolled
+    # here: a terminal sizing moves to `archive/sizings/<month>/` and its
+    # citation is never rewritten, so a literal resolve loses the tier — and
+    # a lost tier composes no review phase, silently.
     # (Review: code-reviewer S4-dispatch-emit, P2 finding 1 -- `root / cited`
     # alone does not contain `cited`: `..`-traversal is not normalized by
     # `Path.__truediv__`, and an absolute `cited` silently discards `root`
-    # entirely per pathlib semantics. Reuses the shared containment helper
-    # rather than hand-rolling a check, matching the sibling `pathspec.py`
-    # containment shape.)
-    resolved = contained_path(root / cited, [root])
+    # entirely per pathlib semantics. That containment now lives inside the
+    # helper, on both the live and the archived arm.)
+    resolved = resolve_sizing_citation(root, cited)
     if resolved is None or not resolved.is_file():
         return None
     sizing_path = resolved

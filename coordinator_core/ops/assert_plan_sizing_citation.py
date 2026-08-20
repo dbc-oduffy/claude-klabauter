@@ -45,10 +45,16 @@ Exit codes:
   1 -- >=1 dangling citation and/or >=1 missing declaration, each listed
        with its owning plan and its own finding block
 
-Read-only: no `--fix` mode. Unlike the backlinks sibling
-(assert_no_dangling_plan_backlinks), there is no move-map to repoint a
-dangling citation against — a dangling `sizing_object` means the record was
-never written, not that it moved. Likewise a missing declaration means the
+Read-only: no `--fix` mode, and none is needed for the one move a sizing
+record actually makes. `fleet.archive_terminal_sizings` relocates a terminal
+sizing to `archive/sizings/<month>/` and rewrites no citation, so the
+citation is resolved live-then-archive by
+`coordinator_core.ops._sizing_citation.resolve_sizing_citation` — the FK is
+archive-agnostic by design, the same posture `plan.schema.json`'s
+`predecessor_handoff` description already states ("a value resolving only
+under `archive/` is correct, not broken"). Past that fallback a dangling
+`sizing_object` means the record was never written; repointing it would need
+a move-map this op does not have. Likewise a missing declaration means the
 decision to cite was never made; the anti-scope forbids guessing one.
 
 Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C3 / AC4 / AC6
@@ -63,6 +69,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -97,7 +104,9 @@ def _scan_plans(
     """Returns (dangling, missing, unreadable).
 
     `dangling` is a list of (rel_plan_path, cited_path) for every plan whose
-    frontmatter `sizing_object` does not resolve on disk. `missing` is a
+    frontmatter `sizing_object` resolves at NEITHER the literal path nor its
+    archived namesake under `archive/sizings/**` (see
+    `_sizing_citation.resolve_sizing_citation`). `missing` is a
     list of rel_plan_path for every plan created on/after `_CUTOFF` whose
     frontmatter carries no `sizing_object` at all (an explicit `null`
     satisfies the check and is never in this list). `unreadable` lists
@@ -141,7 +150,7 @@ def _scan_plans(
         cited = read_fm_field_unquoted(split.fm_text, "sizing_object")
 
         if cited and cited != "null":
-            if not os.path.exists(os.path.join(root, cited)):
+            if resolve_sizing_citation(root, cited) is None:
                 dangling.append((rel_path, cited))
             continue
 
@@ -208,7 +217,10 @@ def main(argv: List[str]) -> int:
     if dangling:
         for rel_plan, cited in dangling:
             print(f"DANGLING sizing_object in: {rel_plan}", file=sys.stderr)
-            print(f"  {cited} does not resolve on disk", file=sys.stderr)
+            print(
+                f"  {cited} does not resolve on disk, nor under archive/sizings/",
+                file=sys.stderr,
+            )
         print(
             f"FAIL: {len(dangling)} dangling plan sizing_object citation(s)",
             file=sys.stderr,

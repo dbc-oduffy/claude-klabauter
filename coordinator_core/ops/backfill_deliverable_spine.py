@@ -448,6 +448,8 @@ def classify_artifact(path: str) -> str:
         return "roadmap"
     if "/state/sizings/" in norm and norm.endswith(".yaml"):
         return "sizing"
+    if "/archive/sizings/" in norm and norm.endswith(".yaml"):
+        return "sizing"
     return "unknown"
 
 

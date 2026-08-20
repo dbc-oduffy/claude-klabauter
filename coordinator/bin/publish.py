@@ -10352,13 +10352,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             # mirror key, which is the invocation that actually pushes them.
             # A row with no mirror sigil is its own dest and keeps its own
             # line. Observed live, 2026-08-20.
+            # NEVER the mirror KEY: `publish.mirrors.<key>` keys are not
+            # registered percolate targets (`claude_klabauter` -> percolate-
+            # push MISSING_TARGET_ENTRY, observed live). The sigil groups
+            # rows; the emitted token must be one of the grouped ROW NAMES,
+            # every one of which resolves to that shared dest -- that is what
+            # sharing a sigil means. Shortest-then-lexicographic picks the
+            # mirror's base row (`claude-klabauter` over its `-bin`/`-lib`
+            # siblings) deterministically.
             _sigils = raw_dest_sigil_by_name(setup_dir)
-            _push_targets: "List[str]" = []
+            _rows_by_group: "dict[str, List[str]]" = {}
             for _row_name in succeeded_row_names:
                 _sigil = _sigils.get(_row_name) or ""
-                _token = _sigil.split(":", 1)[1] if _sigil.startswith("publish-mirror:") else _row_name
-                if _token not in _push_targets:
-                    _push_targets.append(_token)
+                _group = _sigil if _sigil.startswith("publish-mirror:") else f"row:{_row_name}"
+                _rows_by_group.setdefault(_group, []).append(_row_name)
+            _push_targets = [
+                min(_names, key=lambda n: (len(n), n)) for _names in _rows_by_group.values()
+            ]
             for _push_target in _push_targets:
                 print(
                     f"Next step: this round is committed to the mirror, not pushed. "

@@ -232,8 +232,12 @@ def test_mirror_rows_collapse_to_one_line_naming_the_mirror_key(
     assert rc == 0
     next_step_lines = [ln for ln in combined.splitlines() if "Next step:" in ln]
     assert len(next_step_lines) == 1, next_step_lines
-    assert "percolate-push klab-mirror" in next_step_lines[0]
-    # None of the sibling row names may be offered as the invocation.
+    # The token must be a REGISTERED ROW NAME, never the mirror key: mirror
+    # keys are not percolate targets, and emitting one produced a live
+    # MISSING_TARGET_ENTRY. Shortest-then-lexicographic picks the base row.
+    assert "percolate-push klab" in next_step_lines[0]
+    assert "klab-mirror" not in combined
+    # The longer sibling rows are not offered as the invocation.
     for _row in ("klab-bin", "klab-lib"):
         assert f"percolate-push {_row}" not in combined
 
