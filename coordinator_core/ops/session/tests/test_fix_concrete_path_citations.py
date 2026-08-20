@@ -58,6 +58,13 @@ Coverage:
       Windows run to zero families -- and returns `[]` (never raises) on an
       absent or malformed registry; the `baseline` test-marker is anchored
       to a filename's stem-suffix position, not a bare substring.
+  (o) A hit inside a markdown fenced code block is REPORT-ONLY --
+      `fenced_line_numbers` closes on the same character at >= the opening
+      run length only, so a ```-run nested in a ````-block does not end it,
+      and an unterminated fence protects to EOF rather than falling back to
+      prose. Inline `code` spans are deliberately NOT carved out (the corpus
+      measurement that decides it is on the test itself), front matter is
+      not a fence, and fence tracking is markdown-only.
 
 Every offending literal below carries a same-line `abs-path-ok:` marker with
 a reason so THIS file itself can be written past the live
@@ -78,6 +85,7 @@ from coordinator_core.ops.session.fix_concrete_path_citations import (
     REPORT_ONLY,
     SUBSTITUTE,
     _default_registry_keys,
+    fenced_line_numbers,
     _is_test_file,
     _raw_hits_in_line,
     _raw_hits_in_text,
@@ -667,6 +675,173 @@ def test_main_silent_when_family_discovery_finds_repo_families(
     fix_mod.main(["--root", str(tmp_path), "--list-families"])
     captured = capsys.readouterr()
     assert "zero repo/publish_mirror families" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Fenced code blocks -- the module's former KNOWN GAP. A path inside a fence
+# is quoted content by the same argument that already protects a captured
+# diff body: rewriting it falsifies the quote, and for a shell transcript it
+# turns a runnable command into one that is not. Inline `code` spans are
+# deliberately NOT carved out -- see test_inline_code_span_still_substitutes
+# for the corpus measurement that decides it.
+# ---------------------------------------------------------------------------
+
+BT = chr(96)  # backtick, kept out of the source as a literal run so these
+              # fixtures never confuse THIS file's own markdown-ish tooling
+
+
+def _fence_fixture(body: str) -> str:
+    return body
+
+
+def test_fenced_line_numbers_backtick_and_tilde() -> None:
+    text = (
+        "prose one\n"
+        + BT * 3 + "console\n"
+        "inside backtick\n"
+        + BT * 3 + "\n"
+        "prose two\n"
+        "~~~text\n"
+        "inside tilde\n"
+        "~~~\n"
+        "prose three\n"
+    )
+    fenced = fenced_line_numbers(text)
+    assert 1 not in fenced and 5 not in fenced and 9 not in fenced
+    # Fence lines themselves count as inside, so an info string is protected.
+    assert {2, 3, 4, 6, 7, 8} <= fenced
+
+
+def test_fenced_longer_run_and_shorter_inner_run_does_not_close() -> None:
+    """AC2/AC3 -- a four-backtick block survives a three-backtick run inside
+    it. This is exactly how this corpus quotes a fenced example inside a
+    fenced example, so getting it wrong un-protects the nested content."""
+    text = (
+        "prose\n"
+        + BT * 4 + "markdown\n"
+        "quoted example:\n"
+        + BT * 3 + "sh\n"
+        "still inside\n"
+        + BT * 3 + "\n"
+        + BT * 4 + "\n"
+        "after\n"
+    )
+    fenced = fenced_line_numbers(text)
+    assert {2, 3, 4, 5, 6, 7} <= fenced
+    assert 1 not in fenced and 8 not in fenced
+
+
+def test_unterminated_fence_protects_to_eof() -> None:
+    """AC4 -- ambiguity resolves toward protect. Over-protecting leaves a
+    citation unfixed and still reported; under-protecting silently rewrites
+    quoted content, which is the defect this closes."""
+    text = "prose\n" + BT * 3 + "\n" + "a\n" + "b\n"
+    fenced = fenced_line_numbers(text)
+    assert 1 not in fenced
+    assert {2, 3, 4} <= fenced
+
+
+def test_fenced_hit_is_report_only(tmp_path: Path) -> None:
+    """AC1 -- the gap itself, end to end through sweep()."""
+    target = tmp_path / "note.md"
+    target.write_text(
+        "authored /Users/example-operator/X/claude-klabauter/coordinator/a.py here\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "console\n"
+        "$ cd /Users/example-operator/X/claude-klabauter/coordinator\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\n",
+        encoding="utf-8",
+    )
+    before = target.read_bytes()
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["note.md"]))
+    subs = [f for f in result.findings if f.outcome == SUBSTITUTE]
+    fenced_reports = [
+        f for f in result.findings
+        if f.outcome == REPORT_ONLY and "fenced code block" in f.reason
+    ]
+    assert len(subs) == 1, "the authored prose citation still substitutes"
+    assert subs[0].hit.line == 1
+    assert len(fenced_reports) == 1, "the transcript line is report-only, not rewritten"
+    assert fenced_reports[0].hit.line == 3
+    assert b"$ cd /Users/example-operator/X/claude-klabauter/coordinator" in target.read_bytes()
+    assert before != target.read_bytes(), "line 1 was still fixed"
+
+
+def test_inline_code_span_still_substitutes(tmp_path: Path) -> None:
+    """AC5 -- pins the decision NOT to carve out inline spans.
+
+    Measured across all 14,069 tracked `.md` files when this landed: of
+    1,282 pre-fix SUBSTITUTE hits, 785 sat inside an inline span versus 209
+    inside a fence. A backticked path in prose is this fleet's dominant
+    AUTHORED citation form, so carving spans out would cut the tool's reach
+    from 1,073 hits to 316. Fences quote; backticks merely typeset.
+    """
+    target = tmp_path / "note.md"
+    target.write_text(
+        "see " + BT + "/Users/example-operator/X/claude-klabauter/coordinator/a.py" + BT + " here\n",  # abs-path-ok: synthetic test fixture
+        encoding="utf-8",
+    )
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["note.md"]))
+    subs = [f for f in result.findings if f.outcome == SUBSTITUTE]
+    assert len(subs) == 1
+    assert "claude-klabauter:coordinator/a.py" in target.read_text(encoding="utf-8")
+
+
+def test_front_matter_is_not_a_fence(tmp_path: Path) -> None:
+    """AC6 -- `---` is neither fence character, so a plan's frontmatter
+    paths fall straight through and stay substitutable."""
+    target = tmp_path / "plan.md"
+    target.write_text(
+        "---\n"
+        "title: a plan\n"
+        "scope:\n"
+        "  - /Users/example-operator/X/claude-klabauter/coordinator/a.py\n"  # abs-path-ok: synthetic test fixture
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["plan.md"]))
+    subs = [f for f in result.findings if f.outcome == SUBSTITUTE]
+    assert len(subs) == 1
+    assert "claude-klabauter:coordinator/a.py" in target.read_text(encoding="utf-8")
+
+
+def test_python_triple_quote_is_not_a_fence(tmp_path: Path) -> None:
+    """AC7 -- fence tracking is markdown-only. A .py file classifies
+    REPORT_ONLY on its extension long before the fence check, so the two
+    carve-outs can never be confused for one another."""
+    target = tmp_path / "mod.py"
+    target.write_text(
+        'x = """\n'
+        "/Users/example-operator/X/claude-klabauter/coordinator/a.py\n"  # abs-path-ok: synthetic test fixture
+        '"""\n',
+        encoding="utf-8",
+    )
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["mod.py"]))
+    assert not [f for f in result.findings if f.outcome == SUBSTITUTE]
+    assert all(
+        "fenced code block" not in f.reason
+        for f in result.findings
+        if f.outcome == REPORT_ONLY
+    )
+    assert result.files_rewritten == []
+
+
+def test_fenced_carve_out_is_idempotent(tmp_path: Path) -> None:
+    """AC8 -- a second --apply pass rewrites nothing."""
+    target = tmp_path / "note.md"
+    target.write_text(
+        "authored /Users/example-operator/X/claude-klabauter/coordinator/a.py\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\n"
+        "/Users/example-operator/X/claude-klabauter/coordinator/b.py\n"  # abs-path-ok: synthetic test fixture
+        + BT * 3 + "\n",
+        encoding="utf-8",
+    )
+    files = _list_files(["note.md"])
+    sweep(tmp_path, _FAMILIES, apply=True, list_files=files)
+    after_first = target.read_bytes()
+    second = sweep(tmp_path, _FAMILIES, apply=True, list_files=files)
+    assert second.files_rewritten == []
+    assert target.read_bytes() == after_first
 
 
 # ---------------------------------------------------------------------------

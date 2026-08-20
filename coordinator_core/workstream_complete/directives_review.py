@@ -224,6 +224,7 @@ def _decide_review_scale_core(
     chain_disposition: str,
     baton_count: Optional[int] = None,
     commit_count_scope: Optional[str] = None,
+    zero_diff_commit_count: Optional[int] = None,
 ) -> ReviewScaleDecision:
     """SKILL.md's diff-shape row-selection table (lines 415-424) plus its
     precedence rule (line 426, order 6 > 4 > 5 > 3 > 1 > 2): the big-diff
@@ -343,10 +344,40 @@ def _decide_review_scale_core(
     # raw diff-stat sum. `gross_loc` stays an accepted parameter (unused by
     # this predicate now) for callers not yet threading `code_loc` through.
     effective_code_loc = code_loc if code_loc is None else code_loc * baton_multiplier
-    effective_commit_count = commit_count if commit_count is None else commit_count * baton_multiplier
+    # 2026-08-20 (same memo as the `code_loc_resolved_zero` note below): the
+    # commit-count arm is a proxy for ACCUMULATED RISK, and a commit with a
+    # zero-line diff carries none. `baton-assemble apply` scaffold commits
+    # are the reported instance — nine of one session's sixteen, every one
+    # at `diff_loc: 0`, pushing a doc-only close past the `>= 5` threshold.
+    # Subtracted from the brightline's commit arm ONLY: `commit_count`
+    # itself stays the honest count of this session's commits everywhere it
+    # is REPORTED (row-4 reason string, review trail, commit slices), so
+    # this narrows what the threshold reads without making a counter lie
+    # about what it counted. `None` no-ops for every caller not supplying it.
+    brightline_commit_count = commit_count
+    if commit_count is not None and zero_diff_commit_count:
+        brightline_commit_count = max(0, commit_count - zero_diff_commit_count)
+    effective_commit_count = (
+        brightline_commit_count if brightline_commit_count is None else brightline_commit_count * baton_multiplier
+    )
     effective_surface_count = surface_count if surface_count is None else surface_count * baton_multiplier
 
-    brightline_known_true = (
+    # 2026-08-20 (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-doc-
+    # only-em-discretion.md, PM-endorsed): a RESOLVED `code_loc == 0` means
+    # the reviewable-LOC oracle measured this session and found nothing to
+    # review. The commit-count and surface-count arms are PROXIES for
+    # accumulated code risk; letting a proxy mandate a partition over the
+    # direct measurement's own zero is the reported defect — it converted a
+    # doc-only close into one legal exit, a PM waiver, for work the EM can
+    # obviously judge. The brightline stays fully armed for every session
+    # with any code in it: this suppresses the proxies ONLY when the direct
+    # measure is a resolved, honest zero (`None` is unresolvable and is
+    # deliberately NOT treated as zero — that would fail toward less
+    # review). Falls through to row 1 ("no code touched"), an EM-discretion
+    # row, which is what `review-brightline-gate`'s own `VERDICT=single-
+    # reviewer-ok` on the same range already said.
+    code_loc_resolved_zero = code_loc is not None and code_loc == 0
+    brightline_known_true = (not code_loc_resolved_zero) and (
         (effective_code_loc is not None and effective_code_loc >= _BRIGHTLINE_LOC)
         or (effective_commit_count is not None and effective_commit_count >= _BRIGHTLINE_COMMITS)
         or (effective_surface_count is not None and effective_surface_count >= _BRIGHTLINE_SURFACES)
@@ -527,6 +558,7 @@ def decide_review_scale(
     chain_disposition: str,
     baton_count: Optional[int] = None,
     commit_count_scope: Optional[str] = None,
+    zero_diff_commit_count: Optional[int] = None,
     oracle_report: Optional[OracleReport] = None,
 ) -> ReviewScaleDecision:
     """Wraps `_decide_review_scale_core` (the row-selection table, docstring
@@ -549,6 +581,7 @@ def decide_review_scale(
         chain_disposition=chain_disposition,
         baton_count=baton_count,
         commit_count_scope=commit_count_scope,
+        zero_diff_commit_count=zero_diff_commit_count,
     )
     return _apply_chain_wide_arm(decision, oracle_report)
 

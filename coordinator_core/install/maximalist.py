@@ -246,6 +246,33 @@ def _run(cmd: Sequence[str], env: Optional[Dict[str, str]] = None) -> int:
         return 127
 
 
+def _verify_registry_seed(key: str, expected: str) -> None:
+    """Read a just-``set`` registry key back through the same spawn-free seam
+    as ``_registry_get_for_check`` (``machine_resolver.registry_get``) and
+    report which of three outcomes occurred. ``machine-local set`` normalizes
+    the value it writes; ``registry_get`` does not normalize on read -- so
+    both sides are run through ``native_path_form`` before comparison, or a
+    successful seed on this box's backslash/forward-slash asymmetry would
+    mis-report as the mismatch case this function exists to catch.
+
+    Called only from the non-``check_only`` arm, immediately after an rc=0
+    ``machine-local set`` -- rc!=0 is reported by the caller unchanged and
+    never reaches here."""
+    from coordinator_core import _settings_home
+    from coordinator_core.machine_resolver import registry_get
+
+    current = registry_get(key)
+    if current is not None and native_path_form(current) == native_path_form(expected):
+        print(f"{key}: seeded and verified ({expected})")
+    else:
+        reg_file = _settings_home.machine_local_dir() / "registry.local.toml"
+        print(
+            f"ERROR: machine-local set {key} reported success but the registry does not "
+            f"carry the value -- checked {reg_file} (found: {current!r}, expected: {expected!r})",
+            file=sys.stderr,
+        )
+
+
 def _registry_get_for_check(key: str) -> Optional[str]:
     """Best-effort registry read for check-only freshness reporting on a
     best-effort seed block. Uses the direct-tomllib
@@ -1260,7 +1287,7 @@ def _run_body(
     if check_only:
         current = _registry_get_for_check("repos.doe_claude")
         if current == doe_clone:
-            orch.skip_note(f"repos.doe_claude registry key up to date ({doe_clone})")
+            orch.skip_note(f"repos.doe_claude registry key already seeded and verified ({doe_clone})")
         else:
             orch.skip_note(f"Seed repos.doe_claude registry key -- check-only (would seed: {doe_clone})")
     else:
@@ -1279,7 +1306,7 @@ def _run_body(
         if ml_argv:
             rc = _run([*ml_argv, "set", "repos.doe_claude", doe_clone], env=env)
             if rc == 0:
-                print(f"repos.doe_claude: seeded ({doe_clone})")
+                _verify_registry_seed("repos.doe_claude", doe_clone)
             else:
                 print(
                     "WARN: machine-local set repos.doe_claude failed -- REPO_DOE_CLAUDE env override still in effect for this run",
@@ -1316,7 +1343,7 @@ def _run_body(
     if check_only:
         current = _registry_get_for_check("repos.claude_klabauter")
         if current == str(claude_klabauter_clone):
-            orch.skip_note(f"repos.claude_klabauter registry key up to date ({claude_klabauter_clone})")
+            orch.skip_note(f"repos.claude_klabauter registry key already seeded and verified ({claude_klabauter_clone})")
         else:
             orch.skip_note(f"Seed repos.claude_klabauter registry key -- check-only (would seed: {claude_klabauter_clone})")
     elif not (claude_klabauter_clone / "coordinator_core").is_dir():
@@ -1342,7 +1369,7 @@ def _run_body(
         if ml_argv:
             rc = _run([*ml_argv, "set", "repos.claude_klabauter", str(claude_klabauter_clone)], env=env)
             if rc == 0:
-                print(f"repos.claude_klabauter: seeded ({claude_klabauter_clone})")
+                _verify_registry_seed("repos.claude_klabauter", str(claude_klabauter_clone))
             else:
                 print(
                     "WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-root-pointer.py "

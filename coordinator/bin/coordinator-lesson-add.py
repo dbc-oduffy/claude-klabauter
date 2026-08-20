@@ -280,8 +280,17 @@ def main():
         help="One-line lesson title (required).",
     )
     parser.add_argument(
-        "--body", required=True, metavar="TEXT",
-        help="Lesson body prose (required).",
+        "--body", default=None, metavar="TEXT",
+        help="Lesson body prose. Exactly one of --body / --body-file is required.",
+    )
+    parser.add_argument(
+        "--body-file", dest="body_file", default=None, metavar="PATH",
+        help=(
+            "Read the lesson body from PATH ('-' for stdin) instead of --body. "
+            "Exactly one of --body / --body-file is required. The only body "
+            "transport that survives every launcher leg intact — see --body's "
+            "own refusal for why."
+        ),
     )
     parser.add_argument(
         "--scope", required=True, metavar="VALUE",
@@ -326,6 +335,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv, resolve_body
+
+    try:
+        refuse_newline_argv(args.body, flag_name="--body")
+        args.body = resolve_body(args.body, args.body_file)
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
 
     if not args.force:
         dupes = _dedup_check(args.title)

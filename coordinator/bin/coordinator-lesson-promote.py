@@ -559,8 +559,22 @@ def _build_parser(change_kind_values: tuple[str, ...]) -> argparse.ArgumentParse
     )
     parser.add_argument(
         "--body",
-        required=True,
-        help="Lesson body prose — 1-2 sentences describing the pattern and fix.",
+        default=None,
+        help=(
+            "Lesson body prose — 1-2 sentences describing the pattern and fix. "
+            "Exactly one of --body / --body-file is required."
+        ),
+    )
+    parser.add_argument(
+        "--body-file",
+        dest="body_file",
+        default=None,
+        help=(
+            "Read the lesson body from PATH ('-' for stdin) instead of --body. "
+            "Exactly one of --body / --body-file is required. The only body "
+            "transport that survives every launcher leg intact — see --body's "
+            "own refusal for why."
+        ),
     )
     parser.add_argument(
         "--change-kind",
@@ -625,6 +639,14 @@ def main(argv: list[str] | None = None) -> int:
     # Review: code-reviewer Slice-B — (B-F3) deleted unreachable dead block that re-validated
     # change_kind after argparse; argparse choices= already rejects invalid values with exit 2
     # naming the valid set, so the explicit check was dead code.
+
+    from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv, resolve_body
+
+    try:
+        refuse_newline_argv(args.body, flag_name="--body")
+        args.body = resolve_body(args.body, args.body_file)
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
 
     # --allow-new-wiki is documented (and only sound) as an escape hatch for a genuine
     # change_kind: wiki-new promotion, where the target intentionally does not exist yet.

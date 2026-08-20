@@ -930,10 +930,27 @@ def emit_auto_push_health(repo_root: Path) -> str:
     # second time) to tell the two states apart.
     now = time.time()
     record = _ap_read_pending_record(str(repo_root))
+    # An ABSOLUTE stamp, never a countdown: this string is written into
+    # state/orientation_cache.md, which is regenerated per workday rather than
+    # per read. A relative "(287s remaining)" is true when built and a lie for
+    # the rest of the artifact's life -- and if the holder is killed mid-sleep
+    # (routine at this machine's load) a baked-in countdown would keep telling
+    # every reader that auto-push is healthily holding while commits sit
+    # unpushed. The reader compares the stamp against the clock themselves, so
+    # a hold that has since expired reads as expired.
     if record is not None and record.get("branch") == branch and not _ap_record_is_stale(record, now):
         hold_until = record.get("hold_until")
-        remaining = int(max(0.0, hold_until - now)) if isinstance(hold_until, (int, float)) else 0
-        return f"- {unpushed} unpushed commit(s) on `{branch}` — auto-push holding ({remaining}s remaining)"
+        if isinstance(hold_until, (int, float)):
+            until_iso = datetime.fromtimestamp(hold_until, tz=timezone.utc).strftime("%H:%M:%SZ")
+            if hold_until > now:
+                return (
+                    f"- {unpushed} unpushed commit(s) on `{branch}` — auto-push holding "
+                    f"until {until_iso} (by design on a shared branch)"
+                )
+            return (
+                f"- ⚠ {unpushed} unpushed commit(s) on `{branch}` — auto-push hold expired at "
+                f"{until_iso} and the push has not landed; run: git push origin {branch}"
+            )
 
     lastclass = ""
     logf = resolve_git_common_dir(repo_root) / "push-failures.log"

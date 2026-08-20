@@ -291,6 +291,17 @@ _VALID_REVIEWERS = frozenset(
 # outright (state/kill-ledger.md K-005, 2026-08-16); this section never
 # conflated the two and adds/takes nothing from that now-deleted mechanism.
 
+# SECOND CONSUMER, not obvious from here: `hooks/subagent_review_mark.py ::
+# _is_reviewer` imports this set and gates the SubagentStop
+# `commit_ledger.store.mark_reviewed` write on membership. Adding a persona
+# therefore does two things -- admits it to this op's `reviewer` enum, AND arms
+# a durable commit-ledger write for that agent type. Kept as ONE set
+# deliberately: `coverage.py` credits on the record's `kind`, never on reviewer
+# identity, and `reviewed_by` stores the reviewer's NAME, so a consumer that
+# wants to weigh a `staff-ux` pass differently from a `staff-eng` one has the
+# data to. Splitting the sets would buy a maintained divergence against a
+# consumer that does not exist. Pinned by
+# `tests/test_review_trail_write.py :: test_delegate_reviewers_arms_the_commit_ledger_mark`.
 _DELEGATE_REVIEWERS = frozenset(
     {
         "code-reviewer",

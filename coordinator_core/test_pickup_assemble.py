@@ -3641,7 +3641,9 @@ class TestBriefAwaitingGateCheck:
         # intelligence-em-pickup-jgate-cleared-strands-gate-fields.md).
         assert consume["depends_on"] == ["jgate", "d-gate-recheck"]
         gate_recheck = next(
-            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "gate-recheck"
+            d
+            for d in obj["directives"]
+            if d["cli"] == "archive-stamp-cli" and d["args"][0] == "gate-recheck-handoff"
         )
         assert gate_recheck["id"] == "d-gate-recheck"
         assert gate_recheck["depends_on"] == "jgate"

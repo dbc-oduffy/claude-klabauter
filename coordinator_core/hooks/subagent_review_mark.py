@@ -30,13 +30,18 @@ behind each):
        convention) must be a member of ``review_trail_write._DELEGATE_REVIEWERS``
        — the SAME closed reviewer vocabulary ``review_trail.write`` already
        enforces for the ``reviewer`` field, reused rather than re-derived.
-    2. Resolve the run-report sidecar at
-       ``state/subagent-share/<session_id>/<label>.<agent_id>.md`` — BY
-       CONSTRUCTION (AC14), never a directory scan (see
-       ``coordinator_core.subagent_sandbox.provision_report._provision``'s
-       ``derived_key`` branch, ported there from
-       ``coordinator_core.dispatch.provision``'s sibling branch by this same
-       chunk — the naming fix this op depends on).
+    2. Resolve the run-report sidecar by reading the ``sidecar_path:`` marker
+       out of the finishing agent's OWN transcript
+       (``agent_transcript_path``) — see ``_resolve_sidecar_from_transcript``.
+       This SUPERSEDES AC14's by-construction derivation at
+       ``state/subagent-share/<session_id>/<label>.<agent_id>.md``, which no
+       producer ever wrote: ``provision_report._provision`` chooses the name at
+       ``PreToolUse``, where ``agent_id`` is structurally absent, so every real
+       sidecar is nonce-named and the op could not fire for any dispatch
+       (0 of 6,503 measured). AC14 and AC5 are corrected to NOT MET in
+       ``f20b551f8272``; the full record, including the two repairs rejected
+       before this one, is
+       ``state/bug-backlog/2026-08-20-the-mark-op-resolves-a-sidecar-name-noth-526f0eaf2de4.yaml``.
     3. Read ``reviewed_range`` (a YAML LIST) off the sidecar frontmatter.
     4. Resolve ``handoff_id`` via
        ``coordinator_core.commit_ledger.resolve_owner.resolve_owner_handoff_id``,
@@ -84,14 +89,27 @@ the amplification gate polices (per-item-over-a-growing-set spawns are).
 Negative-spec:
     Do NOT glob ``state/subagent-share/<session_id>/<label>-*.md`` to find a
     sidecar — the exact directory-scan shape ``review-trail.schema.json``'s
-    own ``x-bump-note`` already condemned by name (K-005). The sidecar path
-    is resolved by construction (step 2) or not at all.
+    own ``x-bump-note`` already condemned by name (K-005). Step 2 opens ONE
+    file, named by the payload; that is not the scan, and reaching for a glob
+    when a transcript carries no marker reintroduces exactly what K-005 bans.
 
-    Do NOT mark for a pre-existing, nonce-named sidecar. Marks only work for
-    agents dispatched AFTER the ``provision_report.py`` naming fix in this
-    same chunk lands — every pre-existing nonce-named sidecar stays
-    permanently unresolvable. Consistent with the no-backfill rule; not a
-    defect to "fix" by adding a scan.
+    Do NOT re-derive the sidecar path from ``agent_id``, in step 2 or
+    anywhere else. The harness's named-teammate id format embeds ``@``, which
+    ``provision_report._sanitize_segment`` strips, so an ``agent_id``-shaped
+    filename is decided by the harness's id grammar rather than by us and
+    fails for every named dispatch. The id is a KEY, never a path segment.
+
+    Do NOT substitute any positional, time-ordered, or nearest-timestamp
+    correlation for step 2 (claim-the-oldest-pending, match-by-arrival-order).
+    A wrong correlation binds a mark to the WRONG reviewer's findings, which
+    is worse than no mark; the transcript is exact because the harness, not
+    this op, decided which agent it belongs to. Exact or decline.
+
+    Do NOT mark for a sidecar whose agent has already finished. Nothing is
+    backfilled: a mark is derived at the ``SubagentStop`` that carries the
+    transcript, so past dispatches stay unmarked — the no-backfill rule
+    unchanged in effect, though its reason is now "the event has passed"
+    rather than "the name is unresolvable".
 
     Do NOT batch the containment-bound ranges (step 6) into the SAME
     ``git rev-list`` call as ``reviewed_range`` (step 5), and do NOT batch
@@ -105,7 +123,8 @@ Negative-spec:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
 from typing import List, Optional
 
 import yaml
@@ -116,7 +135,6 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
-from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 
 #: Written into .git/coordinator-sessions/.commit-ledger/<handoff_id>.jsonl —
 #: inside .git/, never a tracked artifact. Same reasoning as
@@ -150,25 +168,69 @@ def _is_reviewer(agent_type: str) -> bool:
     return _bare_type(agent_type) in _DELEGATE_REVIEWERS
 
 
-def _resolve_sidecar_path(session_id: str, agent_type: str, agent_id: str) -> Optional[Path]:
-    """``state/subagent-share/<session_id>/<label>.<agent_id>.md`` — by
-    construction (AC14), never a directory scan. Mirrors
-    ``provision_report._provision``'s ``derived_key`` branch exactly (see
-    that module, this same chunk): a malformed ``agent_id`` (does not survive
-    ``_sanitize_segment`` unchanged) resolves to no sidecar rather than
-    guessing.
+#: The injected marker `enforce-agent-dispatch-mode.py::_compose_sidecar_offer_text`
+#: appends verbatim to the child's `tool_input.prompt`, described there as "a
+#: machine-readable marker, not prose". Matched against the transcript's RAW
+#: line text rather than a decoded prompt string: the value is a sanitized
+#: repo-relative path (`_SEGMENT_WHITELIST_RE` admits no whitespace, quote, or
+#: backslash), so the terminator set below cannot truncate a legitimate path,
+#: and matching raw costs no per-line JSON decode on the hot path.
+_SIDECAR_MARKER_RE = re.compile(r'sidecar_path: ([^\s"\\]+)')
+
+#: Bytes of transcript scanned before giving up. The marker lands in the
+#: child's FIRST user message; a whole reviewer transcript routinely runs to
+#: several hundred KB and none of the rest can contain a marker that was not
+#: already seen. Bounds a SubagentStop hook that fires fleet-wide.
+_TRANSCRIPT_SCAN_LIMIT_BYTES = 262144
+
+
+def _resolve_sidecar_from_transcript(transcript_path: str) -> Optional[Path]:
+    """Read the provisioned sidecar path out of the finishing agent's OWN
+    transcript, or ``None``.
+
+    This replaces an earlier by-construction derivation at
+    ``<label>.<agent_id>.md`` that no producer ever wrote — see
+    ``state/bug-backlog/2026-08-20-the-mark-op-resolves-a-sidecar-name-noth-526f0eaf2de4.yaml``
+    for the measurement (0 of 6,503 sidecars) and for why the two obvious
+    repairs were rejected.
+
+    The binding is made by the HARNESS, not reconstructed here, which is what
+    makes it exact: ``agent_transcript_path`` arrives in the ``SubagentStop``
+    payload and names a file the harness keys to a single ``agent_id``, while
+    the sidecar path was injected into that same agent's prompt at
+    ``PreToolUse``. Nothing positional, time-ordered, or nearest-match is
+    involved, so a mark can never be bound to a different reviewer's findings
+    — the two constraints the bug entry records as load-bearing.
+
+    Also why this is NOT the directory scan K-005 forbids: one named file is
+    opened, and it is named by the payload rather than searched for.
+
+    ``None`` on an absent/unreadable transcript, no marker, or a marker whose
+    value is not a plain repo-relative path (absolute, drive-qualified, or
+    carrying a ``..`` segment) — fail-quiet, never a raise.
     """
-    sanitized_session_id = _sanitize_segment(session_id)
-    sanitized_label = _sanitize_segment(agent_type)
-    if sanitized_session_id is None or sanitized_label is None:
+    if not transcript_path:
         return None
-    if _sanitize_segment(agent_id) != agent_id:
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(_TRANSCRIPT_SCAN_LIMIT_BYTES)
+    except OSError:
         return None
-    derived_key = f"{sanitized_label}.{agent_id}"
-    sanitized_key = _sanitize_segment(derived_key)
-    if sanitized_key is None:
+
+    match = _SIDECAR_MARKER_RE.search(head)
+    if match is None:
         return None
-    return Path("state") / "subagent-share" / sanitized_session_id / f"{sanitized_key}.md"
+    raw = match.group(1)
+
+    candidate = PurePosixPath(raw)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    # A Windows drive-qualified value ("X:/...") is not absolute to
+    # PurePosixPath, so it is rejected explicitly rather than joined onto the
+    # worktree and silently escaping it.
+    if ":" in candidate.parts[0]:
+        return None
+    return Path(*candidate.parts)
 
 
 def _read_reviewed_range(sidecar_abs_path: Path) -> Optional[List[str]]:
@@ -247,7 +309,13 @@ def _own_pending_diff_ranges(session_id: str, worktree: Path) -> List[str]:
 
 
 def _resolve_and_mark_sync(
-    *, session_id: str, agent_id: str, agent_type: str, cwd: str, repo_root: str
+    *,
+    session_id: str,
+    agent_id: str,
+    agent_type: str,
+    agent_transcript_path: str,
+    cwd: str,
+    repo_root: str,
 ) -> None:
     """Blocking body: sidecar read, git resolution, ledger append. Called
     exclusively via ``asyncio.to_thread`` — must not be awaited directly.
@@ -256,7 +324,7 @@ def _resolve_and_mark_sync(
     """
     worktree = Path(repo_root)
 
-    sidecar_rel = _resolve_sidecar_path(session_id, agent_type, agent_id)
+    sidecar_rel = _resolve_sidecar_from_transcript(agent_transcript_path)
     if sidecar_rel is None:
         return
     sidecar_abs = worktree / sidecar_rel
@@ -305,7 +373,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
     from a finishing reviewer's own ``reviewed_range`` findings.
 
     Inputs (flat scalar, extracted via ``_payload.field()``; ``""`` treated
-    as absent): ``session_id``, ``agent_id``, ``agent_type``, ``cwd``.
+    as absent): ``session_id``, ``agent_id``, ``agent_type``,
+    ``agent_transcript_path``, ``cwd``.
+
+    ``agent_transcript_path`` is REQUIRED for a mark and its absence is a
+    fail-quiet no-op, not an error: a relay that does not forward it (the
+    ``SubagentStop`` shim forwarded it only to ``hooks.subagent_zero_tool_use``
+    until this op needed it) leaves the op inert rather than marking off a
+    guessed path.
 
     Always returns ``no_advisory()`` — this op never denies, never advises;
     its only observable effect is the ledger append (or its absence).
@@ -313,6 +388,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     session_id = field(params, "session_id")
     agent_id = field(params, "agent_id")
     agent_type = field(params, "agent_type")
+    agent_transcript_path = field(params, "agent_transcript_path")
     cwd = field(params, "cwd")
 
     if not repo_root or not session_id or not agent_id or not agent_type:
@@ -326,6 +402,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         session_id=session_id,
         agent_id=agent_id,
         agent_type=agent_type,
+        agent_transcript_path=agent_transcript_path,
         cwd=cwd or str(repo_root),
         repo_root=str(repo_root),
     )

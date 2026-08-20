@@ -1436,8 +1436,9 @@ def _handler_exception_error(exc: BaseException) -> dict:
     ``structurally_wedged`` duck-type marker; selects INVALID_PARAMS (preserving the
     exception's own message, length-bounded — see CallerFacingValidationError) when ``exc``
     carries the ``caller_facing_validation`` duck-type marker; otherwise falls back to the
-    pre-existing generic INTERNAL_ERROR shape (class-name-only message — the original message
-    text is not assumed safe to surface for an arbitrary, unclassified exception).
+    generic INTERNAL_ERROR shape, which now carries both the exception class name and its
+    own ``str(exc)`` text — mirroring the STRUCTURAL_PIN_ERROR shape above — rather than
+    discarding the message text as the prior class-name-only reduction did.
     """
     if getattr(exc, "structurally_wedged", False):
         return {"code": STRUCTURAL_PIN_ERROR, "message": f"{type(exc).__name__}: {exc}"}
@@ -1446,7 +1447,7 @@ def _handler_exception_error(exc: BaseException) -> dict:
         if len(message) > _CALLER_FACING_MESSAGE_MAX_LEN:
             message = message[:_CALLER_FACING_MESSAGE_MAX_LEN] + "...(truncated)"
         return {"code": INVALID_PARAMS, "message": message}
-    return {"code": INTERNAL_ERROR, "message": f"Internal error: {type(exc).__name__}"}
+    return {"code": INTERNAL_ERROR, "message": f"Internal error: {type(exc).__name__}: {exc}"}
 
 
 async def _dispatch_message_impl(msg: dict) -> dict:

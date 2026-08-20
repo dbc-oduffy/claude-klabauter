@@ -1381,3 +1381,132 @@ def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_
         assert surface_count == 1
 
 
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-20 — the doc-only close stops routing through a PM waiver.
+# Source: cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-doc-only-em-
+# discretion.md (example-retrieval-repo-em, PM-endorsed). The reported defect: one
+# `workstream-complete-assemble` invocation produced two contradictory
+# verdicts over the same 16 commits — `review-brightline-gate` printed
+# `loc=0 VERDICT=single-reviewer-ok` (prose filtered out) while
+# `gates.review_scale` returned `partition_mandatory: true` off
+# `code_loc=2599`, where all 2,599 lines were markdown. `wsc-tail` then
+# refused, leaving a PM waiver as the only legal exit for a session with no
+# code in it.
+
+
+def test_code_loc_excludes_prose_bearing_rows():
+    """`code_loc` must not count markdown/YAML — the counter is named for
+    code and the sibling brightline oracle already excludes prose. The two
+    disagreeing inside one brief was the reported bug."""
+    numstat = "\n".join(
+        (
+            "2342\t0\tstate/research/lane-findings.md",
+            "104\t0\tstate/decisions/DR-999.md",
+            "12\t0\tconfig/settings.yaml",
+        )
+    )
+    assert wsc._accumulate_code_loc_numstat(numstat) == 0
+
+    # A code row in the same diff still counts, undiminished.
+    with_code = numstat + "\n40\t0\tcoordinator_core/ops/thing.py"
+    assert wsc._accumulate_code_loc_numstat(with_code) == 40
+
+
+def test_doc_only_session_resolves_to_em_discretion_not_mandatory_partition():
+    """The memo's acceptance test: a doc-only close with a large prose diff
+    and a commit count well past the brightline resolves to row 1 (no
+    review mandated, EM discretion) instead of `partition_mandatory`."""
+    decision = decide_review_scale(
+        gross_loc=2599,
+        code_loc=0,
+        commit_count=16,
+        surface_count=1,
+        executor_dispatched=False,
+        shared_schema_touched=False,
+        chain_disposition="single-session",
+        zero_diff_commit_count=9,
+    )
+    assert decision.row == 1
+    assert decision.scale == "none"
+    assert decision.partition_mandatory is False
+
+
+def test_resolved_zero_code_loc_suppresses_the_commit_and_surface_proxies():
+    """Commit count and surface count are proxies for accumulated CODE
+    risk. With a resolved `code_loc == 0` neither may mandate a partition
+    on its own."""
+    decision = decide_review_scale(
+        gross_loc=4000,
+        code_loc=0,
+        commit_count=40,
+        surface_count=9,
+        executor_dispatched=False,
+        shared_schema_touched=False,
+        chain_disposition="single-session",
+    )
+    assert decision.partition_mandatory is False
+    assert decision.row == 1
+
+
+def test_unresolved_code_loc_is_not_read_as_zero():
+    """NEGATIVE-SPEC: `None` means unresolvable, never zero. Treating it as
+    zero would fail toward LESS review — the exact direction every other
+    guard in this module is built to refuse."""
+    decision = decide_review_scale(
+        gross_loc=None,
+        code_loc=None,
+        commit_count=16,
+        surface_count=1,
+        executor_dispatched=None,
+        shared_schema_touched=None,
+        chain_disposition="single-session",
+    )
+    assert decision.partition_mandatory is True
+    assert decision.row == 4
+
+
+def test_brightline_stays_armed_for_any_session_carrying_code():
+    """Memo item 4: nothing here relaxes the gate for code. A session with
+    real code still trips row 4 on the commit arm, zero-diff scaffolds and
+    all."""
+    decision = decide_review_scale(
+        gross_loc=120,
+        code_loc=120,
+        commit_count=16,
+        surface_count=1,
+        executor_dispatched=False,
+        shared_schema_touched=False,
+        chain_disposition="single-session",
+        zero_diff_commit_count=9,
+    )
+    assert decision.row == 4
+    assert decision.partition_mandatory is True
+
+
+def test_zero_diff_commits_do_not_count_toward_the_commit_brightline():
+    """Memo item 3: `baton-assemble apply` scaffolds land at `diff_loc: 0`
+    and carry no review risk, so they must not push a session past the
+    commit threshold. `commit_count` itself stays the honest count — only
+    what the threshold READS is narrowed."""
+    kwargs = dict(
+        gross_loc=60,
+        code_loc=60,
+        surface_count=1,
+        executor_dispatched=False,
+        shared_schema_touched=False,
+        chain_disposition="single-session",
+    )
+    # 6 commits, 5 of them zero-diff -> 1 code-bearing commit, under the bar.
+    relieved = decide_review_scale(commit_count=6, zero_diff_commit_count=5, **kwargs)
+    assert relieved.partition_mandatory is False
+
+    # Same commit count, none of them empty -> still trips.
+    tripped = decide_review_scale(commit_count=6, zero_diff_commit_count=0, **kwargs)
+    assert tripped.row == 4
+    assert tripped.partition_mandatory is True
+
+    # Absent (the pre-existing caller) is a no-op, never read as "all zero".
+    unsupplied = decide_review_scale(commit_count=6, **kwargs)
+    assert unsupplied == tripped

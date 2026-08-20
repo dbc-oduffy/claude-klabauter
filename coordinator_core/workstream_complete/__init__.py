@@ -214,6 +214,7 @@ from coordinator_core.ops.session_commits import (
 )
 from coordinator_core.ops.review_brightline_gate import classify_surface
 from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
+from coordinator_core.ops.review_brightline_gate import _is_prose_bearing_path  # 2026-08-20: code_loc stops counting prose, same predicate as the brightline gate's mandate arms
 from coordinator_core.coverage import _is_planning_artifact_path  # review finding P2: planning-artifact LOC de-weight
 from coordinator_core.coverage import (  # 2026-08-12: numstat rename-row resolution, shared with review_brightline_gate.py (see this module's own site below)
     _REVIEW_SCALE_BARE_RENAME_RE,
@@ -2872,7 +2873,21 @@ def _accumulate_code_loc_numstat(text: str) -> int:
     `chain_loc` (`_PLANNING_LOC_WEIGHT`) — a plan/research/problem-framing
     document is real review obligation, not noise, but is not the same
     review cost per line as code. Reuses the shared predicate and constant
-    rather than defining a second weighting."""
+    rather than defining a second weighting.
+
+    2026-08-20 (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-doc-
+    only-em-discretion.md): prose-bearing rows (`_is_prose_bearing_path` —
+    markdown and YAML) are EXCLUDED outright, not de-weighted. This is the
+    predicate `review_brightline_gate`'s own mandate arms already apply, and
+    its absence here was the reported defect: the same closing session had
+    `review-brightline-gate` print `loc=0` (prose filtered) while
+    `gates.review_scale` reported `code_loc=2599` (prose counted) and
+    mandated a partition off it. A counter named `code_loc` must not measure
+    prose while the sibling oracle named the same fact deliberately excludes
+    it — the two numbers disagreeing in one brief is the bug, and the fix is
+    to make this one mean what it is called. Prose still reaches `gross_loc`
+    unfiltered, and the doc-fragile gate (`compute_doc_fragile_gate`) is a
+    separate arm that this exclusion does not touch."""
     total = 0
     for line in text.splitlines():
         match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
@@ -2880,7 +2895,7 @@ def _accumulate_code_loc_numstat(text: str) -> int:
             continue
         added, deleted, path = match.groups()
         resolved_path = _resolve_numstat_row_path(path)
-        if _is_noise_path(resolved_path):
+        if _is_noise_path(resolved_path) or _is_prose_bearing_path(resolved_path):
             continue
         row_loc = (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0)
         if _is_planning_artifact_path(resolved_path):
@@ -3185,7 +3200,7 @@ def _measure_session_review_scale_inputs(
             if added is None:
                 return None, None, None, None
             gross_loc += added
-            if not _is_noise_path(member):
+            if not (_is_noise_path(member) or _is_prose_bearing_path(member)):
                 code_loc += added
             surfaces.add(classify_surface(member))
     if walk_budget[0] <= 0:
@@ -3700,10 +3715,27 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     if resolved_code_loc is None:
         resolved_code_loc = measured_code_loc
 
+    # 2026-08-20 (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-doc-
+    # only-em-discretion.md, item 3): the count of this session's own commits
+    # carrying a zero-line reviewable diff — `baton-assemble apply` scaffolds
+    # and prose-only commits, both of which present nothing to a reviewer.
+    # Read off the slices `_measure_session_review_scale_inputs` already
+    # produced from the same `git show` text (no extra spawn). Left `None`
+    # when the measurement itself was unresolvable (`measured_commit_count is
+    # None` — the slices list stays empty either way, so it cannot be read as
+    # "resolved, zero") and when the caller overrode `commit_count`, since the
+    # slices then describe a different population than the override does.
+    zero_diff_commit_count: Optional[int] = None
+    if measured_commit_count is not None and decisions.get("commit_count") is None:
+        zero_diff_commit_count = sum(
+            1 for _slice in review_scale_commit_slices if _slice["diff_loc"] == 0
+        )
+
     review_scale_decision = directives_review.decide_review_scale(
         gross_loc=resolved_gross_loc,
         code_loc=resolved_code_loc,
         commit_count=resolved_commit_count,
+        zero_diff_commit_count=zero_diff_commit_count,
         surface_count=resolved_surface_count,
         executor_dispatched=decisions.get("executor_dispatched"),
         shared_schema_touched=decisions.get("shared_schema_touched"),

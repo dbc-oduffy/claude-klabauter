@@ -2672,3 +2672,43 @@ class TestMultiCommitRangeRoutesAroundBatchedFastPath:
         )
         assert result[foreign_sha] is True
 
+
+
+def test_delegate_reviewers_arms_the_commit_ledger_mark():
+    """`_DELEGATE_REVIEWERS` has a second consumer outside this module.
+
+    `hooks/subagent_review_mark.py :: _is_reviewer` gates the SubagentStop
+    `commit_ledger.store.mark_reviewed` write on membership in this exact set,
+    so admitting a persona to the trail's `reviewer` enum ALSO arms a durable
+    commit-ledger write for that agent type. That coupling was unnamed and
+    untested when the set was widened on 2026-08-20 (06dbf1486).
+
+    WHAT EACH HALF ACTUALLY PINS -- the two are not equally strong, and the
+    commit that added this test (ee7d66dd5f9d) oversold the first half:
+
+    - The positive loop is VACUOUS while `_is_reviewer` reads
+      `_DELEGATE_REVIEWERS` by direct import, which it does today: emptying the
+      set would keep it green. Its value is conditional and narrow -- it fails
+      only if someone replaces that import with a literal copy of the
+      membership, which is the realistic way these two drift apart.
+    - The negative loop carries the real teeth: it fails if `_is_reviewer`
+      becomes unconditionally True, or if a non-reviewer agent type leaks into
+      the set and silently gains a commit-ledger write.
+
+    Neither half pins a membership snapshot, deliberately -- adding a persona
+    should not have to edit this test, only be a decision someone made knowing
+    both effects move together.
+    """
+    import coordinator_core.ops.review_trail_write as rtw
+    from coordinator_core.hooks import subagent_review_mark
+
+    for reviewer in rtw._DELEGATE_REVIEWERS:
+        assert subagent_review_mark._is_reviewer(reviewer) is True, (
+            f"{reviewer!r} is admitted to the trail's reviewer enum but "
+            "_is_reviewer rejects it -- the two consumers have drifted"
+        )
+
+    for non_reviewer in ("executor", "enricher", "review-integrator", ""):
+        assert subagent_review_mark._is_reviewer(non_reviewer) is False, (
+            f"{non_reviewer!r} must not arm a commit-ledger review mark"
+        )

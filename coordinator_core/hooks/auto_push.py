@@ -270,7 +270,7 @@ _PAT_GH_SERVER_REJECT = re.compile(r"^remote: (error|rejected|fatal):", re.MULTI
 # into `network` -- it is not in _RETRYABLE_CLASSES, matching "unknown"'s
 # prior (non-retrying) behavior exactly, so this changes only the label an
 # operator/banner sees, never the retry/timing decision.
-_PAT_TIMEOUT = re.compile(r"push exceeded \d+s and was killed")
+_PAT_TIMEOUT = re.compile(r"^fatal: push exceeded \d+s and was killed", re.MULTILINE)
 
 
 def classify_error(stderr_text: str) -> str:
@@ -299,12 +299,18 @@ def classify_error(stderr_text: str) -> str:
         return "gh-transient"
     if _PAT_NETWORK.search(stderr_text):
         return "network"
+    # Ahead of _PAT_AUTH deliberately: the synthesized timeout message carries
+    # "Could not read from remote repository", and _PAT_AUTH's "could not read
+    # from remote" alternative misses it only by capitalization. Anyone fixing
+    # _PAT_AUTH to be case-insensitive (real git prints the capitalized form on
+    # SSH auth failure, so that fix is owed) would otherwise silently reclassify
+    # every push timeout as "auth" and send the operator to check credentials.
+    if _PAT_TIMEOUT.search(stderr_text):
+        return "timeout"
     if _PAT_AUTH.search(stderr_text):
         return "auth"
     if _PAT_GH_SERVER_REJECT.search(stderr_text):
         return "gh-server-reject"
-    if _PAT_TIMEOUT.search(stderr_text):
-        return "timeout"
     return "unknown"
 
 
@@ -940,7 +946,7 @@ def _maybe_publish_cockpit_contract(
 # commit` waits on synchronously must never pay this cost).
 #
 # The hold's trigger is narrower than plain `_shared_branch_live_count(...) >
-# 1`: `_hold_window` also calls `_retraction_already_lost` and skips the
+# 1`: `_hold_window` also calls `_peer_commit_within_window` and skips the
 # hold when a foreign-session commit has already landed on the branch within
 # the window. Measured 2026-08-20 on work/machine-a/2026-08-18to20 (trailing
 # 36h): 2079 commits, median inter-commit gap 20s, a median of 10 peer
@@ -951,7 +957,7 @@ def _maybe_publish_cockpit_contract(
 # rewrite their work. `live_count > 1` inverts under load: sharing is
 # exactly what makes retraction impossible, not what threatens it. A quiet
 # shared branch (no recent foreign commits) still holds exactly as before --
-# see `_retraction_already_lost` for the predicate and its fail-toward-
+# see `_peer_commit_within_window` for the predicate and its fail-toward-
 # pushing posture.
 #
 # Do NOT reuse `_backoff_seconds`/`_no_sleep` for the hold's sleep duration
@@ -1133,12 +1139,33 @@ def _shared_branch_live_count(repo_root: str, branch: str) -> int | None:
         return None
 
 
-def _retraction_already_lost(repo_root: str, branch: str, now: float) -> bool | None:
-    """True if a commit from a session OTHER than this process's own has
-    already landed on `branch` within the last `_HOLD_WINDOW_SECONDS` -- the
-    hold's own retraction promise is already broken before the hold would
-    even finish sleeping, because a peer has already built on top of the
-    commit it exists to protect.
+def _peer_commit_within_window(repo_root: str, branch: str, now: float) -> bool | None:
+    """True if a commit from a session OTHER than this process's own landed on
+    `branch` within the last `_HOLD_WINDOW_SECONDS`.
+
+    ### WHAT THIS IS AND IS NOT. This is a base-rate PROXY for "the hold's
+    retraction promise will be gone before the hold finishes sleeping" -- it is
+    NOT a measurement of that. It cannot be: at the moment `_hold_window` runs,
+    the commit being protected IS the branch tip, so it has no followers yet by
+    construction, and the followers that would destroy retractability are in the
+    future. A descendant walk here would therefore return "no followers" always
+    and hold always, which is exactly the behaviour this predicate exists to
+    narrow. So it measures recent PEER ACTIVITY on the branch and infers the
+    rest from the base rate below.
+
+    Known bias, stated because the name of the thing it proxies is stronger than
+    what it observes: peer commits inside the window are counted whether or not
+    they are ancestors of the commit being protected. A peer commit at T=0 on an
+    otherwise idle branch, ours at T=100, causes the hold to be skipped even
+    though ours is genuinely still retractable. The skip is the safe direction
+    (publish sooner), and a branch with any peer commit in the last five minutes
+    is one where a follower inside the next five is the overwhelming base case --
+    but "a quiet shared branch still holds" is true of a branch quiet for the
+    whole window, not of one that merely has no followers yet.
+
+    Commits with no Session-Id trailer are not counted as peer commits. Plumbing
+    commits drop that trailer, so this under-detects peers and, where it does,
+    errs toward holding -- the pre-existing behaviour.
 
     ### DECISION (measured 2026-08-20, work/machine-a/2026-08-18to20, trailing
     36h): 2079 commits, median inter-commit gap 20s -- a median of 10 peer
@@ -1151,9 +1178,8 @@ def _retraction_already_lost(repo_root: str, branch: str, now: float) -> bool | 
     was protecting, and rewinding it would rewrite their work too. The
     `_shared_branch_live_count(...) > 1` trigger inverts under load --
     sharing is exactly what makes retraction impossible, not what threatens
-    it -- so this predicate narrows the hold to the case where holding can
-    still actually deliver on its promise, and leaves a quiet shared branch
-    (no recent foreign commits) holding exactly as before.
+    it -- so this predicate narrows the hold toward the case where holding can
+    still plausibly deliver on its promise.
 
     Does exactly ONE bounded `git log --since=...` call -- no per-commit
     spawning; this repo's amplification gate
@@ -1207,10 +1233,11 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     immediately after this call returns -- covering four cases: (a) the
     branch is solo (<=1 live session sharing it), (b) the live-session
     predicate could not be resolved (fail toward publishing -- AC14a
-    precondition 3 unmet), (b2) the branch IS shared but a foreign-session
-    commit has already landed within the hold window -- see
-    `_retraction_already_lost` -- so the hold's own retraction promise is
-    already broken and holding would only cost time for nothing, and (c)
+    precondition 3 unmet), (b2) the branch IS shared and a foreign-session
+    commit landed within the hold window, which `_peer_commit_within_window`
+    treats as a base-rate proxy for the retraction promise being gone before
+    the hold could finish sleeping (see that function for what the proxy does
+    and does not observe), and (c)
     this call became the new/takeover holder, slept out its window (or
     skipped the sleep under the test seam), and now owns the push.
 
@@ -1279,13 +1306,6 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     if live_count is None or live_count <= 1:
         return True
 
-    # `is not False`, not truthy-check: None (predicate unresolvable) reads
-    # the same as True (retraction provably already lost) here -- both push
-    # immediately. Only an explicit False (retraction still available, proven
-    # by a clean git log read) falls through to the existing hold logic.
-    if _retraction_already_lost(repo_root, branch, now) is not False:
-        return True
-
     existing = _read_pending_record(repo_root)
     if (
         existing is not None
@@ -1293,6 +1313,19 @@ def _hold_window(repo_root: str, branch: str) -> bool:
         and not _record_is_stale(existing, now)
     ):
         return False
+
+    # Deliberately BELOW the live-record check: an incumbent holder's record is
+    # AC14's coalescing token, and `run_push_with_retry`'s success path clears
+    # it. Testing this predicate first let a hold-skipping call push and unlink
+    # a still-sleeping incumbent's record, leaving nothing for drain_pending_push
+    # or boot_sweep to take over if that incumbent was then killed.
+    #
+    # `is not False`, not a truthy check: None (predicate unresolvable) reads
+    # the same as True here -- both push immediately. Only an explicit False
+    # (no peer commit in the window, proven by a clean git log read) falls
+    # through to the hold logic below.
+    if _peer_commit_within_window(repo_root, branch, now) is not False:
+        return True
 
     sha = _run_git(repo_root, ["rev-parse", branch])
     hold_until = now + _HOLD_WINDOW_SECONDS

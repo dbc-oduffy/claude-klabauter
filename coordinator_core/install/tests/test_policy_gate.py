@@ -17,6 +17,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.install import policy_gate
 from coordinator_core.install.policy_gate import (
     HOST_PWSH,
     HOST_WINDOWS_POWERSHELL,
@@ -370,6 +371,102 @@ def test_pwsh_absent_is_still_red_even_when_windows_powershell_not_applicable(mo
     assert verdict.verdict_for(HOST_PWSH).not_applicable is False
 
 
+# ---------------------------------------------------------------------------
+# AC7/AC8 — an unreadable probe (no parsed policy token) must be
+# distinguishable from a parsed-but-restrictive policy, and neither case may
+# become green. Spec: docs/plans/2026-08-20-newline-bearing-argv-fails-loud.md
+# chunk C6.
+# ---------------------------------------------------------------------------
+
+
+def test_unreadable_probe_is_classified_unreadable_not_restrictive() -> None:
+    """A probe that exits non-zero without emitting a parsed policy token
+    (the CouldNotAutoloadMatchingModule case on this box) must be flagged
+    `unreadable=True` — distinct from a host that answered with a policy
+    the gate does not permit."""
+    probe = _scripted_probe(
+        {
+            "pwsh": _completed(stdout="RemoteSigned\n"),
+            "powershell.exe": _completed(
+                stdout="",
+                stderr=(
+                    "Get-ExecutionPolicy: The term 'Get-ExecutionPolicy' was found in the "
+                    "module 'Microsoft.PowerShell.Security', but the module could not be "
+                    "loaded."
+                ),
+                returncode=1,
+            ),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is False
+    assert verdict.unreadable is True
+    ps_v = verdict.verdict_for(HOST_WINDOWS_POWERSHELL)
+    assert ps_v.green is False
+    assert ps_v.unreadable is True
+    assert ps_v.effective_policy is None
+    # The other host parsed a permissive policy and must not be flagged
+    # unreadable — the distinction is per-host, not gate-wide.
+    pwsh_v = verdict.verdict_for(HOST_PWSH)
+    assert pwsh_v.unreadable is False
+
+
+def test_restrictive_policy_is_classified_restrictive_not_unreadable() -> None:
+    """A probe that DID produce a single parsed policy token — just not a
+    permissive one — must be flagged `unreadable=False`: this box was
+    asked and answered, unlike the unreadable case above."""
+    probe = _scripted_probe(
+        {
+            "pwsh": _completed(stdout="RemoteSigned\n"),
+            "powershell.exe": _completed(stdout="Restricted\n"),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is False
+    assert verdict.unreadable is False
+    ps_v = verdict.verdict_for(HOST_WINDOWS_POWERSHELL)
+    assert ps_v.green is False
+    assert ps_v.unreadable is False
+    assert ps_v.effective_policy == "Restricted"
+
+
+def test_restrictive_policy_remains_non_green_after_classification() -> None:
+    """AC8 — the classification in the previous test must not be usable to
+    turn a genuinely restrictive policy green. Both RED reasons stay RED;
+    this is the anti-scope guard the plan calls out explicitly."""
+    probe = _scripted_probe(
+        {
+            "pwsh": _completed(stdout="RemoteSigned\n"),
+            "powershell.exe": _completed(stdout="Restricted\n"),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is False
+    assert verdict.verdict_for(HOST_WINDOWS_POWERSHELL).green is False
+
+
+def test_unreadable_probe_also_remains_non_green() -> None:
+    """AC8's other half — an unreadable probe stays RED too; legibility of
+    the distinction is not a path to a green verdict for either case."""
+    probe = _scripted_probe(
+        {
+            "pwsh": _completed(stdout="RemoteSigned\n"),
+            "powershell.exe": _completed(stdout="", stderr="module autoload failed", returncode=1),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is False
+    assert verdict.verdict_for(HOST_WINDOWS_POWERSHELL).green is False
+
+
 def test_module_calls_get_execution_policy_only_no_mutation_command() -> None:
     """(d) NO REMEDIATION — the probe command itself never mutates policy.
 
@@ -381,3 +478,44 @@ def test_module_calls_get_execution_policy_only_no_mutation_command() -> None:
     assert policy_gate_module._PROBE_COMMAND == "Get-ExecutionPolicy"
     assert "Set-ExecutionPolicy" not in policy_gate_module._PROBE_COMMAND
     assert "Unblock-File" not in policy_gate_module._PROBE_COMMAND
+
+
+# ---------------------------------------------------------------------------
+# Probe environment (2026-08-20) — the gate read RED fleet-wide on a box whose
+# policy was readable and permissive, because an agent-spawned Python process
+# carries no PSModulePath and `env=` replaces the child environment wholesale,
+# so `Get-ExecutionPolicy`'s owning module could not autoload.
+# ---------------------------------------------------------------------------
+
+
+def test_probe_env_restores_psmodulepath_when_absent(monkeypatch):
+    monkeypatch.setattr(
+        policy_gate.os, "environ", {"SystemRoot": r"C:\Windows"}, raising=False
+    )
+    env = policy_gate._probe_env()
+    assert env["PSModulePath"] == r"C:\Windows\system32\WindowsPowerShell\v1.0\Modules"
+
+
+def test_probe_env_never_overrides_an_existing_psmodulepath(monkeypatch):
+    monkeypatch.setattr(
+        policy_gate.os,
+        "environ",
+        {"SystemRoot": r"C:\Windows", "PSModulePath": r"D:\operator\modules"},
+        raising=False,
+    )
+    assert policy_gate._probe_env()["PSModulePath"] == r"D:\operator\modules"
+
+
+def test_probe_env_still_clears_the_inherited_policy_variable(monkeypatch):
+    monkeypatch.setattr(
+        policy_gate.os,
+        "environ",
+        {"SystemRoot": r"C:\Windows", "PSExecutionPolicyPreference": "Bypass"},
+        raising=False,
+    )
+    assert "PSExecutionPolicyPreference" not in policy_gate._probe_env()
+
+
+def test_probe_env_omits_psmodulepath_when_systemroot_is_unknown(monkeypatch):
+    monkeypatch.setattr(policy_gate.os, "environ", {}, raising=False)
+    assert "PSModulePath" not in policy_gate._probe_env()

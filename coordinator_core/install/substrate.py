@@ -3200,6 +3200,7 @@ def _write_ps1_policy_status(bin_dst: Path, verdict: "PolicyGateVerdict") -> Non
     path = _ps1_policy_status_path(bin_dst)
     payload = {
         "green": verdict.green,
+        "unreadable": verdict.unreadable,
         "reason": verdict.reason,
         "repair_entrypoint": _ps1_policy_repair_message(bin_dst),
         "note": (

@@ -323,7 +323,9 @@ def test_handler_raises_plain_value_error_still_returns_32603():
         d = _run(dispatch_message(msg))
     assert "error" in d
     assert d["error"]["code"] == INTERNAL_ERROR
-    assert d["error"]["message"] == "Internal error: ValueError"
+    assert d["error"]["message"] == (
+        "Internal error: ValueError: an ordinary, non-caller-facing ValueError"
+    )
 
 
 # ---------------------------------------------------------------------------

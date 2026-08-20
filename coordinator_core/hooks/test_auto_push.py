@@ -1671,16 +1671,23 @@ def test_push_once_spawns_no_powershell_even_on_windows_ssh(monkeypatch, tmp_pat
     assert not any("powershell" in part or part == "pwsh" for part in lowered)
 
 
-# The real `_retraction_already_lost`, captured before the autouse fixture
+# The real `_peer_commit_within_window`, captured before the autouse fixture
 # below patches the module attribute -- tests that exercise the predicate
 # itself restore this via `monkeypatch.setattr`.
-_REAL_RETRACTION_ALREADY_LOST = auto_push._retraction_already_lost
+_REAL_PEER_COMMIT_WITHIN_WINDOW = auto_push._peer_commit_within_window
 
 
 @pytest.fixture(autouse=True)
-def _default_retraction_not_lost(monkeypatch):
-    """Default `_retraction_already_lost` to False (retraction still
-    available) for every test below unless a test overrides it.
+def _default_retraction_not_lost(request, monkeypatch):
+    """Default `_peer_commit_within_window` to False (no peer commit in the
+    window) unless a test overrides it or opts out.
+
+    SCOPE WARNING: a module-level autouse fixture applies to EVERY test in this
+    file regardless of where it is defined -- "below" is about reading order,
+    not effect. A test of the real predicate added ABOVE this line would still
+    be stubbed and would pass vacuously, so opting out is a marker, not a
+    matter of placement: mark such a test `@pytest.mark.real_peer_predicate`
+    (the predicate tests further down do exactly that).
 
     The many pre-existing `_shared_branch_live_count`-mocked hold tests
     (coalescing, staleness takeover, loss-path, wire-path) exercise record
@@ -1689,9 +1696,11 @@ def _default_retraction_not_lost(monkeypatch):
     they keep asserting exactly what they did before, instead of every site
     needing its own unrelated `_run_git` "log" + session_core mock. Tests
     that DO exercise the predicate restore the real function via
-    `_REAL_RETRACTION_ALREADY_LOST`.
+    `_REAL_PEER_COMMIT_WITHIN_WINDOW`.
     """
-    monkeypatch.setattr(auto_push, "_retraction_already_lost", lambda *a, **k: False)
+    if request.node.get_closest_marker("real_peer_predicate"):
+        return
+    monkeypatch.setattr(auto_push, "_peer_commit_within_window", lambda *a, **k: False)
 
 
 # ---------------------------------------------------------------------------
@@ -1797,15 +1806,16 @@ def test_hold_window_shared_predicate_writes_record_before_sleep_not_via_backoff
 
 
 # ---------------------------------------------------------------------------
-# `_retraction_already_lost` -- the narrowing predicate. These restore the
+# `_peer_commit_within_window` -- the narrowing predicate. These restore the
 # real function (the fixture above defaults it to False for every other
 # test in this section) and drive it through `_run_git`'s "log" branch.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.real_peer_predicate
 def test_busy_shared_branch_with_recent_foreign_commit_skips_hold_pushes_immediately(monkeypatch, tmp_path):
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_peer_commit_within_window", _REAL_PEER_COMMIT_WITHIN_WINDOW)
     monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
     monkeypatch.setattr(auto_push.session_core, "resolve_session_id", lambda cwd=None: "own-sid")
 
@@ -1840,10 +1850,11 @@ def test_busy_shared_branch_with_recent_foreign_commit_skips_hold_pushes_immedia
     assert auto_push._read_pending_record(repo_root) is None
 
 
+@pytest.mark.real_peer_predicate
 def test_shared_branch_no_recent_foreign_commit_hold_still_fires(monkeypatch, tmp_path):
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_peer_commit_within_window", _REAL_PEER_COMMIT_WITHIN_WINDOW)
     monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
     monkeypatch.setattr(auto_push.session_core, "resolve_session_id", lambda cwd=None: "own-sid")
 
@@ -1876,10 +1887,11 @@ def test_shared_branch_no_recent_foreign_commit_hold_still_fires(monkeypatch, tm
     assert push_calls["n"] == 1
 
 
+@pytest.mark.real_peer_predicate
 def test_retraction_predicate_evaluation_failure_pushes_rather_than_holds(monkeypatch, tmp_path):
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_peer_commit_within_window", _REAL_PEER_COMMIT_WITHIN_WINDOW)
     monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
     # Own session IS resolvable, but the bounded git log call itself fails
     # (mirrors a git spawn/timeout failure -- `_run_git` returns None).
@@ -1915,10 +1927,11 @@ def test_retraction_predicate_evaluation_failure_pushes_rather_than_holds(monkey
     assert auto_push._read_pending_record(repo_root) is None
 
 
+@pytest.mark.real_peer_predicate
 def test_retraction_predicate_unresolvable_own_session_id_pushes_rather_than_holds(monkeypatch, tmp_path):
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_peer_commit_within_window", _REAL_PEER_COMMIT_WITHIN_WINDOW)
     monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
     # Own session id unresolvable (e.g. no env var set) -- the predicate
     # must not even need the git log call to fail toward pushing.

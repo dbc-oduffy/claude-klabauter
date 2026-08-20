@@ -7502,11 +7502,22 @@ def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
     `handoff_gate_aging`'s own `date.today()` use for gate-facing engine
     timestamps — `cs_gate_recheck_handoff`'s own `at` contract is a bare
     date string (see `test_archive_stamp.py::test_gate_recheck_cleared`),
-    not a full ISO-8601 timestamp."""
+    not a full ISO-8601 timestamp.
+
+    The emitted verb is the LONG form `gate-recheck-handoff` — what
+    `archive-stamp-cli`'s usage line advertises and its subcommand dispatch
+    accepts. A directive's `cli` + `args` pair is a claim about the named
+    CLI's argv contract, and both ways of working a directive are supported:
+    dispatched through `pa_apply`, or run verbatim by hand off the brief.
+    The short `gate-recheck` satisfied only the former — run as written it
+    exits 2 with `unknown subcommand` (cross-repo/inbox/2026-08-20-doe-
+    claude-em-cmd-forwarder-eats-json-and-two-smaller-seams.md, item 2).
+    `_dispatch_archive_stamp_cli` accepts both spellings, so briefs emitted
+    before this change still dispatch."""
     return {
         "id": "d-gate-recheck",
         "cli": "archive-stamp-cli",
-        "args": ["gate-recheck", artifact_path, date.today().isoformat()],
+        "args": ["gate-recheck-handoff", artifact_path, date.today().isoformat()],
         "depends_on": "jgate",
         "already_satisfied": False,
     }

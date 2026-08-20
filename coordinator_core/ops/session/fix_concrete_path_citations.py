@@ -30,7 +30,8 @@ resolves to exactly one of:
     form is not itself a runtime-resolvable value (see
     `_CODE_EXTENSIONS`/`_is_test_file`), or the hit sits in RECORDED rather
     than authored content — a captured diff body, a review-trail artifact,
-    an agent share sidecar (see `_is_recorded_content`). Surfaced, never
+    an agent share sidecar (see `_is_recorded_content`), or a fenced code
+    block in markdown (see `fenced_line_numbers`). Surfaced, never
     guessed at.
 
 Recorded content is quoted, not authored
@@ -43,15 +44,29 @@ sidecar does not *correct* a citation — it falsifies the record, and
 are report-only unconditionally, exactly like a fixture's exact-byte
 assertion.
 
-KNOWN GAP — fenced code blocks inside markdown are NOT carved out. A
-```-fenced block in an ordinary authored `.md` is quoted content by the
-same argument, but detecting it correctly needs stateful fence tracking
-(tilde fences, indented fences, varying backtick runs, front-matter) fed
-through `_raw_hits_in_text`'s currently line-local scan, plus a decision
-about inline-code spans. That is its own change, not a clause bolted onto
-`classify`, and a half-implemented fence tracker that mis-closes on a
-nested fence would silently un-protect the very content it claims to
-protect. Left explicitly open.
+Fences quote; backticks merely typeset
+--------------------------------------
+Fenced code blocks in markdown ARE carved out, inline spans are NOT.
+`fenced_line_numbers` tracks fences statefully (backtick and tilde, any
+run length >= 3, indented up to 3 spaces, unterminated-to-EOF) and
+`classify` reports a hit inside one as REPORT_ONLY. Front matter needs no
+special case: `---` is neither fence character, so a plan's frontmatter
+`scope:` paths fall through and stay substitutable.
+
+Inline `code` spans are deliberately left in scope, and the corpus is why.
+Measured across all 14,069 tracked `.md` files when this landed, against the
+pre-fix classification: 1,282 SUBSTITUTE hits, of which 209 sat inside a
+fenced block, 785 inside an inline span (28 in both), and 316 in plain
+prose. A backticked path in prose is this fleet's DOMINANT authored citation
+form — precisely what the tool exists to fix — so carving spans out too
+would cut its reach from 1,073 hits to 316. Fences quote; backticks merely
+typeset.
+
+One reason-shift the counts make visible: the fence check sits ABOVE the
+family lookup, so a fenced hit with no mapped family now reports "inside a
+fenced code block" where it used to report "no mapped family". Same
+REPORT_ONLY outcome, more fundamental reason — which is why 249 hits carry
+the fence reason against 209 that were previously rewritable.
 
 Family discovery is machine-local-derived, not hardcoded
 -----------------------------------------------------------
@@ -151,7 +166,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
@@ -536,7 +551,62 @@ class Finding:
     reason: str = ""
 
 
-def classify(hit: Hit, line_text: str, families: List[Family]) -> Finding:
+_MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def fenced_line_numbers(text: str) -> FrozenSet[int]:
+    """1-based line numbers of every line inside a fenced code block.
+
+    CommonMark's fence rule, narrowed to the single bit this tool needs
+    ("is this line quoted content"):
+      - An opening fence is a run of 3+ backticks or 3+ tildes, indented at
+        most 3 spaces.
+      - A closing fence is a run of the SAME character, at least as long as
+        the opening run, followed by nothing but whitespace. A shorter run,
+        or the other character, does not close -- which is what lets a
+        ```-fenced example live inside a ````-fenced block.
+      - The fence lines themselves count as inside, so a citation sitting in
+        an info string is protected too.
+      - An unterminated fence extends to EOF.
+
+    That last rule is the deliberate direction to fail in. Over-protecting
+    leaves a citation unfixed and still visible in the report; under-
+    protecting silently rewrites quoted content, which is the whole defect
+    this closes. Ambiguity resolves toward protect, never toward prose.
+
+    Front matter needs no special case: `---` is neither fence character, so
+    a plan's frontmatter `scope:` paths stay substitutable by falling
+    straight through this rule.
+    """
+    inside: set = set()
+    fence_char: Optional[str] = None
+    fence_len = 0
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        m = _FENCE_OPEN_RE.match(line)
+        run = m.group(1) if m else ""
+        if fence_char is None:
+            if run:
+                fence_char, fence_len = run[0], len(run)
+                inside.add(lineno)
+            continue
+        inside.add(lineno)
+        if run and run[0] == fence_char and len(run) >= fence_len:
+            # A closing fence carries no info string; anything else after the
+            # run means this is an opening fence of a different block quoted
+            # inside the current one, not a close.
+            if not line.strip()[len(run):].strip():
+                fence_char, fence_len = None, 0
+    return frozenset(inside)
+
+
+def classify(
+    hit: Hit,
+    line_text: str,
+    families: List[Family],
+    fenced_lines: Optional[FrozenSet[int]] = None,
+) -> Finding:
     if hit.marked:
         return Finding(hit, MARKER, reason="already adjudicated (marker with reason present)")
     rel = hit.file
@@ -546,6 +616,14 @@ def classify(hit: Hit, line_text: str, families: List[Family]) -> Finding:
         return Finding(hit, REPORT_ONLY, reason="executable/structured-config file -- correctness limit")
     if _is_recorded_content(rel):
         return Finding(hit, REPORT_ONLY, reason="recorded content (captured diff / evidence tree) -- rewriting it falsifies the record")
+    # Same argument as the recorded-content carve-out directly above: a
+    # fenced block quotes what was actually there, so rewriting a path
+    # inside one falsifies it rather than correcting it -- and for a shell
+    # transcript it also turns a runnable command into one that is not.
+    # Inline `code` spans are deliberately NOT carved out; see
+    # `_MARKDOWN_EXTENSIONS`' use site in `sweep` and the module docstring.
+    if fenced_lines and hit.line in fenced_lines:
+        return Finding(hit, REPORT_ONLY, reason="inside a fenced code block -- quoted content, not an authored citation")
     if _is_live_doctrine(rel) and _INCIDENT_EVIDENCE_WORDS.search(line_text):
         return Finding(hit, MARKER, reason="looks like live-doctrine incident evidence -- needs a human-written abs-path-ok: reason, not a guess")
     located = _locate_family(hit.token, families)
@@ -656,6 +734,15 @@ def sweep(
         hits = _raw_hits_in_text(text, rel)
         if not hits:
             continue
+        # Markdown only. Every other rewritable extension is already in
+        # `_CODE_EXTENSIONS` and classifies REPORT_ONLY before the fence
+        # check is ever consulted, so a Python triple-quote or a YAML block
+        # scalar can never be mistaken for a fence.
+        fenced = (
+            fenced_line_numbers(text)
+            if _extension(rel) in _MARKDOWN_EXTENSIONS
+            else None
+        )
 
         touched = False
         # A single logical match can surface as two Hits carrying the same
@@ -673,7 +760,7 @@ def sweep(
         new_lines = list(lines)
         for hit in hits:
             body, ending = lines[hit.line - 1]
-            finding = classify(hit, body, families)
+            finding = classify(hit, body, families, fenced_lines=fenced)
             if finding.outcome == SUBSTITUTE and only_family and finding.hit.token:
                 fam = _find_family(hit.token, families)
                 if fam is None or fam.id != only_family:

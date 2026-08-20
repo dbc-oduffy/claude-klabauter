@@ -26,6 +26,7 @@ import importlib.machinery
 import importlib.util
 import io
 import os
+import subprocess
 import sys
 import unittest.mock
 from pathlib import Path
@@ -554,3 +555,196 @@ def test_queue_append_native_skip_no_file_written(tmp_path):
     _run_native_skip_queue()
     written = list(tmp_path.rglob("*.yaml"))
     assert written == [], f"native skipped:true must write NO files; found: {written}"
+
+
+# ---------------------------------------------------------------------------
+# C2: coordinator_registry's three machine-local read sites bound to the
+# in-process reader (machine_local_impl_resolve.registry_get), CLI subprocess
+# spawn retained as the fallback rung. AC3-AC6 below.
+#
+# Spec backlink: state/dispatch-briefs/2026-08-20-doe-root-rung-2-stops-
+# spawning/C2.md
+# ---------------------------------------------------------------------------
+import shutil as _shutil  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+
+
+def _seed_registry_local_toml(reg_dir: str, body: str) -> None:
+    os.makedirs(reg_dir, exist_ok=True)
+    with open(os.path.join(reg_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+
+
+def _clear_doe_env(monkeypatch) -> None:
+    for _k in ("DOE_ROOT", "REPO_DOE_CLAUDE"):
+        monkeypatch.delenv(_k, raising=False)
+
+
+def test_doe_root_rung2_in_process_zero_spawn(tmp_path, monkeypatch):
+    """AC3: with DOE_ROOT/REPO_DOE_CLAUDE cleared and a seeded scratch
+    registry, doe_root() returns the registered root AND spawns nothing —
+    asserted by making subprocess.run raise if called, not by timing."""
+    _clear_doe_env(monkeypatch)
+    fake_root = str(tmp_path / "registered-doe-root")
+    reg_dir = str(tmp_path / "registry")
+    _seed_registry_local_toml(
+        reg_dir,
+        f'"repos.doe_claude" = {fake_root!r}\n'.replace("'", '"'),
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", reg_dir)
+
+    def _raise_if_spawned(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be called — rung 2 must resolve in-process")
+
+    monkeypatch.setattr(_reg.subprocess, "run", _raise_if_spawned)
+
+    result = _reg.doe_root()
+    assert result == fake_root
+
+
+def test_doe_root_rung2_registry_beats_codename_free_rungs(monkeypatch):
+    """AC4: with the registry naming root A and a codename-free rung also
+    resolving to root B, doe_root() returns A — the 2026-08-10 precedence
+    regression test; must pass before and after this chunk's edit."""
+    monkeypatch.setattr(_reg, "_registry_machine_local_get", lambda key: "A" if key == "repos.doe_claude" else None)
+    monkeypatch.setattr(_reg, "_mp_doe_root_pointer_rung", lambda: "B")
+    monkeypatch.setattr(_reg, "_mp_marketplace_cache_rung", lambda: "")
+    monkeypatch.setattr(_reg, "_mp_flat_layout_probe_rung", lambda: "")
+    with unittest.mock.patch.dict(os.environ, {"DOE_ROOT": "", "REPO_DOE_CLAUDE": ""}, clear=False):
+        result = _reg.doe_root()
+    assert result == "A"
+
+
+def test_doe_root_rung2_backslash_form_passes_through_normalized(tmp_path, monkeypatch):
+    """AC4b: with registry.local.toml storing repos.doe_claude in
+    backslash-drive form, doe_root() returns exactly what
+    machine_local_impl_resolve.registry_get() itself computes for that same
+    stored value — the value-level normalization is owned by registry_get
+    (C1), and doe_root()/_registry_machine_local_get() must pass it through
+    unchanged rather than re-deriving or re-splitting it. This is a
+    pass-through equivalence check, not a hardcoded forward-slash literal —
+    registry_get's own normalization contract (native-drive-form preserving,
+    MSYS-mount-form repairing) is pinned by
+    test_machine_local_registry_reader_parity.py, not re-pinned here.
+    """
+    _clear_doe_env(monkeypatch)
+    reg_dir = str(tmp_path / "registry")
+    _seed_registry_local_toml(
+        reg_dir,
+        '"repos.doe_claude" = "X:\\\\DoE-claude\\\\worktree"\n',  # abs-path-ok: synthetic TOML fixture value, not a real repo reference
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", reg_dir)
+
+    def _raise_if_spawned(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be called — rung 2 must resolve in-process")
+
+    monkeypatch.setattr(_reg.subprocess, "run", _raise_if_spawned)
+
+    expected = _reg._mlir_registry_get("repos.doe_claude")
+    assert expected, "fixture setup failed to seed a resolvable repos.doe_claude value"
+    result = _reg.doe_root()
+    assert result == expected
+
+
+def test_doe_root_rung2_cli_fallback_fires_on_none(monkeypatch):
+    """AC5: with registry_get monkeypatched to return None, the CLI spawn
+    still fires and its value is returned."""
+    _clear_doe_env(monkeypatch)
+    monkeypatch.setattr(_reg, "_mlir_registry_get", lambda key: None)
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = "/spawned/doe/root\n"
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[-2:] == ["get", "repos.doe_claude"]
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(_reg.subprocess, "run", _fake_run)
+    monkeypatch.setattr(_reg, "_mp_doe_root_pointer_rung", lambda: "")
+    monkeypatch.setattr(_reg, "_mp_marketplace_cache_rung", lambda: "")
+    monkeypatch.setattr(_reg, "_mp_flat_layout_probe_rung", lambda: "")
+
+    result = _reg.doe_root()
+    assert result == "/spawned/doe/root"
+
+
+# ---------------------------------------------------------------------------
+# AC6: same zero-spawn assertion for the module-scope manifest bootstrap
+# (the hand-rolled `for _ml_cand in _mlir_machine_local_bin_candidates()`
+# loop), exercised via a fresh import under a seeded registry and an absent
+# co-located manifest.
+# ---------------------------------------------------------------------------
+
+_MANIFEST_FIXTURE_BODY = (
+    '{"docTypes": [], "queueTypes": [], '
+    '"identity": {"repoAliases": [], "centralReceiverIds": ["x-em"]}}'
+)
+
+
+def _build_bootstrap_fixture_tree(root: str) -> str:
+    """Build a copy of coordinator_registry.py + machine_local_impl_resolve.py
+    under <root>/coordinator/bin/lib/, with NO <root>/coordinator/schemas —
+    so the co-located manifest rung is genuinely absent, forcing the
+    split-repo bootstrap block (including this chunk's edited loop) to run.
+
+    Returns the copied coordinator_registry.py path.
+    """
+    fixture_lib_dir = os.path.join(root, "coordinator", "bin", "lib")
+    os.makedirs(fixture_lib_dir)
+    for _name in ("coordinator_registry.py", "machine_local_impl_resolve.py"):
+        _shutil.copyfile(os.path.join(str(_LIB_DIR), _name), os.path.join(fixture_lib_dir, _name))
+    return os.path.join(fixture_lib_dir, "coordinator_registry.py")
+
+
+def test_doe_root_module_bootstrap_zero_spawn(monkeypatch):
+    """AC6: fresh import of the module-scope manifest bootstrap, with the
+    registry naming a `repos.doe_claude` root that carries a real manifest —
+    the hand-rolled `_mlir_machine_local_bin_candidates()` spawn loop must
+    not fire, and no `.exists()` candidate in that loop's body may be
+    reached via subprocess.run either."""
+    _tmp = _tempfile.mkdtemp(prefix="c2-ac6-bootstrap-fixture-")
+    try:
+        fake_doe_root = os.path.join(_tmp, "fake-doe-claude")
+        manifest_dir = os.path.join(fake_doe_root, "coordinator", "schemas")
+        os.makedirs(manifest_dir)
+        with open(
+            os.path.join(manifest_dir, "coordinator-registry.manifest.json"),
+            "w",
+            encoding="utf-8",
+        ) as fh:
+            fh.write(_MANIFEST_FIXTURE_BODY)
+
+        reg_dir = os.path.join(_tmp, "registry")
+        _seed_registry_local_toml(
+            reg_dir,
+            '"repos.doe_claude" = {!r}\n'.format(fake_doe_root).replace("'", '"'),
+        )
+
+        copied_registry_path = _build_bootstrap_fixture_tree(_tmp)
+
+        env = dict(os.environ)
+        env.pop("DOE_ROOT", None)
+        env.pop("REPO_DOE_CLAUDE", None)
+        env["MACHINE_LOCAL_REGISTRY_DIR"] = reg_dir
+
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            def _raise_if_spawned(*args, **kwargs):
+                raise AssertionError(
+                    "subprocess.run must not be called during the module-scope "
+                    "manifest bootstrap — the registry rung must resolve in-process first"
+                )
+
+            with unittest.mock.patch.object(subprocess, "run", _raise_if_spawned):
+                loader = importlib.machinery.SourceFileLoader(
+                    "coordinator_registry_ac6_fixture", copied_registry_path
+                )
+                spec = importlib.util.spec_from_loader(loader.name, loader)
+                mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+                loader.exec_module(mod)
+
+        assert mod._MANIFEST_PATH == os.path.join(
+            fake_doe_root, "coordinator", "schemas", "coordinator-registry.manifest.json"
+        )
+    finally:
+        _shutil.rmtree(_tmp, ignore_errors=True)

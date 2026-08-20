@@ -1605,6 +1605,38 @@ class TestGateRecheckVerbDispatch:
         with pytest.raises(pa_apply.UnrecognizedDirective):
             pa_apply._dispatch_archive_stamp_cli(["gate-recheck", "state/handoffs/h1.md"], repo)
 
+    def test_long_verb_spelling_dispatches_identically(self, tmp_path):
+        """`build_gate_recheck_directive` emits `gate-recheck-handoff` — the
+        only spelling `archive-stamp-cli` itself accepts. The short form
+        stays dispatchable because decision objects written before that
+        change carry it and are still replayable; the returned `verb` echoes
+        what was received rather than normalizing, so a report names the
+        argv actually dispatched."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(repo, "g3.md")
+
+        result = pa_apply._dispatch_archive_stamp_cli(
+            ["gate-recheck-handoff", "state/handoffs/g3.md", "2026-02-01"], repo
+        )
+        assert result == {
+            "cli": "archive-stamp-cli",
+            "verb": "gate-recheck-handoff",
+            "handoff_path": "state/handoffs/g3.md",
+        }
+        text = hp.read_text(encoding="utf-8")
+        assert "deployment_state: ready_to_fire" in text
+        assert "last_gate_recheck: 2026-02-01" in text
+
+    def test_long_verb_argument_count_error_names_the_verb_received(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        with pytest.raises(pa_apply.UnrecognizedDirective) as exc:
+            pa_apply._dispatch_archive_stamp_cli(
+                ["gate-recheck-handoff", "state/handoffs/h1.md"], repo
+            )
+        assert "gate-recheck-handoff" in str(exc.value)
+
     def test_cleared_gate_recheck_lands_ready_to_fire(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)

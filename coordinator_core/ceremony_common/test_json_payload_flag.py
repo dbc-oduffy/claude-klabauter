@@ -134,3 +134,46 @@ def test_file_channel_accepts_a_bom_prefixed_payload(tmp_path):
     assert result.error is None
     assert result.consumed == 2
     assert result.value == {"j-kind": {"disposition": "ack-nil"}}
+
+
+def test_inline_quote_stripped_payload_names_the_transport():
+    """A `.cmd` forwarder's `%*` strips the double quotes from a JSON
+    payload on Windows, so the parser sees a quote-free object and the bare
+    diagnostic blames a payload that was well-formed when sent. The hint
+    names the vehicle and the file channel instead."""
+    stripped = "{lesson-worth-capturing:{disposition:skip},j-kind:{disposition:ack-nil}}"
+    result = resolve_json_payload_flag(["apply", "--decisions", stripped], 1)
+
+    assert result.consumed == 2
+    assert result.value is None
+    assert result.error is not None
+    assert result.error.startswith("malformed --decisions JSON: ")
+    assert ".cmd" in result.error
+    assert "--decisions-file" in result.error
+
+
+def test_inline_malformed_but_quoted_payload_gets_no_transport_hint():
+    """A payload that reached the parser WITH its quotes intact did not lose
+    them in transit, so naming the forwarder would be a guess."""
+    result = resolve_json_payload_flag(["apply", "--decisions", '{"a": }'], 1)
+
+    assert result.error is not None
+    assert result.error.startswith("malformed --decisions JSON: ")
+    assert ".cmd" not in result.error
+
+
+def test_non_container_malformed_payload_gets_no_transport_hint():
+    result = resolve_json_payload_flag(["apply", "--decisions", "not-json-at-all"], 1)
+
+    assert result.error is not None
+    assert ".cmd" not in result.error
+
+
+def test_file_channel_malformed_payload_gets_no_transport_hint(tmp_path):
+    """The file channel never crossed a forwarder — the hint would be noise."""
+    payload_path = tmp_path / "decisions.json"
+    payload_path.write_text("{lesson:{disposition:skip}}", encoding="utf-8")
+    result = resolve_json_payload_flag(["apply", "--decisions-file", str(payload_path)], 1)
+
+    assert result.error is not None
+    assert ".cmd" not in result.error

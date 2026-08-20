@@ -171,7 +171,8 @@ import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from coordinator_core import resolve_coordinator_clone
+from coordinator_core import machine_resolver, resolve_coordinator_clone
+from coordinator_core._settings_home import native_path_form
 from coordinator_core.install import gen_settings_hooks
 from coordinator_core.ops import gen_claude_doe_shim, gen_doe_root_pointer
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -314,14 +315,32 @@ def _python_launch(script: str, *args: str) -> List[str]:
 
 
 def resolve_doe_clone() -> Tuple[str, bool]:
-    """Mirrors bash lines 79-98. Order: ``REPO_DOE_CLAUDE`` env, then
-    ``machine-local get repos.doe_claude`` (sibling-of-self or PATH). Returns
-    ``("", False)`` on total failure — NEVER raises (fresh-install machines
-    routinely fail to resolve this; every downstream check degrades to SKIP,
-    per the FAMILY-I contract in the module docstring)."""
+    """Order: ``REPO_DOE_CLAUDE`` env, then an in-process
+    ``machine_resolver.registry_get("repos.doe_claude")`` read, then
+    ``machine-local get repos.doe_claude`` (sibling-of-self or PATH) as the
+    CLI-spawn fallback rung. Returns ``("", False)`` on total failure — NEVER
+    raises (fresh-install machines routinely fail to resolve this; every
+    downstream check degrades to SKIP, per the FAMILY-I contract in the
+    module docstring).
+
+    The registry rung buys nothing on a genuinely fresh box — on first
+    install ``registry.local.toml`` has no ``repos.doe_claude`` either, this
+    rung misses, and the CLI spawn fires exactly as before. Its value is the
+    *repeat* run: once the key has been seeded, every subsequent
+    ``sandbox_check`` pass reads it for free instead of paying the spawn
+    again. ``registry_get`` does not normalize its return value the way the
+    CLI does (``_to_native_drive_path``) — a wrong (unnormalized) value here
+    would silently poison every downstream check that validates against it,
+    so its result is passed through ``native_path_form`` (the same
+    drive/MSYS repair ``gen_doe_root_pointer.py :: _resolve_doe_root`` wraps
+    both of its own rungs in) before being returned."""
     doe_clone = os.environ.get("REPO_DOE_CLAUDE", "")
     if doe_clone:
         return doe_clone, True
+
+    registry_value = machine_resolver.registry_get("repos.doe_claude")
+    if registry_value:
+        return native_path_form(registry_value), True
 
     ml = _which("machine-local")
     if ml:
@@ -374,7 +393,8 @@ def _usage_text() -> str:
         "\n"
         "Environment:\n"
         "  REPO_DOE_CLAUDE  Path to the resolved clone (primary resolution override).\n"
-        "                   Falls back to: machine-local get repos.doe_claude.\n"
+        "                   Falls back to: an in-process registry read (repos.doe_claude),\n"
+        "                   then machine-local get repos.doe_claude.\n"
         "                   At least one must be set for the clone checks to run.\n"
         "\n"
         "Exit codes:\n"

@@ -84,6 +84,14 @@ def test_arm_never_downgrades_or_repartitions_an_already_reviewed_row():
 
 def test_arm_does_not_override_row4_partitioned_or_its_mandatory_flag():
     kwargs = dict(_NO_REVIEW_KWARGS)
+    # `commit_count` alone no longer trips the brightline off a resolved
+    # `code_loc == 0` (2026-08-20, cross-repo/inbox/2026-08-20-example-retrieval-repo-em-
+    # review-gate-doc-only-em-discretion.md): the commit arm is a proxy for
+    # code risk and a doc-only session has none. This test is about the
+    # chain-wide arm never overriding row 4, so it needs a genuine row-4
+    # case — code present AND the commit threshold met.
+    kwargs["code_loc"] = 120
+    kwargs["gross_loc"] = 120
     kwargs["commit_count"] = 5  # trips the row-4 brightline
     baseline = decide_review_scale(**kwargs)
     decision = decide_review_scale(**kwargs, oracle_report=_report(_CHAIN_WEIGHT_CEILING * 10))

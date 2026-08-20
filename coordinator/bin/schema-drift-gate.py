@@ -54,7 +54,7 @@ def _legacy_fn() -> "NoReturn":  # type: ignore[name-defined]
     raise RuntimeError(
         "schema-drift-gate: coordinator_core seam absent — no bash fallback "
         "under the debash big-bang cutover. Install/repair coordinator_core "
-        "(CLAUDE_KLABAUTER_ROOT) and retry."
+        "(the engine root) and retry."
     )
 
 

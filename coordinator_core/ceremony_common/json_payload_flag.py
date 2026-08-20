@@ -88,7 +88,12 @@ def resolve_json_payload_flag(
             return JsonPayloadFlag(consumed=2, value=json.loads(raw), error=None)
         except json.JSONDecodeError as exc:
             return JsonPayloadFlag(
-                consumed=2, value=None, error=f"malformed --{flag} JSON: {exc}"
+                consumed=2,
+                value=None,
+                error=(
+                    f"malformed --{flag} JSON: {exc}"
+                    f"{_inline_transport_hint(raw, flag)}"
+                ),
             )
 
     if token == file_flag:
@@ -115,6 +120,51 @@ def resolve_json_payload_flag(
 
     return JsonPayloadFlag(consumed=0, value=None, error=None)
 
+
+def _inline_transport_hint(raw: str, flag: str) -> str:
+    """Returns a suffix naming the TRANSPORT when a payload that failed to
+    parse carries the fingerprint of `.cmd`-forwarder quote-stripping, else
+    an empty string.
+
+    The bare `malformed --<flag> JSON` diagnostic blames the caller's
+    payload, and on Windows that is usually wrong: the operator's JSON was
+    well-formed and the `.cmd` forwarder's `%*` ate the double quotes on the
+    way through, so the parser sees `{lesson-worth-capturing:{disposition:
+    skip}}`. The error is correct-looking and misdirects — an EM who trusts
+    it rewrites a payload that was never malformed instead of changing
+    vehicle (cross-repo/inbox/2026-08-20-doe-claude-em-cmd-forwarder-eats-
+    json-and-two-smaller-seams.md, item 1).
+
+    Fingerprint, deliberately narrow: the received value opens a JSON
+    container but contains no `"` at all. A stripped payload cannot contain
+    one by construction, and a genuinely malformed payload that also happens
+    to be entirely quote-free is not a shape any of these call sites'
+    decisions maps can take — every key is a string. Truncation by cmd.exe's
+    8191-char cap is a DIFFERENT failure with its own message (`The command
+    line is too long.`) and never reaches this parse, so it is not hinted at
+    here.
+
+    Negative-spec:
+        - Does NOT inspect the process's own argv, environment, or parent
+          to confirm a `.cmd` forwarder was really the vehicle. The hint is
+          phrased as a possibility to check, not an assertion, precisely
+          because this module cannot see the transport. Claiming a cause it
+          did not observe would trade one confident misdirection for
+          another.
+        - Does NOT fire for the file channel. A payload that travelled as a
+          file never crossed a forwarder, so the hint would be noise there.
+    """
+    stripped = raw.lstrip()
+    if not stripped.startswith(("{", "[")):
+        return ""
+    if '"' in raw:
+        return ""
+    return (
+        f" — the received value contains no double quotes at all, the"
+        f" fingerprint of a `.cmd` forwarder eating them on Windows;"
+        f" the payload as sent may have been well-formed."
+        f" Pass it as a file instead: --{flag}-file <path>."
+    )
 
 def detect_conflicting_payload_channels(
     tokens: Sequence[str], flag: str = "decisions"

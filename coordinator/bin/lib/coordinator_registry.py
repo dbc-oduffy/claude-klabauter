@@ -64,6 +64,7 @@ from machine_local_impl_resolve import (  # noqa: E402
     claude_home as _mlir_claude_home,
     machine_local_bin_candidates as _mlir_machine_local_bin_candidates,
     machine_local_impl_path as _mlir_machine_local_impl_path,
+    registry_get as _mlir_registry_get,
 )
 
 # ---------------------------------------------------------------------------
@@ -121,11 +122,18 @@ def _registry_machine_local_impl() -> str:
 def _registry_machine_local_get(key: str) -> str | None:
     """Call machine-local get <key> and return the value, or None on failure.
 
+    In-process FIRST via machine_local_impl_resolve.registry_get(key) —
+    returned when truthy. Only on None does this fall through to the
+    existing subprocess spawn below, which stays the fallback rung.
+
     Uses sys.executable (the interpreter running this module) — no subprocess
     probing needed; safe on macOS, Linux, and Windows. CREATE_NO_WINDOW guard
     suppresses the Windows console popup (portable: getattr resolves to 0 on
     non-Windows).
     """
+    _in_process = _mlir_registry_get(key)
+    if _in_process:
+        return _in_process
     impl = _registry_machine_local_impl()
     cmd = [sys.executable, impl, "get", key]
     try:
@@ -393,6 +401,8 @@ if not os.path.exists(_MANIFEST_PATH):
     # one exists on disk; the mirror candidate is never removed, only tried
     # last. Spec backlink: machine_local_impl_resolve.py module docstring.
     _doe = os.environ.get("DOE_ROOT", "").strip() or os.environ.get("REPO_DOE_CLAUDE", "").strip()
+    if not _doe:
+        _doe = _mlir_registry_get("repos.doe_claude") or ""
     if not _doe:
         for _ml_cand in _mlir_machine_local_bin_candidates():
             if not os.path.exists(_ml_cand):
@@ -832,8 +842,14 @@ def doe_root() -> str:
     # codename-free rung ALSO resolves (e.g. a stale or genuinely published
     # marketplace install), the ladder below used to win, silently returning
     # a byte-copy install instead of the registry-anchored source tree — see
+    # state/review-findings/2026-08-08-codename-free-partitioned/slice-B-doe-root.md
+    # § B2 (the primary precedence evidence; the separate
     # cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-close-terminal-and-scrub-key.md
-    # § 3.
+    # § 3 incident is a scrubbed registry key masking a cross-repo-memo
+    # send-path defect, not this precedence issue).
+    #
+    # This registry read is now in-process (machine_local_impl_resolve.
+    # registry_get()), CLI spawn retained as the fallback rung.
     val = _registry_machine_local_get("repos.doe_claude")
     if val:
         return val

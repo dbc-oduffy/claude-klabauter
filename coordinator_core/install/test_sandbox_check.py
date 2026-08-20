@@ -102,6 +102,75 @@ def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch
     assert clone == ""
 
 
+def test_ac10_resolve_doe_clone_reads_seeded_registry_in_process_before_cli_spawn(monkeypatch, tmp_path):
+    """AC10: with REPO_DOE_CLAUDE unset, a seeded scratch registry, and
+    `_run` monkeypatched to raise, resolve_doe_clone() returns the registered
+    root and (value, True) — the in-process registry rung must resolve
+    without ever reaching the CLI-spawn fallback."""
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+
+    def _boom(*a, **kw):
+        raise AssertionError("resolve_doe_clone must not spawn the CLI when the registry rung resolves")
+
+    monkeypatch.setattr("coordinator_core.install.sandbox_check._run", _boom)
+
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    (reg_dir / "registry.toml").write_text('"repos.doe_claude" = "/scratch/DoE-claude"\n')
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    clone, resolved = resolve_doe_clone()
+    assert resolved is True
+    assert clone == "/scratch/DoE-claude"
+
+
+def test_ac10_resolve_doe_clone_reaches_cli_spawn_when_registry_empty(monkeypatch, tmp_path):
+    """AC10 (second half): with the registry empty, `_run` is still reached
+    — the CLI-spawn fallback rung is preserved, unchanged."""
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    reached = {"called": False}
+
+    def _fake_run(cmd, *a, **kw):
+        reached["called"] = True
+        raise AssertionError("simulated CLI failure")
+
+    monkeypatch.setattr("coordinator_core.install.sandbox_check._run", _fake_run)
+    monkeypatch.setattr(
+        "coordinator_core.install.sandbox_check._which", lambda name: "/usr/bin/machine-local"
+    )
+
+    with pytest.raises(AssertionError, match="simulated CLI failure"):
+        resolve_doe_clone()
+    assert reached["called"] is True
+
+
+def test_ac4b_resolve_doe_clone_normalizes_msys_mount_form_registry_value(monkeypatch, tmp_path):
+    """The in-process registry rung's return value is normalized (drive/MSYS
+    form) via `native_path_form` — the same repair
+    `gen_doe_root_pointer.py :: _resolve_doe_root` wraps both of its own
+    rungs in — rather than the raw stored string. Mount-form (`/x/...`) is
+    the shape this repair actually acts on; gated to `os.name == "nt"`, a
+    no-op on POSIX."""
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    (reg_dir / "registry.toml").write_text('"repos.doe_claude" = "/x/DoE-claude"\n')
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    clone, resolved = resolve_doe_clone()
+    assert resolved is True
+    if os.name == "nt":
+        assert clone == "X:/DoE-claude"  # abs-path-ok: synthetic MSYS-normalization fixture value, not a real path
+    else:
+        assert clone == "/x/DoE-claude"
+
+
 # ---------------------------------------------------------------------------
 # run_all -- transport-failure path (addendum rule 3b, dedicated exit code)
 # ---------------------------------------------------------------------------

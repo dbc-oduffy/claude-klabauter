@@ -389,7 +389,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
             mark_claim_stamped(handoff_claim_dir(_common_dir, handoff_path))
         return {"cli": "archive-stamp-cli", "verb": "claim-handoff", "handoff_path": args[1]}
 
-    if verb == "gate-recheck":
+    if verb in ("gate-recheck", "gate-recheck-handoff"):
         # Piece A (cross-repo/inbox/2026-08-04-example-market-data-repo-em-
         # pickup-jgate-cleared-strands-gate-fields.md) — records the
         # `jgate: cleared` disposition BEFORE `claim-handoff` moves the
@@ -406,9 +406,17 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         # rather than inventing a second error-detail channel on a
         # composed primitive this module does not own (archive_stamp.py is
         # out of scope for this change).
+        #
+        # Both spellings are accepted. `build_gate_recheck_directive` now
+        # emits `gate-recheck-handoff` — the only verb archive-stamp-cli
+        # itself accepts, so a brief run verbatim by hand works. The short
+        # `gate-recheck` stays dispatchable here because decision objects
+        # written before that change carry it and are still replayable.
+        # The returned `verb` echoes what was received rather than
+        # normalizing, so the report names the argv actually dispatched.
         if len(args) != 3:
             raise UnrecognizedDirective(
-                "archive-stamp-cli gate-recheck: expected 2 arguments (<handoff_path> <at>)"
+                f"archive-stamp-cli {verb}: expected 2 arguments (<handoff_path> <at>)"
             )
         handoff_path = _assert_in_repo_root(Path(args[1]), repo_root)
         at = args[2]
@@ -432,10 +440,10 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         ok = _normalize_primitive_result(rc)
         if not ok:
             raise RuntimeError(
-                f"archive-stamp-cli gate-recheck {args[1]}: refused — "
+                f"archive-stamp-cli {verb} {args[1]}: refused — "
                 f"{buf.getvalue().strip() or 'no detail on stderr'}"
             )
-        return {"cli": "archive-stamp-cli", "verb": "gate-recheck", "handoff_path": args[1]}
+        return {"cli": "archive-stamp-cli", "verb": verb, "handoff_path": args[1]}
 
     if verb == "restamp-execution-sha":
         # AC18 (chunk C9) — re-stamps `execution_authorized_sha` on the ONE

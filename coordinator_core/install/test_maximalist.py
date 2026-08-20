@@ -1422,6 +1422,7 @@ def test_resolve_coordinator_live_path_falls_back_to_tier2_on_tier1_error(monkey
 # ---------------------------------------------------------------------------
 
 from coordinator_core.install import _shared as _shared_module
+from coordinator_core import machine_resolver as _machine_resolver_module
 
 
 def _real_claude_klabauter_clone_root() -> Path:
@@ -1881,3 +1882,62 @@ def test_msys_mount_form_doe_clone_is_normalized_before_every_downstream_use(stu
     out = capsys.readouterr().out
     assert f"{native[0].upper()}:{native[2:]}" in out
     assert mount_form not in out
+
+
+# ---------------------------------------------------------------------------
+# AC9 -- Phase 3 Step 3 seed read-back verification (C4)
+#
+# `machine-local set` rc==0 is an intention, not an artifact: these pin that
+# a read-back through the same spawn-free seam (`_registry_get_for_check`'s
+# `machine_resolver.registry_get`) distinguishes an actually-seeded registry
+# from a set call that merely returned success. The `_run` and
+# `resolve_machine_local_cli` seams are faked so no real `machine-local`
+# subprocess or registry file is touched.
+# ---------------------------------------------------------------------------
+
+
+def test_seed_doe_claude_verify_mismatch_reports_named_failure(stub_env, monkeypatch, capsys):
+    """set faked rc=0, registry left unseeded (registry_get returns None) ->
+    a NAMED failure line, not the seeded-success line."""
+    monkeypatch.setattr(_shared_module, "resolve_machine_local_cli", lambda plugin_root: ["fake-ml-cli"])
+    monkeypatch.setattr(maximalist, "_run", lambda cmd, env=None: 0)
+    monkeypatch.setattr(_machine_resolver_module, "registry_get", lambda key: None)
+
+    rc = maximalist.run(
+        check_only=False,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=str(stub_env["doe_clone"]),
+        claude_home_dir=str(stub_env["claude_home"]),
+    )
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    assert "repos.doe_claude: seeded and verified" not in captured.out
+    assert "ERROR: machine-local set repos.doe_claude reported success" in captured.err
+    assert "registry.local.toml" in captured.err
+
+
+def test_seed_doe_claude_verify_match_reports_verified(stub_env, monkeypatch, capsys):
+    """set faked rc=0, registry seeded with the expected value (read back
+    through registry_get) -> the verified line is emitted."""
+    monkeypatch.setattr(_shared_module, "resolve_machine_local_cli", lambda plugin_root: ["fake-ml-cli"])
+    monkeypatch.setattr(maximalist, "_run", lambda cmd, env=None: 0)
+    doe_clone = str(stub_env["doe_clone"])
+    monkeypatch.setattr(
+        _machine_resolver_module, "registry_get", lambda key: doe_clone if key == "repos.doe_claude" else None
+    )
+
+    rc = maximalist.run(
+        check_only=False,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=doe_clone,
+        claude_home_dir=str(stub_env["claude_home"]),
+    )
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert f"repos.doe_claude: seeded and verified ({doe_clone})" in out

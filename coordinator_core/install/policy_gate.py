@@ -81,6 +81,17 @@ _NO_CONSOLE = no_console_creationflags()
 # module docstring, property (b).
 _INHERITED_POLICY_ENV = "PSExecutionPolicyPreference"
 
+# Module-search path the probe child needs to autoload the module owning
+# `Get-ExecutionPolicy` (Microsoft.PowerShell.Security). Absent from the
+# environment of an agent-spawned Python process on this fleet, and passing
+# `env=` to subprocess replaces the child's environment wholesale, so the
+# child inherits the absence and CANNOT resolve the cmdlet: it exits 1 with
+# CouldNotAutoloadMatchingModule and every host verdict resolves RED on a
+# box whose policy is in fact readable and permissive. Restored only when
+# missing, never overridden -- an operator who set it deliberately keeps it.
+_PS_MODULE_PATH_ENV = "PSModulePath"
+_WINDOWS_POWERSHELL_MODULE_DIR = r"system32\WindowsPowerShell\v1.0\Modules"
+
 # Policy values under which a `.ps1` launcher runs without a signature.
 # Anything else (Restricted, AllSigned, Default, Undefined-with-no-signed-
 # fallback, or a value we don't recognize) is NOT a green.
@@ -128,6 +139,18 @@ class HostVerdict:
     THIS host's own .ps1-execution soundness) but still reported in
     `host_verdicts` and folded into `reason` so the operator sees which
     question could not be asked here, not just a bare RED.
+
+    `unreadable` is distinct from a RED that reflects a genuinely
+    restrictive policy. Both are `green=False`, but they answer different
+    questions: `unreadable=True` means the probe itself never produced a
+    parsed policy token (host missing, timed out, failed to launch,
+    non-zero exit, undecodable or unparseable output — "this box was never
+    asked"), while `unreadable=False` on a RED verdict means the probe DID
+    return a single parsed token and that token is not in
+    `_PERMISSIVE_POLICIES` ("this box was asked and said no"). Per the
+    module docstring's property (c), neither case is a green — this field
+    only makes the two RED reasons legible to a caller, it does not change
+    which one wins.
     """
 
     host: str
@@ -135,6 +158,7 @@ class HostVerdict:
     effective_policy: Optional[str]
     reason: str
     not_applicable: bool = False
+    unreadable: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,6 +168,7 @@ class PolicyGateVerdict:
     green: bool
     host_verdicts: List[HostVerdict] = field(default_factory=list)
     reason: str = ""
+    unreadable: bool = False
 
     def verdict_for(self, host: str) -> Optional[HostVerdict]:
         for hv in self.host_verdicts:
@@ -155,22 +180,42 @@ class PolicyGateVerdict:
 ProbeFn = Callable[[str], subprocess.CompletedProcess]
 
 
+def _probe_env() -> dict:
+    """The environment handed to a probe child: this process's own, minus the
+    inherited-policy variable (property (b)), plus a restored
+    ``PSModulePath`` when this process has none.
+
+    Negative-spec: does NOT override an existing ``PSModulePath``. An
+    operator or a host that already set one keeps it verbatim -- this only
+    fills an absence, and an absence is the case that silently broke the
+    gate rather than one anybody chose.
+    """
+    env = dict(os.environ)
+    env.pop(_INHERITED_POLICY_ENV, None)
+    if not env.get(_PS_MODULE_PATH_ENV):
+        system_root = env.get("SystemRoot")
+        if system_root:
+            env[_PS_MODULE_PATH_ENV] = os.path.join(
+                system_root, _WINDOWS_POWERSHELL_MODULE_DIR
+            )
+    return env
+
+
 def _default_probe(executable: str) -> subprocess.CompletedProcess:
-    """Run `Get-ExecutionPolicy` on `executable` with the inherited preference cleared.
+    """Run `Get-ExecutionPolicy` on `executable` with the probe environment
+    `_probe_env` composes.
 
     This is the real subprocess seam. Tests inject a fake via the
     `probe` parameter on `evaluate_policy_gate` / `_probe_host` rather
     than monkeypatching this function, so this stays a thin, honest
     wrapper with no fallback logic to accidentally paper over a RED.
     """
-    env = dict(os.environ)
-    env.pop(_INHERITED_POLICY_ENV, None)
     return subprocess.run(
         [executable, "-NoProfile", "-NonInteractive", "-Command", _PROBE_COMMAND],
         capture_output=True,
         text=True,
         timeout=_PROBE_TIMEOUT_SECONDS,
-        env=env,
+        env=_probe_env(),
         **_NO_CONSOLE,
     )
 
@@ -203,16 +248,19 @@ def _probe_host(host: str, probe: ProbeFn) -> HostVerdict:
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: host not found on PATH",
+            unreadable=True,
         )
     except subprocess.TimeoutExpired:
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: probe timed out after {_PROBE_TIMEOUT_SECONDS}s",
+            unreadable=True,
         )
     except OSError as exc:
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: probe failed to launch ({exc})",
+            unreadable=True,
         )
     except UnicodeDecodeError as exc:
         # Review: coordinator:code-reviewer (C2, P2) — subprocess.run(text=True)
@@ -225,6 +273,7 @@ def _probe_host(host: str, probe: ProbeFn) -> HostVerdict:
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: probe output could not be decoded ({exc})",
+            unreadable=True,
         )
 
     if proc.returncode != 0:
@@ -233,6 +282,7 @@ def _probe_host(host: str, probe: ProbeFn) -> HostVerdict:
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: probe exited {proc.returncode}{detail}",
+            unreadable=True,
         )
 
     raw = (proc.stdout or "").strip()
@@ -244,6 +294,7 @@ def _probe_host(host: str, probe: ProbeFn) -> HostVerdict:
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: probe output unparseable ({raw!r})",
+            unreadable=True,
         )
 
     policy = lines[0]
@@ -285,7 +336,16 @@ def evaluate_policy_gate(
     red = [hv for hv in host_verdicts if not hv.green and not hv.not_applicable]
     if red:
         reason = "; ".join(hv.reason for hv in red)
-        return PolicyGateVerdict(green=False, host_verdicts=host_verdicts, reason=reason)
+        # `unreadable` distinguishes "this box was never asked" (a probe
+        # that produced no parsed policy token) from "this box was asked
+        # and said no" (a parsed, restrictive policy) — see HostVerdict's
+        # docstring. True if ANY applicable RED host is unreadable, so a
+        # caller (e.g. `_write_ps1_policy_status`) can record which
+        # happened without re-deriving it from `reason` text.
+        unreadable = any(hv.unreadable for hv in red)
+        return PolicyGateVerdict(
+            green=False, host_verdicts=host_verdicts, reason=reason, unreadable=unreadable
+        )
 
     reason = "; ".join(hv.reason for hv in host_verdicts)
     return PolicyGateVerdict(green=True, host_verdicts=host_verdicts, reason=reason)

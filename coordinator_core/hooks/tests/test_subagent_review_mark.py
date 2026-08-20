@@ -39,7 +39,16 @@ from coordinator_core.hooks import subagent_review_mark as mod
 _SESSION_ID = "a1b2c3d4-e5f6-4777-8888-99990000aaaa"
 _AGENT_ID = "coordinatorcode-reviewer-fc901831"
 _AGENT_TYPE = "code-reviewer"
+#: The shape a real spawn writes: `<label>-<nonce>.md`. Deliberately NOT
+#: `<label>.<agent_id>.md` -- see `_write_sidecar`.
+_SIDECAR_NAME = "coordinatorcode-reviewer-36c5be9c.md"
+_SIDECAR_REL = f"state/subagent-share/{_SESSION_ID}/{_SIDECAR_NAME}"
 _HANDOFF_ID = "2026-08-20-the-refusal-dies-and-the-mark-falls-out"
+
+
+#: Sentinel: `None` and `""` are both meaningful transcript values, so
+#: neither can double as "the caller said nothing".
+_UNSET = object()
 
 
 def _run(coro):
@@ -47,9 +56,18 @@ def _run(coro):
 
 
 def _write_sidecar(worktree: Path, ranges, *, session_id: str = _SESSION_ID,
-                   agent_id: str = _AGENT_ID, agent_type: str = _AGENT_TYPE) -> Path:
-    """Author the run-report sidecar at the BY-CONSTRUCTION path (AC14):
-    `state/subagent-share/<session_id>/<label>.<agent_id>.md`."""
+                   agent_type: str = _AGENT_TYPE,
+                   filename: str = _SIDECAR_NAME) -> Path:
+    """Author the run-report sidecar at the NONCE-named path a real spawn
+    actually produces -- `<label>-<nonce>.md`, not the by-construction
+    `<label>.<agent_id>.md` this suite used to assume.
+
+    That assumption is the whole of the defect these tests now cover:
+    `provision_report._provision` picks the name at PreToolUse, where
+    `agent_id` does not exist, so no sidecar on disk has ever carried the
+    derived name (0 of 6,503 measured). A fixture spelling a name no producer
+    writes cannot fail when the op cannot reach it.
+    """
     share = worktree / "state" / "subagent-share" / session_id
     share.mkdir(parents=True, exist_ok=True)
     body = "---\n"
@@ -58,9 +76,42 @@ def _write_sidecar(worktree: Path, ranges, *, session_id: str = _SESSION_ID,
         for r in ranges:
             body += f"  - {r}\n"
     body += "verdict: OK\n---\n\nfindings\n"
-    path = share / f"{agent_type}.{agent_id}.md"
+    path = share / filename
     path.write_text(body, encoding="utf-8")
     return path
+
+
+def _write_transcript(worktree: Path, sidecar_rel, *,
+                      agent_id: str = _AGENT_ID) -> str:
+    """Author the finishing agent's transcript at the harness's own
+    `agent-<agent_id>.jsonl` shape, carrying the `sidecar_path:` marker
+    `enforce-agent-dispatch-mode.py::_compose_sidecar_offer_text` appends to
+    the child's prompt.
+
+    The record is JSON-ENCODED, not raw prose, because that is what the op
+    reads on the live path -- the marker sits inside a JSON string with its
+    newlines escaped, and a fixture that skipped the encoding would not prove
+    the terminator set survives it. `sidecar_rel=None` writes a transcript
+    with no marker: a spawn that provisioned no sidecar.
+    """
+    d = worktree / ".transcripts"
+    d.mkdir(parents=True, exist_ok=True)
+    prompt = "Review the frozen slice.\n"
+    if sidecar_rel is not None:
+        prompt += (
+            "\nYou have a run-report sidecar for this dispatch -- capture run "
+            "notes and any divergence there.\nsidecar_path: " + sidecar_rel
+        )
+    prompt += "\n\nYou are acting as a reviewer.\n"
+    path = d / f"agent-{agent_id}.jsonl"
+    path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": prompt}})
+        + "\n"
+        + json.dumps({"type": "assistant", "message": {"content": []}})
+        + "\n",
+        encoding="utf-8",
+    )
+    return str(path)
 
 
 def _write_pending_diff_record(worktree: Path, sha_range: str, *,
@@ -102,8 +153,16 @@ class _GitStub:
 def _invoke(worktree: Path, git: _GitStub, marks: list, *,
             agent_type: str = _AGENT_TYPE, agent_id: str = _AGENT_ID,
             session_id: str = _SESSION_ID,
+            transcript=_UNSET,
             handoff_id: Optional[str] = _HANDOFF_ID):
-    """Drive the registered handler with every external seam stubbed."""
+    """Drive the registered handler with every external seam stubbed.
+
+    `transcript` defaults to one pointing at `_SIDECAR_REL` -- the REACHABLE
+    case. Pass an explicit path, `None`, or `""` to vary it.
+    """
+    if transcript is _UNSET:
+        transcript = _write_transcript(worktree, _SIDECAR_REL, agent_id=agent_id)
+
     def _fake_mark(*args, **kwargs):
         marks.append((args, kwargs))
         return True
@@ -116,6 +175,7 @@ def _invoke(worktree: Path, git: _GitStub, marks: list, *,
             "session_id": session_id,
             "agent_id": agent_id,
             "agent_type": agent_type,
+            "agent_transcript_path": transcript or "",
             "cwd": str(worktree),
         }, repo_root=str(worktree)))
 
@@ -166,9 +226,9 @@ def test_marks_the_reviewed_shas_with_agent_and_sidecar_provenance(tmp_path: Pat
     assert sorted(args[1]) == ["sha_a", "sha_b"]
     assert args[2] == _AGENT_TYPE
     assert kwargs["agent_id"] == _AGENT_ID
-    assert kwargs["sidecar_path"] == (
-        f"state/subagent-share/{_SESSION_ID}/{_AGENT_TYPE}.{_AGENT_ID}.md"
-    ), "sidecar_path must be the forward-slash relative path, not an absolute one"
+    assert kwargs["sidecar_path"] == _SIDECAR_REL, (
+        "sidecar_path must be the forward-slash relative path, not an absolute one"
+    )
 
 
 def test_handler_always_returns_no_advisory(tmp_path: Path) -> None:
@@ -333,44 +393,169 @@ def test_containment_ranges_are_resolved_one_call_each(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC14 — the sidecar resolves by construction, never by scan
+# Sidecar resolution — read off the finishing agent's own transcript.
+#
+# This section SUPERSEDES the AC14 by-construction coverage it replaces. Those
+# tests asserted that `<label>.<agent_id>.md` was COMPUTED correctly (it was)
+# and that a nonce-named sidecar was unreachable (it was) -- and both passed
+# while the op could not fire for a single real dispatch, because every real
+# sidecar is nonce-named. An unreachability assertion needs a REACHABLE case
+# beside it or it only measures its own precondition; `test_a_nonce_named_
+# sidecar_is_reached_through_the_transcript` is that case, and it is the one
+# test here that would have caught the original defect.
 # ---------------------------------------------------------------------------
 
-def test_sidecar_path_is_derived_from_label_and_agent_id() -> None:
-    """AC14: `<label>.<agent_id>.md`, computed — the nonce-named shape had no
-    `agent_id` binding at all and was unresolvable by construction."""
-    path = mod._resolve_sidecar_path(_SESSION_ID, _AGENT_TYPE, _AGENT_ID)
+def test_a_nonce_named_sidecar_is_reached_through_the_transcript(tmp_path: Path) -> None:
+    """THE REACHABLE CASE. A sidecar named the way a real spawn names it, found
+    through the transcript the harness bound to this agent_id, produces a mark.
 
-    assert path == Path("state") / "subagent-share" / _SESSION_ID / (
-        f"{_AGENT_TYPE}.{_AGENT_ID}.md"
-    )
-
-
-def test_a_nonce_named_sidecar_is_not_found_by_a_glob(tmp_path: Path) -> None:
-    """AC14 negative-spec: a pre-existing `<label>-<nonce>.md` sidecar stays
-    permanently unresolvable. If this op ever grows the directory scan K-005
-    condemned by name, this test goes green for the wrong reason and the
-    no-backfill rule is quietly gone."""
-    share = tmp_path / "state" / "subagent-share" / _SESSION_ID
-    share.mkdir(parents=True)
-    (share / f"{_AGENT_TYPE}-deadbeef.md").write_text(
-        "---\nreviewed_range:\n  - aaa111..bbb222\n---\n", encoding="utf-8",
-    )
+    Every other test in this section constrains that path; this one proves it
+    exists at all."""
+    _write_sidecar(tmp_path, ["aaa111..bbb222"])
     _write_pending_diff_record(tmp_path, "aaa111..bbb222")
     git = _GitStub({"aaa111..bbb222": ["sha_a"]})
     marks: list = []
 
     _invoke(tmp_path, git, marks)
 
-    assert marks == [], "a nonce-named sidecar must not be reachable"
+    assert len(marks) == 1
+    _args, kwargs = marks[0]
+    assert kwargs["sidecar_path"] == _SIDECAR_REL
+    assert kwargs["agent_id"] == _AGENT_ID
 
 
-@pytest.mark.parametrize("agent_id", ["../escape", "has/slash", "has\\backslash"])
-def test_a_malformed_agent_id_resolves_to_no_sidecar(agent_id: str) -> None:
-    """AC14: an `agent_id` that does not survive sanitization unchanged
-    resolves to nothing rather than to a guessed neighbour — the path is a
-    filename component, never a path."""
-    assert mod._resolve_sidecar_path(_SESSION_ID, _AGENT_TYPE, agent_id) is None
+def test_the_marker_is_read_from_the_transcript_not_derived(tmp_path: Path) -> None:
+    """The resolved path is whatever the marker SAYS, including a home the op
+    could never have derived (the § 2.7 plan-sidecars route). A resolver that
+    reconstructed a path from session_id/label/agent_id passes every other test
+    in this file and fails this one."""
+    plan_rel = "state/plan-sidecars/2026-08-20-some-plan.code-review.md"
+    (tmp_path / "state" / "plan-sidecars").mkdir(parents=True)
+    (tmp_path / plan_rel).write_text(
+        "---\nreviewed_range:\n  - aaa111..bbb222\n---\n", encoding="utf-8",
+    )
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks,
+            transcript=_write_transcript(tmp_path, plan_rel))
+
+    assert len(marks) == 1
+    assert marks[0][1]["sidecar_path"] == plan_rel
+
+
+def test_the_by_construction_name_is_no_longer_consulted(tmp_path: Path) -> None:
+    """Regression pin on the defect itself. A sidecar sitting at the OLD
+    derived name, with no marker naming it, marks nothing -- the derivation is
+    gone, not merely demoted to a fallback that would resurrect the failure on
+    every dispatch that has no marker."""
+    _write_sidecar(tmp_path, ["aaa111..bbb222"],
+                   filename=f"{_AGENT_TYPE}.{_AGENT_ID}.md")
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, transcript=_write_transcript(tmp_path, None))
+
+    assert marks == []
+
+
+def test_a_transcript_with_no_marker_marks_nothing(tmp_path: Path) -> None:
+    """Fail-quiet: a spawn that provisioned no sidecar leaves no marker, and an
+    absent marker declines rather than guessing. K-005's negative-spec lives
+    here -- the tempting repair for this branch is the directory glob."""
+    _write_sidecar(tmp_path, ["aaa111..bbb222"])
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, transcript=_write_transcript(tmp_path, None))
+
+    assert marks == []
+
+
+@pytest.mark.parametrize("transcript", ["", None])
+def test_an_unforwarded_transcript_path_marks_nothing(tmp_path: Path, transcript) -> None:
+    """The relay leg. `agent_transcript_path` reaches this op only because the
+    SubagentStop shim forwards it; a shim that does not leaves the op inert
+    rather than marking off a reconstructed path."""
+    _write_sidecar(tmp_path, ["aaa111..bbb222"])
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, transcript=transcript)
+
+    assert marks == []
+
+
+def test_an_unreadable_transcript_marks_nothing_and_does_not_raise(tmp_path: Path) -> None:
+    """AC7: a transcript path that does not resolve to a readable file is the
+    ordinary degraded case, never a raise on a subagent's exit."""
+    _write_sidecar(tmp_path, ["aaa111..bbb222"])
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, transcript=str(tmp_path / "absent.jsonl"))
+
+    assert marks == []
+
+
+@pytest.mark.parametrize("value", [
+    "/etc/passwd",
+    "../../escape.md",
+    "state/../../escape.md",
+    "X:/claude-klabauter/state/subagent-share/s/x.md",
+])
+def test_a_marker_that_escapes_the_worktree_resolves_to_nothing(
+    tmp_path: Path, value: str,
+) -> None:
+    """The marker is authored by another repo's hook and read out of a file the
+    agent itself can write -- so it is untrusted input, not a path this op may
+    join onto the worktree unchecked. Absolute, traversing, and drive-qualified
+    values all decline.
+
+    The drive-qualified case is here because `PurePosixPath("X:/a").is_absolute()`
+    is False on every platform: without its own check it would join onto the
+    worktree and read outside it on Windows, which is first-class here."""
+    assert mod._SIDECAR_MARKER_RE.search(f"sidecar_path: {value}") is not None, (
+        "fixture must reach the resolver's path check, not die at the regex"
+    )
+    transcript = _write_transcript(tmp_path, value)
+
+    assert mod._resolve_sidecar_from_transcript(transcript) is None
+
+
+def test_only_the_first_marker_is_read(tmp_path: Path) -> None:
+    """A reviewer's own findings can quote a sidecar path (this suite's
+    fixtures do). The injected marker is in the FIRST user message, so the
+    first match wins and a later quotation cannot redirect the mark."""
+    d = tmp_path / ".transcripts"
+    d.mkdir(parents=True)
+    path = d / f"agent-{_AGENT_ID}.jsonl"
+    path.write_text(
+        json.dumps({"message": {"content": f"sidecar_path: {_SIDECAR_REL}"}}) + "\n"
+        + json.dumps({"message": {"content": "sidecar_path: state/other/quoted.md"}})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert mod._resolve_sidecar_from_transcript(str(path)) == Path(
+        "state", "subagent-share", _SESSION_ID, _SIDECAR_NAME,
+    )
+
+
+def test_the_scan_is_bounded(tmp_path: Path, monkeypatch) -> None:
+    """The read is capped: a marker beyond the limit is not found. Reviewer
+    transcripts routinely run to hundreds of KB and this hook fires on every
+    SubagentStop fleet-wide, so an unbounded read is a fleet-wide cost, not a
+    local one."""
+    monkeypatch.setattr(mod, "_TRANSCRIPT_SCAN_LIMIT_BYTES", 64)
+    transcript = _write_transcript(tmp_path, _SIDECAR_REL)
+
+    assert mod._resolve_sidecar_from_transcript(transcript) is None
 
 
 # ---------------------------------------------------------------------------
