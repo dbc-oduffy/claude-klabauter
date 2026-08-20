@@ -1164,3 +1164,25 @@ def test_help_flag_exits_0(stub_import_module):
     for flag in ("--help", "-h", "help"):
         rc = _cli.main([flag])
         assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# The advertised verb list must reach the PATH-TOUCH release path.
+#
+# `release-artifact artifact <repo-relative-path>` IS the release verb for a
+# claim `who-claims-path` reports. A peer EM read `_SUBCOMMANDS`, saw eight
+# verbs and no `release-path`, and reported a ledger-derived path claim as
+# having no exit while holding one — twice, across two memos
+# (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-ledger-derived-path-claim-
+# {has-no-release,narrowed}.md). Enumerating verbs without their classes is
+# what made a shipped capability unreachable by reading.
+# ---------------------------------------------------------------------------
+
+
+def test_subcommand_advertisement_names_the_artifact_path_class():
+    advert = _cli._SUBCOMMANDS
+    assert "artifact" in advert
+    assert "release-artifact <class>" in advert
+    # The class token alone is not enough — a reader must be able to tell it
+    # takes a PATH, without reading claims.py.
+    assert "PATH" in advert or "path" in advert

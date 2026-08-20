@@ -2646,3 +2646,142 @@ def test_classify_uncommitted_benign_noop_diagnostics_stay_empty_regardless_of_s
     assert commit_failed is False
     assert diagnostics == []
     assert empty_commit_set is True
+
+
+# ---------------------------------------------------------------------------
+# Stale-index rejection (`_reject_stale_index_paths`)
+#
+# state/bug-backlog/2026-08-19-shared-git-index-holds-stale-pre-head-sn-
+# b5b83e42e275.yaml: a path whose worktree matches HEAD while its index does
+# not is never a legitimate commit intent -- it is either the pre-commit blob
+# a pathspec commit left behind (committing it REVERTS that commit) or content
+# whose sole copy is the index. On 2026-08-20 the first shape landed through
+# `session.safe_commit_offer` as a54addce, reverting cd751b79's `ipc.py` fix
+# while every ordinary signal reported success.
+# ---------------------------------------------------------------------------
+
+
+def _stage_a_revert_of_head(repo: Path, rel_path: str) -> None:
+    """Reproduce the index residue: worktree == HEAD, index == the PREVIOUS
+    blob. Uses `update-index --cacheinfo` so the worktree is never touched --
+    the same divergence the shared tree exhibits after a pathspec commit."""
+    prev_blob = subprocess.run(
+        ["git", "rev-parse", f"HEAD~1:{rel_path}"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _git(["update-index", "--cacheinfo", f"100644,{prev_blob},{rel_path}"], repo)
+
+
+def test_refuses_a_path_whose_index_reverts_head(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "ipc.py", "original\n")
+    _git(["add", "--", "ipc.py"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "ipc.py", "the landed fix\n")
+    _git(["add", "--", "ipc.py"], repo)
+    _git(["commit", "-q", "-m", "land the fix"], repo)
+    landed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    _stage_a_revert_of_head(repo, "ipc.py")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["ipc.py"],
+            "message": "session tail: close-out",
+        }
+    )
+
+    assert result["committed"] is False
+    assert result["sha"] is None
+    assert "stale index" in result["error"]
+    assert "ipc.py" in result["error"]
+    # The landed fix is still what HEAD says, and still what the worktree says.
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert head == landed
+    assert (repo / "ipc.py").read_text(encoding="utf-8") == "the landed fix\n"
+
+
+def test_refuses_the_whole_call_when_one_grouped_path_is_stale(tmp_path):
+    """safe-commit-offer commits GROUPS it computed itself. A group carrying one
+    stale path must refuse rather than land the group and revert that path."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "ipc.py", "original\n")
+    _git(["add", "--", "ipc.py"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "ipc.py", "the landed fix\n")
+    _git(["add", "--", "ipc.py"], repo)
+    _git(["commit", "-q", "-m", "land the fix"], repo)
+
+    _stage_a_revert_of_head(repo, "ipc.py")
+    _seed_file(repo, "notes.md", "ordinary in-scope edit\n")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["ipc.py", "notes.md"],
+            "message": "session tail: close-out",
+        }
+    )
+
+    assert result["committed"] is False
+    assert "stale index" in result["error"]
+    assert _committed_files_at_head(repo) == ["ipc.py"]
+
+
+def test_index_only_content_is_refused_not_swept(tmp_path):
+    """The other direction the entry's negative_spec names: staged content with
+    a worktree identical to HEAD may be a peer's ONLY copy. Refuse; never
+    commit it, never clear it."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "peer.py", "seed\n")
+    _git(["add", "--", "peer.py"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "peer.py", "a live peer's uncommitted work\n")
+    _git(["add", "--", "peer.py"], repo)
+    _seed_file(repo, "peer.py", "seed\n")  # worktree back to HEAD, index is not
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["peer.py"],
+            "message": "close-out",
+        }
+    )
+
+    assert result["committed"] is False
+    assert "stale index" in result["error"]
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert staged == ["peer.py"]
+
+
+def test_ordinary_staged_commit_is_not_refused(tmp_path):
+    """The guard keys on worktree == HEAD AND index != HEAD. A deliberate
+    `git add` leaves worktree == index != HEAD and must commit unchanged."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "feature.py", "new work\n")
+    _git(["add", "--", "feature.py"], repo)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["feature.py"],
+            "message": "add feature",
+        }
+    )
+
+    assert result["committed"] is True
+    assert _committed_files_at_head(repo) == ["feature.py"]

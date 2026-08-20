@@ -1606,7 +1606,27 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
             )
 
     if not groups:
-        lines.append("Nothing to commit for session %s." % report["session_id"])
+        # "I could not look" must never render as "there is nothing". An empty
+        # `groups` has two causes that read identically to an operator: a
+        # genuinely clean tree, and a tree where every dirty path was seen and
+        # declined because nothing carried this session's claim — the shape a
+        # CLI-written file always takes, since only the Edit/Write hot path
+        # writes `touched.txt`. The `excluded` count is already stated above;
+        # this line adds the disposition and the route out, not a second count.
+        if excluded:
+            lines.append(
+                "Nothing to commit for session %s — every dirty path was seen "
+                "and declined; none carried this session's claim. A file a CLI "
+                "or a workflow-internal agent wrote for this session records no "
+                "claim and reads as untouched here. Commit it by name: "
+                '`coordinator-safe-commit "<subject>" -- <paths>`.'
+                % report["session_id"]
+            )
+        else:
+            lines.append(
+                "Nothing to commit for session %s — working tree clean."
+                % report["session_id"]
+            )
 
     for g in groups:
         preview = g["paths"][:_REPORT_PATH_PREVIEW_COUNT]

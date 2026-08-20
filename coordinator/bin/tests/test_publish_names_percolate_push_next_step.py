@@ -79,7 +79,14 @@ publish = _load_publish_module()
 _ROW_NAMES = ["row-a"]
 
 
-def _wire_common_fakes(monkeypatch, tmp_path, *, fail_row: bool = False):
+def _wire_common_fakes(
+    monkeypatch,
+    tmp_path,
+    *,
+    fail_row: bool = False,
+    rows: "list[str] | None" = None,
+    sigils: "dict[str, str] | None" = None,
+):
     def fake_row(name: str) -> str:
         src = tmp_path / f"src-{name}"
         dst = tmp_path / f"dst-{name}"
@@ -91,10 +98,17 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, fail_row: bool = False):
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
     )
+    _rows = rows if rows is not None else _ROW_NAMES
     monkeypatch.setattr(
         publish, "load_targets", lambda setup_dir, target_filter=None: [
-            fake_row(n) for n in _ROW_NAMES
+            fake_row(n) for n in _rows
         ]
+    )
+    # The dest-sigil map is how the next-step block groups rows by
+    # DESTINATION rather than per row; default {} models plain rows that
+    # share no mirror.
+    monkeypatch.setattr(
+        publish, "raw_dest_sigil_by_name", lambda setup_dir: dict(sigils or {})
     )
 
     class _FakeClaudeKlabauter:
@@ -189,3 +203,52 @@ def test_failed_row_does_not_print_next_step(monkeypatch, tmp_path, capsys):
     assert "Rows FAILED:" in combined
     assert "Next step:" not in combined
     assert "percolate-push" not in combined
+
+
+def test_mirror_rows_collapse_to_one_line_naming_the_mirror_key(
+    monkeypatch, tmp_path, capsys
+):
+    """Every row sharing a `publish-mirror:<key>` dest sigil must produce
+    exactly ONE next-step line naming that mirror key.
+
+    Regression pin for a live defect: the first cut keyed off
+    `mirror_expansion`, which is set only when a single bare row name
+    expands to its mirror. An ordinary no-argument publish leaves it None,
+    so a real 9-row klabauter round printed NINE lines naming eight
+    sub-rows nobody should invoke -- the exact noise the message register
+    forbids."""
+    mirror_rows = ["klab-bin", "klab-lib", "klab"]
+    _wire_common_fakes(
+        monkeypatch,
+        tmp_path,
+        rows=mirror_rows,
+        sigils={n: "publish-mirror:klab-mirror" for n in mirror_rows},
+    )
+
+    rc = publish.main([])
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+
+    assert rc == 0
+    next_step_lines = [ln for ln in combined.splitlines() if "Next step:" in ln]
+    assert len(next_step_lines) == 1, next_step_lines
+    assert "percolate-push klab-mirror" in next_step_lines[0]
+    # None of the sibling row names may be offered as the invocation.
+    for _row in ("klab-bin", "klab-lib"):
+        assert f"percolate-push {_row}" not in combined
+
+
+def test_non_mirror_rows_keep_their_own_lines(monkeypatch, tmp_path, capsys):
+    """Grouping is by dest, not a blanket collapse: two rows that share no
+    mirror sigil are two distinct destinations and each still needs its own
+    push."""
+    _wire_common_fakes(monkeypatch, tmp_path, rows=["solo-a", "solo-b"], sigils={})
+
+    publish.main([])
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+
+    next_step_lines = [ln for ln in combined.splitlines() if "Next step:" in ln]
+    assert len(next_step_lines) == 2, next_step_lines
+    assert "percolate-push solo-a" in combined
+    assert "percolate-push solo-b" in combined

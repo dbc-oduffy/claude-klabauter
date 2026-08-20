@@ -707,8 +707,19 @@ def test_compose_script_composes_a_staged_gate_fragment_without_suppressing_the_
     assert "review:coordinator:code-reviewer" in script
     # A gate stage's structured schema is present, but no early-return branch
     # is ever spliced for this post-execution caller.
+    #
+    # Scoped to the REVIEW gate deliberately: a bare `"return" not in script`
+    # was a proxy that stopped meaning what it says once the commit phase
+    # grew its own `return { halted: ... }` gate (example-retrieval-repo-em memo,
+    # 2026-08-20). Assert the absence of a review-gate return, not of every
+    # return in the emitted script.
     assert "sidecar_path" in script
-    assert "return" not in script
+    review_returns = [
+        line
+        for line in script.splitlines()
+        if "return" in line and "commit" not in line.lower()
+    ]
+    assert not review_returns, f"review stage spliced an early return: {review_returns}"
 
 
 def test_review_calls_carry_no_model_key_so_the_agent_definition_pins_the_tier():
@@ -962,3 +973,70 @@ def test_compose_script_commit_prompt_states_provenance_and_passes_run_checks():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# Commit-phase halt gate (example-retrieval-repo-em cross-repo memo, 2026-08-20)
+# ---------------------------------------------------------------------------
+
+
+def test_commit_phase_binds_its_result_and_gates_the_next_wave():
+    # Before this gate, `await agent(...)` discarded the commit agent's result
+    # and the next wave's phase followed unconditionally.
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "const commitWave1Results = await agent(" in script
+    assert "const commitWave2Results = await agent(" in script
+    assert script.count("return { halted:") == 2
+
+
+def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
+    # `null` is the engine's own value for an agent that died or was skipped;
+    # a returning-but-tokenless report is a refusal that still produced prose.
+    # Neither proves a commit landed, so both must fail the same way.
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "if (!commitWave1Results || !String(commitWave1Results).includes('COMMIT-LANDED'))" in script
+
+
+def test_commit_prompt_requires_the_landed_token_only_on_success():
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "COMMIT-LANDED <sha>" in script
+    # The prompt must say NOT to emit it on a refusal -- a token the agent
+    # emits unconditionally is not a gate.
+    assert "do NOT emit that line" in script
+
+
+def test_commit_gate_names_resume_path_not_just_the_failure():
+    # A halt the operator cannot act on is a stall. The reason must say how to
+    # continue after clearing the cause.
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "resumeFromRunId" in script
+
+
+def test_every_commit_phase_gets_its_own_uniquely_named_gate():
+    # A reused const name is a redeclaration error in the emitted script; a
+    # shared one would also let wave 2's gate read wave 1's result.
+    waves = [
+        [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])],
+        [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"])],
+        [_wave_row("C3", ["coordinator_core/ops/dispatch_emit/pathspec.py"])],
+    ]
+    script = compose_script(waves, name="wf", description="three waves")
+    bound = re.findall(r"const (commit\w+) = await agent\(", script)
+    assert len(bound) == 3
+    assert len(set(bound)) == 3, f"duplicate commit result bindings: {bound}"
+    for var in bound:
+        assert f"if (!{var} ||" in script
+
+
+def test_commit_gate_precedes_the_next_wave_phase():
+    # The whole point is ordering: the gate is worthless if it lands after the
+    # next wave's executors have already written.
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    first_gate = script.index("if (!commitWave1Results ||")
+    second_wave_commit = script.index("const commitWave2Results")
+    assert first_gate < second_wave_commit
+
+
+def test_gated_script_still_passes_the_workflow_contract_checker():
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert_zero_errors(script)

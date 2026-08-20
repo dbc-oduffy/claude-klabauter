@@ -185,6 +185,11 @@ _SWEEPING_PATHSPEC_LITERALS = frozenset({".", "./", ":/", ":(top)", "-A", "-a", 
 #: directory_pathspecs`).
 _GLOB_CHARS = frozenset("*?[")
 
+#: How many stale-index paths `_reject_stale_index_paths` names before it
+#: switches to a count. The 2026-08-20 measurement found 18 on this branch at
+#: once; a refusal message that scrolls is one an agent skims past.
+_STALE_INDEX_PATHS_SHOWN = 8
+
 def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[str]:
     """Return a human-readable rejection reason for the first sweeping
     pathspec element in `paths`, or `None` if none of them are sweeping.
@@ -237,6 +242,82 @@ def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[
                 "pathspec %r resolves to the repo root or an ancestor of it" % (p,)
             )
     return None
+
+
+def _reject_stale_index_paths(paths: List[str], worktree_root: str) -> Optional[str]:
+    """Return a rejection reason when any element of `paths` would commit a
+    STALE INDEX entry -- worktree identical to HEAD, index not -- or `None`.
+
+    state/bug-backlog/2026-08-19-shared-git-index-holds-stale-pre-head-sn-
+    b5b83e42e275.yaml: on this shared tree the index keeps the PRE-commit blob
+    for a path a pathspec commit just landed, so the path re-presents as `MM`
+    with an empty HEAD->worktree diff and a staged half that REVERTS the commit
+    that just landed. Committing it publishes that revert. It happened at HEAD
+    on 2026-08-20 (a54addce reverting cd751b79's `ipc.py` fix, restored at
+    d55d8e8e) through `session.safe_commit_offer`, which computes its own
+    pathspec -- so no operator ever saw the path list to sanity-check it, the
+    scoped tests still passed (they read the worktree), and the commit reported
+    success naming 14 in-scope files. Nothing in the ordinary signal set can
+    catch this; only the commit's own diff shows it.
+
+    "Worktree matches HEAD AND index does not" is never a legitimate commit
+    intent, in either direction: it is either the pre-commit blob above (a
+    revert) or index-only content whose sole copy is the index (this entry's
+    negative_spec names two live instances, +2062 and +1161 lines). Refusing
+    is right for both -- the first must not land, and the second must not be
+    swept away by a blanket `git restore --staged`.
+
+    Two batched git calls, independent of `len(paths)` -- the amplification
+    gate (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
+    forbids the per-path probe the bug entry's `repro_steps` describe, and this
+    runs on the commit hot path.
+
+    Fails OPEN (returns `None`) when either probe errors -- an unanswerable
+    git must not wedge every commit on the box. The stale-index shape is
+    persistent, not transient, so a probe that fails now catches it next call.
+
+    Not applied under `stage_patch`: that path stages from a patch file under a
+    process-private index and carries its own `stage_from_patch_cas_refusal`,
+    so the shared index's residue is not what it commits.
+    """
+    if not paths:
+        return None
+    worktree_probe = git_native._git(
+        ["-c", "core.quotepath=false", "diff", "--name-only", "HEAD", "--", *paths],
+        cwd=worktree_root,
+    )
+    index_probe = git_native._git(
+        [
+            "-c", "core.quotepath=false",
+            "diff", "--cached", "--name-only", "HEAD", "--", *paths,
+        ],
+        cwd=worktree_root,
+    )
+    if not (worktree_probe.ok and index_probe.ok):
+        return None
+
+    worktree_changed = {
+        line.strip() for line in worktree_probe.stdout.splitlines() if line.strip()
+    }
+    staged_only = sorted(
+        {line.strip() for line in index_probe.stdout.splitlines() if line.strip()}
+        - worktree_changed
+    )
+    if not staged_only:
+        return None
+
+    shown = ", ".join(staged_only[:_STALE_INDEX_PATHS_SHOWN])
+    if len(staged_only) > _STALE_INDEX_PATHS_SHOWN:
+        shown += " (+%d more)" % (len(staged_only) - _STALE_INDEX_PATHS_SHOWN,)
+    return (
+        "stale index on %d path(s): %s. Their worktree matches HEAD and their "
+        "index does not, so committing them publishes the index's version over "
+        "landed work. Read `git diff --cached -- <path>` first: it is either a "
+        "revert of an already-landed commit (clear it with `git restore "
+        "--staged -- <path>`) or content that exists ONLY in the index, which "
+        "may be a peer's sole copy. Re-issue without these paths."
+        % (len(staged_only), shown)
+    )
 
 
 def _reject_path_shaped_message(message: str) -> Optional[str]:
@@ -1110,6 +1191,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "pushed": None,
             "error": "ceremony.scoped_git_commit: rejected -- %s" % (sweep_reason,),
         }
+
+    # Stale-index rejection -- evaluated on the EXPANDED pathspec, before
+    # anything stages or commits. See `_reject_stale_index_paths` for the
+    # incident (a54addce silently reverting cd751b79 through safe-commit-
+    # offer) and for why the `stage_patch` path is carved out.
+    if stage_patch is None:
+        stale_reason = _reject_stale_index_paths(paths, worktree_root)
+        if stale_reason is not None:
+            return {
+                "committed": False,
+                "sha": None,
+                "pushed": None,
+                "error": "ceremony.scoped_git_commit: rejected -- %s"
+                % (stale_reason,),
+            }
 
     # Resolved ONCE, here, and reused by the post-commit `release_committed_
     # claims` call further down -- the CALLING session's own identity, never

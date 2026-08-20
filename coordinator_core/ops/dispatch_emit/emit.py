@@ -576,14 +576,34 @@ _PROVENANCE_HEADING = (
 )
 
 
+#: The machine-checkable success token an emitted commit agent must end its
+#: report with. The emitted gate below tests for exactly this string, so a
+#: refusal, a crash, or a `null` agent result all fail the same way — CLOSED.
+#:
+#: Why a token and not the agent's prose: a declined commit and a landed one
+#: read almost identically in a progress tree, and the decline reason lives
+#: inside an agent result rather than at a phase boundary (example-retrieval-repo-em
+#: cross-repo memo, 2026-08-20). A token is the only part of a free-form
+#: report a generated script can test without parsing narrative.
+#:
+#: Bias is deliberate: an agent that commits but omits the token halts a run
+#: that did not need halting, which costs a `resumeFromRunId`. The opposite
+#: bias loses chunk ids into someone else's commit subject, which is
+#: unrecoverable once pushed. Cheap-and-wrong-way-round beats expensive-and-
+#: silent.
+_COMMIT_LANDED_TOKEN = "COMMIT-LANDED"
+
+
 def _commit_agent_call(
     pathspec: list[str],
     phase_title: str,
     index: int,
     chunk_ids: list[str] | None = None,
     results_var: Optional[str] = None,
+    commit_var: str = "commitResult",
 ) -> str:
-    """Emit the wave's commit-agent call.
+    """Emit the wave's commit-agent call, plus the gate that halts the run
+    when that commit did not land (see ``_commit_halt_gate``).
 
     ``chunk_ids`` is load-bearing, not cosmetic: `close-out-and-stamp`
     joins a commit to a plan chunk on TWO legs -- the ``Deliverable-Id:``
@@ -644,6 +664,12 @@ def _commit_agent_call(
     static_prompt = (
         f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
         f"{subject_rule}"
+        f" When (and ONLY when) the commit has landed, end your report with"
+        f" the line '{_COMMIT_LANDED_TOKEN} <sha>'. If you refuse, or the"
+        f" commit does not land for any reason, do NOT emit that line —"
+        f" state the reason instead. The emitted run halts at this phase"
+        f" unless that line is present, so emitting it without a landed"
+        f" commit lets the next wave overwrite uncommitted work."
     )
 
     if results_var:
@@ -656,7 +682,7 @@ def _commit_agent_call(
         prompt_literal = _js_string_literal(static_prompt)
 
     call = (
-        "  await agent("
+        f"  const {commit_var} = await agent("
         f"{prompt_literal}, "
         "{ "
         f"label: {_js_string_literal(f'commit:wave-{index + 1}')}, "
@@ -665,7 +691,44 @@ def _commit_agent_call(
         f"{_model_opt(_COMMIT_AGENT_TYPE)} "
         "});"
     )
-    return f"{phase_call}\n{call}"
+    gate = _commit_halt_gate(commit_var, phase_title)
+    return f"{phase_call}\n{call}\n{gate}"
+
+
+def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
+    """The JS that stops the run when ``commit_var``'s commit did not land.
+
+    `return { halted: ... }` from the script's top-level body is the engine's
+    one sanctioned way to stop a run (workflow-orchestration.md); the emitter
+    previously generated none for a commit failure, so a declined commit rolled
+    straight into the next wave.
+
+    The damage that causes is NOT "work piles up uncommitted". It is that the
+    next successful commit touching a shared file absorbs every earlier
+    uncommitted chunk under its OWN id — three chunks in one commit registering
+    one id, which `close_out_and_stamp` then joins on and stamps `implemented`
+    against. It fails looking clean, and the lost id is unrecoverable once the
+    absorbing commit is pushed unless the stolen chunks happen to have other
+    files left (example-retrieval-repo-em, 2026-08-20; recovered that way by luck, and
+    said so).
+
+    A `null` result (the engine's own value for an agent that died or was
+    skipped) and a returning-but-tokenless report are treated identically:
+    neither proves a commit landed, and this gate only ever asserts the
+    positive.
+    """
+    reason = (
+        f"{phase_title} did not land a commit -- halting before the next wave "
+        "writes over uncommitted work. Clear the cause, then resume with "
+        "resumeFromRunId."
+    )
+    return (
+        f"  if (!{commit_var} || "
+        f"!String({commit_var}).includes({_js_string_literal(_COMMIT_LANDED_TOKEN)})) {{\n"
+        f"    return {{ halted: {_js_string_literal(reason)} + "
+        f'" Agent report: " + String({commit_var} ?? "agent returned null") }};\n'
+        "  }"
+    )
 
 
 def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
@@ -913,6 +976,7 @@ def compose_script(
                     index,
                     [row.id for row in batch],
                     results_var,
+                    commit_var=f"commit{results_var[0].upper()}{results_var[1:]}",
                 )
             )
 

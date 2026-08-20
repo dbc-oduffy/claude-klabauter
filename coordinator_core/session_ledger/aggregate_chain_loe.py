@@ -82,6 +82,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from coordinator_core.dag import walk_forward
+from coordinator_core.frontmatter.primitives import (
+    _strip_trailing_comment,
+    unquote_yaml_scalar,
+)
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.wire_paths import rel_id
@@ -311,10 +315,22 @@ def resolve_handoff_path(
 def extract_frontmatter_field(text: str, field: str) -> str:
     """Extract a single scalar frontmatter field between the first ``---`` pair.
 
-    Handles ``field: value``, strips surrounding double-quotes. Returns the
-    empty string if the field, or the frontmatter block itself, is absent.
-    Comment lines (first non-whitespace char ``#``) and blank lines inside the
-    block are skipped (mirrors the awk ``in_fm && /^[[:space:]]*[^#]/`` guard).
+    Handles ``field: value``, drops a trailing inline ``#`` comment, and
+    strips surrounding single- or double-quotes. Returns the empty string if
+    the field, or the frontmatter block itself, is absent. Comment lines
+    (first non-whitespace char ``#``) and blank lines inside the block are
+    skipped (mirrors the awk ``in_fm && /^[[:space:]]*[^#]/`` guard).
+
+    The inline-comment and single-quote handling close a silent
+    misattribution: ``authoring_session: "<uuid>"  # claude-klabauter-51``
+    returned the quotes AND the comment as the session id, so
+    `_session_id_for_ledger` looked up a session that does not exist and the
+    chain's LoE was dropped rather than mis-summed -- invisible in every
+    output. Line-oriented readers of frontmatter are a class here, not one
+    site; the value side needs stripping wherever the key side is matched by
+    regex -- so the cleanup delegates to the shared frontmatter primitives
+    (same pairing as `ops.sizing_spike_verdict`) rather than growing a third
+    quote/comment parser.
     """
     pattern = re.compile(r"^[ \t]*" + re.escape(field) + r"[ \t]*:[ \t]*")
     in_fm = False
@@ -330,10 +346,8 @@ def extract_frontmatter_field(text: str, field: str) -> str:
             continue
         m = pattern.match(line)
         if m:
-            val = line[m.end():].strip()
-            if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
-                val = val[1:-1]
-            return val
+            raw = _strip_trailing_comment(line[m.end():].strip())
+            return unquote_yaml_scalar(raw) or ""
     return ""
 
 

@@ -956,6 +956,39 @@ class TestClaimPlan:
         err = capsys.readouterr().err
         assert "ghost-exec-plan" in err
 
+    def test_claim_plan_for_execution_refusal_leaves_no_claim_behind(
+        self, tmp_path, monkeypatch
+    ):
+        # A refusal must not register a claim. It used to: claim_artifact's
+        # mkdir had already succeeded, and the for_execution branch returned
+        # False over the top of it -- the claim then sat in
+        # list-claims-by-session until an operator went looking
+        # (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-ledger-derived-path-
+        # claim-narrowed.md, reported by example-retrieval-repo-em).
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        assert claims.claim_plan("ghost-exec-plan", cwd=str(repo), for_execution=True) is False
+        assert not _claim_dir(repo, "plan", "ghost-exec-plan").is_dir()
+        assert ("plan-claims", "ghost-exec-plan") not in [
+            tuple(row) for row in claims.list_claims_by_session("me-sid", str(repo))
+        ]
+
+    def test_claim_plan_for_execution_refusal_on_failed_stamp_leaves_no_claim(
+        self, tmp_path, monkeypatch
+    ):
+        # Same contract on the OTHER refusal branch: the plan file resolves,
+        # but plan_status_transition exits non-zero.
+        from coordinator_core.ops import plan_status_transition
+
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        plan = repo / "docs" / "plans" / "stamp-fails-plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("---\nstatus: draft\n---\n# Stamp Fails\n", encoding="utf-8")
+        monkeypatch.setattr(plan_status_transition, "main", lambda argv: 3)
+        assert claims.claim_plan("stamp-fails-plan", cwd=str(repo), for_execution=True) is False
+        assert not _claim_dir(repo, "plan", "stamp-fails-plan").is_dir()
+
     def test_claim_plan_for_execution_fires_before_shape_sid_resolution(
         self, tmp_path, monkeypatch
     ):

@@ -286,10 +286,22 @@ def _sid_looks_valid(sid: str) -> bool:
     return all(ch in _SID_ALLOWED_CHARS for ch in s)
 
 
+#: Advertised verb list. The ``<class>`` enumeration on the first three is
+#: load-bearing, not decoration: ``artifact`` is the PATH-TOUCH plane
+#: (``who-claims-path``'s own answer space), so ``release-artifact artifact
+#: <repo-relative-path>`` IS the release-path verb for a path claim. Naming
+#: only the verbs made that unreachable by reading — a peer EM enumerated
+#: this exact string, concluded "there is no ``release-path``", and reported
+#: a ledger-derived path claim as having no exit at all while holding one
+#: (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-ledger-derived-path-claim-
+#: {has-no-release,narrowed}.md). Keep the classes here when editing.
 _SUBCOMMANDS = (
-    "subcommands: claim-artifact | release-artifact | clear-claim-if-dead | "
-    "claim-plan | is-session-live | list-stale-claim-handoffs | "
-    "list-claims-by-session | who-claims-path"
+    "subcommands: claim-artifact <class> | release-artifact <class> | "
+    "clear-claim-if-dead <class> | claim-plan | is-session-live | "
+    "list-stale-claim-handoffs | list-claims-by-session | who-claims-path\n"
+    "  <class>: handoff | memo | plan (basename-keyed claim records), or "
+    "'artifact' (path-touch plane — basename is a repo-relative PATH; this "
+    "is how a path claim who-claims-path reports is released)"
 )
 
 _HELP_FLAGS = ("--help", "-h", "help")

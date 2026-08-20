@@ -37,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import importlib.machinery
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -219,3 +220,97 @@ class FullCliReverseEdgeClobberGuardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
+    """`state/bug-backlog/2026-08-20-safe-commit-offer-silently-drops-cli-wri-83abe919148c.yaml`.
+
+    The reverse edge is a SECOND file this CLI writes, outside the
+    Edit/Write hot path that fires `hooks.track_touched_files`. Undeclared,
+    it carried no `touched.txt` claim at all, so
+    `session.scope.compute_scope` saw it only through the Step-2 mtime
+    fallback, routed it to `mtime_only`, and Step 4(c) withheld it from
+    `my_scope` -- `safe-commit-offer` then reported "nothing to commit" over
+    a file this invocation had just dirtied, and the next peer's blanket
+    commit swept it.
+
+    Pins BOTH writes of the transaction into the DR-276 declaration, not
+    just the plan file: an assertion on the plan file alone passed
+    throughout the defect's life.
+    """
+
+    def _touched_lines(self, repo: Path, sid: str) -> list[str]:
+        touched = repo / ".git" / "coordinator-sessions" / sid / "touched.txt"
+        if not touched.is_file():
+            return []
+        return [ln for ln in touched.read_text(encoding="utf-8").splitlines() if ln]
+
+    def _scaffold_sizing(self, repo: Path, sizing_rel: str) -> None:
+        """Produce the cited sizing through the CLI's own `--type
+        sizing-object` emitter rather than a hand-written stub.
+
+        The reverse-edge writer schema-validates its own post-mutation text,
+        so a minimal hand-written record fails on missing required fields for
+        a reason unrelated to what this test asserts — and would need editing
+        again on every schema addition. Scaffolding it keeps the fixture
+        valid by construction.
+        """
+        result = subprocess.run(
+            [
+                sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                "--title", "Reverse edge claim sizing",
+                "--out", str(repo / sizing_rel),
+            ],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **_NO_CONSOLE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_both_the_plan_and_the_cited_sizing_are_claimed(self):
+        sid = "reverse-edge-claim-test"
+        with _tmp_git_repo() as (repo, _unused_out):
+            sizing_rel = "state/sizings/2026-08-10-example.yaml"
+            (repo / "state" / "sizings").mkdir(parents=True)
+            self._scaffold_sizing(repo, sizing_rel)
+
+            # The schema pins `plan:` to `^docs/plans/.+\.md$`, so the plan
+            # this routes to must live there — `_tmp_git_repo`'s bare
+            # `custom-out.md` fails validation before the declaration under
+            # test is ever reached.
+            out_path = repo / "docs" / "plans" / "2026-08-10-reverse-edge-claim.md"
+            out_path.parent.mkdir(parents=True)
+
+            env = dict(os.environ)
+            env["COORDINATOR_SESSION_ID"] = sid
+            result = subprocess.run(
+                [
+                    sys.executable, str(_CLI_PATH), "--type", "plan",
+                    "--title", "Reverse edge claim plan",
+                    "--sizing-object", sizing_rel,
+                    "--out", str(out_path),
+                ],
+                cwd=str(repo),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                **_NO_CONSOLE,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            claimed = " ".join(self._touched_lines(repo, sid))
+            plan_rel = out_path.relative_to(repo).as_posix()
+            self.assertIn(
+                plan_rel, claimed,
+                "fixture precondition: the plan file's own claim (pre-existing "
+                "DR-276 adoption) must still be recorded",
+            )
+            self.assertIn(
+                sizing_rel, claimed,
+                "the cited sizing was mutated by this invocation and must carry "
+                "this session's claim -- otherwise safe-commit-offer reports "
+                "'nothing to commit' over it while git status shows it dirty",
+            )

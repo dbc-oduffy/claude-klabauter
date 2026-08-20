@@ -10341,9 +10341,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         # this line should nudge, so the PARTIAL branch above stays silent
         # on it.
         if not args.dry_run and succeeded_row_names and not failed_row_names:
-            _push_targets = (
-                [mirror_expansion[0]] if mirror_expansion is not None else list(succeeded_row_names)
-            )
+            # Grouped by DEST, never per row. `mirror_expansion` is set only
+            # when a single bare row name expanded to its mirror, so the
+            # ordinary no-argument publish leaves it None -- and keying off
+            # it alone printed one line per row (nine, for klabauter) naming
+            # eight sub-rows nobody should invoke. That is the "noise people
+            # skim past" failure the message register exists to prevent, so
+            # the grouping key is the row's dest sigil: every row sharing a
+            # `publish-mirror:<key>` sigil collapses to ONE line naming that
+            # mirror key, which is the invocation that actually pushes them.
+            # A row with no mirror sigil is its own dest and keeps its own
+            # line. Observed live, 2026-08-20.
+            _sigils = raw_dest_sigil_by_name(setup_dir)
+            _push_targets: "List[str]" = []
+            for _row_name in succeeded_row_names:
+                _sigil = _sigils.get(_row_name) or ""
+                _token = _sigil.split(":", 1)[1] if _sigil.startswith("publish-mirror:") else _row_name
+                if _token not in _push_targets:
+                    _push_targets.append(_token)
             for _push_target in _push_targets:
                 print(
                     f"Next step: this round is committed to the mirror, not pushed. "

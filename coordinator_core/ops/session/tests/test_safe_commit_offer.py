@@ -1768,3 +1768,45 @@ class TestMainInvokerFlag:
             )
             assert exit_code == 0
         capsys.readouterr()
+
+
+class TestNothingToCommitDistinguishesSeenFromClean:
+    """`state/bug-backlog/2026-08-20-safe-commit-offer-silently-drops-cli-wri-83abe919148c.yaml`.
+
+    An empty `groups` had ONE rendering for two materially different states:
+    a genuinely clean tree, and a tree whose every dirty path was seen and
+    declined because nothing carried this session's claim. The second is the
+    shape a CLI-written file always takes -- `hooks.track_touched_files`
+    fires on Edit/Write/MultiEdit/NotebookEdit and nothing else, so a file a
+    coordinator CLI wrote on the session's behalf reaches `compute_scope`
+    only through the Step-2 mtime fallback, is routed to `mtime_only`, and
+    is withheld by Step 4(c). Live instance: 1866 declined paths rendered
+    alongside a bare "Nothing to commit for session <id>."
+    """
+
+    def test_declined_paths_are_named_as_seen_not_absent(self):
+        report = _report(_group())
+        report["groups"] = []
+        report["excluded"] = [
+            {"path": "state/sizings/x.yaml", "reason": "untouched by this session"}
+        ]
+
+        rendered = safe_commit_offer._render_report(report)
+
+        assert "Nothing to commit for session mine" in rendered
+        assert "seen and declined" in rendered
+        assert "working tree clean" not in rendered
+        assert "coordinator-safe-commit" in rendered, (
+            "an operator told nothing was committed must be given the route "
+            "that does commit it by name"
+        )
+
+    def test_clean_tree_says_clean(self):
+        report = _report(_group())
+        report["groups"] = []
+        report["excluded"] = []
+
+        rendered = safe_commit_offer._render_report(report)
+
+        assert "working tree clean" in rendered
+        assert "seen and declined" not in rendered

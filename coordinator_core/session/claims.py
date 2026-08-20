@@ -1220,8 +1220,17 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
 
     FATAL for a ``for_execution`` claim: a failed stamp-executing (missing
     plan file, non-zero ``plan_status_transition`` exit) makes this function
-    return False even though the underlying ``claim_artifact`` mkdir
-    succeeded — decided AFTER, and made possible only by, the
+    return False, and the underlying ``claim_artifact`` mkdir that already
+    succeeded is RELEASED before returning (``release_artifact("plan",
+    slug)`` — identity-checked, so it can only ever undo the claim this
+    call just took). Negative spec: a refusal MUST NOT leave a claim
+    behind. It used to: the refusal text said "claim refused, not left
+    half-applied" while the claim dir stayed on disk and sat in
+    ``list-claims-by-session`` until an operator went looking
+    (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-ledger-derived-path-claim-
+    narrowed.md). The claim-taking mkdir is the first step of a two-step
+    op, so an aborted op unwinds it rather than reporting a refusal it
+    did not perform — decided AFTER, and made possible only by, the
     ``for_execution`` discriminator narrowing the caller set to
     ``/execute-plan`` Step 0 alone (AC12): plan authorship and workstream-
     close-out are confirmed OUT of this caller set, so a fatal flip here can
@@ -1299,6 +1308,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
                 f"{root or '<unresolved git root>'}) — claim refused",
                 file=sys.stderr,
             )
+            release_artifact("plan", slug, cwd=cwd)
             return False
         plan_path = str(Path(root) / rel)
         from coordinator_core.ops import plan_status_transition
@@ -1310,6 +1320,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
                 f"{rc}) — claim refused, not left half-applied",
                 file=sys.stderr,
             )
+            release_artifact("plan", slug, cwd=cwd)
             return False
 
     # C3 — best-effort session-shape instrumentation (non-fatal).
