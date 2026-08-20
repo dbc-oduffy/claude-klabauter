@@ -8,11 +8,13 @@ them here means a single edit propagates automatically.
 Exports:
   normalize_frontmatter   — shared ``frontmatter`` shape guard (list/non-dict → {}).
   run_git                 — public git subprocess helper (coordinator_roots + branch).
+  human_axis_vendored     — the C9 activation switch for the human_* wire fields.
   _VERDICT_MAP            — verdict case-normalisation dict (review_trail + rollups).
   _TIME_SEG_RE            — filename timestamp-segment matcher (review_trail + rollups).
   _validate_review_trail_file — shared quarantine filter returning (record_dict, reason).
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b
+Spec backlink (human_axis_vendored): docs/plans/2026-08-19-the-tracker-names-an-owner.md § C9
 """
 
 from __future__ import annotations
@@ -23,6 +25,43 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+from coordinator_core.machine_resolver import registry_get
+
+# C9 activation switch: whether the downstream consumer (cockpit) has re-vendored a
+# cockpit-contract carrying the human_* axis. Default OFF (unresolved key -> False) —
+# see this function's own docstring for why a flag is owed at all before this key
+# reaches a `.strict()` wire.
+_HUMAN_AXIS_VENDORED_REGISTRY_KEY = "cockpit.human_axis_vendored"
+_TRUTHY_FLAG_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def human_axis_vendored() -> bool:
+    """Whether the machine-local registry declares the human_* wire axis activated.
+
+    Single source of truth for the C9 activation switch every ``human_*``-populating
+    section (``handoffs.py``, ``trackers.py``) gates on. Reads the dotted registry key
+    ``cockpit.human_axis_vendored`` via ``machine_resolver.registry_get`` — the same
+    direct-tomllib reader every other registry consumer in this package binds to (see
+    that function's own "Public promotion" docstring note); never the ``machine-local``
+    CLI.
+
+    Default is OFF: an unresolved key (``registry_get`` returns ``None``) or any value
+    outside the small truthy set below resolves to ``False``. This is deliberate — the
+    flag exists precisely so the human_* axis stays off an cockpit `.strict()` wire
+    until they confirm, in writing, that they have re-vendored a contract that names it
+    (docs/plans/2026-08-19-the-tracker-names-an-owner.md § C9's "WHY A SWITCH" note).
+    Flipping it on the reasoning that they "will have vendored by then" is exactly the
+    failure mode this default forecloses.
+
+    Flip condition: cockpit confirms in writing they have re-vendored at or above the
+    bumped CONTRACT_VERSION. Flipping is a one-line ``registry.local.toml`` edit
+    (``machine-local set cockpit.human_axis_vendored true``), not a code change.
+    """
+    value = registry_get(_HUMAN_AXIS_VENDORED_REGISTRY_KEY)
+    if value is None:
+        return False
+    return value.strip().lower() in _TRUTHY_FLAG_VALUES
 
 
 def normalize_frontmatter(rec: object) -> dict:

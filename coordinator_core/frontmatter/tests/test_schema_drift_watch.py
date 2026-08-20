@@ -34,9 +34,12 @@ from coordinator_core.frontmatter.schema_drift_watch import (
     STATUS_INDETERMINATE,
     STATUS_MATCH,
     STATUS_UNRESOLVED,
+    check_source_drift_advisory,
     resolve_doe_repo_path,
+    resolve_cockpit_repo_path,
     scan_vendored_schema_drift,
     vendored_schema_paths,
+    vendored_source_paths,
 )
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -487,3 +490,218 @@ class TestAdvisoryDeterminateKey:
         result = check_schema_drift_advisory(vendored_dir / _SCHEMA_A, fake_doe)
         assert result["diverged"] is True
         assert result["determinate"] is True
+
+
+# ---------------------------------------------------------------------------
+# Parallel `*.vendor.ts`-vs-cockpit-HEAD comparison (C7, 2026-08-19) — the
+# durability gap C1's parity check does not close on its own: this watch is
+# what surfaces cockpit editing `mintContributorId` out from under claude-klabauter's
+# transcribed derivation. Same verdict vocabulary, same non-gating negative-
+# spec, glob-derived coverage set, deliberately mirrored test shape.
+# ---------------------------------------------------------------------------
+
+_VENDOR_SOURCE_NAME = "contributor-id.vendor.ts"
+_COCKPIT_SOURCE_REL_PATH = "src/lib/identity/contributor-id.ts"
+
+
+def _vendor_source_body(marker: str) -> str:
+    return (
+        f"// cockpit-source-path: {_COCKPIT_SOURCE_REL_PATH}\n"
+        f"// cockpit-source-pin: deadbeef (test fixture)\n"
+        f"export function mintContributorId(x) {{ return {marker!r}; }}\n"
+    )
+
+
+def _cockpit_upstream_body(marker: str) -> str:
+    return f"export function mintContributorId(x) {{ return {marker!r}; }}\n"
+
+
+@pytest.fixture()
+def fake_cockpit(tmp_path: Path) -> Path:
+    """A throwaway git repo shaped like an cockpit clone: src/lib/identity/*.ts at HEAD."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = tmp_path / "cockpit-fake"
+    source_dir = repo / "src" / "lib" / "identity"
+    source_dir.mkdir(parents=True)
+    (source_dir / "contributor-id.ts").write_text(_cockpit_upstream_body("SAME"), encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "drift watch test")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed cockpit source")
+    return repo
+
+
+@pytest.fixture()
+def vendored_source_dir(tmp_path: Path) -> Path:
+    """A throwaway vendored-source dir, matching fake_cockpit's HEAD body by default."""
+    directory = tmp_path / "vendored-source"
+    directory.mkdir()
+    (directory / _VENDOR_SOURCE_NAME).write_text(_vendor_source_body("SAME"), encoding="utf-8")
+    return directory
+
+
+class TestVendoredSourcePaths:
+    """The cockpit-source coverage set is globbed from disk, same posture as the schema one."""
+
+    def test_globs_every_vendor_ts_file(self, vendored_source_dir: Path) -> None:
+        names = [p.name for p in vendored_source_paths(vendored_source_dir)]
+        assert names == [_VENDOR_SOURCE_NAME]
+
+    def test_new_vendor_ts_is_covered_without_a_code_change(self, vendored_source_dir: Path) -> None:
+        (vendored_source_dir / "brand-new.vendor.ts").write_text(
+            _vendor_source_body("new"), encoding="utf-8"
+        )
+        names = [p.name for p in vendored_source_paths(vendored_source_dir)]
+        assert "brand-new.vendor.ts" in names
+
+    def test_missing_directory_returns_empty_not_raise(self, tmp_path: Path) -> None:
+        assert vendored_source_paths(tmp_path / "nope") == []
+
+    def test_ignores_non_vendor_ts_files(self, vendored_source_dir: Path) -> None:
+        (vendored_source_dir / "README.md").write_text("not a vendor file\n", encoding="utf-8")
+        names = [p.name for p in vendored_source_paths(vendored_source_dir)]
+        assert "README.md" not in names
+
+
+class TestSourceDriftAdvisory:
+    """check_source_drift_advisory: the header-strip comparison, and its negative-spec."""
+
+    def test_match_when_body_equals_cockpit_head(
+        self, fake_cockpit: Path, vendored_source_dir: Path
+    ) -> None:
+        result = check_source_drift_advisory(
+            vendored_source_dir / _VENDOR_SOURCE_NAME, fake_cockpit
+        )
+        assert result["diverged"] is False
+        assert result["determinate"] is True
+
+    def test_drift_when_cockpit_moves(self, fake_cockpit: Path, vendored_source_dir: Path) -> None:
+        (fake_cockpit / "src" / "lib" / "identity" / "contributor-id.ts").write_text(
+            _cockpit_upstream_body("CHANGED"), encoding="utf-8"
+        )
+        _git(fake_cockpit, "add", "-A")
+        _git(fake_cockpit, "commit", "-q", "-m", "cockpit evolves mintContributorId")
+
+        result = check_source_drift_advisory(
+            vendored_source_dir / _VENDOR_SOURCE_NAME, fake_cockpit
+        )
+        assert result["diverged"] is True
+        assert result["determinate"] is True
+
+    def test_unreadable_cockpit_repo_is_indeterminate_never_match(
+        self, tmp_path: Path, vendored_source_dir: Path
+    ) -> None:
+        result = check_source_drift_advisory(
+            vendored_source_dir / _VENDOR_SOURCE_NAME, tmp_path / "not-a-repo"
+        )
+        assert result["diverged"] is False, "unreadable must never be reported as drift"
+        assert result["determinate"] is False
+
+    def test_missing_header_is_indeterminate(self, fake_cockpit: Path, tmp_path: Path) -> None:
+        headerless_dir = tmp_path / "headerless"
+        headerless_dir.mkdir()
+        headerless = headerless_dir / _VENDOR_SOURCE_NAME
+        headerless.write_text(_cockpit_upstream_body("SAME"), encoding="utf-8")
+
+        result = check_source_drift_advisory(headerless, fake_cockpit)
+
+        assert result["diverged"] is False
+        assert result["determinate"] is False
+
+    def test_header_annotation_is_not_itself_drift(
+        self, fake_cockpit: Path, vendored_source_dir: Path
+    ) -> None:
+        """The claude-klabauter-local header lines must not register as a divergence from
+        cockpit's own file, which never carries them."""
+        result = check_source_drift_advisory(
+            vendored_source_dir / _VENDOR_SOURCE_NAME, fake_cockpit
+        )
+        assert result["diverged"] is False
+
+
+class TestCockpitRepoPathResolution:
+    """resolve_cockpit_repo_path ladder: REPO_EXAMPLE_COCKPIT_REPO, then registry."""
+
+    def test_no_rungs_resolve_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.delenv("REPO_EXAMPLE_COCKPIT_REPO", raising=False)
+        monkeypatch.setattr(
+            "coordinator_core.frontmatter.schema_drift_watch.registry_get",
+            lambda key: None,
+        )
+        assert resolve_cockpit_repo_path() is None
+
+    def test_env_override_wins_when_valid(
+        self, fake_cockpit: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("REPO_EXAMPLE_COCKPIT_REPO", str(fake_cockpit))
+        assert resolve_cockpit_repo_path() == fake_cockpit
+
+    def test_bogus_env_override_does_not_win(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("REPO_EXAMPLE_COCKPIT_REPO", str(tmp_path / "does-not-exist"))
+        monkeypatch.setattr(
+            "coordinator_core.frontmatter.schema_drift_watch.registry_get",
+            lambda key: None,
+        )
+        assert resolve_cockpit_repo_path() is None
+
+
+class TestAggregateIncludesCockpitSource:
+    """scan_vendored_schema_drift's aggregate verdict includes the cockpit-source row."""
+
+    def test_source_match_folds_into_overall_match(
+        self, fake_doe: Path, fake_cockpit: Path, tmp_path: Path
+    ) -> None:
+        directory = tmp_path / "combined"
+        directory.mkdir()
+        for name in (_SCHEMA_A, _SCHEMA_B):
+            (directory / name).write_text(_schema_body(name), encoding="utf-8")
+        (directory / _VENDOR_SOURCE_NAME).write_text(_vendor_source_body("SAME"), encoding="utf-8")
+
+        report = scan_vendored_schema_drift(fake_doe, directory, fake_cockpit)
+
+        assert report["status"] == STATUS_MATCH
+        assert report["checked"] == 3
+        assert _VENDOR_SOURCE_NAME in report["matched"]
+        assert report["cockpit_repo_path"] == str(fake_cockpit)
+
+    def test_cockpit_drift_surfaces_even_when_doe_side_matches(
+        self, fake_doe: Path, fake_cockpit: Path, tmp_path: Path
+    ) -> None:
+        directory = tmp_path / "combined"
+        directory.mkdir()
+        for name in (_SCHEMA_A, _SCHEMA_B):
+            (directory / name).write_text(_schema_body(name), encoding="utf-8")
+        (directory / _VENDOR_SOURCE_NAME).write_text(_vendor_source_body("SAME"), encoding="utf-8")
+
+        (fake_cockpit / "src" / "lib" / "identity" / "contributor-id.ts").write_text(
+            _cockpit_upstream_body("CHANGED"), encoding="utf-8"
+        )
+        _git(fake_cockpit, "add", "-A")
+        _git(fake_cockpit, "commit", "-q", "-m", "cockpit moves mintContributorId")
+
+        report = scan_vendored_schema_drift(fake_doe, directory, fake_cockpit)
+
+        assert report["status"] == STATUS_DRIFT
+        assert [d["schema"] for d in report["drifted"]] == [_VENDOR_SOURCE_NAME]
+        assert sorted(report["matched"]) == sorted([_SCHEMA_A, _SCHEMA_B])
+
+    def test_cockpit_unresolved_is_indeterminate_not_masked(
+        self, fake_doe: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "combined"
+        directory.mkdir()
+        for name in (_SCHEMA_A, _SCHEMA_B):
+            (directory / name).write_text(_schema_body(name), encoding="utf-8")
+        (directory / _VENDOR_SOURCE_NAME).write_text(_vendor_source_body("SAME"), encoding="utf-8")
+
+        report = scan_vendored_schema_drift(fake_doe, directory, tmp_path / "no-cockpit-here")
+
+        assert report["status"] == STATUS_INDETERMINATE
+        assert [d["schema"] for d in report["indeterminate"]] == [_VENDOR_SOURCE_NAME]
+        assert sorted(report["matched"]) == sorted([_SCHEMA_A, _SCHEMA_B])

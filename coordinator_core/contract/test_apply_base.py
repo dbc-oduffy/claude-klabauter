@@ -152,7 +152,7 @@ class TestResolveOp:
         )
         with pytest.raises(apply_base.UnrecognizedDirective) as excinfo:
             apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "handoff.does_not_exist")
-        assert "unrecognized directive op" in str(excinfo.value)
+        assert "no adapter for directive op" in str(excinfo.value)
 
     def test_registered_op_this_assembler_may_not_dispatch_raises(self, monkeypatch):
         monkeypatch.setattr(
@@ -162,7 +162,7 @@ class TestResolveOp:
         )
         with pytest.raises(apply_base.UnrecognizedDirective) as excinfo:
             apply_base.resolve_op(_OP_DISPATCH_TABLE, "baton_assemble", "handoff.author_fork")
-        assert "may not dispatch" in str(excinfo.value)
+        assert "dispatchable set" in str(excinfo.value)
 
     def test_the_two_refusal_reasons_are_distinct_messages(self, monkeypatch):
         monkeypatch.setattr(
@@ -201,33 +201,36 @@ class TestResolveOp:
         assert calls == []
 
     def test_whole_run_fails_before_any_directive_executes(self, monkeypatch):
-        """Mirrors resolve_cli's own whole-list pre-validation property: a
-        planted un-allowlisted `op` name, resolved as part of a
-        pre-validation pass over several directives, must fail before ANY
-        of them — including ones earlier in the list — dispatch."""
-        calls: list[str] = []
+        """Replaces the prior vacuous version (cold review 2026-08-19,
+        Test-quality table): the old test never called `execute_directives`
+        at all — it hand-looped `resolve_op` and then ran a no-op `for
+        handler in resolved: pass`, so deleting the pre-validation pass
+        entirely from `execute_directives` left this test green. This drives
+        directives THROUGH `execute_directives` with a real tracking
+        handler: `d1` is earlier in the list and individually resolvable, so
+        only a genuine whole-list pre-pass keeps it from dispatching when
+        `d2` (later, un-allowlisted) fails pre-validation."""
+        calls: list[Any] = []
 
         def _tracking_handler(args, repo_root):
             calls.append(args)
             return {}
 
-        table = {"handoff.stamp_phase": _tracking_handler, "handoff.author_fork": _tracking_handler}
+        table = {"noop-cli": _tracking_handler, "not-allowlisted": _tracking_handler}
         monkeypatch.setattr(
             apply_base,
             "ASSEMBLER_DISPATCHABLE",
-            {"baton_assemble": frozenset({"handoff.stamp_phase"})},
+            {"baton_assemble": frozenset()},
         )
-        directive_ops = ["handoff.stamp_phase", "handoff.author_fork"]
-        resolved = []
-        try:
-            for op_name in directive_ops:
-                resolved.append(apply_base.resolve_op(table, "baton_assemble", op_name))
-        except apply_base.UnrecognizedDirective:
-            pass
-        # Pre-validation aborts on the second (unallowlisted) name before any
-        # resolved handler in this pass is ever invoked.
-        for handler in resolved:
-            pass
+        directives = [
+            {"id": "d1", "cli": "noop-cli"},
+            {"id": "d2", "op": "not-allowlisted"},
+        ]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], Path("."), table, assembler_name="baton_assemble"
+        )
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert report["landed"] == []
         assert calls == []
 
 

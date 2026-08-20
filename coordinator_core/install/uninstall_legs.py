@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops import configure_git
+from coordinator_core.install import junction
 
 from coordinator_core.install._shared import (
     RequireHomeError,
@@ -66,7 +67,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.install.receipt import InstallReceipt, load_receipt
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
+from coordinator_core.engine_root import coordinator_engine_root_with_class
 from coordinator_core.ops import render_template
 from coordinator_core.hooks import platform_localize
 
@@ -1129,10 +1130,53 @@ def _rmtree_target(path: Path, label: str, errors: List[str]) -> None:
             errors.append(f"failed to remove {label} ({path}): {exc}")
 
 
+def _rmtree_junction_or_target(path: Path, label: str, errors: List[str]) -> None:
+    """``_rmtree_target``'s junction-aware counterpart (2026-08-20,
+    ``ensure_venv``'s move to junction-published ``.coordinator-venv``):
+    ``shutil.rmtree`` REFUSES outright on a junction/reparse point
+    (``OSError: Cannot call rmtree on a symbolic link`` — see
+    ``coordinator_core.install.junction``'s module docstring), so a plain
+    ``_rmtree_target`` on a junctioned ``venv_dir`` would silently leave the
+    junction AND its target generation behind, reporting a failure into
+    ``errors`` instead of actually uninstalling. Detects the reparse tag
+    first (never ``islink()`` — same trap), removes the link with
+    ``junction.remove_junction``, then removes the TARGET generation tree
+    with a plain ``shutil.rmtree``. A non-junction ``path`` (a legacy
+    real-directory venv, or nothing at all) falls through to
+    ``_rmtree_target`` unchanged."""
+    if not junction.is_junction(path):
+        _rmtree_target(path, label, errors)
+        return
+    target = junction.junction_target(path)
+    try:
+        junction.remove_junction(path)
+    except OSError as exc:
+        errors.append(f"failed to remove {label} junction ({path}): {exc}")
+        return
+    if target is not None and target.exists():
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            errors.append(f"failed to remove {label} target ({target}): {exc}")
+
+
 def _sweep_orphaned_swap_dirs(venv_dir: Path) -> None:
-    """Best-effort reclaim of ``.build-*``/``.stale-*`` siblings abandoned by
-    a prior venv-rebuild process that crashed mid-rebuild (before cleanup) or
-    mid-swap (a Windows deferred-reclaim leftover).
+    """Best-effort reclaim of orphaned generation siblings abandoned by a
+    prior venv-rebuild process that crashed mid-rebuild (before cleanup) or
+    mid-publish (a Windows deferred-reclaim leftover, or a torn junction
+    retarget).
+
+    Sweeps two naming generations. ``.gen-*`` (current, since 2026-08-20's
+    junction-publish rewrite — see ``ensure_venv``'s module docstring) is
+    swept EXCEPT the generation ``venv_dir`` currently points at, resolved
+    via ``junction.junction_target`` — that exclusion matters here in a way
+    it never did for the legacy prefixes below, because a ``.gen-*`` sibling
+    CAN be the live, published tree; a `.build-*`/`.stale-*` sibling never
+    was. ``.build-*``/``.stale-*`` (legacy, pre-junction rename-swap) are
+    still swept unconditionally — by construction under the OLD layout
+    neither was ever the published tree, and a box mid-migration or
+    carrying old debris from before this rewrite may still have them lying
+    around.
 
     Relocated here (docs/plans/2026-08-18-retire-coordinator-venv.md chunk
     C3) from ``coordinator_core.install.ensure_venv``, whose own
@@ -1144,35 +1188,37 @@ def _sweep_orphaned_swap_dirs(venv_dir: Path) -> None:
     on both the settings-home and legacy trees even after the venv builder
     itself is retired (C4/C5) — a lazy import of a since-deleted
     ``ensure_venv`` symbol would otherwise break uninstall permanently once
-    that retirement lands. Behaviour, prefix match, and both call sites'
-    tree targets are unchanged by this move.
+    that retirement lands.
 
     Safe to run unconditionally: a rebuild caller holds the venv build lock
     before calling this, so no OTHER process is concurrently populating its
-    own ``.build-*`` sibling of THIS venv right now — anything matching the
-    prefix at that point belongs to a run that has already ended. The
+    own generation sibling of THIS venv right now — anything matching a
+    swept prefix at that point belongs to a run that has already ended
+    (except the currently-published ``.gen-*``, excluded above). The
     uninstall leg below calls this with no lock held at all, which is still
     safe for the same underlying reason a rebuild's post-lock call is: by
     the time uninstall runs, no builder is (or, once C4/C5 land, can be)
     concurrently active against the same tree either. Never raises — a
     sweep failure must not block whatever operation is merely tidying up
     after it.
-
-    Every ``.stale-*`` match already failed the health probe that triggered
-    its own rebuild (or, for uninstall's purposes, is simply debris left
-    behind by a distinct process's rebuild), so there is no "still-good"
-    tree here to lose — see ``ensure_venv._swap_in_new_venv``'s crash-window
-    disclosure for the full reasoning this sweep relies on.
     """
     parent = venv_dir.parent
     build_prefix = f"{venv_dir.name}.build-"
     stale_prefix = f"{venv_dir.name}.stale-"
+    gen_prefix = f"{venv_dir.name}.gen-"
+    current_target = junction.junction_target(venv_dir)
+    current_resolved = current_target.resolve() if current_target is not None else None
     try:
         children = list(parent.iterdir())
     except OSError:
         return
     for child in children:
-        if child.name.startswith(build_prefix) or child.name.startswith(stale_prefix):
+        name = child.name
+        if name.startswith(build_prefix) or name.startswith(stale_prefix):
+            shutil.rmtree(child, ignore_errors=True)
+        elif name.startswith(gen_prefix):
+            if current_resolved is not None and child.resolve() == current_resolved:
+                continue
             shutil.rmtree(child, ignore_errors=True)
 
 
@@ -1378,21 +1424,28 @@ def uninstall_remove_substrate(
 
     # ---- #5: whoami + venv (durable, settings-home) ----
     _rmtree_target(Path(sh) / "coordinator-whoami", "coordinator-whoami", errors)
-    _rmtree_target(Path(sh) / ".coordinator-venv", ".coordinator-venv", errors)
-    # `.coordinator-venv` rebuilds rename-swap (never rmtree-in-place — see
-    # ensure_venv.py's `_swap_in_new_venv`), so a crashed rebuild or a
-    # Windows deferred-reclaim can leave `.coordinator-venv.build-<pid>-
-    # <hex>`/`.coordinator-venv.stale-<pid>-<hex>` siblings on disk.
-    # `_sweep_orphaned_swap_dirs` (this module's own — see its docstring
-    # above) only otherwise runs on the venv's NEXT rebuild — an uninstall
-    # that removes the live dir and never rebuilds again would otherwise
-    # leave those siblings behind permanently. Reuse the same sweep here
-    # rather than reimplementing the `.build-`/`.stale-` prefix match a
-    # second time.
+    # `.coordinator-venv` is a JUNCTION (2026-08-20, ensure_venv's move to
+    # junction-published generations) — `shutil.rmtree` refuses on a
+    # junction outright, so this uses the junction-aware helper rather than
+    # the plain `_rmtree_target` every other durable target above uses. A
+    # legacy real-directory venv (pre-migration, or one this repo has no
+    # purpose building any more per the 2026-08-20 PM ruling) still falls
+    # through to plain `_rmtree_target` inside that helper.
+    _rmtree_junction_or_target(Path(sh) / ".coordinator-venv", ".coordinator-venv", errors)
+    # A crashed rebuild or a Windows deferred-reclaim can leave
+    # `.coordinator-venv.gen-<pid>-<hex>` generation siblings (or, from a
+    # box carrying pre-migration debris, `.build-*`/`.stale-*` ones) on
+    # disk. `_sweep_orphaned_swap_dirs` (this module's own — see its
+    # docstring above) only otherwise runs on the venv's NEXT rebuild — an
+    # uninstall that removes the live dir and never rebuilds again would
+    # otherwise leave those siblings behind permanently. Reuse the same
+    # sweep here rather than reimplementing the prefix match a second time.
     _sweep_orphaned_swap_dirs(Path(sh) / ".coordinator-venv")
     whoami_compat = Path(claude_home) / "coordinator-whoami"
     _rm_target(whoami_compat, "compat symlink", errors)
-    _rmtree_target(Path(claude_home) / ".coordinator-venv", "legacy .coordinator-venv", errors)
+    _rmtree_junction_or_target(
+        Path(claude_home) / ".coordinator-venv", "legacy .coordinator-venv", errors
+    )
     _sweep_orphaned_swap_dirs(Path(claude_home) / ".coordinator-venv")
 
     # ---- #6: .doe-root pointer (BOTH modes) ----
@@ -1460,7 +1513,7 @@ def uninstall_remove_substrate(
         # is already gone/broken must not abort the rest of uninstall — an
         # empty derived set just means this sub-leg is a no-op.
         try:
-            _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+            _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
             agent_bin = Path(_claude_klabauter_root_str) / "coordinator" / "bin"
             derived_names = _derive_agent_helper_names(agent_bin)
         except RuntimeError:

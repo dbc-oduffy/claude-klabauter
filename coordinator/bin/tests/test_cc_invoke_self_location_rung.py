@@ -152,8 +152,8 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     (checkout_root / "pyproject.toml").write_text("[project]\nname = \"stub\"\n", encoding="utf-8")
     # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C6: every
     # DISPATCH-axis candidate rung (env, registry, self-location) now
-    # DELEGATES its final answer to coordinator_core.claude_klabauter_root's own
-    # coordinator_claude_klabauter_root_with_class() instead of returning the candidate
+    # DELEGATES its final answer to coordinator_core.engine_root's own
+    # coordinator_engine_root_with_class() instead of returning the candidate
     # verbatim — so a fixture whose sole purpose is to be self-located must
     # also be a real enough package for that delegation to succeed. This stub
     # answers exactly what the real function would on a single-tree box with
@@ -164,8 +164,8 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     # would lose the module search to that real package regardless of
     # ``sys.path`` insertion order, silently exercising the wrong module.
     (checkout_root / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
-    (checkout_root / "coordinator_core" / "claude_klabauter_root.py").write_text(
-        "def coordinator_claude_klabauter_root_with_class():\n"
+    (checkout_root / "coordinator_core" / "engine_root.py").write_text(
+        "def coordinator_engine_root_with_class():\n"
         f"    return ({str(checkout_root)!r}, 'live-working-tree')\n",
         encoding="utf-8",
     )
@@ -229,10 +229,10 @@ def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_a
     This test used to pin that an explicit CLAUDE_KLABAUTER_ROOT wins over self-location
     INSIDE `_resolve_claude_klabauter_root()` (the DISPATCH axis). C6 makes rungs 1 and 3
     of that function both delegate their final answer to the single gated
-    ladder (`coordinator_claude_klabauter_root_with_class()`) instead of racing each
+    ladder (`coordinator_engine_root_with_class()`) instead of racing each
     other directly — so a bare, marker-only directory set via CLAUDE_KLABAUTER_ROOT (this
     fixture's `other_root`, which deliberately has no real
-    `coordinator_core/claude_klabauter_root.py`) is no longer trusted verbatim on the
+    `coordinator_core/engine_root.py`) is no longer trusted verbatim on the
     DISPATCH axis; delegation now raises for it (see the sibling raise-path
     test below). The "explicit override outranks self-location" CONTRACT
     itself is still real, just on a different function: `resolve_engine_root()`
@@ -249,7 +249,7 @@ def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_a
 
         # A second, distinct, EXISTING checkout directory — CLAUDE_KLABAUTER_ROOT
         # is expected to win outright over self-location on the LOCATOR axis.
-        # Deliberately marker-only (no coordinator_core/claude_klabauter_root.py): this
+        # Deliberately marker-only (no coordinator_core/engine_root.py): this
         # is exactly resolve_engine_root()'s isdir-only gate, unlike the
         # DISPATCH-axis delegation the sibling raise-path test below exercises.
         other_root = tmp_path / "other-existing-checkout"
@@ -289,8 +289,8 @@ def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust(
 
     Measured, not assumed: an explicit CLAUDE_KLABAUTER_ROOT still resolves outright
     over self-location, even against a marker-only directory (no real
-    `coordinator_core/claude_klabauter_root.py`) — because
-    `coordinator_claude_klabauter_root_with_class()` (the gate C6's Rung 1 now delegates
+    `coordinator_core/engine_root.py`) — because
+    `coordinator_engine_root_with_class()` (the gate C6's Rung 1 now delegates
     to) carries its OWN env-first rung, the DR-313 item 5 sanctioned exemption
     ("CLAUDE_KLABAUTER_ROOT ahead of everything else"), which this chunk's `writes:`
     scope (cc_invoke.py only) does not touch or override. `_resolve_claude_klabauter_root()`
@@ -299,7 +299,7 @@ def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust(
     one fewer independent copy of it. `test_terminal_rung_resolves_under_both_
     home_shapes_with_no_prior_rung` above is Rung 3's contrasting case: when
     self-location (not env) supplies the candidate, delegation genuinely can
-    raise — see that test's stub coordinator_core/claude_klabauter_root.py, without which
+    raise — see that test's stub coordinator_core/engine_root.py, without which
     this same delegation would fail loud instead of resolving.
     """
     with tempfile.TemporaryDirectory() as tmp:

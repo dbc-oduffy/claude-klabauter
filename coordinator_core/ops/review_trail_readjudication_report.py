@@ -278,14 +278,14 @@ def _corpus_root(caller_worktree: str) -> Tuple[Path, Optional[str]]:
             )
         raise CorpusRootUnresolved(
             "cannot derive the review-trail corpus's main-worktree root from "
-            f"{caller_worktree!r}: {exc}. Refusing to scan a possibly-wrong tree — "
+            f"'{caller_worktree}': {exc}. Refusing to scan a possibly-wrong tree — "
             "a corpus glob rooted at a linked worktree finds no records and reports "
             "a clean result that was never computed."
         ) from exc
     except OSError as exc:
         raise CorpusRootUnresolved(
             "cannot derive the review-trail corpus's main-worktree root from "
-            f"{caller_worktree!r}: git could not be executed ({exc}). Refusing to "
+            f"'{caller_worktree}': git could not be executed ({exc}). Refusing to "
             "scan a possibly-wrong tree."
         ) from exc
 

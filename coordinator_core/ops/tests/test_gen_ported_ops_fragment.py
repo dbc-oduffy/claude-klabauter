@@ -134,13 +134,31 @@ def test_oracle_basename_real_disk_find_polluter_is_stage2_only():
 
 def test_no_real_op_currently_carries_a_ported_from_field():
     """Guard for the premise behind (d): confirms, against the live
-    discovery walk, that zero @register_op sites today have a non-null
-    ported_from — matching the script's own _ported_from() docstring claim
-    ('zero of the ~163 live @register_op call sites'). If this ever goes
-    non-zero, the fixture-based stage-1 test in (d) should be revisited in
-    favor of a real example."""
+    discovery walk, that the only real @register_op site with a non-null
+    ported_from is the one known, deliberate exception —
+    `updatedocs.gates` (coordinator_core/ops/updatedocs_gates.py), whose
+    module docstring names its 'ported from
+    coordinator/bin/update-docs-probes.py' provenance in its first 10
+    lines.
+
+    That provenance line is NOT new: it arrived with `updatedocs.gates`
+    itself (4c7d711ce), predating nothing and postdating this guard's own
+    landing (86eeee81d) only in the sense that the two were authored
+    independently. So the premise this test guards has been false on the
+    live corpus since then, and the assertion is being corrected to match
+    reality rather than relaxed to accommodate a change made today — the
+    docstring is required backlink text (CLAUDE.md § RAG-bait exception),
+    so deleting it to restore a zero count would be the wrong repair.
+
+    Every other live site must still carry none — (d)'s
+    fixture-based stage-1 test stays synthetic on purpose (it exercises the
+    stage-1/stage-2 branch logic in isolation, independent of which real
+    op happens to carry provenance today), so a second real hit here is
+    still worth failing loud on rather than silently widening the
+    allowlist."""
     records = gpof.discover_records()
-    assert all(r.ported_from is None for r in records)
+    ported = {r.op_key: r.ported_from for r in records if r.ported_from is not None}
+    assert ported == {"updatedocs.gates": "coordinator/bin/update-docs-probes.py"}
 
 
 # ---------------------------------------------------------------------------

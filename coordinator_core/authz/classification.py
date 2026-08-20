@@ -1908,6 +1908,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   when the affirmation explicitly justifies it. Spec: strang-11 C1a.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "records.query": OpClass.COMPUTE_ONLY,
+    # records.history — COMPUTE_ONLY: derives per-file lifecycle events (creation, rename
+    # chains, frontmatter field transitions) for a record type from a single `git log -p -U0`
+    # pass over that type's directory pathspec (record_history.py :: derive_type_history) and
+    # returns the parsed result verbatim. This op reads git history and writes nothing,
+    # anywhere.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      `git log -p -U0` is a read-only history walk; no git object is created, no
+    #      ref is moved, no working-tree file is touched.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Read-only: reads the collected file set off disk and parses git's patch-text
+    #      output; no tempfile, no sentinel, no open-for-write.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns a list of {"path", "created_at", "created_by", "events"} dicts only.
+    # Spec: docs/plans/2026-08-20-a-time-axis-for-any-record-type.md, chunk C2.
+    "records.history": OpClass.COMPUTE_ONLY,
     # handoff.columns — the four-column projection over live + (opt-in) archived handoff
     # records, serving a cross-repo fleet-board consumer that reads on a page request rather
     # than on our ceremony close (DR-287 § Open direction — push vs. pull).
@@ -2472,28 +2490,68 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      set-arithmetic in compute_emergent_set; no write branch exists.
     # Spec: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C3
     "cartography.churn": OpClass.COMPUTE_ONLY,
-    # cartography.symbols — COMPUTE_ONLY: thin RPC wrapper over
-    # coordinator_core.cartography.symbols.build_symbols (ops/cartography_symbols.py) —
-    # per-Python-file AST symbol-table extraction.
-    # DR-208 five-question affirmation (citing this handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?    No.
-    #      Only reads *.py source text (Path.read_text, mode 'r') and returns a
-    #      computed dict; no file is opened for write, no git object is touched.
-    #   2. Writes into rag's relational store?                                   No.
-    #      Returns a structured dict to the caller; no rag interaction of any kind.
-    #   3. Opens any file for write (including sentinel creation)?               No.
-    #      Every file touched is opened read-only; no tempfile, no sentinel, no
-    #      os.replace.
-    #   4. Mutates shared mutable state outside its own module?                  No.
-    #      ast.parse operates on an in-memory string; no shared/global state write.
-    #   5. Persistent state changes observable across process boundaries?       No.
-    #      Nothing is written to disk; the only observable effect is the return value.
-    #   Git-shelling-is-read-only precedent: this handler shells out to nothing — pure-
-    #   Python ast.parse over already-read source text, a strictly narrower profile than
-    #   coverage.gate's affirmed-COMPUTE_ONLY git subprocess reads (DR-208's own table:
-    #   "all subprocess calls are read-only git queries"). No subprocess call is made here.
+    # ---------------------------------------------------------------------------
+    # cartography.symbols — MUTATING (2026-08-20: DR-228 § D6 scratch-tier
+    # sanctioned category, amended to a 5th op alongside distill.scope /
+    # distill.curation_status / memo.fate_partition / cartography.chunk_table).
+    # ---------------------------------------------------------------------------
+    # cartography.symbols — MUTATING: when params["emit"] is truthy, writes
+    # exactly one whole-JSON artifact to
+    # <target_root>/state/scratch/cartography-symbols/<run_id>/symbols.json
+    # and stops — no delete, no in-place mutation of an existing file, no git
+    # command (DR-228 § D6(ii)-(iv)). Classified MUTATING unconditionally
+    # (per-op, not per-call, per DR-208's classification granularity) even
+    # though a bare compute-and-return call (emit absent/false) performs no
+    # write — see this repo's cartography.chunk_table entry immediately
+    # below, whose shape this affirmation copies; a writing op sitting at
+    # COMPUTE_ONLY, even for calls that don't write, is the authz hole
+    # DR-208's fail-closed default exists to close.
+    # DR-208 five-question affirmation (citing ops/cartography_symbols.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      write_symbols_artifact (mkstemp+os.replace) writes
+    #      <target_root>/state/scratch/cartography-symbols/<run_id>/symbols.json
+    #      when emit is truthy.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only the local scratch-tier JSON artifact; no rag store write.
+    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      mkstemp+os.replace in write_symbols_artifact opens a temp file.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      target_root/state/scratch/ is coordinator substrate (global
+    #      ~/.claude/CLAUDE.md § "state/ vs tasks/" — scratch/ is enumerated
+    #      load-bearing substrate, not an ephemeral tempdir; DR-228 § D6
+    #      resolves this explicitly, now extended to this op's own named
+    #      subdirectory).
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The written artifact is readable back off disk by any caller that
+    #      supplied emit:true — the entire reason this op's emit path exists
+    #      (source_memo: 2026-08-19-doe-claude-em-cartography-symbols-needs-
+    #      artifact-emission.md).
+    # DR-228 § D6(i)-(v) scratch-tier bound affirmed (per handler code):
+    #   D6(i)  (write-confined): the emit write target is built from a
+    #          `safe_id`-validated run_id interpolated ONLY into
+    #          <target_root>/state/scratch/cartography-symbols/<run_id>/
+    #          symbols.json — no other state/ path is ever touched.
+    #   D6(ii) (create-or-full-rewrite only): write_symbols_artifact is a
+    #          single mkstemp+os.replace whole-payload write; no existing
+    #          file is opened for partial/appending edit.
+    #   D6(iii) (no delete): this handler contains no unlink/rmtree/git-rm call.
+    #   D6(iv) (no commit): this handler issues no git subprocess of any kind.
+    #   D6(v)  (schema_version-pinned): the artifact's first key is
+    #          cartography_symbols.SCHEMA_VERSION; an unknown forward version
+    #          is a fail-loud consumption error at the reading end
+    #          (cartography_symbols.check_schema_version).
+    # Read-side profile unchanged from the prior COMPUTE_ONLY affirmation:
+    # this handler shells out to nothing on either the `.py` (ast.parse) or
+    # foreign (symbol_extract.extract) path — pure-Python plus a third-party
+    # tree-sitter parse over already-read source text, a strictly narrower
+    # profile than coverage.gate's affirmed-COMPUTE_ONLY git subprocess reads
+    # (DR-208's own table: "all subprocess calls are read-only git queries").
+    # Authority: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6 (amended)
+    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C4
-    "cartography.symbols": OpClass.COMPUTE_ONLY,
+    #       docs/plans/2026-08-20-symbols-emits-its-own-artifact.md § C1
+    "cartography.symbols": OpClass.MUTATING,
     # cartography.edges — COMPUTE_ONLY: thin RPC wrapper over
     # coordinator_core.cartography.edges.build_edges (ops/cartography_edges.py) — static
     # import + intra-module call graph. Self-describes its known incompleteness in-band
@@ -3375,6 +3433,137 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec: docs/plans/2026-08-12-person-identity-primitive-first-slice.md § Tasks C4
     # ---------------------------------------------------------------------------
     "tracker.mint_person": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # tracker.assign — MUTATING. Own justification, not leaning on
+    # tracker.mint_person's comment above (each op is explicitly disclaimed
+    # as precedent for a differently-shaped tracker.* op):
+    #   1. Opens any file for write (including sentinel creation)?            YES.
+    #      Appends an item_person_added or item_person_retracted event to
+    #      the calling repo's own sovereign-tracker event store via
+    #      coordinator_core.tracker_entities.emit_item_person_added /
+    #      emit_item_person_retracted.
+    #   2. Writes into rag's relational store?                                No.
+    #      Writes only through tracker_entities' own emit functions, which
+    #      are confined to the sovereign-tracker event store; dual-write ban
+    #      satisfied.
+    #   3. Mutates shared mutable state outside its own module?               YES.
+    #      The item_person edge is read by any future consumer of the
+    #      sat-02 relational-spine fold (item<->person membership).
+    #   4. Persistent state changes observable across process boundaries?     YES.
+    #      A future session/process reads the assigned/retracted edge back
+    #      through the sat-02 fold surface.
+    #   5. Read-only, no side effects at all?                                 No.
+    #      Question 1 alone already answers YES to "opens a file for write" —
+    #      DR-208 §5's COMPUTE_ONLY checklist does not apply to a MUTATING op
+    #      by construction.
+    # Write confinement: per-repo only (DEC-11, PM ruling 2026-08-12), same
+    # bound tracker.mint_person carries — no write_root_for call, no
+    # cross-tree write, no claude-klabauter-tree default. All role validation
+    # (ITEM_PERSON_ROLES), the duplicate-triple refusal (AC9), applied_at
+    # stamping (DEC-19), and event-id minting (DEC-20) stay in
+    # tracker_entities.py — this op is a caller, not a reimplementation.
+    # Spec: state/dispatch-briefs/2026-08-19-the-tracker-names-an-owner/C2.md
+    # ---------------------------------------------------------------------------
+    "tracker.assign": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # tracker.render_status — MUTATING, by C2's ruling (sat-06 chunk C2, DR-241
+    # amendment dated 2026-08-20), NOT a descriptive claim about this one op's
+    # own read-only handler body:
+    #   1. Opens any file for write (including sentinel creation)?            No.
+    #      coordinator_core.ops.tracker.render_status delegates entirely to
+    #      coordinator_core.tracker_projection.render_status, a pure read-time
+    #      fold over tracker_store.read_events. Nothing in this op's own
+    #      handler code opens a file for write.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Mutates shared mutable state outside its own module?               No.
+    #   4. Persistent state changes observable across process boundaries?     No.
+    #   5. Read-only, no side effects at all?                                 YES,
+    #      on the merits of this op's own handler body alone.
+    #   Despite a clean YES to question 5, this op is classified MUTATING —
+    #   DR-241's Amendment (2026-08-20) rules the `tracker.` prefix's
+    #   COMPUTE_ONLY carve-out conservative-by-construction rather than
+    #   descriptive: no live claude-klabauter-internal consumer of `render_status`
+    #   exists at HEAD (only a benchmark harness, test_tracker_projection, and
+    #   assertions inside test_tracker_completion_policy reference it, and
+    #   tracker_completion_policy itself does not call render_status), so no
+    #   COMPUTE_ONLY exception was granted. See
+    #   `coordinator_core/tests/test_tracker_store.py`'s
+    #   `TestAffirmationEraBoundedRegistrationGuard::
+    #   test_tracker_ops_are_classified_mutating_not_compute_only`, which
+    #   asserts every `OP_CLASSIFICATION` key beginning `tracker.` is
+    #   `OpClass.MUTATING` under DR-241 by construction.
+    # Authority: docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
+    #   § Amendment (2026-08-20) — the conservative-by-construction ruling this
+    #   op's registration discharges.
+    # Spec: docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md § Tasks C2/C3
+    # ---------------------------------------------------------------------------
+    "tracker.render_status": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # tracker.assert_code_complete — MUTATING (C11, DR-318 §D2's routed op
+    # surface for sat-04's tracker_completion_policy). Unlike
+    # tracker.render_status this is not conservative-by-construction — this
+    # op's own handler body performs a real write on every call, via
+    # tracker_completion_policy.emit_code_complete_assert ->
+    # tracker_transitions.emit_transition -> _emit (tracker_store.
+    # append_event). A clean YES to DR-208 §5 question 1 ("opens a file for
+    # write") by construction.
+    # Authority: docs/decisions/DR-318-sat-04-completion-axis-policy-reachabili.md
+    #   § D2 — the routed obligation this op discharges.
+    # Spec: docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md § Tasks C11
+    # ---------------------------------------------------------------------------
+    "tracker.assert_code_complete": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # tracker.push_suggestion — MUTATING (C4, DR-338's delivery op — sat-06's
+    # producer-facing write seam). Not conservative-by-construction: every
+    # call performs a real write, either tracker_store.append_event (local
+    # arm) or a committed file write into a peer repo's cross-repo/inbox/
+    # (peer arm, DR-338 D1(a)/D2). DR-208 §5 checklist against this op's own
+    # handler body:
+    #   1. Opens any file for write (including append)?             YES —
+    #      tracker_store.append_event (local) / _write_envelope_file (peer).
+    #   2. Calls any git write command?                              YES —
+    #      _commit_envelope (peer arm).
+    #   3. Enqueues any state mutation?                              No.
+    #   4. Invokes a subprocess that may do any of the above?        YES —
+    #      _commit_envelope's subprocess.run(["git", ...]).
+    #   5. I/O behavior conditional (reads under some paths, writes under
+    #      others)?                                                  YES —
+    #      the local/peer fork is itself conditional I/O routing.
+    # Authority: docs/decisions/DR-338-tracker-event-delivery-cross-tree-write.md § 2.
+    # Spec: docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md § Tasks C4
+    # ---------------------------------------------------------------------------
+    "tracker.push_suggestion": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # tracker.fold_ownership — MUTATING, by the SAME DR-241 amendment
+    # (2026-08-20) tracker.render_status discharges above, NOT a descriptive
+    # claim about this one op's own read-only handler body:
+    #   1. Opens any file for write (including sentinel creation)?            No.
+    #      coordinator_core.ops.tracker.fold_ownership delegates entirely to
+    #      coordinator_core.tracker_projection.fold_person_membership /
+    #      fold_person_registry, pure read-time folds. Nothing in this op's
+    #      own handler code opens a file for write.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Mutates shared mutable state outside its own module?               No.
+    #   4. Persistent state changes observable across process boundaries?     No.
+    #   5. Read-only, no side effects at all?                                 YES,
+    #      on the merits of this op's own handler body alone.
+    #   Despite a clean YES to question 5, this op is classified MUTATING —
+    #   DR-241's Amendment (2026-08-20) rules the `tracker.` prefix's
+    #   COMPUTE_ONLY carve-out conservative-by-construction rather than
+    #   descriptive: this is a brand-new external-consumer-facing surface
+    #   with no live claude-klabauter-internal consumer at registration time, so no
+    #   COMPUTE_ONLY exception is granted (same bar tracker.render_status was
+    #   held to). See the sovereign-tracker substrate test module's
+    #   `TestAffirmationEraBoundedRegistrationGuard::
+    #   test_tracker_ops_are_classified_mutating_not_compute_only`, which
+    #   asserts every `OP_CLASSIFICATION` key beginning `tracker.` is
+    #   `OpClass.MUTATING` under DR-241 by construction.
+    # Authority: docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
+    #   § Amendment (2026-08-20) — the conservative-by-construction ruling this
+    #   op's registration discharges.
+    # Spec: state/dispatch-briefs/2026-08-19-the-tracker-names-an-owner/C3.md
+    # ---------------------------------------------------------------------------
+    "tracker.fold_ownership": OpClass.MUTATING,
     # priority.set — MUTATING: the sole writer of a priority-ledger entry
     # (<central-state>/priority-ledger/<target_id>.yaml). See
     # coordinator_core/ops/priority_set.py module docstring.

@@ -11,7 +11,7 @@ mirror), with the pointer-file rungs retained as durable-then-legacy fallbacks:
     2. `<settings-home>/machine-local/.doe-root`         (durable file mirror)
     3. `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`         (legacy fallback)
 written by `coordinator_core.ops.gen_doe_root_pointer`. Mirror-image of
-`coordinator_core.claude_klabauter_root` (which resolves CLAUDE_KLABAUTER_ROOT from inside the claude-klabauter
+`coordinator_core.engine_root` (which resolves CLAUDE_KLABAUTER_ROOT from inside the claude-klabauter
 engine) — this module resolves the DoE root from the registry/pointer file, the
 cold-read primitive consumed by the coordinator-clone resolver's rung 3.
 
@@ -56,7 +56,7 @@ Negative-spec:
     - Does NOT raise on a missing/unreadable pointer file or unresolved
       registry key — returns "" like the bash oracle's
       `cat ... 2>/dev/null || true`, never a hard error. Contrast with
-      coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root(), which DOES
+      coordinator_core.engine_root.coordinator_engine_root(), which DOES
       raise on final-rung failure — the two mirror-image resolvers have
       deliberately different failure contracts, carried over unchanged from
       their respective bash oracles.

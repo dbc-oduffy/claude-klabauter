@@ -7,7 +7,7 @@ every call and degrades Windows. Its
 5-rule routing logic is NOT reimplemented here — the claude-klabauter side already
 carries a native peer, `coordinator_core.state_root` (COMPOSED over the
 already-native `coordinator_core.ops.coordinator_doe_root`,
-`coordinator_core.claude_klabauter_root`, `coordinator_core.artifact_subject`, and
+`coordinator_core.engine_root`, `coordinator_core.artifact_subject`, and
 `coordinator_core.meta_repo_identity`), so this file is a thin argv/exit-code
 + importable bridge over that seam — mirroring `coordinator-is-meta-repo.py`'s
 bridge shape (DR-047: DoE owns contract, claude-klabauter owns engine).
@@ -84,7 +84,7 @@ from typing import List, Optional
 def _resolve_claude_klabauter_root() -> str:
     """Delegate to cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder
     (env var -> settings-home pointer file -> machine-local registry ->
-    coordinator_core.claude_klabauter_root) rather than re-deriving it — mirrors
+    coordinator_core.engine_root) rather than re-deriving it — mirrors
     coordinator-is-meta-repo.py's _resolve_claude_klabauter_root().
     """
     _this_dir = os.path.dirname(os.path.abspath(__file__))

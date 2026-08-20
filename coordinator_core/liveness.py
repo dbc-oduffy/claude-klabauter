@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import FrozenSet, Optional, Tuple
 
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 
@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 # repo-wide (migrated to claude-klabauter's coordinator/lib/coordinator_session.py,
 # not to a DoE-side sibling __file__ can walk to), so every one of those
 # rungs always missed. The ladder collapses to a single call through the
-# canonical claude-klabauter-root resolver (coordinator_core.claude_klabauter_root) — no
+# canonical engine-root resolver (coordinator_core.engine_root) — no
 # __file__-walking, no hardcoded sibling names, no subprocess spawn (and
 # therefore no 15s hang path if CLAUDE_KLABAUTER_ROOT can't be resolved).
 # ---------------------------------------------------------------------------
@@ -78,12 +78,12 @@ def _lib_path() -> Optional[str]:
         return _CACHED_LIB
 
     try:
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        engine_root = coordinator_engine_root()
     except RuntimeError as exc:
         logger.debug("coordinator_core.liveness: _lib_path: CLAUDE_KLABAUTER_ROOT unresolvable: %s", exc)
         return None
 
-    candidate = Path(claude_klabauter_root) / "coordinator" / "lib" / "coordinator_session.py"
+    candidate = Path(engine_root) / "coordinator" / "lib" / "coordinator_session.py"
     if candidate.is_file():
         _CACHED_LIB = str(candidate)
         return _CACHED_LIB

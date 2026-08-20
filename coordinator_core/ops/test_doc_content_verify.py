@@ -45,7 +45,7 @@ from coordinator_core.ops.doc_content_verify import (
 # this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 
 _B644D5A9_SHA = "b644d5a9"
 
@@ -132,7 +132,7 @@ class TestNegativeSurface:
         """coordinator/lib/install-substrate.py is absent from a sibling repo's
         tree but present under CLAUDE_KLABAUTER_ROOT — the canonical case AC12 requires
         to resolve as `resolves-cross-repo`, never `absent`."""
-        claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+        claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists(), (
             "test fixture assumption: install-substrate.py must exist under CLAUDE_KLABAUTER_ROOT "
             "for this to be a meaningful negative-surface check"
@@ -433,7 +433,7 @@ class TestAC13HistoricalReplay:
         the sibling test's docstring) rather than an "absent everywhere" one."""
         doe_root = _doe_root()
         text = _git_show(doe_root, _B644D5A9_SHA, "README.md")
-        claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+        claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "scripts" / "install-maximalist.py").exists()
 
         findings = verify_doc(
@@ -456,7 +456,7 @@ class TestAC13HistoricalReplay:
         )
         # ...but present under the current CLAUDE_KLABAUTER_ROOT — the correct-as-written
         # cross-repo citation this replay must not flag.
-        claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+        claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists()
 
         findings = verify_doc(

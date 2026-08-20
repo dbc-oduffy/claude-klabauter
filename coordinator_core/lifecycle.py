@@ -107,11 +107,10 @@ def git_common_dir(repo_root: Path) -> Path:
 
     Delegates to the `coordinator_core.git.repo_root` seam, which resolves this
     by a pure-Python upward walk for a `.git` entry plus `git_dir.
-    resolve_git_common_dir` — NO subprocess is spawned when `repo_root` is
-    inside a repository, which is every documented caller. `git rev-parse
-    --git-common-dir` is only reached as a fallback when the walk finds no
-    `.git` entry at all, and that spawn then fails too. Callers on a hot path
-    may treat this as zero-spawn.
+    resolve_git_common_dir` — WALK ONLY, no subprocess spawn at all (the
+    seam's own spawn fallback was retired; see `repo_root.git_common_dir`'s
+    negative-spec). Callers on a hot path may treat this as zero-spawn,
+    always.
 
     Negative-spec:
       - Do NOT call .resolve() on the returned path — the seam guarantees an
@@ -122,13 +121,26 @@ def git_common_dir(repo_root: Path) -> Path:
       - Do NOT reintroduce a direct `git rev-parse` call here as a
         "simplification" — the walk is what keeps this off the spawn budget.
 
-    Raises RuntimeError if resolution fails (e.g. not inside a git repository).
+    Raises RuntimeError if resolution fails. Because the seam is walk-only,
+    the ONLY way it fails is finding no `.git` entry anywhere from
+    `repo_root` up to the filesystem root — i.e. genuinely not inside a git
+    repository (a permissions/config/ownership error during the walk is
+    caught inside the seam and treated as "not a bare repo dir", never
+    propagated here). The raised message therefore always names that cause
+    explicitly, in the same "not a git repository" phrasing real git itself
+    uses — callers (e.g. `review_trail_readjudication_report._corpus_root`)
+    pattern-match this string to distinguish the one tolerated no-repo
+    fallback from a genuine resolution failure; a generic message here
+    silently defeated that discrimination (P1, 2026-08-20).
     The lru_cache (maxsize=32) is a second-order memo over the seam's own; the
     common dir for a given repo does not change during a process lifetime.
     """
     common_dir = _repo_root_seam.git_common_dir(str(repo_root))
     if common_dir is None:
-        raise RuntimeError("git rev-parse --git-common-dir failed")
+        raise RuntimeError(
+            f"git rev-parse --git-common-dir failed: not a git repository "
+            f"(or any of the parent directories): {repo_root}"
+        )
     return Path(common_dir)
 
 

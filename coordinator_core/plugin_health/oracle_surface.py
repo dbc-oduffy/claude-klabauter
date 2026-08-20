@@ -58,7 +58,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, Set
 
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 
 # Extensions (plus the bare/extensionless form) a reserved-family oracle
 # might carry on disk -- mirrors fleet_reachability._KNOWN_ORACLE_EXTENSIONS,
@@ -76,7 +76,7 @@ def resolve_agent_bin(claude_klabauter_root: Optional[Path] = None) -> Optional[
     precondition, not an error from this resolver."""
     if claude_klabauter_root is None:
         try:
-            claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+            claude_klabauter_root = Path(coordinator_engine_root())
         except RuntimeError:
             return None
     candidate = Path(claude_klabauter_root) / "coordinator" / "bin"
@@ -94,7 +94,7 @@ def resolve_extra_oracle_dirs(claude_klabauter_root: Optional[Path] = None) -> L
     `_derive_agent_helper_target_map`'s own missing-directory tolerance."""
     if claude_klabauter_root is None:
         try:
-            claude_klabauter_root = Path(coordinator_claude_klabauter_root())
+            claude_klabauter_root = Path(coordinator_engine_root())
         except RuntimeError:
             return []
     claude_klabauter_root = Path(claude_klabauter_root)

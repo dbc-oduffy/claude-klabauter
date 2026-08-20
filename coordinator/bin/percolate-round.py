@@ -364,9 +364,18 @@ def _branch0_gate(target: str, percolate_root: str) -> Optional[str]:
         [sys.executable, str(_PERCOLATE_GATE), "branch0-gate", target, "--percolate-root", percolate_root]
     )
     if result.returncode != 0:
+        stdout = result.stdout.strip()
         print(f"percolate-round: target '{target}' is not ready for a round:", file=sys.stderr)
-        print(result.stdout.strip(), file=sys.stderr)
-        print(f"Run `/percolate {target}` once to walk first-run setup, then retry.", file=sys.stderr)
+        print(stdout, file=sys.stderr)
+        # A `route:` line means the gate already resolved the next move: the name
+        # matches several registered rows sharing one mirror, which is a
+        # coordinator-publish job, not a round. Offering the first-run setup walk
+        # on top of that would contradict it and send an operator to re-register
+        # rows that already exist (§ `percolate-gate.py::
+        # _missing_target_entry_guidance`). Setup is still the right offer for
+        # every other Branch-0 failure.
+        if not any(line.startswith("route:") for line in stdout.splitlines()):
+            print(f"Run `/percolate {target}` once to walk first-run setup, then retry.", file=sys.stderr)
         return None
     stdout = result.stdout.strip()
     if not stdout.startswith("CONFIGURED:"):

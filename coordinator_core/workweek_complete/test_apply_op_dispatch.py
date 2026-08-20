@@ -58,7 +58,7 @@ def test_resolve_cli_reaches_nothing_when_control_denies(
     stripped from ASSEMBLER_DISPATCHABLE must still be refused — the
     membership check in `_CLI_DISPATCH` alone must not be sufficient."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
-    with pytest.raises(ApplyBaseUnrecognizedDirective, match="may not dispatch"):
+    with pytest.raises(ApplyBaseUnrecognizedDirective, match="dispatchable set"):
         wwc_apply._resolve_cli("query-records")
 
 
@@ -70,7 +70,50 @@ def test_load_cli_module_denial_reaches_no_module_load(
     via `_resolve_cli`'s admission check before ever caching or executing
     a module — no partial dispatch side effect."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
-    wwc_apply._LOADED_MODULES.pop("query-records", None)
     with pytest.raises(ApplyBaseUnrecognizedDirective):
         wwc_apply._load_cli_module("query-records")
     assert "query-records" not in wwc_apply._LOADED_MODULES
+
+
+def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(monkeypatch) -> None:
+    """F1 (cold review 2026-08-19): an un-admitted `cli`, sequenced SECOND
+    in a two-directive list, must fail the WHOLE run before any directive
+    dispatches — including the FIRST, individually-resolvable directive.
+    The un-admitted entry sitting second is the point: a first-position
+    variant would prove nothing about whole-run pre-validation, since a
+    per-directive halt would already refuse it."""
+    directives = [
+        {"id": "d1", "cli": "query-records", "args": []},
+        {"id": "d2", "cli": "not-a-real-cli-name", "args": []},
+    ]
+    def _never_loads(cli_name: str):
+        raise AssertionError(
+            f"pre-pass regressed: {cli_name!r} reached the dispatch loop, which "
+            "would import and run the real coordinator/bin script in-process"
+        )
+
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", _never_loads)
+    exit_code, report = wwc_apply._execute_directives(directives, [], {})
+    assert exit_code == int(wwc_apply.WorkweekApplyExitCode.DIRECTIVE_FAILED)
+    assert report["landed"] == []
+    assert report["blocked"] == []
+    assert report["failed"] and report["failed"][0]["id"] is None
+
+
+def test_admission_pre_pass_skips_an_already_satisfied_directive(monkeypatch) -> None:
+    """Slice-B review finding 1 (2026-08-20): an `already_satisfied` directive
+    cannot dispatch, so the pre-pass must not refuse the whole run over its
+    verb. A gate-blocked directive is deliberately still checked."""
+
+    def _never_loads(cli_name: str):
+        raise AssertionError(f"{cli_name!r} must not dispatch in this test")
+
+    monkeypatch.setattr(wwc_apply, "_load_cli_module", _never_loads)
+    directives = [
+        {"id": "d1", "cli": "a-verb-that-left-the-allowlist", "args": [],
+         "already_satisfied": True},
+    ]
+    exit_code, report = wwc_apply._execute_directives(directives, [], {})
+
+    assert exit_code != int(wwc_apply.WorkweekApplyExitCode.DIRECTIVE_FAILED)
+    assert report["landed"] == ["d1"]

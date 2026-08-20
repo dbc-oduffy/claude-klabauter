@@ -600,6 +600,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # _OP_KEY_SCOPE entry by a concurrent session, leaving the key-scope coverage gate RED on HEAD.
     # Reads main-worktree-rooted project records → common_dir (matches deliverable.rollup precedent).
     "records.query":                         "common_dir",
+    # records.history — file-set resolution + single-pass `git log -p -U0` derivation over
+    # record-type directory pathspecs (C1a/C1b), walked across every registered ACTIVE sibling
+    # root (C5), not just the calling repo's own tree. Follows fleet.work_state's own
+    # registration triple verbatim (closest sibling in shape and blast radius) — same
+    # cross-repo target-resolution shape → "none".
+    # Spec: docs/plans/2026-08-20-a-time-axis-for-any-record-type.md, chunk C2.
+    "records.history":                        "none",
     # handoff.columns — keyed on git_common_dir, matching records.query, whose collectors it
     # reuses verbatim: the handler derives main_worktree_root(repo_root) and reads
     # main-worktree-rooted state/handoffs/ plus (opt-in) archive/handoffs/. Without this entry
@@ -771,6 +778,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # their own store path under the git common dir themselves rather than
     # reading a caller-supplied repo. Spec:
     # docs/plans/2026-08-18-a-session-always-has-a-baton.md C2/C3.
+    # session.warm_start — none. DECISION, not a default: this op is
+    # machine-scoped, not repo-scoped, and says so in its own handler
+    # signature ("this op is machine-scoped, not repo-scoped — it warms
+    # THIS machine's engine"). Its whole effect is a debounced detached
+    # spawn gated on `warm.settings.is_warm_enabled` plus the
+    # `warm.breadcrumb` pre-check; it reads machine-local settings and a
+    # breadcrumb, never a caller worktree, and writes no repo substrate.
+    # Threading a common_dir in would imply a per-repo warm engine, which
+    # is the opposite of the one-engine-per-machine rule it implements.
+    # Spec: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C25.
+    "session.warm_start":                    "none",
     "session_baton.mint":                    "none",
     "session_baton.promote":                 "none",
     "session.reap":                          "common_dir",
@@ -1305,6 +1323,52 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # degrades to repo_root=None, which would break that per-repo
     # confinement bound silently; do not omit this entry.
     "tracker.mint_person":                      "common_dir",
+    # tracker.assign — common_dir, the SAME scope tracker.mint_person and
+    # tracker.fold_observed_set use. DECISION, not a default: this op's
+    # writes are confined to the LOCAL repo's own worktree root, derived via
+    # main_worktree_root(common_dir) — never a holder/peer repo's root. An
+    # op missing from this table silently degrades to repo_root=None, which
+    # would break that per-repo confinement bound silently; do not omit
+    # this entry.
+    "tracker.assign":                           "common_dir",
+    # tracker.render_status — common_dir, the SAME scope every other tracker.*
+    # op uses. DECISION, not a default: render_status reads the LOCAL repo's
+    # own event shard via tracker_projection, resolved from
+    # main_worktree_root(common_dir) — never a holder/peer repo's root. An op
+    # missing from this table silently degrades to repo_root=None, which for a
+    # read op means projecting the CENTRAL scope's events instead of the
+    # caller's and returning a confidently wrong status
+    # (state/lessons/2026-07-06-compute-only-op-registration-needs-an-op.yaml);
+    # do not omit this entry.
+    "tracker.render_status":                    "common_dir",
+    # tracker.assert_code_complete — common_dir, the SAME scope every other
+    # tracker.* op uses (C11). DECISION, not a default: this op writes into
+    # the LOCAL repo's own event shard via tracker_completion_policy.
+    # emit_code_complete_assert, resolved from main_worktree_root(common_dir)
+    # — never a holder/peer repo's root. An op missing from this table
+    # silently degrades to repo_root=None, which would mis-scope this write
+    # to the CENTRAL scope instead of the caller's own repo
+    # (state/lessons/2026-07-06-compute-only-op-registration-needs-an-op.yaml);
+    # do not omit this entry.
+    "tracker.assert_code_complete":              "common_dir",
+    # tracker.push_suggestion — common_dir, the SAME scope every other
+    # tracker.* op uses (C4). DECISION, not a default: repo_root is always
+    # the CALLING repo's own worktree, derived from main_worktree_root(
+    # common_dir) — ownership resolution (local-vs-peer routing through
+    # tracker_holder.write_root_for) happens INSIDE the handler, not via a
+    # different repo_root scope. An op missing from this table silently
+    # degrades to repo_root=None, which would break the D3 consistency check
+    # and the local-write worktree derivation silently
+    # (state/lessons/2026-07-06-compute-only-op-registration-needs-an-op.yaml);
+    # do not omit this entry.
+    "tracker.push_suggestion":                   "common_dir",
+    # tracker.fold_ownership — common_dir, the SAME scope every other
+    # tracker.* op uses. DECISION, not a default: this op reads the LOCAL
+    # repo's own worktree store, derived via main_worktree_root(common_dir) —
+    # never a holder/peer repo's root. An op missing from this table
+    # silently degrades to repo_root=None, which would break that per-repo
+    # confinement bound silently; do not omit this entry.
+    "tracker.fold_ownership":                   "common_dir",
     # priority.set — none: the priority-ledger root is resolved centrally via
     # coordinator_state_root(central=True), never from a caller repo_root
     # (same class as ping / goal.set_kr_status). See

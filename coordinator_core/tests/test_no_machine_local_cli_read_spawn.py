@@ -119,7 +119,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator/lib/percolate/resolve_target.py:215",
         "coordinator/lib/percolate/targets.py:120",
         "coordinator/lib/resolve-coordinator-clone.py:225",
-        "coordinator_core/claude_klabauter_root.py:178",
+        "coordinator_core/engine_root.py:179",
         "coordinator_core/ops/check_machine_local_regeneratability.py:277",
         "coordinator_core/ops/gen_claude_doe_shim.py:414",
         "coordinator_core/ops/gen_doe_root_pointer.py:127",
@@ -192,8 +192,8 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # the CLI rung here covers state `registry_get` provably cannot reach.
 #
 # `test_engine_root_conformance.py:71` is a TEST whose own `_machine_local_get`
-# mirrors `coordinator_core.claude_klabauter_root`'s Rung 2 CLI fallback for
-# `engine.working_repos.doe_claude` -- `coordinator_core/claude_klabauter_root.py:178`
+# mirrors `coordinator_core.engine_root`'s Rung 2 CLI fallback for
+# `engine.working_repos.doe_claude` -- `coordinator_core/engine_root.py:179`
 # is the production site it pins, and that site is held by the one-engine
 # plan (this plan's Out of scope), so both stay unconverted together, in
 # lockstep, until that plan converts the production site, not on its

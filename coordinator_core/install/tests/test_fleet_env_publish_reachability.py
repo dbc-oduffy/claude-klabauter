@@ -163,7 +163,25 @@ def _covering_row(rows: list[dict[str, str]], repo_relative_path: str) -> Option
     return None
 
 
-_PLAN_PATH = _REPO_ROOT / "docs" / "plans" / "2026-08-16-one-environment-for-the-fleet.md"
+_PLAN_STEM = "2026-08-16-one-environment-for-the-fleet.md"
+
+#: A terminal plan does not stay in `docs/plans/` — the archive ceremony moves it under
+#: `archive/specs/<YYYY-MM>/`, and this drift check went red the moment that happened,
+#: naming a missing file rather than the scope drift it exists to catch. Resolve both
+#: homes so an archival stops reading as a test failure. NEGATIVE SPEC: this does NOT
+#: search the archive broadly; it checks the one dated directory the ceremony writes to,
+#: so a plan moved anywhere else still fails loudly rather than being silently skipped.
+_PLAN_PATH = next(
+    (
+        candidate
+        for candidate in (
+            _REPO_ROOT / "docs" / "plans" / _PLAN_STEM,
+            _REPO_ROOT / "archive" / "specs" / _PLAN_STEM[:7] / _PLAN_STEM,
+        )
+        if candidate.is_file()
+    ),
+    _REPO_ROOT / "docs" / "plans" / _PLAN_STEM,
+)
 
 
 def _plan_scope_block_paths(plan_path: Path) -> list[str]:

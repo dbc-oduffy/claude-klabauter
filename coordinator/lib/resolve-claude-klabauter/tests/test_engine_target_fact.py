@@ -19,7 +19,7 @@ Covers, against the shim's own ``resolve_engine_target``:
 
 Also proves the HARD CONSTRAINT from C3's body: the fact lives inside the
 same ``(registry.toml, registry.local.toml, .claude-klabauter-root)`` tuple
-``coordinator_core.claude_klabauter_root._registry_mtime_pair`` already stats, so
+``coordinator_core.engine_root._registry_mtime_pair`` already stats, so
 writing it self-invalidates both ``_ROOT_MEMO`` and ``_GATE_MEMO`` by mtime
 — no explicit reset call (``_reset_root_memo()`` is a test-only seam with
 zero non-test callers, not the rollback mechanism).
@@ -45,7 +45,7 @@ resolve_claude_klabauter = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = resolve_claude_klabauter
 _spec.loader.exec_module(resolve_claude_klabauter)
 
-from coordinator_core import claude_klabauter_root as claude_klabauter_root_mod  # noqa: E402
+from coordinator_core import engine_root as engine_root_mod  # noqa: E402
 
 
 def _write(path: Path, content: str) -> None:
@@ -119,12 +119,12 @@ class TestWritingTargetInvalidatesBothMemos:
     with no explicit reset call."""
 
     def setup_method(self) -> None:
-        claude_klabauter_root_mod._reset_root_memo()
-        claude_klabauter_root_mod._reset_gate_memo()
+        engine_root_mod._reset_root_memo()
+        engine_root_mod._reset_gate_memo()
 
     def teardown_method(self) -> None:
-        claude_klabauter_root_mod._reset_root_memo()
-        claude_klabauter_root_mod._reset_gate_memo()
+        engine_root_mod._reset_root_memo()
+        engine_root_mod._reset_gate_memo()
 
     def test_mtime_pair_changes_and_stale_memo_entries_are_unreachable(self, tmp_path: Path) -> None:
         ml_dir = tmp_path / "machine-local"
@@ -132,16 +132,16 @@ class TestWritingTargetInvalidatesBothMemos:
         fake_root = "fake-claude-klabauter"
         _write(ml_dir / "registry.local.toml", f'[repos]\nclaude_klabauter = "{fake_root}"\n')
 
-        old_key = claude_klabauter_root_mod._registry_mtime_pair(ml_dir)
+        old_key = engine_root_mod._registry_mtime_pair(ml_dir)
 
         # Seed both memos as if a prior call had already resolved and cached
         # under the pre-write registry state.
-        claude_klabauter_root_mod._ROOT_MEMO[old_key] = fake_root
+        engine_root_mod._ROOT_MEMO[old_key] = fake_root
         gate_key = (*old_key, None)
-        claude_klabauter_root_mod._GATE_MEMO[gate_key] = (fake_root, "live-working-tree")
+        engine_root_mod._GATE_MEMO[gate_key] = (fake_root, "live-working-tree")
 
-        assert claude_klabauter_root_mod._ROOT_MEMO.get(old_key) is not None
-        assert claude_klabauter_root_mod._GATE_MEMO.get(gate_key) is not None
+        assert engine_root_mod._ROOT_MEMO.get(old_key) is not None
+        assert engine_root_mod._GATE_MEMO.get(gate_key) is not None
 
         # Force a distinguishable mtime bump (some filesystems have coarse
         # mtime granularity -- back-date the pre-write stat, then write, so
@@ -151,11 +151,11 @@ class TestWritingTargetInvalidatesBothMemos:
         stat_before = registry_local.stat()
         backdated = stat_before.st_mtime - 5.0
         os.utime(registry_local, (backdated, backdated))
-        old_key = claude_klabauter_root_mod._registry_mtime_pair(ml_dir)
-        claude_klabauter_root_mod._ROOT_MEMO.clear()
-        claude_klabauter_root_mod._GATE_MEMO.clear()
-        claude_klabauter_root_mod._ROOT_MEMO[old_key] = fake_root
-        claude_klabauter_root_mod._GATE_MEMO[(*old_key, None)] = (fake_root, "live-working-tree")
+        old_key = engine_root_mod._registry_mtime_pair(ml_dir)
+        engine_root_mod._ROOT_MEMO.clear()
+        engine_root_mod._GATE_MEMO.clear()
+        engine_root_mod._ROOT_MEMO[old_key] = fake_root
+        engine_root_mod._GATE_MEMO[(*old_key, None)] = (fake_root, "live-working-tree")
 
         # Write the engine.target fact -- the only edit this row makes to
         # the registry state.
@@ -164,7 +164,7 @@ class TestWritingTargetInvalidatesBothMemos:
             f'[repos]\nclaude_klabauter = "{fake_root}"\n\n[engine]\ntarget = "candidate"\n',
         )
 
-        new_key = claude_klabauter_root_mod._registry_mtime_pair(ml_dir)
+        new_key = engine_root_mod._registry_mtime_pair(ml_dir)
         new_gate_key = (*new_key, None)
 
         assert new_key != old_key, (
@@ -174,8 +174,8 @@ class TestWritingTargetInvalidatesBothMemos:
         # No explicit reset call happened between the write and these reads
         # -- the stale entries are simply unreachable under the new key,
         # which is the entire mechanism (no _reset_root_memo() call above).
-        assert claude_klabauter_root_mod._ROOT_MEMO.get(new_key) is None
-        assert claude_klabauter_root_mod._GATE_MEMO.get(new_gate_key) is None
+        assert engine_root_mod._ROOT_MEMO.get(new_key) is None
+        assert engine_root_mod._GATE_MEMO.get(new_gate_key) is None
 
         # And the fact itself is now readable through the shim.
         assert resolve_claude_klabauter.resolve_engine_target(ml_dir) == resolve_claude_klabauter.ENGINE_TARGET_CANDIDATE

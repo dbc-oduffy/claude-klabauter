@@ -545,11 +545,21 @@ def _suppress_pool_worker_consoles() -> None:
     `sys.executable` is what multiprocessing spawns, and `pythonw.exe` is the
     same interpreter with the console subsystem flag cleared — so swapping it
     suppresses the window without touching the pipe-based worker protocol,
-    which never used stdio. Worker stdout/stderr become `None`; `print` to a
-    `None` stream is a no-op in CPython, and the one thing that wrote there
-    (a per-worker op-module import failure) is ALSO recorded via `logging`
-    and in `coordinator_core.ops._POISONED_MODULES`, which re-raises the real
-    cause on dispatch — so no diagnostic is lost, only its unread window.
+    which never used stdio. Worker stdout/stderr become `None`; the one thing
+    that wrote there (a per-worker op-module import failure) is ALSO recorded
+    via `logging` and in `coordinator_core.ops._POISONED_MODULES`, which
+    re-raises the real cause on dispatch — so no diagnostic is lost, only its
+    unread window.
+
+    `None` streams are NOT self-neutralising, and this docstring previously
+    claimed they were. `print(..., file=None)` is a no-op, but an op handler
+    reaching for the stream OBJECT — `sys.stderr.write(...)`, `.flush()` —
+    raises `AttributeError` on `None`, which the dispatcher collapses to a
+    bare `-32603 Internal error: AttributeError` with no traceback (the
+    worker has no stderr to print one to). 138 such call sites across 34 op
+    modules were live when this was found. `_bind_null_std_streams` restores
+    writable sinks in every worker so the swap below stays a console fix and
+    not a behaviour change; see its own docstring.
 
     Negative-spec:
         - Does NOT run off Windows, where there is no console to suppress and
@@ -638,6 +648,44 @@ def _exit_with_parent(parent_pid: int) -> None:
     os._exit(1)
 
 
+def _bind_null_std_streams() -> None:
+    """Give this process writable `sys.stdout`/`sys.stderr` when they are `None`.
+
+    Purpose: a `pythonw.exe`-spawned process (see
+    `_suppress_pool_worker_consoles`) has no console and CPython sets both
+    standard streams to `None`. Op handlers are ordinary library code written
+    against a real interpreter: 138 call sites across 34 modules in
+    `coordinator_core/ops/` reach for the stream OBJECT
+    (`sys.stderr.write(...)`, `.flush()`), which raises `AttributeError` on
+    `None`. Warm-served, that surfaces to the caller as a bare
+    `-32603 Internal error: AttributeError` with an empty stderr, and cold
+    dispatch of the same op succeeds — a divergence between the warm and cold
+    paths, which the warm engine is not allowed to introduce.
+
+    Reported by example-cockpit-repo-em 2026-08-20 against
+    `query-records --type plan`, whose `_apply_plan_filename_filter` warning
+    is one such site; `plan` was simply the first type on their list that
+    writes a diagnostic at all.
+
+    Rebinds to `os.devnull` rather than a buffer: these diagnostics have no
+    reader in a detached worker, and an in-memory sink would grow unbounded
+    for the life of a resident pool.
+
+    Negative-spec:
+        - Does NOT touch a stream that is already bound. A worker that DOES
+          have real stdio (any non-`pythonw` spawn, and every cold-dispatch
+          process) keeps it, so no diagnostic that reaches an operator today
+          is redirected to devnull by this.
+        - Does NOT close or replace `sys.__stdout__`/`sys.__stderr__`.
+        - Is NOT a substitute for an op emitting an operator-facing
+          diagnostic through `logging` or its own result payload. It removes a
+          crash, not the reason those 138 sites are the wrong seam.
+    """
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+
+
 def _worker_process_init() -> None:
     """`ProcessPoolExecutor`'s `initializer=` -- runs once per worker
     process, before that process ever dispatches a request, so the
@@ -648,6 +696,7 @@ def _worker_process_init() -> None:
     `_ServerContext.serve_forever`) for the SAME reason, on the process that
     now actually does the dispatching.
     """
+    _bind_null_std_streams()
     threading.Thread(
         target=_exit_with_parent,
         args=(os.getppid(),),

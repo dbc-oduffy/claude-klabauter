@@ -1857,6 +1857,28 @@ def _predecessor_is_plan_input(fm: str, artifact_path: str, root: Path) -> bool:
     )
 
 
+def _deliverable_id_for(rel_or_abs_path: Optional[str], root: Path) -> Optional[str]:
+    """Read `deliverable_id` off `rel_or_abs_path` relative to `root`.
+
+    Hoisted module-level (C2, staff-eng review finding 6): `_build_fan_in_
+    cardinality_judgment_point` and `_build_divergent_deliverable_id_
+    judgment_point` each carried an identical local of this shape; one
+    definition keeps the union `resolve_lineage` computes and the
+    narration those two judgment points build reading the same disk fact
+    by construction. Delegates to `_read_frontmatter_field`, which never
+    raises (returns `""` on an unreadable/missing file) -- so an
+    unreadable predecessor leg is skipped here, matching `_scan_
+    deliverable_collision`'s own guard over the same read, without a
+    local try/except.
+    """
+    if not rel_or_abs_path:
+        return None
+    candidate = Path(rel_or_abs_path)
+    full_path = candidate if candidate.is_absolute() else root / candidate
+    value = _read_frontmatter_field(str(full_path), "deliverable_id")
+    return value or None
+
+
 def resolve_lineage(
     kind: str,
     artifact_path: str,
@@ -2469,6 +2491,50 @@ def resolve_lineage(
             + _resolve_additional_predecessor_paths(_ledger_extra_paths, root, kind)
         ) or None
 
+        # `deliverable_ids` / `plan_ids` (C2): ordered, deduplicated union of
+        # the primary rung's already-resolved id followed by each additional
+        # predecessor's OWN id, read off ITS frontmatter via the hoisted
+        # `_deliverable_id_for` (unreadable/frontmatter-less legs read back
+        # `None` and are skipped, matching `_scan_deliverable_collision`'s
+        # own guard -- see that helper's docstring). Order is the fan-in
+        # order this function just finalized above (primary, then
+        # `lineage["additional_predecessors"]` verbatim: caller-argv order
+        # followed by ledger-discovery order) -- NOT sorted, NOT earliest-
+        # claimed order; both segments are order-preserving through
+        # `_resolve_additional_predecessor_paths` (its archive-aware
+        # fallback rewrites a path in place, never reorders), so deriving
+        # off the finalized `additional_predecessors` list is sound. THIS
+        # FUNCTION OWNS the 2+ threshold (staff-eng review finding 8) --
+        # `None`, never `[]`, when fewer than 2 distinct ids result, the
+        # same optional-array convention `additional_predecessors` itself
+        # follows.
+        _extra_paths_for_union = lineage["additional_predecessors"] or []
+
+        def _ordered_unique(values: list[Optional[str]]) -> Optional[list[str]]:
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for value in values:
+                if value and value not in seen:
+                    seen.add(value)
+                    ordered.append(value)
+            return ordered if len(ordered) >= 2 else None
+
+        def _field_for(rel_or_abs_path: Optional[str], field: str) -> Optional[str]:
+            if not rel_or_abs_path:
+                return None
+            candidate = Path(rel_or_abs_path)
+            full_path = candidate if candidate.is_absolute() else root / candidate
+            return _read_frontmatter_field(str(full_path), field) or None
+
+        lineage["deliverable_ids"] = _ordered_unique(
+            [lineage.get("deliverable_id")]
+            + [_deliverable_id_for(_extra, root) for _extra in _extra_paths_for_union]
+        )
+        lineage["plan_ids"] = _ordered_unique(
+            [_field_for(lineage.get("predecessor"), "origin_plan_id")]
+            + [_field_for(_extra, "origin_plan_id") for _extra in _extra_paths_for_union]
+        )
+
         # Replay resumption (2026-07-29): pin `output_path` to the successor a
         # prior attempt already recorded on THIS predecessor, rather than
         # letting `_compute_fresh_output_path` disambiguate away from it and
@@ -2772,11 +2838,18 @@ def _build_fan_in_cardinality_judgment_point(
     (`state/roadmap/sedge-2026-08-06/COORDINATOR-RESOLUTIONS.md`), N->1
     fan-in is the CORRECT shape and stays -- this point adds no new
     cardinality, it only narrates one that already exists: the primary
-    predecessor's `deliverable_id` is the one that survives onto the
-    successor (via `resolve_lineage`'s own carry, see `resolve_deliverable_
-    and_initiative`), and every additional predecessor's `deliverable_id`
-    is named but NOT carried -- Cluster 7's ledger, not this stub's, owns
-    dropped-deliverable survival.
+    predecessor's `deliverable_id` is the one that survives as the
+    successor's OWN `deliverable_id` (via `resolve_lineage`'s own carry, see
+    `resolve_deliverable_and_initiative`), while every additional
+    predecessor's `deliverable_id`/`plan_id` is now carried too, onto the
+    baton's `deliverable_ids`/`plan_ids` collections -- per the 2026-08-20 PM
+    ruling recorded as a supersession annotation on
+    `succession-edge-cardinality.md`'s Constraint #2 and on
+    COORDINATOR-RESOLUTIONS.md Resolution 1 (both in
+    `state/roadmap/sedge-2026-08-06/`), delivered by
+    `docs/plans/2026-08-19-unified-baton-inherits-every-parents-material.md`.
+    Cluster 7's ledger is not cancelled by that ruling -- if it ships, the
+    baton's copy becomes a convenience rather than the sole authority.
 
     NARRATION-ONLY (non-negotiable, per the sedge-04 stub and the 2026-07-29
     Constraint #6 hazard `brief()`'s own docstring describes): this id is
@@ -2798,24 +2871,17 @@ def _build_fan_in_cardinality_judgment_point(
     primary_path = lineage.get("predecessor")
     additional_paths = lineage.get("additional_predecessors") or []
 
-    def _deliverable_id_for(rel_or_abs_path: Optional[str]) -> Optional[str]:
-        if not rel_or_abs_path:
-            return None
-        candidate = Path(rel_or_abs_path)
-        full_path = candidate if candidate.is_absolute() else root / candidate
-        value = _read_frontmatter_field(str(full_path), "deliverable_id")
-        return value or None
-
-    primary_deliverable_id = _deliverable_id_for(primary_path)
+    primary_deliverable_id = _deliverable_id_for(primary_path, root)
     entries = [
         f"primary predecessor {primary_path!r} (deliverable_id="
         f"{primary_deliverable_id!r}) -- SURVIVES onto the successor"
     ]
     for extra_path in additional_paths:
-        extra_deliverable_id = _deliverable_id_for(extra_path)
+        extra_deliverable_id = _deliverable_id_for(extra_path, root)
         entries.append(
             f"additional predecessor {extra_path!r} (deliverable_id="
-            f"{extra_deliverable_id!r}) -- dropped, not carried onto the successor"
+            f"{extra_deliverable_id!r}) -- carried onto the successor's "
+            "deliverable_ids"
         )
 
     return build_untrusted_gate_judgment_point(
@@ -2824,7 +2890,8 @@ def _build_fan_in_cardinality_judgment_point(
             f"This session holds {1 + len(additional_paths)} claimed batons "
             "fanning into one successor -- per Resolution 1 this N->1 shape "
             "is correct and stays; acknowledge which predecessor's "
-            "deliverable_id survives and which are dropped."
+            "deliverable_id becomes the successor's own and which are "
+            "carried alongside it."
         ),
         dispositions=[
             {"value": "acknowledge", "resolves": []},
@@ -2833,10 +2900,11 @@ def _build_fan_in_cardinality_judgment_point(
         reason=(
             "Resolution 1 (state/roadmap/sedge-2026-08-06/COORDINATOR-"
             "RESOLUTIONS.md) keeps N->1 fan-in and retires fan-out -- this "
-            "point makes the existing drop of batons 2..N's deliverable_id "
-            "legible to the operator rather than silent; it is narration "
-            "only and never gates `apply` (see this function's own "
-            "docstring for the 2026-07-29 hazard this must not reopen)."
+            "point makes the carry of batons 2..N's deliverable_id onto the "
+            "successor's deliverable_ids legible to the operator rather than "
+            "silent; it is narration only and never gates `apply` (see this "
+            "function's own docstring for the 2026-07-29 hazard this must "
+            "not reopen)."
         ),
     )
 
@@ -2875,15 +2943,8 @@ def _build_divergent_deliverable_id_judgment_point(
     Spec backlink: state/handoffs/2026-08-14-multi-plan-sessions-cannot-hand-off.md
     """
 
-    def _deliverable_id_for(path: Optional[str]) -> Optional[str]:
-        if not path:
-            return None
-        candidate = Path(path)
-        full_path = candidate if candidate.is_absolute() else root / candidate
-        return _read_frontmatter_field(str(full_path), "deliverable_id") or None
-
-    plan_id = _deliverable_id_for(plan_file)
-    predecessor_id = _deliverable_id_for(predecessor_file)
+    plan_id = _deliverable_id_for(plan_file, root)
+    predecessor_id = _deliverable_id_for(predecessor_file, root)
 
     entries = [
         f"claimed-plan rung {plan_file!r} names deliverable_id {plan_id!r}",
@@ -2895,7 +2956,7 @@ def _build_divergent_deliverable_id_judgment_point(
     # operator run DR-207 DD#1's earliest-artifact test across the whole
     # picture rather than just the two carrying rungs.
     for extra_path in additional_predecessor_files:
-        extra_id = _deliverable_id_for(extra_path)
+        extra_id = _deliverable_id_for(extra_path, root)
         if extra_id:
             entries.append(
                 f"fan-in rung {extra_path!r} names deliverable_id {extra_id!r} "
@@ -3151,6 +3212,16 @@ def _build_directives(
         for _extra in lineage.get("additional_predecessors") or []:
             d1_args.append(f"--additional-predecessor={_repo_relative_posix(_extra, root)}")
 
+    # `deliverable_ids` / `plan_ids` (C2): passed once per id, only when the
+    # corresponding `resolve_lineage`-computed key is non-None -- both keys
+    # already carry that module's optional-array convention (`None`, never
+    # `[]`, below 2 distinct ids), so a bare truthiness check here is the
+    # same test the key's own producer already applied.
+    for _deliverable_id in lineage.get("deliverable_ids") or []:
+        d1_args.append(f"--deliverable-ids={_deliverable_id}")
+    for _plan_id in lineage.get("plan_ids") or []:
+        d1_args.append(f"--plan-ids={_plan_id}")
+
     # d7 -- precondition gate, not a post-step: composes
     # `coordinator_core.ops.handoff_carry_gate.evaluate_gate` (in-process, via
     # `_dispatch_handoff_carry_gate` in apply.py) over the PREDECESSOR's own
@@ -3232,11 +3303,46 @@ def _build_directives(
                 "on the resumed successor and add any missing leg by hand; the `d6*` "
                 "up-edges are separate directives and still fire"
             )
+    # d1b -- C3, "the replay path carries the union too": the replay-only
+    # fallback for the drop the d1_already_satisfied `already_satisfied_reason`
+    # NOTE above names -- see that NOTE for the exact hazard this closes.
+    # Emitted ONLY when d1 itself was skipped AND there is
+    # a union to carry (either key non-None) -- a clean run's directive list
+    # stays byte-identical to its pre-C3 shape, and a replay with nothing to
+    # carry (single predecessor, both keys None) emits no extra directive
+    # either. Placed between d1 and d2 (never after d6): d2 lints `d1_out`
+    # and fires on the replay path too, so a stamp landing after it ships
+    # unvalidated bytes; `execute_directives` has no rollback and the `d6*`
+    # predecessor mutations are emitted last by design, so placing this
+    # before them keeps a mid-run failure here pre-d6 -- the already-covered
+    # orphan case -- rather than stranding a predecessor archived-as-continued
+    # into a successor missing its ids.
+    d1b_directive: Optional[dict[str, Any]] = None
+    if d1_already_satisfied and (lineage.get("deliverable_ids") or lineage.get("plan_ids")):
+        _d1b_args = ["--file", d1_out]
+        for _deliverable_id in lineage.get("deliverable_ids") or []:
+            _d1b_args.append(f"--deliverable-ids={_deliverable_id}")
+        for _plan_id in lineage.get("plan_ids") or []:
+            _d1b_args.append(f"--plan-ids={_plan_id}")
+        d1b_directive = {
+            "id": "d1b",
+            "cli": "baton-stamp-carried-ids",
+            "args": _d1b_args,
+            "depends_on": ["d1"],
+            # Never `already_satisfied`: the dispatch itself is idempotent
+            # (a read-back-equal union short-circuits with no write, per
+            # `_dispatch_baton_stamp_carried_ids`'s own docstring), so gating
+            # here would fork that convergence check into a second place.
+            "already_satisfied": False,
+        }
+
     directives: list[dict[str, Any]] = []
     if d7_directive is not None:
         directives.append(d7_directive)
-    directives += [
-        d1_directive,
+    directives.append(d1_directive)
+    if d1b_directive is not None:
+        directives.append(d1b_directive)
+    directives.append(
         {
             "id": "d2",
             "cli": "lint-frontmatter",
@@ -3259,14 +3365,18 @@ def _build_directives(
             # "threading is out of scope" caveat mis-stated the problem: the
             # value was already in scope.)
             "args": ["--file", d1_out],
-            "depends_on": ["d1"],
+            # `d1b` (C3) lands between d1 and d2 when emitted, so d2 must not
+            # lint before it converges -- omitting it from `depends_on` would
+            # let d2 validate `d1_out` before the replay-path stamp writes,
+            # racing the very keys it exists to add.
+            "depends_on": ["d1", "d1b"] if d1b_directive is not None else ["d1"],
             # Never `already_satisfied`: a lint MUTATES NOTHING, so it leaves no
             # residue a replay could skip, and re-running it on a resumed
             # artifact is the whole point (the scaffold may have been edited
             # between attempts).
             "already_satisfied": False,
         },
-    ]
+    )
 
     if kind == "handoff":
         # No d3 here (see module docstring, "kind=handoff's d3 slot

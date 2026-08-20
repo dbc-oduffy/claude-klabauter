@@ -250,10 +250,10 @@ def test_execute_directives_all_landed_is_success(monkeypatch: pytest.MonkeyPatc
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a"), "fake-b": _fake_module(ok_main, "fake_b")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a"), "classify-dispatch-shape": _fake_module(ok_main, "fake_b")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_a", "fake-a"), _directive("d_b", "fake-b")]
+    directives = [_directive("d_a", "archive-stamp-cli"), _directive("d_b", "classify-dispatch-shape")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_a", "d_b"]
@@ -269,7 +269,7 @@ def test_execute_directives_already_satisfied_lands_without_dispatch(
         raise AssertionError("an already_satisfied directive must never dispatch")
 
     monkeypatch.setattr(ws_apply, "_load_cli_module", fake_load)
-    directives = [_directive("d_done", "fake-a", already_satisfied=True)]
+    directives = [_directive("d_done", "archive-stamp-cli", already_satisfied=True)]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_done"]
@@ -284,7 +284,7 @@ def test_execute_directives_blocked_judgment_point_never_dispatches(
 
     monkeypatch.setattr(ws_apply, "_load_cli_module", fake_load)
     judgment_points = [{"id": "jp_gate", "dispositions": [{"value": "go", "resolves": ["d_gated"]}]}]
-    directives = [_directive("d_gated", "fake-a", depends_on="jp_gate")]
+    directives = [_directive("d_gated", "archive-stamp-cli", depends_on="jp_gate")]
     # No decision supplied for jp_gate -> gate stays closed.
     exit_code, report = ws_apply._execute_directives(directives, judgment_points, {})
 
@@ -315,7 +315,7 @@ def test_execute_directives_blocked_directive_gets_a_blocked_remedy_entry(
             ],
         }
     ]
-    directives = [_directive("d_gated", "fake-a", depends_on="jp_gate")]
+    directives = [_directive("d_gated", "archive-stamp-cli", depends_on="jp_gate")]
     exit_code, report = ws_apply._execute_directives(directives, judgment_points, {})
 
     assert report["blocked"] == ["d_gated"]
@@ -346,7 +346,7 @@ def test_execute_directives_blocked_remedy_names_the_disposition_that_missed(
             ],
         }
     ]
-    directives = [_directive("d_gated", "fake-a", depends_on="jp_gate")]
+    directives = [_directive("d_gated", "archive-stamp-cli", depends_on="jp_gate")]
     decisions = {"jp_gate": {"disposition": "wait"}}
     exit_code, report = ws_apply._execute_directives(directives, judgment_points, decisions)
 
@@ -363,10 +363,10 @@ def test_execute_directives_landed_directive_has_no_blocked_remedy_entry(
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "fake-a")]
+    directives = [_directive("d_ok", "archive-stamp-cli")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -399,7 +399,7 @@ def test_main_prints_a_blocked_remedy_line_for_each_blocked_directive(
     judgment_points = [
         {"id": "jp_gate", "dispositions": [{"value": "go", "resolves": ["d_gated"]}]}
     ]
-    directives = [_directive("d_gated", "fake-a", depends_on="jp_gate")]
+    directives = [_directive("d_gated", "archive-stamp-cli", depends_on="jp_gate")]
     envelope = {
         "artifact": {},
         "preflight": {},
@@ -425,11 +425,11 @@ def test_execute_directives_resolved_disposition_opens_the_gate(
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     judgment_points = [{"id": "jp_gate", "dispositions": [{"value": "go", "resolves": ["d_gated"]}]}]
-    directives = [_directive("d_gated", "fake-a", depends_on="jp_gate")]
+    directives = [_directive("d_gated", "archive-stamp-cli", depends_on="jp_gate")]
     decisions = {"jp_gate": {"disposition": "go"}}
     exit_code, report = ws_apply._execute_directives(directives, judgment_points, decisions)
 
@@ -447,10 +447,10 @@ def test_execute_directives_nonzero_exit_is_failed_not_landed(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-a": _fake_module(failing_main, "fake_a")}
+    modules = {"archive-stamp-cli": _fake_module(failing_main, "fake_a")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "fake-a")]
+    directives = [_directive("d_fail", "archive-stamp-cli")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == []
@@ -552,10 +552,10 @@ def test_execute_directives_partial_mutation_when_some_land_some_fail(
     def failing_main(argv: list[str]) -> int:
         return 1
 
-    modules = {"fake-ok": _fake_module(ok_main, "fake_ok"), "fake-fail": _fake_module(failing_main, "fake_fail")}
+    modules = {"session-claim-cli": _fake_module(ok_main, "fake_ok"), "check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "fake-ok"), _directive("d_fail", "fake-fail")]
+    directives = [_directive("d_ok", "session-claim-cli"), _directive("d_fail", "check-machine-local-regeneratability")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -578,10 +578,10 @@ def test_execute_directives_one_failure_does_not_block_other_ready_directives(
         order.append("ok")
         return 0
 
-    modules = {"fake-fail": _fake_module(failing_main, "fake_fail"), "fake-ok": _fake_module(ok_main, "fake_ok")}
+    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail"), "session-claim-cli": _fake_module(ok_main, "fake_ok")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "fake-fail"), _directive("d_ok", "fake-ok")]
+    directives = [_directive("d_fail", "check-machine-local-regeneratability"), _directive("d_ok", "session-claim-cli")]
     ws_apply._execute_directives(directives, [], {})
 
     assert order == ["fail", "ok"]
@@ -661,7 +661,7 @@ def _consumed_handoff_completeness_fixture() -> tuple[list[dict[str, Any]], list
         # halves of this fixture can be dispatched (or not) independently in
         # the tests below without one `_load_cli_module` fake having to
         # discriminate by directive id.
-        _directive("d-coverage-gate", "wsc-coverage-gate-runner-standalone"),
+        _directive("d-coverage-gate", "coordinator-fold-execution-record"),
     ]
     return directives, [jp]
 
@@ -677,7 +677,7 @@ def test_consumed_handoff_completeness_default_blocks_all_six_and_fails_none(
     the six lands in `report["failed"]`."""
 
     def fake_load(cli_name: str) -> ModuleType:
-        if cli_name == "wsc-coverage-gate-runner-standalone":
+        if cli_name == "coordinator-fold-execution-record":
             return _fake_module(lambda argv: 0, "fake_coverage_gate_runner_standalone")
         raise AssertionError(f"a blocked directive must never dispatch: {cli_name}")
 
@@ -704,7 +704,7 @@ def test_consumed_handoff_completeness_override_known_in_flight_clears_all_six(
 
     modules = {
         "wsc-coverage-gate-runner": _fake_module(lambda argv: 0, "fake_coverage_gate_runner"),
-        "wsc-coverage-gate-runner-standalone": _fake_module(lambda argv: 0, "fake_coverage_gate_runner_standalone"),
+        "coordinator-fold-execution-record": _fake_module(lambda argv: 0, "fake_coverage_gate_runner_standalone"),
         "coordinator-harvest-deferrals": _fake_module(lambda argv: 0, "fake_harvest"),
         "coordinator-complete-entry": _fake_module(producer_main, "fake_complete_entry"),
         "reconcile-completion-commits": _fake_module(lambda argv: 0, "fake_reconcile"),
@@ -733,7 +733,7 @@ def test_consumed_handoff_completeness_does_not_gate_coverage_gate_directive(
     which would block every other directive in the fixture."""
 
     def fake_load(cli_name: str) -> ModuleType:
-        if cli_name != "wsc-coverage-gate-runner-standalone":
+        if cli_name != "coordinator-fold-execution-record":
             raise AssertionError(f"only d-coverage-gate's cli may dispatch: {cli_name}")
         return _fake_module(lambda argv: 0, "fake_coverage_gate_runner_standalone")
 
@@ -789,12 +789,12 @@ def test_apply_executes_directives_from_a_successful_brief(monkeypatch: pytest.M
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         return {
-            "directives": [_directive("d_a", "fake-a")],
+            "directives": [_directive("d_a", "archive-stamp-cli")],
             "judgment_points": [],
             "decisions": decisions or {},
         }
@@ -1241,7 +1241,7 @@ def test_apply_halts_before_any_directive_when_no_commit_row_guard_fires(
     def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         return {
             "artifact": {"path": str(tmp_path)},
-            "directives": [_directive("d_a", "fake-a")],
+            "directives": [_directive("d_a", "archive-stamp-cli")],
             "judgment_points": [],
             "decisions": decisions or {},
         }
@@ -1263,13 +1263,13 @@ def test_apply_proceeds_when_no_commit_row_guard_is_clear(
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         return {
             "artifact": {"path": str(tmp_path)},
-            "directives": [_directive("d_a", "fake-a")],
+            "directives": [_directive("d_a", "archive-stamp-cli")],
             "judgment_points": [],
             "decisions": decisions or {},
         }
@@ -1300,12 +1300,12 @@ def test_apply_skips_the_guard_when_brief_reports_no_artifact_path(
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         return {
-            "directives": [_directive("d_a", "fake-a")],
+            "directives": [_directive("d_a", "archive-stamp-cli")],
             "judgment_points": [],
             "decisions": decisions or {},
         }
@@ -1561,16 +1561,16 @@ def test_execute_directives_argv_token_expands_into_consumer_argv(
         return 0
 
     modules = {
-        "fake-producer": _fake_module(producer_main, "fake_producer"),
-        "fake-consumer": _fake_module(consumer_main, "fake_consumer"),
+        "coordinator-complete-entry": _fake_module(producer_main, "fake_producer"),
+        "reconcile-completion-commits": _fake_module(consumer_main, "fake_consumer"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d-close-tail-args", "fake-producer"),
+        _directive("d-close-tail-args", "coordinator-complete-entry"),
         _directive(
             "d-run-wsc-tail",
-            "fake-consumer",
+            "reconcile-completion-commits",
             args=["--sid", "abcdef", "{d-close-tail-args.argv}"],
             depends_on="d-close-tail-args",
         ),
@@ -1593,7 +1593,7 @@ def test_execute_directives_argv_token_producer_never_landed_never_dispatches(
     directives = [
         _directive(
             "d-run-wsc-tail",
-            "fake-consumer",
+            "reconcile-completion-commits",
             args=["--sid", "abcdef", "{d-close-tail-args.argv}"],
         ),
     ]
@@ -1820,16 +1820,16 @@ def test_execute_directives_resolves_and_dispatches_an_entry_path_token(
         return 0
 
     modules = {
-        "fake-producer": _fake_module(producer_main, "fake_producer"),
-        "fake-consumer": _fake_module(consumer_main, "fake_consumer"),
+        "coordinator-complete-entry": _fake_module(producer_main, "fake_producer"),
+        "reconcile-completion-commits": _fake_module(consumer_main, "fake_consumer"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d-complete-entry", "fake-producer"),
+        _directive("d-complete-entry", "coordinator-complete-entry"),
         _directive(
             "d-reconcile-completion-commits",
-            "fake-consumer",
+            "reconcile-completion-commits",
             args=["--append", "{d-complete-entry.entry_path}"],
             depends_on="d-complete-entry",
         ),
@@ -1860,7 +1860,7 @@ def test_execute_directives_never_dispatches_an_unresolved_token(
     directives = [
         _directive(
             "d-reconcile-completion-commits",
-            "fake-consumer",
+            "reconcile-completion-commits",
             args=["--append", "{d-complete-entry.entry_path}"],
         ),
     ]
@@ -1956,7 +1956,7 @@ def test_double_apply_lands_nothing_new_via_genuine_cli_reentrancy(
     monkeypatch.setattr(
         ws_apply, "_load_cli_module", lambda cli_name: _fake_module(reentrant_replace_main, cli_name)
     )
-    directives = [_directive("d-append-orientation-pinboard", "fake-a", args=["same note"])]
+    directives = [_directive("d-append-orientation-pinboard", "archive-stamp-cli", args=["same note"])]
 
     exit_code_1, report_1 = ws_apply._execute_directives(directives, [], {})
     disk_after_first_pass = dict(disk)
@@ -2137,10 +2137,10 @@ def test_best_effort_nonzero_exit_lands_in_degraded_not_failed(
     def failing_main(argv: list[str]) -> int:
         return 3
 
-    modules = {"fake-degraded": _fake_module(failing_main, "fake_degraded")}
+    modules = {"emit-cadence": _fake_module(failing_main, "fake_degraded")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_degraded", "fake-degraded")
+    directive = _directive("d_degraded", "emit-cadence")
     directive["best_effort"] = True
     exit_code, report = ws_apply._execute_directives([directive], [], {})
 
@@ -2164,14 +2164,14 @@ def test_best_effort_directive_alone_reaches_success_not_partial_mutation(
         return 3
 
     modules = {
-        "fake-ok": _fake_module(ok_main, "fake_ok"),
-        "fake-degraded": _fake_module(degraded_main, "fake_degraded"),
+        "session-claim-cli": _fake_module(ok_main, "fake_ok"),
+        "emit-cadence": _fake_module(degraded_main, "fake_degraded"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    degraded_directive = _directive("d_degraded", "fake-degraded")
+    degraded_directive = _directive("d_degraded", "emit-cadence")
     degraded_directive["best_effort"] = True
-    directives = [_directive("d_ok", "fake-ok"), degraded_directive]
+    directives = [_directive("d_ok", "session-claim-cli"), degraded_directive]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -2190,10 +2190,10 @@ def test_non_best_effort_nonzero_exit_is_unchanged(
     def failing_main(argv: list[str]) -> int:
         return 1
 
-    modules = {"fake-fail": _fake_module(failing_main, "fake_fail")}
+    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "fake-fail")]
+    directives = [_directive("d_fail", "check-machine-local-regeneratability")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["degraded"] == []
@@ -2213,15 +2213,15 @@ def test_failed_entry_error_carries_captured_stderr(
         print("route_mutation: transport failure detail here", file=_sys.stderr)
         return 3
 
-    modules = {"fake-fail": _fake_module(failing_main, "fake_fail")}
+    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "fake-fail")]
+    directives = [_directive("d_fail", "check-machine-local-regeneratability")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert len(report["failed"]) == 1
     error = report["failed"][0]["error"]
-    assert "fake-fail exited 3" in error
+    assert "check-machine-local-regeneratability exited 3" in error
     assert "route_mutation: transport failure detail here" in error
 
 
@@ -2235,16 +2235,16 @@ def test_degraded_entry_error_carries_captured_stderr(
         print("route_mutation: transport failure detail here", file=_sys.stderr)
         return 3
 
-    modules = {"fake-degraded": _fake_module(failing_main, "fake_degraded")}
+    modules = {"emit-cadence": _fake_module(failing_main, "fake_degraded")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_degraded", "fake-degraded")
+    directive = _directive("d_degraded", "emit-cadence")
     directive["best_effort"] = True
     exit_code, report = ws_apply._execute_directives([directive], [], {})
 
     assert len(report["degraded"]) == 1
     error = report["degraded"][0]["error"]
-    assert "fake-degraded exited 3" in error
+    assert "emit-cadence exited 3" in error
     assert "route_mutation: transport failure detail here" in error
 
 
@@ -2267,14 +2267,14 @@ def test_best_effort_dispatch_exception_lands_in_degraded_not_failed(
         return 0
 
     modules = {
-        "fake-ok": _fake_module(ok_main, "fake_ok"),
-        "fake-raising": _fake_module(raising_main, "fake_raising"),
+        "session-claim-cli": _fake_module(ok_main, "fake_ok"),
+        "freeze-review-diff": _fake_module(raising_main, "fake_raising"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    degraded_directive = _directive("d-emit-cadence", "fake-raising")
+    degraded_directive = _directive("d-emit-cadence", "freeze-review-diff")
     degraded_directive["best_effort"] = True
-    directives = [_directive("d-run-wsc-tail", "fake-ok"), degraded_directive]
+    directives = [_directive("d-run-wsc-tail", "session-claim-cli"), degraded_directive]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
@@ -2298,12 +2298,12 @@ def test_non_best_effort_dispatch_exception_still_reports_partial_mutation(
         return 0
 
     modules = {
-        "fake-ok": _fake_module(ok_main, "fake_ok"),
-        "fake-raising": _fake_module(raising_main, "fake_raising"),
+        "session-claim-cli": _fake_module(ok_main, "fake_ok"),
+        "freeze-review-diff": _fake_module(raising_main, "fake_raising"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "fake-ok"), _directive("d_raising", "fake-raising")]
+    directives = [_directive("d_ok", "session-claim-cli"), _directive("d_raising", "freeze-review-diff")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["degraded"] == []
@@ -2322,13 +2322,13 @@ def test_error_string_omits_stderr_block_when_stderr_is_empty(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-fail": _fake_module(failing_main, "fake_fail")}
+    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "fake-fail")]
+    directives = [_directive("d_fail", "check-machine-local-regeneratability")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
-    assert report["failed"][0]["error"] == "fake-fail exited 2 (args=[])"
+    assert report["failed"][0]["error"] == "check-machine-local-regeneratability exited 2 (args=[])"
 
 
 def test_already_satisfied_producer_registers_empty_stdout_for_landed_token(
@@ -2341,13 +2341,13 @@ def test_already_satisfied_producer_registers_empty_stdout_for_landed_token(
     def consumer_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-consumer": _fake_module(consumer_main, "fake_consumer")}
+    modules = {"reconcile-completion-commits": _fake_module(consumer_main, "fake_consumer")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     producer = _directive("d-run-wsc-tail", "wsc-tail", already_satisfied=True)
     consumer = _directive(
         "d-emit-cadence",
-        "fake-consumer",
+        "reconcile-completion-commits",
         args=["{d-run-wsc-tail.landed}"],
         depends_on="d-run-wsc-tail",
     )
@@ -2461,17 +2461,17 @@ def test_execute_directives_emits_progress_before_and_after_each_dispatch(
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-a": _fake_module(ok_main, "fake_a"), "fake-b": _fake_module(ok_main, "fake_b")}
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a"), "classify-dispatch-shape": _fake_module(ok_main, "fake_b")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_a", "fake-a"), _directive("d_b", "fake-b")]
+    directives = [_directive("d_a", "archive-stamp-cli"), _directive("d_b", "classify-dispatch-shape")]
     ws_apply._execute_directives(directives, [], {})
 
     err = capsys.readouterr().err
     # The pre-dispatch line is the whole point: it must be present for a
     # directive that has not returned yet, so assert on it per directive.
-    assert "wsc-apply: d_a (fake-a)" in err
-    assert "wsc-apply: d_b (fake-b)" in err
+    assert "wsc-apply: d_a (archive-stamp-cli)" in err
+    assert "wsc-apply: d_b (classify-dispatch-shape)" in err
     assert "wsc-apply: d_a exited 0 in " in err
     assert "wsc-apply: d_b exited 0 in " in err
     # stdout carries the report JSON only -- progress never contaminates it.
@@ -2492,8 +2492,8 @@ def test_execute_directives_progress_survives_a_directive_writing_its_own_stderr
         ws_apply, "_load_cli_module", lambda cli_name: _fake_module(noisy_main, "noisy")
     )
 
-    ws_apply._execute_directives([_directive("d_noisy", "fake-a")], [], {})
+    ws_apply._execute_directives([_directive("d_noisy", "archive-stamp-cli")], [], {})
 
     err = capsys.readouterr().err
-    assert err.index("wsc-apply: d_noisy (fake-a)") < err.index("cli-internal-noise")
+    assert err.index("wsc-apply: d_noisy (archive-stamp-cli)") < err.index("cli-internal-noise")
     assert "wsc-apply: d_noisy exited 0 in " in err

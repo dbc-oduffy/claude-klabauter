@@ -3125,7 +3125,14 @@ def _is_structurally_never_published(path: Path, repo_root: Path) -> bool:
     surface_module = _import_percolate_surface_module()
     structural_prefixes = surface_module.STRUCTURAL_NEVER_PUBLISHED_PREFIXES
     parts = path.relative_to(repo_root).parts
-    if any(part in structural_prefixes for part in parts):
+    # Routed through `matches_exclude_prefix` rather than a hand-rolled membership
+    # test: that helper is the tuple's own match algorithm (the three other call
+    # sites already use it), and since 2026-08-20 the tuple carries one entry --
+    # `.fleet-env.gen-*` -- whose segment is unbounded and which a bare `in` test
+    # therefore silently fails to match. Full path, not the parent only: unlike
+    # `engine.run_parse_sweep`, this walk never admits a file BY basename, so a
+    # nested file named exactly `.git`/`.fleet-env` is plumbing here too.
+    if surface_module.matches_exclude_prefix("/".join(parts), list(structural_prefixes)):
         return True
     return _is_structural_build_artifact("/".join(parts))
 
@@ -7841,6 +7848,55 @@ def _rmtree_clear_readonly_onerror(func: Callable, path: str, exc_info) -> None:
         pass
 
 
+# A provisioned fleet environment and its siblings, matched on the TOP-LEVEL
+# basename only (§ `_create_publish_staging_dir`'s own "fleet-env" paragraph for
+# why this is safe and why it is scoped to the root-dest row). Deliberately not
+# sourced from `surface.STRUCTURAL_NEVER_PUBLISHED_PREFIXES`: that tuple answers
+# "is this file publish-owned content", a question asked of every path at every
+# depth, whereas this one answers "must this top-level directory be COPIED into
+# staging", which has a completely different failure mode -- a wrong answer here
+# deletes a multi-GB directory rather than merely skipping a scan. Keeping the
+# two separate is intentional: if that tuple ever gains a name which is not a
+# top-level dest-local directory, folding them together would silently start
+# excluding real content from the staging copy.
+_FLEET_ENV_STAGING_SKIP_RE = re.compile(r"^\.fleet-env(\.prior|\.gen-.+)?$")
+
+
+def _fleet_env_unstaged_names(dest_dir: Path) -> frozenset:
+    """The top-level names of `dest_dir` that `_create_publish_staging_dir`
+    will NOT stage — empty for any row it stages in full.
+
+    THE single source for that answer, deliberately, because two consumers
+    must agree on it exactly and a previous split between them shipped a
+    defect. `_create_publish_staging_dir` uses it to skip the copy;
+    `_report_published_diff` uses it to keep the same names out of its
+    `dest_dir` walk. Disagreement in either direction produces a change report
+    that contradicts reality BY CONSTRUCTION: a name staged but excluded from
+    the report reads as a phantom `NEW:` on every run, and a name excluded
+    from staging but present in the report reads as a phantom `REMOVE:` —
+    which is not cosmetic, since `percolate-round.py::_extract_change_lines`
+    builds a commit pathspec out of those lines.
+
+    Both conditions below are load-bearing, and both were originally missing
+    from the report side (review: code-reviewer on c5e5bcf81):
+
+      * root-dest rows only. A `dest_subdir` row's swap renames staging ONTO
+        the destination, so declining to stage a name there would destroy it
+        rather than preserve it; such a row is staged in full and must be
+        reported in full.
+      * directories only. The root-dest swap DOES unlink a top-level FILE
+        absent from staging, so a file carrying one of these names is staged
+        normally — and therefore has to be reported normally too.
+    """
+    if not (dest_dir / ".git").exists() or not dest_dir.is_dir():
+        return frozenset()
+    return frozenset(
+        entry.name
+        for entry in dest_dir.iterdir()
+        if _FLEET_ENV_STAGING_SKIP_RE.match(entry.name) and entry.is_dir()
+    )
+
+
 def _create_publish_staging_dir(dest_dir: Path) -> Path:
     """Materializes a fresh, destination-ADJACENT staging directory seeded
     with a copy of `dest_dir`'s current on-disk content (`.git` excluded),
@@ -7870,6 +7926,35 @@ def _create_publish_staging_dir(dest_dir: Path) -> Path:
     `_discard_publish_staging_dir` — a doomed directory should never hold a
     repo's only copy of its own history.
 
+    A provisioned fleet environment (`.fleet-env/`, plus its `.prior`/`.gen-*`
+    siblings — § `_FLEET_ENV_STAGING_SKIP_RE`) is excluded on exactly the same
+    grounds as `.git`, and measured far larger: a live toplevel run copied
+    9.6GB of vendored site-packages into staging, swept every file of it for
+    depersonalization, compared it byte-for-byte via `_dir_trees_equal`, and
+    then deleted the copy — four full passes over content no phase this tree
+    feeds ever reads. That is the "severe, unbounded cost with no correctness
+    benefit" the `.git` paragraph above names, in a bigger tree.
+
+    Two constraints make the exclusion safe, and BOTH are load-bearing:
+
+      * TOP-LEVEL ONLY. The ignore callable returns early unless the directory
+        being walked IS `dest_dir`, so a nested path that happens to carry one
+        of these basenames is copied normally. `shutil.ignore_patterns` cannot
+        express this — it matches at every level — which is why this is a
+        callable rather than another pattern argument.
+      * ROOT-DEST ROWS ONLY, gated on `(dest_dir / ".git").exists()` — the SAME
+        predicate `_swap_publish_staging_into_dest` uses to pick its root-dest
+        branch, so the exclusion is exactly co-extensive with the branch that
+        tolerates it. That branch swaps per top-level entry and never removes a
+        directory from `dest_dir` (§ `_swap_publish_staging_into_dest_root`'s
+        "Top-level DIRECTORIES are never removed here"), so an excluded
+        directory is simply left in place, untouched. The whole-tree branch
+        renames `staging_dir` ONTO `dest_dir`, where the same exclusion would
+        destroy the environment instead of preserving it — hence the gate. A
+        `dest_subdir` row's `dest_dir` never holds a `.git`, and no fleet-env
+        has ever lived anywhere but a repo root, so this is belt-and-braces on
+        both sides rather than a live discrimination; keep it anyway.
+
     `dest_dir` not yet existing (a virgin publish row, § `_ensure_dest_ready`'s
     bootstrap leg already having created it as an empty dir by the time this
     runs) yields an all-but-empty staging dir — correct, there is no prior
@@ -7898,12 +7983,19 @@ def _create_publish_staging_dir(dest_dir: Path) -> Path:
     staging_dir = Path(
         tempfile.mkdtemp(prefix=f".{dest_dir.name}.publish-staging-", dir=str(dest_dir.parent))
     )
+    unstaged = _fleet_env_unstaged_names(dest_dir)
+
+    def _ignore(directory: str, names: list[str]) -> set[str]:
+        if Path(directory) != dest_dir:
+            return set()
+        return {name for name in names if name == ".git" or name in unstaged}
+
     try:
         if dest_dir.is_dir():
             shutil.copytree(
                 dest_dir,
                 staging_dir,
-                ignore=shutil.ignore_patterns(".git"),
+                ignore=_ignore,
                 symlinks=True,
                 dirs_exist_ok=True,
             )
@@ -8468,12 +8560,37 @@ def _report_published_diff(
     `.git` is excluded from both sides: staging never carries one (§
     `_create_publish_staging_dir`), and `dest_dir`'s copy is publish
     machinery, never payload this row's report should count.
+
+    The fleet-env family (§ `_FLEET_ENV_STAGING_SKIP_RE`) is excluded from
+    the `dest_dir` side for the SAME structural reason, and the exclusion is
+    NOT optional bookkeeping — it is the other half of
+    `_create_publish_staging_dir`'s skip. Anything that function declines to
+    stage is, by construction, present in `dest_dir` and absent from
+    `staging_dir`, so this function's `set(dest_files) - set(staged_files)`
+    would report every one of its files as a REMOVE. Measured on a live
+    toplevel row: 95,256 phantom REMOVE lines, a ~9MB log, and a
+    `totals.deleted` inflated by the same amount, for a tree the swap never
+    touches (`_swap_publish_staging_into_dest_root` removes top-level FILES
+    only, never directories).
+
+    That is not merely a cosmetic report defect, which is why it is pinned by
+    a test rather than left to the reader: `percolate-round.py::
+    _extract_change_lines` parses these exact `NEW:`/`UPDATE:`/`REMOVE:`
+    lines to build the pathspec it hands `scoped-git-commit` (§ that module's
+    docstring). An unexcluded fleet-env would put ~95k paths into a commit
+    pathspec, asking git to record the deletion of a multi-GB provisioned
+    environment that is gitignored and that nothing deleted.
+
+    Keep the two exclusions in lockstep. A name added to the staging skip
+    without being added here re-opens exactly this defect, silently, and only
+    on a row whose dest actually carries such a directory.
     """
     staged_files: dict[str, Path] = {
         p.relative_to(staging_dir).as_posix(): p
         for p in staging_dir.rglob("*")
         if p.is_file()
     }
+    unstaged = _fleet_env_unstaged_names(dest_dir)
     dest_files: dict[str, Path] = {}
     if dest_dir.is_dir():
         for p in dest_dir.rglob("*"):
@@ -8481,6 +8598,8 @@ def _report_published_diff(
                 continue
             rel = p.relative_to(dest_dir).as_posix()
             if rel == ".git" or rel.startswith(".git/"):
+                continue
+            if rel.split("/", 1)[0] in unstaged:
                 continue
             dest_files[rel] = p
 

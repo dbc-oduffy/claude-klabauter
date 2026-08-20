@@ -252,12 +252,12 @@ def _grant_cli_invocation() -> str:
     must not propagate — an exception here converts a clean block into a crashed
     PreToolUse guard.
 
-    The import is local rather than module-scope to keep ``claude_klabauter_root``'s
+    The import is local rather than module-scope to keep ``engine_root``'s
     ``subprocess``/``shutil`` chain off the import path of every hook dispatch that
     never renders a deny.
 
     Review: code-reviewer P2 (2026-07-30, ACCEPTED, no code change) --
-    ``coordinator_claude_klabauter_root()`` can reach Rung 2 (the ``machine-local``
+    ``coordinator_engine_root()`` can reach Rung 2 (the ``machine-local``
     subprocess ladder, bounded at 2s) on this deny-render path, the opposite
     choice from ``bash_guards._helpers._resolve_override_keys_doc_display()``,
     which deliberately skips Rung 2 with the stated reason "a message
@@ -277,9 +277,9 @@ def _grant_cli_invocation() -> str:
     falls back, but says so on stderr rather than passing for normal operation.
     """
     try:
-        from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+        from coordinator_core.engine_root import coordinator_engine_root
 
-        root = coordinator_claude_klabauter_root()
+        root = coordinator_engine_root()
     except RuntimeError:
         return _GRANT_CLI_INVOCATION_FALLBACK
     except Exception as exc:  # noqa: BLE001 — deny-render path must never propagate

@@ -11,7 +11,7 @@ Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22).
 COMPOSED — this module does NOT reimplement the four sibling resolver ladders. It
 dispatches the 5-rule state-root routing on top of the already-native peers:
   - coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()  (Optional[str])
-  - coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()            (str, raises)
+  - coordinator_core.engine_root.coordinator_engine_root()            (str, raises)
   - coordinator_core.artifact_subject.classify()                     (engine|doctrine|cross-cutting)
   - coordinator_core.meta_repo_identity.is_meta_repo()               (bool, raises)
 
@@ -28,7 +28,7 @@ Five routing rules (verbatim from the bash oracle's header):
             fall back to claude-klabauter.
 
   Rule 2  central=True, subject="engine"
-            -> <coordinator_claude_klabauter_root()>/state
+            -> <coordinator_engine_root()>/state
 
   Rule 3  central=True, artifact=<path>
             -> classify(<path>); map result:
@@ -38,11 +38,11 @@ Five routing rules (verbatim from the bash oracle's header):
                                   do NOT return a state path.
 
   Rule 4  central=True, no subject, no artifact  [BACKWARD-COMPAT DEFAULT]
-            -> <coordinator_claude_klabauter_root()>/state
+            -> <coordinator_engine_root()>/state
             Every existing --central caller resolves to claude-klabauter, unchanged.
 
   Rule 5  central=False  [BACKWARD-COMPAT DEFAULT]
-            -> <coordinator_claude_klabauter_root()>/state  when cwd git root IS the meta-repo
+            -> <coordinator_engine_root()>/state  when cwd git root IS the meta-repo
                <git_root>/state                   when cwd git root is a sibling repo
                                                     AND is not the published mirror
                                                     (see "Published-mirror guard" below)
@@ -65,7 +65,7 @@ Five routing rules (verbatim from the bash oracle's header):
   Rule 5's sibling-repo branch gets the SAME guard applied to an arbitrary
   candidate git root rather than only "my own" claude-klabauter root: before treating
   a non-meta cwd git root as its own state root, it asks
-  `coordinator_core.claude_klabauter_root.published_engine_mirror_path()` (the same
+  `coordinator_core.engine_root.published_engine_mirror_path()` (the same
   `repos.claude_klabauter` discriminator `_claude_klabauter_state()` already uses,
   exposed standalone) whether that git root IS the registered published
   mirror clone (e.g. a `claude-klabauter` checkout sitting on disk as an
@@ -111,9 +111,9 @@ from typing import List, Optional
 
 from coordinator_core.artifact_subject import Subject, classify, remediation_message
 from coordinator_core.git import repo_root as _repo_root_seam
-from coordinator_core.claude_klabauter_root import (
-    coordinator_claude_klabauter_root,
-    coordinator_claude_klabauter_root_with_class,
+from coordinator_core.engine_root import (
+    coordinator_engine_root,
+    coordinator_engine_root_with_class,
     published_engine_mirror_path,
 )
 from coordinator_core.meta_repo_identity import (
@@ -128,7 +128,7 @@ _STATE_SUBDIR = "state"
 #: `RESOLUTION_RESOLVED_ENGINE` module-level string constant
 #: (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`) rather than loading
 #: the shim just to read one string, mirroring the SAME duplication pattern
-#: `coordinator_core.claude_klabauter_root` already uses for
+#: `coordinator_core.engine_root` already uses for
 #: `_RESOLUTION_LIVE_WORKING_TREE_LITERAL` (see that module's comment for the
 #: full rationale). Per the shim's own docstring, this string is "part of the
 #: contract, not just its name" — if the shim's constant value ever changes,
@@ -178,12 +178,12 @@ def _claude_klabauter_state() -> str:
     failure OR when the resolved claude-klabauter root is a published engine mirror
     (`RESOLUTION_RESOLVED_ENGINE`) rather than a live working tree — see this
     module's docstring, "Published-mirror guard". Uses
-    ``coordinator_claude_klabauter_root_with_class()`` (not the class-less
-    ``coordinator_claude_klabauter_root()``) specifically so this check is possible;
+    ``coordinator_engine_root_with_class()`` (not the class-less
+    ``coordinator_engine_root()``) specifically so this check is possible;
     the ``RESOLUTION_LIVE_WORKING_TREE`` path below returns byte-identical to
     the prior class-less resolution."""
     try:
-        claude_klabauter_root, resolution_class = coordinator_claude_klabauter_root_with_class()
+        claude_klabauter_root, resolution_class = coordinator_engine_root_with_class()
     except RuntimeError as exc:
         raise StateRootError(str(exc)) from exc
     if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
@@ -290,7 +290,7 @@ def coordinator_state_root(
     # sibling IS the registered published-engine mirror clone (see this
     # module's docstring, "Published-mirror guard") — reuses the exact same
     # `repos.claude_klabauter` discriminator `_claude_klabauter_state()` already
-    # applies via `coordinator_claude_klabauter_root_with_class`, exposed standalone as
+    # applies via `coordinator_engine_root_with_class`, exposed standalone as
     # `published_engine_mirror_path()` so this branch can ask the question
     # for an arbitrary candidate path rather than only for "my own" root.
     _mirror = published_engine_mirror_path()
@@ -318,7 +318,7 @@ def coordinator_state_root_central() -> str:
     Review: code-reviewer — previously hand-duplicated verbatim across
     ``coordinator_core.ops.central_run_due`` and
     ``coordinator_core.ops.learn_lessons_roots`` (Rule 4 -- no subject/artifact
-    given, so it resolves to ``<coordinator_claude_klabauter_root()>/state``, matching
+    given, so it resolves to ``<coordinator_engine_root()>/state``, matching
     the retired bash oracle's ``coordinator-state-root.sh --central``
     default). Centralized here so both callers share one definition instead of
     two independently-maintained copies -- the same C11 centralization
@@ -359,13 +359,13 @@ def print_map() -> str:
 
     # Engine root. Routed through the class-aware resolver so the printed
     # map reflects the same published-mirror guard `_claude_klabauter_state()` applies
-    # (Rule 2/4/5) — the class-less `coordinator_claude_klabauter_root()` would happily
+    # (Rule 2/4/5) — the class-less `coordinator_engine_root()` would happily
     # report a mirror path that the resolver itself refuses to hand out for
     # writing, which is worse than no diagnostic. On failure OR on a resolved
     # published-mirror class: null + one stderr WARN line, continue.
     # Review: code-reviewer.
     try:
-        engine_root, resolution_class = coordinator_claude_klabauter_root_with_class()
+        engine_root, resolution_class = coordinator_engine_root_with_class()
         if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
             sys.stderr.write(
                 "coordinator_state_root --print-map: engine root resolved to a "

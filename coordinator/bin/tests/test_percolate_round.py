@@ -2867,6 +2867,38 @@ def test_default_no_op_reports_pass_noop_from_single_real_run(tmp_path, monkeypa
     assert "--dry-run" not in publish_calls[0]
 
 
+def _branch0_stderr(monkeypatch, capsys, gate_stdout: str) -> str:
+    """Drive `_branch0_gate` against a canned failing gate result and return
+    what it wrote to stderr. Stubs `_mod._run`, the module's own subprocess
+    boundary, so nothing spawns."""
+    monkeypatch.setattr(_mod, "_run", lambda *a, **k: _completed(1, gate_stdout))
+    assert _mod._branch0_gate("klabauter", "/percolate-root") is None
+    return capsys.readouterr().err
+
+
+def test_branch0_gate_suppresses_setup_offer_when_the_gate_routed(monkeypatch, capsys):
+    """A `route:` line means the gate already resolved the next move (several
+    registered rows sharing one mirror — a coordinator-publish job). Offering
+    the first-run setup walk on top of it would contradict that line and send
+    an operator to re-register rows that already exist, which is exactly what
+    `/percolate klabauter` used to do against nine `claude-klabauter*` rows."""
+    err = _branch0_stderr(
+        monkeypatch,
+        capsys,
+        "MISSING_TARGET_ENTRY\nroute: 9 rows match 'klabauter' and share one "
+        "destination; percolate-round is single-target. Use: coordinator-publish\n",
+    )
+    assert "coordinator-publish" in err
+    assert "first-run setup" not in err
+
+
+def test_branch0_gate_still_offers_setup_for_every_other_failure(monkeypatch, capsys):
+    """Suppression is scoped to the routed case: a target that genuinely is not
+    set up still gets the setup walk, which remains the correct offer."""
+    err = _branch0_stderr(monkeypatch, capsys, "MISSING_IGNORE\n")
+    assert "first-run setup" in err
+
+
 def test_default_flag_help_text_cites_pm_ruling(tmp_path, monkeypatch):
     parser = _mod._build_parser()
     help_text = parser.format_help()

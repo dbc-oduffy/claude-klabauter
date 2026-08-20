@@ -37,7 +37,7 @@ def _base_manifest(**overrides) -> dict:
 
 def _stub_claude_klabauter_root(monkeypatch, repo_root: Path) -> None:
     monkeypatch.setattr(
-        "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class",
+        "coordinator_core.engine_root.coordinator_engine_root_with_class",
         lambda: (str(repo_root), "stub"),
     )
 

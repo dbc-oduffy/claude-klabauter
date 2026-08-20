@@ -129,25 +129,43 @@ Rebuild-vs-live-reader safety (``_build_dir_for``/``_swap_in_new_venv``/
 ``coordinator_core.install.uninstall_legs`` and imported back here, see
 docs/plans/2026-08-18-retire-coordinator-venv.md chunk C3, so the uninstall
 leg that also calls it survives this module's own eventual retirement):
-the build-lock above only serialises
-BUILDERS against each other — every other session on the box executes
-Python out of ``<venv_dir>/bin/python`` with no lock at all (cannot be
-asked to take one). A rebuild therefore never mutates ``venv_dir`` in
-place: the replacement is built at a fresh ``.build-<pid>-<hex>`` sibling
-and only ``os.rename``-swapped into position once fully healthy, with the
-vacated old tree moved aside to a ``.stale-<pid>-<hex>`` sibling first, not
-``rmtree``'d in place. Both renames are metadata-only directory-entry
-updates on POSIX AND Windows, so neither requires a concurrent reader's
-open file/handle under the old tree to be closed first — the swap itself
-is safe on both platforms. Reclaiming the vacated old tree's disk
-afterward is the part that differs: POSIX permits deleting a file a reader
-still has open (the reader keeps the unlinked inode until it closes it),
-so the stale sibling is ``rmtree``'d immediately; Windows can raise a
-sharing violation on that same delete while a reader's handle is still
-open, so that failure is caught and the sibling is left for
-``_sweep_orphaned_swap_dirs`` to reclaim on this venv's NEXT rebuild
-(deferred, not leaked). A build FAILURE never even reaches the swap step —
-``venv_dir`` is untouched until the replacement is known-good.
+the build-lock above only serialises BUILDERS against each other — every
+other session on the box executes Python out of ``<venv_dir>/bin/python``
+with no lock at all (cannot be asked to take one). A rebuild therefore
+never mutates ``venv_dir`` in place, and — since 2026-08-20 — never renames
+it either. ``venv_dir`` is a JUNCTION (nt) / directory symlink (posix) —
+see ``coordinator_core.install.junction`` — pointing at a sibling
+GENERATION directory, ``<venv_dir name>.gen-<pid>-<hex>``, that is NEVER
+renamed while published. A rebuild populates a fresh generation sibling
+(``_build_dir_for``), health-probes it, then publishes by retargeting the
+junction (``_swap_in_new_venv``): ``junction.remove_junction(venv_dir)``
+followed by ``junction.create_junction(venv_dir, new_generation)``. The
+vacated old generation is then reclaimed with a plain ``shutil.rmtree``
+(immediately on POSIX; best-effort with deferred reclaim via
+``_sweep_orphaned_swap_dirs`` on Windows, where a reader's still-open
+handle can make the delete fail). A build FAILURE never even reaches the
+swap step — ``venv_dir`` is untouched until the replacement is known-good.
+
+NEGATIVE SPEC — this module's own prior shape, and why it changed. Before
+`d99fd6dc88d0`/this junction rewrite, publication was a two-``os.rename``
+swap (live tree renamed aside to ``.stale-<pid>-<hex>``, then the build
+tree renamed into ``venv_dir``). That shape's docstring claimed a directory
+rename is metadata-only on Windows "and, unlike deleting a file, does not
+require every open HANDLE inside the directory to be closed first". THAT
+CLAIM WAS FALSE, measured on a real Windows host (this module's own two
+`pending_fix` tests, `test_swap_in_new_venv_does_not_delete_tree_a_reader_
+still_has_open` / `test_mutate_mode_rebuild_swap_survives_a_reader_holding_
+the_old_tree_open`, both filed 2026-08-14/15): `os.rename` of a directory
+raises `PermissionError [WinError 5]` whenever ANY plain-open file handle
+exists anywhere inside it, even several path segments down, and a Python
+`open()` handle on this platform is NOT opened with `FILE_SHARE_DELETE` (a
+second, independent measurement — probed directly against a Windows host
+2026-08-20; the file itself cannot be renamed OR unlinked while such a
+handle is held, `WinError 32`, so the earlier claim's premise does not
+hold at the file level either). Only the junction-retarget mechanism
+above genuinely avoids touching the reader's tree at all — see
+``_swap_in_new_venv``'s own docstring for the residual it still cannot
+close.
 """
 
 from __future__ import annotations
@@ -164,6 +182,7 @@ from typing import Optional
 from coordinator_core.locked_write import _plat_try_lock, _plat_unlock
 from coordinator_core.trusted_root_guard import coordinator_trusted_root_guard
 from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.install import junction
 from coordinator_core.install.uninstall_legs import _sweep_orphaned_swap_dirs
 from coordinator_core.install.write_surface import (
     ShapedClause,
@@ -659,67 +678,98 @@ def _resolve_base_python() -> Optional[str]:
 
 
 def _build_dir_for(venv_dir: Path) -> Path:
-    """A fresh sibling path a rebuild populates BEFORE ever touching the
-    live tree — never pre-created (``python -m venv`` creates it itself);
-    the ``.build-<pid>-<hex>`` naming is what ``_sweep_orphaned_swap_dirs``
-    matches on to reclaim an orphan left by a crashed prior attempt."""
-    return venv_dir.parent / f"{venv_dir.name}.build-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    """A fresh GENERATION sibling a rebuild populates BEFORE ever touching
+    the published name — under the junction-publish layout this directory
+    is not a transient build scratch space: once it passes the health probe
+    it becomes (and stays, until superseded) the tree ``venv_dir`` points
+    at, so it is named ``.gen-<pid>-<hex>`` from the start rather than
+    renamed at publish time. ``_sweep_orphaned_swap_dirs`` matches this same
+    prefix to reclaim any generation a crashed process never published."""
+    return venv_dir.parent / f"{venv_dir.name}.gen-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
 def _swap_in_new_venv(venv_dir: Path, build_dir: Path) -> None:
-    """Publish ``build_dir`` as ``venv_dir`` via a rename-swap — never an
-    in-place ``rmtree`` of the live tree — so a reader mid-execution against
-    the OLD tree keeps a coherent view instead of having its interpreter
-    gutted out from under it (the defect this function exists to close).
+    """Publish ``build_dir`` as ``venv_dir`` by retargeting the ``venv_dir``
+    junction (nt) / symlink (posix) at it — never a rename or in-place
+    mutation of any real directory. Mirrors
+    ``coordinator_core.install.fleet_env._swap_in_new_env`` (the same
+    primitive, re-derived here rather than imported — this module and
+    ``fleet_env`` intentionally do not share a runtime dependency; see each
+    module's own docstring).
 
-    POSIX: ``os.rename`` is an atomic directory-entry update; an already-open
-    file descriptor survives the rename (or even unlink) of the path that
-    named it, so once the swap lands, discarding the vacated old tree via
-    ``shutil.rmtree`` is safe immediately — a reader with files already open
-    under it keeps working off the unlinked inode until it closes them.
+    A reader that already resolved ``venv_dir`` before this call keeps
+    reading the OLD generation through its already-open handles (unaffected
+    by the link retarget); a reader that resolves ``venv_dir`` after this
+    call gets the NEW generation. Only the two-syscall window strictly
+    between ``remove_junction`` and ``create_junction`` is unreadable at all
+    (``FileNotFoundError``) — the same accepted, documented trade
+    ``fleet_env``'s module docstring records (measured there at ~1.2ms;
+    not independently re-measured here, since it is the identical
+    primitive).
 
-    Windows: renaming a directory is ALSO metadata-only (an update to the
-    parent directory's entry) and, unlike deleting a file, does not require
-    every open HANDLE inside the directory to be closed first — so the same
-    two-rename swap works there too. What differs is reclamation: an
-    in-use file's DELETE typically fails with a sharing violation on
-    Windows while a reader still holds it open, so the immediate
-    ``shutil.rmtree`` of the vacated tree can fail there. That failure is
-    caught, not fatal — the stale tree is left on disk for
-    ``_sweep_orphaned_swap_dirs`` to reclaim on this venv's NEXT rebuild
-    (deferred reclamation, not a leak; see module docstring's disk-
-    reclamation note).
+    The restore guard: if ``create_junction`` raises AFTER
+    ``remove_junction`` already succeeded, ``venv_dir`` would be left absent
+    and every subsequent hook fire hard-broken until the next rebuild
+    notices. This re-points ``venv_dir`` at the PREVIOUS generation and
+    re-raises — it never swallows the failure. First-ever publish (no prior
+    junction, no prior generation to fall back to) is the one case with
+    nothing to restore.
 
-    Crash-window disclosure: the two ``os.rename`` calls below are each
-    individually atomic but not atomic *together*. A crash between them
-    leaves ``venv_dir`` genuinely absent, not just briefly invisible — the
-    tree sitting under ``.stale-{pid}-{hex}`` is the one that JUST FAILED
-    ``_venv_healthy`` (checked twice — once before taking the build lock,
-    once again after — to reach this function at all) and triggered this
-    rebuild in the first place. It is not "still-good"; it is the tree this
-    run was already discarding. The next process to touch this venv finds
-    it unhealthy, takes the build lock, and its ``_sweep_orphaned_swap_dirs``
-    call unconditionally ``rmtree``s every ``.stale-*`` sibling — correctly,
-    since none of them were ever known-good. The only genuine cost of a
-    crash in this window is that the *verified-healthy* replacement sitting
-    under ``.build-*`` is swept right alongside it, so the next process pays
-    a full rebuild (``_create_venv`` + ``_install_deps``) rather than reusing
-    the tree that had already passed the probe.
+    The vacated old generation is then reclaimed with a plain
+    ``shutil.rmtree`` (never ``rmtree(venv_dir)`` — the link itself is
+    retargeted in place, not removed and recreated as a directory).
+    Reclaim failure is guarded exactly as it always was: a reader's
+    still-open handle can make the delete raise a sharing violation on
+    Windows, so failure there is best-effort and left for
+    ``_sweep_orphaned_swap_dirs`` on the next rebuild.
+
+    NOT SUPPORTED — a pre-existing REAL directory at ``venv_dir`` (the
+    pre-2026-08-20 layout, or any state where ``venv_dir`` exists but is
+    neither absent nor a junction). Converting that in place would require
+    vacating the name via the exact ``os.rename``/``os.rmdir`` this rewrite
+    exists to stop calling — measured directly against this repo's own
+    two `pending_fix` tests (see module docstring's NEGATIVE SPEC): a
+    Python `open()` handle on a file inside the tree is not opened with
+    `FILE_SHARE_DELETE`, so neither the file nor any ancestor directory can
+    be renamed or removed while that handle is held, by ANY mechanism this
+    module has available (`_winapi.CreateJunction` itself also refuses --
+    `WinError 183` -- when the link path already names a non-empty
+    directory). This function refuses rather than attempting an unsafe
+    partial mutation; a caller holding a real pre-junction tree must clear
+    it out of band first. Safe to remove by hand: nothing on a current
+    install reads this path directly — ``coordinator_whoami`` resolves from
+    the settings-home source tree instead, and this venv is break-glass
+    only.
     """
-    stale_dir: Optional[Path] = None
-    if venv_dir.is_dir():
-        stale_dir = venv_dir.parent / f"{venv_dir.name}.stale-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-        os.rename(venv_dir, stale_dir)
-    os.rename(build_dir, venv_dir)
-    if stale_dir is not None:
+    had_prior_publish = junction.is_junction(venv_dir)
+    if had_prior_publish:
+        previous_target = junction.junction_target(venv_dir)
+        junction.remove_junction(venv_dir)
+    elif venv_dir.exists():
+        raise EnsureVenvError(
+            f"[ensure-coordinator-venv] {venv_dir} exists but is neither absent nor a "
+            "junction; refusing to convert it in place.\n"
+            f"[ensure-coordinator-venv]   Remove {venv_dir} and re-run."
+        )
+    else:
+        previous_target = None
+
+    try:
+        junction.create_junction(venv_dir, build_dir)
+    except Exception:
+        if had_prior_publish and previous_target is not None:
+            junction.create_junction(venv_dir, previous_target)
+        raise
+
+    if had_prior_publish and previous_target is not None and previous_target.exists():
         try:
-            shutil.rmtree(stale_dir)
+            shutil.rmtree(previous_target)
         except OSError as exc:
             print(
                 f"[ensure-coordinator-venv] WARNING: could not immediately reclaim the prior "
-                f"venv tree ({type(exc).__name__}: {exc}) — a reader likely still has it open "
-                f"(expected on Windows). Left at {stale_dir} for reclamation on the next "
-                "rebuild.",
+                f"venv generation ({type(exc).__name__}: {exc}) — a reader likely still has it "
+                f"open (expected on Windows). Left at {previous_target} for reclamation on the "
+                "next rebuild.",
                 file=sys.stderr,
             )
 

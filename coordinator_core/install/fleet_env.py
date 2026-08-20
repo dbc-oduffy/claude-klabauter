@@ -23,34 +23,56 @@ module's own functions, not imported:
     advisory-lock primitive (`_plat_try_lock`/`_plat_unlock`) on a `.lock`
     sidecar file next to the environment root — the same shared primitive
     `ensure_venv` uses, not a second lock mechanism. Fail-loud on contention
-    (`FleetEnvContention`), no polling.
-  - Rename-swap rebuild: a rebuild NEVER mutates the live environment tree
-    in place. The replacement is built at a fresh `.build-<pid>-<hex>`
-    sibling and only `os.rename`-swapped into `env_root` once it has passed
-    the health probe; the vacated old tree is moved to a `.stale-<pid>-<hex>`
-    sibling first, then reclaimed (immediately on POSIX, best-effort with
-    deferred reclaim via `_sweep_orphaned_swap_dirs` on Windows, where a
-    reader's still-open handle can make immediate deletion fail). This
-    matters MORE here than for the settings-home coordinator venv:
-    `ensure_venv`'s own module docstring records this pattern replacing an
-    in-place `rmtree` (DoE `4591a557`) because readers hold no lock, and this
-    environment has the WHOLE FLEET as such readers on a 50-70-session box.
+    (`FleetEnvContention`), no polling. The publish step (below) runs while
+    this lock is held, so two rebuilders can never interleave a publish.
+  - Junction-publish rebuild (C2/C3): `env_root` is a JUNCTION (nt) /
+    directory symlink (posix) — see `coordinator_core.install.junction` —
+    never itself a real directory. The environments it points at are sibling
+    GENERATION directories, `<env_root name>.gen-<pid>-<hex>`, that are
+    NEVER renamed while published. A rebuild populates a fresh generation
+    sibling, health-probes it, then publishes by retargeting the junction:
+    `junction.remove_junction(env_root)` followed by
+    `junction.create_junction(env_root, new_generation)`. The vacated old
+    generation is then reclaimed with a plain `shutil.rmtree` (immediately on
+    POSIX; best-effort with deferred reclaim via `_sweep_orphaned_swap_dirs`
+    on Windows, where a reader's still-open handle can make the delete fail —
+    that guard was always correct, since it never touched the published
+    name). This matters MORE here than for the settings-home coordinator
+    venv: `ensure_venv`'s own module docstring records the equivalent
+    rename-swap pattern replacing an in-place `rmtree` (DoE `4591a557`)
+    because readers hold no lock, and this environment has the WHOLE FLEET
+    as such readers on a 50-70-session box.
 
-    NEGATIVE SPEC — the rename-swap does NOT make a Windows rebuild
-    concurrency-safe, and no reader should plan around it as if it did.
-    Measured on a real Windows host 2026-08-15 (see
-    `state/bug-backlog/2026-08-15-windows-venv-swap-fails-winerror-5-when-a3c85da8f0bf.yaml`):
-    `os.rename` of a directory raises WinError 5 when ANY plain-open file
-    handle exists anywhere inside it, even several path segments down, so the
-    FIRST rename below — not merely the reclaim — fails outright while a fleet
-    reader is mid-import. A running interpreter's exe image is the case that
-    does survive (the Windows loader opens images with FILE_SHARE_DELETE); an
-    ordinary `open()` is the case that does not, and on a 50-70-session box
-    that is the common one. Bounded retry cannot help: the handle is held for
-    the whole call, so nothing about it is transient. The only mechanism that
-    satisfies the swap's stated guarantee on Windows is making `env_root` a
-    junction/reparse point, which is an architecture change and is NOT
-    implemented here.
+    NEGATIVE SPEC — history, so the fix is not rediscovered as a live
+    defect. Measured on a real Windows host 2026-08-15 (see
+    `state/bug-backlog/2026-08-15-windows-venv-swap-fails-winerror-5-when-a3c85da8f0bf.yaml`)
+    and again 2026-08-20 against this module directly: `os.rename` of a
+    directory raises WinError 5 when ANY plain-open file handle exists
+    anywhere inside it, even several path segments down — so a rename-swap
+    publish (this module's ORIGINAL shape, before `099e51046224`/this
+    junction rewrite) failed outright while a fleet reader was mid-import.
+    Bounded retry could not have closed it: the handle is held for the whole
+    call, so nothing about it was transient. `os.replace` retargeting a live
+    junction fails the SAME WinError 5 (measured 2026-08-20 — see
+    `docs/plans/2026-08-20-the-fleet-env-publishes-through-a-juncti.md`
+    "What was measured"), so atomic retarget is not on the table either; the
+    only primitive that works is `remove_junction` + `create_junction`,
+    which is what `_swap_in_new_env` below does. That makes publication
+    NON-ATOMIC: a measured ~1.2ms (median of 20 samples, range 0.75–1.44ms,
+    this host, 2026-08-20) window in which `env_root` names nothing at all.
+    A reader that resolves `env_root` inside that window gets
+    `FileNotFoundError`, not a coherent old-or-new read. This is an accepted,
+    documented trade (see the plan's "the cost, stated plainly"): today's
+    alternative is a rebuild that fails ~100% of the time under fleet load
+    and never lands at all. `_fleet_env_healthy` / `ensure_fleet_env` treat
+    "env_root absent but a healthy generation sibling exists" as a TORN
+    PUBLISH (a crash inside that window, or the restore-on-failure guard
+    itself losing its race) and repair it with one `create_junction` call
+    rather than a full rebuild — try-acquiring the same build lock
+    (non-blocking) first, so it never fights a concurrent legitimate
+    publisher for the name (slice-A review finding 1; see
+    `_swap_in_new_env`'s docstring for the corruption sequence a lock-free
+    repair used to allow).
 
 Installs from the committed lock via `uv sync --frozen --no-install-project`
 against a reconstructed copy of C3's synthetic project
@@ -144,9 +166,21 @@ Negative-spec:
     (or the injectable `settings_home_factory`/`env_root` override); nothing
     here runs at module import time.
 
+One-time cutover (C4 of the junction-publication plan): `_swap_in_new_env`
+above REFUSES when `env_root` is a real pre-junction directory (see its
+`elif env_root.exists()` branch) — it will not silently rename a real
+directory out from under a fleet reader. `_cutover_to_junction_layout`
+performs that one-time move, exactly once per environment root, under the
+same build lock `ensure_fleet_env` uses so the two can never interleave.
+`coordinator/bin/fleet-env-cutover.py` is the operator-facing script that
+calls it against the resolved live root; see that script and
+`_cutover_to_junction_layout`'s own docstring for the bootstrapping problem
+and the measured retry-budget rationale.
+
 Spec backlink: docs/plans/2026-08-16-one-environment-for-the-fleet.md § C4
 Spec backlink: docs/reference/fleet-shared-environment-contract.md
     § Provisioning the environment (C4)
+Spec backlink: docs/plans/2026-08-20-the-fleet-env-publishes-through-a-juncti.md § C4
 """
 from __future__ import annotations
 
@@ -157,11 +191,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core._settings_home import settings_home as _default_settings_home
+from coordinator_core.install import junction
 from coordinator_core.locked_write import _plat_try_lock, _plat_unlock, held_lock
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.fleet_env_lock import (
@@ -239,12 +276,15 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="fleet-env",
     source_module="coordinator_core.install.fleet_env",
     clauses=(
-        # clauses[0] -- the environment tree itself. `ensure_fleet_env`
-        # populates a fresh `.build-<pid>-<hex>` sibling via
+        # clauses[0] -- the environment tree itself. `env_root` is a
+        # JUNCTION (nt) / directory symlink (posix); `ensure_fleet_env`
+        # populates a fresh `.gen-<pid>-<hex>` sibling generation via
         # `_provision_uv_environment` (`uv sync --frozen` under
         # `UV_PROJECT_ENVIRONMENT=build_dir`), then `_swap_in_new_env`
-        # `os.rename`s it into `env_root` (never an in-place mutation of the
-        # live tree). SHAPED: `env_root` is resolved at runtime via C1+C5
+        # retargets the junction at it via `coordinator_core.install.junction`
+        # (never an in-place mutation of the live tree, and never a rename of
+        # a real directory that a fleet reader may hold open). SHAPED:
+        # `env_root` is resolved at runtime via C1+C5
         # (`resolve_environment_root`), never a literal constant here.
         ShapedClause(
             discovered_by="ensure_fleet_env (env_root via resolve_environment_root)",
@@ -252,28 +292,33 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 kind="file-path",
                 path="<fleet-env-root>/",
                 reason=(
-                    "build-dir populated by `uv sync --frozen` then "
-                    "rename-swapped into env_root by _swap_in_new_env; the "
-                    "vacated old tree is moved to a .stale-<pid>-<hex> "
-                    "sibling and reclaimed (immediately on POSIX, deferred "
-                    "via _sweep_orphaned_swap_dirs on Windows)"
+                    "generation sibling populated by `uv sync --frozen` then "
+                    "published by retargeting the env_root junction "
+                    "(_swap_in_new_env); the vacated old generation is "
+                    "reclaimed by shutil.rmtree (immediately on POSIX, "
+                    "deferred via _sweep_orphaned_swap_dirs on Windows)"
                 ),
             ),
         ),
-        # clauses[1] -- `.build-*`/`.stale-*` orphaned siblings of env_root,
+        # clauses[1] -- `.gen-*` orphaned generation siblings of env_root
+        # (built-but-never-published, or vacated-but-not-yet-reclaimed),
         # `shutil.rmtree`'d by `_sweep_orphaned_swap_dirs` before every
-        # rebuild attempt. SHAPED for the same reason as clauses[0]: rooted
-        # under the runtime-resolved env_root's own parent.
+        # rebuild attempt -- EXCEPT the generation the junction currently
+        # points at, which is excluded by construction. SHAPED for the same
+        # reason as clauses[0]: rooted under the runtime-resolved env_root's
+        # own parent.
         ShapedClause(
             discovered_by="_sweep_orphaned_swap_dirs (env_root.parent)",
             entry_template=WriteSurfaceEntry(
                 kind="file-path",
-                path="<fleet-env-root>.build-*/ , <fleet-env-root>.stale-*/",
+                path="<fleet-env-root>.gen-*/",
                 effect="delete",
                 reason=(
-                    "best-effort reclaim of a prior process's abandoned "
-                    "build/stale sibling directories, run under the build "
-                    "lock before starting a fresh rebuild"
+                    "best-effort reclaim of a prior process's abandoned or "
+                    "vacated generation sibling directories, run under the "
+                    "build lock before starting a fresh rebuild; the "
+                    "currently-published generation (junction.junction_target"
+                    "(env_root)) is always excluded"
                 ),
             ),
         ),
@@ -474,72 +519,159 @@ def _fleet_env_healthy(python_bin: Path) -> bool:
 
 
 def _build_dir_for(env_root: Path) -> Path:
-    """A fresh sibling path a rebuild populates BEFORE ever touching the
-    live tree — mirrors `ensure_venv._build_dir_for`'s naming convention so
-    `_sweep_orphaned_swap_dirs` here matches the same `.build-<pid>-<hex>`
-    shape an operator or diagnostic script already knows to look for."""
-    return env_root.parent / f"{env_root.name}.build-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    """A fresh GENERATION sibling a rebuild populates BEFORE ever touching
+    the published name — under the junction-publish layout (C2) this
+    directory is not a transient build scratch space: once it passes the
+    health probe it becomes (and stays, until superseded) the tree
+    `env_root` points at, so it is named `.gen-<pid>-<hex>` from the start
+    rather than renamed at publish time. `_sweep_orphaned_swap_dirs` matches
+    this same prefix to reclaim any generation a crashed process never
+    published."""
+    return env_root.parent / f"{env_root.name}.gen-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
-def _sweep_orphaned_swap_dirs(env_root: Path) -> None:
-    """Best-effort reclaim of `.build-*`/`.stale-*` siblings abandoned by a
-    prior process that crashed mid-rebuild or mid-swap. Safe unconditionally
-    here: the caller holds the build lock before calling this, so nothing
-    else is concurrently populating its own `.build-*` sibling of THIS
-    environment right now. Never raises — a sweep failure must not block the
-    rebuild it is merely tidying up after. Same reasoning as
-    `uninstall_legs._sweep_orphaned_swap_dirs` (relocated there from
-    `ensure_venv` — docs/plans/2026-08-18-retire-coordinator-venv.md chunk
-    C3): every `.stale-*` match already failed the health probe that
-    triggered its own rebuild, so there is no "still-good" tree here to
-    lose."""
+def _sweep_orphaned_swap_dirs(env_root: Path, *, assume_build_lock_held: bool) -> None:
+    """Best-effort reclaim of `.gen-*` generation siblings abandoned by a
+    prior process that crashed mid-rebuild or mid-publish — EXCEPT the
+    generation `env_root` currently points at, resolved via
+    `junction.junction_target`, which must never be swept out from under a
+    live publish. Safe unconditionally here: the caller holds the build lock
+    before calling this, so nothing else is concurrently populating its own
+    `.gen-*` sibling of THIS environment right now. Never raises — a sweep
+    failure must not block the rebuild it is merely tidying up after. Same
+    reasoning as `uninstall_legs._sweep_orphaned_swap_dirs` (relocated there
+    from `ensure_venv` — docs/plans/2026-08-18-retire-coordinator-venv.md
+    chunk C3): every OTHER `.gen-*` match already either failed the health
+    probe that triggered its own rebuild, or was already vacated by a prior
+    publish, so there is no "still-good" tree here to lose.
+
+    Slice-A review finding 3 (tradeoff, pinned rather than restructured):
+    if `env_root` is ABSENT when this runs, `junction.junction_target`
+    resolves `None` and every `.gen-*` sibling is swept, healthy or not —
+    correct only because the sole existing call site always holds the build
+    lock first, which rules out `env_root` being mid-repair by anything
+    else. `assume_build_lock_held` is a REQUIRED keyword, not a default, so
+    that invariant is stated at every call site rather than left implicit —
+    a future caller that reaches this function without actually holding the
+    lock must fail loudly here, not silently sweep a healthy generation out
+    from under a concurrent repair or rebuild."""
+    if not assume_build_lock_held:
+        raise AssertionError(
+            "fleet_env: _sweep_orphaned_swap_dirs must only be called while "
+            "the build lock is held — pass assume_build_lock_held=True from "
+            "a call site that actually holds it"
+        )
     parent = env_root.parent
-    build_prefix = f"{env_root.name}.build-"
-    stale_prefix = f"{env_root.name}.stale-"
+    gen_prefix = f"{env_root.name}.gen-"
+    current_target = junction.junction_target(env_root)
+    current_resolved = current_target.resolve() if current_target is not None else None
     try:
         children = list(parent.iterdir())
     except OSError:
         return
     for child in children:
-        if child.name.startswith(build_prefix) or child.name.startswith(stale_prefix):
-            shutil.rmtree(child, ignore_errors=True)
+        if not child.name.startswith(gen_prefix):
+            continue
+        if current_resolved is not None and child.resolve() == current_resolved:
+            continue
+        shutil.rmtree(child, ignore_errors=True)
 
 
 def _swap_in_new_env(env_root: Path, build_dir: Path) -> None:
-    """Publish `build_dir` as `env_root` via a rename-swap — never an
-    in-place `rmtree` of the live tree. On POSIX both `os.rename` calls are
-    metadata-only directory-entry updates, so a concurrent reader executing
-    out of the OLD tree right now keeps a coherent view instead of having
-    its interpreter gutted out from under it — the property that matters
-    more here than anywhere else in this repo, since the fleet is this
-    environment's reader set on a 50-70-session box. Reclaiming the vacated
-    old tree is then immediate (a reader's already-open file descriptor
-    survives unlinking).
+    """Publish `build_dir` as `env_root` by retargeting the `env_root`
+    junction (nt) / symlink (posix) at it — never a rename or in-place
+    mutation of any real directory. This is the mechanism that actually
+    delivers the guarantee the old rename-swap only claimed to on Windows
+    (see module docstring § NEGATIVE SPEC for the measured `os.rename`/
+    `os.replace` failures this replaces): a reader that already resolved
+    `env_root` before this call keeps reading the OLD generation through its
+    already-open handles (unaffected by the link retarget), and a reader
+    that resolves `env_root` after this call gets the NEW generation. Only
+    the two-syscall window strictly between `remove_junction` and
+    `create_junction` is unreadable at all (`FileNotFoundError`) — see the
+    NEGATIVE SPEC for why that residual cannot be closed and how C3 makes it
+    self-repairing.
 
-    WINDOWS IS NOT THAT, and the difference is NOT merely when the reclaim
-    happens. The `shutil.rmtree` below is guarded because a reader's open
-    handle can make the delete raise a sharing violation, and that guard is
-    real — but the FIRST `os.rename` is unguarded and is the one measured to
-    fail: renaming a directory raises WinError 5 while any plain-open file
-    handle exists anywhere inside it. See this module's docstring §
-    NEGATIVE SPEC for the measurement and why retry cannot close it. A
-    rebuild racing an ordinary fleet import therefore fails LOUD here rather
-    than swapping safely; that is a known open defect, not a design
-    intention."""
-    stale_dir: Optional[Path] = None
-    if env_root.is_dir():
-        stale_dir = env_root.parent / f"{env_root.name}.stale-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-        os.rename(env_root, stale_dir)
-    os.rename(build_dir, env_root)
-    if stale_dir is not None:
+    AC5 — the restore guard. If `create_junction` raises AFTER
+    `remove_junction` already succeeded, `env_root` would be left absent and
+    the whole fleet hard-broken until the next rebuild notices. This
+    re-points `env_root` at the PREVIOUS generation and re-raises — it never
+    swallows the failure. First-ever publish (no prior junction, no prior
+    generation to fall back to) is the one case with nothing to restore.
+
+    Concurrent-publisher race (slice-A review finding 1): the module
+    docstring's C3 self-repair runs lock-free, before this function's caller
+    ever takes the build lock. A second process can observe the `remove_junction`
+    window here, find a healthy `.gen-*` sibling, and plant its own junction
+    at `env_root` before this function's `create_junction` call runs — so
+    "already exists" here does not always mean "restore is needed": if the
+    name now already points at OUR `build_dir`, the repair (or a second
+    legitimate publisher racing us) already finished the job we were doing,
+    and there is nothing to restore or fail. Anything else genuinely needs
+    the restore attempt. And if the restore attempt ITSELF fails, the two
+    causes are combined into one `FleetEnvError` rather than letting the
+    second exception silently supersede the first (slice-A review finding
+    1's WARN) — `ensure_fleet_env`'s wrapper only stringifies the exception
+    it catches, so an implicitly-chained `__context__` would otherwise be
+    invisible to an operator reading the failure.
+
+    The vacated old generation is then reclaimed with a plain
+    `shutil.rmtree` (never `rmtree(env_root)` — the link itself is retargeted
+    in place, not removed and recreated as a directory). Reclaim failure is
+    guarded exactly as it always was: a reader's still-open handle can make
+    the delete raise a sharing violation on Windows, so failure there is
+    best-effort and left for `_sweep_orphaned_swap_dirs` on the next
+    rebuild."""
+    had_prior_publish = junction.is_junction(env_root)
+    if had_prior_publish:
+        previous_target = junction.junction_target(env_root)
+        junction.remove_junction(env_root)
+    elif env_root.exists():
+        raise FleetEnvError(
+            f"fleet_env: {env_root} exists but is neither absent nor a "
+            "junction — it looks like the pre-junction real-directory "
+            "layout, which must go through the C4 cutover step before "
+            "_swap_in_new_env can publish to it"
+        )
+    else:
+        previous_target = None
+
+    try:
+        junction.create_junction(env_root, build_dir)
+    except Exception as create_exc:
+        current_target = junction.junction_target(env_root)
+        if current_target is not None and current_target.resolve() == build_dir.resolve():
+            # Benign race, not a failure: something else (C3's lock-free
+            # self-repair, or a second legitimate publisher) already
+            # retargeted env_root at OUR build_dir between remove_junction
+            # and this create_junction call. env_root is already correctly
+            # published — restoring would undo a publish that already
+            # succeeded.
+            return
+        if had_prior_publish and previous_target is not None:
+            try:
+                junction.create_junction(env_root, previous_target)
+            except Exception as restore_exc:
+                raise FleetEnvError(
+                    f"fleet_env: could not publish {build_dir} to {env_root} "
+                    f"({type(create_exc).__name__}: {create_exc}), AND the "
+                    f"restore attempt back to the previous generation "
+                    f"({previous_target}) also failed "
+                    f"({type(restore_exc).__name__}: {restore_exc}) — env_root "
+                    f"may be left absent or in an inconsistent state; check "
+                    f"{env_root} manually before the next rebuild"
+                ) from restore_exc
+        raise
+
+    if had_prior_publish and previous_target is not None and previous_target.exists():
         try:
-            shutil.rmtree(stale_dir)
+            shutil.rmtree(previous_target)
         except OSError as exc:
             print(
                 f"[fleet-env] WARNING: could not immediately reclaim the prior "
-                f"environment tree ({type(exc).__name__}: {exc}) — a reader likely "
-                f"still has it open (expected on Windows). Left at {stale_dir} for "
-                "reclamation on the next rebuild.",
+                f"environment generation ({type(exc).__name__}: {exc}) — a reader "
+                f"likely still has it open (expected on Windows). Left at "
+                f"{previous_target} for reclamation on the next rebuild.",
                 file=sys.stderr,
             )
 
@@ -915,6 +1047,43 @@ def _replay_sibling_bindings(
         BINDING_REPLAY_HOOK(env_root)
 
 
+def _env_root_absent(env_root: Path) -> bool:
+    """True iff the `env_root` NAME itself carries no directory entry at
+    all — not a junction, not a real directory, nothing. This is the exact
+    condition `_swap_in_new_env`'s two-syscall window (and, transiently, a
+    process that crashed inside it) produces; a junction whose TARGET has
+    since gone missing is a different, unrelated problem and must not be
+    confused with this one, so this checks presence of the entry itself
+    (`is_junction` or `is_dir`), never `Path.exists()` (which follows the
+    reparse point and would read False for a dangling-target junction too)."""
+    return not junction.is_junction(env_root) and not env_root.is_dir()
+
+
+def _find_torn_publish_generation(env_root: Path) -> "Optional[Path]":
+    """C3's torn-publish detector: scan `env_root`'s siblings for a
+    `.gen-<pid>-<hex>` directory that is itself healthy, for
+    `ensure_fleet_env` to repair `env_root` onto with one `create_junction`
+    call rather than a full rebuild. Only called when `_env_root_absent`
+    is already true, so there is no currently-published generation to
+    accidentally prefer over — every candidate here is equally "the last
+    one built". Returns the first healthy candidate found, or `None` if
+    none is (the caller then falls through to a normal rebuild, which is
+    always correct — repair is an optimization, never a requirement for
+    correctness)."""
+    parent = env_root.parent
+    gen_prefix = f"{env_root.name}.gen-"
+    try:
+        children = list(parent.iterdir())
+    except OSError:
+        return None
+    for child in children:
+        if not (child.name.startswith(gen_prefix) and child.is_dir()):
+            continue
+        if _fleet_env_healthy(_env_python_path(child)):
+            return child
+    return None
+
+
 def ensure_fleet_env(
     *,
     check_only: bool = False,
@@ -925,10 +1094,13 @@ def ensure_fleet_env(
     is healthy at the resolved root (C1 + C5), installing exactly C3's
     committed lock.
 
-    Returns one of `"ready"` (already healthy, no mutation), `"rebuilt"`
-    (was absent or unhealthy, freshly built and swapped in), or
-    `"would-rebuild"` (`check_only=True` and the environment is currently
-    absent or unhealthy — dry-run, no mutation).
+    Returns one of `"ready"` (already healthy, or a torn publish was
+    repaired onto an already-healthy generation sibling — no `uv sync`
+    either way), `"rebuilt"` (was absent or unhealthy with no repairable
+    generation, freshly built and published), or `"would-rebuild"`
+    (`check_only=True` and the environment is currently absent or unhealthy
+    — dry-run, no mutation, including no torn-publish repair: repair is
+    itself a disk mutation and `check_only`'s contract is none at all).
 
     Raises `FleetEnvError` (or its `FleetEnvContention` subclass on lock
     contention) on any failure — this function never exits the process
@@ -945,6 +1117,51 @@ def ensure_fleet_env(
     if _fleet_env_healthy(python_bin):
         return "ready"
 
+    lock_path = Path(str(env_root) + ".lock")
+
+    # C3 torn-publish self-repair: env_root absent (see _env_root_absent)
+    # but a healthy generation sibling still sits on disk — one
+    # create_junction call fixes it, never a uv sync. Slice-A review
+    # finding 1: this used to run fully lock-free, which let it race a
+    # different process's in-flight `_swap_in_new_env` (see that function's
+    # docstring for the corruption sequence this closes). It now
+    # TRY-ACQUIRES the SAME build-lock sidecar the rebuild path below uses
+    # (non-blocking, `_plat_try_lock` — not a second lock mechanism): on
+    # contention a legitimate publisher already owns the name, so there is
+    # nothing here to repair, and this falls through to the normal health
+    # re-check / lock-acquired rebuild path unconditionally. This keeps the
+    # repair at syscall scale — never a rebuild — while closing the race
+    # against a concurrent publisher.
+    if _env_root_absent(env_root):
+        candidate = _find_torn_publish_generation(env_root)
+        if candidate is not None:
+            try:
+                repair_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+            except OSError:
+                repair_fd = None
+            if repair_fd is not None:
+                try:
+                    try:
+                        repair_acquired = _plat_try_lock(repair_fd)
+                    except OSError:
+                        repair_acquired = False
+                    if repair_acquired:
+                        try:
+                            try:
+                                junction.create_junction(env_root, candidate)
+                            except OSError:
+                                pass
+                            else:
+                                if _fleet_env_healthy(python_bin):
+                                    return "ready"
+                        finally:
+                            try:
+                                _plat_unlock(repair_fd)
+                            except OSError:
+                                pass
+                finally:
+                    os.close(repair_fd)
+
     # Both the parent mkdir and the lock-sidecar open are plain filesystem
     # calls made before any guarded region — on a read-only install
     # location, a full disk, or a permission-denied path they raise a bare
@@ -953,7 +1170,6 @@ def ensure_fleet_env(
     # so this function honours its own docstring: "Raises FleetEnvError...
     # on any failure". Review: coordinatorE-reviewer finding 4 (fix-now,
     # relayed to review-integrator mid-pass).
-    lock_path = Path(str(env_root) + ".lock")
     try:
         env_root.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
@@ -984,7 +1200,7 @@ def ensure_fleet_env(
         if _fleet_env_healthy(python_bin):
             return "ready"
 
-        _sweep_orphaned_swap_dirs(env_root)
+        _sweep_orphaned_swap_dirs(env_root, assume_build_lock_held=True)
         build_dir = _build_dir_for(env_root)
         build_python_bin = _env_python_path(build_dir)
 
@@ -1000,19 +1216,20 @@ def ensure_fleet_env(
             raise
 
         # Replay registered bindings into the BUILD tree before the swap
-        # (never after), so `_swap_in_new_env`'s rename stays the single
-        # atomic publish point: a reader spawning right after the swap sees
-        # an environment that already carries every registered binding,
+        # (never after), so `_swap_in_new_env`'s junction retarget stays the
+        # single publish point: a reader spawning right after the retarget
+        # sees an environment that already carries every registered binding,
         # rather than a window where the swap has landed but bindings have
         # not replayed yet. Review: coordinatorcode-reviewer-97d5c433 finding 3.
         try:
             _replay_sibling_bindings(build_dir, settings_home_factory=settings_home_factory)
             _swap_in_new_env(env_root, build_dir)
         except OSError as exc:
-            # Same leak class as the pre-lock mkdir/open above: `os.rename`
-            # (the swap) and the `.pth` mkstemp/replace (the replay) are
-            # plain filesystem calls that can raise OSError on a read-only
-            # or permission-denied target — must not escape as a raw
+            # Same leak class as the pre-lock mkdir/open above:
+            # `junction.remove_junction`/`create_junction` (the publish) and
+            # the `.pth` mkstemp/replace (the replay) are plain filesystem
+            # calls that can raise OSError on a read-only or
+            # permission-denied target — must not escape as a raw
             # exception past this function's own FleetEnvError contract.
             raise FleetEnvError(
                 f"fleet_env: could not publish the rebuilt environment at "
@@ -1025,6 +1242,254 @@ def ensure_fleet_env(
                 _plat_unlock(fd)
             except OSError:
                 pass  # best-effort unlock; os.close(fd) below and process exit release it regardless
+        os.close(fd)
+
+
+#: C4 — the one-time cutover from today's real `env_root` directory to the
+#: junction layout. MEASURED, not assumed (scratch fixture mimicking the env
+#: shape, N background reader processes doing short open/read/close cycles,
+#: bounded retry on `os.rename` of the tree root, 2s budget, 20 trials per N,
+#: this host, 2026-08-20):
+#:
+#:   N=1    success 100%   ~1.05 attempts   ~0.8ms
+#:   N=10   success 100%   ~1.35 attempts   ~1.8ms
+#:   N=30   success 100%   ~2.25 attempts   ~3.2ms
+#:   N=70   success  40%   ~415  attempts   ~0.79s on success; failures hit the 2s cap
+#:
+#: This box's stated norm is 50-70 concurrent sessions (CLAUDE.md § Load
+#: norm), so a 2s budget wins easily at typical load and is marginal at
+#: peak. This is a ONE-TIME bootstrap, not a hot-path call and not something
+#: that runs again once the fleet is on the junction layout (AC7's idempotent
+#: re-run takes the already-junction no-op branch instead) — so it can afford
+#: to spend more wall-clock than the measurement above budgeted, in exchange
+#: for a materially better shot at the N=70 tail. 10s (5x the measured
+#: budget) is chosen on that basis, not from a re-run of the N=70 probe: a
+#: 70-process load probe is itself real load on a 50-70-session machine and
+#: must not be re-run casually (see the measurement's own note). If 10s is
+#: still not enough, `_cutover_to_junction_layout` refuses loudly rather than
+#: looping unboundedly — `coordinator/bin/fleet-env-cutover.py` is the named
+#: retry-later fallback.
+_CUTOVER_RETRY_BUDGET_SECS = 10.0
+
+#: Retry backoff shape for the rename loop — same pattern as
+#: `locked_write._acquire_flock`'s poll-with-backoff (not reused directly:
+#: that function locks an fd, this retries a rename), so the two don't drift
+#: into different retry idioms for what is conceptually the same "wait for a
+#: transient holder to let go" operation.
+_CUTOVER_RETRY_INITIAL_INTERVAL_SECS = 0.005
+_CUTOVER_RETRY_MAX_INTERVAL_SECS = 0.1
+
+
+class FleetEnvCutoverBlocked(FleetEnvError):
+    """Raised when `_cutover_to_junction_layout`'s bounded retry is exhausted.
+
+    Names the condition (a fleet session is importing, holding a handle
+    inside `env_root`) and the runnable fallback
+    (`coordinator/bin/fleet-env-cutover.py`) rather than looping unboundedly
+    or forcing the rename. Mutates nothing when raised — `env_root` is left
+    exactly as found (a real directory)."""
+
+
+@dataclass(frozen=True)
+class CutoverOutcome:
+    """Result of `_cutover_to_junction_layout` — what the CLI script prints."""
+
+    status: str  # "already-junction" | "cutover"
+    env_root: Path
+    generation: "Optional[Path]"
+
+
+def _is_transient_rename_failure(exc: OSError) -> bool:
+    """True iff `exc` is the exact WinError 5 shape this cutover retries —
+    a `PermissionError` raised because a plain-open reader handle exists
+    somewhere inside the tree being renamed (measured, see module docstring
+    NEGATIVE SPEC). Any other `OSError` (real permission denial, a bad path,
+    a different Windows error code) is NOT transient and must propagate
+    immediately rather than being silently retried for up to
+    `_CUTOVER_RETRY_BUDGET_SECS`."""
+    if not isinstance(exc, PermissionError):
+        return False
+    if os.name != "nt":
+        # POSIX PermissionError is a real permission problem, never the
+        # transient reader-handle shape this retries.
+        return False
+    return getattr(exc, "winerror", None) == 5
+
+
+def _rename_with_retry(src: Path, dst: Path, *, budget_secs: float) -> None:
+    """`os.rename(src, dst)`, bounded-retrying only the transient WinError 5
+    shape (see `_is_transient_rename_failure`) for up to `budget_secs` of
+    wall clock. Raises the last `PermissionError` seen once the budget is
+    exhausted — the caller (`_cutover_to_junction_layout`) turns that into
+    the named `FleetEnvCutoverBlocked` remediation. Any non-transient
+    `OSError` propagates on first occurrence, unretried."""
+    deadline = time.monotonic() + budget_secs
+    interval = _CUTOVER_RETRY_INITIAL_INTERVAL_SECS
+    while True:
+        try:
+            os.rename(src, dst)
+            return
+        except OSError as exc:
+            if not _is_transient_rename_failure(exc):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(interval, remaining))
+            interval = min(interval * 1.5, _CUTOVER_RETRY_MAX_INTERVAL_SECS)
+
+
+def _verify_read_through(env_root: Path) -> None:
+    """AC7's "verify a real read through env_root before returning" —
+    iterating the directory forces the OS to resolve the junction, not just
+    check that a reparse point exists at the name. Raises `FleetEnvError`
+    (never lets a raw `OSError` escape) on failure so a caller catching this
+    module's contract sees it."""
+    try:
+        list(env_root.iterdir())
+    except OSError as exc:
+        raise FleetEnvError(
+            f"fleet_env: cutover created the junction at {env_root} but a "
+            f"read through it failed ({type(exc).__name__}: {exc}) — the "
+            "environment is not readable; investigate before retrying."
+        ) from exc
+
+
+def _cutover_to_junction_layout(
+    env_root: Path, *, retry_budget_secs: float = _CUTOVER_RETRY_BUDGET_SECS
+) -> CutoverOutcome:
+    """C4 — the one-time cutover of `env_root` from today's real-directory
+    layout to the junction layout `_swap_in_new_env` (C2/C3) requires.
+
+    The bootstrapping problem this exists to solve: to put a junction AT
+    `env_root` you must first vacate that name, and vacating a real
+    directory means renaming it — the exact operation that raises WinError 5
+    under an open reader handle (see module docstring NEGATIVE SPEC). So
+    this CANNOT use `_swap_in_new_env`'s fast path to install itself; it is
+    the one place in this module that still renames a real directory, and it
+    does so exactly once, ever, per environment root.
+
+    Idempotent (AC7 requires re-running it safely):
+      - `env_root` already a junction -> no-op, returns "already-junction".
+      - `env_root` a real directory -> bounded-retry rename under the build
+        lock (the SAME lock `ensure_fleet_env` uses, so a cutover can never
+        interleave with a concurrent rebuild), then `create_junction`
+        pointing at the moved generation, then `_verify_read_through`.
+      - retry exhausted -> raises `FleetEnvCutoverBlocked` naming the
+        condition and the runnable fallback script. Nothing is mutated: the
+        rename never succeeded, so `env_root` is exactly as found.
+      - rename succeeded but `create_junction` failed -> renames the
+        generation BACK to `env_root` through the SAME bounded retry the
+        vacate rename used (the tree can still carry an open reader handle
+        post-rename, so the restore is exposed to the identical transient
+        WinError-5 shape) and re-raises the original `create_junction`
+        failure. Leaving the fleet with no `env_root` at all is the one
+        unacceptable outcome here; if the restore's own retry is ALSO
+        exhausted, that terminal state is raised as a `FleetEnvError` naming
+        `env_root` as absent and the generation directory the environment
+        still lives at, rather than a bare traceback.
+      - `env_root` absent entirely (never provisioned) -> raises
+        `FleetEnvError`; there is nothing to cut over, and silently treating
+        absence as success would hide a real problem from the caller.
+    """
+    if junction.is_junction(env_root):
+        return CutoverOutcome(
+            status="already-junction",
+            env_root=env_root,
+            generation=junction.junction_target(env_root),
+        )
+
+    if not env_root.is_dir():
+        raise FleetEnvError(
+            f"fleet_env: {env_root} does not exist — nothing to cut over. "
+            "Run ensure_fleet_env() first to provision the environment."
+        )
+
+    lock_path = Path(str(env_root) + ".lock")
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    acquired = False
+    try:
+        try:
+            acquired = _plat_try_lock(fd)
+        except OSError as exc:
+            raise FleetEnvError(
+                f"fleet_env: could not acquire the build lock at {lock_path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if not acquired:
+            raise FleetEnvContention(
+                "[fleet-env] another session is rebuilding or cutting over "
+                "the fleet environment; retry in a moment"
+            )
+
+        # Re-check after acquiring the lock — another process may have
+        # already performed the cutover while this one waited.
+        if junction.is_junction(env_root):
+            return CutoverOutcome(
+                status="already-junction",
+                env_root=env_root,
+                generation=junction.junction_target(env_root),
+            )
+
+        generation = _build_dir_for(env_root)
+        try:
+            _rename_with_retry(env_root, generation, budget_secs=retry_budget_secs)
+        except OSError as exc:
+            if not _is_transient_rename_failure(exc):
+                # A real permission/path problem, not the reader-handle
+                # shape this retries — propagate as-is rather than
+                # mislabelling it as a retry-budget exhaustion.
+                raise
+            raise FleetEnvCutoverBlocked(
+                f"fleet_env: could not cut {env_root} over to the junction "
+                f"layout — a fleet session is importing (holding a handle "
+                f"inside the tree) and the {retry_budget_secs:.0f}s retry "
+                f"budget was exhausted ({type(exc).__name__}: {exc}). "
+                "Nothing was mutated. Retry at a quieter moment with: "
+                f"python3 {_C1_RESOLVER_PATH.parent / 'fleet-env-cutover.py'}"
+            ) from exc
+
+        try:
+            junction.create_junction(env_root, generation)
+        except Exception as create_exc:
+            # Restore: undo the rename so env_root is a real directory
+            # again, exactly as found. Leaving env_root absent is the one
+            # unacceptable outcome (see docstring). This undoes the SAME
+            # vacate-rename `_rename_with_retry` above just retried under
+            # load — the tree can still carry an open reader handle that
+            # survives a rename — so the restore is exposed to the
+            # identical transient WinError-5 shape and must go through the
+            # same bounded retry, never a bare os.rename (slice-B review
+            # HIGH finding).
+            try:
+                _rename_with_retry(generation, env_root, budget_secs=retry_budget_secs)
+            except OSError as restore_exc:
+                # Genuinely unrecoverable: the restore's own retry budget
+                # is exhausted too. env_root is left ABSENT — name that
+                # state and where the environment actually lives, plus the
+                # runnable fallback, rather than letting create_exc's
+                # traceback (now stale) reach the operator alone.
+                raise FleetEnvError(
+                    f"fleet_env: cutover of {env_root} failed to create the "
+                    f"junction ({type(create_exc).__name__}: {create_exc}), and "
+                    f"restoring the vacated directory back to {env_root} also "
+                    f"failed after the retry budget was exhausted "
+                    f"({type(restore_exc).__name__}: {restore_exc}) — env_root "
+                    f"is currently ABSENT; the environment itself is intact at "
+                    f"{generation}. Rename {generation} back to {env_root} "
+                    "manually once no session holds it open, then retry: "
+                    f"python3 {_C1_RESOLVER_PATH.parent / 'fleet-env-cutover.py'}"
+                ) from restore_exc
+            raise
+
+        _verify_read_through(env_root)
+        return CutoverOutcome(status="cutover", env_root=env_root, generation=generation)
+    finally:
+        if acquired:
+            try:
+                _plat_unlock(fd)
+            except OSError:
+                pass
         os.close(fd)
 
 

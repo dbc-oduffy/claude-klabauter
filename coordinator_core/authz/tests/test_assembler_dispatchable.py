@@ -99,6 +99,20 @@ class TestAC8ClosingGuard:
             f"refuse: {undispatchable!r}"
         )
 
+        # F5 (cold review 2026-08-19): the ⊇ half. An allowlist entry that is
+        # NOT a manifest member is a phantom name -- the mapping's own stated
+        # value is that "the declared dispatch surface stays enumerable and
+        # reviewed", which is false the moment it declares a surface that
+        # does not exist. `missing` above only ever caught the ⊆ direction.
+        phantom = {
+            name: sorted(set(ASSEMBLER_DISPATCHABLE.get(name, frozenset())) - set(manifest))
+            for name, manifest in manifests_by_assembler.items()
+        }
+        assert {k: v for k, v in phantom.items() if v} == {}, (
+            f"ASSEMBLER_DISPATCHABLE entry naming a verb absent from its own "
+            f"assembler's CONSUMES_MANIFEST (a phantom name): {phantom!r}"
+        )
+
 
 class TestMutationRaises:
     """MappingProxyType wrapping means runtime mutation raises rather than silently
@@ -180,3 +194,24 @@ class TestAC7RegistryAndClassificationBacking:
             f"ASSEMBLER_DISPATCHABLE assembler-family entries registered but "
             f"missing an OP_CLASSIFICATION entry: {missing_classification!r}"
         )
+
+    def test_assembler_family_allowlist_equals_each_modules_op_migrated_verbs(self) -> None:
+        """Removal-direction closure for the loop above: the assembler-family half of
+        ASSEMBLER_DISPATCHABLE must equal, exactly, the union of each assembler module's own
+        hand-written `_OP_MIGRATED_VERBS`. Emptying the mapping makes this red (a positive-
+        membership loop over an empty set cannot); widening it beyond what a module declares
+        op-migrated makes it red too."""
+        from coordinator_core.baton_assemble.apply import _OP_MIGRATED_VERBS as baton_migrated
+
+        declared = {"baton_assemble": frozenset(baton_migrated)}
+        for assembler_name, migrated in declared.items():
+            assert migrated, (
+                f"{assembler_name} declares no op-migrated verbs -- this pin has nothing to "
+                "check and must be removed rather than left passing vacuously"
+            )
+        actual = {
+            name: frozenset(ops)
+            for name, ops in ASSEMBLER_DISPATCHABLE.items()
+            if name not in _COMPLETION_FAMILY_ASSEMBLERS
+        }
+        assert actual == declared

@@ -178,6 +178,125 @@ def _import_publish_module():
 # Branch 0 — first-run setup gate
 # ---------------------------------------------------------------------------
 
+def _shares_one_destination(dests: List[str]) -> bool:
+    """True iff some dest in `dests` contains every other — i.e. the rows
+    publish into a single mirror rather than several. Compared as normalized
+    POSIX strings because `load_targets` already emits forward-slash dest
+    paths regardless of host.
+
+    Lowercased before comparing, so `X:/Foo` and `x:/foo` read as the same
+    destination — correct on this Windows-first repo, where the filesystem is
+    case-insensitive and identical rows can differ only by casing accident.
+    That is wrong in principle on a case-sensitive filesystem, where two
+    distinct directories differing only in case would be merged into one. The
+    cost is bounded: this function only feeds the `route:` diagnostic hint
+    below, and the branch of `_cmd_branch0_gate` that can reach it has already
+    decided to exit 1, so a false merge at worst suggests `coordinator-publish`
+    on a row that already targets the same mirror — a redundant same-mirror
+    publish, never a wrong-mirror one.
+
+    `.lower()`, deliberately, NOT `.casefold()`. Review (code-reviewer on
+    d062782b) constructed `X:/aß` against `X:/ass/sub`: casefold maps `ß` to
+    `ss`, so those two genuinely-distinct directories collapse to the same
+    string and read as nested. That is a conflation, not an ordering problem —
+    no choice of root fixes it, because the information is gone before the
+    comparison starts. `.lower()` leaves `ß` alone.
+
+    Two things that claim is NOT (review: code-reviewer on c532740ad, which
+    caught the first draft of this paragraph overstating both):
+
+      * It is not "the case mapping Windows uses". NTFS compares through
+        `RtlUpcaseUnicodeChar`, a fixed-width uppercase table pinned to the
+        Unicode version the volume was formatted under; it maps 1:1 per UTF-16
+        code unit and cannot expand one character into two. Python's Unicode
+        lowering is neither fixed-width nor version-pinned. The two agree
+        across the ASCII drive-letter mirror paths this repo actually
+        produces, which is why this works — not because they are the same
+        function.
+      * It does not close the conflation class, only this instance of it.
+        `'\u0130'.lower()` (LATIN CAPITAL I WITH DOT ABOVE) expands to `i` plus
+        COMBINING DOT ABOVE, so `X:/İfoo` and `X:/i\u0307foo/sub` collide
+        exactly the way `ß` did. Left unguarded deliberately: real dest paths
+        here are ASCII, and the containment scan below cannot help once two
+        strings are genuinely equal. If dest paths ever stop being ASCII, this
+        is the assumption that breaks.
+
+    `str.lower()` is locale-independent — it applies only Unicode's
+    unconditional case mappings, never the `tr`/`az` conditional dotted-I
+    rule — so this does not vary with the host's locale.
+
+    Root selection still asks which candidate contains the rest rather than
+    picking the shortest STRING, so nothing depends on a length ordering that
+    a case mapping could perturb. The list is one entry per matched row, so
+    the quadratic scan is free."""
+    if not dests:
+        return False
+    normalized = {d.replace("\\", "/").rstrip("/").lower() for d in dests}
+    return any(
+        all(d == root or d.startswith(root + "/") for d in normalized)
+        for root in normalized
+    )
+
+
+def _missing_target_entry_guidance(target: str, all_rows: List[List[str]]) -> List[str]:
+    """Lines to print after `MISSING_TARGET_ENTRY`, resolving the operator's
+    actual next move rather than leaving them to infer it.
+
+    The case this exists for: claude-klabauter registers NINE `claude-klabauter*` rows
+    against one mirror, and no row is named for the mirror itself, so
+    `/percolate klabauter` — the obvious thing to type — misses every row.
+    `percolate-round` is single-target by construction, so the correct move is
+    `coordinator-publish`, and the previous behaviour (a bare
+    `MISSING_TARGET_ENTRY`, with `percolate-round` then offering the first-run
+    setup walk) steered an operator into re-registering nine rows that already
+    exist. That routing rule was real, load-bearing, and enforced only by a
+    paragraph of skill prose; this is the artifact that discharges it.
+
+    A row matches `target` when every dash-delimited token of `target` appears
+    among the row's own tokens — a token-set-subset test (`wanted <= set(...)`),
+    not a prefix or a sequential-infix test: order and adjacency are ignored,
+    so target `a-b` also matches a row tokenizing to `a-x-b`. It is still not a
+    PREFIX test — `klabauter` matches `claude-klabauter` because the single
+    token is present anywhere, so a prefix test would not have fired for the
+    exact input this exists to answer. A genuine typo (`claude-klabautr`)
+    tokenizes to nothing that matches and correctly falls through to the
+    registered-names line, which is what tells an operator "mistyped" apart
+    from "never registered". A looser-than-intended match is low-risk: the
+    only branch of `_cmd_branch0_gate` that calls this one has already
+    appended `MISSING_TARGET_ENTRY` and exits 1 whatever comes back (the
+    clean path exits 0 with `CONFIGURED:` and never reaches here), and a
+    spurious match only reaches the `route:` line below when the matched rows
+    also share one destination (`_shares_one_destination`) — capping the
+    damage at a redundant same-mirror publish, never a wrong-mirror one.
+
+    Emits a `route:` line only when routing is actually the answer (two or more
+    matched rows sharing one destination). `percolate-round.py::_branch0_gate`
+    keys on that literal prefix to suppress its own first-run-setup offer,
+    which would otherwise contradict this line; every other caller ignores it,
+    branching on the exit code and a `CONFIGURED:` prefix alone."""
+    known = sorted({row[0] for row in all_rows})
+    if not known:
+        return []
+
+    wanted = {tok for tok in target.split("-") if tok}
+    matched = [row for row in all_rows if wanted <= set(row[0].split("-"))]
+
+    if len(matched) == 1:
+        return ["did you mean: " + matched[0][0]]
+
+    if len(matched) > 1 and _shares_one_destination([row[3] for row in matched]):
+        names = sorted(row[0] for row in matched)
+        # All of them: `coordinator-publish` with no argument already means
+        # every resolved row, so naming them back would be noise.
+        argument = "" if len(names) == len(known) else " " + ",".join(names)
+        return [
+            f"route: {len(names)} rows match '{target}' and share one destination; "
+            f"percolate-round is single-target. Use: coordinator-publish{argument}"
+        ]
+
+    return ["registered: " + ", ".join(known)]
+
+
 def _cmd_branch0_gate(args: argparse.Namespace) -> int:
     from percolate.targets import TargetsError, load_targets  # noqa: E402
 
@@ -196,6 +315,11 @@ def _cmd_branch0_gate(args: argparse.Namespace) -> int:
         )
         if match is None:
             reasons.append("MISSING_TARGET_ENTRY")
+            try:
+                all_rows = [row.split("|") for row in load_targets(setup_dir)]
+            except TargetsError:
+                all_rows = []
+            reasons.extend(_missing_target_entry_guidance(target, all_rows))
         else:
             source_dir = Path(match[2])
             if not (source_dir / ".percolate-ignore").is_file():

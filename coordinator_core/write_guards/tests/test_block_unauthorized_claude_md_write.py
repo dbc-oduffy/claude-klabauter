@@ -364,9 +364,9 @@ class TestDenyTextNamesAlternativeAndOverride:
         """The resolved-root branch. Asserting only that the module path appears
         would pass identically on the fallback branch, which is how the original
         dead-end shipped unnoticed -- pin the interpolated root itself."""
-        import coordinator_core.claude_klabauter_root as mr
+        import coordinator_core.engine_root as mr
 
-        monkeypatch.setattr(mr, "coordinator_claude_klabauter_root", lambda: "/opt/some/claude-klabauter")
+        monkeypatch.setattr(mr, "coordinator_engine_root", lambda: "/opt/some/claude-klabauter")
         assert guard._grant_cli_invocation() == (
             'PYTHONPATH="/opt/some/claude-klabauter" '
             'python3 -m coordinator_core.session.claude_md_grant grant pm '
@@ -375,18 +375,18 @@ class TestDenyTextNamesAlternativeAndOverride:
 
     def test_grant_cli_falls_back_when_root_unresolvable(self, monkeypatch):
         """RuntimeError is the resolver's one documented failure."""
-        import coordinator_core.claude_klabauter_root as mr
+        import coordinator_core.engine_root as mr
 
         def _raise():
             raise RuntimeError("cannot resolve CLAUDE_KLABAUTER_ROOT")
 
-        monkeypatch.setattr(mr, "coordinator_claude_klabauter_root", _raise)
+        monkeypatch.setattr(mr, "coordinator_engine_root", _raise)
         assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
 
     def test_grant_cli_falls_back_on_empty_root(self, monkeypatch):
-        import coordinator_core.claude_klabauter_root as mr
+        import coordinator_core.engine_root as mr
 
-        monkeypatch.setattr(mr, "coordinator_claude_klabauter_root", lambda: "")
+        monkeypatch.setattr(mr, "coordinator_engine_root", lambda: "")
         assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
 
     def test_grant_cli_never_propagates_an_unexpected_resolver_error(
@@ -395,12 +395,12 @@ class TestDenyTextNamesAlternativeAndOverride:
         """A raise here would convert a clean block into a crashed PreToolUse
         guard. An undocumented failure -- a rename, a signature drift -- still
         falls back, but must say so rather than passing for normal operation."""
-        import coordinator_core.claude_klabauter_root as mr
+        import coordinator_core.engine_root as mr
 
         def _raise():
             raise AttributeError("resolver drifted")
 
-        monkeypatch.setattr(mr, "coordinator_claude_klabauter_root", _raise)
+        monkeypatch.setattr(mr, "coordinator_engine_root", _raise)
         assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
         assert "could not resolve the claude-klabauter root" in capsys.readouterr().err
 
@@ -414,9 +414,9 @@ class TestDenyTextNamesAlternativeAndOverride:
         """The rendered command is pasted verbatim into a shell. A root that
         would break out of the double quotes yields a remediation that silently
         does the wrong thing -- the same defect class this resolution fixes."""
-        import coordinator_core.claude_klabauter_root as mr
+        import coordinator_core.engine_root as mr
 
-        monkeypatch.setattr(mr, "coordinator_claude_klabauter_root", lambda: hostile_root)
+        monkeypatch.setattr(mr, "coordinator_engine_root", lambda: hostile_root)
         assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
 
     def test_deny_text_never_dead_ends(self, monkeypatch):

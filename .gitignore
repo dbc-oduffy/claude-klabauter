@@ -46,6 +46,22 @@ Saved/
 .fleet-env/
 .fleet-env.prior/
 
+# Two more members of the same family, both left in the mirror by a real run and
+# neither covered by the two entries above (sibling names, not sub-paths).
+# `.fleet-env.gen-<pid>-<hex>/` is the generation directory a fleet-env build
+# populates before cutover (`fleet_env._gen_root`); an abandoned build leaves it
+# behind until `_sweep_orphan_generations` reclaims it, and it is the same
+# multi-GB never-publish class as `.fleet-env/` itself. `.fleet-env.lock` is the
+# advisory build-lock sidecar (`fleet_env`, `Path(str(env_root) + ".lock")`) --
+# deliberately never unlinked, so it is present in every provisioned checkout
+# forever. Untracked-but-unignored, it trips percolate-round's dirty-dest check
+# on every single round, and `--reconcile-dest=discard`'s `git clean -fd` would
+# then delete a lock another session may be holding right then. Anchored with a
+# leading `/` so it cannot reach the shipped payload lockfile of the same stem,
+# `docs/install/fleet-env.lock`.
+.fleet-env.gen-*/
+/.fleet-env.lock
+
 # --- Editor / OS detritus ---
 *.bak
 *.tmp

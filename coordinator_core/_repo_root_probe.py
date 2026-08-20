@@ -18,7 +18,7 @@ in-memory dict lookup with zero subprocess spawns; reintroducing a spawn into
 a cache's hit path inverted the fix's own thesis (the spawn is the cost, not
 the work inside it). Fixed by memoizing THIS probe too, keyed on the ambient
 `os.getcwd()` at call time — a dict, not a single slot and not a zero-arg
-`lru_cache`, mirroring ``coordinator_core.claude_klabauter_root._ROOT_MEMO``'s shape:
+`lru_cache`, mirroring ``coordinator_core.engine_root._ROOT_MEMO``'s shape:
 a warm process can serve dispatches from different cwds, and a single-slot
 cache here would recreate the exact missing-key collision the callers' own
 repo-root-keyed caches exist to fix.

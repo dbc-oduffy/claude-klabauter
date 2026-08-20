@@ -32,7 +32,7 @@ venv breaks every other session on the box, which is a far worse failure
 mode than the drift this module fixes. `run()` also hard-requires
 `CLAUDE_PLUGIN_ROOT` for its DoE-side surfaces; this module's forwarder-only
 concern needs no such thing, since `coordinator/bin/`/`coordinator/lib/`
-resolve off `coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()` alone.
+resolve off `coordinator_core.engine_root.coordinator_engine_root()` alone.
 
 So: extract (`substrate._write_agent_helper_forwarders`, a pure refactor of
 `substrate.py` Step 3b) rather than invoke the whole installer.
@@ -125,9 +125,9 @@ def _self_heal_forwarders_inner() -> None:
         _write_agent_cmd_forwarder,
         _write_agent_forwarder,
     )
-    from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
+    from coordinator_core.engine_root import coordinator_engine_root_with_class
 
-    _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+    _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
     claude_klabauter_root = Path(_claude_klabauter_root_str)
     agent_bin = claude_klabauter_root / "coordinator" / "bin"
     bin_dst = settings_home() / "bin"

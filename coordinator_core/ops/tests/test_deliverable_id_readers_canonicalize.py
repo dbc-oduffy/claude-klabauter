@@ -56,6 +56,15 @@ CARRIER/WRITE-PATH-SITE partition. Allowlisted here (with the reasoning this
 module's own read supports) so this chunk's own scoped test run is green;
 the audit itself is C6a's file, out of this chunk's write scope, and should
 be updated to formally classify both the next time it is touched.
+(2026-08-15: the audit's own "Post-census additions" section now carries that
+classification, so this residual is discharged rather than outstanding.)
+
+Second post-census pass (2026-08-20): a six-file delta plus one stale entry
+(`coordinator/bin/backfill-deliverable-spine.py`, deleted from HEAD) is
+classified in the audit's "Second post-census pass" section and reflected
+below. One of the six -- `coordinator_core/session/claim_neighbours.py` --
+was a genuine JOINER and was converted rather than allowlisted; it is absent
+from `_ALLOWLISTED_RAW_READERS` for that reason.
 """
 
 from __future__ import annotations
@@ -129,7 +138,6 @@ _ALLOWLISTED_RAW_READERS: frozenset[str] = frozenset(
         "coordinator_core/ops/deliverable_ledger_write.py",
         # --- Rubric gap (23, C6a) -- comment/docstring/type-decl only, no
         # runtime deliverable_id touch to convert or leave alone ---
-        "coordinator/bin/backfill-deliverable-spine.py",
         "coordinator/bin/coordinator-render-rollup.py",
         "coordinator/bin/promote-shipped-in-flight-stubs.py",
         "coordinator/bin/spawn-trace-capture.py",
@@ -172,6 +180,27 @@ _ALLOWLISTED_RAW_READERS: frozenset[str] = frozenset(
         # handoff_archive_transition.py:841 passes a literal `deliverable_id
         # =None` keyword-argument default -- no comparison, no join.
         "coordinator_core/ops/handoff_archive_transition.py",
+        # --- Second post-census pass (2026-08-20), classified in the audit's
+        # own "Second post-census pass" section. `claim_neighbours.py` is
+        # deliberately ABSENT: it was the one JOINER in that delta and is
+        # converted, so it lives in the routed set, not here. ---
+        # coverage.py: was a JOINER; 5bdea218f deleted _derive_dag_chain_set
+        # and its exclusive support wholesale, taking the join (and the
+        # canonicalize import) with it. Surviving touches are a single-field
+        # read, a sha->id map, a dataclass field and a display string.
+        "coordinator_core/coverage.py",
+        # holder_evidence.py: four docstring/comment references to the
+        # deliverable_id bridge it delegates to claim_neighbours. Rubric gap.
+        "coordinator_core/session/holder_evidence.py",
+        # quick_wrap_assemble/__init__.py: one literal `"deliverable_id": None`
+        # in an emitted dict -- same shape as handoff_archive_transition.py.
+        "coordinator_core/quick_wrap_assemble/__init__.py",
+        # session_facts.py: literal None default + a verbatim
+        # `pickup.get("deliverable_id")` forward. Single-value carry.
+        "coordinator_core/session/session_facts.py",
+        # work_state.py: copies a handoff's deliverable_id onto REVIEW_DUE/
+        # UNCLAIMED rows when truthy. Presence gate only, no join.
+        "coordinator_core/session/work_state.py",
     }
 )
 

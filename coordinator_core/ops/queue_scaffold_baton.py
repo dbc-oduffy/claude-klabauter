@@ -153,6 +153,7 @@ from coordinator_core.ops.handoff_author_fork import (
     _append_fm_array_field,
     _fork_handoff_filename,
     _resolve_origin_handoff,
+    _stamp_human_assignee,
 )
 from coordinator_core.ops.handoff_normalize import (
     _NO_FRONTMATTER,
@@ -525,7 +526,9 @@ async def _handler(
             provenance=provenance,
             body=body,
         )
-        minted_by = resolve_operating_person().get("github")
+        operating_person = resolve_operating_person()
+        minted_by = operating_person.get("github")
+        human_assignee = operating_person.get("contributor_slug")
         # producer-axis-claude-klabauter-engine-half: op_identity resolved HERE, at this
         # creation seam. This door is machine (op-minted by construction);
         # the finer op-minted-vs-EM-initiated distinction is deliberately
@@ -541,8 +544,13 @@ async def _handler(
             rebuilt = norm["rebuilt"]
             # _normalize_one_text only backfills an ABSENT category — ours is always
             # present up front, so this is a defense-in-depth assertion, not a fixup.
-            return rebuilt
-        return content
+            final_text = rebuilt
+        else:
+            final_text = content
+        # human_assignee, same caller-supplied discipline as minted_by: resolved
+        # once at this creation door, never inside handoff_normalize — mirrors
+        # handoff_author_fork.py's two doors (see that module's _stamp_human_assignee).
+        return _stamp_human_assignee(final_text, human_assignee)
 
     try:
         await asyncio.to_thread(

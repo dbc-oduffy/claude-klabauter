@@ -62,7 +62,13 @@ def _patch_git_config(monkeypatch, values: dict[str, str]) -> None:
 
 
 def test_pinned_signature_and_keys():
-    assert person_resolver.ALIAS_BUNDLE_KEYS == ("github", "github_id", "display", "email")
+    assert person_resolver.ALIAS_BUNDLE_KEYS == (
+        "github",
+        "github_id",
+        "display",
+        "email",
+        "contributor_slug",
+    )
 
 
 def test_both_sources_agree(tmp_path, monkeypatch):
@@ -222,7 +228,11 @@ def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monk
         "email": f"1+{mixed}@users.noreply.github.com",
     }
 
+    # contributor_slug is a derived hash, not a tracker_entities.normalize_alias
+    # namespace — it has no raw/normalized form to compare against here.
     for key in person_resolver.ALIAS_BUNDLE_KEYS:
+        if key == "contributor_slug":
+            continue
         assert key in result, f"expected {key!r} to resolve for this fixture"
         expected = tracker_entities.normalize_alias(key, raw_values[key])
         assert result[key] == expected, (
@@ -292,3 +302,86 @@ def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
     # memoized by design (a failed resolution must not poison the cache),
     # so it re-reads on each call: 1 + 2 = 3 total.
     assert calls["count"] == 3
+
+
+# C1: contributor_slug pinned vectors, verified against example-cockpit-repo's own
+# TypeScript (`src/lib/identity/contributor-id.ts`, their commit
+# `e3d5726bd021b5ffe97b4148ad93ceba9ec95b8d`) via `npx tsx`, 2026-08-19.
+# <!-- VERBATIM: these are measured values, not illustrative ones. -->
+@pytest.mark.parametrize(
+    "database_id,expected_slug",
+    [
+        (240204332, "67c9mio1h"),
+        (12345, "ywv8h6znl"),
+        (987654, "gkn32sma8"),
+        (42, "8xgasyst2"),
+        (1, "5woe8x06s"),
+        (999999999, "0zdsdj8ag"),
+    ],
+)
+def test_contributor_slug_pinned_vectors(database_id, expected_slug):
+    assert person_resolver._derive_contributor_slug(database_id) == expected_slug
+
+
+@pytest.mark.parametrize(
+    "bad_id", [None, "not-an-int", 0, -1, float("nan"), float("inf"), True, False]
+)
+def test_contributor_slug_null_contract(bad_id):
+    assert person_resolver._derive_contributor_slug(bad_id) is None
+
+
+def test_contributor_slug_derived_in_bundle(tmp_path, monkeypatch):
+    _patch_git_config(
+        monkeypatch,
+        {
+            "user.email": "240204332+gh-fixture@users.noreply.github.com",
+            "user.name": "Display Fixture",
+        },
+    )
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result["contributor_slug"] == "67c9mio1h"
+
+
+def test_contributor_slug_rename_invariant(tmp_path, monkeypatch):
+    """AC2: the same databaseId with a different `github` handle in the
+    bundle yields the same slug — the derivation depends only on the
+    numeric id, never on the handle."""
+    _patch_git_config(
+        monkeypatch,
+        {
+            "user.email": "240204332+old-handle@users.noreply.github.com",
+            "user.name": "Display Fixture",
+        },
+    )
+    first = person_resolver.resolve_operating_person(home=tmp_path)
+
+    person_resolver.reset_person_resolver_git_config_cache()
+    _patch_git_config(
+        monkeypatch,
+        {
+            "user.email": "240204332+new-handle@users.noreply.github.com",
+            "user.name": "Display Fixture",
+        },
+    )
+    second = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert first["github"] == "old-handle"
+    assert second["github"] == "new-handle"
+    assert first["contributor_slug"] == second["contributor_slug"] == "67c9mio1h"
+
+
+def test_contributor_slug_absent_when_github_id_unresolved(tmp_path, monkeypatch):
+    _patch_git_config(
+        monkeypatch,
+        {
+            "user.email": "email@fixture",
+            "user.name": "Display Fixture",
+        },
+    )
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert "github_id" not in result
+    assert "contributor_slug" not in result

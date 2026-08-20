@@ -79,7 +79,7 @@ Rung 1 still READS `REPO_DOE_CLAUDE` as an operator override; nothing here write
 DECISION REVERSAL (2026-07-21) — this module previously exported
 `os.environ["REPO_DOE_CLAUDE"]` on rungs 2/2.5/3, mirroring the bash oracle's
 `export`, and its docstring defended that as deliberate bash parity against
-`coordinator_core.claude_klabauter_root`'s opposite choice. That parity argument was wrong,
+`coordinator_core.engine_root`'s opposite choice. That parity argument was wrong,
 and the asymmetry is now retired: an `export` in a spawn-per-call shell script dies
 with the process, whereas the same write from an IMPORTED Python module persists for
 the life of the interpreter. Under pytest the first test to resolve pinned the value
@@ -100,9 +100,9 @@ idempotency without the interpreter-global side effect. Callers that genuinely n
 `REPO_DOE_CLAUDE` in a CHILD process's environment pass it explicitly via `env=`
 (as `install.maximalist` and `install.sandbox_check` already do).
 
-Review: code-reviewer — `coordinator_core.claude_klabauter_root`'s negative-spec cites this
+Review: code-reviewer — `coordinator_core.engine_root`'s negative-spec cites this
 module as the deliberately-asymmetric counter-example. That cross-reference is now
-STALE: both resolvers are pure. The two modules agree; claude_klabauter_root's note should be
+STALE: both resolvers are pure. The two modules agree; engine_root's note should be
 updated when that file is next touched.
 
 Spec backlink: docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md § W2.1 [DEAD-CITATION: plan file never committed to this repo]

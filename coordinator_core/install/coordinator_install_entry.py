@@ -174,10 +174,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     check_only = "--check-only" in argv
     argv = [a for a in argv if a != "--check-only"]
 
-    from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
+    from coordinator_core.engine_root import coordinator_engine_root_with_class
 
     try:
-        claude_klabauter_root_str, _cls = coordinator_claude_klabauter_root_with_class()
+        claude_klabauter_root_str, _cls = coordinator_engine_root_with_class()
         script, contract = _declared_installer(Path(claude_klabauter_root_str))
     except InstallEntryError as exc:
         print(str(exc), file=sys.stderr)

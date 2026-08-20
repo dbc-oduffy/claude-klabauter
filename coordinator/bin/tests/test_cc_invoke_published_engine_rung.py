@@ -8,10 +8,10 @@ brief): `_resolve_claude_klabauter_root()`'s own docstring mandate is "no bash
 subprocess anywhere in the ladder", NOT zero-spawn. Rung 2+ already calls
 `_machine_local_get()` -> `subprocess.run()` to bootstrap the candidate path
 out of the machine-local registry, and already delegates to the native
-oracle in `coordinator_core.claude_klabauter_root` once the candidate is importable —
+oracle in `coordinator_core.engine_root` once the candidate is importable —
 both are UNCHANGED by this chunk. The one thing that changed: Rung 2+'s
 delegation target switched from the classless `coordinator_claude_klabauter_root()` to
-`coordinator_claude_klabauter_root_with_class()`, so cc_invoke gets the DR-132
+`coordinator_engine_root_with_class()`, so cc_invoke gets the DR-132
 published-engine-vs-live-working-tree gate for free, with zero new
 resolution logic.
 
@@ -19,13 +19,13 @@ Rungs 1 (CLAUDE_KLABAUTER_ROOT env), 1.5 (`.claude-klabauter-root` pointer file)
 (self-location from `__file__`) remain gate-BLIND by design — they return
 before the oracle is ever reached, and none of them may gain a NEW
 subprocess as part of this chunk. Rung 1.5 is the exact defect commit
-0fdfb61d6 fixed *inside* `coordinator_claude_klabauter_root_with_class()` itself (the
+0fdfb61d6 fixed *inside* `coordinator_engine_root_with_class()` itself (the
 pointer pre-empting the DR-132 gate on every installed machine) — that fix
 lives in the two-tier wrapper Rung 2+ now calls into, and does not
 retroactively gate Rungs 1/1.5/3 here.
 
 Tests:
-  AC-call-site   Rung 2+ imports and calls `coordinator_claude_klabauter_root_with_class`
+  AC-call-site   Rung 2+ imports and calls `coordinator_engine_root_with_class`
                  (not the classless `coordinator_claude_klabauter_root`), and returns
                  only the resolved root — no branching on the resolution
                  class (that belongs to a future C8 consumer, not this rung).
@@ -76,9 +76,9 @@ class TestCallSiteUsesWithClassVariant(unittest.TestCase):
     def test_resolve_claude_klabauter_root_imports_with_class_variant(self) -> None:
         source = inspect.getsource(_mod._resolve_claude_klabauter_root)
         self.assertIn(
-            "coordinator_claude_klabauter_root_with_class",
+            "coordinator_engine_root_with_class",
             source,
-            "Rung 2+ must delegate to coordinator_claude_klabauter_root_with_class() "
+            "Rung 2+ must delegate to coordinator_engine_root_with_class() "
             "(the DR-132 two-tier published-engine gate), per C5.",
         )
         self.assertNotIn(
@@ -88,17 +88,22 @@ class TestCallSiteUsesWithClassVariant(unittest.TestCase):
             "C5 switches the sole call site to the _with_class sibling.",
         )
         self.assertEqual(
-            source.count("from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class"),
+            source.count("from coordinator_core.engine_root import coordinator_engine_root_with_class"),
             1,
-            "expected exactly one import of coordinator_claude_klabauter_root_with_class "
+            "expected exactly one import of coordinator_engine_root_with_class "
             "in _resolve_claude_klabauter_root — found a different count, check for a "
             "duplicated call site.",
         )
         self.assertEqual(
-            source.count("= coordinator_claude_klabauter_root_with_class()"),
-            1,
-            "expected exactly one call of coordinator_claude_klabauter_root_with_class() "
-            "in _resolve_claude_klabauter_root.",
+            source.count("= coordinator_engine_root_with_class()"),
+            2,
+            "expected exactly two calls of coordinator_engine_root_with_class() "
+            "in _resolve_claude_klabauter_root — C0 (docs/plans/2026-08-20-an-engine-root-"
+            "is-not-named-for-the-repo.md) splits _delegate_to_gate's single call "
+            "site into a same-tree branch (ordinary import) and a foreign-"
+            "candidate branch (file-path load), each calling the resolved "
+            "entry point once; a different count means a branch was duplicated "
+            "or collapsed back to one.",
         )
 
     def test_rung2_returns_root_and_does_not_branch_on_class(self) -> None:
@@ -249,8 +254,8 @@ def _no_pointer_file():
 
 
 def _make_fake_coordinator_core_with_class(root: str, resolution_class: str) -> str:
-    """Build (and register on sys.modules) a fake `coordinator_core.claude_klabauter_root`
-    exposing ONLY `coordinator_claude_klabauter_root_with_class`, plus a real temp
+    """Build (and register on sys.modules) a fake `coordinator_core.engine_root`
+    exposing ONLY `coordinator_engine_root_with_class`, plus a real temp
     directory to serve as the candidate path `_machine_local_get` returns
     (so `os.path.isdir(candidate)` passes and the module is importable via
     `sys.path` injection, matching `_resolve_claude_klabauter_root`'s own contract).
@@ -263,25 +268,25 @@ def _make_fake_coordinator_core_with_class(root: str, resolution_class: str) -> 
 
     cc_pkg = types.ModuleType("coordinator_core")
     cc_pkg.__path__ = []  # mark as a package
-    claude_klabauter_root_mod = types.ModuleType("coordinator_core.claude_klabauter_root")
+    claude_klabauter_root_mod = types.ModuleType("coordinator_core.engine_root")
 
     def _fake_with_class():
         return (root, resolution_class)
 
-    claude_klabauter_root_mod.coordinator_claude_klabauter_root_with_class = _fake_with_class
+    claude_klabauter_root_mod.coordinator_engine_root_with_class = _fake_with_class
     # Deliberately do NOT define coordinator_claude_klabauter_root() on the fake module —
     # if the call site regresses to the classless import, this fixture makes
     # that regression raise ImportError/AttributeError instead of silently
     # passing.
     sys.modules["coordinator_core"] = cc_pkg
-    sys.modules["coordinator_core.claude_klabauter_root"] = claude_klabauter_root_mod
+    sys.modules["coordinator_core.engine_root"] = claude_klabauter_root_mod
     return candidate_dir
 
 
 @pytest.fixture(autouse=True)
 def _cleanup_fake_coordinator_core():
     yield
-    sys.modules.pop("coordinator_core.claude_klabauter_root", None)
+    sys.modules.pop("coordinator_core.engine_root", None)
     sys.modules.pop("coordinator_core", None)
 
 
@@ -403,8 +408,8 @@ class TestGateEntryPointByShape(unittest.TestCase):
     module is spelled differently from this tree's.
 
     The publish transform renames the module and its entry point together
-    (`claude_klabauter_root.py` -> `claude_klabauter_root.py`,
-    `coordinator_claude_klabauter_root_with_class` ->
+    (`engine_root.py` -> `claude_klabauter_root.py`,
+    `coordinator_engine_root_with_class` ->
     `coordinator_claude_klabauter_root_with_class`), so `_delegate_to_gate`'s
     direct import of THIS tree's spelling cannot succeed against a candidate
     spelled the other way. Rung 1 hands it exactly such a candidate on a
@@ -476,7 +481,7 @@ class TestGateEntryPointByShape(unittest.TestCase):
             # `coordinator_core/state_root.py` really does this in-tree, which
             # is why the scan matches a `def` line, not a bare substring.
             (pkg / "state_root.py").write_text(
-                "# see coordinator_claude_klabauter_root_with_class for the gated ladder\n",
+                "# see coordinator_engine_root_with_class for the gated ladder\n",
                 encoding="utf-8",
             )
             self.assertIsNone(_mod._gate_entry_point_by_shape(str(root)))

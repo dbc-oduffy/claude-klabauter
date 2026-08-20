@@ -52,7 +52,7 @@ Spec backlink: pln-cartography-consumes-symbol-ex-3fc0a8
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from coordinator_core.cartography._guard import path_guard
 
@@ -167,6 +167,28 @@ def _is_type_alias_kind(kind_value: str) -> bool:
     return kind_value in _TYPE_ALIAS_KIND_VALUES
 
 
+def _signature_text(symbol: Any) -> Optional[str]:
+    """Project a symbol's `signature` field, preferring a real signature over decl text.
+
+    `symbol_extract.Symbol.decl_text` is the node's source slice capped at
+    `_DECL_TEXT_MAX_CHARS` (4096) — for a function that is the whole
+    IMPLEMENTATION, not a signature, so emitting it under a key named
+    `signature` misdescribes what the consumer is holding and carries most of
+    the payload's bytes (doe-claude-em memo 2026-08-19: 254 of 257 sampled
+    fields contained newlines, max 4082 chars against that 4096 cap).
+
+    `Symbol.detail` is the extractor's LSP-canonical `DocumentSymbol.detail` —
+    the signature sliced from the parse tree by field name, populated for
+    Python, TypeScript, and C++. Prefer it; fall back to `decl_text` only where
+    no projection exists, so a language without signature support keeps the
+    data it emits today rather than losing the field entirely.
+    """
+    detail = getattr(symbol, "detail", None)
+    if detail:
+        return detail
+    return symbol.decl_text
+
+
 def _class_entry(symbol: Any) -> Dict[str, Any]:
     return {
         "name": symbol.name,
@@ -179,7 +201,7 @@ def _class_entry(symbol: Any) -> Dict[str, Any]:
 def _function_entry(symbol: Any) -> Dict[str, Any]:
     return {
         "name": symbol.name,
-        "signature": symbol.decl_text,
+        "signature": _signature_text(symbol),
         "lineno": symbol.range_start_line,
     }
 
@@ -198,7 +220,7 @@ def _constant_entry(symbol: Any) -> Dict[str, Any]:
 def _type_alias_entry(symbol: Any) -> Dict[str, Any]:
     return {
         "name": symbol.name,
-        "signature": symbol.decl_text,
+        "signature": _signature_text(symbol),
         "lineno": symbol.range_start_line,
     }
 
@@ -261,7 +283,7 @@ def _envelope_for_file(rel_path: str, symbols: List[Any]):
                 "kind": kind_value,
                 "lineno": symbol.range_start_line,
             }
-            signature = symbol.decl_text
+            signature = _signature_text(symbol)
             if signature:
                 other_entry["signature"] = signature
             other_symbols.append(other_entry)

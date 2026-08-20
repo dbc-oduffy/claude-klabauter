@@ -58,3 +58,21 @@ SESSION_LEDGER_BLOCK_LINES: list[str] = [
 # ``.match(line)`` (per-line, anchors to position 0 of the given string —
 # unaffected by the MULTILINE flag either way).
 SESSION_LEDGER_HEADING_RE = re.compile(r"^## Session Ledger", re.MULTILINE)
+
+
+def body_has_session_ledger_heading(body: str) -> bool:
+    """Whether ``body`` (a handoff's body text, frontmatter already
+    stripped) carries the canonical ``## Session Ledger`` heading.
+
+    Thin wrapper over ``SESSION_LEDGER_HEADING_RE`` so callers checking for
+    the block's presence -- `coordinator-doc-new.py`'s C3 scaffold-time
+    refusal and `baton_assemble/apply.py`'s d2 body check (C1, pln-the-
+    ledger-check-follows-the-body-not-ju-e2da19) -- share one predicate
+    rather than each re-deriving `bool(SESSION_LEDGER_HEADING_RE.search(...))`
+    inline. Do not replace the regex search with a substring test (`"##
+    Session Ledger" in body`): that was already corrected once, in review
+    49e8b242, because a substring test also matches the heading appearing
+    inside a code fence or quoted example rather than as an actual heading
+    line.
+    """
+    return bool(SESSION_LEDGER_HEADING_RE.search(body))

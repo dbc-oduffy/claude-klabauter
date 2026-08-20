@@ -178,10 +178,10 @@ def test_execute_directives_failing_directive_stderr_survives_into_result(
         print("diagnostic detail", file=sys.stderr)
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "query-records")]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     assert [entry["id"] for entry in report["failed"]] == ["d_plain"]
@@ -196,10 +196,10 @@ def test_execute_directives_landing_directive_reports_empty_stderr(
     def ok_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"fake-ok": _fake_module(ok_main, "fake_ok")}
+    modules = {"list-week-changelog": _fake_module(ok_main, "fake_ok")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "fake-ok")]
+    directives = [_directive("d_ok", "list-week-changelog")]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -225,10 +225,10 @@ def test_best_effort_directive_failure_lands_in_degraded_not_failed(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_cadence", "fake-cli", best_effort=True)]
+    directives = [_directive("d_cadence", "query-records", best_effort=True)]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
@@ -250,14 +250,14 @@ def test_best_effort_directive_failure_alone_still_reports_success(
         return 0
 
     modules = {
-        "fake-cadence": _fake_module(failing_main, "fake_cadence"),
-        "fake-ok": _fake_module(ok_main, "fake_ok"),
+        "emit-cadence": _fake_module(failing_main, "fake_cadence"),
+        "list-week-changelog": _fake_module(ok_main, "fake_ok"),
     }
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d_ok", "fake-ok"),
-        _directive("d_cadence", "fake-cadence", best_effort=True),
+        _directive("d_ok", "list-week-changelog"),
+        _directive("d_cadence", "emit-cadence", best_effort=True),
     ]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
@@ -276,10 +276,10 @@ def test_non_best_effort_directive_failure_is_unchanged(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "query-records")]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     assert [entry["id"] for entry in report["failed"]] == ["d_plain"]
@@ -298,14 +298,14 @@ def test_degraded_entry_error_folds_in_captured_stderr(
         print("ValueError: unrecognized handoff deployment_state 'record'", file=sys.stderr)
         return 3
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_cadence", "fake-cli", best_effort=True)]
+    directives = [_directive("d_cadence", "query-records", best_effort=True)]
     _exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     entry = report["degraded"][0]
-    assert entry["error"].startswith("fake-cli exited 3 (args=[])")
+    assert entry["error"].startswith("query-records exited 3 (args=[])")
     assert "unrecognized handoff deployment_state" in entry["error"]
 
 
@@ -319,14 +319,14 @@ def test_failed_entry_error_still_folds_in_captured_stderr(
         print("diagnostic detail", file=sys.stderr)
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "query-records")]
     _exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     entry = report["failed"][0]
-    assert entry["error"].startswith("fake-cli exited 2 (args=[])")
+    assert entry["error"].startswith("query-records exited 2 (args=[])")
     assert "diagnostic detail" in entry["error"]
 
 
@@ -339,14 +339,14 @@ def test_clean_directive_error_has_no_trailing_stderr_block(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "query-records")]
     _exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     entry = report["failed"][0]
-    assert entry["error"] == "fake-cli exited 2 (args=[])"
+    assert entry["error"] == "query-records exited 2 (args=[])"
 
 
 def test_execute_directives_ignores_hard_block_key_entirely(
@@ -362,10 +362,10 @@ def test_execute_directives_ignores_hard_block_key_entirely(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_cadence", "fake-cli", best_effort=True)
+    directive = _directive("d_cadence", "query-records", best_effort=True)
     directive["hard_block"] = True  # deliberately divergent from best_effort
     _exit_code, report = wwc_apply._execute_directives([directive], [], {})
 

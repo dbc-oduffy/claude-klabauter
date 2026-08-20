@@ -462,17 +462,21 @@ def _find_directive_dict_builders(tree: ast.Module) -> dict[str, dict]:
 def _site_from_dict_literal(node: ast.Dict, module_consts: dict[str, str], list_vars: dict[str, tuple]):
     cli_node = args_node = id_node = None
     is_op_key = False
+    saw_cli_key = False
+    saw_op_key = False
     for key, val in zip(node.keys, node.values):
         if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
             continue
         if key.value == "cli":
             cli_node = val
+            saw_cli_key = True
         elif key.value == "op":
             # Migrated form -- see module docstring's negative-spec entry on
             # `"op"`-keyed sites: ALWAYS in-process, key presence alone is
             # the discriminator, not dot-containment of the value.
             cli_node = val
             is_op_key = True
+            saw_op_key = True
         elif key.value == "args":
             args_node = val
         elif key.value in ("id", "id_"):
@@ -483,6 +487,13 @@ def _site_from_dict_literal(node: ast.Dict, module_consts: dict[str, str], list_
     directive_id = _resolve_str_const(id_node, module_consts)
     tokens, unresolved, positionals, producer_refs = _resolve_args_expr(args_node, module_consts, list_vars)
     if cli is None:
+        unresolved = True
+    if saw_cli_key and saw_op_key:
+        # C11 both-keys ambiguity (cold review 2026-08-19): a dict literal
+        # carrying BOTH `cli` and `op` must report `unresolved`, matching
+        # C3's runtime refusal (`apply_base.execute_directives` refuses a
+        # directive carrying both) -- never silently resolve to whichever
+        # key was typed second.
         unresolved = True
     return {
         "id": directive_id,

@@ -452,3 +452,219 @@ def test_main_no_registry_record_is_unresolved_never_refuses(tmp_path, monkeypat
     out = capsys.readouterr().out
     assert rc == 0
     assert 'repo_identity: "UNRESOLVED"' in out
+
+
+# ---------------------------------------------------------------------------
+# AC4/AC5 (docs/plans/2026-08-20-the-ledger-check-follows-the-body-not-ju.md):
+# a chain that attributed NO LoE from any of the three sources renders
+# `agent_dispatches: null` / `tshirt: null` instead of a measured-looking
+# `0`/`"XS"`. See aggregate()'s `attributed_nothing` comment for the exact
+# discriminator and its `chain_total > 1` narrowing.
+# ---------------------------------------------------------------------------
+
+
+def _write_ledgerless_handoff(path: Path, created: str, predecessor: str) -> None:
+    """A handoff with no `## Session Ledger` heading at all and no fields that
+    would make it a dispatch-fallback candidate (no `kind: recovery`, no
+    `authoring_session`) -- genuinely no source to attribute from."""
+    path.write_text(
+        f"""---
+created: {created}
+predecessor: {predecessor}
+---
+
+# Handoff
+
+No Session Ledger block.
+""",
+        encoding="utf-8",
+    )
+
+
+def test_aggregate_nulls_out_for_a_fully_degenerate_multi_handoff_chain(monkeypatch, tmp_path):
+    """The genuine AC4 target: a two-handoff chain where NEITHER handoff
+    carries a Session Ledger row, dispatch-fallback data, or a closing_session
+    tally -- the chain attributed literally nothing, so `agent_dispatches`/
+    `opus_dispatches`/`tshirt` must all render null together rather than the
+    measured-looking 0/0/"XS"."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import aggregate
+
+    repo_root = _init_repo(tmp_path)
+    handoffs = repo_root / "state" / "handoffs"
+    root = handoffs / "root.md"
+    term = handoffs / "term.md"
+    _write_ledgerless_handoff(root, created="2026-08-18", predecessor="null")
+    _write_ledgerless_handoff(term, created="2026-08-19", predecessor="root.md")
+
+    result = aggregate(
+        terminal_handoff=str(term),
+        repo_root=repo_root,
+        handoffs_dir=handoffs,
+        archive_dir=repo_root / "archive" / "handoffs",
+    )
+
+    assert result["exit_code"] == 0
+    assert result["chain_total"] == 2
+    assert result["agent_dispatches"] is None
+    assert result["opus_dispatches"] is None
+    assert result["tshirt"] is None
+
+
+def test_aggregate_keeps_numbers_when_any_handoff_attributes_something(monkeypatch, tmp_path):
+    """Positive control (AC5): a two-handoff chain where ONE handoff carries a
+    real ledger row must keep rendering real numbers, not null -- the fix
+    must not blank out the common case. Also proves a genuinely-attributed
+    `opus_dispatches: 0` (from the ledger row's own "0o") stays a real int,
+    not null -- attributed-zero and unmeasured are different things."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import aggregate
+
+    repo_root = _init_repo(tmp_path)
+    handoffs = repo_root / "state" / "handoffs"
+    root = handoffs / "root.md"
+    term = handoffs / "term.md"
+    root.write_text(
+        """---
+created: 2026-08-18
+predecessor: null
+---
+
+## Session Ledger
+
+2026-08-18 | 111111 | S | 2d / 0o | root session
+""",
+        encoding="utf-8",
+    )
+    _write_ledgerless_handoff(term, created="2026-08-19", predecessor="root.md")
+
+    result = aggregate(
+        terminal_handoff=str(term),
+        repo_root=repo_root,
+        handoffs_dir=handoffs,
+        archive_dir=repo_root / "archive" / "handoffs",
+    )
+
+    assert result["exit_code"] == 0
+    assert result["agent_dispatches"] == 2
+    assert result["opus_dispatches"] == 0
+    assert result["opus_dispatches"] is not None
+    assert result["tshirt"] is not None
+
+
+def test_aggregate_keeps_real_zero_when_closing_session_supplies_it(monkeypatch, tmp_path):
+    """The one arm of `attributed_nothing` the reviewer flagged as untested
+    (review-c2-findings.md §6): a multi-handoff chain with NO ledger rows and
+    NO dispatch-fallback data anywhere, but a `closing_session` that supplies
+    a genuine, on-disk-real `agent_dispatches: 0` / `opus_dispatches: 0`
+    tally. This is the exact case where nulling the chain would silently
+    erase a real (zero) measurement rather than correctly flag an unmeasured
+    one -- `closing_row_missing` must fire and keep the result at real 0s,
+    NOT null."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import aggregate
+
+    repo_root = _init_repo(tmp_path)
+    handoffs = repo_root / "state" / "handoffs"
+    root = handoffs / "root.md"
+    term = handoffs / "term.md"
+    _write_ledgerless_handoff(root, created="2026-08-18", predecessor="null")
+    _write_ledgerless_handoff(term, created="2026-08-19", predecessor="root.md")
+
+    result = aggregate(
+        terminal_handoff=str(term),
+        repo_root=repo_root,
+        handoffs_dir=handoffs,
+        archive_dir=repo_root / "archive" / "handoffs",
+        closing_session={
+            "session_id": "closing-sess-000000",
+            "agent_dispatches": 0,
+            "opus_dispatches": 0,
+        },
+    )
+
+    assert result["exit_code"] == 0
+    assert result["chain_total"] == 2
+    assert result["agent_dispatches"] == 0
+    assert result["agent_dispatches"] is not None
+    assert result["opus_dispatches"] == 0
+    assert result["opus_dispatches"] is not None
+    assert result["tshirt"] is not None
+
+
+def _minimal_result(**overrides) -> dict:
+    base = {
+        "chain_total": 2,
+        "chain_session_total": 2,
+        "agent_dispatches": None,
+        "opus_dispatches": None,
+        "em_tokens": None,
+        "tshirt": None,
+        "commits": [],
+        "chain_sessions_with_ledger": "0 of 2",
+        "chain_sessions_with_dispatch_fallback": "0 of 2",
+        "chain_span_days": 1,
+        "chain_starting_handoff": "state/handoffs/root.md",
+        "chain_walk_terminated_early": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_format_yaml_frontmatter_renders_null_not_the_string_none():
+    from coordinator_core.session_ledger.aggregate_chain_loe import format_yaml_frontmatter
+
+    out = format_yaml_frontmatter(_minimal_result())
+    assert "  agent_dispatches: null" in out
+    assert "  opus_dispatches: null" in out
+    assert "  tshirt: null" in out
+    assert "None" not in out
+
+
+def test_format_json_renders_json_null_for_degenerate_result():
+    from coordinator_core.session_ledger.aggregate_chain_loe import format_json
+
+    out = format_json(_minimal_result())
+    obj = json.loads(out)
+    assert obj["chain_loe"]["agent_dispatches"] is None
+    assert obj["chain_loe"]["opus_dispatches"] is None
+    assert obj["chain_loe"]["tshirt"] is None
+
+
+def test_format_yaml_frontmatter_still_renders_numbers_when_attributed():
+    from coordinator_core.session_ledger.aggregate_chain_loe import format_yaml_frontmatter
+
+    out = format_yaml_frontmatter(
+        _minimal_result(
+            agent_dispatches=5, opus_dispatches=1, tshirt="S", chain_sessions_with_ledger="2 of 2"
+        )
+    )
+    assert "  agent_dispatches: 5" in out
+    assert "  opus_dispatches: 1" in out
+    assert '  tshirt: "S"' in out
+
+
+def test_format_yaml_frontmatter_renders_a_real_attributed_zero_opus_dispatches():
+    """A real (non-null) 0 -- e.g. an ad-only ledger row -- must render as the
+    bare integer `0`, not the "null" sentinel: attributed-zero and unmeasured
+    are different states and must not collapse to the same output."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import format_yaml_frontmatter
+
+    out = format_yaml_frontmatter(
+        _minimal_result(
+            agent_dispatches=5, opus_dispatches=0, tshirt="S", chain_sessions_with_ledger="2 of 2"
+        )
+    )
+    assert "  opus_dispatches: 0" in out
+    assert "  opus_dispatches: null" not in out
+
+
+def test_format_json_still_renders_numbers_when_attributed():
+    from coordinator_core.session_ledger.aggregate_chain_loe import format_json
+
+    out = format_json(
+        _minimal_result(
+            agent_dispatches=5, opus_dispatches=1, tshirt="S", chain_sessions_with_ledger="2 of 2"
+        )
+    )
+    obj = json.loads(out)
+    assert obj["chain_loe"]["agent_dispatches"] == 5
+    assert obj["chain_loe"]["opus_dispatches"] == 1
+    assert obj["chain_loe"]["tshirt"] == "S"

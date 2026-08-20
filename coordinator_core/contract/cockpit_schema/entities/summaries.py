@@ -507,6 +507,41 @@ class HandoffSummary(BaseModel):
     present-as-null, never an absent key — `extra="forbid"` makes an
     unknown emitted key a hard validation failure)."""
 
+    # ── Human axis (C9, activation-gated) ───────────────────────────────
+    # Spec backlink: docs/plans/2026-08-19-the-tracker-names-an-owner.md § C9, § The
+    # hazard. NEW prefixed keys, never a value on `owner` — PM ruling, 2026-08-19.
+    # Genuinely OPTIONAL (true absence-allowed) AND nullable, same
+    # `x-zod-nullable-optional` combo as `additional_predecessors`/`forked_from`/
+    # `disposed_successors` above: the emit sections (ops/emit/sections/handoffs.py)
+    # omit these keys entirely while `_shared.human_axis_vendored()` is False, and a
+    # bare `.optional()` (unwrapped to non-nullable T by emit_schema.py's
+    # `_unwrap_optional_non_nullable`) would lose the ability to distinguish
+    # "not yet vendored" (absent) from "vendored, no value resolved" (null) once the
+    # switch flips. MINOR-bump-additive: see emit_schema.py's CONTRACT_VERSION
+    # changelog comment for the 3.12.0 -> 3.13.0 row.
+    human_assignee: str | None = Field(
+        default=None,
+        json_schema_extra={"x-zod-nullable-optional": True},
+    )
+    """
+    C1's `contributor_slug` for the human who authored/assigned this handoff,
+    caller-supplied at the creation door (handoff_author_fork.py / C4) the same
+    way `minted_by` is — never resolved inside a normalize sweep. Absent
+    (key omitted) while the C9 activation switch is off; may still be null once
+    on, when no operating person resolves. Never `owner` — see module docstring.
+    """
+    human_claimant: str | None = Field(
+        default=None,
+        json_schema_extra={"x-zod-nullable-optional": True},
+    )
+    """
+    C1's `contributor_slug` for the human who claimed/picked up this handoff,
+    stamped by archive_stamp.py (C8) at claim time, additive beside
+    `picked_up_by` (which keeps carrying the session id, unchanged). Records
+    claimed before C8 shipped carry no `human_claimant`, and none is
+    backfilled. Absent (key omitted) while the C9 activation switch is off.
+    """
+
 
 # ── Backlog item summary (debt / bug / improvement YAML) ────────────────────
 

@@ -448,6 +448,18 @@ _ALLOWLIST: dict[str, str] = {
         "how this module's own protocol module (write_surface.py) declares "
         "no clauses of its own either."
     ),
+    "junction.py": (
+        "EXEMPT: same class as `_shared.py` above. `create_junction` / "
+        "`remove_junction` are link MECHANICS parameterized entirely by a "
+        "caller-supplied `link` and `target` — the module selects no path "
+        "of its own and knows no destination provenance. The writer is "
+        "whichever caller points it somewhere, and that caller declares it: "
+        "`fleet_env.WRITE_SURFACE` clauses[0] names the env_root junction "
+        "retarget explicitly, including that it is performed via this "
+        "module. Note `remove_junction`'s `os.rmdir` removes the reparse "
+        "point ONLY and never the target tree, so it reaches no surface the "
+        "caller has not already declared."
+    ),
     "sandbox_check.py": (
         "EXEMPT: every flagged write (`os.makedirs`, `shutil.copy2`, "
         "`Path.write_text`, plus the sandboxed `subprocess.run` calls it "

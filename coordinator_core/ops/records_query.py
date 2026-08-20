@@ -201,7 +201,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter, parse_yaml
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.lifecycle_constants import (
     HANDOFF_TERMINAL_DEPLOYMENT,
     HANDOFF_TERMINAL_STATUS,
@@ -2032,8 +2032,13 @@ def _handler(
     ``older-than``) → non-zero exit + stderr naming the key with a did-you-mean
     suggestion — never silently dropped (a dropped filter returns the
     unfiltered superset with exit 0, which is the dangerous direction).
-    Unknown ``type`` → non-zero exit + stderr (trips PATH-fallback), mirroring
-    query-records.js and _parse_where. This guard is skipped for the
+    Unknown ``type`` → ``CallerFacingValidationError``, which ipc renders as
+    ``-32602 INVALID_PARAMS`` carrying the bad type and the valid set (the
+    sibling ``ops/ceremony/records_query.py`` already raises for this; the
+    stderr-write + ``sys.exit(1)`` form this replaced needed a bound stream and
+    reached the caller as an unclassified ``-32603``). Still fail-loud, and
+    still a non-zero exit at every CLI trampoline over this op — the classified
+    error is what changed, not the loudness. This guard is skipped for the
     ``unattached``-without-``type`` union dispatch, which needs no ``type``.
     Absent ``repo_root`` → well-formed empty payload, no raise.
 
@@ -2101,12 +2106,22 @@ def _handler(
     # ---- Empty-payload guards (no raise) ------------------------------------
 
     if record_type not in _TYPE_TO_GLOB:
+        # `CallerFacingValidationError`, not `sys.stderr.write` + `sys.exit(1)`:
+        # both of those are CLI reflexes that lie inside an op handler. The
+        # write needs a bound stream, which a warm-pool worker does not have
+        # (see coordinator_core/warm/server.py::_bind_null_std_streams), and
+        # `SystemExit` reaches the dispatcher as an unclassified exception, so
+        # BOTH forms collapsed to a bare `-32603 Internal error: <ClassName>`
+        # that names no type and offers no valid set. Example-cockpit-repo-em hit
+        # exactly that (2026-08-20): a mistyped `--type sizing` and a genuine
+        # internal fault were indistinguishable from the error string, and
+        # they spent a triage round on the wrong one. This marker class routes
+        # to `-32602 INVALID_PARAMS` with the message preserved verbatim — a
+        # bad type name is caller error, and always was.
         valid = ', '.join(sorted(_TYPE_TO_GLOB))
-        sys.stderr.write(
-            f'records.query: unknown type: {record_type!r}. Valid: {valid}. '
-            f'Non-zero exit to trip PATH-fallback.\n'
+        raise CallerFacingValidationError(
+            f'records.query: unknown type: {record_type!r}. Valid: {valid}.'
         )
-        sys.exit(1)
 
     # `include_body` has no effect on the synthetic types: neither
     # `_collect_handoff_ledger_records` nor `_collect_research_claim_records`

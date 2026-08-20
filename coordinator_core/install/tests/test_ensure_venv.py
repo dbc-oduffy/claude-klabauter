@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.install import ensure_venv as ev
+from coordinator_core.install import junction
 from coordinator_core.install.write_surface import ShapedClause, StaticClause, validate
 from coordinator_core.trusted_root_guard import UntrustedRootError
 
@@ -638,10 +639,10 @@ def test_mutate_mode_rebuilds_when_unhealthy(tmp_path, monkeypatch):
     def fake_healthy(py):
         healthy_calls["n"] += 1
         # False for the live venv_dir (fast-path check, post-lock
-        # re-check); True for the freshly-built `.build-*` tree, satisfying
+        # re-check); True for the freshly-built `.gen-*` tree, satisfying
         # the pre-swap health probe so this test still exercises the
         # successful-rebuild leg.
-        return ".build-" in py.parent.parent.name
+        return ".gen-" in py.parent.parent.name
 
     monkeypatch.setattr(ev, "_venv_healthy", fake_healthy)
     monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
@@ -663,7 +664,7 @@ def test_mutate_mode_rebuilds_when_unhealthy(tmp_path, monkeypatch):
     assert len(created) == 1
     assert created[0] != venv_dir
     assert created[0].parent == venv_dir.parent
-    assert created[0].name.startswith(f"{venv_dir.name}.build-")
+    assert created[0].name.startswith(f"{venv_dir.name}.gen-")
     assert venv_dir.is_dir()
     assert installed
     assert pins
@@ -735,7 +736,7 @@ def test_mutate_mode_post_rebuild_leg_leaves_healthy_unrelated_pin(tmp_path, mon
     ml_cli = tmp_path / "machine-local"
 
     monkeypatch.setattr(
-        ev, "_venv_healthy", lambda py: ".build-" in py.parent.parent.name
+        ev, "_venv_healthy", lambda py: ".gen-" in py.parent.parent.name
     )
     monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
     monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
@@ -1466,7 +1467,7 @@ def test_general_pin_leg_does_not_double_warn_on_rebuilt_run(tmp_path, monkeypat
     _make_exe(general)
 
     monkeypatch.setattr(
-        ev, "_venv_healthy", lambda py: ".build-" in py.parent.parent.name
+        ev, "_venv_healthy", lambda py: ".gen-" in py.parent.parent.name
     )
     monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
     monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
@@ -1546,66 +1547,16 @@ def test_resolve_whoami_pkg_can_suppress_the_stale_seam_warning(tmp_path, monkey
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.pending_fix(
-    reason="WINDOWS PRODUCTION DEFECT, not a test defect: _swap_in_new_venv's "
-    "os.rename(venv_dir, stale_dir) raises WinError 5 when any plain-open file "
-    "handle exists inside the tree. POSIX moves the directory out from under an "
-    "open fd happily; Windows refuses. The assertion is RIGHT and is deliberately "
-    "left intact as the oracle for the fix -- weakening it would convert a real "
-    "platform defect into a green tick. Measured on a real Windows host: a "
-    "RUNNING interpreter inside the tree survives the rename (the loader opens exe "
-    "images with FILE_SHARE_DELETE), so the scenario the swap docstring frames as "
-    "load-bearing already works; what breaks is an ordinary open() -- an import or "
-    "config read landing mid-rebuild. The only mechanism that satisfies this test "
-    "on Windows is making venv_dir a junction/reparse point, which is an "
-    "architecture change: real-directory assumptions (is_dir/rmtree/realpath) recur "
-    "across ensure_venv.py, substrate.py, uninstall_legs.py, maximalist.py and "
-    "first_run.py, none audited for junction transparency, and junction CREATION "
-    "needs ctypes/DeviceIoControl plumbing this repo does not have. Bounded retry "
-    "cannot help: the handle is held for the whole call, so there is nothing "
-    "transient to wait out. Routed to the retire-coordinator-venv workstream, which "
-    "already owns this file's shape. Unmark when venv_dir publication no longer "
-    "renames a tree that may hold open handles."
-)
-def test_swap_in_new_venv_does_not_delete_tree_a_reader_still_has_open(tmp_path):
-    """The core contract: a reader with an already-open file descriptor
-    against the OLD tree keeps working after a rebuild swaps in a new one --
-    the old tree is never `rmtree`'d in place while that fd is live."""
-    venv_dir = tmp_path / ".coordinator-venv"
-    old_marker = venv_dir / "bin" / "python"
-    old_marker.parent.mkdir(parents=True)
-    old_marker.write_text("old-interpreter")
-
-    # A "reader" holds this file open across the swap, exactly as a live
-    # coordinator session would hold its interpreter's underlying file open
-    # for the duration of the process.
-    reader_fd = open(old_marker, "r")
-    try:
-        build_dir = ev._build_dir_for(venv_dir)
-        (build_dir / "bin").mkdir(parents=True)
-        (build_dir / "bin" / "python").write_text("new-interpreter")
-
-        ev._swap_in_new_venv(venv_dir, build_dir)
-
-        # The reader's already-open fd still reads the OLD content -- it was
-        # never truncated or unlinked out from under a live read.
-        reader_fd.seek(0)
-        assert reader_fd.read() == "old-interpreter"
-    finally:
-        reader_fd.close()
-
-    # The live path now resolves to the NEW tree for any fresh open.
-    assert (venv_dir / "bin" / "python").read_text() == "new-interpreter"
-    assert not build_dir.exists()
-
-
 def test_swap_in_new_venv_defers_reclaim_when_old_tree_delete_fails(tmp_path, monkeypatch):
-    """Windows-shaped failure mode: deleting the vacated old tree can raise
-    (sharing violation while a reader still has a handle open). The swap
-    itself must still land -- reclamation is deferred, not fatal."""
+    """Windows-shaped failure mode: rmtree-ing the vacated old GENERATION can
+    raise (sharing violation while a reader still has a handle open inside
+    it). The junction retarget itself must still land -- reclamation of the
+    old generation is deferred, not fatal."""
     venv_dir = tmp_path / ".coordinator-venv"
-    (venv_dir / "bin").mkdir(parents=True)
-    (venv_dir / "bin" / "python").write_text("old")
+    old_gen = ev._build_dir_for(venv_dir)
+    (old_gen / "bin").mkdir(parents=True)
+    (old_gen / "bin" / "python").write_text("old")
+    junction.create_junction(venv_dir, old_gen)
 
     build_dir = ev._build_dir_for(venv_dir)
     (build_dir / "bin").mkdir(parents=True)
@@ -1619,9 +1570,138 @@ def test_swap_in_new_venv_defers_reclaim_when_old_tree_delete_fails(tmp_path, mo
     ev._swap_in_new_venv(venv_dir, build_dir)  # must not raise
 
     assert (venv_dir / "bin" / "python").read_text() == "new"
-    stale = list(tmp_path.glob(".coordinator-venv.stale-*"))
-    assert len(stale) == 1
-    assert (stale[0] / "bin" / "python").read_text() == "old"
+    # The vacated generation is left in place under its OWN `.gen-*` name --
+    # there is no rename-to-`.stale-*` step any more, since the swap never
+    # touches the old generation's directory entry at all.
+    assert old_gen.exists()
+    assert (old_gen / "bin" / "python").read_text() == "old"
+
+
+def test_swap_in_new_venv_refuses_a_pre_junction_real_directory_and_names_the_remedy(tmp_path):
+    """A real pre-junction venv_dir is refused loudly, with the way out named.
+
+    REPLACES two tests retired 2026-08-20:
+    ``test_swap_in_new_venv_does_not_delete_tree_a_reader_still_has_open`` and
+    ``test_mutate_mode_rebuild_swap_survives_a_reader_holding_the_old_tree_open``.
+    They were the oracle for the RENAME-SWAP design and asserted that a rebuild
+    survives a reader holding the old tree open. That guarantee still holds and
+    is still asserted -- by
+    ``test_swap_in_new_venv_survives_reader_via_junction_retarget``, which
+    PASSES, where the rename-swap design could never pass it on Windows.
+
+    What the retired pair additionally required was converting a real,
+    non-empty, actively-open directory into a junction IN PLACE. Measured
+    2026-08-20 on a real Windows host: `os.rename` of the tree raises WinError 5
+    while a handle is open inside it, and `_winapi.CreateJunction` raises
+    WinError 183 when the link path is occupied -- so there is no stdlib route,
+    and bounded retry cannot help because the reader's handle is held for the
+    whole call. `fleet_env` solves the equivalent bootstrap with a dedicated
+    cutover chunk plus a runnable fallback script; this module, being break-glass
+    with no live caller and no venv on disk anywhere, refuses instead.
+
+    That refusal is this test's subject: it must FAIL, not silently do something
+    partial, and it must tell the operator what to do next.
+    """
+    venv_dir = tmp_path / ".coordinator-venv"
+    (venv_dir / "Lib").mkdir(parents=True)
+    (venv_dir / "Lib" / "held.py").write_text("x = 1\n", encoding="utf-8")
+    build_dir = tmp_path / ".coordinator-venv.gen-1-abcdef12"
+    build_dir.mkdir()
+
+    with pytest.raises(ev.EnsureVenvError) as excinfo:
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+    message = str(excinfo.value)
+    assert "neither absent nor a junction" in message
+    assert "Remove" in message and str(venv_dir) in message, (
+        "the refusal must name the remedy, not just the diagnosis"
+    )
+
+    assert venv_dir.is_dir(), "a refusal must not have mutated the tree"
+    assert (venv_dir / "Lib" / "held.py").is_file()
+    assert build_dir.is_dir()
+
+
+def test_swap_in_new_venv_survives_reader_via_junction_retarget(tmp_path):
+    """The steady-state guarantee: once venv_dir is ALREADY a junction, a
+    reader with an open fd against the currently-published generation
+    survives a real swap -- the swap never touches that generation's
+    directory entry, only the junction pointing at it.
+
+    This is the assertion the two retired rename-swap oracles carried, and
+    it PASSES here where their design could never pass it on Windows. What
+    they additionally demanded -- converting a real, actively-open directory
+    into a junction in place -- has no stdlib route, and is covered instead
+    as a specified refusal by
+    ``test_swap_in_new_venv_refuses_a_pre_junction_real_directory_and_names_the_remedy``.
+    """
+    venv_dir = tmp_path / ".coordinator-venv"
+    old_gen = ev._build_dir_for(venv_dir)
+    (old_gen / "bin").mkdir(parents=True)
+    old_marker = old_gen / "bin" / "python"
+    old_marker.write_text("old-interpreter")
+    junction.create_junction(venv_dir, old_gen)
+
+    reader_fd = open(venv_dir / "bin" / "python", "r")
+    try:
+        build_dir = ev._build_dir_for(venv_dir)
+        (build_dir / "bin").mkdir(parents=True)
+        (build_dir / "bin" / "python").write_text("new-interpreter")
+
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+        # The reader's already-open fd still reads the OLD content.
+        reader_fd.seek(0)
+        assert reader_fd.read() == "old-interpreter"
+    finally:
+        reader_fd.close()
+
+    # A fresh read through venv_dir resolves to the NEW generation -- the
+    # published target itself is build_dir, never renamed into venv_dir.
+    assert (venv_dir / "bin" / "python").read_text() == "new-interpreter"
+    assert build_dir.exists()
+    assert junction.is_junction(venv_dir)
+    assert junction.junction_target(venv_dir).resolve() == build_dir.resolve()
+    # The vacated old generation's reclaim was attempted WHILE the reader's
+    # handle was still open (inside the swap call above) and deferred, per
+    # the Windows sharing-violation path -- it is left in place under its
+    # own original name, exactly the shape _sweep_orphaned_swap_dirs
+    # reclaims on the next rebuild.
+    assert old_gen.exists()
+    assert (old_gen / "bin" / "python").read_text() == "old-interpreter"
+
+
+def test_swap_in_new_venv_restores_previous_junction_on_create_failure(tmp_path, monkeypatch):
+    """AC5-equivalent restore guard: if create_junction raises AFTER
+    remove_junction already succeeded, venv_dir must re-point at the
+    PREVIOUS generation rather than being left absent."""
+    venv_dir = tmp_path / ".coordinator-venv"
+    old_gen = ev._build_dir_for(venv_dir)
+    (old_gen / "bin").mkdir(parents=True)
+    (old_gen / "bin" / "python").write_text("old")
+    junction.create_junction(venv_dir, old_gen)
+
+    build_dir = ev._build_dir_for(venv_dir)
+    (build_dir / "bin").mkdir(parents=True)
+    (build_dir / "bin" / "python").write_text("new")
+
+    real_create_junction = junction.create_junction
+    calls = {"n": 0}
+
+    def flaky_create_junction(link, target):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated create_junction failure")
+        real_create_junction(link, target)
+
+    monkeypatch.setattr(ev.junction, "create_junction", flaky_create_junction)
+
+    with pytest.raises(OSError):
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+    # Restored to the PREVIOUS generation, never left absent.
+    assert junction.is_junction(venv_dir)
+    assert (venv_dir / "bin" / "python").read_text() == "old"
 
 
 def test_sweep_orphaned_swap_dirs_reclaims_leftover_build_and_stale_siblings(tmp_path):
@@ -1640,67 +1720,6 @@ def test_sweep_orphaned_swap_dirs_reclaims_leftover_build_and_stale_siblings(tmp
     assert not leftover_stale.exists()
     assert venv_dir.exists()
     assert unrelated.exists()  # not our prefix -- must survive the sweep
-
-
-@pytest.mark.pending_fix(
-    reason="WINDOWS PRODUCTION DEFECT, not a test defect: _swap_in_new_venv's "
-    "os.rename(venv_dir, stale_dir) raises WinError 5 when any plain-open file "
-    "handle exists inside the tree. POSIX moves the directory out from under an "
-    "open fd happily; Windows refuses. The assertion is RIGHT and is deliberately "
-    "left intact as the oracle for the fix -- weakening it would convert a real "
-    "platform defect into a green tick. Measured on a real Windows host: a "
-    "RUNNING interpreter inside the tree survives the rename (the loader opens exe "
-    "images with FILE_SHARE_DELETE), so the scenario the swap docstring frames as "
-    "load-bearing already works; what breaks is an ordinary open() -- an import or "
-    "config read landing mid-rebuild. The only mechanism that satisfies this test "
-    "on Windows is making venv_dir a junction/reparse point, which is an "
-    "architecture change: real-directory assumptions (is_dir/rmtree/realpath) recur "
-    "across ensure_venv.py, substrate.py, uninstall_legs.py, maximalist.py and "
-    "first_run.py, none audited for junction transparency, and junction CREATION "
-    "needs ctypes/DeviceIoControl plumbing this repo does not have. Bounded retry "
-    "cannot help: the handle is held for the whole call, so there is nothing "
-    "transient to wait out. Routed to the retire-coordinator-venv workstream, which "
-    "already owns this file's shape. Unmark when venv_dir publication no longer "
-    "renames a tree that may hold open handles."
-)
-def test_mutate_mode_rebuild_swap_survives_a_reader_holding_the_old_tree_open(
-    tmp_path, monkeypatch
-):
-    """End-to-end: a full `ensure_coordinator_venv` rebuild, with a reader's
-    fd held open against the pre-existing (unhealthy) venv the whole time,
-    completes successfully and never breaks that reader's already-open fd."""
-    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
-    settings_home_path = tmp_path / "settings-home"
-    venv_dir = settings_home_path / ".coordinator-venv"
-    (venv_dir / "bin").mkdir(parents=True)
-    (venv_dir / "bin" / "python").write_text("stale-marker")
-
-    reader_fd = open(venv_dir / "bin" / "python", "r")
-    try:
-        # False for the live venv_dir; True for the freshly-built `.build-*`
-        # tree, satisfying the pre-swap health probe so the swap is reached.
-        monkeypatch.setattr(
-            ev, "_venv_healthy", lambda py: ".build-" in py.parent.parent.name
-        )
-        monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
-
-        def fake_create(base_py, dst):
-            (dst / "bin").mkdir(parents=True)
-            (dst / "bin" / "python").write_text("fresh-marker")
-
-        monkeypatch.setattr(ev, "_create_venv", fake_create)
-        monkeypatch.setattr(ev, "_install_deps", lambda py, pkg: None)
-        monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
-
-        status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
-        assert status == "rebuilt"
-
-        reader_fd.seek(0)
-        assert reader_fd.read() == "stale-marker"  # untouched underneath the reader
-    finally:
-        reader_fd.close()
-
-    assert (venv_dir / "bin" / "python").read_text() == "fresh-marker"
 
 
 def test_mutate_mode_failed_rebuild_leaves_preexisting_tree_untouched_and_pin_unclearable(
@@ -1741,4 +1760,4 @@ def test_mutate_mode_failed_rebuild_leaves_preexisting_tree_untouched_and_pin_un
     # published build sibling was cleaned up.
     assert (venv_dir / "bin" / "python").read_text() == "still-here"
     assert registry["coordinator.python"] == str(venv_py)  # not cleared -- still resolves
-    assert not list(settings_home_path.glob(".coordinator-venv.build-*"))
+    assert not list(settings_home_path.glob(".coordinator-venv.gen-*"))

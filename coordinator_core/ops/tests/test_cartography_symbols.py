@@ -586,3 +586,219 @@ def test_real_typescript_extraction_end_to_end(target_root):
 
     py_entry = next(e for e in result["files"] if e["path"] == "main.py")
     assert py_entry["functions"], "the Python path must be unaffected"
+
+
+# ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-20-symbols-emits-its-own-artifact.md): one test per
+# AC1-AC8 — the emit contract, the byte-identical default path, and the
+# coverage-surface survival onto the emitted artifact.
+# ---------------------------------------------------------------------------
+
+import asyncio
+import json
+
+from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
+from coordinator_core.ipc import dispatch_message
+from coordinator_core.ops.cartography_symbols import (
+    SCHEMA_VERSION,
+    SymbolsSchemaError,
+    check_schema_version,
+)
+
+_AC1_TOP_LEVEL_KEYS = {"files"}
+_AC1_ENTRY_KEYS = {"path", "module_docstring", "constants", "classes", "functions"}
+
+
+def test_ac1_default_reply_matches_pre_change_baseline_key_sets(target_root):
+    """AC1: with `emit` absent, the reply's top-level key set is exactly
+    `{"files"}` and each per-file entry's key set is exactly
+    `{path, module_docstring, constants, classes, functions}` — the shape
+    recorded in the plan's ## Problem section, captured by executing the op
+    at 9e66fe09982b (pre-C1). Python-only request: `app.ts` would route
+    through the (uninstalled here) foreign-extraction path and add
+    `unavailable`/`coverage_note` keys, which would test the degradation
+    path instead of this baseline."""
+    result = _cartography_symbols({"target_root": str(target_root), "files": ["main.py"]})
+
+    assert set(result.keys()) == _AC1_TOP_LEVEL_KEYS
+    for entry in result["files"]:
+        assert set(entry.keys()) == _AC1_ENTRY_KEYS
+
+
+def test_ac2_emit_reply_carries_symbols_path_and_counts_not_files(target_root):
+    """AC2: with `emit: true`, the reply carries `symbols_path` (rel-posix
+    to `target_root`) and `counts`, and does NOT carry `files`."""
+    result = _cartography_symbols(
+        {"target_root": str(target_root), "files": ["main.py"], "run_id": "ac2-run", "emit": True}
+    )
+
+    assert "symbols_path" in result
+    assert isinstance(result["symbols_path"], str)
+    assert Path(result["symbols_path"]).as_posix() == result["symbols_path"]
+    assert "counts" in result
+    assert "files" not in result
+
+
+def test_ac3_emitted_artifact_first_key_is_schema_version(target_root):
+    """AC3: the emitted artifact's first key is `schema_version`, equal to
+    the module's `SCHEMA_VERSION` — asserted by reading the written JSON
+    back off disk and checking both key order and value."""
+    result = _cartography_symbols(
+        {"target_root": str(target_root), "files": ["main.py"], "run_id": "ac3-run", "emit": True}
+    )
+
+    artifact_path = target_root / result["symbols_path"]
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+
+    assert next(iter(artifact.keys())) == "schema_version"
+    assert artifact["schema_version"] == SCHEMA_VERSION
+
+
+def test_ac4_check_schema_version_silent_on_known_raises_on_unknown_forward():
+    """AC4: `check_schema_version` raises on an unknown forward
+    schema_version and is silent on every known one — mirroring
+    cartography_chunk_table.check_schema_version's own contract."""
+    check_schema_version({"schema_version": SCHEMA_VERSION})  # silent — must not raise
+
+    with pytest.raises(SymbolsSchemaError):
+        check_schema_version({"schema_version": SCHEMA_VERSION + 1})
+
+
+def test_ac5_emitted_artifact_coverage_keys_are_superset_of_inline_reply(target_root, monkeypatch):
+    """AC5: the emitted artifact is never narrower in coverage than the
+    inline reply. Exercised via the dependency_absent degradation state
+    (chunk C4a) — `symbol_extract` is not installed in this test
+    environment (see module docstring), so this is the one degradation
+    state reachable without the optional dependency, per this plan's C2
+    body note. Emit and inline are run over the SAME input/fakes; the
+    emitted artifact's top-level keys (beyond the always-present `files`,
+    which the artifact also carries in full) must be a superset of the
+    inline reply's."""
+    import coordinator_core.ops.cartography_symbols as mod
+
+    def fake_build_foreign_symbols(root, files):
+        return {"unavailable": "symbol_extract not installed: No module named 'symbol_extract'"}
+
+    def fake_classify(result, census):
+        return [
+            {
+                "state": "dependency_absent",
+                "extension": None,
+                "language": None,
+                "detail": result["unavailable"],
+            }
+        ]
+
+    monkeypatch.setattr(mod, "build_foreign_symbols", fake_build_foreign_symbols)
+    monkeypatch.setattr(mod, "classify_foreign_symbol_coverage", fake_classify)
+
+    inline = _cartography_symbols({"target_root": str(target_root), "files": ["app.ts"]})
+    emitted_reply = _cartography_symbols(
+        {"target_root": str(target_root), "files": ["app.ts"], "run_id": "ac5-run", "emit": True}
+    )
+    artifact_path = target_root / emitted_reply["symbols_path"]
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+
+    assert "coverage_note" in inline
+    assert "coverage_note" in artifact
+    assert artifact["coverage_note"] == inline["coverage_note"]
+    # Superset check (AC5): every top-level key on the inline reply (other
+    # than "files" itself, which the artifact also carries verbatim) is
+    # present on the written artifact.
+    assert set(inline.keys()) - {"files"} <= set(artifact.keys())
+    assert artifact["files"] == inline["files"]
+    entry = artifact["files"][0]
+    assert entry["path"] == "app.ts"
+    assert entry.get("unavailable") is True
+
+
+def test_ac6_op_classified_mutating_with_dr208_affirmation():
+    """AC6: `cartography.symbols` is `OpClass.MUTATING` and carries a
+    DR-208 five-question affirmation citing its write site."""
+    assert OP_CLASSIFICATION["cartography.symbols"] is OpClass.MUTATING
+
+    import coordinator_core.authz.classification as classification_mod
+
+    source = Path(classification_mod.__file__).read_text(encoding="utf-8")
+    marker = "DR-208 five-question affirmation (citing ops/cartography_symbols.py)"
+    entry_line = '"cartography.symbols": OpClass.MUTATING,'
+
+    assert marker in source
+    assert entry_line in source
+    # The affirmation block precedes (and is therefore tied to) this op's
+    # own OP_CLASSIFICATION entry, not some other op's affirmation.
+    assert source.index(marker) < source.index(entry_line)
+
+
+def test_ac7_default_path_writes_no_file_under_target_root(target_root):
+    """AC7: with `emit` false or absent, no file is written anywhere under
+    `target_root` — snapshot the tree before/after, assert no new paths."""
+    before = {p for p in target_root.rglob("*") if p.is_file()}
+
+    _cartography_symbols({"target_root": str(target_root), "files": ["main.py"]})
+
+    after = {p for p in target_root.rglob("*") if p.is_file()}
+    assert after == before
+
+
+def test_ac8_sibling_repo_invocation_shape_exits_clean_through_dispatch_message(target_root):
+    """AC8, first arm: the sibling repos' existing invocation — params
+    exactly `{target_root, files}`, no `run_id`, no `emit` — still succeeds
+    and returns the AC1 shape when routed through the same JSON-RPC
+    dispatch path `coordinator_core.invoke.__main__` (and cc_invoke) use."""
+    sibling_shape_msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "cartography.symbols",
+        "params": {"target_root": str(target_root), "files": ["main.py"]},
+    }
+    response = asyncio.run(dispatch_message(sibling_shape_msg))
+
+    assert "error" not in response
+    result = response["result"]
+    assert set(result.keys()) == _AC1_TOP_LEVEL_KEYS
+    for entry in result["files"]:
+        assert set(entry.keys()) == _AC1_ENTRY_KEYS
+
+
+def test_ac8_emit_without_run_id_fails_loud_at_the_handler_boundary(target_root):
+    """AC8, second arm, AS THE HANDLER RAISES IT: `emit: true` without
+    `run_id` fails loud with a descriptive message naming `run_id`.
+
+    Asserted at BOTH boundaries: the handler (`_cartography_symbols`,
+    matching every other error-contract test in this module — e.g.
+    `test_missing_grammar_raises_loud`) and the JSON-RPC envelope that a
+    cross-repo caller actually reads.
+
+    The envelope assertion is the load-bearing one, and it only became
+    true when the handler started raising `CallerFacingValidationError`.
+    `ipc.py::_handler_exception_error` preserves an escaping exception's
+    own message ONLY when it carries the `caller_facing_validation`
+    duck-type marker; every unclassified `ValueError` is reduced to
+    `{"code": -32603, "message": "Internal error: ValueError"}`, which
+    tells a caller nothing about which param is wrong. C2 originally
+    asserted only `code != 0` here BECAUSE the descriptive form was not
+    reachable — correctly refusing to assert something false rather than
+    weakening the criterion silently.
+
+    Negative spec: do NOT downgrade this to a bare `code != 0` check, and
+    do NOT let the handler go back to raising a plain `ValueError` for
+    this case. A generic envelope on a param this op newly requires is
+    exactly the defect `CallerFacingValidationError` was introduced to
+    close (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-silently.md)."""
+    with pytest.raises(ValueError, match="run_id"):
+        _cartography_symbols(
+            {"target_root": str(target_root), "files": ["main.py"], "emit": True}
+        )
+
+    emit_without_run_id_msg = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "cartography.symbols",
+        "params": {"target_root": str(target_root), "files": ["main.py"], "emit": True},
+    }
+    error_response = asyncio.run(dispatch_message(emit_without_run_id_msg))
+
+    assert "error" in error_response
+    assert error_response["error"]["code"] != 0
+    assert "run_id" in error_response["error"]["message"]

@@ -87,7 +87,7 @@ class TestFanInCardinalityJudgmentPointFires:
         assert "DEL-PRIMARY-1" in jp["evidence"]
         assert "SURVIVES" in jp["evidence"]
         assert "DEL-EXTRA-1" in jp["evidence"]
-        assert "dropped" in jp["evidence"]
+        assert "carried onto the successor's deliverable_ids" in jp["evidence"]
 
     def test_new_point_id_never_appears_in_any_depends_on(self, tmp_path, monkeypatch):
         _init_repo(tmp_path)

@@ -16,8 +16,13 @@ Coverage:
   (c) query_quoted_roadmap_id — equality filter matches quoted YAML values
       (AC2, anti-read_fm_field regression: ``roadmap_id: "claude-klabauter-strangler-2026-07-04"``
       must match the clause ``roadmap_id=claude-klabauter-strangler-2026-07-04``)
-  (d) unknown_type_loud_exit — unknown type → SystemExit(1) + stderr naming valid types
-      (fail-loud, trips PATH-fallback; inverted from old AC2 fail-open)
+  (d) unknown_type_caller_facing — unknown type → CallerFacingValidationError,
+      which ipc renders as -32602 INVALID_PARAMS with the message (bad type +
+      valid set) intact. Still fail-loud; what changed 2026-08-20 is that the
+      loudness now reaches the CALLER. The prior form (stderr write +
+      SystemExit(1)) needed a bound stream and produced an unclassified
+      -32603, so it was silent in a warm-pool worker and uninformative
+      everywhere else.
   (e) no_repo_root_empty_payload — repo_root=None → empty payload, no raise
   (f) full --where grammar operators — !=, <, >, <=, >=, in(...), bare-field
       exists, byte-parity per freeze-query-records-grammar.md Surface 3 (T4d-g1c)
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -45,7 +51,7 @@ from coordinator_core.testing.doe_root import resolve_doe_root
 # ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
-from coordinator_core.ipc import _REGISTRY
+from coordinator_core.ipc import _REGISTRY, CallerFacingValidationError
 from coordinator_core.ops.records_query import (
     _ARCHIVE_GLOB_FOR_TYPE,
     _LEGACY_PROSE_ENTRY_LINE_RE,
@@ -277,40 +283,77 @@ class TestQueryQuotedRoadmapId:
 class TestEmptyPayloadGuards:
     """Guard: unknown type → loud exit (trips PATH-fallback); absent repo_root → empty payload."""
 
-    def test_unknown_type_exits_loud_paths(self, tmp_repo, capsys):
-        """Unknown type causes SystemExit(1) with stderr naming valid types (format=paths)."""
+    def test_unknown_type_raises_caller_facing_paths(self, tmp_repo):
+        """Unknown type is CALLER error, and the caller must be able to read that.
+
+        Was `sys.stderr.write` + `SystemExit(1)` until 2026-08-20. Both halves
+        were CLI reflexes inside an op handler: the write needs a bound stream
+        (a warm-pool worker has none — see
+        `coordinator_core/warm/server.py::_bind_null_std_streams`), and
+        `SystemExit` is unclassified to the dispatcher, so the caller got
+        `-32603 Internal error: SystemExit` naming neither the bad type nor the
+        valid set. Example-cockpit-repo-em could not tell a typo'd `--type` from a
+        real internal fault and triaged the wrong one.
+        """
         # Review: F10 — pass a real git_dir so only the unknown-type guard fires,
         # not the absent-repo_root guard.
         git_dir, _worktree = tmp_repo
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(CallerFacingValidationError) as exc_info:
             _run(
                 _handler(
                     params={"type": "nonexistent-type", "format": "paths"},
                     repo_root=git_dir,
                 )
             )
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "nonexistent-type" in captured.err, (
-            "stderr must name the unknown type"
-        )
-        assert "Valid" in captured.err, (
-            "stderr must list valid types"
-        )
+        message = str(exc_info.value)
+        assert "nonexistent-type" in message, "the error must name the unknown type"
+        assert "Valid" in message, "the error must list valid types"
 
-    def test_unknown_type_exits_loud_json(self, capsys):
-        """Unknown type causes SystemExit(1) with stderr naming valid types (format=json)."""
-        with pytest.raises(SystemExit) as exc_info:
+    def test_unknown_type_raises_caller_facing_json(self):
+        """Same guard, `format=json` — the format must not change the classification."""
+        with pytest.raises(CallerFacingValidationError) as exc_info:
             _run(
                 _handler(
                     params={"type": "nonexistent-type", "format": "json"},
                     repo_root=None,
                 )
             )
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "nonexistent-type" in captured.err
-        assert "Valid" in captured.err
+        message = str(exc_info.value)
+        assert "nonexistent-type" in message
+        assert "Valid" in message
+
+    def test_unknown_type_reaches_the_caller_as_invalid_params(self):
+        """The end of the wire, not just the raise site.
+
+        `CallerFacingValidationError` is only worth raising because `ipc`
+        translates it to `-32602` with the message intact. Asserting the raise
+        alone would leave that translation untested from this side, and the
+        whole defect was a message that did not survive to the caller.
+        """
+        from coordinator_core.ipc import INVALID_PARAMS, _handler_exception_error
+
+        error = _handler_exception_error(
+            CallerFacingValidationError("records.query: unknown type: 'sizing'. Valid: a, b.")
+        )
+        assert error["code"] == INVALID_PARAMS
+        assert "unknown type: 'sizing'" in error["message"]
+
+    def test_unknown_type_guard_survives_a_stdio_less_worker(self, monkeypatch):
+        """The warm-worker condition, pinned at this op rather than only centrally.
+
+        With `sys.stderr` at `None` the old guard raised `AttributeError` before
+        it could name anything. A raise needs no stream, which is the property
+        that makes this the right shape for handler code.
+        """
+        monkeypatch.setattr(sys, "stdout", None)
+        monkeypatch.setattr(sys, "stderr", None)
+        with pytest.raises(CallerFacingValidationError):
+            _run(
+                _handler(
+                    params={"type": "nonexistent-type", "format": "paths"},
+                    repo_root=None,
+                )
+            )
 
     def test_unknown_param_key_exits_loud_with_did_you_mean(self, tmp_repo, capsys):
         """Kebab-case `older-than` → SystemExit(1) + stderr naming the key and

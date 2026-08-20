@@ -104,7 +104,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.sibling_fact import resolve_leg
 
 _PROG = "relocation-ledger"
@@ -184,8 +184,8 @@ def default_ledger_path() -> Path:
     """Resolve the tracked ledger file's on-disk path via claude-klabauter's own root
     -- self-resolution, not sibling I/O, so this does not go through
     `sibling_fact` (that module resolves OTHER repos' roots; claude-klabauter
-    resolving its own tree is `coordinator_claude_klabauter_root`'s job)."""
-    root = Path(coordinator_claude_klabauter_root())
+    resolving its own tree is `coordinator_engine_root`'s job)."""
+    root = Path(coordinator_engine_root())
     for part in _LEDGER_REL_PARTS:
         root = root / part
     return root

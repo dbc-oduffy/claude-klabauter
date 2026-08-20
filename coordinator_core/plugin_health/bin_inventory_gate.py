@@ -97,7 +97,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Set
 
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.plugin_health import relocation_ledger as rl
 
 _PROG = "bin-inventory-gate"
@@ -164,7 +164,7 @@ def default_inventory_path() -> Path:
     """Resolve the tracked inventory file's on-disk path via claude-klabauter's own
     root -- self-resolution, matching `relocation_ledger.default_ledger_path`'s
     own precedent (this repo resolving its own tree, not a sibling's)."""
-    root = Path(coordinator_claude_klabauter_root())
+    root = Path(coordinator_engine_root())
     for part in _INVENTORY_REL_PARTS:
         root = root / part
     return root

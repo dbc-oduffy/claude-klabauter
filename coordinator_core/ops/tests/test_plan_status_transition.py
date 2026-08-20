@@ -851,6 +851,7 @@ def _load_doc_new_cli():
     return mod
 
 
+@pytest.mark.real_home
 def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_path, capsys):
     """Flip a plan through `_stamp_implemented`'s own production call to
     `_run_cascade` (never a hand-built handler-dict) and assert the sizing it
@@ -863,6 +864,18 @@ def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_pat
     that production closes a sizing. It supplies `target_kind: 'sizing'`
     itself, a shape production never sends, so it proves the cascade
     mechanism works while saying nothing about whether anything reaches it.
+
+    ``real_home`` (2026-08-20): `_load_doc_new_cli()`'s production caller
+    mints `deliverable_id` by shelling out to `mint-deliverable-id.py`,
+    which resolves `CLAUDE_KLABAUTER_ROOT` via the real `~/.coordinator-claude-
+    settings` pointer file (`cc_invoke._resolve_claude_klabauter_root`). The suite's
+    autouse `_quarantine_real_home` fixture (coordinator_core/conftest.py)
+    redirects `HOME`/`USERPROFILE` to a throwaway dir with no such pointer,
+    so the mint subprocess fails closed and `_mint_deliverable_id_from_title`
+    silently degrades to `None` — this test needs the real, machine-
+    registered root to reach the mint helper it is actually exercising, and
+    is read-only against it (only tmp_path is written), so it qualifies for
+    the documented opt-out.
     """
     import yaml
 

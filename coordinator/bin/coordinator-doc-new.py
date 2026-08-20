@@ -1667,6 +1667,8 @@ def _scaffold_handoff(
     gated_open: str | None = None,
     gate_note: str | None = None,
     gated_predicate: str | None = None,
+    deliverable_ids: list[str] | None = None,
+    plan_ids: list[str] | None = None,
 ) -> str:
     """Generate validator-clean handoff frontmatter + canonical section skeleton.
 
@@ -1792,6 +1794,16 @@ def _scaffold_handoff(
     frontmatter is written (fail-loud, naming all legal values on mismatch) —
     defaults to 'infra' unchanged when not supplied (behavior-preserving default).
     Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-coordinator-doc-new-category-no-validation.md
+
+    deliverable_ids/plan_ids (--deliverable-ids/--plan-ids, repeatable, C1 plural
+    carriers) are pure carry-through on the same terms as additional_predecessors:
+    never resolved or minted here. Emitted as a YAML block sequence ONLY when the
+    corresponding flag was supplied at all (list is not None) — omitted entirely
+    (not `[]`, not `null`) when the flag was never passed. The 2+-distinct-id
+    threshold that decides WHEN a caller passes these flags is not decided here
+    (C2 owns it); this scaffolder emits exactly what it is handed.
+    The singular --deliverable-id emission above is untouched by this addition —
+    it does not route the singular value through these new flags.
 
     Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D2, C3b
     Spec backlink (handoff_id): docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md § C1
@@ -1989,6 +2001,19 @@ def _scaffold_handoff(
     if _extra_preds:
         lines.append("additional_predecessors:")
         lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in _extra_preds)
+    # deliverable_ids/plan_ids (C1, plural carriers) are pure carry-through, same
+    # posture as additional_predecessors: never resolved or minted here. Emitted
+    # ONLY when the flag was supplied at all — not on `[]`, not on `None` — because
+    # the schema reserves `[]` for a future "explicitly zero" distinction and
+    # treats absent/null alike as "no plural set authored". The 2+ threshold is
+    # NOT decided here (C2 owns it); this scaffolder emits exactly what it is
+    # handed, unconditionally.
+    if deliverable_ids is not None:
+        lines.append("deliverable_ids:")
+        lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in deliverable_ids)
+    if plan_ids is not None:
+        lines.append("plan_ids:")
+        lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in plan_ids)
     _authoring_session = _resolve_session_id()
     if _authoring_session != "em-unknown":
         lines.append(f"authoring_session: {_yaml_quote(_authoring_session)}")
@@ -4746,6 +4771,38 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--deliverable-ids",
+        dest="deliverable_ids",
+        action="append",
+        default=None,
+        metavar="ID",
+        help=(
+            "(handoff ONLY) Repeatable, one deliverable_id per occurrence — NOT "
+            "comma-joined (a comma-split would re-introduce the quoting seam the "
+            ".cmd launcher already mangles). Carried as-is verbatim: never resolved "
+            "or minted here. Emitted as a YAML block sequence (deliverable_ids:) "
+            "ONLY when this flag is supplied at all; omitted entirely (not [], not "
+            "null) when not supplied, matching additional_predecessors' optional-omit "
+            "convention. Distinct from the singular --deliverable-id, which this flag "
+            "does not route through."
+        ),
+    )
+    parser.add_argument(
+        "--plan-ids",
+        dest="plan_ids",
+        action="append",
+        default=None,
+        metavar="ID",
+        help=(
+            "(handoff ONLY) Repeatable, one plan_id per occurrence — NOT "
+            "comma-joined, same rationale as --deliverable-ids. Carried as-is "
+            "verbatim: never resolved or minted here. Emitted as a YAML block "
+            "sequence (plan_ids:) ONLY when this flag is supplied at all; omitted "
+            "entirely (not [], not null) when not supplied, matching "
+            "additional_predecessors' optional-omit convention."
+        ),
+    )
+    parser.add_argument(
         "--predecessor-id",
         dest="predecessor_id",
         default=None,
@@ -5493,11 +5550,31 @@ def main() -> None:
             _bad_flag = "--summary"
         elif args.gated_open:
             _bad_flag = "--gated-open"
-        else:
+        elif args.gate_note:
             _bad_flag = "--gate-note"
+        else:
+            _bad_flag = "--gated-predicate"
         print(
             f"coordinator-doc-new: {_bad_flag} is not accepted for --type {doc_type}. "
-            "--summary, --gated-open, and --gate-note are handoff-only fields.",
+            "--summary, --gated-open, --gate-note, and --gated-predicate are "
+            "handoff-only fields.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --deliverable-ids/--plan-ids are handoff-scoped plural carriers (C1),
+    # same posture as --additional-predecessor/--summary above: refused
+    # fail-loud for every other --type rather than silently dropped (same
+    # cross-repo/inbox/2026-08-18-example-retrieval-repo-em-doc-new-silently-drops-
+    # type-inapplicable-flags.md precedent).
+    if (args.deliverable_ids or args.plan_ids) and doc_type != "handoff":
+        if args.deliverable_ids:
+            _bad_flag = "--deliverable-ids"
+        else:
+            _bad_flag = "--plan-ids"
+        print(
+            f"coordinator-doc-new: {_bad_flag} is not accepted for --type {doc_type}. "
+            "--deliverable-ids and --plan-ids are handoff-only fields.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -5519,6 +5596,8 @@ def main() -> None:
             gated_open=args.gated_open,
             gate_note=args.gate_note,
             gated_predicate=args.gated_predicate,
+            deliverable_ids=args.deliverable_ids,
+            plan_ids=args.plan_ids,
         )
     elif doc_type == "recovery":
         content = _scaffold_recovery(

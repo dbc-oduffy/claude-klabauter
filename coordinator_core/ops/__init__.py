@@ -226,6 +226,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ceremony.session_instructions", 'registers "ceremony.session_instructions"'),
     ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
+    ("coordinator_core.ops.record_history", 'registers "records.history"'),
     (
         "coordinator_core.ops.handoff_columns_query",
         'registers "handoff.columns" (2026-08-11 pull-surface-four-columns C3 — '
@@ -452,6 +453,42 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "tracker.mint_person" (sat-06 C4, DR-241-affirmed producer-'
         "facing op that mints a person through the sovereign-tracker person "
         "registry, per-repo, no cross-tree write)",
+    ),
+    (
+        "coordinator_core.ops.tracker.assign",
+        'registers "tracker.assign" (the first production caller of the '
+        "item_person edge — writes/retracts through tracker_entities' "
+        "existing emit_item_person_added/emit_item_person_retracted, "
+        "per-repo, no cross-tree write)",
+    ),
+    (
+        "coordinator_core.ops.tracker.render_status",
+        'registers "tracker.render_status" (sat-06 C3 — the read-only status '
+        "projection, classified MUTATING by DR-241's 2026-08-20 amendment as "
+        "conservative-by-construction rather than descriptive)",
+    ),
+    (
+        "coordinator_core.ops.tracker.completion_policy",
+        'registers "tracker.assert_code_complete" (C11 — DR-318 D2\'s routed '
+        "op surface for sat-04's tracker_completion_policy; wraps "
+        "emit_code_complete_assert, a real write via tracker_transitions."
+        "emit_transition, classified MUTATING on the merits)",
+    ),
+    (
+        "coordinator_core.ops.tracker.push_suggestion",
+        'registers "tracker.push_suggestion" (sat-06 C4 — the producer-'
+        "facing write op: resolves ownership via tracker_holder."
+        "write_root_for, then routes a local write through the store's own "
+        "append entrypoint "
+        "vs a DR-338 delivery envelope committed into a peer repo's "
+        "cross-repo/inbox/, never a direct cross-tree open())",
+    ),
+    (
+        "coordinator_core.ops.tracker.fold_ownership",
+        'registers "tracker.fold_ownership" (a read op answering who owns/is '
+        "assigned one item — folds item_person retractions and person_merged "
+        "resolution via tracker_projection, classified MUTATING per DR-241's "
+        "2026-08-20 conservative-by-construction amendment)",
     ),
     ("coordinator_core.ops.priority_set", 'registers "priority.set"'),
     ("coordinator_core.ops.priority_drain", 'registers "priority.drain"'),

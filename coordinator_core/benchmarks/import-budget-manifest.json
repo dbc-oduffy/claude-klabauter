@@ -40,7 +40,7 @@
         "coordinator_core/lifecycle.py",
         "coordinator_core/liveness.py",
         "coordinator_core/locked_write.py",
-        "coordinator_core/claude_klabauter_root.py",
+        "coordinator_core/engine_root.py",
         "coordinator_core/op_scopes.py",
         "coordinator_core/session/__init__.py",
         "coordinator_core/session/autonomous_sentinel.py",

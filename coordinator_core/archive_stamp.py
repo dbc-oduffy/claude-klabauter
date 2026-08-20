@@ -158,12 +158,20 @@ from typing import Optional, Sequence
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.git import repo_root as _repo_root_seam
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.frontmatter.primitives import (
+    insert_fm_field,
+    read_fm_field,
+    read_fm_field_unquoted,
+    rebuild,
+    split_frontmatter,
+)
 from coordinator_core.liveness import cs_claim_holder_live
+from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops import plan_status_transition
 from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.ops.handoff_stamp import _SHIPPED_IN_KIND_ENUM
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.person_resolver import resolve_operating_person
 from coordinator_core.reconcile.commit_reality import (
     _DEFAULT_MECHANICAL_DENYLIST,
     _is_mechanical_subject,
@@ -1610,6 +1618,54 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _record_human_claimant_best_effort(target_path: str, worktree: Path) -> None:
+    """C8: additive claim-time stamp of the OPERATING HUMAN, beside
+    `picked_up_by`/`claimed_by` (which keep carrying the SESSION id,
+    unchanged — liveness and the claim ledger still key on those).
+
+    PM ruling, 2026-08-19 (one-box-one-human): the claiming session resolves
+    the operating human at the moment it claims, exactly as C4 does at the
+    creation door (`resolve_operating_person().get("github")`, the same
+    resolution `minted_by` uses) — authored, never derived, and never
+    resolved inside a sweep. Do NOT use `machine_resolver.compute_contributor`
+    here — that is a differently-derived, differently-shaped "contributor
+    slug" (env var / machine-registry / email-derived, with an "unknown"
+    fallback) that is NOT this axis's value space; see this chunk's brief.
+
+    Best-effort and non-fatal, mirroring `_record_pickup_best_effort`'s own
+    contract: an unresolvable operating human, or any write failure, leaves
+    `human_claimant` unset rather than aborting the caller's claim. Inserted
+    ONLY when absent — a claim record already carrying `human_claimant` (e.g.
+    idempotent re-claim by the same session) is left untouched, never
+    re-stamped or overwritten.
+    """
+    slug = resolve_operating_person().get("github")
+    if not slug:
+        return
+    try:
+        repo_root = _git_common_dir(worktree)
+        if repo_root is None:
+            return
+
+        def _mutate(old_text: str) -> str:
+            split = split_frontmatter(old_text)
+            if split is None:
+                raise MutateAbort(f"no parseable YAML frontmatter in {target_path}")
+            fm_text = split.fm_text
+            if read_fm_field(fm_text, "human_claimant") is not None:
+                return old_text
+            fm_text = insert_fm_field(fm_text, "human_claimant", slug, "picked_up_by", numeric_quoting=True)
+            return rebuild(split, fm_text)
+
+        locked_rmw(Path(target_path), _mutate, repo_root=repo_root)
+    except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
+        print(
+            f"_record_human_claimant_best_effort: WARNING — human_claimant not "
+            f"recorded for {target_path} ({exc}); non-fatal",
+            file=sys.stderr,
+        )
+
+
 def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> None:
     """C2 write-moment: best-effort, non-fatal session.record_pickup — mirrors the
     oracle's foreign-repo-bleed fix (repo-relative handoff path, never absolute)."""
@@ -1761,6 +1817,7 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
 
     _record_pickup_best_effort(handoff_path, worktree, sid)
     _record_session_goal_best_effort(handoff_path, worktree, sid)
+    _record_human_claimant_best_effort(handoff_path, worktree)
     return result if return_result else 0
 
 
@@ -1807,6 +1864,8 @@ def cs_claim_memo_stamp(memo_path: str, *, return_result: bool = False) -> "int 
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_claim_memo_stamp: {result.get('error', 'unknown error')}", file=sys.stderr)
+    elif worktree is not None:
+        _record_human_claimant_best_effort(memo_path, worktree)
     return result if return_result else rc
 
 

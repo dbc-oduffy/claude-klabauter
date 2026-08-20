@@ -224,6 +224,20 @@ def test_contained_path_extended_length_prefix_on_root_only_still_contained(tmp_
     assert not str(result).startswith("\\\\?\\")
 
 
+def _has_extended_length_prefix(path: Path) -> bool:
+    """True when `path` still carries a Windows extended-length prefix, in
+    either spelling.
+
+    `\\\\?\\` is the raw form straight off Windows; `//?/` is the
+    forward-slash-normalized form `strip_extended_length_prefix` also accepts
+    (its own docstring names both). A test that hard-codes one spelling is
+    asserting which host it runs on, so the prefix-survives negative is
+    checked through this instead.
+    """
+    text = str(path)
+    return text.startswith("\\\\?\\") or text.startswith("//?/")
+
+
 def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch):
     r"""UNC form (`\\?\UNC\<server>\<share>\...`) is the other prefix shape
     `strip_extended_length_prefix` recognizes — collapses to the bare UNC
@@ -260,7 +274,20 @@ def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch):
     result = contained_path(candidate, [root])
 
     assert result is not None
-    assert str(result) == prefixed_unc_candidate
+    # Compared as PATHS, not as strings. The invariant under test is "the
+    # returned path is the caller's resolved path with its extended-length
+    # prefix intact" -- not any particular separator spelling. `WindowsPath`
+    # canonicalizes `/` to `\\` at construction, so a `str(...) ==` against
+    # this test's forward-slash literal can never hold on Windows no matter
+    # what `contained_path` returns; it was asserting the host's separator
+    # convention, not the guard's behaviour. `Path.__eq__` normalizes per
+    # platform, so this reads the same on both.
+    assert result == Path(prefixed_unc_candidate)
+    # Load-bearing negative, kept explicit and separator-agnostic: the
+    # extended-length prefix must SURVIVE. Normalization inside
+    # `contained_path` is comparison-only; a stripped return value would
+    # still fail here, which is the whole point of this assertion.
+    assert _has_extended_length_prefix(result)
 
 
 def test_contained_path_genuinely_long_windows_path_return_value_keeps_prefix(tmp_path, monkeypatch):
@@ -287,4 +314,8 @@ def test_contained_path_genuinely_long_windows_path_return_value_keeps_prefix(tm
     result = contained_path(candidate, [root])
 
     assert result is not None
-    assert str(result) == long_form
+    # Path-compared for the same reason as the UNC test above: `long_form` is
+    # built with a `/` separator before the final component, which
+    # `WindowsPath` rewrites to `\\` on construction.
+    assert result == Path(long_form)
+    assert _has_extended_length_prefix(result)

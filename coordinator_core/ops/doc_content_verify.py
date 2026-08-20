@@ -545,9 +545,9 @@ def _sibling_roots() -> List[Path]:
     """
     roots: List[Path] = []
     try:
-        from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+        from coordinator_core.engine_root import coordinator_engine_root
 
-        roots.append(Path(coordinator_claude_klabauter_root()))
+        roots.append(Path(coordinator_engine_root()))
     except Exception:
         pass
     try:

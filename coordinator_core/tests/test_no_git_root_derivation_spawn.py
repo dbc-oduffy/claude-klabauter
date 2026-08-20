@@ -93,7 +93,7 @@ goes through `coordinator_core.git.repo_root`). Whatever the estimate's
 origin, this collector's frozenset is the ground truth the gate reads, not
 the plan's number.
 
-`coordinator_core/claude_klabauter_root.py` and `coordinator/bin/lib/git_hook_
+`coordinator_core/engine_root.py` and `coordinator/bin/lib/git_hook_
 install.py` -- named by this chunk's brief as PEER-PLAN-HELD and never to
 be converted here -- were checked directly and carry ZERO root-derivation
 `rev-parse` spawn sites of this collector's shape; both resolve their repo
@@ -117,7 +117,7 @@ NEGATIVE-SPEC:
     legitimately spawn `git rev-parse` themselves as the seam's own
     ground-truth path), not a call site this collector protects sites
     from bypassing.
-  - `claude_klabauter_root.py` and `git_hook_install.py` are NOT converted here even
+  - `engine_root.py` and `git_hook_install.py` are NOT converted here even
     though named by the dispatch brief -- see the paragraph above; they
     are held by a peer plan and, independently, carry no hits of this
     collector's shape to convert.
@@ -392,8 +392,8 @@ def test_collector_silent_on_own_conversion_target() -> None:
     assert hits == []
 
 
-def test_claude_klabauter_root_and_git_hook_install_carry_no_hits() -> None:
-    """`claude_klabauter_root.py` and `git_hook_install.py` are named by this
+def test_engine_root_and_git_hook_install_carry_no_hits() -> None:
+    """`engine_root.py` and `git_hook_install.py` are named by this
     collector's dispatch brief as peer-plan-held and never to be converted
     here. Pins that they genuinely have nothing of this collector's shape
     to convert (see module docstring) -- if a future edit introduces a
@@ -402,7 +402,7 @@ def test_claude_klabauter_root_and_git_hook_install_carry_no_hits() -> None:
     holds and the peer-plan boundary needs re-examination, not a silent
     frozenset addition."""
     for repo_rel in (
-        "coordinator_core/claude_klabauter_root.py",
+        "coordinator_core/engine_root.py",
         "coordinator/bin/lib/git_hook_install.py",
     ):
         path = _REPO_ROOT / repo_rel

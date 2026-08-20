@@ -713,6 +713,63 @@ class TestWriteMechanics:
         content = Path(result["handoff_path"]).read_text(encoding="utf-8")
         assert "predecessor: none" in content
 
+    def test_human_assignee_stamped_end_to_end_via_creation_door(self, tmp_path, monkeypatch):
+        """C4 (the-tracker-names-an-owner): the second creation door stamps
+        `human_assignee` from the SAME `resolve_operating_person()` call already
+        used for `minted_by` -- caller-supplied hand-down, no second resolution."""
+        import coordinator_core.ops.queue_scaffold_baton as qsb
+
+        monkeypatch.setattr(
+            qsb,
+            "resolve_operating_person",
+            lambda: {"github": "dbc-example-operator", "contributor_slug": "example-operator"},
+        )
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        path = _seed_debt(repo_root, "assignee-present.yaml", title="Assignee Present")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-assignee-present")
+        result = _run(
+            _handler(
+                {
+                    "entry": {"id": "assignee-present", "path": _rel(repo_root, path), "title": "Assignee Present"},
+                    "title": "Assignee Present Baton",
+                    "origin_plan_id": None,
+                    "origin_goal_id": None,
+                },
+                repo_root=common_dir,
+            )
+        )
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert "human_assignee: example-operator" in content
+
+    def test_human_assignee_absent_via_creation_door_when_resolver_unresolvable(
+        self, tmp_path, monkeypatch
+    ):
+        """Unresolvable identity omits the key entirely -- no null, no sentinel --
+        matching the existing `minted_by` contract."""
+        import coordinator_core.ops.queue_scaffold_baton as qsb
+
+        monkeypatch.setattr(qsb, "resolve_operating_person", lambda: {})
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        path = _seed_debt(repo_root, "assignee-absent.yaml", title="Assignee Absent")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-assignee-absent")
+        result = _run(
+            _handler(
+                {
+                    "entry": {"id": "assignee-absent", "path": _rel(repo_root, path), "title": "Assignee Absent"},
+                    "title": "Assignee Absent Baton",
+                    "origin_plan_id": None,
+                    "origin_goal_id": None,
+                },
+                repo_root=common_dir,
+            )
+        )
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert "human_assignee" not in content
+
     def test_two_invocations_produce_unique_files(self, tmp_path, monkeypatch):
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)

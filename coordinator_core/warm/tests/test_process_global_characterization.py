@@ -35,7 +35,7 @@ from typing import Optional
 import pytest
 
 from coordinator_core import _hook_envelope
-from coordinator_core import claude_klabauter_root
+from coordinator_core import engine_root
 from coordinator_core.bash_guards import _blanket_disarm
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.contract import apply_base
@@ -642,16 +642,16 @@ def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Site 9: coordinator_core/claude_klabauter_root.py -- CLAUDE_KLABAUTER_ROOT process-memoization
+# Site 9: coordinator_core/engine_root.py -- CLAUDE_KLABAUTER_ROOT process-memoization
 # (staff-eng review finding 8; state/lessons/2026-07-06-tri-plane-read-ops-
 # must-process-memoize.yaml)
 # ---------------------------------------------------------------------------
 
 
-def test_claude_klabauter_root_gate_memo_keys_per_interleaved_session_root(
+def test_engine_root_gate_memo_keys_per_interleaved_session_root(
     monkeypatch, tmp_path
 ):
-    """C10 -- `coordinator_claude_klabauter_root_with_class`'s two-tier gate answer is
+    """C10 -- `coordinator_engine_root_with_class`'s two-tier gate answer is
     now a multi-entry `_GATE_MEMO` dict keyed on `(registry mtime pair,
     session root)`, not a single-slot last-write-wins pair
     (`_GATE_MEMO_KEY`/`_GATE_MEMO_VALUE` no longer exist). Under two sessions
@@ -659,7 +659,7 @@ def test_claude_klabauter_root_gate_memo_keys_per_interleaved_session_root(
     process, each root gets its own memo entry, so returning to a
     previously-seen root hits its own still-valid entry instead of re-
     running the full gate."""
-    claude_klabauter_root._reset_gate_memo()
+    engine_root._reset_gate_memo()
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
     calls = {"n": 0}
@@ -682,26 +682,26 @@ def test_claude_klabauter_root_gate_memo_keys_per_interleaved_session_root(
             return (current_session_root["root"], self.RESOLUTION_LIVE_WORKING_TREE)
 
     fake_shim = _FakeShim()
-    monkeypatch.setattr(claude_klabauter_root, "_load_shim", lambda: fake_shim)
+    monkeypatch.setattr(engine_root, "_load_shim", lambda: fake_shim)
 
     current_session_root["root"] = "/repo/session-a"
-    result_a1 = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    result_a1 = engine_root.coordinator_engine_root_with_class()
     assert calls["n"] == 1
     assert result_a1[0] == "/repo/session-a"
 
     # An interleaved dispatch for a DIFFERENT session/root arrives.
     current_session_root["root"] = "/repo/session-b"
-    result_b1 = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    result_b1 = engine_root.coordinator_engine_root_with_class()
     assert calls["n"] == 2
     assert result_b1[0] == "/repo/session-b"
 
     # Back to session A's root -- the per-root-keyed memo hits.
     current_session_root["root"] = "/repo/session-a"
-    result_a2 = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    result_a2 = engine_root.coordinator_engine_root_with_class()
 
     # FIXED BEHAVIOUR (C10): session A's second call hits its own still-valid
     # memo entry rather than recomputing -- no third gate walk.
     assert calls["n"] == 2
     assert result_a2[0] == "/repo/session-a"
 
-    claude_klabauter_root._reset_gate_memo()
+    engine_root._reset_gate_memo()

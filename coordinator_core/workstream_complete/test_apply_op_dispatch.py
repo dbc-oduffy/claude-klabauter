@@ -58,7 +58,7 @@ def test_resolve_cli_reaches_nothing_when_control_denies(
     stripped from ASSEMBLER_DISPATCHABLE must still be refused — the
     membership check in `_CLI_DISPATCH` alone must not be sufficient."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
-    with pytest.raises(ApplyBaseUnrecognizedDirective, match="may not dispatch"):
+    with pytest.raises(ApplyBaseUnrecognizedDirective, match="dispatchable set"):
         wsc_apply._resolve_cli("wsc-close")
 
 
@@ -70,7 +70,48 @@ def test_load_cli_module_denial_reaches_no_module_load(
     via `_resolve_cli`'s admission check before ever caching or executing
     a module — no partial dispatch side effect."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
-    wsc_apply._LOADED_MODULES.pop("wsc-close", None)
     with pytest.raises(ApplyBaseUnrecognizedDirective):
         wsc_apply._load_cli_module("wsc-close")
     assert "wsc-close" not in wsc_apply._LOADED_MODULES
+
+
+def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(
+    tmp_path,
+) -> None:
+    """F1 (cold review 2026-08-19): an un-admitted `cli`, sequenced SECOND
+    in a two-directive list, must fail the WHOLE run before any directive
+    dispatches — including the FIRST, individually-resolvable directive.
+    The un-admitted entry sitting second is the point: a first-position
+    variant would prove nothing about whole-run pre-validation, since a
+    per-directive halt would already refuse it."""
+    directives = [
+        {"id": "d1", "cli": "wsc-close", "args": []},
+        {"id": "d2", "cli": "not-a-real-cli-name", "args": []},
+    ]
+    exit_code, report = wsc_apply._execute_directives(directives, [], {}, repo_root=tmp_path)
+    assert exit_code == int(wsc_apply.WorkstreamApplyExitCode.DIRECTIVE_FAILED)
+    assert report["landed"] == []
+    assert report["blocked"] == []
+    assert report["failed"] and report["failed"][0]["id"] is None
+
+
+def test_admission_pre_pass_skips_an_already_satisfied_directive(monkeypatch, tmp_path) -> None:
+    """Slice-B review finding 1 (2026-08-20): an `already_satisfied` directive
+    cannot dispatch, so the pre-pass must not refuse the whole run over its
+    verb -- a replayed directive whose verb has since left
+    ASSEMBLER_DISPATCHABLE was refusing a run it could not have affected. A
+    gate-blocked directive is deliberately still checked: it dispatches the
+    moment its gate resolves."""
+
+    def _never_loads(cli_name: str):
+        raise AssertionError(f"{cli_name!r} must not dispatch in this test")
+
+    monkeypatch.setattr(wsc_apply, "_load_cli_module", _never_loads)
+    directives = [
+        {"id": "d1", "cli": "a-verb-that-left-the-allowlist", "args": [],
+         "already_satisfied": True},
+    ]
+    exit_code, report = wsc_apply._execute_directives(directives, [], {"repo_root": str(tmp_path)})
+
+    assert exit_code != int(wsc_apply.WorkstreamApplyExitCode.DIRECTIVE_FAILED)
+    assert report["landed"] == ["d1"]

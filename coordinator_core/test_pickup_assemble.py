@@ -6097,6 +6097,7 @@ class TestMultiArtifactBrief:
         assert rc == pa.EXIT_USAGE
         assert "cross-repo/inbox/m1.md" in err
 
+    @pytest.mark.real_home
     def test_real_bin_trampoline_subprocess_fans_out_both_not_first_only(self, tmp_path):
         # End-to-end regression through the ACTUAL CLI binary (not just the
         # in-process `main()`): confirms the bulleted PM-shaped paste yields
@@ -6117,6 +6118,13 @@ class TestMultiArtifactBrief:
             capture_output=True,
             text=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        # Assert the exit status before parsing: the trampoline reports a
+        # resolution failure on stderr and exits non-zero with EMPTY stdout,
+        # which json.loads renders as a bare "Expecting value: line 1 column 1"
+        # naming neither the command nor its reason.
+        assert proc.returncode == 0, (
+            f"pickup-assemble exited {proc.returncode}; stderr: {proc.stderr}"
         )
         payload = json.loads(proc.stdout)
 

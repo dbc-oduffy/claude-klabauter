@@ -25,14 +25,14 @@ Dual-anchor resolution (b644d5a9's executable-surface relocation moved
 Claude-klabauter's own tree): DoE-side surfaces (``templates/``, ``whoami/``,
 ``schemas/``) still resolve off ``CLAUDE_PLUGIN_ROOT``; claude-klabauter-side surfaces
 (``coordinator/lib/``, ``coordinator/bin/``) resolve off the claude-klabauter root via
-``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()`` — never by
+``coordinator_core.engine_root.coordinator_engine_root()`` — never by
 ``__file__``-walking or a hardcoded sibling-repo name.
 
 Env:
     CLAUDE_PLUGIN_ROOT — required; the coordinator plugin install root
         (DoE-side surfaces only — see dual-anchor note above).
     CLAUDE_KLABAUTER_ROOT        — optional; short-circuits claude-klabauter-root resolution
-        (see ``coordinator_core.claude_klabauter_root`` for the full resolution chain).
+        (see ``coordinator_core.engine_root`` for the full resolution chain).
     CLAUDE_HOME        — optional; $HOME substitute.
     COORDINATOR_NON_INTERACTIVE — optional; "1" suppresses the AppX stub
         deletion consent prompt.
@@ -100,7 +100,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.install.policy_gate import PolicyGateVerdict, evaluate_policy_gate
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
+from coordinator_core.engine_root import coordinator_engine_root_with_class
 
 # Generator-provenance declaration (generator_provenance.py). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
@@ -408,7 +408,7 @@ def _resolve_bin_templates_manifest_root() -> Path:
     colocated = Path(__file__).resolve().parents[2]
     if (colocated / "coordinator" / "lib" / "bin-templates-manifest.py").is_file():
         return colocated
-    _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+    _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
     return Path(_claude_klabauter_root_str)
 
 
@@ -2560,7 +2560,7 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
     # in the claude-klabauter checkout, resolved via the canonical resolver, never by
     # __file__-walking or a hardcoded sibling name.
     try:
-        _claude_klabauter_root_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
         claude_klabauter_root = Path(_claude_klabauter_root_str)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
@@ -3395,7 +3395,7 @@ def _install_bin_resolvers(
     # derivation that already needed this same value. Purely a reordering:
     # same resolution, same failure mode, just paid once, earlier.
     try:
-        _claude_klabauter_root_resolved_str, _resolution_class = coordinator_claude_klabauter_root_with_class()
+        _claude_klabauter_root_resolved_str, _resolution_class = coordinator_engine_root_with_class()
         claude_klabauter_root_resolved = Path(_claude_klabauter_root_resolved_str)
     except RuntimeError as exc:
         raise SubstrateFatalError(f"install-substrate: {exc}") from exc

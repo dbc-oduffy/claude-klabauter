@@ -293,14 +293,14 @@ def test_preflight_agent_call_carries_git_commit_agent_type_and_union_pathspec()
     assert "do not stage or commit" in script.lower()
 
 
-def test_preflight_call_carries_active_model_sonnet():
+def test_preflight_call_carries_the_commit_agents_charter_model():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
     body_start = script.index("};\n") + len("};\n")  # end of the meta block
     preflight_block_start = script.index("Preflight: commit claimability", body_start)
     preflight_block_end = script.index("Wave 1", body_start)
     preflight_block = script[preflight_block_start:preflight_block_end]
-    assert "model: 'sonnet'" in preflight_block
+    assert "model: 'haiku'" in preflight_block
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +308,34 @@ def test_preflight_call_carries_active_model_sonnet():
 # ---------------------------------------------------------------------------
 
 
-def test_every_agent_call_carries_active_model_sonnet():
+def test_commit_and_test_calls_carry_charter_haiku_while_waves_stay_sonnet():
+    """A call-site ``model:`` OVERRIDES the named agent definition's own
+    frontmatter, so the emitted tier must track each agentType's charter
+    rather than one constant. ``git-commit-agent`` and ``test-runner`` are
+    haiku by charter; a blanket sonnet billed a Sonnet for mechanical staging
+    and test invocation. Negative spec for `_model_opt`.
+    """
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="tier check")
+
+    def opts_for(label):
+        idx = script.index(label)
+        return script[idx:script.index("})", idx)]
+
+    assert "model: 'haiku'" in opts_for("commit:wave-1")
+    assert "model: 'sonnet'" not in opts_for("commit:wave-1")
+
+    test_label_idx = script.find("agentType: 'coordinator:test-runner'")
+    assert test_label_idx != -1, "fixture must compose the terminal test phase"
+    assert "model: 'haiku'" in script[test_label_idx:script.index("})", test_label_idx)]
+
+    assert "model: 'sonnet'" in opts_for("work:"), (
+        "executor waves keep their charter sonnet - only the mechanical "
+        "agents drop to haiku"
+    )
+
+
+def test_every_agent_call_carries_an_active_model():
     waves = [
         [
             _wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
@@ -319,13 +346,13 @@ def test_every_agent_call_carries_active_model_sonnet():
     script = compose_script(waves, name="wf", description="model check")
 
     agent_call_count = len(_AGENT_CALL_RE.findall(script))
-    model_count = script.count("model: 'sonnet'")
+    model_count = script.count("model: '")
 
     assert agent_call_count >= 4  # 2 wave-1 + 1 wave-2 + 2 commit + 1 test
     assert model_count == agent_call_count, (
-        "every agent() call site must carry an active model: 'sonnet' — "
-        f"found {agent_call_count} agent() calls but {model_count} model: "
-        "'sonnet' opts entries"
+        "every agent() call site must carry an active model: - "
+        f"found {agent_call_count} agent() calls but {model_count} "
+        "model: opts entries"
     )
     assert "// model:" not in script  # never a commented placeholder
 
@@ -722,7 +749,7 @@ def test_non_reviewer_calls_still_carry_model_so_coverage_is_partial_not_zero():
         review_roster_fragment=_FIXTURE_ROSTER_FRAGMENT,
     )
 
-    assert "model: 'sonnet'" in script, (
+    assert "model: '" in script, (
         "an emitted script with zero modeled call sites would be DENIED by the "
         "Workflow model guard"
     )

@@ -295,11 +295,17 @@ def _bridge_deliverable_to_plan_scope(
     ``scope:``, filtered to bare-local paths. ``None`` when no such plan
     exists (the caller renders this as UNRESOLVABLE, never empty-neighbours)
     OR the matching plan itself carries no parseable ``scope:`` list."""
-    plans_dir = Path(_resolve_repo_root(cwd)) / _PLAN_DIR
+    repo_root = Path(_resolve_repo_root(cwd))
+    plans_dir = repo_root / _PLAN_DIR
     try:
         entries = sorted(os.scandir(plans_dir), key=lambda e: e.name)
     except OSError:
         return None
+
+    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
+
+    equivalence_map = load_equivalence_map(repo_root)
+    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
 
     for entry in entries:
         if not entry.name.endswith(".md"):
@@ -316,7 +322,9 @@ def _bridge_deliverable_to_plan_scope(
         if candidate is None:
             continue
         candidate = candidate.strip("'\"")
-        if candidate != deliverable_id:
+        # Join key canonicalized (C6b/AC11): a plan whose deliverable_id forked
+        # from the handoff's still bridges, rather than rendering UNRESOLVABLE.
+        if canonicalize(candidate, equivalence_map) != canonical_deliverable_id:
             continue
         try:
             fm = yaml.safe_load(split.fm_text)

@@ -178,7 +178,68 @@ def _dispatch_lint_frontmatter(args: list[str], repo_root: Path) -> dict[str, An
     )
     if proc.returncode != 0:
         raise RuntimeError(f"lint-frontmatter {args}: failed (rc={proc.returncode}): {proc.stderr.strip()}")
-    return {"cli": "lint-frontmatter", "args": args}
+    detail: dict[str, Any] = {"cli": "lint-frontmatter", "args": args}
+    detail.update(_check_session_ledger_body(args, repo_root))
+    return detail
+
+
+def _check_session_ledger_body(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """d2's body-section check (C1, pln-the-ledger-check-follows-the-body-
+    not-ju-e2da19 § AC1/AC2/AC3): every artifact `baton_assemble` scaffolds
+    is a handoff-family, ledger-owing kind (`coordinator-doc-new.py`'s C3
+    docstring: "all handoff-family kinds are ledger-owing, including
+    goal-seed") so, unlike C3's write-time refusal, this needs no
+    per-kind gate -- reaching d2 at all already implies ledger-owing.
+
+    Deliberately REPORTS rather than refuses (Anti-scope: "Warn vs refuse
+    at d2 is not the executor's call") -- a missing block is surfaced in
+    the returned detail dict and on stderr, never raised, so d2 stays
+    green and `apply()`'s transaction is unaffected either way (AC3).
+
+    Reads `--file <path>` straight off d2's own args (the same target
+    `lint-frontmatter` just validated) rather than threading `d1_out`
+    through a second parameter -- one value, one seam. Degrades to
+    "checked: False" (no raise) if the path is absent from `args` or
+    the file cannot be read/parsed, matching `_assert_scaffold_content_valid`'s
+    own fail-open convention for infra trouble rather than turning a read
+    glitch into a false report. Unlike that convention, the degrade path
+    prints its own distinct stderr note: a stderr-only observer must not
+    read "not checked" as "checked, heading present" -- both were silent
+    before this.
+    """
+    try:
+        file_idx = args.index("--file")
+        rel_path = args[file_idx + 1]
+    except (ValueError, IndexError):
+        print(
+            "warning: session ledger check skipped -- no --file arg found. Verdict is unmeasured, not passing.",
+            file=sys.stderr,
+        )
+        return {"session_ledger_checked": False}
+
+    try:
+        from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+        from coordinator_core.session_ledger import body_has_session_ledger_heading
+
+        content = (repo_root / rel_path).read_text(encoding="utf-8")
+        parsed = parse_frontmatter(content)
+        body = parsed.get("body") or ""
+    except Exception:  # noqa: BLE001 -- fail-open on read/parse trouble, never block d2 on it
+        print(
+            f"warning: session ledger check skipped for {rel_path} -- read/parse failed. Verdict is unmeasured, not passing.",
+            file=sys.stderr,
+        )
+        return {"session_ledger_checked": False}
+
+    if body_has_session_ledger_heading(body):
+        return {"session_ledger_checked": True, "session_ledger_heading_present": True}
+
+    print(
+        f"warning: {rel_path} has no '## Session Ledger' heading -- chain LoE "
+        "reads as zero. Add the block before close.",
+        file=sys.stderr,
+    )
+    return {"session_ledger_checked": True, "session_ledger_heading_present": False}
 
 
 def _dispatch_session_claim_cli(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -889,6 +950,142 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     return {"cli": "handoff.supersede_predecessor", "args": args, "result": result}
 
 
+def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """d1's replay-only fallback (C3, plan 2026-08-19-unified-baton-inherits-
+    every-parents-material). `_build_directives`'s d1 is `already_satisfied`
+    (skipped) on a replay whose `--out` target already exists on disk -- see
+    that function's own comment for why -- so the `--deliverable-ids`/
+    `--plan-ids` flags it would otherwise have passed to `coordinator-doc-new`
+    never reach an argv, and this run's resolved union is silently dropped.
+    This directive is the idempotent, frontmatter-only stamp that closes that
+    gap WITHOUT re-running d1 (an unconditional overwrite that would destroy
+    the existing successor's content) and WITHOUT a `yaml.safe_load`/
+    `yaml.dump` round-trip (which would reflow every unrelated key).
+
+    Args shape mirrors d1's own: `--file <path>` (required) plus zero or more
+    repeated `--deliverable-ids=<id>` / `--plan-ids=<id>` flags -- the same
+    flag names `_build_directives` already builds for d1, so `_build_directives`
+    can hand this directive the identical per-id loop output.
+
+    ANCHORED INSERT ONLY. Appends each present key (`deliverable_ids`,
+    `plan_ids`) at the end of the frontmatter block via
+    `insert_fm_field_raw(fm, key, raw_block, after_key=None)` -- never anchored
+    to a sibling nested-block key, because `insert_fm_field_raw`'s anchor regex
+    matches only the ANCHOR's own key line (`^key:$`), and anchoring a second
+    insert to an already-inserted BLOCK key (e.g. `deliverable_ids`) would land
+    the second key's line inside the first key's own sequence, not after it.
+    Anchoring to a single-line sibling key would be safe but is unnecessary
+    here: append-at-end matches `coordinator-doc-new.py`'s own emission order
+    (`deliverable_ids`/`plan_ids` land near the end of its scaffolded frontmatter,
+    see `coordinator-doc-new.py` lines ~2011-2019).
+
+    MEASURED: `insert_fm_field_raw` composes `f'{key}: {raw_value}'`; a
+    block-sequence `raw_value` (leading `\\n`) therefore lands as `key: \\n`
+    -- a trailing space before the newline. Stripped below via a single
+    literal replace, and never reintroduced.
+
+    IDEMPOTENCY: `read_fm_nested_field` (not `read_fm_field`, which returns
+    `''` for a block sequence -- a silent wrong answer) reads the key's
+    current on-disk entries; equal to this run's resolved union means no
+    write at all (mutate returns `old_text` unchanged, so `locked_rmw` skips
+    the write entirely -- no mtime churn on a converged replay). A present
+    key whose entries do NOT match this run's resolved union raises
+    (surfaced as `RuntimeError`) rather than silently overwriting one
+    real recorded union with a different one -- the same conflict posture
+    `handoff.archive_transition`'s supersede mutate closure takes on
+    `continued_into`.
+    """
+    from coordinator_core.frontmatter.primitives import (
+        insert_fm_field_raw,
+        read_fm_nested_field,
+        rebuild,
+        split_frontmatter,
+    )
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    file_rel: Optional[str] = None
+    deliverable_ids: list[str] = []
+    plan_ids: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--file":
+            file_rel = args[i + 1] if i + 1 < len(args) else None
+            i += 2
+            continue
+        if arg.startswith("--deliverable-ids="):
+            deliverable_ids.append(arg.split("=", 1)[1])
+        elif arg.startswith("--plan-ids="):
+            plan_ids.append(arg.split("=", 1)[1])
+        i += 1
+
+    if not file_rel:
+        raise RuntimeError("baton-stamp-carried-ids: --file is required")
+
+    target = Path(file_rel)
+    target_abs = target if target.is_absolute() else repo_root / target
+
+    def _quote(value: str) -> str:
+        # Matches `coordinator-doc-new.py`'s own always-double-quote
+        # convention for these two fields (`memo_compose._yaml_quote`'s
+        # shape) -- so a replay-stamped entry is not visually distinguishable
+        # from one d1 authored directly.
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    _state: dict[str, Any] = {"stamped": []}
+
+    def mutate(old_text: str) -> str:
+        _state["stamped"] = []
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(
+                f"baton-stamp-carried-ids: no parseable YAML frontmatter in {target_abs}"
+            )
+        fm = split.fm_text
+        for key, values in (("deliverable_ids", deliverable_ids), ("plan_ids", plan_ids)):
+            if not values:
+                continue
+            existing_block = read_fm_nested_field(fm, key)
+            if existing_block is not None:
+                import yaml as _yaml
+
+                parsed = _yaml.safe_load(f"{key}:\n{existing_block}") or {}
+                existing_entries = list(parsed.get(key) or [])
+                if existing_entries == list(values):
+                    continue
+                raise MutateAbort(
+                    f"baton-stamp-carried-ids: {target_abs} already carries "
+                    f"{key}={existing_entries!r}, which does not match this "
+                    f"run's resolved union {list(values)!r} -- refusing to "
+                    "silently overwrite; resolve by hand"
+                )
+            raw_block = "\n" + "\n".join(f"  - {_quote(v)}" for v in values)
+            fm = insert_fm_field_raw(fm, key, raw_block, after_key=None)
+            # Strip the trailing space `insert_fm_field_raw` leaves after the
+            # key name on a block-sequence insert -- see this function's
+            # MEASURED docstring note.
+            fm = fm.replace(f"{key}: \n", f"{key}:\n", 1)
+            _state["stamped"].append(key)
+
+        if not _state["stamped"]:
+            return old_text
+        return rebuild(split, fm)
+
+    try:
+        locked_rmw(target_abs, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        raise RuntimeError(f"baton-stamp-carried-ids: file not found: {target_abs}")
+    except LockTimeout as exc:
+        raise RuntimeError(
+            f"baton-stamp-carried-ids: timed out waiting for file lock on {target_abs}: {exc}"
+        )
+    except MutateAbort as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    return {"cli": "baton-stamp-carried-ids", "args": args, "stamped": _state["stamped"]}
+
+
 #: C5 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
 #: a-cli.md § C5 / § The discriminator for the mixed end state) -- checked
 #: live against `coordinator_core.authz.registration_quad._live_registry()`
@@ -933,6 +1130,7 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "handoff.author_fork": _dispatch_handoff_author_fork,
     "handoff.supersede_predecessor": _dispatch_handoff_supersede_predecessor,
     "handoff-carry-gate": _dispatch_handoff_carry_gate,
+    "baton-stamp-carried-ids": _dispatch_baton_stamp_carried_ids,
 }
 
 #: The op-named subset of `_CLI_DISPATCH` per the C5 discriminator decision
@@ -1417,7 +1615,28 @@ def _execute_directives(
     `ASSEMBLER_DISPATCHABLE`'s default-deny lookup on for any directive
     `_migrate_op_named_directives` rewrote to carry an `op` key. Harmless for
     a run with no `op`-keyed directive at all (every `cli`-keyed directive
-    still resolves via `resolve_cli`, which never consults `assembler_name`)."""
+    still resolves via `resolve_cli`, which never consults `assembler_name`).
+
+    F2 (cold review 2026-08-19): a directive carrying a `cli` key for one
+    of `_OP_MIGRATED_VERBS` is refused here, before `apply_base.
+    execute_directives` even sees it -- `apply_base.resolve_cli` (the seam
+    a `cli`-keyed directive resolves through) never calls
+    `assert_dispatchable`, so a migrated verb arriving `cli`-keyed (a
+    second call site that skips `_migrate_op_named_directives`, or a
+    resumed/replayed decision object read from disk with the original
+    `cli` key) would dispatch the same adapter with the admission control
+    silently absent. Returned as `APPLY_EXIT_TRANSPORT_FAIL` -- the same
+    whole-run-refusal shape `apply_base.execute_directives` itself returns
+    for an `UnrecognizedDirective` from its own pre-validation pass, never
+    a raised exception out of this wrapper (its caller, `apply()`, expects
+    an `(exit_code, report)` tuple here, not a propagating exception).
+    Self-contained to this module -- no `apply_base` change."""
+    stray = [d.get("id") for d in directives if d.get("cli") in _OP_MIGRATED_VERBS]
+    if stray:
+        return apply_base.APPLY_EXIT_TRANSPORT_FAIL, {
+            "error": f"{stray!r} carry a 'cli' key for an op-migrated verb; emit 'op'",
+            "landed": [],
+        }
     return apply_base.execute_directives(
         directives,
         judgment_points,

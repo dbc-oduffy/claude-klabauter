@@ -303,7 +303,7 @@ class TestChainWidening:
             "coordinator_core.meta_repo_identity.is_meta_repo", lambda _root: True
         )
         monkeypatch.setattr(
-            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root",
+            "coordinator_core.engine_root.coordinator_engine_root",
             lambda: str(central_root),
         )
 

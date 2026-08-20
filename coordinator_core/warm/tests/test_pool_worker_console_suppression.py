@@ -16,11 +16,23 @@ THE INVARIANT THAT MATTERS MOST HERE. Under `pythonw` a worker's
 `ops/fleet/_common.py::_setup_error`, on the refusal path of every fleet op.
 A code-reviewer flagged (2026-08-19, slice B) that this must raise
 `AttributeError` and turn a structured `exit_code: 1` refusal into an opaque
-INTERNAL_ERROR. It does not, and the reason is worth pinning rather than
-re-deriving: CPython's `print` treats a `file` argument of `None` as "use
-`sys.stdout`", and when that is `None` too it returns without writing. The
-suppression fix rests entirely on that, so it is tested here rather than
-trusted.
+INTERNAL_ERROR. For the `print` form it does not, and the reason is worth
+pinning rather than re-deriving: CPython's `print` treats a `file` argument of
+`None` as "use `sys.stdout`", and when that is `None` too it returns without
+writing.
+
+THE REVIEWER WAS RIGHT ABOUT THE OTHER FORM, AND THIS FILE MISSED IT.
+`print(..., file=sys.stderr)` survives a `None` stream; `sys.stderr.write(...)`
+does not — it reaches for an attribute on `None` and raises. This file pinned
+only the form that happens to be safe and read as clearing the whole class, so
+the suppression fix shipped resting on a claim that covered maybe half its call
+sites: 138 `sys.std*.write`/`.flush()` sites across 34 op modules in
+`coordinator_core/ops/` were live and unprotected. Example-cockpit-repo-em hit one
+2026-08-20 — `query-records --type plan` returned `-32603 Internal error:
+AttributeError`, warm-only, cold-clean, emptying the plans leg of their store
+build. `_bind_null_std_streams` now restores writable sinks in every worker, so
+the invariant this file pins is no longer "a `None` stream is harmless" (it is
+not) but "a worker never has one".
 
 Negative-spec:
     - Does NOT spawn a pool. The end-to-end proof (a detached parent spawning
@@ -80,6 +92,78 @@ def test_stderr_print_is_a_silent_no_op_when_stdio_is_none(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     print("this must not raise", file=sys.stderr, flush=True)
+
+
+def test_stderr_write_DOES_raise_when_stdio_is_none(monkeypatch) -> None:
+    """The counter-invariant, pinned so nobody re-derives the safe half alone.
+
+    `print(file=sys.stderr)` tolerates a `None` stream (test above); reaching
+    for the stream OBJECT does not. This is the shape that broke
+    `records.query --type plan` for example-cockpit-repo-em, and pinning it here is
+    what makes `_bind_null_std_streams` a fix rather than a belt-and-braces.
+    """
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    with pytest.raises(AttributeError):
+        sys.stderr.write("this DOES raise\n")
+
+
+def test_worker_init_binds_writable_streams_when_stdio_is_none(monkeypatch) -> None:
+    """A pool worker never starts with a `None` stream.
+
+    Drives `_bind_null_std_streams` directly rather than `_worker_process_init`,
+    which additionally starts a parent watchdog thread and imports the whole op
+    registry — neither is this test's subject.
+    """
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    server._bind_null_std_streams()
+
+    assert sys.stdout is not None and sys.stderr is not None
+    # The exact failing call from the cockpit report, on the restored streams.
+    sys.stderr.write("records.query: anomalous plan filename excluded: INDEX.md\n")
+    sys.stderr.flush()
+
+
+def test_binding_leaves_an_already_bound_stream_alone(monkeypatch) -> None:
+    """Negative-spec: a worker WITH real stdio keeps it.
+
+    Redirecting a live operator-visible stream to devnull would trade an
+    AttributeError for silently swallowed diagnostics — a worse bug, and an
+    easy one to introduce by dropping the `is None` guard.
+    """
+    import io
+
+    real_out, real_err = io.StringIO(), io.StringIO()
+    monkeypatch.setattr(sys, "stdout", real_out)
+    monkeypatch.setattr(sys, "stderr", real_err)
+    server._bind_null_std_streams()
+
+    assert sys.stdout is real_out
+    assert sys.stderr is real_err
+
+
+def test_worker_init_calls_the_binder_before_anything_else(monkeypatch) -> None:
+    """Ordering is the whole point: `_preload_op_registry` imports 55 op modules,
+    any of which may write a diagnostic at import time. Binding after the
+    preload would leave exactly the window this fix exists to close.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(server, "_bind_null_std_streams", lambda: calls.append("bind"))
+    monkeypatch.setattr(server, "_preload_op_registry", lambda: calls.append("preload"))
+
+    class _StubThread:
+        def __init__(self, *a, **kw) -> None:
+            pass
+
+        def start(self) -> None:
+            calls.append("watchdog")
+
+    monkeypatch.setattr(server.threading, "Thread", _StubThread)
+    server._worker_process_init()
+
+    assert calls[0] == "bind", f"binder did not run first: {calls}"
+    assert "preload" in calls
 
 
 def test_fleet_setup_error_still_returns_its_envelope_with_no_stdio(monkeypatch) -> None:

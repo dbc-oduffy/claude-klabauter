@@ -151,7 +151,7 @@ from coordinator_core.frontmatter.baton_class import (
     BatonClassSchemaError,
     baton_class as _baton_class,
 )
-from ._shared import normalize_frontmatter
+from ._shared import human_axis_vendored, normalize_frontmatter
 from .handoff_columns import (
     PREDECESSOR_DEFAULT,
     _DEPLOYMENT_RECOGNIZED,
@@ -382,6 +382,13 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     records: list[dict] = []
     malformed: list[dict] = []
 
+    # C9 activation switch (module docstring / _shared.human_axis_vendored): resolved
+    # once per collect() call, not per record — same posture as the priority ledger load
+    # below. While this is False, `human_assignee`/`human_claimant` never reach a
+    # record's dict at all (see the gated block below), and the pydantic model's default
+    # is stripped back out post-dump — the byte-identity leg of AC7 depends on both.
+    _human_axis_on = human_axis_vendored()
+
     # Review: code-reviewer -- Finding 1 (28a20f28) -- baton_class.py's `_load_mapping`
     # deliberately re-reads+re-parses the vendored schema on every call and its own
     # docstring tells a tight-loop caller to cache at its own boundary instead of
@@ -486,7 +493,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         # emitted pair would come to disagree on a record whose `kind:` is absent.
         emitted_kind = _jq_or(fm.get("kind"), "session-handoff")
 
-        records.append({
+        record = {
             "repo": ctx.repo_name,
             "coordinator_root_path": ".",
             "title": fm["title"],
@@ -553,7 +560,17 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             # until that chunk lands.
             "producer": _jq_or(fm.get("producer"), None),
             "_shipped_in_sha": shipped_sha_raw,
-        })
+        }
+        # Human axis (C9), activation-gated (module docstring). `human_assignee` and
+        # `human_claimant` are OPTIONAL nullable HandoffSummary fields (entities/
+        # summaries.py) — while the switch is off, the keys never reach this dict at
+        # all (the model's own default=None supplies them for validation below), so
+        # the post-model_dump pop further down and this omission agree on one shape:
+        # no new key on the wire until cockpit has vendored it.
+        if _human_axis_on:
+            record["human_assignee"] = _jq_or(fm.get("human_assignee"), None)
+            record["human_claimant"] = _jq_or(fm.get("human_claimant"), None)
+        records.append(record)
 
     # Review: code-reviewer -- Finding 2 (28a20f28) -- surface the baton_class degrade
     # (if any) as an observable diagnostic rather than a silent None on every record;
@@ -675,6 +692,14 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             # back out rather than emit a schema-invalid explicit null.
             if dumped.get("content_hash") is None:
                 dumped.pop("content_hash", None)
+            # Human axis (C9), activation-gated: strip the model's own default=None
+            # materialization for human_assignee/human_claimant whenever the switch is
+            # off, so a flag-OFF emission carries neither key at all — the behavioural
+            # leg of AC7 (byte-identical to today's shape) depends on this pop, not
+            # just on the raw-dict omission above.
+            if not _human_axis_on:
+                dumped.pop("human_assignee", None)
+                dumped.pop("human_claimant", None)
             validated.append(dumped)
         except ValidationError as exc:
             malformed.append({

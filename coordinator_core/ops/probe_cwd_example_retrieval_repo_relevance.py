@@ -108,7 +108,7 @@ def _resolve_home_base() -> Tuple[str, Optional[str]]:
     subprocess env inherited by the changelog/completion bash-oracle parity
     harnesses, which then failed CLAUDE_KLABAUTER_ROOT resolution). Mirrors the
     deliberate no-export choice documented in
-    ``coordinator_core.claude_klabauter_root``'s negative-spec.
+    ``coordinator_core.engine_root``'s negative-spec.
     """
     test_home = os.environ.get("COORDINATOR_TEST_HOME")
     if test_home:

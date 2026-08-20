@@ -428,7 +428,8 @@ def assert_dispatchable(assembler_name: str, verb: str) -> None:
     allowed = ASSEMBLER_DISPATCHABLE.get(assembler_name, frozenset())
     if verb not in allowed:
         raise UnrecognizedDirective(
-            f"{verb!r} is a registered op that {assembler_name!r} may not dispatch"
+            f"{verb!r} is not in {assembler_name!r}'s dispatchable set. "
+            "Add it to ASSEMBLER_DISPATCHABLE in coordinator_core/authz/dispatchable.py."
         )
 
 
@@ -458,7 +459,7 @@ def resolve_op(
     directive executes, never degrading to inert or skip-and-continue."""
     handler = dispatch_table.get(op_name)
     if handler is None:
-        raise UnrecognizedDirective(f"unrecognized directive op {op_name!r}")
+        raise UnrecognizedDirective(f"no adapter for directive op {op_name!r} in this table")
     assert_dispatchable(assembler_name, op_name)
     return handler
 

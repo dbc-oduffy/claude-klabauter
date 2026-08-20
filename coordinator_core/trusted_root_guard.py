@@ -19,7 +19,7 @@ anchors:
      ``${CLAUDE_HOME:-$HOME}/.claude/.doe-root``,
   3. the registry-resolved claude-klabauter root (2026-07-22 — the settings-home
      machine-local registry key ``repos.claude_klabauter``, the same anchor
-     ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()`` resolves for
+     ``coordinator_core.engine_root.coordinator_engine_root()`` resolves for
      in-process callers), with the durable ``<settings-home>/machine-local/
      .claude-klabauter-root`` pointer file retained as a fallback rung. Absence of the
      ``repos.claude_klabauter`` key degrades cleanly to "this anchor
@@ -179,7 +179,7 @@ def _claude_klabauter_root(env: dict) -> str:
     """Read the registry-resolved claude-klabauter root, registry-first with a durable
     pointer-file fallback — same shape as ``_doe_root`` above, minus the
     legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter has no such
-    legacy sentinel; ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()``
+    legacy sentinel; ``coordinator_core.engine_root.coordinator_engine_root()``
     is the in-process analog for callers that also want the ``CLAUDE_KLABAUTER_ROOT``
     env-var rung and the machine-local CLI subprocess rung — this function
     stays subprocess-free like ``_doe_root``, so a missing/absent registry

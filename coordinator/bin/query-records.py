@@ -7,7 +7,7 @@ regression this plan's C1/D1 gate exists to prevent — see
 `docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md` § A2).
 This trampoline services the DoE-used flag subset only — `--type --where
 --since --older-than --format --status --root --list-schemas
---include-archived --include-body` — over the
+--include-archived --include-body --limit` — over the
 already-working `coordinator/bin/lib/records_query.py` transport
 (`route_mutation` -> `coordinator_core.invoke records.query`, per that
 module's own docstring). It deliberately does NOT reimplement the query
@@ -49,10 +49,20 @@ an explicit "not ported — claude-klabauter BIG_PORT" message — NEVER a silen
 (`--all-repos` is `render-handoff-tracker`'s flag, not this oracle's — not
 serviced or fail-louded here; confirmed via grep it never appears on a
 query-records fence.) Any OTHER flag not in this file's supported set (e.g.
-`--unattached`, `--limit`, `--sort` — real query-records.js flags, but not in
-this chunk's DoE-used flag list) is left to argparse's own "unrecognized
+`--unattached`, `--sort` — real query-records.js flags, but not in this
+chunk's DoE-used flag list) is left to argparse's own "unrecognized
 arguments" rejection, which is already fail-loud by construction — no bespoke
 handling needed for flags outside both named lists.
+
+`--limit` was named in that unsupported list until 2026-08-20 while the parser
+below has accepted and forwarded it since 2026-08-14 (`632ce6533`). A reader
+who trusted this docstring over the code got the wrong answer, and one did:
+Claude-klabauter-em told example-cockpit-repo-em on 2026-08-19 that the flag "is not exposed
+on our trampoline" and "caps at the op's default 50", filed it, and offered to
+build it. Measured through this CLI, `--limit 0` returns 258 lesson rows,
+`--limit 7` returns 7, and omitting it returns 50 — the flag was never broken.
+A docstring that contradicts the parser twelve lines below it is worse than no
+docstring, because it reads as the authority.
 
 Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A2
 Prior node implementation: coordinator/bin/query-records.js (kept on disk

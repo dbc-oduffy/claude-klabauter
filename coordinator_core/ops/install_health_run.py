@@ -28,8 +28,8 @@ Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
   (`_trusted_root`, below) — that check validates the invoking harness root
   itself, a DoE-side concept unrelated to where leg content lives. Every
   claude-klabauter-side surface (the drop-in directory, and the `seed-skill-overrides`
-  helper lookup) instead resolves off `coordinator_claude_klabauter_root()`
-  (`coordinator_core.claude_klabauter_root`) — the canonical claude-klabauter-root resolver
+  helper lookup) instead resolves off `coordinator_engine_root()`
+  (`coordinator_core.engine_root`) — the canonical claude-klabauter-root resolver
   (env var -> settings-home pointer file -> machine-local registry -> raise,
   never silent). This is the same dual-anchor split already applied
   elsewhere in this port (e.g. `coordinator_core.install.substrate`'s
@@ -81,7 +81,7 @@ shape — see that module for the full anchor list). Untrusted root is
 fail-loud (exit 1), matching the original script's
 own `--mode=fail-loud` call — install-health-run.sh is a REQUIRED install
 step (`coordinator/scripts/install-maximalist.py` calls it via `run_required`),
-not an advisory hook. `coordinator_claude_klabauter_root()` failing to resolve is likewise fail-loud
+not an advisory hook. `coordinator_engine_root()` failing to resolve is likewise fail-loud
 (exit 1) — every leg below needs a resolved claude-klabauter root to run correctly
 (the seed-skill-overrides helper lookup and the residual glob directory both
 live under it), so an unresolvable root cannot be silently downgraded to
@@ -116,7 +116,7 @@ from coordinator_core.install._shared import env_overlay
 from coordinator_core.install.shell_rc_guard import write_path_entry_guard_blocks
 from coordinator_core.install.wrapper_onto_path import _on_path as _bin_dst_on_path
 from coordinator_core.launchable import resolve_by_shebang
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.ops import check_windows_ssh_binary, ensure_python3_exe_shim, seed_skill_overrides
 from coordinator_core.trusted_root_guard import is_trusted as _trusted_root
 from coordinator_core.win_portability import no_console_passthrough_kwargs
@@ -316,7 +316,7 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
         return 1
 
     try:
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        claude_klabauter_root = coordinator_engine_root()
     except RuntimeError as exc:
         print(f"ERROR: install-health-run.py: {exc}", file=sys.stderr)
         return 1
@@ -365,7 +365,7 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
             failures += 1
 
     # Residual extensibility hook for a hypothetical FUTURE foreign drop-in
-    # with no native peer — resolved off claude_klabauter_root (coordinator_claude_klabauter_root()),
+    # with no native peer — resolved off claude_klabauter_root (coordinator_engine_root()),
     # NOT plugin_root: this directory is claude-klabauter's own tree
     # (<claude_klabauter_root>/coordinator/bin/install-health/), not a DoE-side
     # surface, per the dual-anchor split (see module docstring).

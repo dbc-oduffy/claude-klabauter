@@ -71,10 +71,10 @@ def test_journal_records_successful_rebuild(tmp_path, _journal_env, monkeypatch)
     settings_home_path.mkdir()
 
     # False for the live venv_dir (forces the rebuild path); True for the
-    # freshly-built `.build-*` tree (satisfies the pre-swap health probe so
+    # freshly-built `.gen-*` tree (satisfies the pre-swap health probe so
     # this test still exercises the successful-rebuild leg).
     monkeypatch.setattr(
-        mod, "_venv_healthy", lambda venv_py, *a, **k: ".build-" in venv_py.parent.parent.name
+        mod, "_venv_healthy", lambda venv_py, *a, **k: ".gen-" in venv_py.parent.parent.name
     )
     monkeypatch.setattr(mod, "_resolve_ml_cli", lambda *a, **k: None)
     monkeypatch.setattr(mod, "_set_pin", lambda *a, **k: None)
@@ -132,10 +132,10 @@ def test_rebuild_not_swapped_when_build_fails_health_probe(tmp_path, _journal_en
     assert venv_dir.is_dir()
     assert marker.read_text(encoding="utf-8") == "pre-existing tree"
 
-    # No leftover `.build-*` sibling from the discarded (unhealthy) tree.
+    # No leftover `.gen-*` sibling from the discarded (unhealthy) tree.
     leftovers = [
         p for p in settings_home_path.iterdir()
-        if p.name.startswith(".coordinator-venv.build-")
+        if p.name.startswith(".coordinator-venv.gen-")
     ]
     assert leftovers == []
 

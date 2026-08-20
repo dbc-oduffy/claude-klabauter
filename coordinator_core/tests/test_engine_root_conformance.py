@@ -7,8 +7,8 @@ Drives BOTH:
   - the shim's single implementation,
     ``coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::
     resolve_claude_klabauter_root_with_class()``, and
-  - C4a's wrapper, ``coordinator_core.claude_klabauter_root::
-    coordinator_claude_klabauter_root_with_class()``,
+  - C4a's wrapper, ``coordinator_core.engine_root::
+    coordinator_engine_root_with_class()``,
 against every declarative case in DoE's fixture, and asserts both agree
 with each other and with the fixture's ``expect``.
 
@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 import pytest
 
-import coordinator_core.claude_klabauter_root as claude_klabauter_root_mod
+import coordinator_core.engine_root as engine_root_mod
 from coordinator_core.win_portability import no_console_creationflags
 
 _TIMEOUT_SECS = 5.0
@@ -61,7 +61,7 @@ def _machine_local_get(key: str) -> Optional[str]:
 
     Fail-open: a missing binary, a nonzero exit, or a timeout all resolve
     to ``None`` (treated as "unregistered" by the caller) rather than
-    raising — this mirrors ``coordinator_core.claude_klabauter_root``'s own Rung 2
+    raising — this mirrors ``coordinator_core.engine_root``'s own Rung 2
     disposition for the same CLI.
     """
     ml_bin = shutil.which("machine-local")
@@ -166,14 +166,14 @@ _NO_ENV_RUNGS_REASON_TEMPLATE = (
     "'.claude-klabauter-root' sentinel only. DoE's _resolve_live_working_tree "
     "(coordinator/hooks/scripts/_engine_root.py:527-560) checks "
     "LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, CLAUDE_KLABAUTER_ROOT) first. C4a's wrapper "
-    "(coordinator_core/claude_klabauter_root.py::coordinator_claude_klabauter_root_with_class) adds a "
+    "(coordinator_core/engine_root.py::coordinator_engine_root_with_class) adds a "
     "CLAUDE_KLABAUTER_ROOT-only short-circuit rung, not REPO_CLAUDE_KLABAUTER. Out of scope for "
     "this chunk per its own brief — do not add env rungs to force conformance."
 )
 
 #: Case IDs that fail ONLY because of the named env-rung divergence above.
 #: Root-caused by re-deriving each case's ladder path by hand against both
-#: `_resolve_claude_klabauter.py` and `claude_klabauter_root.py` — see this chunk's run-report
+#: `_resolve_claude_klabauter.py` and `engine_root.py` — see this chunk's run-report
 #: sidecar for the full per-case derivation.
 _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "no-published-engine-non-working-repo-resolves-live-tree": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
@@ -460,15 +460,15 @@ else:
                 )
 
         tokens = _prepare_case(case, tmp_path, monkeypatch)
-        claude_klabauter_root_mod._reset_gate_memo()
+        engine_root_mod._reset_gate_memo()
 
-        shim = claude_klabauter_root_mod._load_shim()
+        shim = engine_root_mod._load_shim()
 
         shim_actual = _invoke(
             shim.resolve_claude_klabauter_root_with_class, shim.ClaudeKlabauterResolutionError
         )
         wrapper_actual = _invoke(
-            claude_klabauter_root_mod.coordinator_claude_klabauter_root_with_class,
+            engine_root_mod.coordinator_engine_root_with_class,
             shim.ClaudeKlabauterResolutionError,
         )
 

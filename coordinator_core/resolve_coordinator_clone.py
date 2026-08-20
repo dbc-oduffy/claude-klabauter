@@ -58,7 +58,7 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
       the bottom of the bash file) — see Scope note above.
     - Does NOT reimplement the four composed peers this module is a SIBLING
       of (``coordinator_core.state_root``, ``coordinator_core.ops.
-      coordinator_doe_root``, ``coordinator_core.claude_klabauter_root``,
+      coordinator_doe_root``, ``coordinator_core.engine_root``,
       ``coordinator_core.doe_root_pointer``) — no second settings-home/
       state-root/clone resolver.
     - The pointer-file read (``_read_doe_root_pointer``) now DELEGATES to

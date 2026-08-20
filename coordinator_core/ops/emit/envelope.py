@@ -1393,7 +1393,7 @@ def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
     ``coordinator_state_root --central`` with
     no ``--subject``/``--artifact`` — Rule 4 (backward-compat default): resolves to
     ``$(_csr_claude_klabauter_root)/state``. The bash lib's own ``_csr_claude_klabauter_root`` is itself
-    documented as a native bridge onto ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root``
+    documented as a native bridge onto ``coordinator_core.engine_root.coordinator_engine_root``
     (see that lib's "Native bridge" comment) — this calls the SAME native resolver directly,
     in-process, retiring the ``bash -c "source ... && coordinator_state_root --central"``
     spawn entirely. Falls back to the pre-migration computed path (~/.claude/state) only
@@ -1405,7 +1405,7 @@ def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
 
     Review: code-reviewer (F2/F3) — the except-clause is ``Exception`` (not the narrower
     ``(RuntimeError, ImportError)``) so it actually matches this docstring's "falls back
-    ... only when the resolver fails" claim (``coordinator_claude_klabauter_root()``'s pointer-file
+    ... only when the resolver fails" claim (``coordinator_engine_root()``'s pointer-file
     read only catches ``OSError``, so a corrupt/non-UTF-8 pointer file raises
     ``UnicodeDecodeError`` — a ``ValueError`` subclass the narrower clause missed and would
     have let crash ``emit()`` instead of degrading). The fallback also now ``warnings.warn``s
@@ -1415,16 +1415,16 @@ def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
     ``resolve_coordinator_root``'s own env-override fallback warning below.
     """
     try:
-        from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+        from coordinator_core.engine_root import coordinator_engine_root
 
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        claude_klabauter_root = coordinator_engine_root()
         if claude_klabauter_root:
             return Path(claude_klabauter_root) / "state"
     except Exception as exc:  # noqa: BLE001 — any resolver failure degrades, per docstring
         import warnings
 
         warnings.warn(
-            f"coordinator_claude_klabauter_root() failed ({type(exc).__name__}: {exc}); falling back "
+            f"coordinator_engine_root() failed ({type(exc).__name__}: {exc}); falling back "
             "to the pre-migration CLAUDE_HOME/.claude/state path. This usually means "
             "repos.claude_klabauter is unset in the machine-local registry, or a "
             "partially-installed/durable-settings-home-only machine — verify "

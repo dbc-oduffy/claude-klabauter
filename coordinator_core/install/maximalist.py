@@ -1307,8 +1307,8 @@ def _run_body(
     # `machine-local get repos.claude_klabauter`, which is exactly the read this
     # write makes possible for the first time on a fresh machine.
     #
-    # Path derivation is deliberately NOT coordinator_core.claude_klabauter_root.
-    # coordinator_claude_klabauter_root() -- that resolver reads the very registry key
+    # Path derivation is deliberately NOT coordinator_core.engine_root.
+    # coordinator_engine_root() -- that resolver reads the very registry key
     # this block seeds, so calling it here would just re-enact the circularity.
     # This code runs FROM the claude-klabauter clone (coordinator_core/install/maximalist.py),
     # so the clone root is derived from this file's own location instead.

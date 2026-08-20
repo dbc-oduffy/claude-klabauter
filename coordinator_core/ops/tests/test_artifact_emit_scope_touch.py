@@ -124,7 +124,13 @@ def test_artifact_emit_declared_path_lands_in_compute_offer_safe_paths(tmp_path,
     out_path = Path(d["result"]["out"])
     assert out_path.is_file()
 
-    rel = str(out_path.relative_to(repo))
+    # `.as_posix()`, not `str()`: `compute_offer` speaks the repo-relative
+    # POSIX form by construction — `safe_commit_offer` normalizes `\` to `/`
+    # and does all its path work in `posixpath`, matching what git itself
+    # emits. `str()` on a WindowsPath yields backslashes, so this compared
+    # the host's separator convention against the contract's and failed on
+    # Windows regardless of whether the declared path actually landed.
+    rel = out_path.relative_to(repo).as_posix()
     offer = compute_offer("sid-emit-1", cwd=str(repo))
     assert rel in offer["safe_paths"], (rel, offer)
     assert rel not in offer["orphans"]

@@ -10,7 +10,7 @@ with a timeout cap; applies a fail-closed timeout/nonzero-exit/empty-stdout ladd
 then parses the
 {jsonrpc,id,result} envelope that is coordinator_core.invoke's default (non---bare)
 response shape (see DR-215 ref below). On the route() path, CLAUDE_KLABAUTER_ROOT is resolved ONCE via the native
-_resolve_claude_klabauter_root ladder (env var → pointer file → coordinator_core.claude_klabauter_root,
+_resolve_claude_klabauter_root ladder (env var → pointer file → coordinator_core.engine_root,
 no bash subprocess anywhere) — forwarded to cc_invoke() via _claude_klabauter_root for both the
 find_spec gate and the subprocess env (single resolution source).
 
@@ -87,6 +87,7 @@ Negative-spec (retired transport patterns — DO NOT reintroduce):
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -325,7 +326,7 @@ def _claude_home() -> str:
     return _machine_local_impl_resolver().claude_home()
 
 
-# Cross-reference: coordinator_core/claude_klabauter_root.py defines this same literal
+# Cross-reference: coordinator_core/engine_root.py defines this same literal
 # (plan pln-the-ceremony-tail-stops-lying-b58fb3 AC3b). The two rungs sit on
 # opposite sides of a declared one-way no-import boundary and cannot share a
 # symbol; the constant is duplicated deliberately and each side asserts the literal.
@@ -356,7 +357,7 @@ def _machine_local_get(key: str) -> str | None:
     bin/_machine_local.py (the real reader) directly with the same interpreter
     that loaded this module — no shell, no bash. Mirrors
     gen-claude-klabauter-root-pointer.py::_machine_local_get and
-    coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root's own rung-2 lookup.
+    coordinator_core.engine_root.coordinator_engine_root's own rung-2 lookup.
 
     Returns the resolved value, or None on any failure (missing impl, non-zero
     exit, empty stdout) — a registry miss is a normal fallback state here, not
@@ -431,11 +432,11 @@ def _gate_entry_point_by_shape(candidate: str) -> Optional[Callable[[], Tuple[st
     turns that into the same RuntimeError it always raised.
 
     WHY THIS EXISTS. `_delegate_to_gate` above imports
-    ``coordinator_core.claude_klabauter_root`` from the CANDIDATE's path. That name is
+    ``coordinator_core.engine_root`` from the CANDIDATE's path. That name is
     correct for a candidate spelled the way THIS tree is spelled, and wrong for
     one spelled the way the other tree is: the publish transform renames the
     module and its entry point together, so the live tree asking a published
-    mirror for `coordinator_core.claude_klabauter_root` can never succeed, and the mirror
+    mirror for `coordinator_core.engine_root` can never succeed, and the mirror
     asking a live tree for its own transformed name can never succeed either.
     Rung 1 hands this function the published mirror on any DR-326 box — where
     engine dispatch resolves to the published build by design — so the
@@ -496,8 +497,137 @@ def _gate_entry_point_by_shape(candidate: str) -> Optional[Callable[[], Tuple[st
     return None
 
 
+def _normalised_root(path: str) -> str:
+    """Resolve symlinks and case-fold (Windows only) for root COMPARISON and
+    for deriving the candidate-unique synthetic-module key below.
+
+    Two spellings of one root must normalise identically; two distinct roots
+    must not collide. Used by both `_is_same_tree_as_canonical` (comparison)
+    and `_load_foreign_gate_entry_point` (key derivation) so the two never
+    disagree about what counts as "the same root".
+    """
+    resolved = os.path.realpath(path)
+    if os.name == "nt":
+        resolved = resolved.casefold()
+    return resolved
+
+
+def _is_same_tree_as_canonical(candidate: str) -> bool:
+    """True when `candidate` is the SAME root `coordinator_core` is already
+    cached from (or nothing is cached yet — no cache to collide with).
+
+    Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C0.
+    This is the disambiguate-by-ROOT check `_delegate_to_gate` uses to decide
+    between the ordinary `importlib.import_module` short-circuit (same tree —
+    must stay byte-identical to the pre-C0 behaviour) and the foreign-
+    candidate file-path load below (genuinely a different root).
+
+    `coordinator_core` not yet in `sys.modules`, or cached with no
+    `__file__` (a namespace-package edge case), or an unreadable path along
+    the way: treated as "same tree" — there is no cache to collide with, so
+    the ordinary import is safe and correct either way.
+    """
+    canonical = sys.modules.get("coordinator_core")
+    if canonical is None:
+        return True
+    canonical_file = getattr(canonical, "__file__", None)
+    if not canonical_file:
+        return True
+    try:
+        canonical_root = _normalised_root(str(Path(canonical_file).resolve().parents[1]))
+        candidate_root = _normalised_root(candidate)
+    except OSError:
+        return True
+    return canonical_root == candidate_root
+
+
+def _load_foreign_gate_entry_point(candidate: str) -> Optional[Callable[[], Tuple[str, str]]]:
+    """Load `candidate`'s engine-root gate entry point BY FILE PATH, under a
+    candidate-unique `sys.modules` key — for a candidate proven (by
+    `_is_same_tree_as_canonical`) to be a genuinely DIFFERENT root than the
+    one `coordinator_core` is already cached from.
+
+    Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C0.
+
+    LOCATING THE FILE — direct path first, shape scan as FALLBACK. Tries
+    `<candidate>/coordinator_core/engine_root.py` directly (the post-rename
+    spelling this plan converges on); falls back to the same shape-scan
+    `_gate_entry_point_by_shape` uses (module-name-agnostic: text-scans for
+    the `coordinator_\\w+_root_with_class` entry-point DEFINITION) only when
+    that direct path is absent — the pre-rename / mixed-mirror transition
+    window, and the case this chunk ships under today (before C1 lands).
+
+    KNOWN AND ACCEPTED LIMIT (stated, not silently overclaimed): the loaded
+    module still resolves any cross-package import (e.g.
+    `from coordinator_core._settings_home import machine_local_dir`) through
+    the CACHED `coordinator_core` package (root A), not candidate root B's
+    own copy. Harmless today because the only such import is settings-home
+    (machine state, not tree state) and `_SHIM_PATH` — the vector that
+    actually mattered — derives from this module's own real `__file__`, so it
+    is correctly per-root regardless. See `_resolve_claude_klabauter_root`'s "KNOWN AND
+    ACCEPTED LIMIT" docstring note for the caller-facing version of this pin.
+
+    Returns None when `candidate` has no locatable engine-root module (a
+    marker-only or broken checkout) — the caller turns that into the same
+    RuntimeError it always raised on a same-tree miss.
+    """
+    module_path = os.path.join(candidate, "coordinator_core", "engine_root.py")
+    if not os.path.isfile(module_path):
+        pkg_dir = os.path.join(candidate, "coordinator_core")
+        try:
+            entries = sorted(os.listdir(pkg_dir))
+        except OSError:
+            return None
+        module_path = None
+        for entry in entries:
+            if not entry.endswith(_GATE_MODULE_GLOB_SUFFIX) or entry.startswith("test_"):
+                continue
+            candidate_path = os.path.join(pkg_dir, entry)
+            try:
+                with open(candidate_path, "r", encoding="utf-8") as fh:
+                    if _GATE_ENTRY_POINT_RE.search(fh.read()):
+                        module_path = candidate_path
+                        break
+            except OSError:
+                continue
+        if module_path is None:
+            return None
+
+    try:
+        with open(module_path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    match = _GATE_ENTRY_POINT_RE.search(text)
+    if match is None:
+        return None
+    entry_name = match.group(1)
+
+    digest = hashlib.sha1(_normalised_root(candidate).encode("utf-8")).hexdigest()[:16]
+    synthetic_name = f"_cc_engine_root_{digest}"
+
+    spec = importlib.util.spec_from_file_location(synthetic_name, module_path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[synthetic_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        # Same posture as _gate_entry_point_by_shape's own except-broad note:
+        # a candidate whose module matches by shape/path but raises on load
+        # (partial checkout, mid-publish state) is a BROKEN candidate, not
+        # this loader's problem to re-raise.
+        sys.modules.pop(synthetic_name, None)
+        return None
+    found = getattr(module, entry_name, None)
+    if callable(found):
+        return cast(Callable[[], Tuple[str, str]], found)
+    return None
+
+
 def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str) -> str:
-    """Remediation text for a candidate that imported ``coordinator_core.claude_klabauter_root``
+    """Remediation text for a candidate that imported ``coordinator_core.engine_root``
     but whose gated resolver still returned a falsy root.
 
     Review: engine-root-slice-2 finding 1 — the un-parameterized
@@ -512,7 +642,7 @@ def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str
         return _CLAUDE_KLABAUTER_ROOT_REMEDIATION
     return (
         f"cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — candidate {candidate!r} (from {source}) "
-        "imported coordinator_core.claude_klabauter_root but the gated ladder returned no root.\n"
+        "imported coordinator_core.engine_root but the gated ladder returned no root.\n"
         "  Remediate (choose one):\n"
         f"    Confirm {candidate!r} is a genuine, stamped claude-klabauter checkout.\n"
         "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
@@ -526,7 +656,7 @@ def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str
 def _resolve_claude_klabauter_root() -> str:
     """Resolve CLAUDE_KLABAUTER_ROOT natively — no bash subprocess anywhere in the ladder.
 
-    Resolution order (mirrors coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root,
+    Resolution order (mirrors coordinator_core.engine_root.coordinator_engine_root,
     the native port of coordinator-claude-klabauter-root.sh):
       Rung 1:   CLAUDE_KLABAUTER_ROOT already set in environment → CANDIDATE, delegated
                 through the single gated ladder (see "DELEGATION" below) rather
@@ -548,10 +678,10 @@ def _resolve_claude_klabauter_root() -> str:
       Each only supplies a CANDIDATE path capable of importing
       coordinator_core; the nested `_delegate_to_gate()` helper bootstraps that import
       and hands the actual decision to
-      ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class()``
+      ``coordinator_core.engine_root.coordinator_engine_root_with_class()``
       (the DR-132/stamp-gated ladder C5 rewrote) — the single place that
       answers "which engine executes?" for every caller. A candidate that
-      cannot import ``coordinator_core.claude_klabauter_root`` (a marker-only or broken
+      cannot import ``coordinator_core.engine_root`` (a marker-only or broken
       checkout) raises, rather than being trusted verbatim.
 
       DISPATCH axis vs LOCATOR axis: this function answers the DISPATCH
@@ -569,7 +699,7 @@ def _resolve_claude_klabauter_root() -> str:
       gate-blind hole in practice.
 
       Rung 1.5 USED to be the live end of that blindness, and was the exact
-      defect commit 0fdfb61d6 fixed inside `coordinator_claude_klabauter_root_with_class()`
+      defect commit 0fdfb61d6 fixed inside `coordinator_engine_root_with_class()`
       itself — the pointer file pre-empting the DR-132 gate on every installed
       machine. That fix landed in the two-tier wrapper but did NOT reach this
       rung, so on a dual-boot box `cc_invoke` answered `X:/claude-klabauter` from
@@ -612,7 +742,7 @@ def _resolve_claude_klabauter_root() -> str:
     Returns the resolved absolute path.
     Raises RuntimeError on failure (unresolvable root — including a candidate
     from any delegated rung that cannot import
-    ``coordinator_core.claude_klabauter_root``) — or the RuntimeError subclass
+    ``coordinator_core.engine_root``) — or the RuntimeError subclass
     `_RegistryReadTimeout` specifically when the registry read at Rung 2 timed
     out and self-location (Rung 3) also missed, so a caller wanting to tell the
     two apart can `except _RegistryReadTimeout` before the general
@@ -635,8 +765,8 @@ def _resolve_claude_klabauter_root() -> str:
     list) — left as an explicit exception, not a silent skip.
     """
     def _delegate_to_gate(candidate: str, *, source: str) -> str:
-        """Bootstrap ``coordinator_core.claude_klabauter_root`` from ``candidate`` and
-        return the gated final answer from ``coordinator_claude_klabauter_root_with_class()``.
+        """Bootstrap ``coordinator_core.engine_root`` from ``candidate`` and
+        return the gated final answer from ``coordinator_engine_root_with_class()``.
 
         Nested (not module-level) so every DISPATCH-axis candidate rung below
         (env, registry, self-location) shares exactly ONE delegation body,
@@ -646,39 +776,66 @@ def _resolve_claude_klabauter_root() -> str:
         `coordinator_core`; the actual DR-132/stamp-gated decision comes from
         exactly one place (the ladder C5 rewrote), never answered here
         directly. `source` is folded into the raised message only, on a
-        candidate that cannot import `coordinator_core.claude_klabauter_root` (a
+        candidate that cannot import `coordinator_core.engine_root` (a
         marker-only or broken checkout) — that candidate is NOT trusted
         verbatim on that failure, unlike the pre-C6 behaviour of Rungs 1 and 3.
+
+        DISAMBIGUATES BY ROOT, NOT BY MODULE NAME (C0,
+        docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md).
+        `sys.modules["coordinator_core.<gate-module>"]` is a process-lifetime
+        singleton keyed on NAME -- a second call with a different `candidate`
+        would silently get served the FIRST call's cached module once both
+        trees spell the gate module the same way. `_is_same_tree_as_canonical`
+        decides which of two paths this call takes:
+          - SAME root as the already-cached `coordinator_core` (or nothing
+            cached yet): the ordinary `importlib`-based import below, BYTE-
+            IDENTICAL to the pre-C0 behaviour -- this is the load-bearing
+            short-circuit, not an optimisation (see this module's own
+            docstring note on `_GATE_MEMO`/`_reset_*_memo` seams).
+          - GENUINELY DIFFERENT root: `_load_foreign_gate_entry_point` loads
+            candidate's own gate module by file path under a candidate-unique
+            key, so it can never collide with (or be served from) the
+            canonical module's cached entry.
         """
-        _injected = candidate not in sys.path
-        if _injected:
-            sys.path.insert(0, candidate)
-        try:
-            try:
-                from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root_with_class
-            except ImportError as exc:
-                coordinator_claude_klabauter_root_with_class = _gate_entry_point_by_shape(candidate)
-                if coordinator_claude_klabauter_root_with_class is None:
-                    raise RuntimeError(
-                        f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
-                        f"a valid claude-klabauter checkout — no coordinator_core/*_root.py under it defines "
-                        f"a coordinator_*_root_with_class entry point "
-                        f"(direct import also failed: {exc})"
-                    ) from exc
-            # Published-engine rung: coordinator_claude_klabauter_root_with_class() runs the
-            # DR-132 two-tier gate (published-engine-mirror vs. live-working-tree)
-            # instead of the classless coordinator_claude_klabauter_root(), which always
-            # answered live-working-tree. The (root, resolution_class) pair is
-            # returned; this rung only needs root — cc_invoke does not branch on
-            # the class (that belongs to a future consumer, not this resolution
-            # rung: engine.target is a read-site default, never diverted on here).
-            resolved, _resolution_class = coordinator_claude_klabauter_root_with_class()
-        finally:
+        if _is_same_tree_as_canonical(candidate):
+            _injected = candidate not in sys.path
             if _injected:
+                sys.path.insert(0, candidate)
+            try:
                 try:
-                    sys.path.remove(candidate)
-                except ValueError:
-                    pass
+                    from coordinator_core.engine_root import coordinator_engine_root_with_class
+                except ImportError as exc:
+                    coordinator_engine_root_with_class = _gate_entry_point_by_shape(candidate)
+                    if coordinator_engine_root_with_class is None:
+                        raise RuntimeError(
+                            f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
+                            f"a valid claude-klabauter checkout — no coordinator_core/*_root.py under it defines "
+                            f"a coordinator_*_root_with_class entry point "
+                            f"(direct import also failed: {exc})"
+                        ) from exc
+                # Published-engine rung: coordinator_engine_root_with_class() runs the
+                # DR-132 two-tier gate (published-engine-mirror vs. live-working-tree)
+                # instead of the classless coordinator_engine_root(), which always
+                # answered live-working-tree. The (root, resolution_class) pair is
+                # returned; this rung only needs root — cc_invoke does not branch on
+                # the class (that belongs to a future consumer, not this resolution
+                # rung: engine.target is a read-site default, never diverted on here).
+                resolved, _resolution_class = coordinator_engine_root_with_class()
+            finally:
+                if _injected:
+                    try:
+                        sys.path.remove(candidate)
+                    except ValueError:
+                        pass
+        else:
+            coordinator_engine_root_with_class = _load_foreign_gate_entry_point(candidate)
+            if coordinator_engine_root_with_class is None:
+                raise RuntimeError(
+                    f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
+                    f"a valid claude-klabauter checkout — no coordinator_core/*_root.py under it defines "
+                    f"a coordinator_*_root_with_class entry point"
+                )
+            resolved, _resolution_class = coordinator_engine_root_with_class()
         if not resolved:
             raise RuntimeError(_claude_klabauter_root_gate_empty_remediation(candidate, source=source))
         return resolved
@@ -742,7 +899,7 @@ def _resolve_claude_klabauter_root() -> str:
         return _pointer_val
 
     # Rung 2: native bootstrap — locate a candidate root via the machine-local
-    # registry (no bash), then delegate to coordinator_core.claude_klabauter_root itself
+    # registry (no bash), then delegate to coordinator_core.engine_root itself
     # once it's importable, so the FINAL answer (and any future rung additions
     # to that module) come from the single native oracle, not a re-derivation
     # duplicated here.

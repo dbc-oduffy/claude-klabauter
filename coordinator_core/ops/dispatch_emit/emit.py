@@ -175,18 +175,26 @@ exactly one executor phase immediately followed by exactly one commit phase,
 so the entry immediately before the terminal test phase is always a commit
 phase.
 
-## model: 'sonnet' (AC11)
+## An ACTIVE model: on every call, tiered by agentType (AC11)
 
 Every emitted ``agent()`` call — executor wave, commit phase, and the
-terminal test phase alike — carries an ACTIVE ``model: 'sonnet'`` in its
-opts object, never a commented placeholder and never a model-less call left
-to inherit the session model. This is a settled PM ruling
+terminal test phase alike — carries an ACTIVE ``model:`` in its opts object,
+never a commented placeholder and never a model-less call left to inherit
+the session model. This is a settled PM ruling
 (docs/wiki/workflow-skeleton-stamper.md § Scaffold defaults model best
 practice by construction) enforced at WARN tier only in
 ``_workflow_contract.run_checks`` — AC5's zero-ERROR bar does NOT catch an
 omission here, so this module enforces it structurally: every call-composing
-helper below hardcodes the ``model: 'sonnet'`` opts entry inline, with no
-parameter or code path that could omit it.
+helper below routes through ``_model_opt``, with no parameter or code path
+that could omit it.
+
+Which model is a per-``agentType`` decision, not one constant. A call-site
+``model:`` OVERRIDES the agent definition's own frontmatter, so a blanket
+``'sonnet'`` silently outranked ``git-commit-agent``'s and
+``test-runner``'s charter tier and billed a Sonnet for mechanical work.
+``_AGENT_MODELS`` mirrors the charter tier each definition declares
+(DoE-claude ``coordinator/agent-effort-registry.yaml``); keep the two in
+step when either moves.
 
 ## Tier-T only (Anti-scope)
 
@@ -268,11 +276,29 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_B
 # that still names it, without a second exception class to keep in sync.
 ReviewRosterFragmentError = RosterFragmentError
 
-_MODEL_OPT = "model: 'sonnet'"
 _EXECUTOR_AGENT_TYPE = "coordinator:executor"
 _ENRICHER_AGENT_TYPE = "coordinator:enricher"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 _TEST_AGENT_TYPE = "coordinator:test-runner"
+
+_DEFAULT_MODEL = "sonnet"
+_AGENT_MODELS = {
+    _EXECUTOR_AGENT_TYPE: "sonnet",
+    _ENRICHER_AGENT_TYPE: "sonnet",
+    _COMMIT_AGENT_TYPE: "haiku",
+    _TEST_AGENT_TYPE: "haiku",
+}
+
+
+def _model_opt(agent_type: str) -> str:
+    """Compose the ACTIVE ``model:`` opts entry for one ``agentType`` (AC11).
+
+    See module docstring § An ACTIVE model: on every call. An agentType with
+    no row falls back to ``_DEFAULT_MODEL`` rather than emitting nothing --
+    the invariant is that no call site is ever left model-less.
+    """
+    return f"model: '{_AGENT_MODELS.get(agent_type, _DEFAULT_MODEL)}'"
+
 
 # dispatch_emit/emit.py -> dispatch_emit -> ops -> coordinator_core -> repo
 # root. Same 3-parents-up derivation `pathspec.py` uses for its own
@@ -496,7 +522,7 @@ def _wave_agent_calls(
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
             f"agentType: {_js_string_literal(_row_agent_type(row))}, "
-            f"{_MODEL_OPT} "
+            f"{_model_opt(_row_agent_type(row))} "
             "});"
         )
         return f"{phase_call}\n{call}"
@@ -508,7 +534,7 @@ def _wave_agent_calls(
         f"label: {_js_string_literal(f'work:{row.id}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
         f"agentType: {_js_string_literal(_row_agent_type(row))}, "
-        f"{_MODEL_OPT} "
+        f"{_model_opt(_row_agent_type(row))} "
         "})"
         for row in wave
     )
@@ -636,7 +662,7 @@ def _commit_agent_call(
         f"label: {_js_string_literal(f'commit:wave-{index + 1}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
         f"agentType: {_js_string_literal(_COMMIT_AGENT_TYPE)}, "
-        f"{_MODEL_OPT} "
+        f"{_model_opt(_COMMIT_AGENT_TYPE)} "
         "});"
     )
     return f"{phase_call}\n{call}"
@@ -669,7 +695,7 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
         f"label: {_js_string_literal('preflight:commit-claimability')}, "
         f"phase: {_js_string_literal(phase_title)}, "
         f"agentType: {_js_string_literal(_COMMIT_AGENT_TYPE)}, "
-        f"{_MODEL_OPT} "
+        f"{_model_opt(_COMMIT_AGENT_TYPE)} "
         "});"
     )
     return f"{phase_call}\n{call}"
@@ -685,7 +711,7 @@ def _test_agent_call(scope: list[str], phase_title: str) -> str:
         f"label: {_js_string_literal('test:terminal')}, "
         f"phase: {_js_string_literal(phase_title)}, "
         f"agentType: {_js_string_literal(_TEST_AGENT_TYPE)}, "
-        f"{_MODEL_OPT} "
+        f"{_model_opt(_TEST_AGENT_TYPE)} "
         "});"
     )
     return f"{phase_call}\n{call}"

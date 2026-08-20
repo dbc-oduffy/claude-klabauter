@@ -47,7 +47,7 @@ repo or machine root, raising/returning falsy on failure":
 ``coordinator_core.ops.emit.envelope.resolve_coordinator_root`` (same name,
 two call sites, both live-root oracles),
 ``coordinator_core.plugin_health.relocation_ledger.default_ledger_path``,
-``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root``. Matched by bare
+``coordinator_core.engine_root.coordinator_engine_root``. Matched by bare
 name/attribute only, not full import resolution — the same precision
 tradeoff ``test_no_node_schema_shellout.py`` makes for its spawn-call
 detector, and for the same reason: a test corpus calls these through module
@@ -118,7 +118,7 @@ _LIVE_ROOT_RESOLVER_NAMES: frozenset[str] = frozenset({
     "read_doe_root_pointer",
     "resolve_coordinator_root",
     "default_ledger_path",
-    "coordinator_claude_klabauter_root",
+    "coordinator_engine_root",
 })
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

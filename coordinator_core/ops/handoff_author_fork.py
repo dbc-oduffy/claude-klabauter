@@ -544,6 +544,29 @@ def _fork_handoff_filename(title: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _stamp_human_assignee(text: str, human_assignee: Optional[str]) -> str:
+    """Stamp the ``human_assignee`` key onto ``text``'s frontmatter, IN PLACE,
+    on the same caller-supplied discipline as ``minted_by``: resolved once at
+    the creation door (both doors' ``_mutate`` closures, above), never inside
+    ``handoff_normalize`` — see the module docstring's "CRITICAL" paragraph.
+
+    Unresolvable identity (``human_assignee`` falsy) OMITS the key entirely —
+    no null, no sentinel, matching the existing ``minted_by`` contract rather
+    than inventing a second absent-representation. Idempotent: replaces an
+    existing ``human_assignee`` line in place rather than duplicating it.
+    """
+    if not human_assignee:
+        return text
+    split = split_frontmatter(text)
+    if split is None:
+        return text
+    if read_fm_field(split.fm_text, "human_assignee") is not None:
+        new_fm_text = replace_fm_field(split.fm_text, "human_assignee", human_assignee)
+    else:
+        new_fm_text = insert_fm_field(split.fm_text, "human_assignee", human_assignee)
+    return rebuild(split, new_fm_text)
+
+
 def _resolve_stamp_match_text(contained: Path) -> str:
     """Stamp mode's ``match_text`` fallback: the target handoff's own
     frontmatter ``title`` when readable, else the filename stem.
@@ -789,14 +812,15 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
         # none of the five origin_* keys), but running it second also means the
         # normalizer measures the bytes that actually land, never a pre-stamp
         # snapshot.
-        minted_by = resolve_operating_person().get("github")
+        operating_person = resolve_operating_person()
+        minted_by = operating_person.get("github")
+        human_assignee = operating_person.get("contributor_slug")
         producer = resolve_producer_for_creation(op_identity="machine-minted")
         norm = _normalize_one_text(
             stamped, contained, carried_deliverable_id, minted_by, producer
         )
-        if norm is not None and norm is not _NO_FRONTMATTER:
-            return norm["rebuilt"]
-        return stamped
+        final_text = norm["rebuilt"] if (norm is not None and norm is not _NO_FRONTMATTER) else stamped
+        return _stamp_human_assignee(final_text, human_assignee)
 
     try:
         await asyncio.to_thread(locked_rmw, contained, _mutate, repo_root=repo_root)
@@ -1095,7 +1119,9 @@ async def _handler(
         # Compose handoff.normalize (inline) to fill in category, summary,
         # deliverable_id, initiative — exactly the six-normalization pass from
         # normalize-handoff-frontmatter.js (no reimplemented frontmatter I/O).
-        minted_by = resolve_operating_person().get("github")
+        operating_person = resolve_operating_person()
+        minted_by = operating_person.get("github")
+        human_assignee = operating_person.get("contributor_slug")
         # producer-axis-claude-klabauter-engine-half: op_identity resolved HERE, at this
         # creation seam. This door is machine (EM-initiated); the finer
         # EM-initiated-vs-op-minted distinction is deliberately dropped — the
@@ -1107,9 +1133,8 @@ async def _handler(
         norm = _normalize_one_text(
             content, out_path, carried_deliverable_id, minted_by, producer
         )
-        if norm is not None and norm is not _NO_FRONTMATTER:
-            return norm["rebuilt"]
-        return content
+        final_text = norm["rebuilt"] if (norm is not None and norm is not _NO_FRONTMATTER) else content
+        return _stamp_human_assignee(final_text, human_assignee)
 
     try:
         await asyncio.to_thread(

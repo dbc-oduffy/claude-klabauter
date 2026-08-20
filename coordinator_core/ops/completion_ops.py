@@ -686,9 +686,9 @@ def _resolve_handoff_dirs(worktree_root: Path) -> Tuple[List[Path], Optional[str
         from coordinator_core.meta_repo_identity import is_meta_repo
 
         if is_meta_repo(str(worktree_root)):
-            from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+            from coordinator_core.engine_root import coordinator_engine_root
 
-            state_root = Path(coordinator_claude_klabauter_root()) / "state"
+            state_root = Path(coordinator_engine_root()) / "state"
     except Exception as exc:  # noqa: BLE001 — best-effort central-root resolution
         logger.warning(
             "completion.reconcile_commits: meta-repo central-root resolution "

@@ -44,7 +44,7 @@ prefixed names below (``_ml_dir``, ``_registry_value``,
 only stable contract for arbitrary callers is
 ``resolve_claude_klabauter_root_with_class()``, the ``RESOLUTION_*`` constants, and
 ``resolve_claude_klabauter_bin_dir()``/``exec_cli()``. The ONE declared exception:
-``coordinator_core.claude_klabauter_root`` (loaded BY PATH, never imported as a
+``coordinator_core.engine_root`` (loaded BY PATH, never imported as a
 package — see that module's own docstring) is a named path-load consumer of
 ``_ml_dir``, ``_registry_value``, and ``_resolve_claude_klabauter_root`` directly, in
 its hot-path short-circuit that skips the full
@@ -52,8 +52,8 @@ its hot-path short-circuit that skips the full
 is not registered. Changing ``resolve_claude_klabauter_root_with_class()``'s step-1
 precondition (the published-engine-registered-and-usable check) obliges
 updating that wrapper's short-circuit in the SAME change — see
-``coordinator_core/claude_klabauter_root.py``'s matching declaration, and
-``coordinator_core/tests/test_claude_klabauter_root_two_tier.py``'s cross-entrypoint
+``coordinator_core/engine_root.py``'s matching declaration, and
+``coordinator_core/tests/test_engine_root_two_tier.py``'s cross-entrypoint
 agreement test (fixture: ``repos.claude_klabauter`` absent) for the
 mechanical backstop that catches drift here.
 
@@ -76,11 +76,11 @@ are UNRELATED functions that happen to share a name — this one resolves
 resolves the ENGINE (dispatch axis, delegated through the DR-132/stamp
 gate). This one is already the "source-tree resolver, confined to a named
 narrow seam" C7's body asks for in substance — underscore-private, and its
-only declared exception consumer is ``coordinator_core.claude_klabauter_root``'s
+only declared exception consumer is ``coordinator_core.engine_root``'s
 path-load (see the Review note above) — but is NOT renamed to say so in
 this pass: that consumer path-loads it BY THIS NAME, so a rename here
 requires updating that consumer in the same change, and
-``coordinator_core/claude_klabauter_root.py`` is outside this chunk's ``writes:``
+``coordinator_core/engine_root.py`` is outside this chunk's ``writes:``
 scope. Left as a named exception, not a silent skip.
 """
 from __future__ import annotations
@@ -408,7 +408,7 @@ def _registry_value(ml_dir: Path, key: str) -> Optional[str]:
 # every other declared fact this module reads.
 #
 # HARD CONSTRAINT (memo-invalidation): this key MUST live in one of the two
-# files ``_registry_mtime_pair`` (coordinator_core/claude_klabauter_root.py) already
+# files ``_registry_mtime_pair`` (coordinator_core/engine_root.py) already
 # stats -- registry.toml or registry.local.toml -- so that writing it
 # self-invalidates both ``_ROOT_MEMO`` and ``_GATE_MEMO`` by mtime with no
 # explicit reset call. ``_registry_value`` reads exactly those two files, so

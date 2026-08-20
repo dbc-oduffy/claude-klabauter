@@ -30,7 +30,7 @@ from __future__ import annotations
 from coordinator_core.ops.ceremony.records_query import query_records as _ceremony_query_records
 from coordinator_core.ops.emit.context import EmitContext
 
-from ._shared import normalize_frontmatter
+from ._shared import human_axis_vendored, normalize_frontmatter
 
 _TRACKER_STATUS_ENUM = frozenset({"active", "archived"})
 
@@ -79,6 +79,11 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     records: list[dict] = []
     malformed: list[dict] = []
 
+    # C9 activation switch (see _shared.human_axis_vendored's own docstring): resolved
+    # once per collect() call. While False, `human_owner` never reaches a record's dict
+    # at all — no new key on the wire until cockpit has vendored a contract naming it.
+    _human_axis_on = human_axis_vendored()
+
     for rec in raw:
         if not isinstance(rec, dict):
             continue
@@ -86,19 +91,25 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         path = rec.get("path")
 
         if _is_valid(fm):
-            records.append(
-                {
-                    "repo": ctx.repo_name,
-                    "coordinator_root_path": ".",
-                    "path": path,
-                    "title": fm["title"],
-                    "created": fm["created"][0:10],
-                    "status": fm["status"],
-                    "owner": _jq_alternative(fm.get("owner")),
-                    "items": _jq_alternative(fm.get("items")),
-                    "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
-                }
-            )
+            record = {
+                "repo": ctx.repo_name,
+                "coordinator_root_path": ".",
+                "path": path,
+                "title": fm["title"],
+                "created": fm["created"][0:10],
+                "status": fm["status"],
+                "owner": _jq_alternative(fm.get("owner")),
+                "items": _jq_alternative(fm.get("items")),
+                "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
+            }
+            # Human axis (C9), activation-gated: `human_owner` is an OPTIONAL nullable
+            # TrackerSummary field (entities/tracker_summary.py). See handoffs.py's
+            # matching block for the full rationale — same switch, same omission
+            # discipline, no post-dump pop needed here because this section builds
+            # plain dicts directly rather than routing through a pydantic model.
+            if _human_axis_on:
+                record["human_owner"] = _jq_alternative(fm.get("human_owner"))
+            records.append(record)
         else:
             malformed.append(
                 {

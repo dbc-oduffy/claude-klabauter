@@ -105,6 +105,140 @@ def test_branch0_gate_missing_target_entry(tmp_path):
     assert "MISSING_TARGET_ENTRY" in out
 
 
+def _make_multi_row_root(tmp_path: Path, rows: list[tuple[str, str]]) -> Path:
+    """Seed a percolate root with `rows` of (target, dest) — the shape a real
+    mirror has: several registered targets whose dests nest under one root."""
+    percolate_root = tmp_path / "percolate-root"
+    setup_dir = percolate_root / "setup"
+    setup_dir.mkdir(parents=True)
+
+    lines = []
+    for target, dest in rows:
+        source_dir = tmp_path / "source" / target
+        source_dir.mkdir(parents=True)
+        (source_dir / ".percolate-ignore").write_text("", encoding="utf-8")
+        lines.append(f"{target}|mirror|{source_dir}|{dest}")
+
+    (setup_dir / "publish-targets.portable").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    return percolate_root
+
+
+_MIRROR_ROWS = [
+    ("claude-klabauter", "X:/claude-klabauter"),
+    ("claude-klabauter-bin", "X:/claude-klabauter/bin"),
+    ("claude-klabauter-docs-install", "X:/claude-klabauter/docs/install"),
+]
+
+
+def test_branch0_gate_routes_a_multi_row_mirror_to_coordinator_publish(tmp_path):
+    """The name of the MIRROR matches every row and no row is named for it, so
+    the answer is `coordinator-publish`, not a round and not first-run setup.
+    Regression for the live shape: `/percolate klabauter` against nine
+    `claude-klabauter*` rows previously emitted a bare MISSING_TARGET_ENTRY and
+    percolate-round then offered to re-register rows that already existed.
+
+    Matching is INFIX, which is the whole point — `klabauter` is not a prefix
+    of `claude-klabauter`, so a prefix test would not fire for the exact input
+    this exists to answer."""
+    percolate_root = _make_multi_row_root(tmp_path, _MIRROR_ROWS)
+    rc, out = _run_cli(
+        ["branch0-gate", "klabauter", "--percolate-root", str(percolate_root)]
+    )
+    assert rc == 1
+    assert "MISSING_TARGET_ENTRY" in out
+    route = [line for line in out.splitlines() if line.startswith("route:")]
+    assert len(route) == 1, out
+    assert "coordinator-publish" in route[0]
+    # Every registered row matched, and a bare `coordinator-publish` already
+    # means exactly that — naming them back would be noise.
+    assert route[0].rstrip().endswith("coordinator-publish")
+
+
+def test_branch0_gate_route_names_a_partial_match_explicitly(tmp_path):
+    """When the match is a SUBSET of what is registered, the bare command would
+    publish more than the operator asked for, so the row names are required."""
+    rows = _MIRROR_ROWS + [("other-mirror-lib", "X:/other-mirror/lib")]
+    percolate_root = _make_multi_row_root(tmp_path, rows)
+    rc, out = _run_cli(
+        ["branch0-gate", "klabauter", "--percolate-root", str(percolate_root)]
+    )
+    assert rc == 1
+    route = next(line for line in out.splitlines() if line.startswith("route:"))
+    assert "coordinator-publish claude-klabauter,claude-klabauter-bin," \
+        "claude-klabauter-docs-install" in route
+    assert "other-mirror-lib" not in route
+
+
+def test_branch0_gate_does_not_route_across_separate_destinations(tmp_path):
+    """Rows that match the name but publish to DIFFERENT mirrors are not one
+    `coordinator-publish` job, so no route is offered — the operator gets the
+    registered-names line and picks."""
+    rows = [
+        ("shared-name-alpha", "X:/mirror-one"),
+        ("shared-name-beta", "X:/mirror-two"),
+    ]
+    percolate_root = _make_multi_row_root(tmp_path, rows)
+    rc, out = _run_cli(
+        ["branch0-gate", "shared-name", "--percolate-root", str(percolate_root)]
+    )
+    assert rc == 1
+    assert not any(line.startswith("route:") for line in out.splitlines())
+    assert "registered: shared-name-alpha, shared-name-beta" in out
+
+
+def test_branch0_gate_names_the_single_near_miss(tmp_path):
+    """One match is a partially-typed name, not a routing question."""
+    percolate_root = _make_multi_row_root(tmp_path, _MIRROR_ROWS)
+    rc, out = _run_cli(
+        ["branch0-gate", "docs-install", "--percolate-root", str(percolate_root)]
+    )
+    assert rc == 1
+    assert "did you mean: claude-klabauter-docs-install" in out
+
+
+def test_branch0_gate_typo_falls_through_to_registered_names(tmp_path):
+    """A genuine typo matches nothing and must NOT be routed anywhere — the
+    registered list is what distinguishes 'mistyped' from 'never registered'."""
+    percolate_root = _make_multi_row_root(tmp_path, _MIRROR_ROWS)
+    rc, out = _run_cli(
+        ["branch0-gate", "claude-klabautr", "--percolate-root", str(percolate_root)]
+    )
+    assert rc == 1
+    assert not any(line.startswith("route:") for line in out.splitlines())
+    assert "did you mean" not in out
+    assert "registered: claude-klabauter, claude-klabauter-bin" in out
+
+
+def test_shares_one_destination_is_path_segment_aware():
+    """`X:/mirror-two` must not read as nested under `X:/mirror` just because
+    the string starts the same way."""
+    assert _mod._shares_one_destination(["X:/m", "X:/m/a", "X:/m/b/c"]) is True
+    assert _mod._shares_one_destination(["X:/mirror", "X:/mirror-two"]) is False
+    assert _mod._shares_one_destination([r"X:\m", "X:/m/a"]) is True
+    assert _mod._shares_one_destination([]) is False
+
+
+def test_shares_one_destination_is_case_insensitive():
+    """`X:/Foo` and `x:/foo` are the same directory on Windows -- casing must
+    not make them read as two destinations."""
+    assert _mod._shares_one_destination(["X:/Foo", "x:/foo/a"]) is True
+    assert _mod._shares_one_destination(["X:/Mirror", "x:/MIRROR-two"]) is False
+
+
+def test_shares_one_destination_does_not_conflate_sharp_s():
+    """Review (code-reviewer on d062782b): `.casefold()` maps `ß` to `ss`, so
+    `X:/aß` and `X:/ass/sub` — two genuinely distinct directories — collapse
+    to the same string and read as nested. The comparison therefore uses
+    `.lower()`, which leaves `ß` alone and matches the simple case mapping
+    Windows uses for path equality. Root selection independently avoids any
+    shortest-string ordering assumption."""
+    assert _mod._shares_one_destination(["X:/a\u00df", "X:/ass/sub"]) is False
+    # The genuinely-nested case still resolves, casefold length change and all.
+    assert _mod._shares_one_destination(["X:/a\u00df", "X:/A\u00df/sub"]) is True
+
+
 def test_branch0_gate_configured_with_hook_dirs_absent(tmp_path):
     """Regression (2026-07-24, extirpate-orphaned-claude-central-publish-shell
     chunk C1): the per-target pre-rsync/post-rsync/pre-ci hook subdirectories

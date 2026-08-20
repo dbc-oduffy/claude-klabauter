@@ -77,7 +77,7 @@ def _resolve_state_root() -> Optional[Path]:
 
     Delegates to the same canonical claude-klabauter-root resolver
     ``coordinator_core.ops.emit.envelope._resolve_central_state_root`` wraps
-    (``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root``) rather than hardcoding
+    (``coordinator_core.engine_root.coordinator_engine_root``) rather than hardcoding
     ``state/cockpit-emission.json`` relative to cwd. Returns None (never raises) on any
     resolution failure — leg 3 is advisory-only; an unresolvable root degrades to
     ``emission_snapshot=None``, the same as a missing file.
@@ -87,9 +87,9 @@ def _resolve_state_root() -> Optional[Path]:
     resolves to in a live checkout.
     """
     try:
-        from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+        from coordinator_core.engine_root import coordinator_engine_root
 
-        return Path(coordinator_claude_klabauter_root()) / "state"
+        return Path(coordinator_engine_root()) / "state"
     except Exception:
         return None
 

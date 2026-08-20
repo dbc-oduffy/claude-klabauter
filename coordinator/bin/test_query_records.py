@@ -112,6 +112,47 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
             self._run(["--where", "status=open"])
         self.assertNotEqual(ctx.exception.code, 0)
 
+    def test_limit_reaches_params_including_the_zero_form(self) -> None:
+        """`--limit` forwards, and `--limit 0` survives as 0, not as "omitted".
+
+        Pinned because the module docstring named `--limit` in its UNSUPPORTED
+        list from 2026-08-14 (when the parser gained it, 632ce6533) to
+        2026-08-20, and a claude-klabauter-em session read the docstring instead of
+        measuring — then told example-cockpit-repo-em the flag "is not exposed on
+        our trampoline" and "caps at the op's default 50", filed it, and
+        offered to build what already existed. Cockpit's own measurement
+        through this CLI contradicted us and was right.
+
+        The zero case is the one worth an assertion of its own: `--limit 0`
+        means UNLIMITED here, so a `if args.limit:` truthiness guard would
+        silently restore the op's default 50 — which is precisely the symptom
+        we wrongly reported.
+        """
+        self._run(["--type", "lesson", "--limit", "0"])
+        assert self._captured_params is not None
+        self.assertEqual(self._captured_params["limit"], 0)
+
+        self._run(["--type", "lesson", "--limit", "7"])
+        assert self._captured_params is not None
+        self.assertEqual(self._captured_params["limit"], 7)
+
+    def test_limit_omitted_sends_no_limit_key(self) -> None:
+        """Omitting the flag must not synthesize one — the op's own default
+        (50) is what applies, and a trampoline-side default would shadow it."""
+        self._run(["--type", "lesson"])
+        assert self._captured_params is not None
+        self.assertNotIn("limit", self._captured_params)
+
+    def test_limit_is_not_in_the_unported_flag_list(self) -> None:
+        """The docstring's two lists must not contradict the parser.
+
+        `_UNPORTED_FLAGS` is the machine-readable half of the same claim the
+        prose got wrong; asserting the flag is absent from it keeps a future
+        edit from re-adding `--limit` to the rejected set while the parser
+        still serves it.
+        """
+        self.assertNotIn("--limit", qr._UNPORTED_FLAGS)
+
     def test_status_value_containing_and_fails_loud(self) -> None:
         # Review: code-reviewer — Finding 1: a status value that itself
         # contains " AND " must fail loud, not silently compose into a

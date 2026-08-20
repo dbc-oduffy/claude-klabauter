@@ -192,7 +192,7 @@ def _claude_klabauter_bin_root() -> Path:
     sentinel.py and the manifest are co-located in the SAME repo post-migration.
 
     Negative-spec: does NOT consult `coordinator_core.ops.coordinator_doe_root`
-    or `coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()` for this
+    or `coordinator_core.engine_root.coordinator_engine_root()` for this
     default — the manifest is claude-klabauter-native data now, so resolving it through
     a sibling-repo pointer (REPO_DOE_CLAUDE / machine-local `repos.doe_claude`)
     would still be wrong-repo-shaped even where it happens to resolve; the
@@ -1542,7 +1542,7 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
 
     `claude_klabauter_root` is resolved by the caller from this module's own on-disk
     location (`Path(__file__).resolve().parents[2]`) rather than through the
-    `coordinator_claude_klabauter_root()` machine-local ladder — this probe already
+    `coordinator_engine_root()` machine-local ladder — this probe already
     runs from inside a live claude-klabauter checkout, so a self-relative resolution is
     both cheap (no subprocess) and immune to a stale/unset `repos.claude_klabauter`
     registry entry that would otherwise misreport an unrelated resolver gap as
@@ -1750,7 +1750,7 @@ def _this_claude_klabauter_root() -> Path:
     at `<claude_klabauter_root>/coordinator_core/plugin_health/sentinel.py`, so a
     running instance of this probe suite already IS inside the claude-klabauter
     checkout whose wrapper source it needs to read. Deliberately NOT
-    `coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()`: that ladder's
+    `coordinator_core.engine_root.coordinator_engine_root()`: that ladder's
     Rung 2 shells out to `machine-local get repos.claude_klabauter` (a
     subprocess spawn this `weight = "cheap"` probe must not incur) and can
     fail on a machine where that registry key drifted — a resolver gap

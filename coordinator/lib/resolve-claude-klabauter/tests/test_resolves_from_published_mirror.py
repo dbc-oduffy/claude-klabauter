@@ -16,7 +16,7 @@ no ``.claude-klabauter-root`` file), points ``MACHINE_LOCAL_REGISTRY_DIR`` at it
 clears ``CLAUDE_KLABAUTER_ROOT``/``CLAUDE_PROJECT_DIR`` from the child env — so rungs
 1/1.5/2 all genuinely miss and only the published rung can answer. It then
 loads the MIRROR's own ``coordinator_core/claude_klabauter_root.py`` (never
-this repo's ``claude_klabauter_root.py``) by path in a subprocess, asserts it resolves
+this repo's ``engine_root.py``) by path in a subprocess, asserts it resolves
 class ``resolved-engine`` at the mirror root, and execs a real,
 side-effect-free op (``coordinator/bin/archive-stamp-cli.py --help``) FROM
 the mirror's own ``coordinator/bin/`` — confirming the partial-checkout
@@ -26,9 +26,9 @@ stdout) output.
 IMPORTANT — the publish pipeline REDACTS the "claude-klabauter" codename as it syncs.
 Source-side names never appear in the mirror:
 
-- ``coordinator_core/claude_klabauter_root.py`` publishes as
+- ``coordinator_core/engine_root.py`` publishes as
   ``coordinator_core/claude_klabauter_root.py`` (function
-  ``coordinator_claude_klabauter_root_with_class`` publishes as
+  ``coordinator_engine_root_with_class`` publishes as
   ``coordinator_claude_klabauter_root_with_class``).
 - ``coordinator/lib/resolve-claude-klabauter/`` publishes as
   ``coordinator/lib/resolve-claude-klabauter/``, and inside it
@@ -166,8 +166,8 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
     (not an accidental live-tree hit) answered.
 
     IMPORTANT — ``claude_klabauter_root.py`` is a genuinely different module
-    from source-side ``claude_klabauter_root.py``, not a straight redacted rename of
-    it: ``claude_klabauter_root.py`` disambiguates a distinct "am I the live tree"
+    from source-side ``engine_root.py``, not a straight redacted rename of
+    it: ``engine_root.py`` disambiguates a distinct "am I the live tree"
     rung (``repos.claude_klabauter`` / ``CLAUDE_KLABAUTER_ROOT``) from a distinct
     "published mirror" rung (``repos.claude_klabauter``). This module is
     self-referential — it resolves the identity of the repo it ships

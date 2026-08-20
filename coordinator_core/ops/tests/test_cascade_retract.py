@@ -162,12 +162,36 @@ def _seed_with_scope(repo: Path, name: str, deliverable_id: str) -> Path:
     )
 
 
-class TestHappyPathRevert:
-    def test_reverts_an_advanced_uncommitted_candidate(self, tmp_path):
+#: The exact refusal `cascade_retract` names for a cascade write that is
+#: already committed. Pinned as a constant so both tests below assert the SAME
+#: string the module emits, rather than each re-spelling it.
+_ALREADY_COMMITTED_REFUSAL = (
+    "already committed — nothing uncommitted to revert "
+    "(see module docstring § Scoping call)"
+)
+
+
+class TestSelfCommittedAdvanceIsRefused:
+    """`deliverable_cascade.advance` SELF-COMMITS its own write (C2,
+    2026-08-14) — deliberately, because an uncommitted terminal write is
+    "simultaneously too-terminal for the closers" and trips the fleet drift
+    guard in `ops/fleet/_common.py`. `cascade_retract` recovers only writes
+    still UNCOMMITTED relative to HEAD, equally deliberately, because
+    unwinding a committed commit is "a materially different (and materially
+    more destructive) operation" (its own § Scoping call).
+
+    Both designs are correct and neither is being changed here. The
+    consequence is that the revert path is UNREACHABLE for any cascade fired
+    through `advance`: what used to be this class's happy path is now, by
+    construction, a named refusal. These tests assert that refusal rather
+    than a revert that can no longer occur -- and they fail loudly if either
+    side of the contract moves, which is the point of keeping them.
+    """
+
+    def test_self_committed_advance_is_refused_and_named(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_with_scope(repo, "h1", "dlv-ret-111111")
-        original_text = hp.read_text(encoding="utf-8")
 
         advanced = _advance_run(
             {"deliverable_id": "dlv-ret-111111", "source_kind": "plan", "source_path": "docs/plans/p.md"},
@@ -178,15 +202,26 @@ class TestHappyPathRevert:
 
         result = _retract_run({"deliverable_id": "dlv-ret-111111"}, repo_root=repo / ".git")
 
-        assert result["exit_code"] == 0
-        assert len(result["reverted"]) == 1
-        assert result["refused"] == []
-        assert hp.read_text(encoding="utf-8") == original_text
-        assert _fm_field(hp, "deployment_state") == "ready_to_fire"
-        assert _fm_field(hp, "advanced_by") is None
-        assert _fm_field(hp, "shipped_in") is None
+        # Refused, not silently skipped: the candidate IS found (so a future
+        # regression that stops matching it is not mistaken for this refusal),
+        # and it is named with the documented reason.
+        assert result["exit_code"] == 1
+        assert result["candidates_matched"] == 1
+        assert result["reverted"] == []
+        assert [r["reason"] for r in result["refused"]] == [_ALREADY_COMMITTED_REFUSAL]
+        assert result["refused"][0]["handoff_path"].endswith("h1.md")
 
-    def test_second_retract_is_loud_not_silent(self, tmp_path):
+        # Load-bearing negative: a refusal must leave the artifact untouched.
+        # A partial revert here would be worse than no revert at all.
+        assert _fm_field(hp, "deployment_state") == "shipped"
+        assert _fm_field(hp, "advanced_by") == "dlv-ret-111111"
+
+    def test_repeat_retract_is_loud_and_stable(self, tmp_path):
+        """Idempotent refusal. Pre-C2 this asserted that a SECOND retract found
+        nothing because the first had cleared `advanced_by`; post-C2 nothing is
+        ever cleared, so the invariant worth pinning is that repeating the call
+        keeps refusing identically instead of drifting into a silent success or
+        a different error."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_with_scope(repo, "h1", "dlv-ret-222222")
@@ -196,13 +231,12 @@ class TestHappyPathRevert:
             repo_root=repo / ".git",
         )
         first = _retract_run({"deliverable_id": "dlv-ret-222222"}, repo_root=repo / ".git")
-        assert first["exit_code"] == 0
-
-        # advanced_by is gone after revert -- provenance index has nothing left to
-        # find, mirroring AC6i's own idempotency-by-construction shape.
         second = _retract_run({"deliverable_id": "dlv-ret-222222"}, repo_root=repo / ".git")
-        assert second["exit_code"] == 1
-        assert second["candidates_matched"] == 0
+
+        assert first["exit_code"] == 1
+        assert second["exit_code"] == first["exit_code"]
+        assert second["candidates_matched"] == first["candidates_matched"] == 1
+        assert [r["reason"] for r in second["refused"]] == [_ALREADY_COMMITTED_REFUSAL]
         assert "dlv-ret-222222" in second["error"]
 
 

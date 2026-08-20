@@ -2298,19 +2298,14 @@ def _commit_deliverable_id_trailers(shas: List[str], cwd: str) -> Dict[str, str]
     _commit_touched_paths' batched-call shape (:352) rather than one
     subprocess per commit.
 
-    Used by Step 3's leg (b) (legacy-history fallback): a commit already
-    matched by Session-Id is kept in a deliverable_id node's segment if it
-    carries NO Deliverable-Id trailer at all, OR one that no WALKED node
-    holds (see AC0 / the pre-pass `walked_deliverable_ids` set) — this is
-    what makes that leg attribute untrailered history exactly as before
-    while still excluding a commit stamped with a deliverable a *different
-    walked* node holds, without dropping it entirely just because SOME
-    (possibly unwalked) node happens to hold a Deliverable-Id.
+    Its former caller, the leg-(b) legacy-history fallback in
+    `_derive_dag_chain_set`, was removed 2026-08-19 (see state/kill-ledger.md);
+    this helper is currently unreferenced. Retained as a standalone
+    trailer-lookup utility for any future consumer needing a batched
+    sha-to-Deliverable-Id map.
 
-    On git failure (rc != 0), every sha maps to "" (absent) — fail-closed
-    for the leg-(b) inclusion test (an unreadable trailer is treated as "no
-    trailer", i.e. still eligible for legacy inclusion via Session-Id, not
-    silently dropped).
+    On git failure (rc != 0), every sha maps to "" (absent) — fail-closed:
+    an unreadable trailer is treated as "no trailer" rather than raising.
     """
     if not shas:
         return {}

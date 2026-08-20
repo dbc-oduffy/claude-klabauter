@@ -4,7 +4,7 @@ Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22)'s
 ``coordinator_state_root --central`` (Rule 4,
 the backward-compat default: no ``--subject``/``--artifact``) — resolves to
 ``$(_csr_claude_klabauter_root)/state``. The bash lib's own docstring documents ``_csr_claude_klabauter_root``
-as ITSELF a native bridge onto ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root``, so
+as ITSELF a native bridge onto ``coordinator_core.engine_root.coordinator_engine_root``, so
 this port calls that same native resolver in-process instead of spawning
 ``bash -c "source ... && coordinator_state_root --central"``.
 
@@ -24,7 +24,7 @@ class TestResolveCentralStateRootNative:
         """Success path: claude_klabauter_root/state, exactly Rule 4's contract."""
         claude_klabauter_root = tmp_path / "claude-klabauter"
         with patch(
-            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root",
+            "coordinator_core.engine_root.coordinator_engine_root",
             return_value=str(claude_klabauter_root),
         ):
             result = _resolve_central_state_root(tmp_path / "coordinator", tmp_path)
@@ -38,7 +38,7 @@ class TestResolveCentralStateRootNative:
         except-clause used on a bash/subprocess failure."""
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
         with patch(
-            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root",
+            "coordinator_core.engine_root.coordinator_engine_root",
             side_effect=RuntimeError("repos.claude_klabauter not set"),
         ):
             result = _resolve_central_state_root(tmp_path / "coordinator", tmp_path)
@@ -55,7 +55,7 @@ class TestResolveCentralStateRootNative:
         the exception-path test above, since nothing else in this file exercised it."""
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
         with patch(
-            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root",
+            "coordinator_core.engine_root.coordinator_engine_root",
             return_value="",
         ):
             result = _resolve_central_state_root(tmp_path / "coordinator", tmp_path)
@@ -65,7 +65,7 @@ class TestResolveCentralStateRootNative:
         """Regression guard: this port must never spawn a subprocess at all."""
         claude_klabauter_root = tmp_path / "claude-klabauter"
         with patch(
-            "coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root",
+            "coordinator_core.engine_root.coordinator_engine_root",
             return_value=str(claude_klabauter_root),
         ), patch("subprocess.run") as mock_run:
             _resolve_central_state_root(tmp_path / "coordinator", tmp_path)

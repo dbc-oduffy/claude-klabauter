@@ -175,8 +175,14 @@ def test_missing_exit_interview_section_ignored(tmp_path: Path) -> None:
 def test_no_explicit_root_and_no_git_returns_zero_silently(
     tmp_path: Path, monkeypatch
 ) -> None:
+    # Root resolution went through shutil.which("git") + a subprocess at the
+    # time this test was written; it is now coordinator_core.git.repo_root.
+    # show_toplevel(), a walk-only seam with no `which` symbol at all (see
+    # that module's docstring: "WALKS ONLY -- never spawns, on any path").
+    # Simulating "no git repo" now means the walk itself finding nothing,
+    # not an absent `git` binary.
     monkeypatch.setattr(
-        "coordinator_core.ops.audience_mismatch_scan.which", lambda _name: None
+        "coordinator_core.ops.audience_mismatch_scan.show_toplevel", lambda: None
     )
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

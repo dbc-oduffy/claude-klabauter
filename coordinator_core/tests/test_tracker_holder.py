@@ -15,7 +15,7 @@ Spec backlink: pln-designated-holder-repo-for-uno-d11d4d
 chunk C4.
 
 Fixture discipline: every case monkeypatches `registry_get` and
-`coordinator_claude_klabauter_root` directly — none reads or writes the real
+`_claude_klabauter_source_tree` directly — none reads or writes the real
 machine-local registry. That registry is concurrently written by other
 sessions on this fleet; a test depending on its live state would be flaky
 by construction, not merely impure.
@@ -120,7 +120,7 @@ def test_holder_repo_root_raises_if_resolved_root_is_claude_klabauter_own_root(
         ),
     )
     monkeypatch.setattr(
-        tracker_holder, "coordinator_claude_klabauter_root", lambda: str(tmp_path)
+        tracker_holder, "_claude_klabauter_source_tree", lambda: Path(tmp_path)
     )
     with pytest.raises(RuntimeError) as exc:
         holder_repo_root()
@@ -147,7 +147,7 @@ def test_write_root_for_none_returns_holder_root(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(
-        tracker_holder, "coordinator_claude_klabauter_root", lambda: str(tmp_path / "claude-klabauter")
+        tracker_holder, "_claude_klabauter_source_tree", lambda: Path(tmp_path / "claude-klabauter")
     )
     result = write_root_for(owning_repo=None, repo_root=caller_dir)
     assert result.resolve() == holder_dir.resolve()
@@ -156,8 +156,8 @@ def test_write_root_for_none_returns_holder_root(monkeypatch, tmp_path):
 def test_write_root_for_named_resolvable_repo_returns_that_repos_root(
     monkeypatch, tmp_path
 ):
-    """AC6: a stated `owning_repo` naming a resolvable `repos.<key>`
-    returns that repo's own root, not the holder's."""
+    """AC6: a stated `owning_repo` slug resolving through `repo_slug.<slug>`
+    -> `repos.<key>` returns that repo's own root, not the holder's."""
     owner_dir = tmp_path / "owner-repo"
     owner_dir.mkdir()
     caller_dir = tmp_path / "caller"
@@ -165,9 +165,14 @@ def test_write_root_for_named_resolvable_repo_returns_that_repos_root(
     monkeypatch.setattr(
         tracker_holder,
         "registry_get",
-        _fake_registry({"repos.some_project": str(owner_dir)}),
+        _fake_registry(
+            {
+                "repo_slug.acme/some_project": "some_project",
+                "repos.some_project": str(owner_dir),
+            }
+        ),
     )
-    result = write_root_for(owning_repo="some_project", repo_root=caller_dir)
+    result = write_root_for(owning_repo="acme/some_project", repo_root=caller_dir)
     assert result.resolve() == owner_dir.resolve()
 
 
@@ -191,12 +196,15 @@ def test_write_root_for_named_repo_unset_raises_and_does_not_fall_through_to_hol
             {
                 "tracker.holder_repo": "example_store_repo",
                 "repos.example_store_repo": str(holder_dir),
+                "repo_slug.acme/unregistered_project": "unregistered_project",
                 # repos.unregistered_project deliberately absent
             }
         ),
     )
     with pytest.raises(RuntimeError) as exc:
-        result = write_root_for(owning_repo="unregistered_project", repo_root=caller_dir)
+        result = write_root_for(
+            owning_repo="acme/unregistered_project", repo_root=caller_dir
+        )
         # if no raise occurred, make the fall-through visible in the failure
         assert result.resolve() != holder_dir.resolve(), (
             "fell through to the holder root instead of raising"
@@ -225,12 +233,17 @@ def test_write_root_for_named_repo_not_cloned_raises_distinct_message_and_no_fal
             {
                 "tracker.holder_repo": "example_store_repo",
                 "repos.example_store_repo": str(holder_dir),
+                "repo_slug.acme/uncloned_project": "uncloned_project",
                 "repos.uncloned_project": str(absent_owner),
+                "repo_slug.acme/unregistered_project": "unregistered_project",
+                # repos.unregistered_project deliberately absent
             }
         ),
     )
     with pytest.raises(RuntimeError) as exc:
-        result = write_root_for(owning_repo="uncloned_project", repo_root=caller_dir)
+        result = write_root_for(
+            owning_repo="acme/uncloned_project", repo_root=caller_dir
+        )
         assert result.resolve() != holder_dir.resolve(), (
             "fell through to the holder root instead of raising"
         )
@@ -240,7 +253,7 @@ def test_write_root_for_named_repo_not_cloned_raises_distinct_message_and_no_fal
 
     # Distinguishable from the unset-repos-key message.
     with pytest.raises(RuntimeError) as exc2:
-        write_root_for(owning_repo="unregistered_project", repo_root=caller_dir)
+        write_root_for(owning_repo="acme/unregistered_project", repo_root=caller_dir)
     unset_msg = str(exc2.value)
     assert unset_msg != not_cloned_msg
     assert "clone" not in unset_msg
@@ -274,7 +287,7 @@ def test_person_write_with_no_owning_repo_lands_in_holder_as_ordinary_none_case(
         ),
     )
     monkeypatch.setattr(
-        tracker_holder, "coordinator_claude_klabauter_root", lambda: str(tmp_path / "claude-klabauter")
+        tracker_holder, "_claude_klabauter_source_tree", lambda: Path(tmp_path / "claude-klabauter")
     )
     # A "person" write is just a caller with no owning_repo — no kind arg
     # exists on write_root_for at all.
@@ -302,13 +315,111 @@ def test_item_write_with_owning_repo_lands_in_that_repo_not_the_holder(
             {
                 "tracker.holder_repo": "example_store_repo",
                 "repos.example_store_repo": str(holder_dir),
+                "repo_slug.acme/item_owner": "item_owner",
                 "repos.item_owner": str(owner_dir),
             }
         ),
     )
-    result = write_root_for(owning_repo="item_owner", repo_root=caller_dir)
+    result = write_root_for(owning_repo="acme/item_owner", repo_root=caller_dir)
     assert result.resolve() == owner_dir.resolve()
     assert result.resolve() != holder_dir.resolve()
+
+
+# --- AC7/AC9: slug rejection of "", non-member slug refusal, and the
+# slug-index hop's own distinct unset-vs-path-absent messages ---
+
+
+def test_write_root_for_empty_string_owning_repo_raises_and_never_reaches_slug_resolution(
+    monkeypatch, tmp_path
+):
+    """AC7: `owning_repo=""` is rejected explicitly, before it ever reaches
+    `repo_slug.<slug>` lookup — never producing the confusing `repos.`
+    message an unresolved-empty-string index lookup would give."""
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+
+    def _boom(key: str):
+        raise AssertionError(
+            f"registry_get({key!r}) called — '' must never reach slug "
+            "resolution at all"
+        )
+
+    monkeypatch.setattr(tracker_holder, "registry_get", _boom)
+    with pytest.raises(RuntimeError) as exc:
+        write_root_for(owning_repo="", repo_root=caller_dir)
+    msg = str(exc.value)
+    assert "empty string" in msg
+    assert "repos." not in msg
+
+
+def test_write_root_for_non_member_slug_refused_not_routed_to_holder(
+    monkeypatch, tmp_path
+):
+    """AC8: a slug with no `repo_slug.<slug>` index entry at all is refused
+    — a further, earlier failure than the `repos.<key>` unset/absent rungs —
+    and never silently routed to the holder."""
+    holder_dir = tmp_path / "holder"
+    holder_dir.mkdir()
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "tracker.holder_repo": "example_store_repo",
+                "repos.example_store_repo": str(holder_dir),
+                # repo_slug.acme/no_such_slug deliberately absent
+            }
+        ),
+    )
+    with pytest.raises(RuntimeError) as exc:
+        result = write_root_for(owning_repo="acme/no_such_slug", repo_root=caller_dir)
+        assert result.resolve() != holder_dir.resolve(), (
+            "fell through to the holder root instead of raising"
+        )
+    msg = str(exc.value)
+    assert "acme/no_such_slug" in msg
+    assert "repo_slug.acme/no_such_slug" in msg
+    assert "machine-local set repo_slug.acme/no_such_slug" in msg
+
+
+def test_write_root_for_slug_index_unset_message_distinct_from_repos_key_unset_message(
+    monkeypatch, tmp_path
+):
+    """AC9: the `repo_slug.<slug>` index-entry-absent message (an earlier,
+    distinct failure inside `_resolve_repos_key_for_slug`) is a DISTINCT
+    message from `write_root_for`'s own `repos.<key>`-unset message for the
+    subsequent hop — neither ever falls through to the holder."""
+    holder_dir = tmp_path / "holder"
+    holder_dir.mkdir()
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir()
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "tracker.holder_repo": "example_store_repo",
+                "repos.example_store_repo": str(holder_dir),
+                # repo_slug.acme/no_index_entry deliberately absent
+                "repo_slug.acme/repos_key_unset": "repos_key_unset",
+                # repos.repos_key_unset deliberately absent
+            }
+        ),
+    )
+    with pytest.raises(RuntimeError) as exc_index:
+        write_root_for(owning_repo="acme/no_index_entry", repo_root=caller_dir)
+    index_unset_msg = str(exc_index.value)
+
+    with pytest.raises(RuntimeError) as exc_repos_key:
+        write_root_for(owning_repo="acme/repos_key_unset", repo_root=caller_dir)
+    repos_key_unset_msg = str(exc_repos_key.value)
+
+    assert index_unset_msg != repos_key_unset_msg
+    assert "repo_slug.acme/no_index_entry" in index_unset_msg
+    assert "repo_slug." not in repos_key_unset_msg
+    assert "repos.repos_key_unset" in repos_key_unset_msg
 
 
 # --- AC11: owning_repo is keyword-required, no default ---
@@ -344,7 +455,7 @@ def test_write_root_for_none_arm_raises_if_holder_root_equals_caller_repo_root(
         ),
     )
     monkeypatch.setattr(
-        tracker_holder, "coordinator_claude_klabauter_root", lambda: str(tmp_path / "claude-klabauter")
+        tracker_holder, "_claude_klabauter_source_tree", lambda: Path(tmp_path / "claude-klabauter")
     )
     with pytest.raises(RuntimeError) as exc:
         write_root_for(owning_repo=None, repo_root=same_dir)
@@ -365,9 +476,14 @@ def test_write_root_for_stated_owner_matching_caller_root_does_not_raise(
     monkeypatch.setattr(
         tracker_holder,
         "registry_get",
-        _fake_registry({"repos.self_project": str(own_dir)}),
+        _fake_registry(
+            {
+                "repo_slug.acme/self_project": "self_project",
+                "repos.self_project": str(own_dir),
+            }
+        ),
     )
-    result = write_root_for(owning_repo="self_project", repo_root=own_dir)
+    result = write_root_for(owning_repo="acme/self_project", repo_root=own_dir)
     assert result.resolve() == own_dir.resolve()
 
 

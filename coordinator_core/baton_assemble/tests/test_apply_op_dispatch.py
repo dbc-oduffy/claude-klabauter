@@ -24,6 +24,8 @@ No process spawn, no git -- fast tier.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 import coordinator_core.contract.apply_base as apply_base
@@ -40,6 +42,7 @@ _BATON_CLI_VERBS = (
     "handoff.author_fork",
     "handoff.supersede_predecessor",
     "handoff-carry-gate",
+    "baton-stamp-carried-ids",
 )
 _MIGRATED_VERBS = ("handoff.stamp_phase", "handoff.author_fork")
 _NON_MIGRATED_VERBS = tuple(v for v in _BATON_CLI_VERBS if v not in _MIGRATED_VERBS)
@@ -169,3 +172,39 @@ class TestExecuteDirectivesThreadsAssemblerName:
         assert exit_code == apply_base.APPLY_EXIT_OK
         assert calls == [["x"]]
         assert report["landed"] == ["d1"]
+
+    def test_execute_directives_threads_assembler_name_into_apply_base(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Replaces the prior version (cold review 2026-08-19, Test-quality
+        table): the test above calls `apply_base.execute_directives`
+        directly and passes `assembler_name="baton_assemble"` itself, so it
+        stays green even if that kwarg were deleted from
+        `baton_assemble.apply._execute_directives` -- the exact property
+        this class's docstring claims. This calls the module's OWN
+        `_execute_directives` wrapper and monkeypatches `apply_base.
+        execute_directives` to capture what it actually threads through."""
+        captured: dict[str, Any] = {}
+
+        def _fake_execute_directives(directives, judgment_points, repo_root, dispatch_table, **kwargs):
+            captured.update(kwargs)
+            return apply_base.APPLY_EXIT_OK, {"landed": []}
+
+        monkeypatch.setattr(apply_base, "execute_directives", _fake_execute_directives)
+        ba_apply._execute_directives([], [], tmp_path)
+        assert captured.get("assembler_name") == "baton_assemble"
+
+
+class TestCliKeyedMigratedVerbIsRefused:
+    """F2 (cold review 2026-08-19): a migrated verb arriving `cli`-keyed
+    (rather than `op`-keyed, `_migrate_op_named_directives`'s own output
+    shape) must be refused before dispatch -- the `cli` key is otherwise
+    ungated (`apply_base.resolve_cli` never calls `assert_dispatchable`),
+    so a directive that bypassed the migration rewrite would reach the
+    same handler with the admission control silently absent."""
+
+    def test_cli_keyed_handoff_stamp_phase_reaches_nothing(self, tmp_path) -> None:
+        directives = [{"id": "d1", "cli": "handoff.stamp_phase", "args": ["x"]}]
+        exit_code, report = ba_apply._execute_directives(directives, [], tmp_path)
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert report["landed"] == []

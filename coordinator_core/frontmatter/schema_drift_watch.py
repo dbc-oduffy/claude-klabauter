@@ -71,11 +71,14 @@ Spec backlink: CLAUDE.md § Architecture (vendored-schema/DoE boundary);
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory
+from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_git_env
+from coordinator_core.machine_resolver import registry_get
 
 # Directory holding claude-klabauter's vendored copies of DoE's canonical schemas.
 VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
@@ -131,6 +134,228 @@ def vendored_schema_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
         )
     except OSError:
         return []
+
+
+# Vendored-source coverage set — a PARALLEL, equally-globbed comparison to the
+# JSON-schema one above (see this module's docstring, "durability gap" addendum,
+# 2026-08-19 — the six pinned test vectors in person_resolver keep claude-klabauter's
+# derivation in sync with claude-klabauter's OWN prior run, never with cockpit's; this is
+# the drift watch that closes that gap). `*.vendor.ts` is deliberately DISK-GLOB
+# derived, same coverage-by-construction posture as `vendored_schema_paths` — a
+# newly vendored `<x>.vendor.ts` file gains watch coverage the moment it lands,
+# no second list to remember.
+COCKPIT_SOURCE_GLOB = "*.vendor.ts"
+
+# Machine-readable header line each `*.vendor.ts` file carries (see
+# `contributor-id.vendor.ts`'s header comment) — the cockpit-repo-relative
+# path this vendored copy mirrors. Read at scan time so a future vendored file
+# is fully self-describing: no filename convention, no second path-mapping dict.
+_COCKPIT_SOURCE_PATH_PREFIX = "// cockpit-source-path:"
+
+
+def vendored_source_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
+    """Every vendored cockpit-source file, sorted — glob-derived like `vendored_schema_paths`.
+
+    Returns [] (never raises) when the directory is absent or unreadable.
+    """
+    directory = Path(schemas_dir) if schemas_dir is not None else VENDORED_SCHEMAS_DIR
+    try:
+        return sorted(
+            p for p in directory.glob(COCKPIT_SOURCE_GLOB) if p.is_file()
+        )
+    except OSError:
+        return []
+
+
+def _read_cockpit_source_path(vendor_path: Path) -> Optional[str]:
+    """Parse the `// cockpit-source-path: <repo-relative path>` header line.
+
+    Returns None (never raises) when the file is unreadable or carries no such
+    header — the caller folds that into INDETERMINATE, never a claimed match.
+    """
+    try:
+        text = vendor_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines()[:10]:
+        stripped = line.strip()
+        if stripped.startswith(_COCKPIT_SOURCE_PATH_PREFIX):
+            value = stripped[len(_COCKPIT_SOURCE_PATH_PREFIX):].strip()
+            return value or None
+    return None
+
+
+def _vendor_body_without_header(text: str) -> str:
+    """Strip the leading `//`-comment header block, leaving the mirrored body.
+
+    The header (cockpit-source-path, cockpit-source-pin, and any accompanying
+    `//` prose) is a claude-klabauter-local annotation absent from cockpit's own file, so
+    it must not itself register as drift. Strips every contiguous leading line
+    that starts with `//`; the first line that does not (cockpit's real content
+    always starts with `/**` or `import` for the file this row watches) ends the
+    strip. A future vendored file whose OWN upstream content also opens with a
+    `//` line would have that line incorrectly stripped too — acceptable for
+    this module's advisory, non-gating contract (worst case: a same-shaped
+    false MATCH on that one line, never a false DRIFT), not worth a stricter
+    delimiter for a single-entry coverage set.
+    """
+    lines = text.splitlines(keepends=True)
+    idx = 0
+    while idx < len(lines) and lines[idx].lstrip().startswith("//"):
+        idx += 1
+    return "".join(lines[idx:])
+
+
+def resolve_cockpit_repo_path() -> Optional[Path]:
+    """Best-effort resolution of the example-cockpit-repo sibling clone root.
+
+    Ladder (first rung that yields a directory wins), mirroring
+    `resolve_doe_repo_path`'s shape:
+      1. REPO_EXAMPLE_COCKPIT_REPO env var — operator/caller override.
+      2. registry `repos.example_cockpit_repo` (`coordinator_core.machine_resolver.registry_get`).
+
+    Returns None when neither rung resolves to an existing directory — the
+    honest "cockpit clone not present on this machine" answer. Never raises.
+    """
+    candidates: list[str] = []
+
+    env_root = os.environ.get("REPO_EXAMPLE_COCKPIT_REPO", "").strip()
+    if env_root:
+        candidates.append(env_root)
+
+    try:
+        registry_root = registry_get("repos.example_cockpit_repo") or ""
+    except Exception:
+        registry_root = ""
+    if registry_root:
+        candidates.append(registry_root)
+
+    for candidate in candidates:
+        try:
+            path = Path(candidate)
+            if path.is_dir():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def check_source_drift_advisory(vendor_path: Path, cockpit_repo_path: Path) -> dict[str, Any]:
+    """Non-gating drift check for one `*.vendor.ts` file against cockpit HEAD.
+
+    Same field shape as `schema_validate.check_schema_drift_advisory` (schema,
+    diverged, determinate, direction, divergence_kind, local_version,
+    doe_version, local_bump_class, doe_bump_class, doe_bump_note, detail) so
+    the aggregate reducer in `_scan` can treat both comparison kinds
+    uniformly — version/bump-class fields are always None here (cockpit
+    source files carry no such headers), never fabricated.
+
+    Negative-spec (mirrors check_schema_drift_advisory exactly):
+      - NEVER raises. An unreadable/foreign cockpit clone, an unresolvable
+        header, or a failed `git show` all fold into determinate=False,
+        diverged=False — indeterminate, never a claimed match or a false
+        drift alarm.
+    """
+    schema_filename = vendor_path.name
+
+    def _indeterminate(detail: str) -> dict[str, Any]:
+        return {
+            "schema": schema_filename,
+            "diverged": False,
+            "determinate": False,
+            "direction": None,
+            "divergence_kind": None,
+            "local_version": None,
+            "doe_version": None,
+            "local_bump_class": None,
+            "doe_bump_class": None,
+            "doe_bump_note": None,
+            "detail": detail,
+        }
+
+    source_path = _read_cockpit_source_path(vendor_path)
+    if source_path is None:
+        return _indeterminate(
+            f'Vendored file "{schema_filename}" carries no readable '
+            f'"{_COCKPIT_SOURCE_PATH_PREFIX}" header — cannot resolve which cockpit '
+            "file it mirrors; drift could not be determined."
+        )
+
+    unusable = foreign_repo_unusable_reason(cockpit_repo_path, timeout=30)
+    if unusable is not None:
+        return _indeterminate(
+            f"cockpit repo ({cockpit_repo_path}) could not be read as a git "
+            f"repository ({unusable}) — drift could not be determined; this is "
+            "not a claim that the vendored copy has diverged."
+        )
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cockpit_repo_path), "show", f"HEAD:{source_path}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=scoped_git_env(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _indeterminate(
+            f"Could not run git against cockpit repo ({cockpit_repo_path}): {exc}"
+        )
+
+    if result.returncode != 0:
+        return _indeterminate(
+            f'Cannot read cockpit HEAD source "{source_path}": {result.stderr.strip()}. '
+            f"cockpit repo path ({cockpit_repo_path}) unreadable or missing this file at HEAD."
+        )
+
+    cockpit_content = result.stdout
+    try:
+        local_content = vendor_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _indeterminate(f"Could not read vendored copy at {vendor_path}: {exc}")
+
+    local_body = _vendor_body_without_header(local_content)
+    diverged = local_body.rstrip("\n") != cockpit_content.rstrip("\n")
+
+    if diverged:
+        return {
+            "schema": schema_filename,
+            "diverged": True,
+            "determinate": True,
+            "direction": None,
+            "divergence_kind": None,
+            "local_version": None,
+            "doe_version": None,
+            "local_bump_class": None,
+            "doe_bump_class": None,
+            "doe_bump_note": None,
+            "detail": (
+                f'Vendored copy "{schema_filename}" diverges from cockpit HEAD '
+                f"({cockpit_repo_path}:{source_path}) — cockpit has moved since the "
+                "pin; re-derive and re-vendor (see the C1 derivation this row "
+                "guards)."
+            ),
+        }
+
+    return {
+        "schema": schema_filename,
+        "diverged": False,
+        "determinate": True,
+        "direction": None,
+        "divergence_kind": None,
+        "local_version": None,
+        "doe_version": None,
+        "local_bump_class": None,
+        "doe_bump_class": None,
+        "doe_bump_note": None,
+        "detail": (
+            f'Vendored copy "{schema_filename}" matches cockpit HEAD '
+            f"({cockpit_repo_path}:{source_path})."
+        ),
+    }
 
 
 def resolve_doe_repo_path() -> Optional[Path]:
@@ -192,18 +417,32 @@ def resolve_doe_repo_path() -> Optional[Path]:
 def scan_vendored_schema_drift(
     doe_repo_path: Optional[Path | str] = None,
     schemas_dir: Optional[Path | str] = None,
+    cockpit_repo_path: Optional[Path | str] = None,
 ) -> dict[str, Any]:
-    """Run the advisory over every vendored schema and reduce to one non-gating verdict.
+    """Run the advisory over every vendored schema/source and reduce to one non-gating verdict.
 
     Args:
         doe_repo_path: DoE clone root. None → resolve_doe_repo_path().
-        schemas_dir: vendored-schema directory. None → VENDORED_SCHEMAS_DIR.
+        schemas_dir: vendored-schema/source directory. None → VENDORED_SCHEMAS_DIR.
+        cockpit_repo_path: example-cockpit-repo clone root, for the `*.vendor.ts`
+            comparison. None → resolve_cockpit_repo_path(). Additive parameter
+            (2026-08-19, C7); appended last with a default so every existing
+            positional call site (doe_repo_path, schemas_dir) is unaffected.
 
     Returns a dict with keys:
         status (str): one of UNRESOLVED / DRIFT / INDETERMINATE / MATCH.
-        doe_repo_path (str | None): the clone root actually used.
-        checked (int): number of vendored schemas compared.
-        matched (list[str]): filenames confirmed byte-identical to DoE HEAD.
+        doe_repo_path (str | None): the DoE clone root actually used, if resolved.
+        cockpit_repo_path (str | None): the example-cockpit-repo clone root actually
+            used, if resolved — via resolve_cockpit_repo_path() (REPO_EXAMPLE_COCKPIT_REPO
+            env var, then registry `repos.example_cockpit_repo`). Additive key (2026-08-19,
+            C7 — the `*.vendor.ts`-vs-cockpit-HEAD parallel comparison described
+            below). None whenever no cockpit clone resolved on this machine; the two
+            repo-path keys resolve independently, so one being None does not imply
+            the other is.
+        checked (int): number of vendored files compared — JSON schemas (against
+            DoE HEAD) plus `*.vendor.ts` files (against cockpit HEAD), summed.
+        matched (list[str]): filenames confirmed to match their upstream HEAD
+            (DoE for `*.schema.json`, cockpit for `*.vendor.ts`).
         drifted (list[dict]): {schema, detail, direction, divergence_kind,
             local_version, doe_version, local_bump_class, doe_bump_class,
             doe_bump_note} per diverged schema.
@@ -249,11 +488,12 @@ def scan_vendored_schema_drift(
     INDETERMINATE with the exception text in `summary`.
     """
     try:
-        return _scan(doe_repo_path, schemas_dir)
+        return _scan(doe_repo_path, schemas_dir, cockpit_repo_path)
     except Exception as exc:  # noqa: BLE001 — total containment is this module's contract
         return {
             "status": STATUS_INDETERMINATE,
             "doe_repo_path": str(doe_repo_path) if doe_repo_path else None,
+            "cockpit_repo_path": str(cockpit_repo_path) if cockpit_repo_path else None,
             "checked": 0,
             "matched": [],
             "drifted": [],
@@ -268,13 +508,30 @@ def scan_vendored_schema_drift(
 def _scan(
     doe_repo_path: Optional[Path | str],
     schemas_dir: Optional[Path | str],
+    cockpit_repo_path: Optional[Path | str] = None,
 ) -> dict[str, Any]:
-    """Inner scan body — see scan_vendored_schema_drift for the contract it satisfies."""
+    """Inner scan body — see scan_vendored_schema_drift for the contract it satisfies.
+
+    Runs TWO independent, equally-globbed comparisons and folds both into one
+    aggregate verdict: the existing JSON-schema-vs-DoE-HEAD comparison, and a
+    parallel `*.vendor.ts`-vs-cockpit-HEAD comparison (2026-08-19, the C7
+    durability-gap mitigation for C1's cockpit `contributor_slug` derivation —
+    see this module's docstring). The two external repos resolve
+    independently; one being absent on this machine does NOT mask a real
+    drift finding from the other, so UNRESOLVED is reserved for the case where
+    NEITHER comparison could even be attempted.
+    """
     resolved_doe = (
         Path(doe_repo_path) if doe_repo_path is not None else resolve_doe_repo_path()
     )
+    resolved_cockpit = (
+        Path(cockpit_repo_path) if cockpit_repo_path is not None else resolve_cockpit_repo_path()
+    )
 
-    if resolved_doe is None:
+    schema_paths = vendored_schema_paths(Path(schemas_dir) if schemas_dir is not None else None)
+    source_paths = vendored_source_paths(Path(schemas_dir) if schemas_dir is not None else None)
+
+    if resolved_doe is None and resolved_cockpit is None:
         return {
             "status": STATUS_UNRESOLVED,
             "doe_repo_path": None,
@@ -284,27 +541,27 @@ def _scan(
             "indeterminate": [],
             "summary": (
                 "No sibling schema-source clone resolved on this machine (checked "
-                "REPO_DOE_CLAUDE, the .doe-root pointer, and the sibling-checkout layout) "
-                "— vendored-schema drift is not determinable here."
+                "REPO_DOE_CLAUDE, the .doe-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
+                "registry repos.example_cockpit_repo key) — vendored drift is not determinable "
+                "here."
             ),
         }
 
-    paths = vendored_schema_paths(Path(schemas_dir) if schemas_dir is not None else None)
-    if not paths:
+    if not schema_paths and not source_paths:
         directory = (
             Path(schemas_dir) if schemas_dir is not None else VENDORED_SCHEMAS_DIR
         )
         return {
             "status": STATUS_INDETERMINATE,
-            "doe_repo_path": str(resolved_doe),
+            "doe_repo_path": str(resolved_doe) if resolved_doe else None,
             "checked": 0,
             "matched": [],
             "drifted": [],
             "indeterminate": [],
             "summary": (
-                f"No vendored schemas found under {directory} — nothing to compare; "
-                "treating as indeterminate rather than clean (an empty coverage set is "
-                "not evidence of no drift)."
+                f"No vendored schemas or sources found under {directory} — nothing to "
+                "compare; treating as indeterminate rather than clean (an empty coverage "
+                "set is not evidence of no drift)."
             ),
         }
 
@@ -312,72 +569,117 @@ def _scan(
     drifted: list[dict[str, str]] = []
     indeterminate: list[dict[str, str]] = []
 
-    for schema_path in paths:
-        result = check_schema_drift_advisory(schema_path, resolved_doe)
-        name = str(result.get("schema") or schema_path.name)
-        detail = str(result.get("detail") or "")
-        # `determinate` is the advisory's discriminator for its diverged=False overload
-        # (matches vs could-not-read). Absent key → treat as determinate so an older
-        # advisory build degrades to today's diverged-only semantics, not to a wall of
-        # false indeterminates.
-        if not result.get("determinate", True):
-            indeterminate.append({"schema": name, "detail": detail})
-        elif result.get("diverged"):
-            # `direction` (WE_AHEAD/WE_BEHIND/BOTH, absent -> None on an older advisory
-            # build) is the field this watch exists to surface: a DRIFT verdict that
-            # cannot say who moved is unactionable — see this module's docstring and
-            # the memo it links.
-            drifted.append({
-                "schema": name,
-                "detail": detail,
-                "direction": result.get("direction"),
-                "divergence_kind": result.get("divergence_kind"),
-                "local_version": result.get("local_version"),
-                "doe_version": result.get("doe_version"),
-                "local_bump_class": result.get("local_bump_class"),
-                "doe_bump_class": result.get("doe_bump_class"),
-                "doe_bump_note": result.get("doe_bump_note"),
+    if resolved_doe is None and schema_paths:
+        for schema_path in schema_paths:
+            indeterminate.append({
+                "schema": schema_path.name,
+                "detail": (
+                    "No sibling DoE-claude clone resolved on this machine — drift "
+                    "could not be determined."
+                ),
             })
-        else:
-            matched.append(name)
+    elif resolved_doe is not None:
+        for schema_path in schema_paths:
+            result = check_schema_drift_advisory(schema_path, resolved_doe)
+            name = str(result.get("schema") or schema_path.name)
+            detail = str(result.get("detail") or "")
+            # `determinate` is the advisory's discriminator for its diverged=False overload
+            # (matches vs could-not-read). Absent key → treat as determinate so an older
+            # advisory build degrades to today's diverged-only semantics, not to a wall of
+            # false indeterminates.
+            if not result.get("determinate", True):
+                indeterminate.append({"schema": name, "detail": detail})
+            elif result.get("diverged"):
+                # `direction` (WE_AHEAD/WE_BEHIND/BOTH, absent -> None on an older advisory
+                # build) is the field this watch exists to surface: a DRIFT verdict that
+                # cannot say who moved is unactionable — see this module's docstring and
+                # the memo it links.
+                drifted.append({
+                    "schema": name,
+                    "detail": detail,
+                    "direction": result.get("direction"),
+                    "divergence_kind": result.get("divergence_kind"),
+                    "local_version": result.get("local_version"),
+                    "doe_version": result.get("doe_version"),
+                    "local_bump_class": result.get("local_bump_class"),
+                    "doe_bump_class": result.get("doe_bump_class"),
+                    "doe_bump_note": result.get("doe_bump_note"),
+                })
+            else:
+                matched.append(name)
 
-    checked = len(paths)
+    if resolved_cockpit is None and source_paths:
+        for source_path in source_paths:
+            indeterminate.append({
+                "schema": source_path.name,
+                "detail": (
+                    "No sibling example-cockpit-repo clone resolved on this machine (checked "
+                    "REPO_EXAMPLE_COCKPIT_REPO and the registry repos.example_cockpit_repo key) — "
+                    "drift could not be determined."
+                ),
+            })
+    elif resolved_cockpit is not None:
+        for source_path in source_paths:
+            result = check_source_drift_advisory(source_path, resolved_cockpit)
+            name = str(result.get("schema") or source_path.name)
+            detail = str(result.get("detail") or "")
+            if not result.get("determinate", True):
+                indeterminate.append({"schema": name, "detail": detail})
+            elif result.get("diverged"):
+                drifted.append({
+                    "schema": name,
+                    "detail": detail,
+                    "direction": result.get("direction"),
+                    "divergence_kind": result.get("divergence_kind"),
+                    "local_version": result.get("local_version"),
+                    "doe_version": result.get("doe_version"),
+                    "local_bump_class": result.get("local_bump_class"),
+                    "doe_bump_class": result.get("doe_bump_class"),
+                    "doe_bump_note": result.get("doe_bump_note"),
+                })
+            else:
+                matched.append(name)
+
+    checked = len(schema_paths) + len(source_paths)
 
     if drifted:
         # Named + directioned, one segment per drifted file — the skimmable line a
         # daily cadence surface reads without opening the doctor-probe dump: WHAT
         # drifted, WHICH DIRECTION (we-are-ahead / we-are-behind / both), and DoE's
         # declared bump class alongside it (verbatim surface only — no hold/no-hold
-        # verdict is derived here; see the docstring's negative-spec).
+        # verdict is derived here; see the docstring's negative-spec). Cockpit-source
+        # entries never carry a direction/bump-class (None on both), so they render
+        # as "[direction unknown]" — accurate, not a defect.
         named = ", ".join(
             f"{d['schema']} [{d.get('direction') or 'direction unknown'}"
             f"{', bump-class ' + d['doe_bump_class'] if d.get('doe_bump_class') else ''}]"
             for d in drifted
         )
         extra = (
-            f" ({len(indeterminate)} further schema(s) indeterminate)"
+            f" ({len(indeterminate)} further indeterminate)"
             if indeterminate
             else ""
         )
         status, summary = STATUS_DRIFT, (
-            f"{len(drifted)}/{checked} vendored schema(s) diverge from DoE HEAD: "
-            f"{named}{extra}. DoE has moved since the pin — re-vendor."
+            f"{len(drifted)}/{checked} vendored file(s) diverge from their upstream HEAD: "
+            f"{named}{extra}. Upstream has moved since the pin — re-vendor."
         )
     elif indeterminate:
         names = ", ".join(d["schema"] for d in indeterminate)
         status, summary = STATUS_INDETERMINATE, (
             f"INDETERMINATE — could not compare {len(indeterminate)}/{checked} vendored "
-            f"schema(s) against DoE HEAD at {resolved_doe}: {names}. This is NOT a "
-            "drift finding and NOT a clean bill of health; the check did not run."
+            f"file(s) against upstream HEAD: {names}. This is NOT a drift finding and "
+            "NOT a clean bill of health; the check did not run."
         )
     else:
         status, summary = STATUS_MATCH, (
-            f"All {checked} vendored schema(s) match DoE HEAD at {resolved_doe}."
+            f"All {checked} vendored file(s) match their upstream HEAD."
         )
 
     return {
         "status": status,
-        "doe_repo_path": str(resolved_doe),
+        "doe_repo_path": str(resolved_doe) if resolved_doe else None,
+        "cockpit_repo_path": str(resolved_cockpit) if resolved_cockpit else None,
         "checked": checked,
         "matched": matched,
         "drifted": drifted,

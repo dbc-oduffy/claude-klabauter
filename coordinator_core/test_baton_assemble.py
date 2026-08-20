@@ -2889,6 +2889,7 @@ class TestApplyBaseClosedDispatchRejection:
             "handoff.stamp_phase",
             "handoff.author_fork",
             "handoff.supersede_predecessor",
+            "baton-stamp-carried-ids",
         ):
             assert callable(ba_apply._resolve_cli(name))
 
@@ -2901,6 +2902,7 @@ class TestApplyBaseClosedDispatchRejection:
             "handoff.author_fork",
             "handoff.supersede_predecessor",
             "handoff-carry-gate",
+            "baton-stamp-carried-ids",
         }
 
 
@@ -2931,6 +2933,7 @@ class TestEveryEmittedDirectiveActuallyDispatches:
         "handoff.stamp_phase": "handoff.stamp_phase",
         "handoff.author_fork": "handoff.author_fork",
         "handoff.supersede_predecessor": "handoff.archive_transition",
+        "baton-stamp-carried-ids": None,
     }
 
     def test_every_emitted_directive_cli_is_in_the_dispatch_table(self, tmp_path):

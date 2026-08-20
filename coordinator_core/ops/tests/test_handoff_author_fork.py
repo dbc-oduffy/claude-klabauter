@@ -1030,6 +1030,35 @@ class TestArtifactWrite:
         content = Path(result["handoff_path"]).read_text(encoding="utf-8")
         assert "minted_by" not in content
 
+    def test_human_assignee_stamped_end_to_end_via_creation_door(self, tmp_path, monkeypatch):
+        """C4 (the-tracker-names-an-owner): the author-mode creation door stamps
+        `human_assignee` from the SAME `resolve_operating_person()` call already
+        used for `minted_by` — caller-supplied hand-down, no second resolution."""
+        import coordinator_core.ops.handoff_author_fork as haf
+
+        monkeypatch.setattr(
+            haf,
+            "resolve_operating_person",
+            lambda: {"github": "dbc-example-operator", "contributor_slug": "example-operator"},
+        )
+        repo_root, result = self._invoke_fork(tmp_path, monkeypatch)
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert "human_assignee: example-operator" in content
+
+    def test_human_assignee_absent_via_creation_door_when_resolver_unresolvable(
+        self, tmp_path, monkeypatch
+    ):
+        """Unresolvable identity omits the key entirely -- no null, no sentinel --
+        matching the existing `minted_by` contract."""
+        import coordinator_core.ops.handoff_author_fork as haf
+
+        monkeypatch.setattr(haf, "resolve_operating_person", lambda: {})
+        repo_root, result = self._invoke_fork(tmp_path, monkeypatch)
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert "human_assignee" not in content
+
     def test_result_carries_handoff_path_and_id(self, tmp_path, monkeypatch):
         """Result carries handoff_path (absolute path) and handoff_id (stem)."""
         repo_root, result = self._invoke_fork(tmp_path, monkeypatch)

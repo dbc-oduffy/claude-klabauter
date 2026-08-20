@@ -3,7 +3,7 @@ ambient live-tree rungs".
 
 Chunk: docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C6
 
-C5 gave `coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class()`
+C5 gave `coordinator_core.engine_root.coordinator_engine_root_with_class()`
 the DR-132/stamp-gated ladder: the single place that answers "which engine
 executes?" for every caller. Before C6, two rungs inside
 `cc_invoke._resolve_claude_klabauter_root()` (the DISPATCH axis — consumed by
@@ -18,7 +18,7 @@ the loop. Rung 3 was documented gate-blind outright.
 C6's fix: both rungs now supply a CANDIDATE only, delegated through the same
 nested `_delegate_to_gate()` helper Rung 2 (registry) already used — the
 single source of truth for the DISPATCH answer is
-`coordinator_claude_klabauter_root_with_class()`, never re-derived inline. This file
+`coordinator_engine_root_with_class()`, never re-derived inline. This file
 pins that structural closure two ways: a source-level guard that neither rung
 answers directly any more, and a behavioral case where delegation's answer
 genuinely diverges from what the closed-over rung would have returned
@@ -131,7 +131,7 @@ def _hermetic_child_env(isolated_home: str, extra: dict[str, str] | None = None)
 def _build_self_locatable_checkout_with_gate_stub(root: Path, *, gate_answer: str) -> tuple[Path, Path]:
     """Build a synthetic checkout at `root / "flat-checkout"` that
     `_walk_up_to_checkout` can self-locate, whose stub
-    `coordinator_core/claude_klabauter_root.py` answers `gate_answer` — deliberately
+    `coordinator_core/engine_root.py` answers `gate_answer` — deliberately
     NOT the checkout's own path, so a passing test proves the final answer
     came from delegation, not from trusting self-location verbatim.
 
@@ -143,8 +143,8 @@ def _build_self_locatable_checkout_with_gate_stub(root: Path, *, gate_answer: st
     (checkout_root / "coordinator_core").mkdir(parents=True)
     (checkout_root / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
     (checkout_root / "pyproject.toml").write_text("[project]\nname = \"stub\"\n", encoding="utf-8")
-    (checkout_root / "coordinator_core" / "claude_klabauter_root.py").write_text(
-        "def coordinator_claude_klabauter_root_with_class():\n"
+    (checkout_root / "coordinator_core" / "engine_root.py").write_text(
+        "def coordinator_engine_root_with_class():\n"
         f"    return ({gate_answer!r}, 'resolved-engine')\n",
         encoding="utf-8",
     )
@@ -168,7 +168,7 @@ _RESOLVE_SNIPPET = textwrap.dedent(
 def test_self_location_answer_can_diverge_from_the_self_located_path():
     """The closed hole, demonstrated: on a box where the gate would redirect
     to a published engine mirror (simulated here by the stub's own
-    `coordinator_claude_klabauter_root_with_class()` answering a DIFFERENT path than
+    `coordinator_engine_root_with_class()` answering a DIFFERENT path than
     the checkout self-location found), `_resolve_claude_klabauter_root()`'s terminal
     rung now returns the GATE's answer, not the self-located tree's own path.
     Before C6 this was structurally impossible — Rung 3 always returned

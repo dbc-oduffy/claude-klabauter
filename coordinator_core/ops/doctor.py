@@ -254,10 +254,10 @@ def _check_sibling_resolution() -> Layer:
     findings: List[Finding] = []
     status = "ok"
 
-    from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+    from coordinator_core.engine_root import coordinator_engine_root
 
     try:
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        claude_klabauter_root = coordinator_engine_root()
     except RuntimeError as exc:
         status = "broken"
         findings.append(Finding("broken", f"claude-klabauter root did not resolve: {exc}"))

@@ -1,12 +1,12 @@
 """
 coordinator_core.tests.test_liveness — targeted coverage for liveness._lib_path()'s
-Claude-klabauter-root-anchored resolution of the coordinator-session.sh successor.
+engine-root-anchored resolution of the coordinator-session.sh successor.
 
 2026-07-22 rewrite: coordinator-session.sh (and the __file__-walk +
 resolve-coordinator-clone subprocess ladder that used to hunt it) is retired
 repo-wide. _lib_path() now resolves a single candidate,
 <claude_klabauter_root>/coordinator/lib/coordinator_session.py, via
-coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root() — pinned
+coordinator_core.engine_root.coordinator_engine_root() — pinned
 deterministically in tests via CLAUDE_KLABAUTER_ROOT env, never the real machine
 registry or DoE checkout. Superseded coverage (the old 3-rung ladder's
 success/nonzero-rc/timeout/OSError branches) is gone with the ladder itself.
@@ -48,7 +48,7 @@ def _reset_cache(monkeypatch):
     monkeypatch.setattr(_liveness, "_CACHED_LIB", None)
 
 
-def test_lib_path_resolves_via_claude_klabauter_root_when_file_present(tmp_path, monkeypatch):
+def test_lib_path_resolves_via_engine_root_when_file_present(tmp_path, monkeypatch):
     """CLAUDE_KLABAUTER_ROOT resolvable and coordinator/lib/coordinator_session.py present
     under it -> that path is returned and cached."""
     _reset_cache(monkeypatch)
@@ -61,7 +61,7 @@ def test_lib_path_resolves_via_claude_klabauter_root_when_file_present(tmp_path,
 
     result = _liveness._lib_path()
 
-    assert result == str(script), f"Expected claude-klabauter-root-anchored successor path; got {result}"
+    assert result == str(script), f"Expected engine-root-anchored successor path; got {result}"
 
 
 def test_lib_path_missing_successor_file_returns_none(tmp_path, monkeypatch):
@@ -78,8 +78,8 @@ def test_lib_path_missing_successor_file_returns_none(tmp_path, monkeypatch):
     assert result is None
 
 
-def test_lib_path_unresolvable_claude_klabauter_root_degrades_to_none(monkeypatch):
-    """coordinator_claude_klabauter_root() raising RuntimeError (no CLAUDE_KLABAUTER_ROOT env, no
+def test_lib_path_unresolvable_engine_root_degrades_to_none(monkeypatch):
+    """coordinator_engine_root() raising RuntimeError (no CLAUDE_KLABAUTER_ROOT env, no
     settings-home pointer, no machine-local registry entry) must degrade to
     None rather than raise — matching _lib_path()'s "or None if not found"
     contract, never a __file__-walk or subprocess fallback."""
@@ -87,9 +87,9 @@ def test_lib_path_unresolvable_claude_klabauter_root_degrades_to_none(monkeypatc
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
     def _raise():
-        raise RuntimeError("coordinator_claude_klabauter_root: cannot resolve CLAUDE_KLABAUTER_ROOT")
+        raise RuntimeError("coordinator_engine_root: cannot resolve CLAUDE_KLABAUTER_ROOT")
 
-    monkeypatch.setattr(_liveness, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(_liveness, "coordinator_engine_root", _raise)
 
     result = _liveness._lib_path()
 

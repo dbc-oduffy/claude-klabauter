@@ -481,7 +481,17 @@ def read_events(*, repo_root: Path) -> list[dict]:
     shard_dir = repo_root / EVENTS_DIR_RELPATH
     events: list[dict] = []
     if shard_dir.is_dir():
-        for shard_file in sorted(shard_dir.glob(EVENTS_SHARD_GLOB)):
+        # Merges the flat live shard (events.<slug>.jsonl) with any
+        # rotated-out months (<YYYY-MM>/events.<slug>.jsonl) -- rotation
+        # (rotate_month) relocates a closed month's lines out of the live
+        # shard but never renumbers or reorders them, and the cross-shard
+        # sort below recovers the right order regardless of which file a
+        # line currently lives in. See docs/plans/2026-08-18-sat-06-
+        # cockpit-consumption-seam.md § RULING 2026-08-20.
+        shard_files = sorted(shard_dir.glob(EVENTS_SHARD_GLOB)) + sorted(
+            shard_dir.glob(f"*/{EVENTS_SHARD_GLOB}")
+        )
+        for shard_file in shard_files:
             text = shard_file.read_text(encoding="utf-8")
             for line in _split_lines(text):
                 try:
@@ -535,6 +545,153 @@ def max_sequence(*, repo_root: Path, machine: str | None = None) -> int:
 
     sequence = tail.get("sequence", 0)
     return sequence if isinstance(sequence, int) else 0
+
+
+def _peer_shard_paths(repo_root: Path, slug: str) -> list[Path]:
+    """Every shard file holding *slug*'s full event history, oldest to
+    newest: any rotated ``<YYYY-MM>/events.<slug>.jsonl`` partitions in
+    ascending month order, followed by the live flat shard
+    (``events.<slug>.jsonl``) if it exists.
+
+    Read order matters to callers that fold this into a running digest or
+    sequence: ``sequence`` is monotonic across a machine's whole history and
+    ``rotate_month`` never renumbers it, so a rotated month's lines always
+    precede whatever remains in the live shard.
+    """
+    shard_dir = repo_root / EVENTS_DIR_RELPATH
+    rotated = sorted(shard_dir.glob(f"*/events.{slug}.jsonl"))
+    paths = list(rotated)
+    live = shard_dir / f"events.{slug}.jsonl"
+    if live.exists():
+        paths.append(live)
+    return paths
+
+
+def _all_machine_slugs(repo_root: Path) -> set[str]:
+    """Every machine slug with a shard anywhere on disk — flat live shard or
+    a rotated partition — so a peer that has been fully rotated out of its
+    live shard (were that ever to happen) is still visited by
+    ``fold_observed_set``.
+    """
+    shard_dir = repo_root / EVENTS_DIR_RELPATH
+    prefix, suffix = "events.", ".jsonl"
+    slugs: set[str] = set()
+    for shard_file in shard_dir.glob(EVENTS_SHARD_GLOB):
+        slugs.add(shard_file.name[len(prefix) : -len(suffix)])
+    for shard_file in shard_dir.glob(f"*/{EVENTS_SHARD_GLOB}"):
+        slugs.add(shard_file.name[len(prefix) : -len(suffix)])
+    return slugs
+
+
+def _event_month(line: str) -> str | None:
+    """The ``YYYY-MM`` prefix of a shard line's ``observed_at`` field, or
+    ``None`` if the line is malformed or the field is missing/not a string.
+
+    ``rotate_month`` treats a line it cannot date as belonging to the live
+    shard — never rotated — the same conservative default the rest of this
+    module applies to anything it cannot parse confidently.
+    """
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    observed_at = record.get("observed_at")
+    if not isinstance(observed_at, str) or len(observed_at) < 7:
+        return None
+    return observed_at[:7]
+
+
+def rotate_month(*, repo_root: Path, month: str, machine: str | None = None) -> int:
+    """Relocate a CLOSED month's events out of the live flat shard into
+    ``state/sovereign-tracker/<month>/events.<slug>.jsonl``.
+
+    Standalone maintenance step per the C7 ruling (rotation-on-close, not
+    partition-on-write — docs/plans/2026-08-18-sat-06-cockpit-consumption-
+    seam.md § RULING 2026-08-20 "C7 is rotation-on-close, not partition-on-
+    write"). Never called from the write path — ``append_event`` and
+    ``append_events`` are untouched by this function's existence: sequence,
+    the tail read, own-shard dedup, and ``locked_rmw`` all keep their
+    current shape.
+
+    *month* is a ``YYYY-MM`` string; only lines whose ``observed_at`` starts
+    with that prefix are relocated (a line this function cannot date, per
+    ``_event_month``, is left in the live shard, never moved).
+
+    Returns the count of events relocated — 0 if none matched. This makes a
+    repeated call for the same month idempotent: the first call already
+    removed those lines from the live shard, so a second call has nothing
+    left to move. Also idempotent against a prior run that reached the
+    rotated file but not the live-shard trim (e.g. an interrupted run): a
+    candidate line whose ``id`` already appears in the rotated file is
+    skipped rather than appended a second time.
+
+    Ordering: the rotated file is written BEFORE the live shard is
+    trimmed, so a crash between the two steps leaves the data present in
+    both places (safe — readers already merge across both layouts, see
+    ``read_events``/``fold_observed_set``/``resolve_observed_set``) rather
+    than in neither.
+
+    Locks the live shard through the same ``locked_rmw`` target
+    ``append_event`` uses, so rotation never races a concurrent append.
+    """
+    slug = machine if machine is not None else machine_slug()
+    live = shard_path(repo_root, machine=slug)
+    if not live.exists():
+        return 0
+
+    candidates = [
+        line
+        for line in _split_lines(live.read_text(encoding="utf-8"))
+        if _event_month(line) == month
+    ]
+    if not candidates:
+        return 0
+
+    rotated_dir = repo_root / EVENTS_DIR_RELPATH / month
+    rotated_dir.mkdir(parents=True, exist_ok=True)
+    rotated_path = rotated_dir / f"events.{slug}.jsonl"
+
+    existing_ids: set = set()
+    existing_text = ""
+    if rotated_path.exists():
+        existing_text = rotated_path.read_text(encoding="utf-8")
+        for line in _split_lines(existing_text):
+            try:
+                existing_record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(existing_record, dict) and existing_record.get("id"):
+                existing_ids.add(existing_record["id"])
+
+    new_lines: list[str] = []
+    for line in candidates:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            record = None
+        record_id = record.get("id") if isinstance(record, dict) else None
+        if record_id is not None and record_id in existing_ids:
+            continue
+        new_lines.append(line)
+
+    if new_lines:
+        if existing_text and not existing_text.endswith("\n"):
+            existing_text += "\n"
+        rotated_path.write_text(
+            existing_text + "".join(line + "\n" for line in new_lines),
+            encoding="utf-8",
+        )
+
+    def _mutate(old_text: str) -> str:
+        remaining = [
+            line for line in _split_lines(old_text) if _event_month(line) != month
+        ]
+        return "".join(line + "\n" for line in remaining)
+
+    locked_rmw(live, _mutate, repo_root=repo_root, missing_ok=True)
+    return len(candidates)
 
 
 def _prefix_digest(event_ids: list[str]) -> str:
@@ -691,45 +848,48 @@ def fold_observed_set(*, repo_root: Path) -> dict | None:
         return None
 
     own_slug = machine_slug()
-    prefix = "events."
-    suffix = ".jsonl"
 
+    # Visits every peer slug found across BOTH layouts — the flat live
+    # shard and any rotated-out <YYYY-MM>/events.<slug>.jsonl partitions
+    # (see docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md §
+    # RULING 2026-08-20). A rotated peer's history is split across
+    # multiple files; _peer_shard_paths orders them oldest-to-newest so
+    # event_ids/current_sequence below accumulate in the same order the
+    # peer originally appended them, and each file is still read EXACTLY
+    # ONCE — sequence and prefix_digest are derived from these reads alone,
+    # never a second, independent call to max_sequence() — see the
+    # docstring's TOCTOU note above.
     observed_set: dict[str, dict[str, object]] = {}
-    for shard_file in sorted(shard_dir.glob(EVENTS_SHARD_GLOB)):
-        name = shard_file.name
-        slug = name[len(prefix):-len(suffix)]
+    for slug in sorted(_all_machine_slugs(repo_root)):
         if slug == own_slug:
             continue
 
-        # Exactly one read_text() per peer shard: sequence and
-        # prefix_digest below are BOTH derived from this single read, not
-        # from a second, independent call to max_sequence() — see the
-        # docstring's TOCTOU note above.
-        text = shard_file.read_text(encoding="utf-8")
         event_ids: list[str] = []
         current_sequence = 0
-        for line in _split_lines(text):
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise TrackerStoreError(
-                    f"malformed line in shard {shard_file}: {exc}"
-                ) from exc
-            if not isinstance(record, dict):
-                raise TrackerStoreError(
-                    f"malformed line in shard {shard_file}: not a JSON object"
-                )
-            sequence = record.get("sequence")
-            if not isinstance(sequence, int):
-                continue
-            record_id = record.get("id")
-            if not record_id:
-                raise TrackerStoreError(
-                    f"malformed record in shard {shard_file}: missing or "
-                    "empty 'id'"
-                )
-            event_ids.append(record_id)
-            current_sequence = sequence
+        for shard_file in _peer_shard_paths(repo_root, slug):
+            text = shard_file.read_text(encoding="utf-8")
+            for line in _split_lines(text):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise TrackerStoreError(
+                        f"malformed line in shard {shard_file}: {exc}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise TrackerStoreError(
+                        f"malformed line in shard {shard_file}: not a JSON object"
+                    )
+                sequence = record.get("sequence")
+                if not isinstance(sequence, int):
+                    continue
+                record_id = record.get("id")
+                if not record_id:
+                    raise TrackerStoreError(
+                        f"malformed record in shard {shard_file}: missing or "
+                        "empty 'id'"
+                    )
+                event_ids.append(record_id)
+                current_sequence = sequence
 
         if not event_ids:
             continue
@@ -895,12 +1055,22 @@ def resolve_observed_set(marker: dict, *, repo_root: Path) -> dict:
                 f"sequence: {claimed_seq!r}"
             )
 
-        # Exactly one read_text() per claimed peer shard: current_max and
-        # event_ids below are BOTH derived from this single read, not from
-        # a separate max_sequence() call followed by a second read — see
-        # the docstring's TOCTOU note above.
+        # Concatenates every shard file for this peer — any rotated
+        # <YYYY-MM>/events.<slug>.jsonl partitions (ascending) then the
+        # live flat shard — so a claim whose justifying bytes have been
+        # rotated out of the live shard is still visible here (see
+        # docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md §
+        # RULING 2026-08-20). Each file is read EXACTLY ONCE via
+        # _peer_shard_paths; current_max and event_ids below are BOTH
+        # derived from these reads, not from a separate max_sequence()
+        # call followed by a second read — see the docstring's TOCTOU
+        # note above. `path` is kept only as a display name for error
+        # messages below.
         path = shard_path(repo_root, machine=slug)
-        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        text = "".join(
+            shard_file.read_text(encoding="utf-8")
+            for shard_file in _peer_shard_paths(repo_root, slug)
+        )
         lines = _split_lines(text)
 
         if lines:

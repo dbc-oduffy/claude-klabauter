@@ -256,7 +256,34 @@ GENERATES = [
 # (cockpit and rag) and claude-central-em's ratification of this MINOR
 # classification, both of which the 3.11.0 bump above carried. Heads-up sent;
 # do not treat the census as discharged until it is recorded here.
-CONTRACT_VERSION = "3.12.0"
+#
+# 3.12.0 -> 3.13.0 (C9, docs/plans/2026-08-19-the-tracker-names-an-owner.md): adds
+# three OPTIONAL, nullable human_* fields — `human_assignee`/`human_claimant` on
+# HandoffSummary, `human_owner` on TrackerSummary (entities/summaries.py,
+# entities/tracker_summary.py) — carrying C1's `contributor_slug` on their own NEW
+# prefixed keys, never a value on the pre-existing `owner` key. Additive/non-breaking:
+# a genuinely optional field (Zod `.nullable().optional()`, this port's
+# `x-zod-nullable-optional` marker), same class as `additional_predecessors`/
+# `forked_from`/`disposed_successors` above. Same reasoning as every prior additive
+# bump in this changelog: nothing narrowed, nothing removed, nothing required-since-
+# never-optional.
+#
+# claude-central-em warned BEFORE this edit, not after — cross-repo/inbox/
+# 2026-08-20-claude-klabauter-em-cockpit-schema-additive-minor-bump-for-the-human-axis.md
+# (their tree, committed 1c30106). CLAUDE.md names this module DoE's sole
+# regeneration path for their frozen schema; that heads-up is the discharge of the
+# "warn before, not after" obligation this bump owed.
+#
+# ACTIVATION IS GATED, SEPARATELY FROM THIS BUMP: the emit sections
+# (ops/emit/sections/handoffs.py, trackers.py) populate these keys only when the
+# machine-local registry flag `_shared.human_axis_vendored()` is on (default OFF).
+# This bump alone changes zero emitted bytes — see that function's own docstring
+# and the C9 chunk body for the full "why a switch" rationale: cockpit's
+# `coordinatorRootSchema` is `.strict()`, so an unvendored key does not degrade, it
+# rejects the whole payload. Their vendored copy is 3.12.0 at time of writing;
+# flipping the switch on the assumption they will have re-vendored by then is
+# exactly the failure mode the switch exists to foreclose.
+CONTRACT_VERSION = "3.13.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

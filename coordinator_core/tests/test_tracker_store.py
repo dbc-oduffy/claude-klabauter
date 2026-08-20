@@ -113,6 +113,7 @@ from coordinator_core.tracker_store import (  # noqa: E402
     resolve_observed_set,
     resolve_observed_set_for_event,
     resolve_observed_set_union_for_event,
+    rotate_month,
     shard_path,
 )
 from coordinator_core.locked_write import LockTimeout, MutateAbort  # noqa: E402,F401
@@ -867,10 +868,62 @@ class TestAC4PlacementAndDurablePlaneIsolation:
 # see docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
 # § Amendment (2026-08-11) — sat-03's transition-event vocabulary affirmed
 # bound-by-bound.
+#
+# sat-06 (2026-08-20) added coordinator_core/ops/tracker/push_suggestion.py
+# — C4's producer-facing tracker.push_suggestion op, the seam a foreign
+# cross-language process (cockpit) uses to push one sovereign-tracker
+# item-event bundle in. RULING 2026-08-20 ("C4 mints the event id; only
+# then is the DR-241 affirmation honest") required claude-klabauter to mint the event
+# id itself before this affirmation could be truthfully written — see that
+# ruling in docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md and
+# push_suggestion.py's own `_mint_event_id`. Fresh DR-241 bound-by-bound
+# affirmation against push_suggestion.py's real handler code, in the same
+# shape as the `## Amendment (2026-08-05)` and `## Amendment (2026-08-11)`
+# tables in docs/decisions/DR-241-sovereign-tracker-substrate-write-
+# carveout.md:
+#
+#   (i)   id content-derived AND globally unique — `push_suggestion.py ::
+#         _mint_event_id` mints `evt-<machine_slug()>-<digest12>`,
+#         `digest12` a SHA-256 hexdigest prefix (12 hex chars) over the
+#         canonical JSON of the caller's event content plus a fresh
+#         microsecond timestamp folded in as the per-event nonce.
+#         Content-derived (digest over the event) satisfies the base half;
+#         the `<machine>-` component satisfies the global-uniqueness half.
+#         A caller-supplied `event.id` is refused loud
+#         (`PushSuggestionMalformedError`), never silently overwritten —
+#         `push_suggestion.py`'s handler body, the `if "id" in event:`
+#         check immediately after the event-shape validation.
+#   (ii)  commutative modulo total order — this op performs exactly ONE
+#         `tracker_store.append_event` call per invocation (local arm,
+#         `_write_local`) or delivers exactly one envelope (peer arm,
+#         `_deliver_envelope`) — never a batch, never a re-ordering of
+#         prior events; `append_event`'s own sequence/logical-clock bump
+#         governs ordering unchanged, this op adds no second ordering
+#         mechanism.
+#   (iii) git-reversible — the local arm is append-only via
+#         `tracker_store.append_event` (no in-place mutation); the peer
+#         arm's envelope is a plain committed file addition
+#         (`_commit_envelope`), reversible by `git revert` like any other
+#         commit.
+#   (iv)  no terminality-re-verify — this op never reads an item's prior
+#         terminal state before writing; it is a pure forward append/
+#         delivery.
+#   (v)   in-process command-type dispatch only — registered as a
+#         command-type op via `@register_op("tracker.push_suggestion")`; no
+#         UDS/HTTP surface exists in this repo (see
+#         `test_no_uds_or_http_surface_exists_to_expose_tracker_ops` below).
+#
+# Confinement of the write target: the local arm calls
+# `tracker_store.append_event` only (never a hand-built `state/`
+# literal — see `test_allowlisted_referencers_confine_writes_via_tracker_
+# store_api_only` below); the peer arm writes only under the resolved
+# receiver's `cross-repo/inbox/`, never `state/sovereign-tracker/` in a
+# peer tree (module docstring negative-spec, DR-338 D4).
 _ALLOWED_TRACKER_STORE_REFERENCERS = frozenset(
     {
         "coordinator_core/ops/tracker/fold_observed_set.py",
         "coordinator_core/ops/session/boot_sweep.py",
+        "coordinator_core/ops/tracker/push_suggestion.py",
         "coordinator_core/tracker_entities.py",
         "coordinator_core/tracker_projection.py",
         "coordinator_core/tracker_transitions.py",
@@ -3870,4 +3923,247 @@ class TestAC4NoVendoredPredicateOrRuntimeCrossRepoRead:
         assert hits == [], (
             f"cockpit's conformance fixture is co-vendored into this repo: {hits!r} "
             "— DEC-1/Anti-scope require it be read live off their clone, never copied here"
+        )
+
+
+# ---------------------------------------------------------------------------
+# C7 (sat-06) — rotation-on-close, per docs/plans/2026-08-18-sat-06-cockpit-
+# consumption-seam.md § RULING 2026-08-20 "C7 is rotation-on-close, not
+# partition-on-write". append_event/append_events are untouched; rotate_month
+# is a standalone maintenance step, and read_events/fold_observed_set/
+# resolve_observed_set are taught to merge the flat live shard with any
+# rotated <YYYY-MM>/events.<slug>.jsonl partitions.
+# ---------------------------------------------------------------------------
+
+
+class TestRotateMonthRelocatesClosedMonth:
+    def test_rotated_month_moves_out_of_live_shard_into_month_dir(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [
+                {**_event("evt-1", "2026-06-01T00:00:00Z"), "sequence": 1},
+                {**_event("evt-2", "2026-07-15T00:00:00Z"), "sequence": 2},
+                {**_event("evt-3", "2026-07-20T00:00:00Z"), "sequence": 3},
+            ],
+        )
+
+        moved = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert moved == 2
+
+        live_ids = [r["id"] for r in _read_raw_lines(shard_path(repo, machine="host-a"))]
+        assert live_ids == ["evt-1"]
+
+        rotated_path = repo / EVENTS_DIR_RELPATH / "2026-07" / "events.host-a.jsonl"
+        rotated_ids = [r["id"] for r in _read_raw_lines(rotated_path)]
+        assert rotated_ids == ["evt-2", "evt-3"]
+
+    def test_rotate_month_is_idempotent(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-07-15T00:00:00Z"), "sequence": 1}],
+        )
+
+        first = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert first == 1
+
+        second = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert second == 0
+
+        rotated_path = repo / EVENTS_DIR_RELPATH / "2026-07" / "events.host-a.jsonl"
+        rotated_ids = [r["id"] for r in _read_raw_lines(rotated_path)]
+        assert rotated_ids == ["evt-1"], "second rotation must not duplicate the moved line"
+
+    def test_rotate_month_skips_already_rotated_id_on_replayed_run(self, tmp_path):
+        # Simulates the crash window rotate_month's own docstring names:
+        # the rotated file already holds the line (a prior run reached
+        # that write) but the live shard was never trimmed.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-07-15T00:00:00Z"), "sequence": 1}],
+        )
+        rotated_dir = repo / EVENTS_DIR_RELPATH / "2026-07"
+        rotated_dir.mkdir(parents=True)
+        _write_shard(repo, "host-a", [{**_event("evt-1", "2026-07-15T00:00:00Z"), "sequence": 1}])
+        rotated_path = rotated_dir / "events.host-a.jsonl"
+        rotated_path.write_text(
+            (repo / EVENTS_DIR_RELPATH / "events.host-a.jsonl").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        moved = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert moved == 1
+
+        rotated_ids = [r["id"] for r in _read_raw_lines(rotated_path)]
+        assert rotated_ids == ["evt-1"], "replayed rotation must not duplicate an already-rotated id"
+
+        live_ids = [
+            r["id"]
+            for r in _read_raw_lines(repo / EVENTS_DIR_RELPATH / "events.host-a.jsonl")
+        ]
+        assert live_ids == []
+
+    def test_rotate_month_no_op_when_month_has_no_events(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-06-01T00:00:00Z"), "sequence": 1}],
+        )
+        moved = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert moved == 0
+        assert not (repo / EVENTS_DIR_RELPATH / "2026-07").exists()
+
+    def test_rotate_month_absent_shard_is_a_no_op(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        (repo / EVENTS_DIR_RELPATH).mkdir(parents=True)
+        moved = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert moved == 0
+
+    def test_shard_path_and_events_dir_relpath_unchanged_by_rotation(self, tmp_path):
+        # The ruling's own hard constraint: shard_path/EVENTS_DIR_RELPATH
+        # never point at a partitioned layout, even after rotation.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-07-15T00:00:00Z"), "sequence": 1}],
+        )
+        rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert shard_path(repo, machine="host-a") == repo / EVENTS_DIR_RELPATH / "events.host-a.jsonl"
+        assert EVENTS_DIR_RELPATH == "state/sovereign-tracker"
+
+
+class TestReadEventsMergesFlatAndPartitionedLayouts:
+    def test_rotated_month_still_readable_through_read_events(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [
+                {**_event("evt-1", "2026-06-01T00:00:00Z", applied_at="2026-06-01T00:00:00Z"), "sequence": 1},
+                {**_event("evt-2", "2026-07-15T00:00:00Z", applied_at="2026-07-15T00:00:00Z"), "sequence": 2},
+            ],
+        )
+        rotate_month(repo_root=repo, month="2026-06", machine="host-a")
+
+        ids = [r["id"] for r in read_events(repo_root=repo)]
+        assert ids == ["evt-1", "evt-2"], "rotated-out month must stay readable"
+
+    def test_mixed_flat_and_partitioned_corpus_reads_in_chronological_order(self, tmp_path):
+        repo = _make_git_repo(tmp_path / "repo")
+        # host-a: fully flat, no rotation.
+        _write_shard(
+            repo,
+            "host-a",
+            [
+                {**_event("a-1", "2026-01-01T00:00:00Z", applied_at="2026-01-01T00:00:02Z"), "sequence": 1},
+            ],
+        )
+        # host-b: one rotated month plus a live remainder.
+        _write_shard(
+            repo,
+            "host-b",
+            [
+                {**_event("b-1", "2026-06-01T00:00:00Z", applied_at="2026-01-01T00:00:01Z"), "sequence": 1},
+                {**_event("b-2", "2026-07-01T00:00:00Z", applied_at="2026-01-01T00:00:03Z"), "sequence": 2},
+            ],
+        )
+        rotate_month(repo_root=repo, month="2026-06", machine="host-b")
+
+        ids = [r["id"] for r in read_events(repo_root=repo)]
+        assert ids == ["b-1", "a-1", "b-2"], "cross-shard applied_at order must survive partitioning"
+
+    def test_read_events_untouched_when_no_rotation_has_happened(self, tmp_path):
+        # Regression guard: a fully-flat corpus (the common case today)
+        # must read identically to before this chunk.
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-01-01T00:00:00Z", applied_at="2026-01-01T00:00:00Z"), "sequence": 1}],
+        )
+        ids = [r["id"] for r in read_events(repo_root=repo)]
+        assert ids == ["evt-1"]
+
+
+class TestFoldObservedSetReadsAcrossRotatedPeerShards:
+    def test_fold_observed_set_vector_covers_rotated_and_live_peer_bytes(self, tmp_path, monkeypatch):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-peer",
+            [
+                {**_event("p-1", "2026-06-01T00:00:00Z"), "sequence": 1},
+                {**_event("p-2", "2026-07-01T00:00:00Z"), "sequence": 2},
+            ],
+        )
+        rotate_month(repo_root=repo, month="2026-06", machine="host-peer")
+
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "host-self")
+        marker = fold_observed_set(repo_root=repo)
+        assert marker is not None
+        component = marker["observed_set"]["host-peer"]
+        assert component["sequence"] == 2
+
+        # The digest must cover BOTH events (rotated + live), not just the
+        # live remainder — recompute it the same way the peer's full
+        # ordered history would.
+        from coordinator_core.tracker_store import _prefix_digest
+
+        assert component["prefix_digest"] == _prefix_digest(["p-1", "p-2"])
+
+    def test_resolve_observed_set_validates_claim_spanning_rotated_and_live(self, tmp_path, monkeypatch):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-peer",
+            [
+                {**_event("p-1", "2026-06-01T00:00:00Z"), "sequence": 1},
+                {**_event("p-2", "2026-07-01T00:00:00Z"), "sequence": 2},
+            ],
+        )
+        rotate_month(repo_root=repo, month="2026-06", machine="host-peer")
+
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "host-self")
+        marker = fold_observed_set(repo_root=repo)
+        assert marker is not None
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+        assert resolved["host-peer"] != OBSERVED_SET_UNKNOWN
+        assert resolved["host-peer"]["sequence"] == 2
+
+    def test_resolve_observed_set_detects_tampering_across_rotation(self, tmp_path, monkeypatch):
+        repo = _make_git_repo(tmp_path / "repo")
+        _write_shard(
+            repo,
+            "host-peer",
+            [
+                {**_event("p-1", "2026-06-01T00:00:00Z"), "sequence": 1},
+                {**_event("p-2", "2026-07-01T00:00:00Z"), "sequence": 2},
+            ],
+        )
+        rotate_month(repo_root=repo, month="2026-06", machine="host-peer")
+
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "host-self")
+        marker = fold_observed_set(repo_root=repo)
+        assert marker is not None
+
+        # Tamper with the ROTATED partition's content after the fold.
+        rotated_path = repo / EVENTS_DIR_RELPATH / "2026-06" / "events.host-peer.jsonl"
+        _write_shard(repo, "host-peer-tmp", [{**_event("p-1-rewritten", "2026-06-01T00:00:00Z"), "sequence": 1}])
+        rotated_path.write_text(
+            (repo / EVENTS_DIR_RELPATH / "events.host-peer-tmp.jsonl").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        (repo / EVENTS_DIR_RELPATH / "events.host-peer-tmp.jsonl").unlink()
+
+        resolved = resolve_observed_set(marker, repo_root=repo)
+        assert resolved["host-peer"] is OBSERVED_SET_UNKNOWN, (
+            "a digest mismatch inside the rotated partition must still resolve unknown"
         )

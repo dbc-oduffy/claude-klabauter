@@ -3,9 +3,9 @@ root through the class-AWARE resolver, never the class-less one.
 
 Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C6
 
-Purpose: `coordinator_claude_klabauter_root()` is a class-less three-rung ladder;
+Purpose: `coordinator_engine_root()` is a class-less three-rung ladder;
 the published-engine gate (live-working-tree vs. published-mirror) lives
-only on its sibling `coordinator_claude_klabauter_root_with_class()`. An install-chain
+only on its sibling `coordinator_engine_root_with_class()`. An install-chain
 module that imports the class-less form is gate-blind by construction --
 this test is the mechanical backstop that a future importer cannot silently
 regress back onto the bypassing form.
@@ -25,8 +25,8 @@ from pathlib import Path
 
 _INSTALL_DIR = Path(__file__).resolve().parent.parent
 
-_CLASS_LESS_NAME = "coordinator_claude_klabauter_root"
-_CLASS_AWARE_NAME = "coordinator_claude_klabauter_root_with_class"
+_CLASS_LESS_NAME = "coordinator_engine_root"
+_CLASS_AWARE_NAME = "coordinator_engine_root_with_class"
 
 
 def _install_py_files() -> list[Path]:
@@ -38,12 +38,12 @@ def _install_py_files() -> list[Path]:
 
 
 def _imports_class_less_form(path: Path) -> bool:
-    """True iff `path` imports the class-less `coordinator_claude_klabauter_root`
-    name from `coordinator_core.claude_klabauter_root` (as itself, not merely as a
+    """True iff `path` imports the class-less `coordinator_engine_root`
+    name from `coordinator_core.engine_root` (as itself, not merely as a
     substring of the class-aware sibling's longer name)."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "coordinator_core.claude_klabauter_root":
+        if isinstance(node, ast.ImportFrom) and node.module == "coordinator_core.engine_root":
             for alias in node.names:
                 if alias.name == _CLASS_LESS_NAME:
                     return True
@@ -58,7 +58,7 @@ def test_no_install_module_imports_class_less_root_resolver():
     ]
     assert offenders == [], (
         "the following coordinator_core/install/ modules import the "
-        f"class-less coordinator_claude_klabauter_root(), gate-blind by construction: {offenders}"
+        f"class-less coordinator_engine_root(), gate-blind by construction: {offenders}"
     )
 
 

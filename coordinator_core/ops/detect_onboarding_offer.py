@@ -67,7 +67,7 @@ import sys
 from typing import List, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.ops.probe_onboarding_currency import (
     _strip_one_trailing_slash,
@@ -187,9 +187,9 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
     # reachable instead of silently always missing the file and returning ""
     # regardless of actual drift.
     try:
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        claude_klabauter_root = coordinator_engine_root()
     except RuntimeError as exc:
-        print(f"skip: detect_onboarding_offer: coordinator_claude_klabauter_root(): {exc}", file=sys.stderr)
+        print(f"skip: detect_onboarding_offer: coordinator_engine_root(): {exc}", file=sys.stderr)
         claude_klabauter_root = ""
 
     currency_lib = os.path.join(claude_klabauter_root, "coordinator", "lib", "coordinator_currency.py") if claude_klabauter_root else ""

@@ -56,9 +56,21 @@ write, not two — "the cascade re-deriving every projection, including the AC6g
 Scoping call (named explicitly per this chunk's own instruction to say so precisely
 rather than diverge silently): this module's byte-attributable check is a git-HEAD
 diff, so it can only recover a cascade write that is STILL UNCOMMITTED relative to
-HEAD — the ordinary case for this repo's own workflow (an EM fires the cascade via a
-plan stamp mid-session and notices a problem before committing; every chunk in THIS
-plan's own execution is itself left uncommitted for the EM per that same convention).
+HEAD.
+
+NO LONGER THE ORDINARY CASE (corrected 2026-08-20). This paragraph used to call that
+"the ordinary case for this repo's own workflow" — an EM firing the cascade mid-session
+and noticing a problem before committing. That stopped being true when
+`deliverable_cascade`'s C2 chunk (2026-08-14) made `advance` COMMIT its own write
+before returning, deliberately: an uncommitted terminal write is "simultaneously
+too-terminal for the closers", and the fleet drift guard in `ops/fleet/_common.py`
+refuses on an uncommitted mutation. So every cascade fired through `advance` now
+reaches this module ALREADY COMMITTED, and the revert path below is unreachable for
+it — `advance` then `retract` is a named refusal, not a round trip. The revert path
+stays correct and tested for a genuinely uncommitted cascade write; it simply is not
+what `advance` produces any more. Do NOT "fix" this by making `advance` stop
+committing (that reintroduces exactly what C2 closed), nor by teaching this module to
+unwind a commit (see the next paragraph for why that is a different operation).
 A candidate whose cascade write has ALREADY been committed reads as "current text ==
 HEAD text" (nothing to diff) and is REFUSED, named `"already committed — nothing
 uncommitted to revert"` — this module does not walk git history to unwind a committed

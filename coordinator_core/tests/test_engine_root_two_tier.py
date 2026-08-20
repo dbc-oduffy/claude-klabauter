@@ -1,8 +1,8 @@
 """
-coordinator_core/tests/test_claude_klabauter_root_two_tier.py
+coordinator_core/tests/test_engine_root_two_tier.py
 
 Chunk C4a (wrapper half): verifies
-`coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class()` — which
+`coordinator_core.engine_root.coordinator_engine_root_with_class()` — which
 loads C3's shim (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`) BY
 PATH and wraps its `resolve_claude_klabauter_root_with_class()` rather than
 reimplementing the published-engine-vs-live-working-tree gate — agrees with
@@ -31,7 +31,7 @@ from typing import Optional
 
 import pytest
 
-from coordinator_core import claude_klabauter_root
+from coordinator_core import engine_root as claude_klabauter_root
 from coordinator_core.install.substrate import _derive_agent_helper_target_map
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -107,13 +107,13 @@ def test_shim_present_and_loadable():
 @pytest.mark.real_home
 def test_cross_entrypoint_agreement():
     """(a) The shim's own `resolve_claude_klabauter_root_with_class()` and
-    `coordinator_claude_klabauter_root_with_class()` agree — same resolution class,
+    `coordinator_engine_root_with_class()` agree — same resolution class,
     same effective root — over the machine's live registry state. This is
     what makes the C3<->C4 agreement a CHECKED invariant, not a documented
     drift seam."""
     shim = _load_shim_for_test()
     expected_root, expected_class = shim.resolve_claude_klabauter_root_with_class()
-    actual_root, actual_class = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    actual_root, actual_class = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert actual_class == expected_class
     assert _normalize_root(actual_root) == _normalize_root(expected_root)
@@ -122,7 +122,7 @@ def test_cross_entrypoint_agreement():
 # Review: code-reviewer (finding 1) — the `real_home` cross-entrypoint
 # agreement test above depends on the box's own live registry contents and
 # cannot guarantee it exercises the wrapper's cheap short-circuit (the
-# `repos.claude_klabauter`-absent branch in `coordinator_claude_klabauter_root_with_class`
+# `repos.claude_klabauter`-absent branch in `coordinator_engine_root_with_class`
 # that reaches into the shim's `_ml_dir`/`_registry_value`/
 # `_resolve_claude_klabauter_root` helpers directly rather than calling
 # `resolve_claude_klabauter_root_with_class()`). This fixture pins that branch
@@ -156,14 +156,14 @@ def _short_circuit_fixture(tmp_path, monkeypatch):
 
 def test_cross_entrypoint_agreement_short_circuit_branch(_short_circuit_fixture):
     """`repos.claude_klabauter` is absent from the registry — the wrapper's
-    cheap short-circuit (step 2, see `coordinator_claude_klabauter_root_with_class`'s
+    cheap short-circuit (step 2, see `coordinator_engine_root_with_class`'s
     own docstring) fires, calling `shim._ml_dir()`/`shim._resolve_claude_klabauter_root()`
     directly instead of `shim.resolve_claude_klabauter_root_with_class()`. Both must
     still agree with the shim's own full-ladder answer — this is the
     mechanical backstop the module docstrings (both files) point to."""
     shim = _load_shim_for_test()
     expected_root, expected_class = shim.resolve_claude_klabauter_root_with_class()
-    actual_root, actual_class = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    actual_root, actual_class = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert expected_class == shim.RESOLUTION_LIVE_WORKING_TREE
     assert actual_class == expected_class
@@ -463,7 +463,7 @@ def test_wrapper_skew_advisory_silent_by_default(_skew_fixture, monkeypatch, cap
     _skew_fixture.write_registry(claude_klabauter=True)
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", raising=False)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert cls == "resolved-engine"
     captured = capsys.readouterr()
@@ -474,7 +474,7 @@ def test_wrapper_skew_advisory_silent_by_default(_skew_fixture, monkeypatch, cap
 def test_wrapper_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys):
     _skew_fixture.write_registry(claude_klabauter=True)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert cls == "resolved-engine"
     captured = capsys.readouterr()
@@ -485,7 +485,7 @@ def test_wrapper_skew_advisory_fires_on_dual_registration(_skew_fixture, capsys)
 def test_wrapper_skew_advisory_silent_single_tier(_skew_fixture, capsys):
     _skew_fixture.write_registry(claude_klabauter=False)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert cls == "resolved-engine"
     captured = capsys.readouterr()
@@ -496,7 +496,7 @@ def test_wrapper_skew_advisory_silent_single_tier(_skew_fixture, capsys):
 def test_wrapper_skew_advisory_stderr_only(_skew_fixture, capsys):
     _skew_fixture.write_registry(claude_klabauter=True)
 
-    claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    claude_klabauter_root.coordinator_engine_root_with_class()
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -506,10 +506,10 @@ def test_wrapper_skew_advisory_stderr_only(_skew_fixture, capsys):
 def test_wrapper_skew_advisory_once_per_process(_skew_fixture, capsys):
     _skew_fixture.write_registry(claude_klabauter=True)
 
-    claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
-    claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    claude_klabauter_root.coordinator_engine_root_with_class()
+    claude_klabauter_root.coordinator_engine_root_with_class()
     claude_klabauter_root._reset_gate_memo()
-    claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    claude_klabauter_root.coordinator_engine_root_with_class()
 
     captured = capsys.readouterr()
     assert captured.err.count("note:") == 1
@@ -519,7 +519,7 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
     _skew_fixture.write_registry(claude_klabauter=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", "1")
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert cls == "resolved-engine"
     captured = capsys.readouterr()
@@ -541,7 +541,7 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 
 # --- C2 (2026-08-12 dual-boot plan): rung-1.5 pointer must not pre-empt the
 # DR-132 gate. Four tests THROUGH THE WRAPPER
-# (`coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root_with_class`) — the
+# (`coordinator_core.engine_root.coordinator_engine_root_with_class`) — the
 # `_short_circuit_fixture`/`_skew_fixture` cases above exercise the wrapper
 # too, but none of them pin a session root that the gate confirms is NOT a
 # working repo while `.claude-klabauter-root` is ALSO present, which is exactly the
@@ -612,7 +612,7 @@ def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_
     fx = _dual_boot_fixture
     fx.write_registry(session_is_working_repo=False)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     # `write_registry` seeds `claude_klabauter` via `as_posix()` (forward
     # slashes), and the resolver returns that registry value verbatim — so
@@ -629,7 +629,7 @@ def test_dual_boot_live_tree_wins_when_session_is_working_repo(_dual_boot_fixtur
     fx = _dual_boot_fixture
     fx.write_registry(session_is_working_repo=True)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert root == str(fx.live_dir)
     assert cls == "live-working-tree"
@@ -642,7 +642,7 @@ def test_dual_boot_claude_klabauter_root_env_wins_unconditionally(_dual_boot_fix
     fx.write_registry(session_is_working_repo=False)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/explicit/claude-klabauter/root")
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert root == "/explicit/claude-klabauter/root"
     assert cls == "live-working-tree"
@@ -665,7 +665,7 @@ def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, m
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert root == str(live_dir)
     assert cls == "live-working-tree"
@@ -708,7 +708,7 @@ def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_ov
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
-    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
     assert root == str(override_live_dir)
     assert cls == "live-working-tree"
@@ -927,7 +927,7 @@ def test_rung2_timeout_reports_distinguishably_from_exec_failure(_rung2_fixture,
     monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_timeout)
 
     with pytest.raises(RuntimeError) as excinfo:
-        claude_klabauter_root.coordinator_claude_klabauter_root()
+        claude_klabauter_root.coordinator_engine_root()
 
     assert str(excinfo.value) != claude_klabauter_root._REMEDIATION
 
@@ -942,7 +942,7 @@ def test_rung2_timeout_names_reader_timeout_not_machine_local_set(_rung2_fixture
     monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_timeout)
 
     with pytest.raises(RuntimeError) as excinfo:
-        claude_klabauter_root.coordinator_claude_klabauter_root()
+        claude_klabauter_root.coordinator_engine_root()
 
     message = str(excinfo.value)
     assert "machine-local set" not in message
@@ -959,7 +959,7 @@ def test_rung2_timeout_message_carries_shared_token(_rung2_fixture, monkeypatch)
     monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_timeout)
 
     with pytest.raises(RuntimeError) as excinfo:
-        claude_klabauter_root.coordinator_claude_klabauter_root()
+        claude_klabauter_root.coordinator_engine_root()
 
     assert claude_klabauter_root._REGISTRY_READ_TIMEOUT_TOKEN in str(excinfo.value)
 
@@ -977,7 +977,7 @@ def test_rung2_exec_failure_still_falls_through_to_absent_key_remediation(
     monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _raise_oserror)
 
     with pytest.raises(RuntimeError) as excinfo:
-        claude_klabauter_root.coordinator_claude_klabauter_root()
+        claude_klabauter_root.coordinator_engine_root()
 
     assert str(excinfo.value) == claude_klabauter_root._REMEDIATION
 
@@ -989,7 +989,7 @@ def test_rung2_absent_key_remediation_text_byte_identical(_rung2_fixture, monkey
     byte — this chunk edits what the TIMEOUT arm reports, not the
     already-shipped absent-key remediation."""
     assert claude_klabauter_root._REMEDIATION == (
-        "coordinator_claude_klabauter_root: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
+        "coordinator_engine_root: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
         "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
         "  Remediate (choose one):\n"
         "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
@@ -1003,7 +1003,7 @@ def test_rung2_absent_key_remediation_text_byte_identical(_rung2_fixture, monkey
     monkeypatch.setattr(claude_klabauter_root.subprocess, "run", _fake_run)
 
     with pytest.raises(RuntimeError) as excinfo:
-        claude_klabauter_root.coordinator_claude_klabauter_root()
+        claude_klabauter_root.coordinator_engine_root()
 
     assert str(excinfo.value) == claude_klabauter_root._REMEDIATION
 

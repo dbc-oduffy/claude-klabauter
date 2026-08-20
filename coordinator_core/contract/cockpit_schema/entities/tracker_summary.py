@@ -65,3 +65,22 @@ class TrackerSummary(BaseModel):
     aggregates, empty-path computed records). Version-neutral optional —
     absent on all existing records. Spec: producer-contract § 3.3.
     """
+
+    # ── Human axis (C9, activation-gated) ───────────────────────────────
+    # Spec backlink: docs/plans/2026-08-19-the-tracker-names-an-owner.md § C9, § The
+    # hazard. A NEW prefixed key, never a value on `owner` above — PM ruling,
+    # 2026-08-19. Same `x-zod-nullable-optional` combo as HandoffSummary's
+    # `human_assignee`/`human_claimant` (entities/summaries.py) — see that
+    # module's matching block for the full rationale. The emit section
+    # (ops/emit/sections/trackers.py) omits this key entirely while
+    # `_shared.human_axis_vendored()` is False.
+    human_owner: str | None = Field(
+        default=None,
+        json_schema_extra={"x-zod-nullable-optional": True},
+    )
+    """
+    C1's `contributor_slug` for the human who owns this tracker — the axis this
+    plan is named for. Absent (key omitted) while the C9 activation switch is
+    off; may still be null once on, when no operating person resolves. Never
+    `owner` above, which stays the pre-existing team/person free-text field.
+    """

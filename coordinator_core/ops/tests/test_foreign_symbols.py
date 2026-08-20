@@ -348,12 +348,108 @@ def test_healthy_language_total_does_not_excuse_a_silently_dropped_file():
 
 
 class _FakeSymbol:
-    def __init__(self, name, kind, decl_text=None, range_start_line=1, container_name=None):
+    def __init__(
+        self,
+        name,
+        kind,
+        decl_text=None,
+        range_start_line=1,
+        container_name=None,
+        detail=None,
+    ):
         self.name = name
         self.kind = kind
         self.decl_text = decl_text
         self.range_start_line = range_start_line
         self.container_name = container_name
+        self.detail = detail
+
+
+def test_function_signature_prefers_detail_over_decl_text_body():
+    """A `signature` key must not carry the implementation.
+
+    `decl_text` is the node's whole source slice (capped at 4096 chars by
+    `symbol_extract`), so for a function it is the body. `Symbol.detail` is the
+    extractor's parse-tree signature projection. Negative spec: emitting
+    `decl_text` here is what made a 25-file reply 193KB and misdescribed every
+    function to the consumer (doe-claude-em memo 2026-08-19).
+    """
+    entry, _ = _envelope_for_file(
+        "src/app.ts",
+        [
+            _FakeSymbol(
+                "main",
+                "function",
+                decl_text="function main() {\n  doWork();\n  return 1;\n}",
+                detail="function main(): number",
+                range_start_line=4,
+            )
+        ],
+    )
+
+    assert entry["functions"] == [
+        {"name": "main", "signature": "function main(): number", "lineno": 4}
+    ]
+
+
+def test_function_signature_falls_back_to_decl_text_when_no_detail():
+    """A language with no signature projection keeps the field it emits today."""
+    entry, _ = _envelope_for_file(
+        "src/app.rb",
+        [_FakeSymbol("main", "function", decl_text="def main", range_start_line=2)],
+    )
+
+    assert entry["functions"] == [
+        {"name": "main", "signature": "def main", "lineno": 2}
+    ]
+
+
+def test_method_signature_prefers_detail_over_decl_text_body():
+    """The class-nesting path builds its entries through the same projection."""
+    entry, _ = _envelope_for_file(
+        "src/app.ts",
+        [
+            _FakeSymbol("Widget", "class", range_start_line=1),
+            _FakeSymbol(
+                "render",
+                "function",
+                decl_text="render(ctx) {\n  return ctx.draw();\n}",
+                detail="render(ctx: Ctx): string",
+                range_start_line=2,
+                container_name="Widget",
+            ),
+        ],
+    )
+
+    assert entry["classes"][0]["methods"] == [
+        {"name": "render", "signature": "render(ctx: Ctx): string", "lineno": 2}
+    ]
+
+
+def test_other_symbols_signature_prefers_detail_over_decl_text():
+    """The residual bucket names its field `signature` too, so it projects too."""
+    entry, unmapped = _envelope_for_file(
+        "src/app.ts",
+        [
+            _FakeSymbol(
+                "helper",
+                "accessor",
+                decl_text="get helper() {\n  return this._h;\n}",
+                detail="get helper(): H",
+                range_start_line=9,
+            )
+        ],
+    )
+
+    assert unmapped == {"accessor": 1}
+    assert entry["other_symbols"] == [
+        {
+            "name": "helper",
+            "kind": "accessor",
+            "lineno": 9,
+            "signature": "get helper(): H",
+        }
+    ]
 
 
 def test_constant_kind_lands_in_constants_with_none_value():

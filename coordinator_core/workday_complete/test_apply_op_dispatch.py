@@ -60,7 +60,7 @@ def test_resolve_cli_reaches_nothing_when_control_denies(
     is the removal-test's own mutation, exercised directly rather than only
     asserted from the guard's presence."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
-    with pytest.raises(ApplyBaseUnrecognizedDirective, match="may not dispatch"):
+    with pytest.raises(ApplyBaseUnrecognizedDirective, match="dispatchable set"):
         wc_apply._resolve_cli("standup")
 
 
@@ -72,7 +72,56 @@ def test_load_cli_module_denial_reaches_no_module_load(
     via `_resolve_cli`'s admission check before ever caching or executing
     a module — no partial dispatch side effect."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
-    wc_apply._LOADED_MODULES.pop("standup", None)
     with pytest.raises(ApplyBaseUnrecognizedDirective):
         wc_apply._load_cli_module("standup")
     assert "standup" not in wc_apply._LOADED_MODULES
+
+
+def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(monkeypatch) -> None:
+    """F1 (cold review 2026-08-19): an un-admitted `cli`, sequenced SECOND
+    in a two-directive list, must fail the WHOLE run before any directive
+    dispatches — including the FIRST, individually-resolvable directive.
+    The un-admitted entry sitting second is the point: a first-position
+    variant would prove nothing about whole-run pre-validation, since a
+    per-directive halt would already refuse it."""
+    directives = [
+        {"id": "d1", "cli": "standup", "args": []},
+        {"id": "d2", "cli": "not-a-real-cli-name", "args": []},
+    ]
+
+    def _never_loads(cli_name: str):
+        raise AssertionError(
+            f"pre-pass regressed: {cli_name!r} reached the dispatch loop, which "
+            "would import and run the real coordinator/bin script in-process"
+        )
+
+    monkeypatch.setattr(wc_apply, "_load_cli_module", _never_loads)
+    exit_code, report = wc_apply._execute_directives(directives, [], {})
+    assert exit_code == int(wc_apply.WorkdayApplyExitCode.DIRECTIVE_FAILED)
+    assert report["landed"] == []
+    assert report["blocked"] == []
+    assert report["failed"] and report["failed"][0]["id"] is None
+
+
+def test_admission_pre_pass_skips_an_already_satisfied_directive(monkeypatch) -> None:
+    """Slice-B review finding 1 (2026-08-20): an `already_satisfied` directive
+    never dispatches, so the pre-pass must NOT admission-check its verb. Before
+    this fix, a replayed directive whose verb had since left
+    ASSEMBLER_DISPATCHABLE refused the whole run -- a false refusal over a name
+    that could not have dispatched. The gate-blocked case is deliberately NOT
+    exempt: such a directive dispatches the moment its gate resolves."""
+
+    def _never_loads(cli_name: str):
+        raise AssertionError(f"{cli_name!r} must not dispatch in this test")
+
+    monkeypatch.setattr(wc_apply, "_load_cli_module", _never_loads)
+    directives = [
+        {"id": "d1", "cli": "a-verb-that-left-the-allowlist", "args": [],
+         "already_satisfied": True},
+    ]
+    exit_code, report = wc_apply._execute_directives(directives, [], {})
+
+    assert exit_code != int(wc_apply.WorkdayApplyExitCode.DIRECTIVE_FAILED), (
+        "an already_satisfied directive's stale verb refused the whole run"
+    )
+    assert report["landed"] == ["d1"]

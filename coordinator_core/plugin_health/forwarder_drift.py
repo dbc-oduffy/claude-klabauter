@@ -174,7 +174,7 @@ Resolution ladder (in order, first hit wins — see individual resolvers):
      same env pair, unmodified, for the ~/.claude/bin compat mirror.
   3. CLAUDE_KLABAUTER_ROOT env var / <settings-home>/machine-local/.claude-klabauter-root pointer
      / machine-local registry (`repos.claude_klabauter`) — via
-     coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root(), for the
+     coordinator_core.engine_root.coordinator_engine_root(), for the
      coordinator/bin/ scan root.
   4. Unresolvable at any required rung -> clean skip, never a fail.
 
@@ -192,7 +192,7 @@ from typing import Dict, List, Optional, Set
 
 from coordinator_core._settings_home import home_dir, settings_home
 from coordinator_core.ipc import register_op
-from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
 _PROG = "forwarder-drift"
@@ -289,10 +289,10 @@ class ForwarderDriftResult:
 
 def _resolve_agent_bin() -> Optional[Path]:
     try:
-        claude_klabauter_root = coordinator_claude_klabauter_root()
+        engine_root = coordinator_engine_root()
     except RuntimeError:
         return None
-    candidate = Path(claude_klabauter_root) / "coordinator" / "bin"
+    candidate = Path(engine_root) / "coordinator" / "bin"
     return candidate if candidate.is_dir() else None
 
 

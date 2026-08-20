@@ -55,6 +55,20 @@ Negative-spec (mirrors the bash oracle, preserve exactly):
     Do not "fix" this by threading an explicit ``handoff_dir`` into
     ``walk_forward``; that would diverge from the bash oracle's actual
     (already node-invoked-with-no---handoff-dir-flag) behaviour.
+
+Byte-parity exception (docs/plans/2026-08-20-the-ledger-check-follows-the-body-not-ju.md
+AC4/AC5): the parity claim above holds for every chain that attributed ANY
+LoE from any of the three sources (ledger rows, dispatch fallback, closing
+session), and unconditionally for every single-handoff chain (``chain_total
+== 1``) regardless of attribution. It deliberately does NOT hold for the
+fully-degenerate case restricted to a MULTI-handoff chain (``chain_total >
+1``) that attributed nothing from any source — where ``aggregate()`` now
+emits ``agent_dispatches: null`` / ``tshirt: null`` instead of the bash
+oracle's ``0`` / ``"XS"``, because that pair is otherwise indistinguishable
+from a chain that really was trivial. A single-handoff chain that attributed
+nothing still renders the real ``0`` / ``"XS"`` and remains byte-parity with
+the bash oracle. See ``aggregate()``'s ``attributed_nothing`` comment for the
+exact discriminator.
 """
 from __future__ import annotations
 
@@ -664,8 +678,11 @@ def aggregate(
             exactly — see the closing-session block below.
 
     Returns a dict with keys: ``exit_code`` (0 success, 1 error), and on
-    success: ``chain_total``, ``agent_dispatches``, ``opus_dispatches``,
-    ``em_tokens`` (int or None), ``tshirt``, ``commits`` (list[str]),
+    success: ``chain_total``, ``agent_dispatches`` (int or None — None only
+    when the chain attributed no LoE from any source, see AC4 below),
+    ``opus_dispatches`` (int or None — None in lockstep with
+    ``agent_dispatches``), ``em_tokens`` (int or None), ``tshirt`` (str or
+    None — None in lockstep with ``agent_dispatches``), ``commits`` (list[str]),
     ``chain_sessions_with_ledger`` (str),
     ``chain_sessions_with_dispatch_fallback`` (str — count of handoffs whose
     LoE was attributed via the ``dispatched-agents.txt`` fallback rather
@@ -834,6 +851,47 @@ def aggregate(
 
     tshirt = compute_tshirt(total_ad, total_od, total_tok, thresholds)
 
+    # AC4 (docs/plans/2026-08-20-the-ledger-check-follows-the-body-not-ju.md):
+    # a chain that attributed NO LoE from any of the three sources — no
+    # parsed Session Ledger rows, no dispatched-agents.txt fallback record,
+    # and no closing_session tally — must not render a measured-looking
+    # `agent_dispatches: 0` / `opus_dispatches: 0` / `tshirt: "XS"`.
+    # `opus_dispatches` nulls in lockstep under the SAME condition (PM
+    # follow-up: the spec named only agent_dispatches/tshirt, but leaving
+    # opus_dispatches at a bare 0 is the identical false-precision defect
+    # surviving one field over — no second discriminator). `seen_sids`/`anonymous_records`
+    # cover the first two sources (every record from either grammar, ledger
+    # or fallback, lands in one of those two counters — see the aggregation
+    # loop above); `closing_row_missing` covers the third. Deliberately NOT
+    # `chain_sessions_with_ledger.startswith("0 of")`: that string undercounts
+    # on purpose (see its own construction above) and reads "0 of" even when
+    # the dispatch fallback or closing-session attribution supplied real
+    # counts — exactly the common case that must keep rendering numbers.
+    #
+    # `chain_total > 1` is a deliberate narrowing, discovered while implementing
+    # this chunk: a literal "no source anywhere" reading also fires on a
+    # single-handoff chain whose lone handoff legitimately has neither (e.g. a
+    # freshly-scaffolded ``## Session Ledger`` heading with only its two
+    # comment lines, or a recovery baton whose resolved session simply never
+    # wrote a dispatched-agents.txt because it dispatched nothing) — both
+    # already-shipped, both asserting a real `0`
+    # (coordinator/tests/test_aggregate_chain_loe.py::
+    # test_scaffold_comments_only_yields_zero_records and
+    # test_dispatch_fallback.py::test_fallback_absent_when_no_dispatched_agents_file,
+    # the latter a live AC5 guard rail in THIS repo). The Problem section's own
+    # scoping ("the zero-reading survives only for a predecessor handoff in a
+    # multi-handoff chain with neither") names the residual defect as a
+    # multi-handoff phenomenon, matching this boundary.
+    attributed_nothing = (
+        chain_total > 1
+        and not seen_sids
+        and anonymous_records == 0
+        and not closing_row_missing
+    )
+    agent_dispatches_out: Optional[int] = None if attributed_nothing else total_ad
+    opus_dispatches_out: Optional[int] = None if attributed_nothing else total_od
+    tshirt_out: Optional[str] = None if attributed_nothing else tshirt
+
     return {
         "exit_code": 0,
         "chain_total": chain_total,
@@ -842,10 +900,10 @@ def aggregate(
         # preserved there for byte-parity; a genuine session count once a
         # closing session identifies itself.
         "chain_session_total": session_total,
-        "agent_dispatches": total_ad,
-        "opus_dispatches": total_od,
+        "agent_dispatches": agent_dispatches_out,
+        "opus_dispatches": opus_dispatches_out,
         "em_tokens": total_tok,
-        "tshirt": tshirt,
+        "tshirt": tshirt_out,
         "commits": commits,
         "chain_sessions_with_ledger": chain_sessions_with_ledger,
         "chain_sessions_with_dispatch_fallback": chain_sessions_with_dispatch_fallback,
@@ -863,14 +921,24 @@ def aggregate(
 def format_yaml_frontmatter(result: Dict[str, Any]) -> str:
     """Render the aggregate() result as the yaml-frontmatter output (bash :625-658)."""
     em_tokens_out = str(result["em_tokens"]) if result["em_tokens"] is not None else "null"
+    # AC4: agent_dispatches/opus_dispatches/tshirt go null in lockstep
+    # (attributed_nothing in aggregate()) — same "null" sentinel
+    # em_tokens_out already renders above.
+    agent_dispatches_out = (
+        str(result["agent_dispatches"]) if result["agent_dispatches"] is not None else "null"
+    )
+    opus_dispatches_out = (
+        str(result["opus_dispatches"]) if result["opus_dispatches"] is not None else "null"
+    )
+    tshirt_out = f'"{result["tshirt"]}"' if result["tshirt"] is not None else "null"
 
     lines = [
         "chain_loe:",
         f"  sessions: {result.get('chain_session_total', result['chain_total'])}",
-        f"  agent_dispatches: {result['agent_dispatches']}",
-        f"  opus_dispatches: {result['opus_dispatches']}",
+        f"  agent_dispatches: {agent_dispatches_out}",
+        f"  opus_dispatches: {opus_dispatches_out}",
         f"  em_tokens: {em_tokens_out}",
-        f'  tshirt: "{result["tshirt"]}"',
+        f"  tshirt: {tshirt_out}",
     ]
 
     commits = result["commits"]

@@ -73,6 +73,7 @@ same root as `cwd=` to the underlying spawn.
 from __future__ import annotations
 
 import functools
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -85,7 +86,17 @@ from coordinator_core._repo_root_probe import (
     resolve_repo_root as _resolve_repo_root,
 )
 
-ALIAS_BUNDLE_KEYS: tuple[str, ...] = ("github", "github_id", "display", "email")
+ALIAS_BUNDLE_KEYS: tuple[str, ...] = (
+    "github",
+    "github_id",
+    "display",
+    "email",
+    "contributor_slug",
+)
+
+_CONTRIBUTOR_SLUG_MODULUS = 36**9
+_CONTRIBUTOR_SLUG_LEN = 9
+_BASE36_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 _GIT_TIMEOUT = 10
 
@@ -229,6 +240,43 @@ def _parse_noreply_email(email: Optional[str]) -> tuple[Optional[str], Optional[
     return m.group("handle"), m.group("id")
 
 
+def _derive_contributor_slug(database_id: Optional[int]) -> Optional[str]:
+    """Derive cockpit's `contributor_slug` offline from a github numeric
+    `databaseId`, transcribed from example-cockpit-repo
+    `src/lib/identity/contributor-id.ts` (their commit
+    `e3d5726bd021b5ffe97b4148ad93ceba9ec95b8d`, 2026-08-19): SHA-256 the
+    decimal-string form of ``database_id``, take the first 12 hex
+    characters, parse as base16, reduce modulo `36**9`, render base36
+    lowercase, left-pad with "0" to exactly 9 characters.
+
+    Null contract, matching theirs exactly: absent, non-integer,
+    non-finite, and non-positive input all return ``None`` — never ``""``,
+    never a sentinel, never a guessed id (mirrors
+    ``resolve_operating_person``'s own unresolvable-case convention, DEC-41
+    extended).
+    """
+    if database_id is None:
+        return None
+    if isinstance(database_id, bool) or not isinstance(database_id, int):
+        return None
+    if database_id <= 0:
+        return None
+
+    digest = hashlib.sha256(str(database_id).encode("ascii")).hexdigest()
+    value = int(digest[:12], 16) % _CONTRIBUTOR_SLUG_MODULUS
+
+    if value == 0:
+        slug = "0"
+    else:
+        chars: list[str] = []
+        remaining = value
+        while remaining:
+            remaining, digit = divmod(remaining, 36)
+            chars.append(_BASE36_DIGITS[digit])
+        slug = "".join(reversed(chars))
+    return slug.rjust(_CONTRIBUTOR_SLUG_LEN, "0")
+
+
 def resolve_operating_person(*, home: Path | None = None) -> dict[str, str]:
     """Resolve the operating human to an alias bundle. Offline; no `gh`, no network.
 
@@ -255,6 +303,9 @@ def resolve_operating_person(*, home: Path | None = None) -> dict[str, str]:
     # treatment of the github_id namespace.
     if noreply_id:
         bundle["github_id"] = noreply_id
+        contributor_slug = _derive_contributor_slug(int(noreply_id))
+        if contributor_slug:
+            bundle["contributor_slug"] = contributor_slug
 
     # display does NOT casefold — mirrors tracker_entities.normalize_alias's
     # own namespace split (display/transcript_name preserve case; email,

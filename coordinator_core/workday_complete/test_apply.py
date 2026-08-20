@@ -198,14 +198,14 @@ def test_execute_directives_pipes_producer_stdout_into_consumer_stdin(
         return 0
 
     modules = {
-        "fake-scan": _fake_module(producer_main, "fake_scan"),
-        "fake-anchor": _fake_module(consumer_main, "fake_anchor"),
+        "workday-complete-backfill-scan": _fake_module(producer_main, "fake_scan"),
+        "workday-complete-backfill-anchor": _fake_module(consumer_main, "fake_anchor"),
     }
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d_scan", "fake-scan"),
-        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+        _directive("d_scan", "workday-complete-backfill-scan"),
+        _directive("d_anchor", "workday-complete-backfill-anchor", stdin_from="d_scan"),
     ]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
@@ -233,14 +233,14 @@ def test_execute_directives_directive_without_stdin_from_unaffected(
 
     sentinel = sys.stdin
     modules = {
-        "fake-scan": _fake_module(producer_main, "fake_scan"),
-        "fake-unrelated": _fake_module(unrelated_main, "fake_unrelated"),
+        "workday-complete-backfill-scan": _fake_module(producer_main, "fake_scan"),
+        "query-completions": _fake_module(unrelated_main, "fake_unrelated"),
     }
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d_scan", "fake-scan"),
-        _directive("d_unrelated", "fake-unrelated"),  # no stdin_from
+        _directive("d_scan", "workday-complete-backfill-scan"),
+        _directive("d_unrelated", "query-completions"),  # no stdin_from
     ]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
@@ -268,14 +268,14 @@ def test_execute_directives_consumer_refuses_dispatch_when_producer_failed(
         return 0
 
     modules = {
-        "fake-scan": _fake_module(failing_producer_main, "fake_scan"),
-        "fake-anchor": _fake_module(consumer_main, "fake_anchor"),
+        "workday-complete-backfill-scan": _fake_module(failing_producer_main, "fake_scan"),
+        "workday-complete-backfill-anchor": _fake_module(consumer_main, "fake_anchor"),
     }
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d_scan", "fake-scan"),
-        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+        _directive("d_scan", "workday-complete-backfill-scan"),
+        _directive("d_anchor", "workday-complete-backfill-anchor", stdin_from="d_scan"),
     ]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
@@ -296,7 +296,7 @@ def test_execute_directives_consumer_refuses_dispatch_when_producer_blocked(
     def consumer_main(argv: list[str]) -> int:
         raise AssertionError("must never dispatch: its stdin producer never landed")
 
-    modules = {"fake-anchor": _fake_module(consumer_main, "fake_anchor")}
+    modules = {"workday-complete-backfill-anchor": _fake_module(consumer_main, "fake_anchor")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     judgment_points = [
@@ -306,8 +306,8 @@ def test_execute_directives_consumer_refuses_dispatch_when_producer_blocked(
         }
     ]
     directives = [
-        _directive("d_scan", "fake-scan", depends_on="jp_gate"),
-        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+        _directive("d_scan", "workday-complete-backfill-scan", depends_on="jp_gate"),
+        _directive("d_anchor", "workday-complete-backfill-anchor", stdin_from="d_scan"),
     ]
     # No decision supplied for jp_gate -> d_scan stays blocked, never dispatched.
     exit_code, report = wc_apply._execute_directives(directives, judgment_points, {})
@@ -332,10 +332,10 @@ def test_execute_directives_failing_directive_stderr_survives_into_result(
         print("diagnostic detail", file=sys.stderr)
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
     assert [entry["id"] for entry in report["failed"]] == ["d_plain"]
@@ -353,10 +353,10 @@ def test_execute_directives_failing_directive_still_reported_as_failed(
     def failing_main(argv: list[str]) -> int:
         return 2
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == []
@@ -381,7 +381,7 @@ def test_dispatch_exception_error_string_names_the_exception_type(
 
     monkeypatch.setattr(wc_apply, "_load_cli_module", _raising_loader)
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     _, report = wc_apply._execute_directives(directives, [], {})
 
     (entry,) = report["failed"]
@@ -396,7 +396,7 @@ def test_gate_evaluation_error_string_names_the_exception_type(
 
     monkeypatch.setattr(wc_apply, "_directive_gate_open", _bad_gate)
 
-    directives = [_directive("d_plain", "fake-cli", depends_on="jp_x")]
+    directives = [_directive("d_plain", "standup", depends_on="jp_x")]
     judgment_points = [{"id": "jp_x", "dispositions": []}]
     _, report = wc_apply._execute_directives(directives, judgment_points, {})
 
@@ -434,10 +434,10 @@ def test_directive_subprocess_via_run_forwarding_reaches_capture_buffer(
         )
         return proc.returncode
 
-    modules = {"fake-cli": _fake_module(main_fn, "fake_cli")}
+    modules = {"standup": _fake_module(main_fn, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_plain"]
@@ -463,10 +463,10 @@ def test_best_effort_directive_failure_lands_in_degraded_not_failed(
     def failing_main(argv: list[str]) -> int:
         return 3
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_cadence", "fake-cli")
+    directive = _directive("d_cadence", "standup")
     directive["best_effort"] = True
     exit_code, report = wc_apply._execute_directives([directive], [], {})
 
@@ -489,14 +489,14 @@ def test_best_effort_directive_failure_alone_still_reaches_success(
         return 0
 
     modules = {
-        "fake-cadence": _fake_module(failing_main, "fake_cadence"),
-        "fake-clean": _fake_module(clean_main, "fake_clean"),
+        "emit-cadence": _fake_module(failing_main, "fake_cadence"),
+        "workday-complete-step2_5-dirty-tree": _fake_module(clean_main, "fake_clean"),
     }
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    cadence = _directive("d_cadence", "fake-cadence")
+    cadence = _directive("d_cadence", "emit-cadence")
     cadence["best_effort"] = True
-    directives = [_directive("d_clean", "fake-clean"), cadence]
+    directives = [_directive("d_clean", "workday-complete-step2_5-dirty-tree"), cadence]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
@@ -513,10 +513,10 @@ def test_non_best_effort_directive_failure_unchanged(monkeypatch: pytest.MonkeyP
     def failing_main(argv: list[str]) -> int:
         return 3
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
     assert report["degraded"] == []
@@ -532,10 +532,10 @@ def test_failed_entry_error_string_carries_captured_stderr(monkeypatch: pytest.M
         print("op timed out after 30.0s", file=sys.stderr)
         return 3
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     _, report = wc_apply._execute_directives(directives, [], {})
 
     (entry,) = report["failed"]
@@ -549,10 +549,10 @@ def test_degraded_entry_error_string_carries_captured_stderr(monkeypatch: pytest
         print("op timed out after 30.0s", file=sys.stderr)
         return 3
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_cadence", "fake-cli")
+    directive = _directive("d_cadence", "standup")
     directive["best_effort"] = True
     _, report = wc_apply._execute_directives([directive], [], {})
 
@@ -569,14 +569,14 @@ def test_failed_entry_error_string_has_no_stray_block_on_clean_stderr(
     def failing_main(argv: list[str]) -> int:
         return 3
 
-    modules = {"fake-cli": _fake_module(failing_main, "fake_cli")}
+    modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_plain", "fake-cli")]
+    directives = [_directive("d_plain", "standup")]
     _, report = wc_apply._execute_directives(directives, [], {})
 
     (entry,) = report["failed"]
-    assert entry["error"] == "fake-cli exited 3 (args=[])"
+    assert entry["error"] == "standup exited 3 (args=[])"
 
 
 # ---------------------------------------------------------------------------
@@ -594,12 +594,12 @@ def test_stdin_from_naming_already_satisfied_producer_still_refuses_dispatch(
     def consumer_main(argv: list[str]) -> int:
         raise AssertionError("must never dispatch: producer gave no stdout this pass")
 
-    modules = {"fake-anchor": _fake_module(consumer_main, "fake_anchor")}
+    modules = {"workday-complete-backfill-anchor": _fake_module(consumer_main, "fake_anchor")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d_scan", "fake-scan", already_satisfied=True),
-        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+        _directive("d_scan", "workday-complete-backfill-scan", already_satisfied=True),
+        _directive("d_anchor", "workday-complete-backfill-anchor", stdin_from="d_scan"),
     ]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
@@ -618,12 +618,12 @@ def test_stdin_from_already_satisfied_message_distinguishes_from_never_landed(
     def consumer_main(argv: list[str]) -> int:
         raise AssertionError("must never dispatch")
 
-    modules = {"fake-anchor": _fake_module(consumer_main, "fake_anchor")}
+    modules = {"workday-complete-backfill-anchor": _fake_module(consumer_main, "fake_anchor")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
-        _directive("d_scan", "fake-scan", already_satisfied=True),
-        _directive("d_anchor", "fake-anchor", stdin_from="d_scan"),
+        _directive("d_scan", "workday-complete-backfill-scan", already_satisfied=True),
+        _directive("d_anchor", "workday-complete-backfill-anchor", stdin_from="d_scan"),
     ]
     _, report = wc_apply._execute_directives(directives, [], {})
 

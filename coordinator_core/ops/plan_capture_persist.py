@@ -412,10 +412,10 @@ def invoke_coordinator_doc_new(
     (``Path(__file__).resolve().parents[2]``, mirroring
     ``plan_tasks_mutate.py``'s ``_HARVEST_CLI_PATH`` self-location
     convention for the same "shell out to a sibling coordinator/bin/ engine
-    CLI" problem — chosen over ``coordinator_core.claude_klabauter_root`` because this
+    CLI" problem — chosen over ``coordinator_core.engine_root`` because this
     module already lives inside the engine checkout, so self-location is a
     free ``Path(__file__)`` derivation with no subprocess, versus
-    ``claude_klabauter_root``'s Rung 2 fallback which can shell out to the
+    ``engine_root``'s Rung 2 fallback which can shell out to the
     ``machine-local`` CLI). Resolving the scaffolder against ``repo_root``
     instead was the bug this fix addresses: for any caller repo that is NOT
     the engine checkout (i.e. every real consumer repo), no

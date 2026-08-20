@@ -150,7 +150,7 @@ def _resolve_cli(cli_name: str) -> Path:
     run dispatches. Additionally gated (C7) by the shared
     `apply_base.assert_dispatchable` admission check against
     `authz.dispatchable.ASSEMBLER_DISPATCHABLE["workday_complete"]` — no
-    table in the engine is left with review-only admission."""
+    table dispatching a registered op is left with review-only admission."""
     if cli_name not in _CLI_DISPATCH:
         raise UnrecognizedDirective(
             f"workday_complete.apply: unrecognized cli {cli_name!r} — not a "
@@ -163,10 +163,12 @@ def _resolve_cli(cli_name: str) -> Path:
 def _load_cli_module(cli_name: str) -> ModuleType:
     """Loads (once, cached) the script named by `cli_name` via a fixed
     literal path — never a brief-derived import target. Never spawns a
-    subprocess."""
+    subprocess. `_resolve_cli` (admission) runs BEFORE the cache check
+    (F6, cold review 2026-08-19) so the control is a per-dispatch check,
+    never merely a first-load one."""
+    script_path = _resolve_cli(cli_name)
     if cli_name in _LOADED_MODULES:
         return _LOADED_MODULES[cli_name]
-    script_path = _resolve_cli(cli_name)
     module_name = f"_workday_complete_cli_{cli_name.replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     if spec is None or spec.loader is None:
@@ -406,6 +408,41 @@ def _execute_directives(
             "degraded": [],
             "results": [],
             "budget_breach": pre_mutation_breach,
+        }
+
+    # Whole-run admission pre-pass (F1, cold review 2026-08-19): an
+    # un-admitted `cli` must fail the WHOLE run before any directive
+    # dispatches, mirroring `apply_base.execute_directives`'s own
+    # whole-list pre-validation — never degrade to a per-directive
+    # skip-and-continue on an admission/manifest-membership refusal. This
+    # is admission-only (`_resolve_cli` raising `UnrecognizedDirective`);
+    # the per-directive halt contract below (gates, non-zero exits,
+    # `best_effort`) is untouched. Scope, stated because the first cut of
+    # this pre-pass widened it silently: every directive that CAN dispatch in
+    # this run is checked, including a gate-blocked one; an `already_satisfied`
+    # directive is skipped, because it cannot.
+    try:
+        for directive in directives:
+            # An `already_satisfied` directive ran in an earlier pass and hits
+            # `continue` below without ever dispatching, so its verb name is
+            # never resolved by the main loop either. Admission-checking it here
+            # would refuse the WHOLE run over a name that cannot dispatch --
+            # a false refusal on a replayed directive whose verb has since left
+            # `ASSEMBLER_DISPATCHABLE` (slice-B review finding 1, 2026-08-20).
+            # A gate-blocked directive is deliberately NOT skipped: it is still
+            # a live member of this run's list and dispatches the moment its
+            # gate resolves, so an un-admitted verb there is a structurally
+            # invalid list, which is exactly what this pre-pass exists to catch.
+            if directive.get("already_satisfied"):
+                continue
+            _resolve_cli(directive["cli"])
+    except UnrecognizedDirective as exc:
+        return int(WorkdayApplyExitCode.DIRECTIVE_FAILED), {
+            "landed": [],
+            "blocked": [],
+            "failed": [{"id": None, "error": str(exc)}],
+            "degraded": [],
+            "results": [],
         }
 
     for directive in directives:
