@@ -513,6 +513,160 @@ def _raise_nested_block_guard(fn_name: str, key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Block-scalar read/append — the companion to replace_fm_field's refusal
+# ---------------------------------------------------------------------------
+
+#: A block-scalar header: the ``|`` / ``>`` style byte, then the optional
+#: explicit-indentation digit and chomping indicator in EITHER order (YAML
+#: 1.2 §8.1.1 permits ``|2-`` and ``|-2`` alike), then an optional trailing
+#: comment. Anchored whole so a value that merely CONTAINS a pipe cannot match.
+_BLOCK_SCALAR_HEADER_RE = re.compile(
+    r'^(?P<style>[|>])'
+    r'(?:(?P<indent>[1-9])(?P<chomp_a>[+-])?|(?P<chomp_b>[+-])(?P<indent_b>[1-9])?)?'
+    r'[ \t]*(?:#.*)?$'
+)
+
+
+class BlockScalar(NamedTuple):
+    """A frontmatter field whose value is a ``|`` or ``>`` block scalar.
+
+    ``style`` is ``'|'`` (literal) or ``'>'`` (folded). ``indent`` is the
+    column the body lines are indented to — taken from an explicit
+    indentation indicator when the header carries one, otherwise inferred
+    from the first non-empty body line. ``lines`` holds the body
+    DE-INDENTED, in order, blank lines preserved as ``''``. ``end_offset``
+    is the character offset in the source frontmatter one past the last
+    body line's newline — the splice point ``append_fm_block_scalar_line``
+    writes at.
+    """
+
+    style: str
+    indent: int
+    lines: list[str]
+    end_offset: int
+
+
+def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
+    """Read ``key:``'s value as a block scalar, or ``None`` when the field is
+    absent or holds an ordinary single-line value.
+
+    Exists because ``read_fm_field`` deliberately reads only the ``key:``
+    LINE: on a block-scalar field it returns the bare header (``'|'``,
+    ``'>-'``) and never the body. A caller that compared that reading
+    against real note text was comparing against a two-character sigil —
+    which is how a convergence test over a block-scalar
+    ``execution_authorized_note`` silently answered "not converged" forever
+    (cross-repo memo, example-retrieval-repo-em, 2026-08-20).
+
+    Negative-spec: this does NOT resolve folded (``>``) line-joining or
+    chomping into a final YAML string — it returns the body as authored.
+    Its consumers are convergence tests and the appender below, both of
+    which want the authored lines; a caller needing the resolved scalar
+    should parse the document with a YAML loader instead.
+    """
+    m = _fm_key_line_pattern(key).search(fm)
+    if m is None:
+        return None
+
+    header = m.group(0).split(':', 1)[1].strip()
+    hm = _BLOCK_SCALAR_HEADER_RE.match(header)
+    if hm is None:
+        return None
+
+    explicit = hm.group('indent') or hm.group('indent_b')
+
+    rest = fm[m.end():]
+    if rest.startswith('\n'):
+        rest = rest[1:]
+    elif rest.startswith('\r\n'):
+        rest = rest[2:]
+    body_start = len(fm) - len(rest)
+
+    kept: list[str] = []
+    for line in rest.splitlines(keepends=True):
+        if line.strip() and not line.startswith((' ', '\t')):
+            break
+        kept.append(line)
+
+    # Trailing blank lines after the block belong to the DOCUMENT, not to the
+    # block, unless a `+` chomping indicator claims them. Either way they must
+    # not be counted into `end_offset`, or an append would land past them and
+    # be separated from the block it is appending to.
+    while kept and not kept[-1].strip():
+        kept.pop()
+
+    consumed = sum(len(line) for line in kept)
+    raw = [line.rstrip('\r\n') for line in kept]
+
+    if explicit is not None:
+        indent = int(explicit)
+    else:
+        first = next((ln for ln in raw if ln.strip()), None)
+        indent = len(first) - len(first.lstrip()) if first is not None else 2
+
+    return BlockScalar(
+        style=hm.group('style'),
+        indent=indent,
+        lines=[ln[indent:] if ln.strip() else '' for ln in raw],
+        end_offset=body_start + consumed,
+    )
+
+
+def append_fm_block_scalar_line(fm: str, key: str, line: str) -> str:
+    """Append *line* as a new line inside ``key:``'s existing block scalar.
+
+    The operation ``replace_fm_field`` refuses. That refusal is correct and
+    stays: rewriting a multi-line value as one line corrupts the document.
+    Appending is a different operation with a well-defined answer, so it
+    gets its own function rather than a flag that softens the guard.
+
+    Under a FOLDED (``>``) block, a bare appended line would be folded into
+    the preceding line by any conforming YAML reader — space-joined, not
+    line-separated. So a blank line is emitted first, which is how a folded
+    scalar spells a real line break. A literal (``|``) block needs no such
+    separator.
+
+    Idempotent in the sense its callers need: appending a line the block
+    already ends with returns *fm* unchanged.
+
+    Raises ``ValueError`` when the field is absent or is not a block scalar
+    — use ``replace_fm_field`` for a single-line value, and
+    ``insert_fm_field`` for an absent one. Raises ``ValueError`` when *line*
+    is itself multi-line; splice the caller's lines one at a time so each
+    one's indentation is this function's decision, not the caller's.
+    """
+    if '\n' in line or '\r' in line:
+        raise ValueError(
+            f'append_fm_block_scalar_line: field "{key}" — *line* must be a '
+            f'single line; append multi-line text one line at a time.'
+        )
+
+    block = read_fm_block_scalar(fm, key)
+    if block is None:
+        raise ValueError(
+            f'append_fm_block_scalar_line: field "{key}" is absent or does not '
+            f'hold a block-scalar ("|"/">") value — nothing to append into.'
+        )
+
+    if block.lines and block.lines[-1] == line:
+        return fm
+
+    newline = '\r\n' if '\r\n' in fm[:block.end_offset] else '\n'
+    pad = ' ' * block.indent
+
+    # `end_offset` sits one PAST the last body line's terminator, so the
+    # appended text carries its own trailing break rather than a leading one —
+    # a leading break would land a blank line inside the block and push the
+    # following field's own newline out of the document.
+    addition = ''
+    if block.style == '>' and block.lines and block.lines[-1].strip():
+        addition += newline
+    addition += pad + line + newline
+
+    return fm[:block.end_offset] + addition + fm[block.end_offset:]
+
+
+# ---------------------------------------------------------------------------
 # replace_fm_field
 # ---------------------------------------------------------------------------
 
@@ -558,10 +712,16 @@ def replace_fm_field(fm: str, key: str, v: object, *, numeric_quoting: bool = Fa
     current = read_fm_field(fm, key)
     if current is not None and (current.startswith('>') or current.startswith('|')):
         truncated = current[:40] + '...' if len(current) > 40 else current
+        # The refusal stands; its ADVICE was the defect. "Fix the frontmatter
+        # manually" was true only while no tool could touch this shape at all
+        # — it now names a hand-edit as the remedy for a field whose whole
+        # point is machine attribution, which is the unattributable-stamp
+        # anti-pattern the callers exist to prevent. Names the append verb
+        # instead: one fact, one terse alternative (guard-messaging register).
         raise ValueError(
             f'replace_fm_field: field "{key}" uses a block-scalar YAML value '
-            f'("{truncated}") — cannot safely replace single-line. '
-            f'Fix the frontmatter manually.'
+            f'("{truncated}") — a single-line replace would truncate it. '
+            f'To add a line, use append_fm_block_scalar_line(fm, "{key}", ...).'
         )
     if _is_nested_block_key(fm, key):
         _raise_nested_block_guard('replace_fm_field', key)

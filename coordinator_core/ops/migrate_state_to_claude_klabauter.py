@@ -68,6 +68,7 @@ import shutil
 import sys
 from typing import List, TextIO, Tuple
 
+from coordinator_core.engine_root import coordinator_engine_source_root_env
 from coordinator_core.session.declared_writes import declare_write
 
 # Relative-to-CLAUDE_HOME / CLAUDE_KLABAUTER_ROOT tree pairs mirrored (source, dest) —
@@ -322,7 +323,10 @@ def main(argv: List[str]) -> int:
         print(f"ERROR: CLAUDE_HOME not found at: {claude_home}", file=sys.stderr)
         return 1
 
-    claude_klabauter_root = os.environ.get("CLAUDE_KLABAUTER_ROOT") or _default_claude_klabauter_root()
+    # C11: this override names the SOURCE CHECKOUT being migrated into (locator
+    # axis), not which engine dispatches — routed through the C18 locator
+    # accessor rather than a bare CLAUDE_KLABAUTER_ROOT read.
+    claude_klabauter_root = coordinator_engine_source_root_env("migrate_state_to_claude_klabauter") or _default_claude_klabauter_root()
     claude_klabauter_root = claude_klabauter_root.rstrip("/")
 
     if subcommand == "--populate":

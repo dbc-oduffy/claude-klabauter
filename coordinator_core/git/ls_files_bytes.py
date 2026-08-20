@@ -20,8 +20,19 @@ from `tracked_files`' cached value: by the time that tuple exists the bytes
 are already gone.
 
 Cache is a PROCESS-lifetime cache with no invalidation, matching the sibling
-module; call ``tracked_files_bytes.cache_clear()`` for a fresh read after a
-commit within one process.
+module; call ``_tracked_files_bytes_cached.cache_clear()`` for a fresh read
+after a commit within one process.
+
+COLD-PATH-ONLY (fix for a landed-review finding): that cache assumption is
+correct for a one-shot CLI process, where "process lifetime" is one command
+dispatch, but wrong for a caller registered as an op and therefore served
+by a resident, multi-day warm server -- the first call against a given root
+would otherwise pin that root's tracked-file list for the server's ENTIRE
+life, with files added since invisible and files deleted since silently
+dropped. `use_cache: bool = True` lets such a caller opt OUT per call
+(``tracked_files_bytes(root, use_cache=False)``); the cache remains the
+default because most callers ARE cold CLI processes. `eol.census` is the
+first ``use_cache=False`` caller -- see that module's docstring.
 
 NEGATIVE SPEC: this module does not modify, wrap, or deprecate
 `ls_files.tracked_files`. Both are first-class; text callers keep the decoding
@@ -45,20 +56,35 @@ from coordinator_core.win_portability import no_console_creationflags
 __all__ = ["tracked_files_bytes"]
 
 
-def tracked_files_bytes(repo_root: Union[str, Path], pathspec: str = ".") -> Tuple[bytes, ...]:
+def tracked_files_bytes(
+    repo_root: Union[str, Path], pathspec: str = ".", use_cache: bool = True
+) -> Tuple[bytes, ...]:
     """Repo-relative paths tracked by git under ``repo_root`` matching
     ``pathspec``, as UNDECODED bytes -- forward-slash separated, exactly as
     git emitted them under ``-z``.
 
     Returns an empty tuple when git is absent, ``repo_root`` is not a
     repository, or the call times out; never raises for those cases.
+
+    ``use_cache`` (default True) routes through the process-lifetime
+    ``lru_cache``, correct for a one-shot CLI process. Pass False for a
+    caller that is itself long-lived (a warm-served op) -- see the module
+    docstring's "COLD-PATH-ONLY" note. A False call always re-spawns and is
+    never memoized, independent of any prior or later cached call for the
+    same (repo_root, pathspec).
     """
     resolved_root = str(Path(repo_root).resolve())
+    if not use_cache:
+        return _tracked_files_bytes_uncached(resolved_root, pathspec)
     return _tracked_files_bytes_cached(resolved_root, pathspec)
 
 
 @lru_cache(maxsize=None)
 def _tracked_files_bytes_cached(repo_root: str, pathspec: str) -> Tuple[bytes, ...]:
+    return _tracked_files_bytes_uncached(repo_root, pathspec)
+
+
+def _tracked_files_bytes_uncached(repo_root: str, pathspec: str) -> Tuple[bytes, ...]:
     git_bin = shutil.which("git")
     if git_bin is None:
         return ()

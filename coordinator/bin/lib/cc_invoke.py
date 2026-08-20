@@ -332,6 +332,18 @@ def _claude_home() -> str:
 # symbol; the constant is duplicated deliberately and each side asserts the literal.
 _REGISTRY_READ_TIMEOUT_TOKEN = "machine-local registry read timed out"
 
+# Cross-reference (C11, pln-an-engine-root-is-not-named-for-the-repo-...):
+# coordinator_core/engine_root.py's `coordinator_engine_root_env`/
+# `coordinator_engine_root_env_exports` (C10) are the dual-read/dual-write seam
+# for this rename everywhere coordinator_core CAN be imported. This module sits
+# on the far side of the same one-way no-import boundary as
+# `_REGISTRY_READ_TIMEOUT_TOKEN` above (its own CLAUDE_KLABAUTER_ROOT-resolution ladder
+# exists to LOCATE coordinator_core in the first place, so it cannot depend on
+# importing coordinator_core.engine_root to do it) — these two literals are
+# duplicated by hand for the same reason, not an oversight.
+_ENGINE_ROOT_NEW_VAR = "COORDINATOR_ENGINE_ROOT"
+_ENGINE_ROOT_OLD_VAR = "CLAUDE_KLABAUTER_ROOT"
+
 _MACHINE_LOCAL_READ_TIMEOUT_SECS = 10  # bound on the subprocess.run() call below
 
 
@@ -710,7 +722,7 @@ def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str
 
 
 
-def _resolve_claude_klabauter_root() -> str:
+def _resolve_engine_root() -> str:
     """Resolve CLAUDE_KLABAUTER_ROOT natively — no bash subprocess anywhere in the ladder.
 
     Resolution order (mirrors coordinator_core.engine_root.coordinator_engine_root,
@@ -805,21 +817,27 @@ def _resolve_claude_klabauter_root() -> str:
     two apart can `except _RegistryReadTimeout` before the general
     `except RuntimeError` (see `route()`, which does exactly this).
 
-    C7 routing note (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md
-    § C7, docs/reference/engine-vs-locator-resolver-routing.md bucket
-    4-bare-class-blind): this is the class-blind ENGINE-axis resolver every
-    bare `_resolve_claude_klabauter_root()` caller reaches, and the PM's naming ruling
-    (`resolve_claude_klabauter` should read as "find the source repo", not "find the
-    engine") argues for renaming this symbol to say what it returns. That
-    rename is deliberately NOT done here: `_delegate_to_gate`'s own comment
-    above records that call-site guards elsewhere introspect
-    `inspect.getsource(_resolve_claude_klabauter_root)` by this exact name, and a
-    same-file wrapper/alias split would hand those guards the wrapper's
-    short source instead of this function's real body — silently breaking
-    them rather than fixing the naming. Renaming this symbol safely needs
-    updating every guard that source-inspects it BY NAME, which is caller
-    work outside C7's `writes:` scope (see the routing doc's bucket 4 file
-    list) — left as an explicit exception, not a silent skip.
+    C7/C17 routing note (docs/plans/2026-08-19-an-engine-root-is-a-stamped-
+    build.md § C7, docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-
+    repo.md § C17, docs/reference/engine-vs-locator-resolver-routing.md
+    bucket 4-bare-class-blind): this is the class-blind ENGINE-axis resolver
+    every bare `_resolve_claude_klabauter_root()` caller reaches, and the PM's naming
+    ruling (`resolve_claude_klabauter` should read as "find the source repo", not
+    "find the engine") argued for renaming this symbol to say what it
+    returns. C17 does the rename: this function's canonical name is now
+    `_resolve_engine_root`. `_resolve_claude_klabauter_root` (defined immediately
+    below the function body as `_resolve_claude_klabauter_root = _resolve_engine_root`)
+    is kept as a PLAIN NAME ALIAS to the SAME function object, deliberately
+    not a wrapper — `_delegate_to_gate`'s own comment above still applies
+    verbatim: `inspect.getsource(_resolve_claude_klabauter_root)`-based call-site
+    guards elsewhere in this tree, and unittest.mock.patch.object callers
+    that intercept `_resolve_claude_klabauter_root` by name, both keep working because
+    every bare call site in this module (route(), the other rungs, etc.)
+    still spells the call `_resolve_claude_klabauter_root()` — the literal identifier
+    a patch/getsource call targets, resolved at call time through the
+    alias. Routing bucket-4's ~53 external callers, and this module's own
+    internal call sites, onto the new name directly is left to a later
+    chunk; until then both names resolve identically and are interchangeable.
     """
     def _delegate_to_gate(candidate: str, *, source: str) -> str:
         """Bootstrap ``coordinator_core.engine_root`` from ``candidate`` and
@@ -899,7 +917,10 @@ def _resolve_claude_klabauter_root() -> str:
 
     # Rung 1: already in environment — CANDIDATE only now, delegated through
     # the gate (see docstring's "DELEGATION" note) rather than answered here.
-    existing = os.environ.get("CLAUDE_KLABAUTER_ROOT", "")
+    # C11 dual-read: COORDINATOR_ENGINE_ROOT wins when both are set, matching
+    # coordinator_engine_root_env()'s precedence (see this module's literal
+    # duplication note near _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR above).
+    existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR, "")
     if existing:
         return _delegate_to_gate(existing, source="CLAUDE_KLABAUTER_ROOT environment variable")
 
@@ -992,6 +1013,21 @@ def _resolve_claude_klabauter_root() -> str:
     raise RuntimeError(_CLAUDE_KLABAUTER_ROOT_REMEDIATION)
 
 
+# Back-compat alias for the C17 rename (docs/plans/2026-08-20-an-engine-root-
+# is-not-named-for-the-repo.md § C17): `_resolve_claude_klabauter_root` is the
+# pre-rename spelling. This is a PLAIN NAME ALIAS, not a wrapper function --
+# both names reference the exact same function object, so
+# `inspect.getsource(_resolve_claude_klabauter_root)` call-site guards and
+# `unittest.mock.patch.object(module, "_resolve_claude_klabauter_root")` callers
+# elsewhere in this tree keep working unchanged: every bare call site in
+# THIS module still spells the call `_resolve_claude_klabauter_root()`, so a patch on
+# that name intercepts it (Python resolves a bare name against module
+# globals at call time, not at def time). Bucket-4 callers
+# (docs/reference/engine-vs-locator-resolver-routing.md, ENGINE verdict,
+# ~53 files) that import this name directly also keep working. Remove only
+# once every caller — internal and external — has been routed to
+# `_resolve_engine_root` directly.
+_resolve_claude_klabauter_root = _resolve_engine_root
 
 # Dual-read window for the engine-root rename (docs/plans/2026-08-20-an-engine-
 # root-is-not-named-for-the-repo.md). The PUBLISHED engine is transformed on the
@@ -1123,7 +1159,9 @@ def resolve_engine_root(script_file: str) -> str:
     THIS function, not on ``ensure_engine_on_path`` — see that function's
     docstring for why the degrading form is the wrong choice there.
     """
-    env_root = os.environ.get("CLAUDE_KLABAUTER_ROOT") or ""
+    # C11 dual-read: COORDINATOR_ENGINE_ROOT wins when both are set (see
+    # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
+    env_root = os.environ.get(_ENGINE_ROOT_NEW_VAR) or os.environ.get(_ENGINE_ROOT_OLD_VAR) or ""
     if env_root and os.path.isdir(env_root):
         return env_root
     walked = _walk_up_to_checkout(script_file)
@@ -1459,9 +1497,20 @@ def _build_subprocess_env(claude_klabauter_root: str) -> dict[str, str]:
     child that itself resolves settings-home (directly, or by invoking a shell
     resolver that tries the `coordinator-settings-home` CLI before its disk
     fallback) hits rung 0 and skips that CLI call.
+
+    C11 (dual-read/dual-write rename window): sets BOTH `CLAUDE_KLABAUTER_ROOT` and
+    `COORDINATOR_ENGINE_ROOT` to `claude_klabauter_root` — the same additive-both-names
+    shape as `coordinator_core.engine_root.coordinator_engine_root_env_exports`,
+    duplicated by hand here rather than imported (see the module-level literal
+    duplication note above this function's neighbours). A child running from a
+    pre-rename tree (reads only the old name) and a child running from a
+    post-rename tree (reads the new name) both resolve correctly. This routes
+    the NAME only — it still answers the DISPATCH question (which engine
+    executes), the axis split (C18) is not this function's concern.
     """
     env: dict[str, str] = _settings_home_env(
-        {**os.environ, "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root}, claude_klabauter_root
+        {**os.environ, _ENGINE_ROOT_OLD_VAR: claude_klabauter_root, _ENGINE_ROOT_NEW_VAR: claude_klabauter_root},
+        claude_klabauter_root,
     )
     env.update(_locator_axis_export())
     existing_pp = env.get("PYTHONPATH", "")
@@ -1496,7 +1545,11 @@ def _settings_home_env(base_env: dict[str, str], claude_klabauter_root: str | No
     if base_env.get("COORDINATOR_SETTINGS_HOME"):
         return base_env
 
-    _root = claude_klabauter_root if claude_klabauter_root is not None else os.environ.get("CLAUDE_KLABAUTER_ROOT")
+    # C11 dual-read: COORDINATOR_ENGINE_ROOT wins when both are set (see
+    # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
+    _root = claude_klabauter_root if claude_klabauter_root is not None else (
+        os.environ.get(_ENGINE_ROOT_NEW_VAR) or os.environ.get(_ENGINE_ROOT_OLD_VAR)
+    )
     _injected = bool(_root) and _root not in sys.path
     if _injected:
         sys.path.insert(0, _root)

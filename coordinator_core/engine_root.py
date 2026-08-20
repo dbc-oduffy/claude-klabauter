@@ -142,11 +142,23 @@ def coordinator_engine_root() -> str:
     `_registry_mtime_pair` (see `_ROOT_MEMO`) — resolved once per distinct
     registry state per process, not once globally and not once per call.
     """
-    # Rung 1: CLAUDE_KLABAUTER_ROOT already set in environment (§4b idempotency gate).
+    # Rung 1: engine root already set in environment (§4b idempotency gate).
     # Never memoized: this is a direct env read, already as cheap as a memo
     # lookup, and honoring a caller's env override on every call is the
     # entire point of the idempotency gate.
-    existing = os.environ.get("CLAUDE_KLABAUTER_ROOT", "")
+    #
+    # READ THROUGH THE C10 ACCESSOR, NEVER THE RAW NAME. A literal
+    # "CLAUDE_KLABAUTER_ROOT" here is rewritten by the publish transform, which splits
+    # env-var names as readily as module names — so the mirror's copy of this
+    # rung looks for CLAUDE_KLABAUTER_ROOT and can never see the CLAUDE_KLABAUTER_ROOT a
+    # live-tree caller actually exported. That made Rung 1 inert across the
+    # tree boundary, which is precisely the DR-326 case it exists to serve,
+    # and the warm server exporting the mirror's root fleet-wide makes the
+    # crossing the common path on this box rather than the edge one.
+    # COORDINATOR_ENGINE_ROOT is transform-stable, so the accessor crosses
+    # intact where the raw name cannot. Surfaced by claude-klabauter-ff,
+    # 2026-08-20, reproduced under a synthetic HOME.
+    existing = coordinator_engine_root_env("engine_root.coordinator_engine_root") or ""
     if existing:
         return existing
 
@@ -471,7 +483,16 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
     chains (see `coordinator_engine_root()`'s own remediation vs. the
     shim's registry-plus-published-engine remediation text).
     """
-    existing = os.environ.get("CLAUDE_KLABAUTER_ROOT", "")
+    # Through the C10 accessor, not the raw name — same reason as
+    # `coordinator_engine_root`'s Rung 1 above: the publish transform rewrites
+    # a literal "CLAUDE_KLABAUTER_ROOT" and the mirror's copy of this rung then cannot
+    # see what a live-tree caller exported. This is the site `cc_invoke`'s
+    # `_delegate_to_gate` reaches when it loads a MIRROR candidate's gate, so
+    # a raw read here is what sent that path falling through to the
+    # machine-local registry — the dependency Rung 1 exists to remove.
+    existing = coordinator_engine_root_env(
+        "engine_root.coordinator_engine_root_with_class"
+    ) or ""
     if existing:
         return existing, _RESOLUTION_LIVE_WORKING_TREE_LITERAL
 

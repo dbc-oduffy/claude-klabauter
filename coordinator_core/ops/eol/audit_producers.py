@@ -16,11 +16,20 @@ test code (out of this op's scope per this plan's C4, and per the source
 module's own "TEST CODE IS OUT OF SCOPE" negative-spec), and importing a
 `test_*` module from production code is not a shape this repo uses elsewhere.
 Pointing this op at `target_root=<this repo>` must reproduce
-`test_no_production_text_write_omits_newline`'s verdict exactly (AC6) — same
-skip-dir set, same test-file exclusion, same literal-mode/newline-pin logic —
-so any future edit to the source predicate must be mirrored here (or lifted
-into a shared helper both import; not done here because the source module is
-explicitly test-only and this op's scope per C4 is this file alone).
+`test_no_production_text_write_omits_newline`'s OFFENDER SET (AC6) — same
+test-file exclusion, same literal-mode/newline-pin logic — so any future edit
+to the shared predicate logic must be mirrored here (or lifted into a shared
+helper both import; not done here because the source module is explicitly
+test-only and this op's scope per C4 is this file alone).
+`test_audit_producers_matches_source_ratchet.py` enforces this as a live
+comparison over this repo's own corpus, not a promise.
+
+`_SKIP_DIRS` is the ONE deliberate, documented exception to the exact-mirror
+claim above (F14, staff-eng review 2026-08-20): this op's set is a superset
+of the ratchet's, adding `site-packages`/`build`/`dist` — directories the
+ratchet's single fixed target (this repo) never needs to skip but an
+arbitrary caller-supplied `target_root` can carry. See `_SKIP_DIRS`'s own
+comment for the full rationale.
 
 AST, never behavioural, for the same reason the source ratchet gives: Python
 only translates `"\n"` to `"\r\n"` in text mode on Windows, so a behavioural
@@ -63,11 +72,21 @@ from coordinator_core.cartography._guard import path_guard
 from coordinator_core.ipc import register_op
 
 #: Directories that never hold production writes we own — mirrors the source
-#: ratchet's `_SKIP_DIRS` exactly (see module docstring on why this must stay
-#: in lockstep rather than import the test module).
+#: ratchet's `_SKIP_DIRS` (see module docstring on why this must stay in
+#: lockstep rather than import the test module), WIDENED by three entries
+#: the ratchet does not carry (F14, staff-eng review 2026-08-20):
+#: `site-packages`, `build`, `dist`. The ratchet only ever walks THIS repo
+#: (hardcoded `REPO`), where none of the three hold code this repo owns; this
+#: op runs against any caller-supplied `target_root`, including a repo that
+#: hosts the fleet's venv (this repo's own CLAUDE.md: "This repo hosts the
+#: fleet's venv") or ships a build/dist output directory — both reachable in
+#: practice, unlike the ratchet's single fixed target. Documented, DELIBERATE
+#: divergence from an exact mirror — see
+#: `test_audit_producers_matches_source_ratchet.py`'s own accounting for it.
 _SKIP_DIRS = frozenset({
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     ".pytest_cache", ".mypy_cache", "_vendor", "archive",
+    "site-packages", "build", "dist",
 })
 
 _OPEN_NAMES = frozenset({"open"})

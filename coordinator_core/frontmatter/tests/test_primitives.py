@@ -22,6 +22,8 @@ from coordinator_core.frontmatter.primitives import (
     _append_blocking_note,
     _retire_gate_dependency,
     insert_fm_field,
+    append_fm_block_scalar_line,
+    read_fm_block_scalar,
     read_fm_field,
     read_fm_nested_field,
     rebuild,
@@ -1934,3 +1936,117 @@ class TestAppendBlockingNoteWithoutTheEmptyKeyRegex:
         fm = 'title: T\nblocking_notes:\n  - a\nstatus: open\n'
         with pytest.raises(ValueError, match='nested YAML block'):
             _append_blocking_note(fm, 'note', 'title')
+
+
+# ---------------------------------------------------------------------------
+# read_fm_block_scalar / append_fm_block_scalar_line
+#
+# The append path replace_fm_field refuses. Its absence made
+# `review-exec-auth-stamp authorize-invocation` — /execute-plan Phase 1
+# step 2 — unrunnable on every plan whose execution_authorized_note is a
+# `|` or `>` block, with no flag to get past it (cross-repo memo,
+# example-retrieval-repo-em, 2026-08-20).
+# ---------------------------------------------------------------------------
+
+class TestBlockScalarReadAndAppend:
+
+    def test_plain_scalar_reads_as_not_a_block(self):
+        """The discriminator callers branch on. read_fm_field returns the
+        header sigil for a block scalar and the value for a plain one, so it
+        cannot tell them apart; this can."""
+        assert read_fm_block_scalar('note: hello\n', 'note') is None
+
+    def test_absent_key_reads_as_not_a_block(self):
+        assert read_fm_block_scalar('title: T\n', 'note') is None
+
+    @pytest.mark.parametrize('header,style', [
+        ('|', '|'), ('|-', '|'), ('|+', '|'),
+        ('>', '>'), ('>-', '>'), ('>+', '>'),
+        ('|2', '|'), ('|2-', '|'), ('|-2', '|'),
+    ])
+    def test_every_block_header_variant_is_recognised(self, header, style):
+        """Chomping and explicit-indentation indicators are permitted in
+        either order (YAML 1.2 §8.1.1); a header parser that admits only
+        `|`/`>-` silently reclassifies the rest as plain scalars and hands
+        them to the single-line writer that corrupts them."""
+        fm = f'note: {header}\n  first\n  second\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block is not None
+        assert block.style == style
+        assert block.lines == ['first', 'second']
+
+    def test_value_merely_containing_a_pipe_is_not_a_block(self):
+        assert read_fm_block_scalar('note: a|b\n', 'note') is None
+
+    @pytest.mark.parametrize('eol', _EOLS)
+    def test_literal_append_lands_inside_the_block(self, eol):
+        fm = _fm(eol, 'title: T', 'note: |', '  one', '  two', 'status: open')
+        result = append_fm_block_scalar_line(fm, 'note', 'three')
+        loaded = yaml.safe_load(result.replace('\r\n', '\n'))
+        assert loaded['note'] == 'one\ntwo\nthree\n'
+        assert loaded['status'] == 'open'
+        assert not _mixed_endings(result)
+
+    @pytest.mark.parametrize('eol', _EOLS)
+    def test_folded_append_stays_a_separate_line(self, eol):
+        """A bare appended line under a FOLDED block is space-joined into the
+        preceding line by any conforming reader — the appended text would
+        silently merge into the PM's last sentence. The blank-line separator
+        is how a folded scalar spells a real line break."""
+        fm = _fm(eol, 'note: >-', '  PM said go', '  and go now.', 'status: open')
+        result = append_fm_block_scalar_line(fm, 'note', '/execute-plan')
+        loaded = yaml.safe_load(result.replace('\r\n', '\n'))
+        assert loaded['note'] == 'PM said go and go now.\n/execute-plan'
+
+    def test_append_honours_the_blocks_own_indentation(self):
+        fm = 'note: |-\n    deep\nstatus: open\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        assert '\n    appended\n' in result
+        assert yaml.safe_load(result)['note'] == 'deep\nappended'
+
+    def test_append_to_the_last_field_in_the_block(self):
+        fm = 'note: |\n  only\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        assert yaml.safe_load(result)['note'] == 'only\nappended\n'
+
+    def test_trailing_blank_lines_do_not_push_the_append_out_of_the_block(self):
+        """A blank line after the block belongs to the document. Counting it
+        into the block's extent lands the appended line below it — outside
+        the scalar, where it parses as a stray key or breaks the document."""
+        fm = 'note: |\n  one\n\nstatus: open\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'two')
+        assert yaml.safe_load(result)['note'] == 'one\ntwo\n'
+        assert yaml.safe_load(result)['status'] == 'open'
+
+    def test_append_is_idempotent_on_a_line_the_block_already_ends_with(self):
+        fm = 'note: |\n  one\n  two\nstatus: open\n'
+        assert append_fm_block_scalar_line(fm, 'note', 'two') == fm
+
+    def test_append_preserves_neighbouring_fields_byte_for_byte(self):
+        fm = 'title: T\nnote: |\n  one\nstatus: open\nother: 42\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'two')
+        assert result.startswith('title: T\n')
+        assert result.endswith('status: open\nother: 42\n')
+
+    def test_append_refuses_a_plain_scalar(self):
+        """Not a silent no-op and not a fallback to replace_fm_field: the
+        caller picked the wrong primitive and needs to hear it."""
+        with pytest.raises(ValueError, match='does not'):
+            append_fm_block_scalar_line('note: plain\n', 'note', 'x')
+
+    def test_append_refuses_an_absent_key(self):
+        with pytest.raises(ValueError, match='absent'):
+            append_fm_block_scalar_line('title: T\n', 'note', 'x')
+
+    def test_append_refuses_multiline_text(self):
+        """Each appended line's indentation is this function's decision. A
+        caller splicing its own newlines in would author the second line's
+        indent itself, which is how a block gets a line at the wrong column."""
+        with pytest.raises(ValueError, match='single line'):
+            append_fm_block_scalar_line('note: |\n  one\n', 'note', 'a\nb')
+
+    def test_replace_fm_field_still_refuses_the_shape(self):
+        """The refusal is correct and stays. Appending got its own function
+        precisely so the guard did not have to be softened into a flag."""
+        with pytest.raises(ValueError, match='block-scalar'):
+            replace_fm_field('note: |\n  one\n', 'note', 'clobbered')

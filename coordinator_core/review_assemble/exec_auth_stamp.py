@@ -86,8 +86,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.frontmatter.primitives import (
+    BlockScalar,
+    append_fm_block_scalar_line,
     canonical_body_sha,
     insert_fm_field,
+    read_fm_block_scalar,
     read_fm_field_unquoted,
     rebuild,
     replace_fm_field,
@@ -135,6 +138,26 @@ def _append_note(current: Optional[str], addition: str) -> str:
     if current.endswith(addition):
         return current
     return current + NOTE_APPEND_SEPARATOR + addition
+
+
+def _current_note_text(fm: str, block: Optional[BlockScalar]) -> Optional[str]:
+    """The `execution_authorized_note` text a convergence test should compare
+    against, for either value shape.
+
+    A single-line note reads back through `read_fm_field_unquoted`. A block
+    scalar does NOT: that reader returns only the `key:` line, so on a `|` or
+    `>` note it yields the bare header sigil. Comparing an appended note
+    against `"|"` never converges, so the caller re-stamped on every
+    invocation -- the non-convergence half of the same defect that made the
+    write itself refuse (cross-repo memo, example-retrieval-repo-em, 2026-08-20).
+
+    The block's authored lines are joined with the same
+    `NOTE_APPEND_SEPARATOR` the single-line path writes, so one `endswith`
+    test serves both shapes.
+    """
+    if block is None:
+        return read_fm_field_unquoted(fm, "execution_authorized_note")
+    return NOTE_APPEND_SEPARATOR.join(block.lines)
 
 
 def _canonical_body_sha(text: str, repo_root: Path) -> str:
@@ -218,7 +241,8 @@ def stamp_execution_authorization(
             raise MutateAbort(f"{plan_path}: no parseable frontmatter (race)")
 
         fm = split.fm_text
-        current_note = read_fm_field_unquoted(fm, "execution_authorized_note")
+        note_block = read_fm_block_scalar(fm, "execution_authorized_note")
+        current_note = _current_note_text(fm, note_block)
 
         # The note field's convergence test differs from the other three:
         # under append_note it asks "does the existing note already end with
@@ -238,14 +262,43 @@ def stamp_execution_authorization(
             state["applied"] = False
             return old_text
 
-        final_note = _append_note(current_note, note) if append_note else note
+        # A block-scalar note is appended INTO its block and then excluded
+        # from the single-line writer below. `replace_fm_field` refuses that
+        # shape by design -- correctly, since a single-line rewrite would
+        # truncate the PM's verbatim multi-line words -- and routing an
+        # append through it made `authorize-invocation` (i.e. /execute-plan
+        # Phase 1 step 2) unrunnable on every plan whose note is a `|` or `>`
+        # block, with no flag to get past it (cross-repo memo, example-retrieval-repo-em,
+        # 2026-08-20). Appending is a different operation, so it takes the
+        # different primitive rather than softening the guard.
+        fields = list(EXEC_FIELDS)
+        if note_block is not None and not append_note:
+            # The replace-outright verb (`stamp --note`) over a block-scalar
+            # note. Deliberately still refused -- that field holds the PM's
+            # verbatim authorizing words, and collapsing a multi-line quote
+            # to one line destroys evidence with no reconstruction. What is
+            # NOT deliberate is surfacing it as a raw ValueError traceback
+            # from a frontmatter primitive: this is the layer that knows the
+            # verb the operator typed, so it owns the message.
+            raise MutateAbort(
+                f"{plan_path}: execution_authorized_note is a block scalar "
+                f"holding multi-line verbatim text; --note would replace it "
+                f"with a single line. Use `authorize-invocation` (or `stamp "
+                f"--append-note`) to add a line instead."
+            )
+        if append_note and note_block is not None:
+            fm = append_fm_block_scalar_line(fm, "execution_authorized_note", note)
+            fields.remove("execution_authorized_note")
+            final_note = note
+        else:
+            final_note = _append_note(current_note, note) if append_note else note
         final_values = {**intended_exact, "execution_authorized_note": final_note}
 
         # Append-only insert (no `after_key`): a first-time stamp has no
         # prior execution_authorized_* fields to anchor after, so each
         # field lands at the end of the frontmatter block, in EXEC_FIELDS
         # order.
-        for field in EXEC_FIELDS:
+        for field in fields:
             value = final_values[field]
             numeric_quoting = field == "execution_authorized_sha"
             if read_fm_field_unquoted(fm, field) is not None:
@@ -402,7 +455,9 @@ def stamp_invocation_authorization(
     # at worst a redundant identical stamp, never a lost one.
     fm = split.fm_text
     existing_sha = read_fm_field_unquoted(fm, "execution_authorized_sha")
-    existing_note = read_fm_field_unquoted(fm, "execution_authorized_note") or ""
+    existing_note = _current_note_text(
+        fm, read_fm_block_scalar(fm, "execution_authorized_note")
+    ) or ""
     existing_at = read_fm_field_unquoted(fm, "execution_authorized_at")
     body_unchanged_since_stamp = existing_sha == sha
 

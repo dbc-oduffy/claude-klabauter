@@ -143,6 +143,56 @@ def test_argv_convention_matches_the_sibling_module(
     assert seen_kwargs.get("timeout") == 10
 
 
+def test_use_cache_false_sees_files_added_after_the_first_cached_call(
+    repo: Path,
+) -> None:
+    """F4 regression: the cached path pins a root's tracked-file list for
+    the life of the cache (correct for a one-shot CLI, wrong for a
+    warm-served caller). `use_cache=False` must bypass that pin and see a
+    file added after the FIRST cached call, without needing to
+    `cache_clear()`."""
+    _tracked_files_bytes_cached.cache_clear()
+    before = tracked_files_bytes(repo)  # populates the cache
+    assert b"new.py" not in before
+
+    (repo / "new.py").write_bytes(b"z = 3\n")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "add new.py", cwd=repo)
+
+    still_cached = tracked_files_bytes(repo)
+    assert b"new.py" not in still_cached, (
+        "sanity: the cached call must still be stale here -- otherwise this "
+        "test cannot distinguish use_cache=False from an accidental cache miss"
+    )
+
+    fresh = tracked_files_bytes(repo, use_cache=False)
+    assert b"new.py" in fresh
+
+
+def test_use_cache_false_never_populates_or_reads_the_cache(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `use_cache=False` call must always re-spawn -- never served from,
+    and never written into, the `lru_cache` -- independent of any other
+    cached call for the same (repo_root, pathspec)."""
+    _tracked_files_bytes_cached.cache_clear()
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "coordinator_core.git.ls_files_bytes.subprocess.run", counting_run
+    )
+    tracked_files_bytes(repo, use_cache=False)
+    tracked_files_bytes(repo, use_cache=False)
+    tracked_files_bytes(repo, use_cache=False)
+    assert len(calls) == 3, f"expected one spawn per call, saw {len(calls)}"
+    assert _tracked_files_bytes_cached.cache_info().currsize == 0
+
+
 def test_tracked_files_is_unmodified_by_this_module() -> None:
     """C1's negative spec: the decoding enumerator keeps its Tuple[str, ...]
     return and five-plus call sites keep working."""

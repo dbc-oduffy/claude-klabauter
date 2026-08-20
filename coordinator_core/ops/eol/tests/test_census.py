@@ -39,7 +39,7 @@ import coordinator_core.ops.eol.census  # noqa: F401 -- fires @register_op
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.ipc import _REGISTRY, dispatch_message
-from coordinator_core.ops.eol.census import _eol_census
+from coordinator_core.ops.eol.census import _eol_census, census
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -192,3 +192,108 @@ def test_dispatch_message_wire_smoke_without_origin_worktree(tmp_path):
 
 def test_classified_compute_only():
     assert OP_CLASSIFICATION[_OP_NAME] is OpClass.COMPUTE_ONLY
+
+
+# ---------------------------------------------------------------------------
+# F1 -- binary-content guard, both halves
+# ---------------------------------------------------------------------------
+
+
+def test_wildcard_eol_crlf_over_binary_content_is_not_a_violation(tmp_path):
+    """Regression for the critical finding: a wildcard `* text=auto
+    eol=crlf` declaration makes `check-attr eol` answer `crlf` for a binary
+    path too, and `text=auto` reports the literal "auto" macro value from
+    `check-attr text` rather than a per-file binary verdict -- so the
+    `text`-attribute guard alone cannot exclude this path. The NUL-byte
+    belt-and-braces guard must."""
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    _git(d, "config", "core.autocrlf", "false")
+    (d / ".gitattributes").write_bytes(b"* text=auto eol=crlf\n")
+    _git(d, "add", ".gitattributes")
+    _git(d, "commit", "-qm", "attrs")
+
+    # b"\n" present, no b"\r\n" at all, and a NUL byte -- the shape that
+    # would otherwise be flagged "crlf declared, lf-only found" (a real
+    # eol.repair candidate) if the belt-and-braces guard did not exclude it.
+    binary_content = b"\x00\x01\x02fake\nbinary\x00content\n"
+    (d / "image.bin").write_bytes(binary_content)
+    _git(d, "add", "image.bin")
+    _git(d, "commit", "-qm", "binary")
+
+    result = census(d)
+
+    assert "image.bin" not in {v["path"] for v in result["violations"]}
+
+
+def test_explicit_binary_attribute_is_not_a_violation(tmp_path):
+    """The other half of F1: a path with an explicit `binary` macro (which
+    implies `-text`) reports `text: unset` from `check-attr`, distinct from
+    the `text=auto` case above -- the `text`-attribute guard must exclude
+    it directly, without needing the NUL-byte fallback."""
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    _git(d, "config", "core.autocrlf", "false")
+    (d / ".gitattributes").write_bytes(
+        b"* text=auto eol=crlf\nblob.bin binary\n"
+    )
+    _git(d, "add", ".gitattributes")
+    _git(d, "commit", "-qm", "attrs")
+
+    # No NUL byte here -- if the text-attribute guard were absent, only the
+    # belt-and-braces NUL check would be left, and this content would slip
+    # past it, proving the two guards are independently necessary.
+    binary_like_content = b"fake\nbinary-ish\ncontent\n"
+    (d / "blob.bin").write_bytes(binary_like_content)
+    _git(d, "add", "blob.bin")
+    _git(d, "commit", "-qm", "binary")
+
+    result = census(d)
+
+    assert "blob.bin" not in {v["path"] for v in result["violations"]}
+
+
+# ---------------------------------------------------------------------------
+# F3 -- subdirectory target_root is refused
+# ---------------------------------------------------------------------------
+
+
+def test_subdirectory_target_root_is_refused(tmp_path):
+    d = _new_fixture_repo(tmp_path)
+    sub = d / "sub"
+    sub.mkdir()
+    (sub / "keep.txt").write_bytes(b"hi\n")
+    _git(d, "add", "sub/keep.txt")
+    _git(d, "commit", "-qm", "sub")
+
+    with pytest.raises(PathEscapeError):
+        _eol_census({"target_root": str(sub)})
+
+
+# ---------------------------------------------------------------------------
+# F4 -- census reads tracked files uncached
+# ---------------------------------------------------------------------------
+
+
+def test_census_reads_tracked_files_uncached(tmp_path, monkeypatch):
+    d = _new_fixture_repo(tmp_path)
+    seen_kwargs = {}
+    import coordinator_core.ops.eol.census as mod
+
+    real = mod.tracked_files_bytes
+
+    def spy(root, pathspec=".", use_cache=True):
+        seen_kwargs["use_cache"] = use_cache
+        return real(root, pathspec, use_cache=use_cache)
+
+    monkeypatch.setattr(mod, "tracked_files_bytes", spy)
+
+    census(d)
+
+    assert seen_kwargs.get("use_cache") is False

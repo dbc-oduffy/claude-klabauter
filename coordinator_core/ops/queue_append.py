@@ -795,6 +795,34 @@ def _claude_klabauter_root() -> Optional[str]:
     return val if val else None
 
 
+def _claude_klabauter_root_unresolved_detail() -> str:
+    """Diagnostic detail for a `_claude_klabauter_root()` miss (F12, staff-eng review
+    2026-08-20) -- names the missing registry key explicitly, and
+    distinguishes "genuinely unset" from "CLAUDE_KLABAUTER_ROOT is set but discarded
+    under warm serving" (the latter reads as a silent no-write otherwise: the
+    env var IS present, just not the current caller's, per `_claude_klabauter_root`'s
+    own docstring on the warm-server hazard).
+
+    No fallback rung is added here -- a wrong root writing into a stranger's
+    tree is worse than a skipped write (accepted as-is; direction-class per
+    the review). This only makes the skip diagnosable.
+    """
+    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    if override and op_latency.execution_route() != op_latency.IN_PROCESS:
+        return (
+            f"repos.claude_klabauter not set in machine-local registry; CLAUDE_KLABAUTER_ROOT "
+            f"env var IS set ({override!r}) but discarded under warm serving "
+            f"(execution_route={op_latency.execution_route()!r} != IN_PROCESS) -- a "
+            "warm-served process inherits its SPAWNER's environment, not the "
+            "current caller's, so trusting it here risks writing into a stranger's "
+            "tree. Register the key: machine-local set repos.claude_klabauter "
+            "/path/to/claude-klabauter"
+        )
+    if not override:
+        return "repos.claude_klabauter not set in machine-local registry and CLAUDE_KLABAUTER_ROOT env var not set"
+    return "repos.claude_klabauter not set in machine-local registry"
+
+
 def _same_path(a: str, b: str) -> bool:
     """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
     consolidated primitive (state/sizings/2026-08-07-path-equality-
@@ -873,9 +901,7 @@ def _output_path(
             )
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root is None:
-            raise _ClaudeKlabauterUnresolvable(
-                "repos.claude_klabauter not set in machine-local registry and CLAUDE_KLABAUTER_ROOT env var not set"
-            )
+            raise _ClaudeKlabauterUnresolvable(_claude_klabauter_root_unresolved_detail())
         base = os.path.join(claude_klabauter_root, output_dir)
     elif caller_worktree is not None:
         home = _claude_home()
@@ -884,7 +910,8 @@ def _output_path(
             claude_klabauter_root = _claude_klabauter_root()
             if claude_klabauter_root is None:
                 raise _ClaudeKlabauterUnresolvable(
-                    "repos.claude_klabauter not set; cannot route meta-repo per-repo state to claude-klabauter"
+                    "cannot route meta-repo per-repo state to claude-klabauter: "
+                    + _claude_klabauter_root_unresolved_detail()
                 )
             base = os.path.join(claude_klabauter_root, output_dir)
         else:
@@ -896,7 +923,8 @@ def _output_path(
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root is None:
             raise _ClaudeKlabauterUnresolvable(
-                "caller_worktree not provided and CLAUDE_KLABAUTER_ROOT not set; cannot resolve output path"
+                "caller_worktree not provided; cannot resolve output path: "
+                + _claude_klabauter_root_unresolved_detail()
             )
         base = os.path.join(claude_klabauter_root, output_dir)
 

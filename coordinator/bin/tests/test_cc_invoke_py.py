@@ -2068,6 +2068,11 @@ class RequireEngineVariantsTest(unittest.TestCase):
             clear=False,
         ):
             os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+            # C11: cc_invoke's env-root reads now also check COORDINATOR_ENGINE_ROOT
+            # (dual-read rename window) — must be neutralized here too, or a real
+            # session's exported COORDINATOR_ENGINE_ROOT leaks into this "unset"
+            # fixture the same way an un-popped CLAUDE_KLABAUTER_ROOT would.
+            os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
             yield
 
     # -- Agreement (AC2) -----------------------------------------------------

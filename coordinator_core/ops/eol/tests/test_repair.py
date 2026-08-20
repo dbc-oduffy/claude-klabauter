@@ -200,3 +200,140 @@ def test_dispatch_message_wire_smoke_without_origin_worktree(tmp_path):
 
 def test_classified_mutating():
     assert OP_CLASSIFICATION[_OP_NAME] is OpClass.MUTATING
+
+
+# ---------------------------------------------------------------------------
+# F1 -- binary corruption under a wildcard eol=crlf declaration (CRITICAL)
+# ---------------------------------------------------------------------------
+
+
+def test_wildcard_eol_crlf_binary_content_untouched_after_mutate(tmp_path):
+    """Regression for the critical review finding: a wildcard
+    `* text=auto eol=crlf` declaration made `check-attr eol` answer `crlf`
+    for a binary path, and `_normalize_for_index_check` is a no-op on
+    content with no CRLF -- so the index-blob-equality refusal was vacuous
+    for this exact case, and `mutate: true` would insert `\\r` before every
+    `\\n` in the binary. `eol.census`'s NUL-byte guard must keep this path
+    out of the violation set entirely, so `eol.repair` never even sees it
+    as a candidate."""
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    _git(d, "config", "core.autocrlf", "false")
+    (d / ".gitattributes").write_bytes(b"* text=auto eol=crlf\n")
+    _git(d, "add", ".gitattributes")
+    _git(d, "commit", "-qm", "attrs")
+
+    binary_content = b"\x00\x01\x02fake\nbinary\x00content\n"
+    (d / "image.bin").write_bytes(binary_content)
+    _git(d, "add", "image.bin")
+    _git(d, "commit", "-qm", "binary")
+
+    result = _eol_repair({"target_root": str(d), "mutate": True})
+
+    assert "image.bin" not in {r["path"] for r in result["repaired"]}
+    assert "image.bin" not in {s["path"] for s in result["skipped"]}
+    assert (d / "image.bin").read_bytes() == binary_content
+
+
+# ---------------------------------------------------------------------------
+# F2 -- read-then-write race
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_edit_between_read_and_write_is_not_reverted(tmp_path, monkeypatch):
+    """A peer writes to a candidate's path in the window between this op's
+    initial read and its final disk write (simulated here as the window
+    around `_index_blobs`, which is where the real op spawns and awaits a
+    git subprocess). The op must skip with `changed-under-us` rather than
+    silently reverting the peer's edit to its own stale normalization."""
+    import coordinator_core.ops.eol.repair as mod
+
+    d = _new_fixture_repo(tmp_path)
+    peer_content = b"alpha\r\nbeta\r\nPEER-EDIT\r\n"
+    real_index_blobs = mod._index_blobs
+
+    def racing_index_blobs(root, rels):
+        result = real_index_blobs(root, rels)
+        # Simulate a peer's concurrent write landing in the window between
+        # this op's read and its write.
+        (root / "a.txt").write_bytes(peer_content)
+        return result
+
+    monkeypatch.setattr(mod, "_index_blobs", racing_index_blobs)
+
+    result = mod._eol_repair({"target_root": str(d), "mutate": True})
+
+    skipped_by_path = {s["path"]: s for s in result["skipped"]}
+    assert skipped_by_path["a.txt"]["reason"] == "changed-under-us"
+    assert (d / "a.txt").read_bytes() == peer_content
+
+
+# ---------------------------------------------------------------------------
+# F3 -- subdirectory target_root is refused
+# ---------------------------------------------------------------------------
+
+
+def test_subdirectory_target_root_is_refused(tmp_path):
+    d = _new_fixture_repo(tmp_path)
+    sub = d / "sub"
+    sub.mkdir()
+    (sub / "keep.txt").write_bytes(b"hi\n")
+    _git(d, "add", "sub/keep.txt")
+    _git(d, "commit", "-qm", "sub")
+
+    with pytest.raises(PathEscapeError):
+        _eol_repair({"target_root": str(sub)})
+
+
+# ---------------------------------------------------------------------------
+# F9 -- bounded runtime: candidate count capped per invocation
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_count_is_capped_per_invocation(tmp_path, monkeypatch):
+    import coordinator_core.ops.eol.repair as mod
+
+    d = _new_fixture_repo(tmp_path)  # a.txt and b.txt are clean candidates
+    monkeypatch.setattr(mod, "_MAX_REPAIR_CANDIDATES", 1)
+
+    result = mod._eol_repair({"target_root": str(d), "mutate": True})
+
+    assert result["capped_remainder_count"] == 1
+    assert result["repaired_count"] == 1
+    assert (
+        result["repaired_count"] + result["skipped_count"] + result["capped_remainder_count"]
+        == result["violation_count"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# F11 -- a path containing a newline is dropped, not batched
+# ---------------------------------------------------------------------------
+
+
+def test_newline_in_path_is_skipped_with_explicit_reason(tmp_path, monkeypatch):
+    """`_index_blobs`'s `cat-file --batch` protocol is newline-delimited;
+    a tracked path containing `\\n` would desync it. Rather than exercise
+    that against a real newline-containing filename (fragile across
+    filesystems), stub `_census` to hand `repair()` a violation carrying
+    one directly, proving the guard fires before any git spawn or disk
+    read is attempted for that path."""
+    import coordinator_core.ops.eol.repair as mod
+
+    d = _new_fixture_repo(tmp_path)
+    fake_census_result = {
+        "violations": [
+            {"path": "weird\npath.txt", "declared": "lf", "found": "crlf-present", "dirty": False},
+        ],
+        "violation_count": 1,
+    }
+    monkeypatch.setattr(mod, "_census", lambda root: fake_census_result)
+
+    result = mod.repair(d, mutate=True)
+
+    skipped_by_path = {s["path"]: s for s in result["skipped"]}
+    assert skipped_by_path["weird\npath.txt"]["reason"] == "newline-in-path"
+    assert result["repaired_count"] == 0

@@ -22,9 +22,12 @@ test_no_unbatched_per_item_git_spawn.py`):
      `ls_files.tracked_files`; that one decodes with errors="replace" before
      splitting, which substitutes U+FFFD on non-UTF-8 path bytes -- lossy for
      a byte-exactness probe).
-  2. `git -C <target_root> check-attr eol -z --stdin` -- fed the WHOLE
+  2. `git -C <target_root> check-attr eol text -z --stdin` -- fed the WHOLE
      tracked-path list over stdin in one call (the reason `--stdin` exists),
-     not one call per path.
+     not one call per path. Both attributes are requested in this SAME
+     spawn (not a second call) so the pinned three-spawn budget does not
+     change: `eol` for the declared direction, `text` to exclude any path
+     git will never text-normalize at checkin (see the F1 note below).
   3. `git -C <target_root> status --porcelain -z` -- identifies dirty paths,
      which are excluded from violation reporting: a path mid-edit may
      legitimately carry content that does not yet match its declared
@@ -49,6 +52,29 @@ Target resolution: `target_root` wire param, path-guarded via
 argument is ignored entirely (this plan's anti-scope: "Do not resolve the
 target root from the environment" / AC7). Reference shape:
 `coordinator_core/ops/cartography_tree.py :: _cartography_tree`.
+
+Binary-content guard (fix for a landed-review finding, not part of the
+original AC set): a wildcard `.gitattributes` declaration such as
+`* text=auto eol=crlf` makes `check-attr eol` answer `crlf` for EVERY
+tracked path INCLUDING binaries, while `text=auto` leaves git to sniff
+binary-ness per file at commit time rather than reporting a per-path
+verdict through `check-attr text` (that call reports the literal `auto`
+macro value, not a resolved binary verdict). Two independent guards, both
+required, neither sufficient alone:
+  - Any path whose `text` attribute is explicitly `unset` (a bare `-text`
+    or the `binary` macro, which implies `-text`) is excluded from the
+    violation predicate outright -- git never text/eol-normalizes such a
+    path, so an `eol=` declaration on it carries no direction to check
+    bytes against.
+  - Belt-and-braces: any content containing a NUL byte is excluded from
+    the violation predicate regardless of what `text` reports -- catches
+    the `text=auto` case above, where `check-attr text` cannot tell us the
+    per-file verdict. Imperfect (a NUL-free binary would still slip
+    through) but the two guards together close the reachable corruption
+    path traced in review: `eol.repair` no-ops on a clean predicate, so a
+    false negative here costs a missed detection, never a bad write.
+`eol.repair` relies on this predicate never firing a false positive on
+binary content -- see that module's docstring.
 
 Declaration coverage (AC15): tracked substrate paths carrying NO `eol`
 attribute at all (`check-attr` reports "unspecified"). Zero marginal spawn
@@ -88,8 +114,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from coordinator_core.cartography._guard import path_guard
+from coordinator_core.cartography._guard import PathEscapeError, path_guard
 from coordinator_core.git.ls_files_bytes import tracked_files_bytes
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -99,12 +126,19 @@ from coordinator_core.win_portability import no_console_creationflags
 #: check bytes against, so they are skipped from the violation predicate.
 _NO_DIRECTION = frozenset({b"set", b"unset"})
 
+#: `text` attribute value that means "git will never text/eol-normalize
+#: this path" -- a bare `-text` or the `binary` macro (which implies
+#: `-text`). See the module docstring's "Binary-content guard" note (F1).
+_TEXT_EXCLUDED = frozenset({b"unset"})
 
-def _check_attr_eol(root: Path, paths: Tuple[bytes, ...]) -> Dict[bytes, bytes]:
-    """One batched `git check-attr eol -z --stdin` call over the whole
-    `paths` list. Returns {path_bytes: value_bytes}; a path git errors on or
-    that check-attr never emits a record for is simply absent from the
-    result (folded to "unspecified" by the caller).
+
+def _check_attr_eol_text(root: Path, paths: Tuple[bytes, ...]) -> Dict[bytes, Dict[bytes, bytes]]:
+    """One batched `git check-attr eol text -z --stdin` call over the whole
+    `paths` list, fetching BOTH attributes in the SAME spawn so the pinned
+    three-spawn budget (AC3) does not change. Returns
+    {path_bytes: {attr_name_bytes: value_bytes}}; an attribute git never
+    emits a record for is simply absent from that path's sub-dict (folded
+    to "unspecified" by the caller).
     """
     if not paths:
         return {}
@@ -114,7 +148,7 @@ def _check_attr_eol(root: Path, paths: Tuple[bytes, ...]) -> Dict[bytes, bytes]:
     stdin_payload = b"\x00".join(paths) + b"\x00"
     try:
         proc = subprocess.run(
-            [git_bin, "-C", str(root), "check-attr", "eol", "-z", "--stdin"],
+            [git_bin, "-C", str(root), "check-attr", "eol", "text", "-z", "--stdin"],
             input=stdin_payload,
             capture_output=True,
             timeout=30,
@@ -127,17 +161,37 @@ def _check_attr_eol(root: Path, paths: Tuple[bytes, ...]) -> Dict[bytes, bytes]:
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", errors="replace")
         print(
-            f"eol.census: git -C {root} check-attr eol -z --stdin exited "
+            f"eol.census: git -C {root} check-attr eol text -z --stdin exited "
             f"{proc.returncode}: {(stderr or '').strip()}",
             file=sys.stderr,
         )
         return {}
     tokens = [t for t in proc.stdout.split(b"\x00") if t]
-    result: Dict[bytes, bytes] = {}
+    result: Dict[bytes, Dict[bytes, bytes]] = {}
     for i in range(0, len(tokens) - len(tokens) % 3, 3):
-        path_b, _attr_b, value_b = tokens[i], tokens[i + 1], tokens[i + 2]
-        result[path_b] = value_b
+        path_b, attr_b, value_b = tokens[i], tokens[i + 1], tokens[i + 2]
+        result.setdefault(path_b, {})[attr_b] = value_b
     return result
+
+
+def _require_worktree_toplevel(guarded_root: Path) -> None:
+    """Refuse a `target_root` that is not itself a git worktree's top
+    level. `path_guard` proves the resolved path is self-contained; it has
+    no notion of git at all. A caller pointed at any subdirectory of a
+    worktree silently desyncs the two path frames this module compares:
+    `tracked_files_bytes` (`ls-files`, CWD-relative to whatever root it was
+    given) against `_dirty_paths` (`status --porcelain`, always relative to
+    the repo TOP LEVEL and covering the WHOLE repo). Under that mismatch
+    `dirty_violation_count` silently reads 0 on a tree full of in-flight
+    work. Never spawns: `show_toplevel` walks only.
+    """
+    toplevel = show_toplevel(str(guarded_root))
+    resolved_toplevel = Path(toplevel).resolve() if toplevel is not None else None
+    if resolved_toplevel != guarded_root:
+        raise PathEscapeError(
+            f"target_root must be a git worktree's top level, got "
+            f"{guarded_root} (resolved worktree top level: {toplevel!r})"
+        )
 
 
 def _dirty_paths(root: Path) -> Set[bytes]:
@@ -183,19 +237,33 @@ def census(root: Path) -> dict:
     reporting bidirectional declared-vs-actual EOL drift plus declaration
     coverage. See module docstring for the full contract.
     """
-    tracked = tracked_files_bytes(root)
-    attrs = _check_attr_eol(root, tracked)
+    # use_cache=False: this is the warm-served consumer of the process-
+    # lifetime lru_cache. A cached tracked-file list would pin this root's
+    # corpus for the life of a resident warm server (F4) -- census is a
+    # cadence-fired rider, not a one-shot CLI, so it must not inherit the
+    # cold-CLI cache assumption `ls_files_bytes`'s sibling module makes. See
+    # that module's docstring.
+    tracked = tracked_files_bytes(root, use_cache=False)
+    attrs = _check_attr_eol_text(root, tracked)
     dirty = _dirty_paths(root)
 
     violations: List[dict] = []
     unspecified_count = 0
 
     for path_b in tracked:
-        value = attrs.get(path_b, b"unspecified")
+        path_attrs = attrs.get(path_b, {})
+        value = path_attrs.get(b"eol", b"unspecified")
         if value == b"unspecified":
             unspecified_count += 1
             continue
         if value in _NO_DIRECTION:
+            continue
+
+        text_value = path_attrs.get(b"text", b"unspecified")
+        if text_value in _TEXT_EXCLUDED:
+            # `-text` / `binary` macro: git never text/eol-normalizes this
+            # path, so its `eol=` declaration carries no direction to check
+            # bytes against (F1).
             continue
 
         rel = path_b.decode("utf-8", errors="surrogateescape")
@@ -203,6 +271,13 @@ def census(root: Path) -> dict:
         try:
             content = fs_path.read_bytes()
         except OSError:
+            continue
+
+        if b"\x00" in content:
+            # Belt-and-braces binary guard (F1): a NUL byte is near-certain
+            # proof of binary content, catching the `text=auto` case the
+            # `text` attribute check above cannot resolve per-file. See the
+            # module docstring's "Binary-content guard" note.
             continue
 
         # A dirty path is REPORTED, flagged, and left for the operator; it is
@@ -249,8 +324,10 @@ def _eol_census(params: dict, repo_root: Optional[Path] = None) -> dict:
     the full contract.
 
     Wire params:
-        target_root (str, required) -- root of the tree to scan. Must
-                                        resolve inside a git worktree.
+        target_root (str, required) -- root of the tree to scan. Must BE a
+                                        git worktree's top level (not merely
+                                        resolve somewhere inside one) -- a
+                                        subdirectory is refused, see F3.
 
     Returns:
         target_root          (str)  -- resolved target_root, echoed.
@@ -270,13 +347,15 @@ def _eol_census(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Raises ValueError if target_root is missing; propagates
     coordinator_core.cartography._guard.PathEscapeError if target_root
-    cannot be resolved inside a git worktree.
+    cannot be resolved on disk, escapes itself, or is not itself a git
+    worktree's top level (see `_require_worktree_toplevel`).
     """
     target_root = params.get("target_root")
     if not target_root:
         raise ValueError("eol.census requires param: target_root")
 
     guarded_root = path_guard(target_root, ".")
+    _require_worktree_toplevel(guarded_root)
     result = census(guarded_root)
     result["target_root"] = str(guarded_root)
     return result

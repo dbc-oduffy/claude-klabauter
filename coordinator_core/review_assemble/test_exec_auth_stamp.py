@@ -21,6 +21,7 @@ from coordinator_core.review_assemble.exec_auth_stamp import (
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
 
 import pytest
+import yaml
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -519,3 +520,161 @@ def test_invocation_mint_appends_to_a_pre_existing_review_note(tmp_path: Path) -
     assert "earlier review note" in note_line
     assert utterance in note_line
     assert note_line.index("earlier review note") < note_line.index(utterance)
+
+
+_BLOCK_SCALAR_NOTE_PLAN = """---
+title: "test plan"
+status: draft
+execution_authorized_note: |
+  PM: yes, go ahead and build it.
+  Do the embedder A/B first.
+---
+
+# Test Plan
+
+Some body content.
+"""
+
+
+def test_invocation_mint_appends_into_a_block_scalar_note(tmp_path: Path) -> None:
+    """`authorize-invocation` is /execute-plan Phase 1 step 2 — the mint that
+    records the PM's authorizing act. It used to die outright on any plan
+    whose `execution_authorized_note` was a `|` or `>` block, because
+    `stamp_execution_authorization` routed even an `append_note=True` call
+    through `replace_fm_field`, whose block-scalar guard refuses. The refusal
+    was total — no flag got past it, and its own advice ("Fix the frontmatter
+    manually") is the unattributable hand-stamp the mint exists to prevent.
+    Reported cross-repo by example-retrieval-repo-em, 2026-08-20.
+    """
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-block-scalar-note.md"
+    plan_path.write_text(_BLOCK_SCALAR_NOTE_PLAN, encoding="utf-8")
+
+    exit_code, result = stamp_invocation_authorization(
+        str(plan_path),
+        typed_command="/execute-plan",
+        utterance="go",
+        at="2026-08-20",
+        repo_root=tmp_path,
+    )
+
+    assert exit_code == EXIT_OK, result
+    assert result["applied"] is True
+
+    loaded = yaml.safe_load(plan_path.read_text(encoding="utf-8").split("---")[1])
+    note = loaded["execution_authorized_note"]
+    # The PM's verbatim words survive intact -- the corruption the guard was
+    # protecting against does not happen, it simply is no longer the only
+    # available outcome.
+    assert "PM: yes, go ahead and build it." in note
+    assert "Do the embedder A/B first." in note
+    assert note.rstrip("\n").endswith(result["note"])
+    assert loaded["execution_authorized_by"] == "PM"
+    assert loaded["status"] == "draft"
+
+
+def test_invocation_mint_converges_on_a_block_scalar_note(tmp_path: Path) -> None:
+    """Convergence across re-invocation is the whole point of the mint, and
+    it has a second failure mode on this shape: `read_fm_field_unquoted`
+    returns only the `key:` LINE, so on a block scalar the convergence test
+    compared the appended note against the bare `"|"` sigil and never
+    matched. Without this, a fixed write path would append the same line on
+    every pickup and grow the field without bound."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-block-scalar-converge.md"
+    plan_path.write_text(_BLOCK_SCALAR_NOTE_PLAN, encoding="utf-8")
+
+    kwargs = dict(
+        typed_command="/execute-plan",
+        utterance="go",
+        at="2026-08-20",
+        repo_root=tmp_path,
+    )
+    first_code, _ = stamp_invocation_authorization(str(plan_path), **kwargs)
+    after_first = plan_path.read_text(encoding="utf-8")
+    second_code, second = stamp_invocation_authorization(str(plan_path), **kwargs)
+
+    assert first_code == EXIT_OK
+    assert second_code == EXIT_OK
+    assert second["applied"] is False
+    assert plan_path.read_text(encoding="utf-8") == after_first
+
+
+def test_block_scalar_note_stamp_is_stamp_check_clean(tmp_path: Path) -> None:
+    """The mint's output has to satisfy the reader that gates pickup, not
+    merely parse."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-block-scalar-stamp-check.md"
+    plan_path.write_text(_BLOCK_SCALAR_NOTE_PLAN, encoding="utf-8")
+
+    stamp_invocation_authorization(
+        str(plan_path),
+        typed_command="/execute-plan",
+        utterance="go",
+        at="2026-08-20",
+        repo_root=tmp_path,
+    )
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "stamp")
+
+    check_exit, gate = stamp_check(
+        "docs/plans/2026-08-20-block-scalar-stamp-check.md", repo_root=tmp_path
+    )
+    assert check_exit == EXIT_OK
+    assert gate["verdict"] == "match", gate
+
+
+def test_replace_outright_on_a_block_scalar_note_refuses_actionably(tmp_path: Path) -> None:
+    """`stamp --note` over a block-scalar note stays REFUSED -- the field
+    holds the PM's verbatim authorizing words and a single-line replace
+    destroys them with no reconstruction. What changed is the surface: this
+    used to escape as a raw ValueError traceback out of a frontmatter
+    primitive whose advice was "Fix the frontmatter manually" -- a hand-edit,
+    recommended for the one field whose entire purpose is machine
+    attribution. It is now a clean business failure naming the append verb.
+    """
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-block-scalar-replace.md"
+    plan_path.write_text(_BLOCK_SCALAR_NOTE_PLAN, encoding="utf-8")
+    before = plan_path.read_text(encoding="utf-8")
+
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path), "PM", "single line replacement", at="2026-08-20",
+        repo_root=tmp_path,
+    )
+
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "block scalar" in result["error"]
+    assert "authorize-invocation" in result["error"]
+    assert "manually" not in result["error"]
+    # Refused means untouched, not half-written.
+    assert plan_path.read_text(encoding="utf-8") == before
+
+
+def test_append_note_flag_still_works_on_a_block_scalar_note(tmp_path: Path) -> None:
+    """The alternative the refusal above names has to actually exist —
+    remediation text pointing at a verb that does not work is worse than the
+    hand-edit advice it replaced."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-block-scalar-append-flag.md"
+    plan_path.write_text(_BLOCK_SCALAR_NOTE_PLAN, encoding="utf-8")
+
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path), "PM", "an appended line", at="2026-08-20",
+        repo_root=tmp_path, append_note=True,
+    )
+
+    assert exit_code == EXIT_OK, result
+    loaded = yaml.safe_load(plan_path.read_text(encoding="utf-8").split("---")[1])
+    assert "PM: yes, go ahead and build it." in loaded["execution_authorized_note"]
+    assert "an appended line" in loaded["execution_authorized_note"]

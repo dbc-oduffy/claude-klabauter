@@ -42,16 +42,29 @@ import cc_invoke as _mod  # noqa: E402  (import after path setup)
 
 def _build_candidate_root(root: Path, *, answer: str) -> Path:
     """Build a minimal synthetic checkout at `root`: a real `coordinator_core`
-    package (so it's importable) with a `claude_klabauter_root.py` whose
-    `coordinator_claude_klabauter_root_with_class()` returns a distinguishable,
+    package (so it's importable) with an `engine_root.py` whose
+    `coordinator_engine_root_with_class()` returns a distinguishable,
     caller-supplied `answer` — this is what makes cross-root confusion
     observable rather than silently masked by both candidates agreeing.
+
+    THE SPELLING HERE IS LOAD-BEARING, not cosmetic. This fixture built
+    `claude_klabauter_root.py` until C1 renamed the module, and a stale fixture does not
+    fail loudly — it fails INERT. `_load_foreign_gate_entry_point` probes
+    `<candidate>/coordinator_core/engine_root.py` first, so an old-spelling
+    candidate misses that probe, `_is_same_tree_as_canonical` sends the call
+    down the same-tree short-circuit instead, and the real engine's gate
+    answers from the ambient environment. The assertions below then compare a
+    resolved PATH against an answer sentinel and fail for a reason that has
+    nothing to do with root identity — while the C0 mechanism this module
+    exists to guard is never entered at all. Measured 2026-08-20: with this
+    spelling the foreign loader runs and the candidate is honoured; with the
+    pre-C1 spelling it is never called.
     """
     pkg_dir = root / "coordinator_core"
     pkg_dir.mkdir(parents=True)
     (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
-    (pkg_dir / "claude_klabauter_root.py").write_text(
-        "def coordinator_claude_klabauter_root_with_class():\n"
+    (pkg_dir / "engine_root.py").write_text(
+        "def coordinator_engine_root_with_class():\n"
         f"    return ({answer!r}, 'live-working-tree')\n",
         encoding="utf-8",
     )
@@ -105,7 +118,7 @@ def test_same_tree_short_circuit_returns_canonical_module_not_a_synthetic_copy(m
     """Pins the load-bearing short-circuit: a candidate that resolves to the
     SAME root `coordinator_core` is already cached from must go through the
     ordinary `importlib.import_module` path and return the CANONICAL
-    `coordinator_core.claude_klabauter_root` module object — not a synthetic
+    `coordinator_core.engine_root` module object — not a synthetic
     file-path-loaded copy — so the `_GATE_MEMO`/`_reset_*_memo` seams keep
     observing the one module object they always did.
     """
@@ -125,7 +138,7 @@ def test_same_tree_short_circuit_returns_canonical_module_not_a_synthetic_copy(m
         f"same-tree candidate took the foreign-candidate load path, creating "
         f"synthetic module(s) {synthetic!r} instead of using the short-circuit"
     )
-    assert "coordinator_core.claude_klabauter_root" in sys.modules, (
+    assert "coordinator_core.engine_root" in sys.modules, (
         "expected the ordinary import to populate the canonical "
-        "coordinator_core.claude_klabauter_root module entry"
+        "coordinator_core.engine_root module entry"
     )

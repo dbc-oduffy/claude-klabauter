@@ -365,7 +365,18 @@ _RECONCILE_CADENCE_WINDOW_SECONDS: float = 15 * 60.0
 # above, not the same file: this rider gets its OWN marker so census firing
 # never contends with / is gated by the unrelated reconcile-open cadence.
 _EOL_CENSUS_MARKER_NAME = "coordinator-eol-census-cadence.marker"
-_EOL_CENSUS_CADENCE_WINDOW_SECONDS: float = 15 * 60.0
+# Widened 15m -> 60m by the kill-disposition call recorded in
+# `coordinator_core/ops/session/tests/test_eol_rider_cost_budget.py`: measured
+# honestly against a real corpus rather than a 2-file fixture, the census
+# rider projected 31.1% of a 15-minute window fleet-wide, against a 0.15
+# ceiling. The budget page's remedy for a breach is to bound the LOAD, never
+# to widen the ceiling, and of the available shapes this is the only one that
+# costs no coverage: a per-file size cap or a narrowed pathspec both buy the
+# fraction by not looking at part of the corpus. EOL drift is a slow-moving
+# property of a tree -- detection latency moving from 15 minutes to an hour
+# changes nothing an operator acts on, while reading every declared path
+# still does.
+_EOL_CENSUS_CADENCE_WINDOW_SECONDS: float = 60 * 60.0
 
 # eol.audit_producers cadence rider — an AST walk over .py, not a per-boot
 # cost, so a 24h window is the right shape (C8): same degrade contract, same
@@ -379,6 +390,23 @@ _EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS: float = 24 * 60 * 60.0
 # the detector a producer of the churn it detects.
 _EOL_CENSUS_SENTINEL_NAME = "coordinator-eol-census-last-run.json"
 _EOL_AUDIT_PRODUCERS_SENTINEL_NAME = "coordinator-eol-audit-producers-last-run.json"
+
+# F6 (staff-eng review, 2026-08-20): wall-clock cap for a rider run off the
+# event loop via `asyncio.to_thread` — an overrun folds into `warnings[]`
+# exactly like a raised exception (see `_run_eol_rider_capped`), never
+# blocks `_handler`'s coroutine indefinitely. Generous against the 3-spawn,
+# ~1.5s worst case named by the cost-budget formula (each git spawn's own
+# 30s subprocess timeout already bounds the individual spawn; this caps the
+# WHOLE rider, spawns plus the full-corpus byte-read/AST-parse together).
+_EOL_RIDER_WALL_CLOCK_CAP_SECONDS: float = 20.0
+
+# F13 (staff-eng review, 2026-08-20): both the sentinel and the boot RPC
+# response echoed the WHOLE violation/offender list on every fire — a
+# multi-megabyte write to `.git/` every 15 minutes and a multi-megabyte
+# response on the session-boot hot path, on exactly the drifted tree this
+# feature exists to find. Both surfaces now carry only counts,
+# `declaration_coverage`, and the first N paths, with `truncated: true`.
+_EOL_SENTINEL_MAX_LISTED_PATHS: int = 50
 
 
 # ----------------------------------------------------------------------
@@ -564,6 +592,79 @@ def _write_eol_sentinel(common_dir: Path, name: str, verdict: dict) -> None:
         )
     except OSError as exc:
         _LOG.debug("boot_sweep: could not write eol sentinel %s: %s", sentinel_path, exc)
+
+
+def _error_eol_sentinel_verdict(reason: str) -> dict:
+    """Build the verdict payload a rider's error branch writes to its sentinel
+    (F7, staff-eng review 2026-08-20).
+
+    Before this fix, a persistently-erroring rider left the LAST GOOD verdict
+    sitting on disk indefinitely — `written_at` was read by the doctor probe
+    and never compared, so a rider dead since some past date and a rider that
+    ran cleanly a minute ago were indistinguishable. `_claim_cadence_slot`
+    touches the cadence MARKER (a separate file, purely a rate-limit gate)
+    before the rider runs, deliberately — moving that touch to only fire
+    after success would mean a failing rider retries on EVERY boot inside the
+    window instead of once per window, which is exactly the unbounded
+    machine-load case the cost budget (`test_eol_rider_cost_budget.py`)
+    exists to bound. The fix here is orthogonal: write a FRESH sentinel on
+    the error branch too, carrying an explicit `error` marker and a current
+    `written_at` — so the doctor probe sees "erroring as of now," not silence
+    that reads as "still clean as of last success." `reason` is the same
+    string `_run_eol_rider_capped` already returns for either a raised
+    exception or a wall-clock overrun — one shape, one caller-facing string.
+    """
+    return {"error": True, "detail": reason}
+
+
+async def _run_eol_rider_capped(fn, worktree: Path, cap_seconds: float) -> Tuple[Optional[dict], Optional[str]]:
+    """Run a synchronous eol rider (`census`/`audit_producers`) off the event
+    loop via `asyncio.to_thread`, capped at `cap_seconds` wall-clock (F6,
+    staff-eng review 2026-08-20).
+
+    Before this fix, both riders ran as plain synchronous calls directly
+    inside `async def _handler` — three subprocess spawns with 30s timeouts
+    apiece (census) or a full-corpus AST parse (audit_producers), with no
+    yield point anywhere, blocking every other coroutine sharing this loop
+    for the duration. `asyncio.to_thread` moves the call off the loop;
+    `asyncio.wait_for` bounds how long `_handler` waits on it, folding an
+    overrun into the SAME (verdict, error) shape a raised exception already
+    produces — every existing degrade-safe guarantee (never raises out of
+    `_handler`, never changes `exit_code`) is preserved unchanged.
+
+    Returns (verdict, None) on success, or (None, reason) on either a raised
+    exception or a wall-clock overrun. A cap overrun leaves the spawned
+    thread running to completion in the background (Python threads are not
+    forcibly cancellable) — accepted, since the alternative (blocking
+    `_handler` until it finishes) is the exact defect this fix removes.
+    """
+    try:
+        verdict = await asyncio.wait_for(asyncio.to_thread(fn, worktree), timeout=cap_seconds)
+    except asyncio.TimeoutError:
+        return None, f"exceeded {cap_seconds:.0f}s wall-clock cap"
+    except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
+        return None, str(exc)
+    return verdict, None
+
+
+def _truncate_eol_verdict(verdict: dict, list_key: str, max_items: int = _EOL_SENTINEL_MAX_LISTED_PATHS) -> dict:
+    """Truncate a rider's verdict for the sentinel/RPC surfaces (F13, staff-eng
+    review 2026-08-20): keep every count/coverage field, cap `list_key`
+    (`"violations"` for census, `"offenders"` for audit_producers) to the
+    first `max_items` entries, and mark `truncated: true` when anything was
+    dropped. `violation_count`/`offender_count` etc. are left at their FULL
+    values — only the per-path listing is capped, so the count an operator
+    or a sibling repo reads is never itself truncated.
+    """
+    items = verdict.get(list_key)
+    if not isinstance(items, list) or len(items) <= max_items:
+        out = dict(verdict)
+        out["truncated"] = False
+        return out
+    out = dict(verdict)
+    out[list_key] = items[:max_items]
+    out["truncated"] = True
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2811,24 +2912,43 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # contends with or is gated by reconcile-open's cadence.
     #
     # Degrade-safe: any exception (including inside eol.census's own git
-    # spawns) is caught here and folded into warnings[], never raised out of
-    # this composite boot sweep and never changing exit_code — mirrors every
-    # other rider above. NEGATIVE SPEC (C8): this rider dispatches eol.census
-    # only, never eol.repair — an automated mutation of a tree on the boot
-    # path is the one outcome nobody wants; repair stays operator-invoked.
+    # spawns) OR a wall-clock overrun is folded into warnings[], never raised
+    # out of this composite boot sweep and never changing exit_code — mirrors
+    # every other rider above. NEGATIVE SPEC (C8): this rider dispatches
+    # eol.census only, never eol.repair — an automated mutation of a tree on
+    # the boot path is the one outcome nobody wants; repair stays
+    # operator-invoked.
+    #
+    # F6 (staff-eng review, 2026-08-20): run off the event loop via
+    # `asyncio.to_thread`, capped at `_EOL_RIDER_WALL_CLOCK_CAP_SECONDS` —
+    # see `_run_eol_rider_capped`'s own docstring; this was a plain
+    # synchronous call blocking the whole loop before this fix.
     eol_census_warnings: List[dict] = []
     if _claim_cadence_slot(common_dir, _EOL_CENSUS_MARKER_NAME, _EOL_CENSUS_CADENCE_WINDOW_SECONDS):
-        try:
-            eol_census_verdict = _eol_census(worktree)
-        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
-            _LOG.warning("session.boot_sweep: eol.census cadence rider errored: %s", exc)
+        eol_census_verdict, eol_census_err = await _run_eol_rider_capped(
+            _eol_census, worktree, _EOL_RIDER_WALL_CLOCK_CAP_SECONDS
+        )
+        if eol_census_err is not None:
+            _LOG.warning("session.boot_sweep: eol.census cadence rider errored: %s", eol_census_err)
             eol_census_warnings.append(
-                {"scope": "eol_census", "reason": f"eol.census call errored: {exc}"}
+                {"scope": "eol_census", "reason": f"eol.census call errored: {eol_census_err}"}
             )
             eol_census_result = {"ran": True, "reason": "error", "result": None}
+            # F7: a fresh error sentinel, not silence — see
+            # `_error_eol_sentinel_verdict`'s docstring for why the cadence
+            # marker's own touch-before-run ordering is left unchanged.
+            _write_eol_sentinel(
+                common_dir, _EOL_CENSUS_SENTINEL_NAME, _error_eol_sentinel_verdict(eol_census_err)
+            )
         else:
-            eol_census_result = {"ran": True, "reason": "cadence window elapsed", "result": eol_census_verdict}
-            _write_eol_sentinel(common_dir, _EOL_CENSUS_SENTINEL_NAME, eol_census_verdict)
+            # F13: truncate the listed violations for both surfaces — counts
+            # and declaration_coverage stay full-fidelity, only the per-path
+            # listing is capped (see `_truncate_eol_verdict`).
+            truncated_census_verdict = _truncate_eol_verdict(eol_census_verdict, "violations")
+            eol_census_result = {
+                "ran": True, "reason": "cadence window elapsed", "result": truncated_census_verdict,
+            }
+            _write_eol_sentinel(common_dir, _EOL_CENSUS_SENTINEL_NAME, truncated_census_verdict)
     else:
         eol_census_result = {"ran": False, "reason": "within cadence window", "result": None}
 
@@ -2838,24 +2958,42 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # its own marker. Own worktree ONLY, same rationale as sweep 11 above.
     # NEGATIVE SPEC (C8): eol.audit_producers pins its default mode as
     # read-only reporting; it does not modify tracked producer files.
+    # F6: same event-loop-offload/wall-clock-cap treatment as sweep 11 above
+    # (`_run_eol_rider_capped`) — an AST walk over the whole corpus is the
+    # same "no yield point" shape as census's git spawns.
     eol_audit_producers_warnings: List[dict] = []
     if _claim_cadence_slot(
         common_dir, _EOL_AUDIT_PRODUCERS_MARKER_NAME, _EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS
     ):
-        try:
-            eol_audit_producers_verdict = _eol_audit_producers(worktree)
-        except Exception as exc:  # noqa: BLE001 — degrade-safe per module convention above
-            _LOG.warning("session.boot_sweep: eol.audit_producers cadence rider errored: %s", exc)
+        eol_audit_producers_verdict, eol_audit_producers_err = await _run_eol_rider_capped(
+            _eol_audit_producers, worktree, _EOL_RIDER_WALL_CLOCK_CAP_SECONDS
+        )
+        if eol_audit_producers_err is not None:
+            _LOG.warning(
+                "session.boot_sweep: eol.audit_producers cadence rider errored: %s",
+                eol_audit_producers_err,
+            )
             eol_audit_producers_warnings.append(
-                {"scope": "eol_audit_producers", "reason": f"eol.audit_producers call errored: {exc}"}
+                {
+                    "scope": "eol_audit_producers",
+                    "reason": f"eol.audit_producers call errored: {eol_audit_producers_err}",
+                }
             )
             eol_audit_producers_result = {"ran": True, "reason": "error", "result": None}
+            # F7: fresh error sentinel — see `_error_eol_sentinel_verdict`.
+            _write_eol_sentinel(
+                common_dir,
+                _EOL_AUDIT_PRODUCERS_SENTINEL_NAME,
+                _error_eol_sentinel_verdict(eol_audit_producers_err),
+            )
         else:
+            # F13: same truncation treatment as census above.
+            truncated_audit_verdict = _truncate_eol_verdict(eol_audit_producers_verdict, "offenders")
             eol_audit_producers_result = {
-                "ran": True, "reason": "cadence window elapsed", "result": eol_audit_producers_verdict,
+                "ran": True, "reason": "cadence window elapsed", "result": truncated_audit_verdict,
             }
             _write_eol_sentinel(
-                common_dir, _EOL_AUDIT_PRODUCERS_SENTINEL_NAME, eol_audit_producers_verdict
+                common_dir, _EOL_AUDIT_PRODUCERS_SENTINEL_NAME, truncated_audit_verdict
             )
     else:
         eol_audit_producers_result = {"ran": False, "reason": "within cadence window", "result": None}

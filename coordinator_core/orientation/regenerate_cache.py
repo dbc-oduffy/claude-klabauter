@@ -308,6 +308,35 @@ def _claude_klabauter_root() -> Optional[str]:
     return val if val else None
 
 
+def _claude_klabauter_root_unresolved_detail() -> str:
+    """Diagnostic detail for a `_claude_klabauter_root()` miss (F12, staff-eng review
+    2026-08-20) -- same shape as `coordinator_core.ops.queue_append`'s
+    sibling helper. Names the missing registry key explicitly, and
+    distinguishes "genuinely unset" from "CLAUDE_KLABAUTER_ROOT is set but discarded
+    under warm serving" (the latter otherwise reads as a silent no-write: the
+    env var IS present, just not the current caller's -- see `_claude_klabauter_root`'s
+    own docstring on the warm-server hazard).
+
+    No fallback rung is added here -- a wrong root writing into a stranger's
+    tree is worse than a skipped write (accepted as-is; direction-class per
+    the review). This only makes the miss diagnosable.
+    """
+    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    if override and op_latency.execution_route() != op_latency.IN_PROCESS:
+        return (
+            f"repos.claude_klabauter not set in machine-local registry; CLAUDE_KLABAUTER_ROOT "
+            f"env var IS set ({override!r}) but discarded under warm serving "
+            f"(execution_route={op_latency.execution_route()!r} != IN_PROCESS) -- a "
+            "warm-served process inherits its SPAWNER's environment, not the "
+            "current caller's, so trusting it here risks writing into a stranger's "
+            "tree. Register the key: machine-local set repos.claude_klabauter "
+            "/path/to/claude-klabauter"
+        )
+    if not override:
+        return "no CLAUDE_KLABAUTER_ROOT env, no repos.claude_klabauter machine-local entry"
+    return "repos.claude_klabauter not set in machine-local registry"
+
+
 def _same_path(a: str, b: str) -> bool:
     """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
     consolidated primitive (state/sizings/2026-08-07-path-equality-
@@ -330,7 +359,7 @@ def _state_root(repo_root: Path) -> Path:
         if claude_klabauter_root is None:
             raise RuntimeError(
                 "coordinator_state_root: repo_root is the meta-repo but CLAUDE_KLABAUTER_ROOT is "
-                "unresolvable (no CLAUDE_KLABAUTER_ROOT env, no repos.claude_klabauter machine-local entry)"
+                "unresolvable: " + _claude_klabauter_root_unresolved_detail()
             )
         return Path(claude_klabauter_root) / "state"
     return repo_root / "state"

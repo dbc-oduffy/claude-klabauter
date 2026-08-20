@@ -774,7 +774,7 @@ def test_post_commit_already_shipped_and_archived_is_noop(repo):
     shipped` directly (e.g. `archive-stamp-cli ship-handoff`), then swept to
     archive/handoffs/ by an async sweep, BEFORE this ceremony's stamp pass
     ran. `handoff.stamp` refuses any archive/handoffs/ path by design (see
-    `_already_terminal_and_archived`'s docstring) -- the stamp this ceremony
+    `_already_terminal_no_op`'s docstring) -- the stamp this ceremony
     wants to apply is already on disk, so this must resolve as a no-op skip,
     never as `failed`."""
     sid = "sess-already-shipped-1"
@@ -842,6 +842,83 @@ def test_post_commit_non_shipped_terminal_and_archived_is_noop(repo, terminal_st
     on_disk = repo.read_handoff("archive/handoffs/2026-07/2026-07-26_082943_pred.md")
     assert "shipped_in:" not in on_disk
     assert f"deployment_state: {terminal_state}" in on_disk
+
+
+@pytest.mark.parametrize("terminal_state", ["closed", "abandoned", "continued"])
+def test_post_commit_non_shipped_terminal_unarchived_is_noop(repo, terminal_state):
+    """The non-shipped-terminal branch of the no-op guard is location-
+    independent -- it applies just as much to a candidate still sitting in
+    `state/handoffs/` as to one an async sweep already moved to
+    `archive/handoffs/` (test_post_commit_non_shipped_terminal_and_archived_
+    is_noop, above). Before the fix, `_already_terminal_and_archived`'s
+    FIRST line unconditionally required the `archive/handoffs/` prefix, so a
+    terminal-but-unarchived candidate fell through to the stamp attempt,
+    which the frontmatter validator correctly refuses -- surfacing as a
+    FAILED tail item on an otherwise clean close, even though `shipped_in`
+    must never be written for undelivered work regardless of where the file
+    happens to sit."""
+    sid = f"sess-unarchived-{terminal_state}-1"
+    repo.seed_handoff(
+        "2026-07-26_082943_pred.md",
+        claimed_by=sid,
+        deployment_state=terminal_state,
+    )
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
+        )
+    )
+    assert outcome.stamped == []
+    assert outcome.errors == []
+    assert outcome.skipped_already_terminal == [
+        "state/handoffs/2026-07-26_082943_pred.md"
+    ]
+
+    # Untouched -- the no-op guard never mutates the already-terminal file.
+    on_disk = repo.read_handoff("state/handoffs/2026-07-26_082943_pred.md")
+    assert "shipped_in:" not in on_disk
+    assert f"deployment_state: {terminal_state}" in on_disk
+
+
+def test_post_commit_closed_cancelled_unarchived_is_noop(repo):
+    """Regression for the live 2026-08-20 defect: `/pickup` auto-created a
+    placeholder successor, its remit was fully discharged in-session, and it
+    was cancelled via `archive-stamp-cli close-handoff --reason cancelled`
+    -- `deployment_state: closed` + `closed_reason: cancelled`, still sitting
+    in `state/handoffs/`. `wsc-tail` then tried to stamp it `shipped` and hit
+    the frontmatter validator's `closed_reason` coupling refusal
+    (`closed_reason: permitted only when deployment_state=closed`), which is
+    nonsensical on a file that already IS `deployment_state: closed` -- the
+    real defect was the no-op guard's unconditional archive-prefix gate
+    never letting this candidate reach the terminal check at all."""
+    sid = "sess-closed-cancelled-1"
+    hf = repo.seed_handoff(
+        "2026-07-26_082943_pred.md",
+        claimed_by=sid,
+        deployment_state="closed",
+    )
+    text = hf.read_text(encoding="utf-8")
+    text = text.replace(
+        "deployment_state: closed\n", "deployment_state: closed\nclosed_reason: cancelled\n"
+    )
+    hf.write_text(text, encoding="utf-8")
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
+        )
+    )
+    assert outcome.stamped == []
+    assert outcome.errors == []
+    assert outcome.skipped_already_terminal == [
+        "state/handoffs/2026-07-26_082943_pred.md"
+    ]
+
+    on_disk = repo.read_handoff("state/handoffs/2026-07-26_082943_pred.md")
+    assert "shipped_in:" not in on_disk
+    assert "closed_reason: cancelled" in on_disk
+    assert "deployment_state: closed" in on_disk
 
 
 def test_post_commit_archived_but_not_terminal_still_fails_containment(repo):

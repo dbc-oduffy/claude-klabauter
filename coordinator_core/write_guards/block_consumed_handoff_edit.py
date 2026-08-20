@@ -37,11 +37,10 @@ route existed, since pointing that case at an in-session-unreachable env
 var was the defect the op closes (2026-07-31 claimed-baton-body-correction
 plan). The continuation-branch deny message is now ORDERED by applicability
 to the calling session (2026-08-06 executing-session-can-discharge-criteria
-plan, C4): ``claimed_by`` is read via the existing ``_extract_fm_field`` and
-compared against the calling session's id — resolved via the same
-three-variable precedence chain ``handoff_correct_body`` walks
-(``COORDINATOR_SESSION_ID`` > ``CLAUDE_SESSION_ID`` >
-``CLAUDE_CODE_SESSION_ID``) — to tell a claim holder from a non-holder. A
+plan, C4): the holder/non-holder split is ``_calling_session_is_holder``,
+which owns the ledger-first read and the session-id precedence chain — that
+function's own docstring is the SSOT for both, deliberately not restated
+here or at its call site. A
 holder is led straight to ``handoff.correct_body``/``handoff.propagate``, a
 non-holder is led to the liveness-gated pickup route (a sanctioned door onto
 possession that will not steal a live peer's claim) before the recovery-only

@@ -570,7 +570,49 @@ def parse_args(argv: List[str]) -> SweepConfig:
         else:
             sys.exit(_usage_error(f"unknown flag '{arg}'\n  Use --help for usage."))
 
+    _reject_rootless_defaults(cfg, central_state_root, non_central_state_root)
     return cfg
+
+
+def _reject_rootless_defaults(
+    cfg: SweepConfig, central_state_root: str, non_central_state_root: str
+) -> None:
+    """Refuse an unresolved-state-root run instead of writing to the drive root.
+
+    `_state_root_or_empty` folds a resolution failure to "" (bash-oracle
+    command-substitution fidelity), so the defaults above degrade to
+    `/cruft-sweep-log.md` and `/cruft-sweep.lock.d`. POSIX makes those a
+    root-owned refusal; Windows resolves a leading `/` against the CURRENT
+    DRIVE and the run silently succeeds against `<drive>:\\cruft-sweep-log.md`
+    — the run marker lands where the workweek staleness advisory
+    (`workweek-complete-advisories.py cruft-sweep-last-run`) will never read
+    it, so the sweep reads as never-run. Only fires when the unresolved
+    default is still in effect: an explicit `--log-path` is honoured.
+    """
+    if central_state_root and non_central_state_root:
+        return
+    unresolved = [
+        flag
+        for flag, root, value, default in (
+            ("--log-path", central_state_root, cfg.log_path, "/cruft-sweep-log.md"),
+            (
+                "--handoffs-glob",
+                non_central_state_root,
+                cfg.handoffs_glob,
+                "/handoffs/*.md",
+            ),
+        )
+        if not root and value == default
+    ]
+    if not unresolved:
+        return
+    sys.exit(
+        _usage_error(
+            "state root did not resolve; refusing to write to the drive root "
+            "(%s). Pass %s, or fix the root: machine-local get repos.claude_klabauter"
+            % (cfg.log_path, " and ".join(unresolved))
+        )
+    )
 
 
 def _apply_machine_local_days_override(cfg: SweepConfig) -> None:

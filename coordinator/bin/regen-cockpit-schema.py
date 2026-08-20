@@ -180,8 +180,12 @@ def _build_trampoline_env(mak_root: str) -> dict[str, str]:
     the same sanctioned source-trampoline pattern, not a fresh convention.
     This reaches the engine repo's SOURCE tree only; it never resolves or spawns
     an engine-resident interpreter (see module docstring).
+
+    C11: also sets `COORDINATOR_ENGINE_ROOT` alongside `CLAUDE_KLABAUTER_ROOT` (same
+    dual-write rename-window shape `_build_subprocess_env()` now uses), so a
+    child reading either name resolves correctly during the rename window.
     """
-    env: dict[str, str] = {**os.environ, "CLAUDE_KLABAUTER_ROOT": mak_root}
+    env: dict[str, str] = {**os.environ, "CLAUDE_KLABAUTER_ROOT": mak_root, "COORDINATOR_ENGINE_ROOT": mak_root}
     existing_pp = env.get("PYTHONPATH", "")
     _sep = os.pathsep
     if f"{_sep}{mak_root}{_sep}" not in f"{_sep}{existing_pp}{_sep}":

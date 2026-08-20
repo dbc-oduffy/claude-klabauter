@@ -85,6 +85,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 try:
     import tomllib
     _TOMLLIB_AVAILABLE = True
@@ -2364,6 +2365,37 @@ _EOL_AUDIT_PRODUCERS_SENTINEL_NAME = "coordinator-eol-audit-producers-last-run.j
 _EOL_CENSUS_PROBE = "claude-klabauter.eol.census"
 _EOL_CENSUS_SENTINEL_NAME = "coordinator-eol-census-last-run.json"
 
+# F7 (staff-eng review, 2026-08-20): "a small multiple of the rider's own
+# cadence window" — the sentinel's `written_at` was read into `data` and
+# never compared against anything, so a rider dead since some past date and
+# a rider that ran cleanly a minute ago were both reported PASS/DEGRADED
+# purely off the LAST verdict's violation_count, with no notion of "how old
+# is that verdict." 3x the rider's own cadence window is generous against
+# ordinary jitter (a slow boot, a missed cadence slot under load) while
+# still catching a rider that has been silent for hours past its window.
+_EOL_STALE_WINDOW_MULTIPLE = 3
+
+
+def _eol_sentinel_age_seconds(written_at: object) -> float | None:
+    """Parse a sentinel's `written_at` ISO-8601 timestamp and return its age
+    in seconds (now minus written_at), or None if absent/unparseable.
+
+    Never raises — an absent/malformed timestamp degrades to "cannot judge
+    staleness," handled by the caller exactly like the sentinel-absent case.
+    """
+    if not written_at:
+        return None
+    try:
+        raw = str(written_at).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(tz=timezone.utc) - dt).total_seconds()
+    except (ValueError, TypeError):
+        return None
+
 
 def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.eol.census — OPTIONAL (required=False); DEGRADED-on-fail.
@@ -2383,6 +2415,14 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
     Verdict mapping:
       sentinel absent / unreadable / claude_klabauter_root unresolved -> INFO (skipped=True) —
         the rider has not run yet on this machine, not a fault.
+      verdict.error is truthy (F7)                          -> DEGRADED, naming the
+        rider's own last error — the rider's error branch now writes its OWN
+        fresh sentinel (boot_sweep._error_eol_sentinel_verdict) instead of
+        leaving the prior good verdict silently sitting on disk.
+      written_at older than 3x the rider's own cadence window (F7)
+                                                              -> DEGRADED, "STALE" —
+        a rider that stopped firing must not read as a current PASS just
+        because its last recorded verdict happened to be clean.
       verdict.violation_count > 0                           -> DEGRADED, named paths.
       verdict.violation_count == 0                          -> PASS, reporting
         declaration coverage alongside, because a clean verdict from a thinly
@@ -2412,6 +2452,9 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
 
         try:
             from coordinator_core.lifecycle import git_common_dir  # type: ignore[import]
+            from coordinator_core.ops.session.boot_sweep import (  # type: ignore[import]
+                _EOL_CENSUS_CADENCE_WINDOW_SECONDS,
+            )
         except Exception as exc:
             return _ProbeResult(
                 probe=_EOL_CENSUS_PROBE,
@@ -2441,7 +2484,51 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
             )
 
         payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
+        written_at = payload.get("written_at")
         verdict = payload.get("verdict") or {}
+
+        # F7: the rider's own error branch now writes a fresh sentinel too
+        # (boot_sweep._error_eol_sentinel_verdict) — surface that explicitly
+        # rather than falling through to the count-based PASS/DEGRADED logic
+        # below, which would otherwise misread {"error": True} as
+        # violation_count-less-and-therefore-clean.
+        if verdict.get("error"):
+            return _ProbeResult(
+                probe=_EOL_CENSUS_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"eol.census's cadence rider errored on its last run "
+                    f"(written_at={written_at}): {verdict.get('detail')}"
+                ),
+                remediation="Inspect the boot_sweep warnings for this session, or re-run "
+                             "eol.census directly against this worktree to reproduce the error.",
+                required=False,
+                data={"written_at": written_at, "error": True, "detail": verdict.get("detail")},
+            )
+
+        # F7: a stale-but-clean sentinel must not read as PASS — a rider
+        # that stopped firing (marker claim races, a boot path that never
+        # runs, etc.) leaves the LAST GOOD verdict on disk indefinitely.
+        age_seconds = _eol_sentinel_age_seconds(written_at)
+        stale_threshold = _EOL_CENSUS_CADENCE_WINDOW_SECONDS * _EOL_STALE_WINDOW_MULTIPLE
+        if age_seconds is not None and age_seconds > stale_threshold:
+            return _ProbeResult(
+                probe=_EOL_CENSUS_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"eol.census sentinel is STALE: last written {age_seconds:.0f}s ago, "
+                    f"exceeding {_EOL_STALE_WINDOW_MULTIPLE}x the rider's own "
+                    f"{_EOL_CENSUS_CADENCE_WINDOW_SECONDS:.0f}s cadence window. The "
+                    "verdict below is the last one recorded, not a current one — the "
+                    "rider has not run recently on this machine."
+                ),
+                remediation="Boot a session in this repo (SessionStart runs the cadence "
+                             "rider automatically); if it stays stale across a boot, the "
+                             "rider is failing silently upstream of its own error branch.",
+                required=False,
+                data={"written_at": written_at, "age_seconds": age_seconds, "stale": True},
+            )
+
         violations = verdict.get("violations") or []
         violation_count = verdict.get("violation_count", len(violations))
         coverage = verdict.get("declaration_coverage") or {}
@@ -2457,7 +2544,7 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
             else ""
         )
         data = {
-            "written_at": payload.get("written_at"),
+            "written_at": written_at,
             "violation_count": violation_count,
             "dirty_violation_count": verdict.get("dirty_violation_count"),
             "tracked_count": verdict.get("tracked_count"),
@@ -2522,6 +2609,11 @@ def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _Probe
     Verdict mapping:
       sentinel absent / unreadable / claude_klabauter_root unresolved -> INFO (skipped=True) —
         the rider has not run yet on this machine, not a fault.
+      verdict.error is truthy (F7)                          -> DEGRADED, naming the
+        rider's own last error — see the eol.census probe's matching block for
+        the full rationale.
+      written_at older than 3x the rider's own 24h cadence window (F7)
+                                                              -> DEGRADED, "STALE".
       verdict.offender_count > 0                            -> DEGRADED, named offenders.
       verdict.offender_count == 0                            -> PASS.
 
@@ -2558,6 +2650,9 @@ def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _Probe
 
         try:
             from coordinator_core.lifecycle import git_common_dir  # type: ignore[import]
+            from coordinator_core.ops.session.boot_sweep import (  # type: ignore[import]
+                _EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS,
+            )
         except Exception as exc:
             return _ProbeResult(
                 probe=_EOL_DRIFT_PROBE,
@@ -2587,11 +2682,51 @@ def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _Probe
             )
 
         payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
+        written_at = payload.get("written_at")
         verdict = payload.get("verdict") or {}
+
+        # F7: fresh error sentinel from the rider's own error branch — see
+        # the census probe's matching block above for the full rationale.
+        if verdict.get("error"):
+            return _ProbeResult(
+                probe=_EOL_DRIFT_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"eol.audit_producers's cadence rider errored on its last run "
+                    f"(written_at={written_at}): {verdict.get('detail')}"
+                ),
+                remediation="Inspect the boot_sweep warnings for this session, or re-run "
+                             "eol.audit_producers directly against this worktree to reproduce "
+                             "the error.",
+                required=False,
+                data={"written_at": written_at, "error": True, "detail": verdict.get("detail")},
+            )
+
+        # F7: stale-but-clean sentinel — see the census probe's matching
+        # block above; same mechanism, this rider's own 24h cadence window.
+        age_seconds = _eol_sentinel_age_seconds(written_at)
+        stale_threshold = _EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS * _EOL_STALE_WINDOW_MULTIPLE
+        if age_seconds is not None and age_seconds > stale_threshold:
+            return _ProbeResult(
+                probe=_EOL_DRIFT_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"eol.audit_producers sentinel is STALE: last written "
+                    f"{age_seconds:.0f}s ago, exceeding {_EOL_STALE_WINDOW_MULTIPLE}x the "
+                    f"rider's own {_EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS:.0f}s cadence "
+                    "window. The verdict below is the last one recorded, not a current one."
+                ),
+                remediation="Boot a session in this repo (SessionStart runs the cadence "
+                             "rider automatically); if it stays stale across a boot, the "
+                             "rider is failing silently upstream of its own error branch.",
+                required=False,
+                data={"written_at": written_at, "age_seconds": age_seconds, "stale": True},
+            )
+
         offenders = verdict.get("offenders") or []
         offender_count = verdict.get("offender_count", len(offenders))
         data = {
-            "written_at": payload.get("written_at"),
+            "written_at": written_at,
             "offender_count": offender_count,
             "offenders": offenders,
             "scanned": verdict.get("scanned"),

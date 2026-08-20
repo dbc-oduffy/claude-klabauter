@@ -212,6 +212,14 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
         "_read_backpointer_subagent_type",
         lambda git_root, agent_id, **kw: subagent_type,
     )
+    # The stubbed `/fake/git-root` is not a sandbox: a guard whose DENY path
+    # also appends a per-session audit log (`block_subagent_plan_body_bash_write
+    # ._write_block_log`) would `mkdir -p /fake/git-root/.git/coordinator-sessions/
+    # <sid>/`, which on Windows resolves against the CURRENT DRIVE and leaves a
+    # real `<drive>:\fake\` tree behind on every run. `raising=False` -- only
+    # some guards carry this seam. Sibling stubs in each guard's own test file
+    # (`test_block_subagent_plan_body_bash_write.py::_stub`) do the same.
+    monkeypatch.setattr(module, "_write_block_log", lambda *a, **kw: None, raising=False)
 
 
 def _wrap_variants(cmd: str) -> Dict[str, str]:
