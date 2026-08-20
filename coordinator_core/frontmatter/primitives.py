@@ -530,20 +530,25 @@ _BLOCK_SCALAR_HEADER_RE = re.compile(
 class BlockScalar(NamedTuple):
     """A frontmatter field whose value is a ``|`` or ``>`` block scalar.
 
-    ``style`` is ``'|'`` (literal) or ``'>'`` (folded). ``indent`` is the
-    column the body lines are indented to — taken from an explicit
-    indentation indicator when the header carries one, otherwise inferred
-    from the first non-empty body line. ``lines`` holds the body
-    DE-INDENTED, in order, blank lines preserved as ``''``. ``end_offset``
-    is the character offset in the source frontmatter one past the last
-    body line's newline — the splice point ``append_fm_block_scalar_line``
-    writes at.
+    ``style`` is ``'|'`` (literal) or ``'>'`` (folded). ``pad`` is the body's
+    literal indentation PREFIX — the actual whitespace characters, not a
+    count, so that re-emitting a line into a tab-indented block writes tabs
+    rather than silently mixing in spaces. ``indent`` is ``len(pad)``, kept
+    for callers that only need the column. ``lines`` holds the body
+    DE-INDENTED, in order, blank lines preserved as ``''``. ``newline`` is
+    the terminator the BLOCK's own lines use, which is not necessarily the
+    document's — a mixed-ending document must not have a foreign terminator
+    appended into an otherwise-consistent block. ``end_offset`` is the
+    character offset in the source frontmatter one past the last body line's
+    newline — the splice point ``append_fm_block_scalar_line`` writes at.
     """
 
     style: str
     indent: int
     lines: list[str]
     end_offset: int
+    pad: str = ''
+    newline: str = '\n'
 
 
 def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
@@ -563,6 +568,21 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     Its consumers are convergence tests and the appender below, both of
     which want the authored lines; a caller needing the resolved scalar
     should parse the document with a YAML loader instead.
+
+    Negative-spec: trailing blank lines are dropped from ``lines``
+    unconditionally, INCLUDING under a ``+`` (keep) chomping indicator where
+    YAML counts them as part of the value. They are excluded from
+    ``end_offset`` for the appender's sake — an append past them would land
+    outside the block — so under ``+`` this reads back marginally less than
+    the authored body. Do not use this to round-trip a ``+``-chomped scalar.
+
+    Negative-spec: recognises only a WELL-FORMED header. A malformed value
+    that merely starts with ``|``/``>`` (``|abc``, ``|0``) reads as ``None``,
+    i.e. "not a block scalar", while ``replace_fm_field``'s looser
+    single-character guard still refuses it. Callers must not infer from a
+    ``None`` here that ``replace_fm_field`` will accept the field — see the
+    ValueError-to-domain-error conversion in
+    ``exec_auth_stamp.stamp_execution_authorization``.
     """
     m = _fm_key_line_pattern(key).search(fm)
     if m is None:
@@ -575,11 +595,14 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
 
     explicit = hm.group('indent') or hm.group('indent_b')
 
+    # `_fm_key_line_pattern`'s trailing `.*$` already consumed any `\r` as
+    # part of the key line (`.` matches `\r`; MULTILINE `$` matches before
+    # `\n`), so `rest` can only ever begin with the bare `\n`. Do not
+    # "restore" a `\r\n` branch here — it would be unreachable and would
+    # imply a case that cannot occur.
     rest = fm[m.end():]
     if rest.startswith('\n'):
         rest = rest[1:]
-    elif rest.startswith('\r\n'):
-        rest = rest[2:]
     body_start = len(fm) - len(rest)
 
     kept: list[str] = []
@@ -598,17 +621,28 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     consumed = sum(len(line) for line in kept)
     raw = [line.rstrip('\r\n') for line in kept]
 
+    # The indentation PREFIX, not a width. A count plus `' ' * count` writes
+    # spaces into a tab-indented block, mixing both inside one scalar.
+    first = next((ln for ln in raw if ln.strip()), None)
     if explicit is not None:
-        indent = int(explicit)
+        pad = ' ' * int(explicit)
+    elif first is not None:
+        pad = first[:len(first) - len(first.lstrip())]
     else:
-        first = next((ln for ln in raw if ln.strip()), None)
-        indent = len(first) - len(first.lstrip()) if first is not None else 2
+        pad = '  '
+
+    # The terminator of the BLOCK's own lines. Scanning the whole document
+    # prefix instead would let one earlier CRLF field dictate the ending
+    # appended into an otherwise LF-consistent block.
+    newline = '\r\n' if any(ln.endswith('\r\n') for ln in kept) else '\n'
 
     return BlockScalar(
         style=hm.group('style'),
-        indent=indent,
-        lines=[ln[indent:] if ln.strip() else '' for ln in raw],
+        indent=len(pad),
+        lines=[ln[len(pad):] if ln.strip() else '' for ln in raw],
         end_offset=body_start + consumed,
+        pad=pad,
+        newline=newline,
     )
 
 
@@ -651,14 +685,17 @@ def append_fm_block_scalar_line(fm: str, key: str, line: str) -> str:
     if block.lines and block.lines[-1] == line:
         return fm
 
-    newline = '\r\n' if '\r\n' in fm[:block.end_offset] else '\n'
-    pad = ' ' * block.indent
+    newline = block.newline
+    pad = block.pad
 
-    # `end_offset` sits one PAST the last body line's terminator, so the
-    # appended text carries its own trailing break rather than a leading one —
-    # a leading break would land a blank line inside the block and push the
-    # following field's own newline out of the document.
-    addition = ''
+    # `end_offset` normally sits one PAST the last body line's terminator, so
+    # the appended text carries its own trailing break rather than a leading
+    # one — a leading break would land a blank line inside the block and push
+    # the following field's own newline out of the document. The exception is
+    # a final body line with no terminator at all (only reachable when the
+    # block ends the string), where appending without a leading break would
+    # glue the new line onto the end of the previous one.
+    addition = '' if fm[:block.end_offset].endswith(('\n', '\r')) else newline
     if block.style == '>' and block.lines and block.lines[-1].strip():
         addition += newline
     addition += pad + line + newline

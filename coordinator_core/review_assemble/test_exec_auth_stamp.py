@@ -678,3 +678,28 @@ def test_append_note_flag_still_works_on_a_block_scalar_note(tmp_path: Path) -> 
     loaded = yaml.safe_load(plan_path.read_text(encoding="utf-8").split("---")[1])
     assert "PM: yes, go ahead and build it." in loaded["execution_authorized_note"]
     assert "an appended line" in loaded["execution_authorized_note"]
+
+
+def test_malformed_block_header_fails_clean_not_as_a_traceback(tmp_path: Path) -> None:
+    """The discriminator gap the reviewer found: `read_fm_block_scalar` reads
+    a MALFORMED header (`|abc`) as "not a block scalar" and skips the append
+    branch, while `replace_fm_field`'s looser one-character guard still
+    refuses it -- and that ValueError was caught nowhere, so it escaped the
+    mint as a raw traceback. Precisely the failure ec55ed90d849 closed for
+    the well-formed case, left open for the malformed one."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-malformed-block-header.md"
+    plan_path.write_text(
+        '---\ntitle: t\nstatus: draft\nexecution_authorized_note: |abc\n---\n\n# Body\ncontent\n',
+        encoding="utf-8",
+    )
+
+    exit_code, result = stamp_invocation_authorization(
+        str(plan_path), typed_command="/execute-plan", utterance="go",
+        at="2026-08-20", repo_root=tmp_path,
+    )
+
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "execution_authorized_note" in result["error"]

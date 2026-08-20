@@ -2783,6 +2783,8 @@ def _scaffold_plan(
         "# predecessor_handoff: state/handoffs/YYYY-MM-DD-<slug>.md",
         "# prerequisite_of: docs/plans/YYYY-MM-DD-<slug>.md",
         "# source_memo: YYYY-MM-DD-<topic>.md",
+        "# review_signals:                   # reviewer routing; ids from coordinator/contract/review-signals.json",
+        "#   - architecture                  # absent = positive claim: no specialist surface in play",
         "# scope:",
         "#   - path/or/item/one",
         "#   - path/or/item/two",

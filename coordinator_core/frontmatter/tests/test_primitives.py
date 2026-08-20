@@ -2050,3 +2050,55 @@ class TestBlockScalarReadAndAppend:
         precisely so the guard did not have to be softened into a flag."""
         with pytest.raises(ValueError, match='block-scalar'):
             replace_fm_field('note: |\n  one\n', 'note', 'clobbered')
+
+
+class TestBlockScalarAppendEdgeCases:
+    """Review: coordinator:code-reviewer, 2026-08-20 — six findings against
+    the append path, all confirmed against real input before fixing."""
+
+    def test_tab_indented_body_is_re_emitted_with_tabs(self):
+        """Padding with `' ' * indent` wrote ONE SPACE under a tab-indented
+        block, mixing both inside a single scalar. The prefix is copied, not
+        counted. (Such a document is already invalid YAML — PyYAML rejects
+        tab indentation — but writing a space into it makes it worse, not
+        better, and the primitive should not be the thing that corrupts.)"""
+        fm = 'note: |\n\tfirst\n\tsecond\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'third')
+        assert result == 'note: |\n\tfirst\n\tsecond\n\tthird\n'
+
+    def test_newline_follows_the_block_not_the_document(self):
+        """The old detector asked "does CRLF appear anywhere earlier in the
+        document", so one CRLF field above an LF-only block dictated a CRLF
+        append INTO that block."""
+        fm = 'title: T\r\nnote: |\n  one\nstatus: open\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'two')
+        assert '  two\n' in result
+        assert '  two\r\n' not in result
+
+    def test_crlf_block_still_gets_crlf(self):
+        fm = 'title: T\r\nnote: |\r\n  one\r\nstatus: open\r\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'two')
+        assert '  two\r\n' in result
+
+    def test_final_body_line_without_a_terminator_is_not_glued(self):
+        """`end_offset == len(fm)` with no trailing newline appended straight
+        onto the previous line: 'one' + 'two' became 'onetwo'."""
+        result = append_fm_block_scalar_line('note: |\n  one', 'note', 'two')
+        assert yaml.safe_load(result)['note'] == 'one\ntwo\n'
+
+    @pytest.mark.parametrize('malformed', ['|abc', '|0', '>x'])
+    def test_malformed_header_reads_as_not_a_block(self, malformed):
+        """The discriminator is deliberately STRICTER than
+        replace_fm_field's one-character guard. This asserts the gap exists
+        so the domain-error conversion that covers it is not later deleted as
+        dead code — see test_exec_auth_stamp's malformed-header test."""
+        fm = f'note: {malformed}\n  body\nstatus: open\n'
+        assert read_fm_block_scalar(fm, 'note') is None
+        with pytest.raises(ValueError, match='block-scalar'):
+            replace_fm_field(fm, 'note', 'x')
+
+    def test_explicit_indicator_wider_than_the_body_pads_to_the_indicator(self):
+        fm = 'note: |2\n  two\nstatus: open\n'
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        assert '\n  appended\n' in result
+        assert yaml.safe_load(result)['note'] == 'two\nappended\n'
