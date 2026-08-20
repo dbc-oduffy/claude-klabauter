@@ -70,9 +70,9 @@ _VALID_INVOKERS = (
 
 
 def _import_orientation_module():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported module.
+    """Resolve the engine root, put it on sys.path, and import the ported module.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) — this is a plain
     in-process import, not an RPC invoke, so cc_invoke's subprocess-spawn
     transport (cc_invoke()/route()) is deliberately NOT used here (same shape

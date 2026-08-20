@@ -101,6 +101,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.workflow_fire import fire
 

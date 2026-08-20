@@ -3,7 +3,7 @@
 gen-settings-hooks.py — CLI trampoline over claude-klabauter coordinator_core.install.gen_settings_hooks.
 
 Collapses install.md § 3.5c ("Seed settings.json hook block") into one call —
-this trampoline owns no logic of its own beyond the standard CLAUDE_KLABAUTER_ROOT
+this trampoline owns no logic of its own beyond the standard engine-root
 resolve-and-import dance (mirrors coordinator/bin/ensure-doe-clone.py's own
 shape 1:1). All install-time behavior — kill-switch check, coordinator-root
 resolution, hooks.json read/merge, stray-hook detection, atomic write,
@@ -37,18 +37,18 @@ def main() -> None:
         op_main = _import_main()
     except RuntimeError as exc:
         # rc=3 preserves the exit-code contract carried over from the retired
-        # bash trampoline (install.md § 3.5c): "3  CLAUDE_KLABAUTER_ROOT/import transport
+        # bash trampoline (install.md § 3.5c): "3  engine-root/import transport
         # failure" is never conflated with rc=1 (generator business error) —
         # a claude-klabauter outage must never be misread as a business error.
-        print(f"gen-settings-hooks.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        print("settings_hooks_seed: failed (CLAUDE_KLABAUTER_ROOT transport failure)")
+        print(f"gen-settings-hooks.py: engine-root resolution failed: {exc}", file=sys.stderr)
+        print("settings_hooks_seed: failed (engine-root transport failure)")
         sys.exit(3)
     except ImportError as exc:
         print(
             f"gen-settings-hooks.py: coordinator_core.install.gen_settings_hooks not importable: {exc}",
             file=sys.stderr,
         )
-        print("settings_hooks_seed: failed (CLAUDE_KLABAUTER_ROOT transport failure)")
+        print("settings_hooks_seed: failed (engine-root transport failure)")
         sys.exit(3)
     sys.exit(op_main(sys.argv[1:]))
 

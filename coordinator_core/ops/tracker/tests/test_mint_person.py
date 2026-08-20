@@ -55,6 +55,8 @@ from coordinator_core.ops.tracker.mint_person import _handler, _mint_person_core
 from coordinator_core.tracker_entities import emit_person_alias_added, emit_person_created, mint_person_id
 from coordinator_core.tracker_projection import fold_person_registry, resolve_alias
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Duplicated locally rather than imported — see module docstring's
 # "Import-hygiene note".
 _EVENTS_DIR_RELPATH = "state/sovereign-tracker"

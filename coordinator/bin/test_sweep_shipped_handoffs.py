@@ -9,7 +9,7 @@ Highest-value coverage in this file is test_repo_root_derived_from_state_root_no
 below — the Staff Engineer's coupling-regression finding. The bash oracle's invariant
 `repo_root="${_ssh_state_root%/state}"` is NOT reproducible via an independent
 `git rev-parse --show-toplevel` call once the meta-repo central-state redirect is live
-(coordinator_state_root(), which resolves to the state dir under CLAUDE_KLABAUTER_ROOT,
+(coordinator_state_root(), which resolves to the state dir under the engine root,
 diverges from the git repo root). This
 test simulates that divergence directly and asserts the trampoline still derives repo_root
 from state_root, not from git_repo_root — the exact silent-never-archive bug the review

@@ -35,6 +35,8 @@ from coordinator_core.ops.fleet.memo_compose import (
 from coordinator_core.ops.fleet.memo_draft import _memo_draft
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(result):
     if asyncio.iscoroutine(result):

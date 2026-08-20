@@ -26,7 +26,7 @@ indeterminate-guard fail-closed) never invoke `_run_archive_stamp_cli` with
 
 The `_import_module()` seam is monkeypatched (same idiom as
 test_archive_stamp_cli_ship_handoff.py) so this suite never requires
-CLAUDE_KLABAUTER_ROOT to resolve or `coordinator_core` to be importable.
+the engine root to resolve or `coordinator_core` to be importable.
 
 Spec backlink: coordinator-code-reviewer findings 1 and 3,
 state/subagent-share/d720eca0-3aba-45a9-af4b-6178f904c279/

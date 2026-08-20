@@ -109,10 +109,10 @@ entirely, so every dirty path classifies by branches 6-8 alone — EXACTLY
 today's pre-C6 behavior, never a wider commit (see `_resolve_claim_context`).
 
 Exit codes (`main()`) — these are business codes only; this module never
-raises or resolves CLAUDE_KLABAUTER_ROOT, so it has no transport-failure concept.
+raises or resolves the engine root, so it has no transport-failure concept.
 The DoE-side trampoline wraps this module's import/invocation and uses a
 SEPARATE dedicated rc=3
-for transport failure (CLAUDE_KLABAUTER_ROOT resolution / import), per code-review
+for transport failure (engine-root resolution / import), per code-review
 Finding 2 (A3b) — it never reuses these business codes for that purpose:
     0 — all clear-wins handled (or nothing dirty); no source-tree/ambiguous
         paths remain.

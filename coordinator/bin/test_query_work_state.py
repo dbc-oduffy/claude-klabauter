@@ -4,7 +4,7 @@ Mirrors `test_query_handoff_columns.py`'s fake-`cc_invoke` fixture pattern:
 seed `sys.modules["cc_invoke"]` with a fake module BEFORE importing the
 subject via `importlib` (the subject's `import cc_invoke` after its own
 `sys.path.insert(0, lib_dir)` resolves against `sys.modules` first, so a
-pre-seeded entry fully short-circuits the file search — no live CLAUDE_KLABAUTER_ROOT
+pre-seeded entry fully short-circuits the file search — no live engine-root
 / coordinator_core.invoke subprocess is ever spawned and no real
 `session.work_state` op fires). Each test loads a FRESH copy of the subject
 module so a per-test fake `route` never leaks across tests.

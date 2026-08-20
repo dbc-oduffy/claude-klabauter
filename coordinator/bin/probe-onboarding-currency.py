@@ -8,7 +8,7 @@ against the coordinator source's current schema version. The classification
 logic (schema-version read, stamp read/compare, source_is_live detection, the
 F14 CLAUDE_HOME-not-a-.claude-dir guard) is fully ported to
 coordinator_core/ops/probe_onboarding_currency.py — this file's only remaining
-job is: resolve CLAUDE_KLABAUTER_ROOT, resolve the DoE-claude coordinator plugin root
+job is: resolve the engine root, resolve the DoE-claude coordinator plugin root
 (coordinator-schema-version's home) and hand it to the engine module via
 COORDINATOR_CURRENCY_PLUGIN_ROOT, tell the engine module where THIS file lives
 on disk via COORDINATOR_CURRENCY_SCRIPT_DIR (a DoE-side/contract-only fact the
@@ -43,7 +43,7 @@ Exit codes (never-block probe, per the ported module's own docstring): 0 in the
 overwhelming common case (probe ran, printed one of
 current|drift(...)|unstamped(legacy)|inconclusive(...)|source_is_live to stdout);
 1 ONLY on the F14 fatal guard (CLAUDE_HOME already ends in /.claude). On a
-Claude-klabauter-link failure (CLAUDE_KLABAUTER_ROOT unresolvable / module not importable), this
+Claude-klabauter-link failure (the engine root unresolvable / module not importable), this
 trampoline mirrors the probe's own "never silently fail a caller" ethos: it
 prints an inconclusive(...) status line to stdout (so callers parsing the
 status string via a case statement degrade to their `inconclusive*` branch,

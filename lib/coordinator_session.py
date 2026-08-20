@@ -45,9 +45,9 @@ _NO_CONSOLE_WINDOW = (
 
 
 def _claude_klabauter_env() -> Optional[dict]:
-    """Resolve CLAUDE_KLABAUTER_ROOT and build the js_bridge_cli subprocess env.
+    """Resolve the engine root and build the js_bridge_cli subprocess env.
 
-    Returns None if CLAUDE_KLABAUTER_ROOT is unresolvable — callers treat that as a
+    Returns None if the engine root is unresolvable — callers treat that as a
     best-effort skip, matching the old "lib not found" branch.
     """
     try:

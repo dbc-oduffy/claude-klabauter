@@ -12,7 +12,7 @@ handoff-archived.schema.json does not admit. Reverted in commit f145480d.
 
 The `_import_module()` seam is monkeypatched (same idiom as
 test_archive_stamp_cli_ship_handoff.py) so this suite never requires
-CLAUDE_KLABAUTER_ROOT to resolve or coordinator_core to be importable — it asserts
+the engine root to resolve or coordinator_core to be importable — it asserts
 ONLY the argv -> `cs_close_handoff(...)` call-shape translation, not the
 engine behind it (that is
 coordinator_core/ops/tests/test_handoff_transition.py's job, which exercises

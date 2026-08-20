@@ -32,7 +32,7 @@ Sort mechanism: sort by basename, NOT by full path.
 State-root resolution: self-contains the DR-047/stop-the-rot Rule-5
 default-branch resolution (bare ``coordinator_state_root()``, no
 ``--central``/``--subject``/``--artifact``): meta-repo cwd (git root ==
-CLAUDE_HOME) routes to CLAUDE_KLABAUTER_ROOT/state; any other (sibling-repo) cwd uses
+CLAUDE_HOME) routes to the engine root/state; any other (sibling-repo) cwd uses
 ``<git-root>/state`` directly. Mirrors the sibling pattern in
 ``ops/check_weekly_staleness.py::_resolve_state_root`` /
 ``ops/check_arch_audit_staleness.py::_resolve_state_root`` (same shape,
@@ -175,7 +175,7 @@ def _resolve_state_root(explicit_override: Optional[str] = None) -> Optional[str
            else ``+"/state"`` appended (oracle's exact override branching).
            Correct only for a cold, single-request process (the CLI path).
         3. Rule 5 default: git root of cwd; meta-repo cwd routes to
-           ``CLAUDE_KLABAUTER_ROOT/state``, sibling-repo cwd uses ``<git-root>/state``.
+           ``the engine root/state``, sibling-repo cwd uses ``<git-root>/state``.
 
     Returns None on any unresolvable case (not a git repo, meta-repo but
     claude-klabauter root unresolvable) — callers emit ONE generic error message

@@ -680,6 +680,21 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
         sanitized_provision_key = _sanitize_segment(str(provision_key))
         if sanitized_provision_key is None:
             return None
+    elif agent_id:
+        # Ported from coordinator_core.dispatch.provision._provision's
+        # `derived_key` branch (same rationale verbatim: the 2026-08-15
+        # concurrent-same-agent_type incident, and the load-bearing
+        # `_sanitize_segment(derived_key)` re-check even though `agent_id`
+        # already looks path-shaped -- a named-teammate id's `.+` segment
+        # is NOT guaranteed sanitize-stable on its own). No caller-supplied
+        # provision_key -> derive one deterministically from
+        # `sanitized_label` + the already-resolved, already-canonicalized
+        # `agent_id`, gated on `agent_id` surviving `_sanitize_segment`
+        # unchanged; a malformed id falls through to the random-nonce path
+        # below exactly as if no agent_id had resolved at all.
+        if _sanitize_segment(str(agent_id)) == agent_id:
+            derived_key = f"{sanitized_label}.{agent_id}"
+            sanitized_provision_key = _sanitize_segment(derived_key)
 
     session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
     # Review: the Staff Engineer -- sanitized_session_id is guaranteed separator-free by

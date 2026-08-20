@@ -6,7 +6,7 @@ Pins the field-report's own negative controls (session a5efc7bc, unsolicited,
 2026-08-13): an all-zeros sid, an ancient session dir, a live foreign-repo
 session, and a live same-repo session. Each is fixture-based via a stub of
 the CLI's own `_import_module` seam -- this suite never depends on this
-machine's real live peer list, and never requires CLAUDE_KLABAUTER_ROOT to resolve.
+machine's real live peer list, and never requires the engine root to resolve.
 
 Asserted matrix (AC4: exit codes stay backward-compatible; every arm prints
 an explicit verdict, none exits 0 silently):

@@ -7,7 +7,7 @@ check-rag-state/generate-repomap branching, the ~/.claude.json example-retrieval
 CLI/root resolution + silent-skip contract, and the autonomous-sentinel
 enable/disable fail-loud-vs-idempotent branches. The autonomous-sentinel
 tests monkeypatch `_import_resolve_session_id` so this suite never requires
-CLAUDE_KLABAUTER_ROOT to resolve or `coordinator_core` to be importable — same idiom
+the engine root to resolve or `coordinator_core` to be importable — same idiom
 used by test_archive_stamp_cli_ship_handoff.py / test_session_claim_cli.py
 for the `_import_module()` seam.
 
@@ -241,7 +241,7 @@ class AutonomousSentinelTests(unittest.TestCase):
             with redirect_stdout(stdout):
                 rc = _cli._cmd_autonomous_sentinel(["enable", "--mode", "mise-en-place"])
         self.assertEqual(rc, 0)
-        write_mock.assert_called_once_with("mise-en-place\n", encoding="utf-8")
+        write_mock.assert_called_once_with("mise-en-place\n", encoding="utf-8", newline="\n")
         self.assertIn("autonomous-run-sid-abc", stdout.getvalue())
 
     def test_disable_unresolvable_session_id_is_noop_success(self):

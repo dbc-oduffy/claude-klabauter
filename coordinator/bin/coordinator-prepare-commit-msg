@@ -377,11 +377,11 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
 
 def _ensure_claude_klabauter_on_syspath() -> str:
     """Bootstrap ``coordinator_core`` onto ``sys.path``, resolving the
-    colocated claude-klabauter checkout via ``cc_invoke.resolve_colocated_claude_klabauter_root``
+    colocated engine checkout via ``cc_invoke.resolve_colocated_claude_klabauter_root``
     (this script's own ``__file__`` parents) — the SAME bootstrap
     ``_resolve_deliverable_id_from_claimed_plan`` already performs inline,
     extracted so tier 0's artifact lookup can share it without duplicating
-    the ``sys.path`` dance a second time. Returns the resolved claude-klabauter root,
+    the ``sys.path`` dance a second time. Returns the resolved engine root,
     or ``""`` on any resolution failure — never raises.
     """
     try:
@@ -498,7 +498,7 @@ def _list_held_plan_claims(cwd: str) -> list:
     (``_ensure_claude_klabauter_on_syspath``) step 4b's claimed-plan lookup already
     performs, reused rather than re-derived. Feeds both the scope-match tier
     and the ambiguity gate below (step 3b of the module docstring) with the
-    ONE enumeration both consume. Never raises -- an unresolvable claude-klabauter
+    ONE enumeration both consume. Never raises -- an unresolvable engine
     root, an import failure, or any exception from the callee all degrade to
     ``[]``, the same omit-rather-than-guess contract ``list_held_plan_claims``
     itself documents."""
@@ -523,7 +523,7 @@ def _resolve_deliverable_id_from_scope_match(cwd: str, paths: list, claims: list
     just below) having already imported ``cc_invoke`` -- see the module
     docstring's ORDERING DEPENDENCY note under step 3b before reordering
     this call relative to that bootstrap.
-    Never raises -- an unresolvable claude-klabauter root, an import failure, or any
+    Never raises -- an unresolvable engine root, an import failure, or any
     exception from the callee all degrade to ``""`` (tier abstains, caller
     falls through)."""
     claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
@@ -570,10 +570,10 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
 
     Lazily reaches into ``coordinator_core`` — deliberately NOT imported at
     module scope, so a hit on step 4/4a (the common case) never pays this
-    import's cost on the commit hot path. Resolves CLAUDE_KLABAUTER_ROOT via the
+    import's cost on the commit hot path. Resolves the engine root via the
     self-location-first ``require_colocated_engine_on_path()`` (which wraps
     ``resolve_colocated_claude_klabauter_root()``; this script
-    lives inside the claude-klabauter checkout at ``coordinator/bin/``, so
+    lives inside the engine checkout at ``coordinator/bin/``, so
     ``Path(__file__)``'s own parents answer it with zero external
     dependency) SOLELY to put ``coordinator_core`` on ``sys.path`` for the
     import below -- ``resolve_claimed_plan_path()`` returns a path relative
@@ -586,7 +586,7 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
     rather than re-deriving either — see that module's own negative-spec on
     the ``plan_claim_dir`` import-cycle trap before touching this function.
 
-    Omit-rather-than-guess throughout: an unresolvable CLAUDE_KLABAUTER_ROOT, an
+    Omit-rather-than-guess throughout: an unresolvable engine root, an
     unresolvable plan, a missing/unreadable file, or a missing/blank field
     all return ``""`` — never fabricates a value, never raises (any
     exception anywhere in this chain is swallowed and treated as "no

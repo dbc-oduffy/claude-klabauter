@@ -260,6 +260,17 @@ _PAT_AUTH = re.compile(
 # 5xx via smart-http, branch-protection rules, org SSO, etc.). Distinct from
 # "unknown" so the forensic stderr file is the obvious next read.
 _PAT_GH_SERVER_REJECT = re.compile(r"^remote: (error|rejected|fatal):", re.MULTILINE)
+# push_once's own TimeoutExpired-synthesized message (see below) -- matched
+# on the literal phrase THIS module itself writes, so it is unambiguous
+# regardless of what the killed subprocess had or hadn't already printed.
+# Previously fell through the whole ladder to "unknown" (Defect 3, 2026-08-20
+# dispatch): the message's "timed out" wording does not match _PAT_NETWORK's
+# "Connection timed out" phrase, despite push_once's docstring intent that it
+# land in that bucket. Given its own distinct class instead of being folded
+# into `network` -- it is not in _RETRYABLE_CLASSES, matching "unknown"'s
+# prior (non-retrying) behavior exactly, so this changes only the label an
+# operator/banner sees, never the retry/timing decision.
+_PAT_TIMEOUT = re.compile(r"push exceeded \d+s and was killed")
 
 
 def classify_error(stderr_text: str) -> str:
@@ -292,6 +303,8 @@ def classify_error(stderr_text: str) -> str:
         return "auth"
     if _PAT_GH_SERVER_REJECT.search(stderr_text):
         return "gh-server-reject"
+    if _PAT_TIMEOUT.search(stderr_text):
+        return "timeout"
     return "unknown"
 
 
@@ -520,9 +533,9 @@ def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool)
             **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
-        # Phrased to land in the network-class bucket of the classification
-        # ladder: a stalled SSH leg IS a network failure, and the retry policy
-        # is the correct response to it.
+        # Classified as "timeout" by classify_error()'s dedicated _PAT_TIMEOUT
+        # arm (matched on this literal phrase) -- not retried, same as the
+        # "unknown" fallback it used to land in before that arm existed.
         return False, (
             f"fatal: push exceeded {GIT_PUSH_TIMEOUT_SECS}s and was killed "
             f"(Could not read from remote repository: timed out)"
@@ -926,6 +939,21 @@ def _maybe_publish_cockpit_contract(
 # and `_hold_window`'s docstrings for why the parent process that `git
 # commit` waits on synchronously must never pay this cost).
 #
+# The hold's trigger is narrower than plain `_shared_branch_live_count(...) >
+# 1`: `_hold_window` also calls `_retraction_already_lost` and skips the
+# hold when a foreign-session commit has already landed on the branch within
+# the window. Measured 2026-08-20 on work/machine-a/2026-08-18to20 (trailing
+# 36h): 2079 commits, median inter-commit gap 20s, a median of 10 peer
+# commits land on top of any given commit within the 300s hold, and only 6
+# of 2079 commits had zero followers in that window. On a branch that busy
+# the retraction this hold pays for doesn't exist -- by the time the window
+# expires, peers have already built on the commit and rewinding it would
+# rewrite their work. `live_count > 1` inverts under load: sharing is
+# exactly what makes retraction impossible, not what threatens it. A quiet
+# shared branch (no recent foreign commits) still holds exactly as before --
+# see `_retraction_already_lost` for the predicate and its fail-toward-
+# pushing posture.
+#
 # Do NOT reuse `_backoff_seconds`/`_no_sleep` for the hold's sleep duration
 # beyond skipping the sleep itself under the test seam -- `_backoff_seconds`
 # is error-recovery timing (ref-lock/network/gh-transient), a different
@@ -1105,17 +1133,86 @@ def _shared_branch_live_count(repo_root: str, branch: str) -> int | None:
         return None
 
 
+def _retraction_already_lost(repo_root: str, branch: str, now: float) -> bool | None:
+    """True if a commit from a session OTHER than this process's own has
+    already landed on `branch` within the last `_HOLD_WINDOW_SECONDS` -- the
+    hold's own retraction promise is already broken before the hold would
+    even finish sleeping, because a peer has already built on top of the
+    commit it exists to protect.
+
+    ### DECISION (measured 2026-08-20, work/machine-a/2026-08-18to20, trailing
+    36h): 2079 commits, median inter-commit gap 20s -- a median of 10 peer
+    commits land on top of any given commit within the 300s hold window, and
+    only 6 of 2079 commits had zero followers in that window. The hold's
+    stated purpose (see the section comment above this function) is to avoid
+    publishing a trivially-reversible bad commit within ~60s of it landing --
+    a retraction window. On a branch this busy that window doesn't exist: by
+    the time the hold would wake, peers have already built on the commit it
+    was protecting, and rewinding it would rewrite their work too. The
+    `_shared_branch_live_count(...) > 1` trigger inverts under load --
+    sharing is exactly what makes retraction impossible, not what threatens
+    it -- so this predicate narrows the hold to the case where holding can
+    still actually deliver on its promise, and leaves a quiet shared branch
+    (no recent foreign commits) holding exactly as before.
+
+    Does exactly ONE bounded `git log --since=...` call -- no per-commit
+    spawning; this repo's amplification gate
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
+    forbids that shape. Reuses the `%x1f`-delimited Session-Id trailer format
+    `session_attribution.py` already established
+    (`bulk_trailer_session_map`/`trailer_foreign_shas`) rather than inventing
+    a new parsing shape -- those functions aren't called directly because
+    both append a single revision-arg string after the format flag, and that
+    slot can't also carry this call's `--since=...` bound.
+
+    Returns None -- not False -- if the predicate could not be evaluated
+    (this process's own session id is unresolvable, or the `git log` call
+    fails/times out). `_hold_window` treats None as "push", matching AC14a's
+    existing fail-toward-publishing posture for every other precondition
+    here: a predicate that holds when it can't prove retraction is already
+    lost would reintroduce the exact starvation this function removes.
+    """
+    own_session_id = session_core.resolve_session_id(repo_root)
+    if not own_session_id:
+        return None
+    since_iso = datetime.fromtimestamp(
+        now - _HOLD_WINDOW_SECONDS, tz=timezone.utc
+    ).isoformat()
+    output = _run_git(
+        repo_root,
+        [
+            "log", "--no-merges",
+            f"--since={since_iso}",
+            "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+            branch,
+        ],
+    )
+    if output is None:
+        return None
+    for line in output.splitlines():
+        if "\x1f" not in line:
+            continue
+        _, trailer = line.split("\x1f", 1)
+        trailer = trailer.strip()
+        if trailer and trailer != own_session_id:
+            return True
+    return False
+
+
 def _hold_window(repo_root: str, branch: str) -> bool:
     """Decide whether `run_push_with_retry` should push NOW or has already
     delegated to an existing holder.
 
     Returns True when the caller should proceed to attempt the push
-    immediately after this call returns -- covering three cases: (a) the
+    immediately after this call returns -- covering four cases: (a) the
     branch is solo (<=1 live session sharing it), (b) the live-session
     predicate could not be resolved (fail toward publishing -- AC14a
-    precondition 3 unmet), and (c) this call became the new/takeover holder,
-    slept out its window (or skipped the sleep under the test seam), and
-    now owns the push.
+    precondition 3 unmet), (b2) the branch IS shared but a foreign-session
+    commit has already landed within the hold window -- see
+    `_retraction_already_lost` -- so the hold's own retraction promise is
+    already broken and holding would only cost time for nothing, and (c)
+    this call became the new/takeover holder, slept out its window (or
+    skipped the sleep under the test seam), and now owns the push.
 
     Returns False only when a LIVE, non-stale pending record already covers
     this exact branch (AC14a precondition 2 unmet) -- this call exits
@@ -1180,6 +1277,13 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     now = time.time()
     live_count = _shared_branch_live_count(repo_root, branch)
     if live_count is None or live_count <= 1:
+        return True
+
+    # `is not False`, not truthy-check: None (predicate unresolvable) reads
+    # the same as True (retraction provably already lost) here -- both push
+    # immediately. Only an explicit False (retraction still available, proven
+    # by a clean git log read) falls through to the existing hold logic.
+    if _retraction_already_lost(repo_root, branch, now) is not False:
         return True
 
     existing = _read_pending_record(repo_root)

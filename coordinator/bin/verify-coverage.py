@@ -26,7 +26,7 @@
 #   1 — orphan reference(s) found (business fail, from the ported module)
 #   2 — usage/configuration error (unknown flag, root/sweep-root not found —
 #       also from the ported module's own main())
-#   3 — TRANSPORT failure: CLAUDE_KLABAUTER_ROOT resolution or
+#   3 — TRANSPORT failure: engine-root resolution or
 #       coordinator_core.ops.verify_coverage import failure AT THIS trampoline
 #       layer. Deliberately distinct from both CLI-usage (2) and business (1)
 #       failure — a caller branching on exit code alone (e.g. /update-docs
@@ -61,9 +61,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the DR-276 runner.
+    """Resolve the engine root, put it on sys.path, and import the DR-276 runner.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder rather than
+    Reuses cc_invoke's battle-tested engine-root resolution ladder rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
     deliberately NOT used here (this is not a hot per-commit path, but the
@@ -85,7 +85,7 @@ def main() -> None:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
-        print(f"verify-coverage: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"verify-coverage: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(3)
     except ImportError as exc:
         print(

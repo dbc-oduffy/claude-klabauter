@@ -26,7 +26,7 @@ Usage:
 
 Output: exactly one line — STALE / MILD / FRESH / UNKNOWN — to stdout.
 Exit code: always 0 (informational — callers decide whether to surface the
-signal), matching the original bash oracle's convention. On a CLAUDE_KLABAUTER_ROOT
+signal), matching the original bash oracle's convention. On an engine-root
 resolution/import failure this trampoline follows the SAME never-block
 convention: prints UNKNOWN and exits 0, rather than failing loud, because
 the ported op is purely informational (never a gate).
@@ -48,9 +48,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _resolve_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

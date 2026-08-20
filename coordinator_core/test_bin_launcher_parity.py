@@ -38,6 +38,8 @@ from typing import NamedTuple
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.git.ls_files import tracked_files
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

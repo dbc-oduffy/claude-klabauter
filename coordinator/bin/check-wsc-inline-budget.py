@@ -24,7 +24,7 @@ Exit codes (parity-critical — workweek-complete.md:289 pipes through
 non-blocking explicitly, e.g. `check-wsc-inline-budget.sh || true`):
   0 — count within baseline (or no baseline file — safe to ship pre-finalization)
   1 — count exceeds baseline (WARN — non-blocking by caller convention)
-  2 — fatal error (SKILL.md not found, or CLAUDE_KLABAUTER_ROOT/import resolution failed)
+  2 — fatal error (SKILL.md not found, or engine-root/import resolution failed)
 
 Env overrides (for testing — mirrors the retired bash script's contract):
   WSC_SKILL_PATH     — substitute a different SKILL.md path
@@ -46,9 +46,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

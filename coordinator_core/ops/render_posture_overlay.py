@@ -59,7 +59,7 @@ Exit codes (parity-critical — the DoE trampoline forwards this verbatim):
         funnels ALL such failures to a single exit 1 — not split further,
         to stay byte-parity with the oracle's exit-code contract)
     2 — RESERVED for the DoE trampoline's own claude-klabauter-link/import failure
-        (CLAUDE_KLABAUTER_ROOT resolution / ImportError) — never returned by this
+        (engine-root resolution / ImportError) — never returned by this
         module's own main(); documented here so the two layers' exit-code
         tables stay disjoint (rule: transport-failure code must not collide
         with a business code — see docs/plans/2026-07-16-bash-clean-slate-

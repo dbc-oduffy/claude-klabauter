@@ -3056,7 +3056,7 @@ def _cmd_draft(args: argparse.Namespace) -> int:
         below.
         """
         raise RuntimeError(
-            "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
             "coordinator_core.invoke not importable) — the direct-write "
             "fallback has been retired. Install/configure the claude-klabauter "
             "engine to draft cross-repo memos."
@@ -3589,7 +3589,7 @@ def _send_via_engine(
         `except RuntimeError` handler below.
         """
         raise RuntimeError(
-            "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
             "coordinator_core.invoke not importable) — the direct-write "
             "fallback has been retired (Q-c hard). Install/configure the "
             "claude-klabauter engine to send cross-repo memos."
@@ -3820,7 +3820,7 @@ def _send_campaign_via_engine(
     def legacy_send() -> None:
         """Fail-loud legacy stub — mirrors _send_via_engine.legacy_send (Q-c hard)."""
         raise RuntimeError(
-            "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
             "coordinator_core.invoke not importable) — the direct-write "
             "fallback has been retired (Q-c hard). Install/configure the "
             "claude-klabauter engine to send cross-repo memos."
@@ -4208,7 +4208,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
         below.
         """
         raise RuntimeError(
-            "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
             "coordinator_core.invoke not importable) — the direct-compute "
             "fallback has been retired. Install/configure the claude-klabauter "
             "engine to list outbox drafts."
@@ -4491,7 +4491,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
                 RuntimeError` handler below.
                 """
                 raise RuntimeError(
-                    "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+                    "claude-klabauter engine seam not found (the engine root unresolvable or "
                     "coordinator_core.invoke not importable) — the direct-write "
                     "fallback has been retired. Install/configure the claude-klabauter "
                     "engine to compose cross-repo memos."
@@ -5312,7 +5312,7 @@ def main(argv: list[str] | None = None) -> int:
             below.
             """
             raise RuntimeError(
-                "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+                "claude-klabauter engine seam not found (the engine root unresolvable or "
                 "coordinator_core.invoke not importable) — the direct-compute "
                 "fallback has been retired. Install/configure the claude-klabauter "
                 "engine to check memo addressees."
@@ -5393,7 +5393,7 @@ def main(argv: list[str] | None = None) -> int:
             below.
             """
             raise RuntimeError(
-                "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+                "claude-klabauter engine seam not found (the engine root unresolvable or "
                 "coordinator_core.invoke not importable) — the direct-compute "
                 "fallback has been retired. Install/configure the claude-klabauter "
                 "engine to list memo receivers."
@@ -5690,7 +5690,7 @@ def main(argv: list[str] | None = None) -> int:
             below.
             """
             raise RuntimeError(
-                "claude-klabauter engine seam not found (CLAUDE_KLABAUTER_ROOT unresolvable or "
+                "claude-klabauter engine seam not found (the engine root unresolvable or "
                 "coordinator_core.invoke not importable) — the direct-compute "
                 "fallback has been retired. Install/configure the claude-klabauter "
                 "engine to preview a memo delivery."

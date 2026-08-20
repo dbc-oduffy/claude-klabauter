@@ -30,6 +30,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.ops.workflow_fire import fire
 
 

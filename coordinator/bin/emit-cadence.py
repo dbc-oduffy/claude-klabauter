@@ -166,9 +166,6 @@ def main() -> int:
     # from cwd by the seam itself — zero new dependency vs artifact.emit.
     try:
         route_mutation("emit.cadence", {}, repo_root, legacy_cadence)
-    except _SeamAbsentError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
     except RouteMutationError as exc:
         print(f"emit-cadence: {exc}", file=sys.stderr)
         return 1
@@ -182,6 +179,15 @@ def main() -> int:
         )
         return 4
     except RuntimeError as exc:
+        # route_mutation's State-1 arm wraps whatever legacy_fn() raises in a
+        # plain RuntimeError (the four-rung engine-root remediation), chained
+        # via `raise ... from exc` — a bare `except _SeamAbsentError` here can
+        # never match, since the wrapper type is RuntimeError itself, not a
+        # subclass of it. Unwrap via __cause__ to recover the seam-absent exit
+        # code this module documents (see module docstring's Exit codes).
+        if isinstance(exc.__cause__, _SeamAbsentError):
+            print(str(exc.__cause__), file=sys.stderr)
+            return 1
         print(f"emit-cadence: {exc}", file=sys.stderr)
         return 3
 

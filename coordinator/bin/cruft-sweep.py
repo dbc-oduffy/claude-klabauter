@@ -224,7 +224,7 @@ try:
     _CLAUDE_KLABAUTER_ROOT = require_dispatch_engine_on_path()
 except RuntimeError as _exc:
     sys.stderr.write(
-        f"cruft-sweep: cannot resolve CLAUDE_KLABAUTER_ROOT for native coordinator_core "
+        f"cruft-sweep: cannot resolve the engine root for native coordinator_core "
         f"import: {_exc}\n"
     )
     sys.exit(1)

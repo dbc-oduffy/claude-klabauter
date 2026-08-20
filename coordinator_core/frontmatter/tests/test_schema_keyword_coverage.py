@@ -66,6 +66,10 @@ _SUPPORTED_KEYWORDS = frozenset({
     "additionalProperties",
     "unevaluatedProperties",
     "minItems",
+    # Implemented in _validate_json_schema_node's array-level block. Arrived
+    # with plan.schema.json 2.5.0 (review_signals); implemented rather than
+    # allowlisted-away, since a tolerated keyword is a silent no-op.
+    "uniqueItems",
     "items",
 })
 

@@ -157,13 +157,30 @@ def _lock_anchor(path: Path) -> Optional[Path]:
     return common_dir.parent
 
 
-def _entry_line(sha: str, kind: str, weight_basis: Any, reviewed_by: Optional[List[str]]) -> str:
+def _entry_line(
+    sha: str,
+    kind: str,
+    weight_basis: Any,
+    reviewed_by: Optional[List[str]],
+    agent_id: Optional[str] = None,
+    sidecar_path: Optional[str] = None,
+) -> str:
     entry = {
         "sha": sha,
         "kind": kind,
         "weight_basis": weight_basis,
         "reviewed_by": list(reviewed_by) if reviewed_by else [],
     }
+    # C4 extension (state/dispatch-briefs/2026-08-20-the-refusal-dies-and-the-
+    # mark-falls-out/C4.md, step 7): carry the marking agent's identity and
+    # sidecar provenance on a mark-only append. Additive-only -- omitted
+    # entirely when not supplied, so every pre-existing append() call site
+    # (real commit entries, and any caller that never passes these) keeps
+    # writing the original four-key shape byte-for-byte.
+    if agent_id:
+        entry["agent_id"] = agent_id
+    if sidecar_path:
+        entry["sidecar_path"] = sidecar_path
     return json.dumps(entry, sort_keys=True) + "\n"
 
 
@@ -174,6 +191,8 @@ def append_entry(
     weight_basis: Any = None,
     reviewed_by: Optional[List[str]] = None,
     cwd: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    sidecar_path: Optional[str] = None,
 ) -> bool:
     """Append one commit entry to ``handoff_id``'s ledger. Pure append — NO
     read-modify-write: a duplicate ``sha`` (a retry of a commit that landed
@@ -221,7 +240,7 @@ def append_entry(
     except OSError:
         return False
 
-    line = _entry_line(sha, kind, weight_basis, reviewed_by)
+    line = _entry_line(sha, kind, weight_basis, reviewed_by, agent_id, sidecar_path)
 
     def _append() -> None:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
@@ -325,6 +344,8 @@ def mark_reviewed(
     shas: List[str],
     reviewer: str,
     cwd: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    sidecar_path: Optional[str] = None,
 ) -> bool:
     """Mark each of ``shas`` as reviewed by ``reviewer`` in ``handoff_id``'s
     ledger — EM ergonomics for "a dispatched reviewer concluded over this
@@ -340,6 +361,14 @@ def mark_reviewed(
     read-time union of ``reviewed_by`` across every line sharing a ``sha``
     (see that function's docstring) is what makes the mark visible without
     a read-modify-write.
+
+    ``agent_id``/``sidecar_path`` (C4, state/dispatch-briefs/2026-08-20-the-
+    refusal-dies-and-the-mark-falls-out/C4.md step 7) are optional per-entry
+    provenance for a mark-only append — the finishing reviewer's own
+    ``agent_id`` and the run-report sidecar its ``reviewed_range`` was read
+    from. Forwarded to every :func:`append_entry` call this function makes;
+    omitted from the entry entirely when not supplied (see
+    :func:`_entry_line`).
 
     Returns True only when EVERY sha's append succeeds (mirrors
     :func:`append_entry`'s own True/False contract); a partial failure
@@ -363,6 +392,8 @@ def mark_reviewed(
             weight_basis=None,
             reviewed_by=[reviewer],
             cwd=cwd,
+            agent_id=agent_id,
+            sidecar_path=sidecar_path,
         ):
             ok = False
     return ok

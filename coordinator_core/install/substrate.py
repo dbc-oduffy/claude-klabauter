@@ -31,7 +31,7 @@ Claude-klabauter's own tree): DoE-side surfaces (``templates/``, ``whoami/``,
 Env:
     CLAUDE_PLUGIN_ROOT — required; the coordinator plugin install root
         (DoE-side surfaces only — see dual-anchor note above).
-    CLAUDE_KLABAUTER_ROOT        — optional; short-circuits claude-klabauter-root resolution
+    CLAUDE_KLABAUTER_ROOT        — optional; short-circuits engine-root resolution
         (see ``coordinator_core.engine_root`` for the full resolution chain).
     CLAUDE_HOME        — optional; $HOME substitute.
     COORDINATOR_NON_INTERACTIVE — optional; "1" suppresses the AppX stub
@@ -2570,7 +2570,7 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
     if not claude_klabauter_lib.is_dir():
         print(
             f"install-substrate: claude-klabauter-side {claude_klabauter_lib} not found "
-            f"(resolved CLAUDE_KLABAUTER_ROOT={claude_klabauter_root}).\n"
+            f"(resolved engine root={claude_klabauter_root}).\n"
             "The claude-klabauter checkout is broken/incomplete, or repos.claude_klabauter "
             "resolves to the wrong tree. Remediation:\n"
             "  (a) confirm 'machine-local get repos.claude_klabauter' points at a real "

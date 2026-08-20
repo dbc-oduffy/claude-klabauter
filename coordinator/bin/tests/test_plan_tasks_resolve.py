@@ -12,7 +12,7 @@ the caller's proposed id" defensive-forward behavior). It does NOT exercise
 disposition_ref shape validation, ...) — that is
 `coordinator_core/ops/tests/test_plan_tasks_mutate.py`'s job. Every test here
 monkeypatches `cc_invoke.route_mutation` (and, for --moved-to,
-`_read_source_row`) rather than invoking the real op, so no CLAUDE_KLABAUTER_ROOT
+`_read_source_row`) rather than invoking the real op, so no engine-root
 resolution or coordinator_core.invoke subprocess spawn ever happens in this
 suite.
 
@@ -33,6 +33,10 @@ import unittest
 import unittest.mock
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
+
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = Path(__file__).resolve().parents[3]

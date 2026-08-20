@@ -2,7 +2,7 @@
 (writer for the atomic `<stem>.claims.json` + `<stem>.claims.meta.json`
 pair). Direct-import variant (template-variant #1, per
 tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1): a plain
-in-process function call after resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop
+in-process function call after resolving the engine root, no cc_invoke/IPC hop
 — the coordinator/bin/archive-stamp-cli.py precedent, chosen here specifically
 because no op registration is needed (see the plan's Anti-scope for why).
 
@@ -28,7 +28,7 @@ Exit codes: propagates coordinator_core.claims_emit.emit_claims's own
 taxonomy verbatim — 0 both files written, 1 producer-side failure
 (malformed claim record(s) or a write failure), 2 invalid invocation
 (missing/malformed flags or STDIN payload). A missing/unresolvable
-CLAUDE_KLABAUTER_ROOT (this trampoline's own transport failure, distinct from the
+the engine root (this trampoline's own transport failure, distinct from the
 module's business exit code) exits 3 — the dedicated code below, since
 that failure means "the engine repo could not be reached," never
 silently degraded to 0.

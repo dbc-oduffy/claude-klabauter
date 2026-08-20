@@ -73,7 +73,7 @@ from typing import List, TextIO, Tuple
 from coordinator_core.engine_root import coordinator_engine_source_root_env
 from coordinator_core.session.declared_writes import declare_write
 
-# Relative-to-CLAUDE_HOME / CLAUDE_KLABAUTER_ROOT tree pairs mirrored (source, dest) —
+# Relative-to-CLAUDE_HOME / engine-root tree pairs mirrored (source, dest) —
 # see Negative-spec above re: archive/ inclusion.
 TREE_PAIRS: List[Tuple[str, str]] = [
     ("state", "state"),

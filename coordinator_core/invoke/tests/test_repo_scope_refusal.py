@@ -25,6 +25,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
 
 # Portable Windows console-suppression flag — resolves to CREATE_NO_WINDOW

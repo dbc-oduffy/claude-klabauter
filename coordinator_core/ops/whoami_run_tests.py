@@ -28,7 +28,7 @@ Port of: run-tests.sh (DoE 6fb5fb37, 2026-07-22)
 Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec:
-  - Does NOT resolve CLAUDE_KLABAUTER_ROOT, cc_invoke, or any coordinator-wide
+  - Does NOT resolve the engine root, cc_invoke, or any coordinator-wide
     registry/env-config seam — `base_dir` is caller-resolved, exactly like
     `cruft_sweep.py`'s "handed fully-resolved paths" contract.
   - Does NOT reimplement the bash oracle's Windows-console-popup escape

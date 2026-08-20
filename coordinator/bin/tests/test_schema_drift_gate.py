@@ -47,33 +47,28 @@ def _load_module():
     return mod
 
 
-def _run_main_capturing(mod, argv=None, fake_route=None, fake_repo_root=...):
-    """Run mod.main(argv or []) with stdout/stderr captured; optionally fake cc_invoke.route
-    and _resolve_repo_root (so no real git subprocess runs under test).
+def _run_main_capturing(mod, argv=None, fake_route=None):
+    """Run mod.main(argv or []) with stdout/stderr captured; optionally fake cc_invoke.route.
 
-    fake_repo_root defaults to the sentinel `...`, which callers must override with an
-    explicit tmp_path-derived value (or None, to exercise the unresolvable-root path)."""
-    if fake_repo_root is ...:
-        raise ValueError("fake_repo_root must be passed explicitly (tmp_path-derived or None)")
+    schema.drift_gate is scope "none" (D4, docs/plans/2026-08-20-a-refusal-
+    cannot-exit-zero.md § C16): the CLI no longer resolves (or spawns git
+    for) a repo root before dispatching — there is nothing left to fake here."""
     orig_route = mod.cc_invoke.route
-    orig_resolve = mod._resolve_repo_root
     if fake_route is not None:
         mod.cc_invoke.route = fake_route
-    mod._resolve_repo_root = lambda: fake_repo_root
     out, err = io.StringIO(), io.StringIO()
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = mod.main(argv if argv is not None else [])
     finally:
         mod.cc_invoke.route = orig_route
-        mod._resolve_repo_root = orig_resolve
     return rc, out.getvalue(), err.getvalue()
 
 
 # ===========================================================================
 # DRIFT (ok=False) -> exit 1, message names the drifted schema + direction.
 # ===========================================================================
-def test_drift_exits_1_and_names_schema_and_direction(tmp_path):
+def test_drift_exits_1_and_names_schema_and_direction():
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -86,7 +81,7 @@ def test_drift_exits_1_and_names_schema_and_direction(tmp_path):
             "message": "1 vendored schema(s) diverge from DoE HEAD: cockpit-contract.json [we-behind].",
         }
 
-    rc, out, _err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
+    rc, out, _err = _run_main_capturing(mod, fake_route=fake_route)
 
     if rc == 1:
         _pass("DRIFT: exit 1")
@@ -102,13 +97,13 @@ def test_drift_exits_1_and_names_schema_and_direction(tmp_path):
 # ===========================================================================
 # MATCH (ok=True) -> exit 0, plain pass, no "unverified" hedge language.
 # ===========================================================================
-def test_match_exits_0_plain_pass(tmp_path):
+def test_match_exits_0_plain_pass():
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
         return {"ok": True, "status": "MATCH", "drifted": [], "message": None}
 
-    rc, out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
+    rc, out, err = _run_main_capturing(mod, fake_route=fake_route)
 
     if rc == 0:
         _pass("MATCH: exit 0")
@@ -124,7 +119,7 @@ def test_match_exits_0_plain_pass(tmp_path):
 # ===========================================================================
 # INDETERMINATE (ok=True) -> exit 0, but explicitly says "could not verify".
 # ===========================================================================
-def test_indeterminate_exits_0_but_says_unverifiable(tmp_path):
+def test_indeterminate_exits_0_but_says_unverifiable():
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -135,7 +130,7 @@ def test_indeterminate_exits_0_but_says_unverifiable(tmp_path):
             "message": "vendored-schema drift check could not run",
         }
 
-    rc, out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
+    rc, out, err = _run_main_capturing(mod, fake_route=fake_route)
 
     if rc == 0:
         _pass("INDETERMINATE: exit 0")
@@ -156,7 +151,7 @@ def test_indeterminate_exits_0_but_says_unverifiable(tmp_path):
 # ===========================================================================
 # UNRESOLVED (ok=True) -> exit 0, explicitly says unresolved/no clone.
 # ===========================================================================
-def test_unresolved_exits_0_but_says_unverifiable(tmp_path):
+def test_unresolved_exits_0_but_says_unverifiable():
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -167,7 +162,7 @@ def test_unresolved_exits_0_but_says_unverifiable(tmp_path):
             "message": "no DoE clone resolved; drift not determinable",
         }
 
-    rc, out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
+    rc, out, err = _run_main_capturing(mod, fake_route=fake_route)
 
     if rc == 0:
         _pass("UNRESOLVED: exit 0")
@@ -183,13 +178,13 @@ def test_unresolved_exits_0_but_says_unverifiable(tmp_path):
 # ===========================================================================
 # Transport failure (route() raises) -> exit 2, distinct from a DRIFT block.
 # ===========================================================================
-def test_transport_failure_exits_2(tmp_path):
+def test_transport_failure_exits_2():
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
         raise RuntimeError("simulated transport failure")
 
-    rc, _out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
+    rc, _out, err = _run_main_capturing(mod, fake_route=fake_route)
 
     if rc == 2:
         _pass("transport failure: exit 2")
@@ -205,13 +200,13 @@ def test_transport_failure_exits_2(tmp_path):
 # ===========================================================================
 # Malformed result (not a dict) -> exit 2.
 # ===========================================================================
-def test_malformed_result_exits_2(tmp_path):
+def test_malformed_result_exits_2():
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
         return "not-a-dict"
 
-    rc, _out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
+    rc, _out, err = _run_main_capturing(mod, fake_route=fake_route)
 
     if rc == 2:
         _pass("malformed result: exit 2")
@@ -222,34 +217,5 @@ def test_malformed_result_exits_2(tmp_path):
         _pass("malformed result: stderr names the malformed-result condition")
     else:
         _fail("malformed result: stderr names the malformed-result condition", f"stderr: {err!r}")
-
-
-# ===========================================================================
-# Unresolvable repo root -> exit 2 before any route() dispatch.
-# ===========================================================================
-def test_unresolvable_repo_root_exits_2():
-    mod = _load_module()
-    route_called = {"n": 0}
-
-    def fake_route(op, params, repo_root, legacy_fn):
-        route_called["n"] += 1
-        return {"ok": True, "status": "MATCH", "drifted": [], "message": None}
-
-    rc, _out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=None)
-
-    if rc == 2:
-        _pass("unresolvable repo root: exit 2")
-    else:
-        _fail("unresolvable repo root: exit 2", f"got rc={rc}")
-
-    if route_called["n"] == 0:
-        _pass("unresolvable repo root: route() never dispatched")
-    else:
-        _fail("unresolvable repo root: route() never dispatched", f"called {route_called['n']} times")
-
-    if "cannot resolve git repo root" in err:
-        _pass("unresolvable repo root: stderr names the resolution failure")
-    else:
-        _fail("unresolvable repo root: stderr names the resolution failure", f"stderr: {err!r}")
 
 

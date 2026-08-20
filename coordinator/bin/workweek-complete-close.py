@@ -99,9 +99,9 @@ def _ensure_claude_klabauter_root_on_path() -> None:
     bootstrap as :func:`_import_rel_id` — shared here rather than
     duplicated, since the archive command needs TWO coordinator_core
     symbols (``resolve_session_id`` and ``relocate_touched_path``), not one."""
-    from cc_invoke import _resolve_claude_klabauter_root  # noqa: WPS433 (deferred, mirrors house style)
+    from cc_invoke import require_dispatch_engine_on_path  # noqa: WPS433 (deferred, mirrors house style)
 
-    claude_klabauter_root = require_dispatch_engine_on_path()
+    require_dispatch_engine_on_path()
 
 
 def _resolve_session_id_for_relocate() -> str:

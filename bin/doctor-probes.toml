@@ -19,7 +19,7 @@
 # mirroring coordinator's bin/doctor-probes.toml):
 #   id               — Probe id; join key to bin/claude-klabauter-doctor-probe.py probe names.
 #   cluster          — Symptom group (claude-klabauter-domain enum):
-#                        registry = CLAUDE_KLABAUTER_ROOT resolution and machine-local key health
+#                        registry = engine-root resolution and machine-local key health
 #                        install  = coordinator_core import, engine bootstrap, and
 #                                   command-type health (version, debris)
 #                        dispatch = command-type entrypoint smoke (spawn-per-call path)
@@ -63,7 +63,7 @@
 # serves as the static-headline triage probe.
 
 # ---------------------------------------------------------------------------
-# Cluster: registry — CLAUDE_KLABAUTER_ROOT resolution and machine-local key health
+# Cluster: registry — engine-root resolution and machine-local key health
 # ---------------------------------------------------------------------------
 
 [[probe]]
@@ -88,7 +88,7 @@ fix = "none (run the install-time pointer writer gen-claude-klabauter-root-point
 symptom_keywords = ["claude-klabauter-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py"]
 # triage=true: file-read-only presence/content check (no subprocess, no network) is
 # cheap enough for every bare invocation, and surfaces the dominant Windows per-invoke
-# latency cause (bash-fallback CLAUDE_KLABAUTER_ROOT resolution) as early as possible.
+# latency cause (bash-fallback engine-root resolution) as early as possible.
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_pointer"
 required = false

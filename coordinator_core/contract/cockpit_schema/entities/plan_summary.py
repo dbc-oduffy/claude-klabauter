@@ -139,6 +139,23 @@ class PlanSummary(BaseModel):
     Named `deliverable_status` to avoid collision with PlanSummary.status (PlanStatus).
     D9: nullable, never optional.
     """
+    review_verified: bool | None
+    """
+    Derived at emit: `coordinator_core.ops.emit.deliverable_status.plan_review_verified()`
+    applied to this record — True iff `review_verified_by` (C6a attest field) is present.
+    An ordering predicate layered on top of `status`, not a `PlanStatus` enum member (hard
+    constraint 1) and not itself a raw frontmatter field. D9: nullable, never optional.
+
+    Field-shape sanctioned by the pre-existing `deliverable_status` derived-predicate field
+    above; SemVer classification of this addition (MINOR/PATCH warn vs. MAJOR/DR-234 hold)
+    is recorded at C7's dispatch site (docs/plans/2026-08-20-the-rungs-get-writers.md § C7,
+    AC16), not here.
+
+    NOT YET WIRED (C7 scope, out of scope here): the caller that constructs `PlanSummary`
+    instances at emit time does not yet populate this field from `plan_review_verified()` --
+    that wiring is a named follow-on, matching the `bridged_ids`/`envelope.emit` precedent
+    documented in `deliverable_status.stamp()`.
+    """
     content_hash: ContentHash | None = None
     """
     R5 content-hash change-signal (optional; sibling of provenance). Omitted by

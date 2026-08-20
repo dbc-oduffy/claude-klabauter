@@ -114,7 +114,7 @@ def _rc_registry_live_path() -> str:
     Delegates to `coordinator_core.machine_resolver.registry_get` — the
     canonical registry.local.toml-before-registry.toml reader with
     empty-string-is-a-miss semantics — rather than a hand-rolled TOML parse.
-    A plain `try/except ImportError` (no CLAUDE_KLABAUTER_ROOT sys.path bootstrap) is
+    A plain `try/except ImportError` (no engine-root sys.path bootstrap) is
     correct here: this is an importable library module consumed in-process by
     callers that already share coordinator_core's interpreter/venv (see
     session_ensure_branch.py::_parses_as_branch_span for the same pattern),

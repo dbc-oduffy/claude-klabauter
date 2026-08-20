@@ -27,7 +27,7 @@ Exit codes (parity with the ported module):
       plan not found, ...).
   2 — usage/transport error (bad args, unresolvable repo root, plan_path
       escapes docs/plans/).
-  3 — CLAUDE_KLABAUTER_ROOT resolution / import failure.
+  3 — engine-root resolution / import failure.
 
 Spec backlink: coordinator_core/ops/plan_tasks_grouping_digest.py module docstring.
 """

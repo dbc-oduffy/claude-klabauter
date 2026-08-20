@@ -2,7 +2,7 @@
 # coordinator_core.archive_stamp (handoff/memo/plan lifecycle frontmatter
 # writes). Direct-import variant (template-variant #1, per
 # tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1): a plain
-# in-process function call after resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop.
+# in-process function call after resolving the engine root, no cc_invoke/IPC hop.
 #
 # Direct Python engine boundary (R1 template's variant discriminator) for
 # callers in skills/{handoff,pickup,workstream-complete}/SKILL.md.
@@ -79,7 +79,7 @@
 # exit-code contract — cs_stamp_plan_implemented is now a plain 0/1 contract,
 # having moved to an in-process plan_status_transition.main() call with no
 # node/DoE-root resolution step of its own).
-# A missing/unresolvable CLAUDE_KLABAUTER_ROOT (this trampoline's own transport failure,
+# A missing/unresolvable the engine root (this trampoline's own transport failure,
 # distinct from any mapped function's business exit code) exits 3 — the
 # dedicated code below, since that failure means "the claude-klabauter engine could not
 # be reached," never silently degraded to 0.
@@ -284,7 +284,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     # Before path validation, and before the engine import — a help request
-    # must be answerable even where CLAUDE_KLABAUTER_ROOT does not resolve.
+    # must be answerable even where the engine root does not resolve.
     if subcmd in _SUBCOMMAND_USAGE and any(t in _SUBCOMMAND_HELP_FLAGS for t in rest):
         print(f"usage: {_SUBCOMMAND_USAGE[subcmd]}")
         return 0

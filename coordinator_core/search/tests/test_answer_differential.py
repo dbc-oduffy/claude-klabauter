@@ -21,6 +21,8 @@ import pytest
 
 from coordinator_core.search.answer import answer
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 FIXTURE_FILES = {
     "alpha.py": textwrap.dedent(
         """\

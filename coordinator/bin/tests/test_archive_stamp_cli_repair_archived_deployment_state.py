@@ -12,7 +12,7 @@ handler's frontmatter-write/cross-field-validation contract directly).
 
 The `_import_module()` seam is monkeypatched (same idiom as
 test_archive_stamp_cli_close_handoff.py) so this suite never requires
-CLAUDE_KLABAUTER_ROOT to resolve or coordinator_core to be importable.
+the engine root to resolve or coordinator_core to be importable.
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 archive-stamp-cli is an extensionless polyglot entrypoint, not a `.py`

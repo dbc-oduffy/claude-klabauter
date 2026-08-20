@@ -18,6 +18,13 @@ Negative-spec:
       in `os._exit`, which would take the test runner with it; the seam under
       test is `_wait_for_parent_exit`'s RETURN, which is what gates that call.
     - Does NOT spawn a process pool. See module docstring.
+
+Spawn ratchet C2 disposition: TIER -- `_dead_pid()` needs a PID that is
+genuinely, OS-level dead (module's own comment: a fixed constant risks
+colliding with a live process on a 50-70-concurrent-session box), which
+only a real spawn-then-reap can produce; the process identity itself is
+load-bearing for `_wait_for_parent_exit`'s dead-parent branch, not
+incidental scaffolding.
 """
 
 from __future__ import annotations
@@ -31,6 +38,8 @@ import time
 import pytest
 
 from coordinator_core.warm import server
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _dead_pid() -> int:

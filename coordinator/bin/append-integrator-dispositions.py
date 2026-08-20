@@ -19,7 +19,7 @@ Exit codes (parity with the ported module — coordinator_core/ops/append_integr
   0 — success (block appended, or already present — idempotent no-op)
   1 — validation error (wrong target, unfilled scaffold, no ids supplied, ...)
   2 — usage/transport error (bad args, unreadable --rationale-file, unresolvable repo root)
-  3 — CLAUDE_KLABAUTER_ROOT resolution / import failure
+  3 — engine-root resolution / import failure
 
 Spec backlink: coordinator_core/ops/append_integrator_dispositions.py module docstring.
 """

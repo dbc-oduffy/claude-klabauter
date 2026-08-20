@@ -29,6 +29,8 @@ from coordinator_core import tracker_projection
 from coordinator_core import tracker_store
 from coordinator_core import tracker_transitions as tt
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _make_git_repo(root):
     """Init a minimal git repository under *root* — mirrors

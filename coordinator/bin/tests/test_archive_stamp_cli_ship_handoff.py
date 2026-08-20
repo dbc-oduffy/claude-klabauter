@@ -11,7 +11,7 @@ this incident exercised `arstamp.cs_ship_handoff(...)` as a Python function
 call, never the trampoline's own `main()` argv parsing.
 
 The `_import_module()` seam is monkeypatched (same idiom as
-test_session_claim_cli.py) so this suite never requires CLAUDE_KLABAUTER_ROOT to
+test_session_claim_cli.py) so this suite never requires the engine root to
 resolve or `coordinator_core` to be importable — it asserts ONLY the argv ->
 `cs_ship_handoff(...)` call-shape translation, not the engine behind it
 (that is `coordinator_core/ops/tests/test_handoff_archive_transition.py`'s

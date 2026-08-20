@@ -39,7 +39,7 @@ subprocess-invoked read-frontmatter-field.py
 per field per goal. Fix-in-port (DR-059): drops the jq dependency entirely — JSON
 projection uses the stdlib `json` module — and imports
 coordinator_core.ops.read_frontmatter_field.read_frontmatter_field directly
-in-process (via cc_invoke.resolve_engine_root() for CLAUDE_KLABAUTER_ROOT resolution,
+in-process (via cc_invoke.resolve_engine_root() for engine-root resolution,
 matching every other Windows-campaign per-op port) instead of subprocess-spawning
 read-frontmatter-field.py once per field per goal artifact. append-goal-event.py
 itself stays a subprocess invocation — that IS the DR-210 single-writer facade
@@ -115,7 +115,7 @@ def _map_status(artifact_status: str) -> str:
 def _resolve_read_frontmatter_field():
     """Import coordinator_core.ops.read_frontmatter_field.read_frontmatter_field.
 
-    Raises RuntimeError on CLAUDE_KLABAUTER_ROOT/import failure — mapped to a fatal
+    Raises RuntimeError on engine-root/import failure — mapped to a fatal
     precondition (exit 1) by main(), matching the bash oracle's jq-absent /
     helper-not-found fatal-precondition class.
     """
@@ -308,7 +308,7 @@ def main(argv: list[str]) -> int:
     try:
         read_frontmatter_field = _resolve_read_frontmatter_field()
     except RuntimeError as exc:
-        print(f"ERROR: could not resolve CLAUDE_KLABAUTER_ROOT: {exc}", file=sys.stderr)
+        print(f"ERROR: could not resolve the engine root: {exc}", file=sys.stderr)
         return 1
 
     git_root = _resolve_repo_root(root_override)

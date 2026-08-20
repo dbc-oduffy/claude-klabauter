@@ -33,7 +33,7 @@ Options:
 Exit codes:
   0 — assessment complete (even if some goals have no movement, or the op
       degraded a signal source to a warning)
-  1 — fatal error (CLAUDE_KLABAUTER_ROOT resolution failure, op transport failure, or
+  1 — fatal error (engine-root resolution failure, op transport failure, or
       the op itself returned exit_code != 0)
 
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 1
@@ -135,6 +135,10 @@ def main() -> None:
         result = cc_invoke("goals.reassess_krs", params, cwd_repo_root)
     except RuntimeError as exc:
         print(f"reassess-goal-krs: op transport failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(result, dict):
+        print(f"reassess-goal-krs: malformed result from cc_invoke: not a dict ({result!r})", file=sys.stderr)
         sys.exit(1)
 
     for warning in result.get("warnings") or []:

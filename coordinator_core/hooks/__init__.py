@@ -184,6 +184,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.subagent_fabrication_check",  # registers "hooks.subagent_fabrication_check"
     "coordinator_core.hooks.receiver_state_sensor",  # registers "hooks.receiver_state_sensor"
     "coordinator_core.hooks.subagent_sidecar_fill_check",  # registers "hooks.subagent_sidecar_fill_check"
+    "coordinator_core.hooks.subagent_review_mark",  # registers "hooks.subagent_review_mark"
 ]
 
 

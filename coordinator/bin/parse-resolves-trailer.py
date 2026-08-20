@@ -22,7 +22,7 @@ Usage:
   parse-resolves-trailer.py <commit>
 
 Exit codes: 0 — success (incl. vacuous zero-trailer output); 1 — usage error;
-2 — not a git repo / invalid commit / CLAUDE_KLABAUTER_ROOT resolution or import failure
+2 — not a git repo / invalid commit / engine-root resolution or import failure
 (fail-loud, matching the ported script's own internal-error convention).
 
 Spec backlink: DoE-claude:pln-lifecycle-vocab-c2-durable-cro-991bd4 § C4
@@ -43,9 +43,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _prepare_claude_klabauter_root() -> None:
-    """Resolve CLAUDE_KLABAUTER_ROOT and put it on sys.path.
+    """Resolve the engine root and put it on sys.path.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it.
 

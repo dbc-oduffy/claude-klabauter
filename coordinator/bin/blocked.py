@@ -24,7 +24,7 @@ here).
 Exit convention (fail-loud, matches the bash oracle): the bash script exits
 1 only when NOT run inside a git repository (an ERROR line to stderr); every
 other path — found items, no items — exits 0. This trampoline preserves
-that exact split: a claude-klabauter-link failure (CLAUDE_KLABAUTER_ROOT unresolved, module not
+that exact split: a claude-klabauter-link failure (the engine root unresolved, module not
 importable) is ALSO a fail-loud condition (this is a diagnostic tool whose
 whole job is to report ground truth; silently exiting 0 on a broken link
 would misreport "no blocked items" when the detector never actually ran) —
@@ -45,9 +45,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke.
 

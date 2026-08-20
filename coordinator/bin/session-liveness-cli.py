@@ -32,7 +32,7 @@
 # Exit codes: the mapped bool-returning functions map True->0, False->1 (matches
 # session-claim-cli's convention). The two print-returning subcommands
 # (active-sessions, live-session-ids) always exit 0 on success. A missing/
-# unresolvable CLAUDE_KLABAUTER_ROOT or an ImportError (this trampoline's own transport
+# unresolvable engine root or an ImportError (this trampoline's own transport
 # failure) exits 3 (_TRANSPORT_FAIL — "the claude-klabauter engine could not be reached,"
 # never silently degraded to 0/1). A usage error (missing/unknown subcommand,
 # wrong arity) exits 2.

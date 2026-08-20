@@ -48,7 +48,7 @@ cross-repo/fleet-shared hook.
 # Exit-code contract (THIS trampoline's own added layer — claude-klabauter-link/import
 # transport failure, dedicated code per porter-brief addendum § 3b, chosen as
 # the lowest code unused by the business contract above):
-#   2 — CLAUDE_KLABAUTER_ROOT resolution failed, or coordinator_core.ops.
+#   2 — engine-root resolution failed, or coordinator_core.ops.
 #       validate_install_contract is not importable (claude-klabauter-link/transport
 #       failure — distinct from any business 0/1 outcome above, so a caller
 #       cannot misclassify a real claude-klabauter-link outage as "compliant" or
@@ -80,9 +80,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _resolve_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -107,7 +107,7 @@ def main() -> None:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
         print(
-            f"validate-install-contract.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"validate-install-contract.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(2)

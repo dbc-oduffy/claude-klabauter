@@ -148,7 +148,7 @@ _DOE_ROOT_ENV = "DOE_ROOT"
 
 
 class _ClaudeKlabauterUnresolvable(RuntimeError):
-    """Raised when CLAUDE_KLABAUTER_ROOT cannot be resolved via env var or machine-local registry.
+    """Raised when the engine root cannot be resolved via env var or machine-local registry.
 
     Callers in the central write loop catch this and degrade gracefully (WARN + skip,
     exit 0) per AC13. The low-level resolver itself fails loud; this is the caller-layer

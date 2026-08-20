@@ -3,7 +3,7 @@
 # release_artifact / clear_claim_if_dead / claim_plan). Direct-import variant,
 # mirroring coordinator/bin/archive-stamp-cli.py's resolve/import/dispatch/exit
 # shape (template-variant #1: a plain in-process function call after
-# resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop — these functions are plain
+# resolving the engine root, no cc_invoke/IPC hop — these functions are plain
 # module functions in claims.py, NOT registered coordinator_core.invoke ops).
 #
 # is-session-live / list-stale-claim-handoffs (2026-07-23) are a SEPARATE
@@ -45,7 +45,12 @@
 #     0, same as before) — the note is additive output only, distinct in
 #     BOTH output and exit code from a live-holder refusal (which prints
 #     "refusing to clear claim ... holder is live" and exits 1).
-#   claim-plan <slug> -> claims.claim_plan(slug)
+#   claim-plan <slug> [--for-execution] -> claims.claim_plan(slug, for_execution=...)
+#     --for-execution is passed ONLY by /execute-plan Step 0 (DoE SKILL.md) —
+#     it gates claims.claim_plan's stamp-executing status flip (C4,
+#     docs/plans/2026-08-20-the-rungs-get-writers.md); the other two
+#     production callers (coordinator-doc-new.py, wsc-coverage-gate-
+#     runner.py cmd_claim_plan) never pass it and never flip status.
 #   list-claims-by-session <sid> [cwd] -> claims.list_claims_by_session(sid, cwd)
 #     stdout: one line per match, TAB-delimited "<class>-claims\t<basename>"
 #       (e.g. "handoff-claims\thb-1.md") — reads the claim-record store
@@ -54,7 +59,7 @@
 #     exit 0   -> enumeration completed (0 or more matches printed) — an
 #                 empty result is success, not failure, same contract as
 #                 list-stale-claim-handoffs.
-#     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError).
+#     exit 3   -> transport failure (the engine root unresolvable / ImportError).
 #   is-session-live <SID> [cwd] -> liveness.session_live(SID, cwd)
 #     stdout line 1: exactly one word — "live" | "live-elsewhere" | "dead" |
 #       "indeterminate". "live" | "dead" | "indeterminate" are UNCHANGED
@@ -79,7 +84,7 @@
 #     exit 1   -> NOT live in THIS repo (dead, or live-elsewhere) — see line
 #                 1 to distinguish; exit code is UNCHANGED for compat.
 #     exit 2   -> usage error (missing SID arg).
-#     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError),
+#     exit 3   -> transport failure (the engine root unresolvable / ImportError),
 #                 OR liveness.session_live itself raised unexpectedly (e.g.
 #                 MissingPsutilError propagating past a Layer-1 arm) — reused
 #                 rather than a new code (Review: staff-eng-review A): 3
@@ -123,7 +128,7 @@
 #                 -- additive only; the refusal sentence above and this exit
 #                 code are unchanged (C1/C2, docs/plans/2026-08-11-claim-
 #                 index-abort-cause-and-cli-blindness.md).
-#     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError),
+#     exit 3   -> transport failure (the engine root unresolvable / ImportError),
 #                 OR liveness.session_live raised unexpectedly for one of the
 #                 claimants (same reused code as is-session-live above).
 #   list-stale-claim-handoffs [repo_root] -> stale_claims.list_stale_claim_handoffs(repo_root)
@@ -132,12 +137,12 @@
 #       because neither a filesystem path nor a session id can contain one.
 #       Zero lines + exit 0 means "no stale claims found", not "could not tell".
 #     exit 0   -> enumeration completed (0 or more stale entries printed).
-#     exit 3   -> transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / ImportError).
+#     exit 3   -> transport failure (the engine root unresolvable / ImportError).
 #
 # Exit codes: the claim-* subcommands' mapped functions return bool, not an
 # int exit code (unlike archive-stamp-cli's archive_stamp functions, which
 # return ints passed through verbatim) — this CLI maps bool->exit: True->0,
-# False->1. A missing/unresolvable CLAUDE_KLABAUTER_ROOT or an ImportError (this
+# False->1. A missing/unresolvable engine root or an ImportError (this
 # trampoline's own transport failure) exits 3 (_TRANSPORT_FAIL, same
 # dedicated code archive-stamp-cli uses — "the claude-klabauter engine could not be
 # reached," never silently degraded to 0). A usage error (missing/unknown
@@ -474,8 +479,12 @@ def _dispatch(argv: list[str]) -> int:
 
     if subcmd == "claim-plan":
         if not rest:
-            return _usage("session-claim-cli claim-plan <slug>")
-        return _bool_to_exit(mod.claim_plan(rest[0]))
+            return _usage("session-claim-cli claim-plan <slug> [--for-execution]")
+        for_execution = "--for-execution" in rest
+        positional = [a for a in rest if a != "--for-execution"]
+        if not positional:
+            return _usage("session-claim-cli claim-plan <slug> [--for-execution]")
+        return _bool_to_exit(mod.claim_plan(positional[0], for_execution=for_execution))
 
     if subcmd == "list-claims-by-session":
         if not rest:

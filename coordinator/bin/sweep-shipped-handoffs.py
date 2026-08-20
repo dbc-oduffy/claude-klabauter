@@ -114,7 +114,7 @@ from repo_identity import resolve_checked_repo_root  # noqa: E402  # pyright: ig
 
 
 def _ensure_claude_klabauter_on_path() -> str:
-    """Idempotently put the claude-klabauter root on sys.path; returns it.
+    """Idempotently put the engine root on sys.path; returns it.
 
     The file's ONE claude-klabauter-root path-resolution site — every consumer
     (`_import_housekeeping_seam`, `_resolve_state_root`,
@@ -134,7 +134,7 @@ def _ensure_claude_klabauter_on_path() -> str:
 
 
 def _import_housekeeping_seam():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
+    """Resolve the engine root and import `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
 
     Mirrors `sweep-boot.py::_import_housekeeping_seam` / the copies in the sibling
     per-class CLIs -- best-effort; returns None on any resolution/import failure.
@@ -437,7 +437,7 @@ def _terminal_deployment_states() -> frozenset[str]:
 
     Routes through `_ensure_claude_klabauter_on_path()` — the file's one
     path-resolution site — rather than re-deriving or re-inserting the
-    claude-klabauter root.
+    engine root.
     """
     _ensure_claude_klabauter_on_path()
     from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT  # noqa: PLC0415
@@ -495,7 +495,7 @@ def main(_argv: list[str] | None = None) -> int:
     # `repo_root="${_ssh_state_root%/state}"` invariant — never resolved
     # independently via `git rev-parse`. Under the meta-repo central-state
     # redirect (coordinator_state_root() resolves to the state dir under
-    # CLAUDE_KLABAUTER_ROOT), git_repo_root
+    # the engine root), git_repo_root
     # and state_root diverge; using git_repo_root here for relativization and
     # for the fleet.archive_completed_handoffs repo_root param would silently
     # break candidate-path relativization (absolute paths passed to the op)

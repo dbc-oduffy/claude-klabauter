@@ -145,7 +145,7 @@ def _make_sender_repo(parent_dir: str, name: str = "sender_repo") -> str:
     shape, same rationale): cross-repo-memo.py's send path resolves the
     sender repo via `_current_repo_root()` (git root of the CLI subprocess's
     cwd) — memo.send is common_dir-scoped and derives repo_root from THAT
-    cwd, never from CLAUDE_KLABAUTER_ROOT (CLAUDE_KLABAUTER_ROOT only resolves where the engine
+    cwd, never from the engine root (the engine root only resolves where the engine
     package lives for cc_invoke's own subprocess spawn/import, and is safe to
     point at the real repo checkout for that purpose alone).
     """
@@ -185,8 +185,8 @@ def _make_mock_machine_local(tmpdir: str, return_value: str) -> str:  # mirrors 
 # post-cutover dispatches through cc_invoke.route_mutation onto the REAL
 # claude-klabauter memo.send op — MACHINE_LOCAL_IMPL-only mocking no longer satisfies
 # it (the op reads registry.toml directly via COORDINATOR_SETTINGS_HOME,
-# bypassing MACHINE_LOCAL_IMPL entirely). A fixture-resolvable CLAUDE_KLABAUTER_ROOT
-# and an isolated registry.toml are both required; CLAUDE_KLABAUTER_ROOT-unresolvable
+# bypassing MACHINE_LOCAL_IMPL entirely). A fixture-resolvable engine root
+# and an isolated registry.toml are both required; engine-root-unresolvable
 # machines SKIP loud (never silently degrade) via `skip_test`.
 # ---------------------------------------------------------------------------
 
@@ -197,7 +197,7 @@ SKIPS: list[str] = []
 def skip_test(name: str, reason: str) -> None:
     """Record a LOUD skip — printed and tallied separately from pass/fail,
     never silent. Used only when the real claude-klabauter op seam is genuinely
-    unresolvable on this machine (CLAUDE_KLABAUTER_ROOT unresolvable) — mirrors
+    unresolvable on this machine (the engine root is unresolvable) — mirrors
     test_cross_repo_memo.py / test_cross_repo_memo_draft.py's identically-named
     helper."""
     global TESTS_SKIPPED
@@ -208,7 +208,7 @@ def skip_test(name: str, reason: str) -> None:
 
 
 def _resolve_test_claude_klabauter_root() -> str | None:
-    """Resolve CLAUDE_KLABAUTER_ROOT for real-op (send) subcommand tests.
+    """Resolve the engine root for real-op (send) subcommand tests.
 
     Routes through the SAME cc_invoke._resolve_claude_klabauter_root() four-rung ladder
     test_cross_repo_memo.py's identically-named helper uses (env var -> pointer
@@ -354,7 +354,7 @@ def test_c6a_kind_roundtrip_schema_and_band(
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op the flag-only path now dispatches through")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op the flag-only path now dispatches through")
         return
 
     with tempfile.TemporaryDirectory() as receiver_tmpdir, \
@@ -367,7 +367,7 @@ def test_c6a_kind_roundtrip_schema_and_band(
         # A8 strangler cutover: the flag-only send path now dispatches through
         # cc_invoke.route_mutation onto the real memo.send op, which reads
         # registry.toml directly via COORDINATOR_SETTINGS_HOME — wire an
-        # isolated registry.toml registering the receiver alongside CLAUDE_KLABAUTER_ROOT.
+        # isolated registry.toml registering the receiver alongside the engine root.
         _write_registry_toml(claude_home_tmpdir, {_repo_key_for("example-retrieval-repo-em"): receiver_tmpdir})
         env = {
             "MACHINE_LOCAL_IMPL": mock_impl,

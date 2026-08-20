@@ -20,7 +20,7 @@ from __future__ import annotations
 #
 # Exit convention: this is a fail-loud wrapper (missing/invalid roadmap_id,
 # untrusted coordinator root, or unresolved coordinator root all exit 1 in the
-# ported logic) — a CLAUDE_KLABAUTER_ROOT resolution or import failure at THIS
+# ported logic) — an engine-root resolution or import failure at THIS
 # trampoline layer must exit 1 too, not swallow the error at exit 0 (unlike
 # the never-block auto-push shape).
 #

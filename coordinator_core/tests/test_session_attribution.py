@@ -54,7 +54,6 @@ from typing import Optional
 import pytest
 
 from coordinator_core import coverage, session_attribution
-from coordinator_core.ops import review_trail_write
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -334,9 +333,13 @@ def test_wsc_resolve_caller_fails_empty_on_git_failure(repo_root):
 
 
 # ---------------------------------------------------------------------------
-# A0 — golden fixture: P1 (`trailer_foreign_shas`) and the write guard's
-# disposition (`_guard_foreign_session_range`), replayed against THIS repo's
-# real history at real, pinned SHAs.
+# A0 — golden fixture: P1 (`trailer_foreign_shas`) replayed against THIS
+# repo's real history at real, pinned SHAs.
+#
+# The golden also pins a `guard` disposition per case, from the era when
+# `_guard_foreign_session_range` existed. That leg was removed with the rest
+# of the refusal apparatus (K-010, state/kill-ledger.md) and no test reads
+# those keys any more; they are inert fixture residue, not a second oracle.
 #
 # docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md
 # § Tasks, chunk A0 / AC5. The golden JSON
@@ -455,32 +458,3 @@ def test_trailer_foreign_shas_matches_golden(golden, case_id):
             session_attribution.trailer_foreign_shas(
                 sha_range, own_session_id, str(_REPO_ROOT), {}, _golden_git_run,
             )
-
-
-@pytest.mark.parametrize("case_id", _golden_case_ids())
-def test_guard_disposition_matches_golden(golden, case_id):
-    case = golden["cases"][case_id]
-    sha_range = case["sha_range"]
-    own_session_id = case["own_session_id"]
-    expected = case["guard"]
-
-    try:
-        waived = review_trail_write._guard_foreign_session_range(
-            sha_range, own_session_id, _REPO_ROOT,
-        )
-        actual = {"disposition": "proceed", "waived": sorted(waived)}
-    except review_trail_write.ForeignSessionRangeRefused as exc:
-        actual = {"disposition": "refused", "message": str(exc)}
-    except ValueError as exc:
-        actual = {"disposition": "error", "exception_type": "ValueError", "message": str(exc)}
-
-    assert actual["disposition"] == expected["disposition"], (
-        f"case={case_id!r} sha_range={sha_range!r} own_session_id={own_session_id!r}: "
-        f"guard disposition drifted from the golden.\n"
-        f"golden={expected}\nactual={actual}"
-    )
-    if expected["disposition"] == "proceed":
-        assert actual["waived"] == expected["waived"], (
-            f"case={case_id!r}: waived-sha set drifted from the golden.\n"
-            f"golden={expected['waived']}\nactual={actual['waived']}"
-        )

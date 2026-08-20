@@ -22,25 +22,57 @@ break-class rather than untidy: the entry can never resolve, so the baton stays
 parked FOREVER -- filling in category and summary would not clear it. The fix
 is the `--gated-predicate` arm, which parks on the predicate and carries the
 reason as advisory prose with no graph edge invented.
+
+Spawn ratchet C2 disposition: STUB. Every assertion here is decided inside
+`_scaffold_handoff` itself (the `--gated-predicate` blank-check and the
+readiness/notes derivation both live there, not in `main()`'s argv layer),
+so the CLI subprocess this file used to shell out to is incidental --
+calling `_scaffold_handoff` in-process (same loader idiom as
+test_coordinator_doc_new_summary_gated_open.py) proves the identical
+property with no clean-interpreter dependency.
 """
 
-import subprocess
-import sys
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 CLI = REPO / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
-def _scaffold(tmp_path, *extra):
-    out = tmp_path / "hnd-promoted.md"
-    proc = subprocess.run(
-        [sys.executable, str(CLI), "--type", "handoff", "--title", "promoted baton",
-         "--out", str(out), *extra],
-        capture_output=True, text=True, cwd=str(REPO),
+def _load_cli_module():
+    loader = importlib.machinery.SourceFileLoader(
+        "coordinator_doc_new_dr173_predicate_test", str(CLI)
     )
-    assert proc.returncode == 0, proc.stderr
-    return out.read_text(encoding="utf-8")
+    spec = importlib.util.spec_from_loader(
+        "coordinator_doc_new_dr173_predicate_test", loader
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    loader.exec_module(mod)
+    return mod
+
+
+_cli = _load_cli_module()
+
+
+def _scaffold(tmp_path, *extra):
+    kwargs = {}
+    args = list(extra)
+    while args:
+        flag = args.pop(0)
+        if flag == "--gated-predicate":
+            kwargs["gated_predicate"] = args.pop(0)
+        elif flag == "--gate-note":
+            kwargs["gate_note"] = args.pop(0)
+        elif flag == "--gated-open":
+            kwargs["gated_open"] = args.pop(0)
+        else:  # pragma: no cover -- fixture discipline, not a real CLI arg
+            raise AssertionError(f"unrecognized fixture flag: {flag!r}")
+    return _cli._scaffold_handoff(title="promoted baton", branch="b", **kwargs)
 
 
 class TestDr173RatifiedOutcomeIsPreserved:
@@ -129,14 +161,12 @@ class TestDr173RatifiedOutcomeIsPreserved:
         assert "blocked_by:" not in content
 
     def test_blank_predicate_is_refused_fail_loud(self, tmp_path):
-        out = tmp_path / "hnd-blank.md"
-        proc = subprocess.run(
-            [sys.executable, str(CLI), "--type", "handoff", "--title", "blank",
-             "--out", str(out), "--gated-predicate", "   "],
-            capture_output=True, text=True, cwd=str(REPO),
-        )
-        assert proc.returncode == 1
-        assert "gated-predicate" in proc.stderr
+        stderr_buf = io.StringIO()
+        with contextlib.redirect_stderr(stderr_buf):
+            with pytest.raises(SystemExit) as ctx:
+                _cli._scaffold_handoff(title="blank", branch="b", gated_predicate="   ")
+        assert ctx.value.code == 1
+        assert "gated-predicate" in stderr_buf.getvalue()
 
 
 class TestPromoteOpRoutesToThePredicateArm:

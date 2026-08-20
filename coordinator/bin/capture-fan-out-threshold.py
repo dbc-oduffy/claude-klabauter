@@ -34,7 +34,7 @@ functional benefit.
 Exit convention: install-maximalist.py calls this via `run_required` — a
 FAIL-LOUD gate (stops the install, non-idempotent to skip past). Unlike
 coordinator-auto-push (a never-block hot-path hook that always exits 0),
-this is a config-writer gate script: CLAUDE_KLABAUTER_ROOT resolution failure or an
+this is a config-writer gate script: engine-root resolution failure or an
 import failure here MUST propagate as a non-zero exit so the install phase
 fails loud rather than silently skipping the threshold capture.
 
@@ -60,9 +60,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

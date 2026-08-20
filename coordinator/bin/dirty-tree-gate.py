@@ -11,7 +11,7 @@ Usage: dirty-tree-gate.py --terminator <token>
 
 Exit codes:
     0  all dirty paths attributable (phantom / staged-a / consumed-handoff-b)
-    1  CLAUDE_KLABAUTER_ROOT resolution or coordinator_core import failure (fail-loud —
+    1  engine-root resolution or coordinator_core import failure (fail-loud —
        this is a gate script; a silent claude-klabauter-link failure must not let a
        dirty-tree pre-terminate check silently pass)
     2  usage error (missing --terminator, not a git repo)
@@ -48,7 +48,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"dirty-tree-gate.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"dirty-tree-gate.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(f"dirty-tree-gate.py: coordinator_core.ops.dirty_tree_gate not importable: {exc}", file=sys.stderr)

@@ -36,9 +36,13 @@ Exit codes:
     1 — client-side argument error (missing --target-id / --target-kind /
         --priority).
     2 — everything else: unresolvable git repo root for the cc_invoke spawn,
-        or any cc_invoke transport/op failure (op-level ValueError such as an
+        any cc_invoke transport/op failure (op-level ValueError such as an
         out-of-enum target_kind/priority, schema-validation MutateAbort, lock
-        timeout, or malformed envelope).
+        timeout, or malformed envelope), or an in-envelope refusal (non-zero
+        'exit_code' / non-empty 'error') that cc_invoke's transport-only
+        ladder returns as an ordinary bare result rather than raising —
+        inspected here via cc_invoke.mutation_refusal_message() (DR-215
+        exit_code trap).
 
 """
 
@@ -52,7 +56,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import cc_invoke  # noqa: E402
+from cc_invoke import cc_invoke, mutation_refusal_message  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 
@@ -139,27 +143,32 @@ def _parse_args(argv: list[str]) -> dict[str, str]:
 def main(argv: list[str]) -> int:
     params = _parse_args(argv)
 
-    cwd_repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
+    # DR-277 (accepted): the cwd identity gate that used to sit here refused
+    # on MISMATCH against a stale rationale -- `priority.set` is
+    # scope="none" (coordinator_core/ops/priority_set.py), so cwd_repo_root
+    # never leaves this CLI and the op writes to a CENTRAL ledger root
+    # (coordinator_state_root(central=True)), never derived from cwd_repo_root.
+    # There was nothing to advise on: the fact checked (does cwd's repo
+    # identity match?) has no bearing on where this op writes, so the gate
+    # is removed outright rather than demoted to a warning (a warning would
+    # be pure nag against DR-277's own "reserve deny() for cases where no
+    # correct rewrite exists"). `cwd_repo_root` is still resolved below --
+    # it is the spawn cwd for the cc_invoke child, not a write-location check.
+    cwd_repo_root, _verdict = resolve_checked_repo_root(explicit_root=None)
     if cwd_repo_root is None:
-        # No git root resolved from cwd at all -- distinct from the
-        # MISMATCH identity gate below (positive evidence of a DIFFERENT
-        # real repo). This is "nowhere to write"; refusing here is not the
-        # AC4 "UNRESOLVED never refuses" carve-out being violated.
+        # No git root resolved from cwd at all -- "nowhere to spawn from".
         print(f"priority-set: cannot resolve git repo root from {os.getcwd()}", file=sys.stderr)
-        return 2
-    if verdict["verdict"] == "MISMATCH":
-        # DR-277 named carve-out: this door dispatches priority.set, which
-        # writes a priority-ledger entry into cwd_repo_root's state tree
-        # (coordinator_core/ops/priority_set.py) -- a genuine WRITER, not a
-        # diagnostic read. Refuse rather than write into a foreign tree.
-        # UNRESOLVED never refuses (AC4).
-        print(verdict["message"], file=sys.stderr)
         return 2
 
     try:
         result = cc_invoke("priority.set", params, cwd_repo_root)
     except RuntimeError as exc:
         print(f"priority-set: {exc}", file=sys.stderr)
+        return 2
+
+    message = mutation_refusal_message("priority.set", result)
+    if message is not None:
+        print(f"priority-set: {message}", file=sys.stderr)
         return 2
 
     print(json.dumps(result, ensure_ascii=False))

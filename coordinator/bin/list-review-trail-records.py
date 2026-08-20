@@ -24,7 +24,7 @@ here).
 
 Exit convention: this is a FAIL-LOUD reader — the original oracle exits 1 on
 tool failure, bad --date-prefix, or unresolvable state root. A claude-klabauter-link
-failure (CLAUDE_KLABAUTER_ROOT unresolvable, or the ported module not importable) is
+failure (the engine root unresolvable, or the ported module not importable) is
 the same class of failure and also exits 1 here (NOT the never-block
 exit-0 convention used by hook-shaped scripts like coordinator-auto-push).
 
@@ -47,7 +47,7 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import `run_op_main` (DR-276: routes the op
+    """Resolve the engine root and import `run_op_main` (DR-276: routes the op
     in-process through `coordinator_core.cli_entry` rather than a plain
     `_import_main()` + `sys.exit(op_main(argv))` tail, so any path the op
     declares via `declare_write` becomes a session scope-touch claim instead

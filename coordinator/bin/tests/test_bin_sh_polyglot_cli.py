@@ -33,7 +33,11 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)

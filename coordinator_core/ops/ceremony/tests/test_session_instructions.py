@@ -40,6 +40,8 @@ from coordinator_core.ops.ceremony.node_handlers import (
     STEP_2_9C,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(result) -> Any:
     """Pass a plain (already computed) result through unchanged

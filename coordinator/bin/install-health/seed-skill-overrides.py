@@ -37,7 +37,7 @@ Exit codes:
   0 — helper ran successfully, OR the helper script was not found (degrades
       gracefully — does not fail the whole install-health orchestrator)
   1 — the resolved plugin root failed the trusted-root-guard check, OR
-      CLAUDE_KLABAUTER_ROOT resolution / the claude-klabauter module import itself failed
+      engine-root resolution / the claude-klabauter module import itself failed
   N — helper's own exit code on failure
 
 Fail-loud convention: matches coordinator/bin/generate-repomap.py — the
@@ -63,9 +63,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

@@ -19,7 +19,7 @@ orchestrator's `*.sh` glob matches any drop-in by extension regardless of
 its interpreter, so this is not a wiring change.
 
 Exit convention: FAIL-LOUD. install-health-run.py is a REQUIRED install step
-(install-maximalist.py's `run_required`), not an advisory hook — CLAUDE_KLABAUTER_ROOT
+(install-maximalist.py's `run_required`), not an advisory hook — the engine root
 resolution failure or an untrusted plugin root both exit 1, matching the
 original script's own `--mode=fail-loud` trust-guard call.
 

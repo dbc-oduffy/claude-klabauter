@@ -45,6 +45,8 @@ from coordinator_core.bash_guards._advisory_value import AdvisoryValue, suppress
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 from coordinator_core.daily_day import local_day
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 

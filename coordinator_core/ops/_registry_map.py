@@ -74,6 +74,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.nudge_unauthorized_handoff":       "coordinator_core.hooks",
     "hooks.postuse_advisory_dispatch":        "coordinator_core.hooks",
     "hooks.context_pressure_precompact":      "coordinator_core.hooks",
+    "hooks.subagent_review_mark":             "coordinator_core.hooks",
     "hooks.subagent_zero_tool_use":           "coordinator_core.hooks",
     "hooks.subagent_zero_tool_use_surface":   "coordinator_core.hooks",
     "hooks.subagent_zero_tool_use_resolve":   "coordinator_core.hooks",

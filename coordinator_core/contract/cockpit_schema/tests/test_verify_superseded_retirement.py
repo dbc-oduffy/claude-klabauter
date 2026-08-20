@@ -39,11 +39,15 @@ import json
 import re
 import subprocess
 
+import pytest
+
 from coordinator_core.contract.cockpit_schema.tests.conftest import (
     COCKPIT_CONTRACT_DIR,
     DOE_CLONE,
     skip_no_doe,
 )
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # The original `verify-superseded-retirement.sh` derives `CC` (the
 # coordinator dir) from ITS OWN location: `test/../..` relative to

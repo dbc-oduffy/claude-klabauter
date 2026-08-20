@@ -13,7 +13,7 @@ with a fake module BEFORE importing the subject: `close-origin-stub-on-ship.py`
 does `from cc_invoke import route_mutation, RouteMutationError` after its own
 `sys.path.insert(0, lib_dir)`, but Python's import machinery checks
 `sys.modules` first — a pre-seeded entry short-circuits the file search
-entirely, so no live CLAUDE_KLABAUTER_ROOT / coordinator_core.invoke subprocess is ever
+entirely, so no live engine-root / coordinator_core.invoke subprocess is ever
 spawned. Each test loads a FRESH copy of the subject module (importlib, a
 new module object per test) so the fake `route_mutation` can vary per test
 without cross-test leakage.
@@ -66,7 +66,7 @@ def _install_fake_cc_invoke(route_mutation_fn):
     """Seed sys.modules["cc_invoke"] with a fake module exposing route_mutation
     and RouteMutationError. Must run BEFORE the subject module is imported —
     the subject's `from cc_invoke import ...` resolves against sys.modules
-    first, so this fully short-circuits any real file/CLAUDE_KLABAUTER_ROOT lookup.
+    first, so this fully short-circuits any real file/engine-root lookup.
 
     Returns the prior sys.modules entry (or `_ABSENT`) — hand it to
     `_restore_cc_invoke` in a `finally`.

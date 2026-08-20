@@ -29,8 +29,11 @@ and logged (log-and-continue, best-effort ceremony op) — never silently
 routes to the retired cs_sweep_terminal_plans bash body.
 
 Exit codes:
-    0 — always (best-effort; transport/op failures are logged to stderr,
-        never propagated as a non-zero exit).
+    0 — transport/op failures (RuntimeError, resolution failure) are logged to
+        stderr and treated as best-effort skips, never propagated as non-zero.
+    1 — the act call returned a recognized-refusal or unrecognized exit_code
+        (anything other than 0/None/2) — a setup-error shape, not a healthy
+        "nothing to do" run. The liveness stamp is withheld on this path.
 
 Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § C3 / KD-2 / KD-3
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
@@ -59,13 +62,14 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
+from cc_invoke import is_timeout_error  # noqa: E402
 from sweep_argv import parse_repo_root_argv  # noqa: E402
 
 _USAGE = "usage: python3 sweep-terminal-plans.py [-h] [<repo_root>]"
 
 
 def _import_housekeeping_seam():
-    """Resolve CLAUDE_KLABAUTER_ROOT (self-location-first) and import
+    """Resolve the engine root (self-location-first) and import
     `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
 
     Mirrors `sweep-boot.py::_import_housekeeping_seam` verbatim (same resolve-then-import
@@ -184,10 +188,24 @@ def main(argv: list[str] | None = None) -> int:
     # Review: the Staff Engineer — route() never raises RouteMutationError (only route_mutation
     # does); the broader arm was a dead catch, reduced to RuntimeError.
     except RuntimeError as exc:
-        print(
-            f"sweep-terminal-plans: fleet.archive_completed_plans act call failed (transport error) -- skipping: {exc}",
-            file=sys.stderr,
-        )
+        if is_timeout_error(exc):
+            # CLAUDE.md § Load norm: a timeout is a SLOW op, not a stopped one -- the
+            # act call may be mid-`git mv`+commit and about to succeed. Reporting a
+            # completed/absent count here is a false negative that re-dispatches the
+            # same ids on the next sweep. Same discriminator and same shape
+            # prune-closed-bugs.py carries (C13,
+            # docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md); landed here on
+            # review of that chunk, whose declared surface named only that one file.
+            print(
+                f"sweep-terminal-plans: {len(ids)} candidate(s) selected -- archive status "
+                "indeterminate (engine timeout, op may still complete)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"sweep-terminal-plans: fleet.archive_completed_plans act call failed (transport error) -- skipping: {exc}",
+                file=sys.stderr,
+            )
         print(0)
         return 0
 
@@ -200,6 +218,13 @@ def main(argv: list[str] | None = None) -> int:
             f"sweep-terminal-plans: WARN: fleet.archive_completed_plans partial (exit_code=2, acted={count}) -- check claude-klabauter logs",
             file=sys.stderr,
         )
+    elif act_exit not in (0, None):
+        print(
+            f"sweep-terminal-plans: fleet.archive_completed_plans act call refused (exit_code={act_exit}) -- not archived",
+            file=sys.stderr,
+        )
+        print(0)
+        return 1
 
     _stamp_archive_sweeps_liveness(repo_root)
     print(count)

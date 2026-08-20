@@ -5,7 +5,7 @@ coordinator_core.install.run_platform_localize.
 
 Collapses install.md § Step 9 ("Fire platform-localize once at install
 time") into one call — this trampoline owns no logic of its own beyond the
-standard CLAUDE_KLABAUTER_ROOT resolve-and-import dance (mirrors
+standard engine-root resolve-and-import dance (mirrors
 coordinator/bin/ensure-doe-clone.py's own shape 1:1). All install-time
 behavior — the in-process ``platform_localize.main()`` call, the
 ``--check-only`` short-circuit, and the conditional JSON-schema-validation

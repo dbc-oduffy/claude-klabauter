@@ -9,7 +9,7 @@ contract plane owns contract/generator, the engine plane owns engine).
 
 Exit convention: UNLIKE check-harvest-debt.py, this IS a commit/ceremony
 gate (C13/AC15), not an advisory nudge — a trampoline/transport failure
-(CLAUDE_KLABAUTER_ROOT unresolvable, module not importable) still exits 0 (fail-open
+(the engine root unresolvable, module not importable) still exits 0 (fail-open
 on the SEAM, matching every other ceremony-gate trampoline in this directory
 (e.g. check-harvest-debt.py) — a broken
 install must never silently block every closure ceremony), but once the op
@@ -32,9 +32,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

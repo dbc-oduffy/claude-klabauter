@@ -15,7 +15,7 @@ printed as a DEFERRED manual-gate banner, unchanged in spirit from the oracle.
 FAMILY-I (fresh-install surface): on a cold machine ``REPO_DOE_CLAUDE`` /
 ``machine-local`` may be unresolvable — every unresolved-clone branch below
 degrades to a SKIP with actionable remediation text, never a hard crash, and
-:func:`main` prints a dedicated CLAUDE_KLABAUTER_ROOT-resolution remediation block if
+:func:`main` prints a dedicated engine-root-resolution remediation block if
 the claude-klabauter link itself cannot be established (the trampoline's own concern,
 not this module's — this module assumes it is already running IN claude-klabauter).
 

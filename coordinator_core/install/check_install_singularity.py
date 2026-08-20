@@ -71,7 +71,7 @@ imported directly. The DoE-side trampoline
 per the plugin_health/sentinel.py P-18 probe's hardcoded subprocess call —
 see that module's own docstring for the not-yet-repointed caller) does a
 plain in-process `from coordinator_core.install.check_install_singularity
-import main` after resolving CLAUDE_KLABAUTER_ROOT (template-variant #1, direct-import
+import main` after resolving the engine root (template-variant #1, direct-import
 trampoline).
 
 Env:

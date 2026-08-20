@@ -53,6 +53,8 @@ from coordinator_core.ops.tracker.fold_observed_set import (
     run_fold_observed_set,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(coro):
     return asyncio.run(coro)

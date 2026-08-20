@@ -38,7 +38,7 @@ DR-047 — the discovery logic itself is ported to coordinator_core/ops/discover
 # Never-block contract (preserved from the bash oracle): this script ALWAYS
 # exits 0 — there is no failure signal to distinguish via exit code, on either
 # side of the claude-klabauter link. If the claude-klabauter link itself cannot be resolved
-# (CLAUDE_KLABAUTER_ROOT unresolvable, module not importable), this trampoline ALSO
+# (engine root unresolvable, module not importable), this trampoline ALSO
 # exits 0 (loud on stderr) rather than blocking `/setup` — matching the
 # oracle's "advisory, never a gate" posture (transport-failure disposition per
 # PORTER-BRIEF-ADDENDUM.md § 3b: best-effort/advisory scripts degrade to exit 0).

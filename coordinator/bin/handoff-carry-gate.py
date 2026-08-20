@@ -40,9 +40,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the runner.
+    """Resolve the engine root, put it on sys.path, and import the runner.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -63,7 +63,7 @@ def main() -> None:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
-        print(f"handoff-carry-gate: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"handoff-carry-gate: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(2)
     except ImportError as exc:
         print(

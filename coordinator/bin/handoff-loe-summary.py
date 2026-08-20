@@ -246,7 +246,7 @@ Options:
   --row-only              Print ONLY the ready-to-paste one-line row (no
                            JSON wrapper) — for direct `>> handoff.md`
                            redirection. Exits 1 if the row can't be
-                           computed (CLAUDE_KLABAUTER_ROOT unresolved or the
+                           computed (the engine root unresolved or the
                            formatter module isn't importable).
   -h, --help               Show this help
 
@@ -339,7 +339,7 @@ def main(argv: list[str]) -> int:
             print(
                 "handoff-loe-summary: --row-only requires "
                 "coordinator_core.session_ledger.aggregate_chain_loe.format_oneline_row "
-                "to be importable, and it isn't (CLAUDE_KLABAUTER_ROOT unresolved or the module "
+                "to be importable, and it isn't (the engine root unresolved or the module "
                 "failed to import)",
                 file=sys.stderr,
             )

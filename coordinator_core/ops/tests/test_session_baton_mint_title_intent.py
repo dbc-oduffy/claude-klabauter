@@ -13,6 +13,10 @@ from pathlib import Path
 from coordinator_core.ops import session_baton_mint as mint_mod
 from coordinator_core.session_baton import store
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _make_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path)

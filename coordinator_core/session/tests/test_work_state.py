@@ -10,6 +10,12 @@ AC13 (import-cycle standalone) is already pinned by the sibling C1a file
 `test_work_state_imports.py`, in its own subprocess — not repeated here in
 full; a light corroborating check is included below since the C1b brief
 names it explicitly.
+
+Spawn ratchet C2 disposition: TIER -- the one subprocess use in this file
+(`test_session_work_state_imports_standalone_without_ops_light_check`) is
+the same import-isolation shape as the sibling C1a file: a fresh
+interpreter is what the assertion needs, not incidental scaffolding. Rule 4
+tiers at file granularity, so the file's otherwise-mocked tests ride along.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.session.work_state as ws

@@ -76,6 +76,8 @@ import pytest
 from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 #: Same bridge-to-C8 skip pattern as `test_guard_multiprobe_banner.py`'s own
 #: `requires_powershell_grammar` -- the grammar package is not yet declared
 #: in `pyproject.toml` (C8), so a peer/clean-install run without it must not

@@ -104,7 +104,7 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
     - Exit codes reproduced exactly: 0 — entry written, or idempotent no-op
       (pre-existing chain entry found); 1 — argument error; 2 — environment
       error (not inside a git repository). A NEW dedicated code (3) is used
-      ONLY by the DoE-side trampoline for a CLAUDE_KLABAUTER_ROOT/import transport
+      ONLY by the DoE-side trampoline for an engine-root/import transport
       failure (this module never returns 3 itself — see the trampoline's own
       docstring; this is a fail-loud ceremony tool, not a best-effort/
       never-block script, so a transport outage must not misclassify as

@@ -46,7 +46,7 @@ Negative-spec:
       state/improvement-queue/2026-07-06-claude-klabauter-root-shared-helper-extraction.yaml).
       Self-contains the DR-047/stop-the-rot Rule-5 default-branch resolution
       (bare `coordinator_state_root()`, no --central/--subject/--artifact):
-      meta-repo cwd (git root == CLAUDE_HOME) routes to CLAUDE_KLABAUTER_ROOT/state;
+      meta-repo cwd (git root == CLAUDE_HOME) routes to the engine root/state;
       any other (sibling-repo) cwd uses <git-root>/state directly. Mirrors
       the pattern already used ad hoc in ops/queue_append.py._output_path.
     - Reproduces a pre-existing oracle quirk faithfully: a present-but-

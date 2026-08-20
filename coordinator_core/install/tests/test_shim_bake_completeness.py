@@ -167,7 +167,7 @@ def test_install_bin_resolvers_fails_loudly_on_unresolvable_interpreter(monkeypa
     import coordinator_core.pyresolve as pyresolve
 
     monkeypatch.setattr(
-        substrate_mod, "coordinator_claude_klabauter_root_with_class",
+        substrate_mod, "coordinator_engine_root_with_class",
         lambda: (str(Path(__file__).resolve().parents[3]), "sentinel"),
     )
     monkeypatch.setattr(pyresolve, "resolve_python_bin", lambda **_: ("", []))

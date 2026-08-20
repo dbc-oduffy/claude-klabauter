@@ -140,7 +140,7 @@ def _record_invocation(name: str) -> None:
         # this hook). `coordinator_core.ops.<anything>` triggers that
         # package's `_eager_import_all` over ~206 op modules, and several of
         # them import the top-level `coordinator` package. If this hook runs
-        # BEFORE `_import_engine_module` puts the claude-klabauter root on `sys.path`,
+        # BEFORE `_import_engine_module` puts the engine root on `sys.path`,
         # `coordinator` is unresolvable, `app_session` (and any sibling like
         # it) fails to import, and `coordinator_core.ops` CACHES that failure
         # for the life of the process -- so the op stays unregistered and
@@ -195,7 +195,7 @@ def _import_engine_module(dotted: str):
 def _simple_entry(name: str, dotted: str) -> Callable[[List[str]], int]:
     """Build the entry callable for one of the single-module targets —
     each original bin/*.py file's `_import_module` + `main(argv)` body was
-    exactly this shape (resolve CLAUDE_KLABAUTER_ROOT, import one `coordinator_core`
+    exactly this shape (resolve the engine root, import one `coordinator_core`
     module, call its own `main(argv)`), differing only in `name` and
     `dotted`. Reproduces both exception branches' message text and the `3`
     transport-failure exit code verbatim."""
@@ -455,7 +455,7 @@ def _run_op_main_entry(name: str, dotted: str, fail_exit: int = 1) -> Callable[[
     """Reproduce the `cli_entry.run_op_main` CLI-trampoline shape shared by
     `assert-no-dangling-plan-backlinks.py`, `assert-plan-sizing-citation.py`,
     and `check-em-environment.py` (each read in full and confirmed identical
-    up to `name`/`dotted`/`fail_exit`): resolve CLAUDE_KLABAUTER_ROOT via cc_invoke's
+    up to `name`/`dotted`/`fail_exit`): resolve the engine root via cc_invoke's
     ladder, import `coordinator_core.cli_entry.run_op_main`, call it with the
     op's dotted module path. `fail_exit` reproduces each file's own
     transport-failure exit code — 1 for the fail-loud gates, 0 for

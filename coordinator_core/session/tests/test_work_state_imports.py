@@ -36,12 +36,19 @@ Behaviour tests for `work_state.py`'s helpers belong to C1b, in a
 different file — this file stays runnable without importing any of that
 chunk's fixtures, which is the import order that would hide the defect
 this test exists to catch.
+
+Spawn ratchet C2 disposition: TIER -- same import-isolation reasoning as
+`test_warm_start_import_cycle.py`; a clean interpreter is load-bearing.
 """
 
 import subprocess
 import sys
 
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(code: str) -> subprocess.CompletedProcess:

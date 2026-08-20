@@ -44,7 +44,7 @@ Exit codes:
       blocks."; `ready`/`awaiting-gate` are also exit 0 on a clean query,
       including an empty result set — an empty inbox is not a failure).
   2 — setup/transport error (e.g. `records_query.query_records()` raised —
-      CLAUDE_KLABAUTER_ROOT unresolvable, engine unreachable, or a malformed CLI
+      the engine root unresolvable, engine unreachable, or a malformed CLI
       invocation). Mirrors `check-no-illegal-paths.py`'s 2 = setup error
       convention.
 

@@ -178,8 +178,6 @@ def cmd_write_trail(args: argparse.Namespace) -> int:
         argv += ["--workstream", args.workstream]
     if args.reviewer_evidence:
         argv += ["--reviewer-evidence", args.reviewer_evidence]
-    if args.attestation_dispatch_id:
-        argv += ["--attestation-dispatch-id", args.attestation_dispatch_id]
 
     returncode, stdout, stderr = _run_write_review_trail(argv)
     if stdout:
@@ -214,12 +212,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Evidence correlating --reviewer with an artifact showing a review "
         "occurred (optional; forwarded verbatim when supplied). See "
         "coordinator_core/ops/review_trail_write.py's reviewer_evidence design.",
-    )
-    p_trail.add_argument(
-        "--attestation-dispatch-id", default=None, dest="attestation_dispatch_id",
-        help="Dispatch id engaging the reviewer-attestation admission path in "
-        "review_trail_write._guard_foreign_session_range (optional; forwarded "
-        "verbatim when supplied).",
     )
     p_trail.set_defaults(func=cmd_write_trail)
 

@@ -12,7 +12,7 @@ Purpose: CLI entrypoint that sequences the uninstall legs
 All orchestration logic (flag parsing, ordered-plan printing, --dry-run
 short-circuit, fail-loud leg sequencing) now lives claude-klabauter-side —
 naked-Python port, T4a-g3b/uninstall-orchestrator chunk. This file is a
-thin CLI trampoline: resolve CLAUDE_KLABAUTER_ROOT, import, forward argv, forward
+thin CLI trampoline: resolve the engine root, import, forward argv, forward
 exit code. Kept as a `.sh`-suffixed polyglot (not renamed) so every
 existing caller (`bash coordinator-uninstall.py ...`, direct exec, docs)
 keeps working unchanged — the sh/python polyglot shebang below makes
@@ -25,7 +25,7 @@ Fail-loud-on-ambiguity doctrine (prior-art Compatible #6): this
   standards, "Detect-then-silently-pick is a footgun — refactor to
   detect-then-fail-loud on ambiguity" (coordinator/CLAUDE.md § Implementation
   Standards retired 2026-07-27) — already the discipline every leg follows.
-  If CLAUDE_KLABAUTER_ROOT cannot be resolved or the claude-klabauter module is not
+  If the engine root cannot be resolved or the claude-klabauter module is not
   importable, this trampoline exits 1 (fail-loud), matching the
   orchestrator's own leg-failure exit convention — never exit 0 on a
   broken link, since a silent no-op here would leave the maximalist
@@ -59,7 +59,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"coordinator-uninstall.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"coordinator-uninstall.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(

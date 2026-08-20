@@ -11,7 +11,7 @@ is well tested; this file closes the trampoline-layer gap.
 
 Hermeticity: fakes `cc_invoke._resolve_claude_klabauter_root` (seeded into
 `sys.modules["cc_invoke"]` before import, mirroring
-test_close_origin_stub_on_ship.py's pattern) so no real CLAUDE_KLABAUTER_ROOT
+test_close_origin_stub_on_ship.py's pattern) so no real engine-root
 resolution runs, and fakes
 `coordinator_core.ops.promote_shipped_in_flight_stubs` directly so `main()`'s
 return value is fully controlled — the assertion is ONLY "does the
@@ -40,7 +40,7 @@ _ABSENT = object()
 
 def _install_fakes(op_main_fn):
     """Seed sys.modules with a fake `cc_invoke` (so `_resolve_claude_klabauter_root`
-    never does real CLAUDE_KLABAUTER_ROOT resolution) and a fake
+    never does real engine-root resolution) and a fake
     `coordinator_core.ops.promote_shipped_in_flight_stubs` (so `main()`'s
     return value is fully controlled). Returns the prior sys.modules entries
     for both names — hand them to `_restore_fakes` in a `finally`.

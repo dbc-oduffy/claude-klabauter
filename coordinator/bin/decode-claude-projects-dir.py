@@ -25,7 +25,7 @@ Usage:
 
 Exit codes: 0 — candidates emitted; 1 — projects dir not found, or zero
 candidates decoded (see claude-klabauter module's Negative-spec for the reproduced
-bash-oracle bug this preserves rather than fixes); 2 — CLAUDE_KLABAUTER_ROOT
+bash-oracle bug this preserves rather than fixes); 2 — engine-root
 resolution or module import failure.
 
 Port of: coordinator/bin/decode-claude-projects-dir.py (bash body retired on
@@ -46,9 +46,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _prepare_claude_klabauter_root() -> None:
-    """Resolve CLAUDE_KLABAUTER_ROOT and put it on sys.path.
+    """Resolve the engine root and put it on sys.path.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it.
 
@@ -64,7 +64,7 @@ def main() -> None:
     try:
         _prepare_claude_klabauter_root()
     except RuntimeError as exc:
-        print(f"decode-claude-projects-dir.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"decode-claude-projects-dir.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(2)
 
     from coordinator_core.cli_entry import run_op_main

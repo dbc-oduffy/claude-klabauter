@@ -21,7 +21,7 @@ carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
 Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not here).
 
 Exit convention: this is a once-a-day bookkeeping write, never a gate — mirrors
-central-run-due.py's fail-open shape (CLAUDE_KLABAUTER_ROOT/import resolution failure
+central-run-due.py's fail-open shape (engine-root/import resolution failure
 degrades to a stderr note + exit 0, never a nonzero abort), NOT
 capture-fan-out-threshold.py's fail-loud install-gate shape.
 
@@ -56,7 +56,7 @@ def main() -> None:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(
-            f"write-workday-start-marker: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"write-workday-start-marker: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(0)

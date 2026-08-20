@@ -49,7 +49,11 @@ import datetime as _dt
 import os
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.session import guard_settings_integrity as gsi
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _write_marker(config_dir, text: str):

@@ -21,7 +21,7 @@ Coverage:
       zero SUBSTITUTE findings and rewrites zero files) -- exercised across
       all four detection rule shapes and both family categories.
   (f) `discover_families` builds repo/publish_mirror families from an
-      injected `machine-local`-shaped `call`, longest-match_name-first (so
+      injected registry-key lister, longest-match_name-first (so
       `example-retrieval-repo-ue-addon` is tried before the strict-prefix `example-retrieval-repo`).
   (g) A family name that is a normalized PREFIX of an unrelated folder (e.g.
       `claude-klabauter` inside `claude-klabauter-backup-2026`) never matches --
@@ -52,10 +52,12 @@ Coverage:
       silently zeroing every substitution, and warns on stderr when family
       discovery finds zero repo/publish_mirror families (a degraded
       registry read must never read as "corpus is clean").
-  (n) `_default_machine_local_call` treats a `machine-local` subprocess
-      timeout the same as any other resolution failure (returns `None`,
-      never hangs the CLI); the `baseline` test-marker is anchored to a
-      filename's stem-suffix position, not a bare substring.
+  (n) `_default_registry_keys` reads the machine-local registry TOML
+      in-process -- it never execs the extensionless `machine-local` CLI
+      shim, which is unexecutable on Windows and silently degraded every
+      Windows run to zero families -- and returns `[]` (never raises) on an
+      absent or malformed registry; the `baseline` test-marker is anchored
+      to a filename's stem-suffix position, not a bare substring.
 
 Every offending literal below carries a same-line `abs-path-ok:` marker with
 a reason so THIS file itself can be written past the live
@@ -65,7 +67,6 @@ fixture full of offending paths is the marker's designed use case.
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -76,7 +77,7 @@ from coordinator_core.ops.session.fix_concrete_path_citations import (
     MARKER,
     REPORT_ONLY,
     SUBSTITUTE,
-    _default_machine_local_call,
+    _default_registry_keys,
     _is_test_file,
     _raw_hits_in_line,
     _raw_hits_in_text,
@@ -87,21 +88,19 @@ from coordinator_core.ops.session.fix_concrete_path_citations import (
 )
 
 
-def _fake_machine_local(args):
-    if args == ["keys"]:
-        return "repos.claude_klabauter\nrepos.example_retrieval_repo\nrepos.example_retrieval_repo_ue_addon\n"
-    return None
+def _fake_machine_local():
+    return ["repos.claude_klabauter", "repos.example_retrieval_repo", "repos.example_retrieval_repo_ue_addon"]
 
 
 def test_discover_families_longest_match_first_and_config_families() -> None:
-    families = discover_families(call=_fake_machine_local)
+    families = discover_families(keys=_fake_machine_local)
     ids = [f.id for f in families]
     assert ids.index("repo_example_retrieval_repo_ue_addon") < ids.index("repo_example_retrieval_repo")
     assert any(f.id == "claude_config_dir" and f.canonical == "${CLAUDE_HOME:-$HOME}/.claude" for f in families)
     assert any(f.id == "settings_home" for f in families)
 
 
-_FAMILIES = discover_families(call=_fake_machine_local)
+_FAMILIES = discover_families(keys=_fake_machine_local)
 
 
 def _list_files(files):
@@ -302,7 +301,7 @@ def test_family_match_still_finds_the_real_segment_elsewhere_in_token(tmp_path: 
     # that is genuinely its own path component must still be found, even
     # though "a" is trivially a normalized substring of "example-operator" earlier in
     # the same token.
-    families = discover_families(call=_fake_machine_local_single_letter)
+    families = discover_families(keys=_fake_machine_local_single_letter)
     target = tmp_path / "doc.md"
     target.write_text(
         "see /Users/example-operator/a/deep/sub/path.py here\n",  # abs-path-ok: synthetic test fixture
@@ -385,11 +384,17 @@ def test_bare_marker_does_not_exempt(tmp_path: Path) -> None:
     dry_dir = tmp_path / "dry"
     dry_dir.mkdir()
     (dry_dir / "doc.md").write_text(content, encoding="utf-8")
+    # Snapshot the ON-DISK bytes, exactly as every other dry-run assertion in
+    # this module does. `write_text` without `newline=""` applies Windows
+    # newline translation, so `content.encode()` is not what landed on disk --
+    # comparing against it fails on Windows for a reason that has nothing to
+    # do with what this test is about.
+    before = (dry_dir / "doc.md").read_bytes()
     dry = sweep(dry_dir, _FAMILIES, apply=False, list_files=_list_files(["doc.md"]))
     dry_subs = [f for f in dry.findings if f.outcome == SUBSTITUTE]
     assert len(dry_subs) == 1
     assert dry.files_rewritten == []
-    assert (dry_dir / "doc.md").read_bytes() == content.encode("utf-8")
+    assert (dry_dir / "doc.md").read_bytes() == before
 
     apply_dir = tmp_path / "apply"
     apply_dir.mkdir()
@@ -497,10 +502,8 @@ def test_branch_precedence_test_file_beats_live_doctrine_incident() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fake_machine_local_single_letter(args):
-    if args == ["keys"]:
-        return "repos.a\n"
-    return None
+def _fake_machine_local_single_letter():
+    return ["repos.a"]
 
 
 def test_idempotency_config_families(tmp_path: Path) -> None:
@@ -523,6 +526,34 @@ def test_idempotency_config_families(tmp_path: Path) -> None:
     second = sweep(tmp_path, _FAMILIES, apply=True, list_files=files)
     assert second.files_rewritten == []
     assert not [f for f in second.findings if f.outcome == SUBSTITUTE]
+    assert target.read_bytes() == after_first
+
+
+def test_config_family_replacement_keeps_the_trailing_subpath(tmp_path: Path) -> None:
+    """A config family's canonical text replaces the matched DIRECTORY, not
+    the whole token. Returning the bare canonical for
+    `<home>/.claude/settings.json` retargets the citation at the directory --
+    a silent content change, not a path fix -- and `--apply` writes it."""
+    target = tmp_path / "note.md"
+    target.write_text(
+        "config at /Users/example-operator/.claude/settings.json and "  # abs-path-ok: synthetic test fixture
+        "shim /Users/example-operator/.coordinator-claude-settings/bin/machine-local\n",  # abs-path-ok: synthetic test fixture
+        encoding="utf-8",
+    )
+    files = _list_files(["note.md"])
+    first = sweep(tmp_path, _FAMILIES, apply=True, list_files=files)
+    subs = [f for f in first.findings if f.outcome == SUBSTITUTE]
+    assert {s.replacement for s in subs} == {
+        "${CLAUDE_HOME:-$HOME}/.claude/settings.json",
+        "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/machine-local",
+    }
+    body = target.read_text(encoding="utf-8")
+    assert "settings.json" in body
+    assert "bin/machine-local" in body
+
+    after_first = target.read_bytes()
+    second = sweep(tmp_path, _FAMILIES, apply=True, list_files=files)
+    assert second.files_rewritten == []
     assert target.read_bytes() == after_first
 
 
@@ -554,7 +585,7 @@ def test_idempotency_single_letter_short_name_does_not_relex_as_drive_letter(
     # leading separator stripped before the colon is appended, so the
     # character right after the colon is never `/` or `\`. Proven here
     # rather than merely reasoned about.
-    families = discover_families(call=_fake_machine_local_single_letter)
+    families = discover_families(keys=_fake_machine_local_single_letter)
     target = tmp_path / "note.md"
     target.write_text(
         "see /Users/example-operator/a/deep/sub/path.py here\n",  # abs-path-ok: synthetic test fixture
@@ -617,12 +648,12 @@ def test_detection_parity_marked_exemption() -> None:
 def test_main_warns_when_family_discovery_finds_no_repo_families(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    def _empty_machine_local(_args):
-        return None
+    def _empty_machine_local():
+        return []
 
     real_discover = fix_mod.discover_families
     monkeypatch.setattr(
-        fix_mod, "discover_families", lambda: real_discover(call=_empty_machine_local)
+        fix_mod, "discover_families", lambda: real_discover(keys=_empty_machine_local)
     )
     fix_mod.main(["--root", str(tmp_path), "--list-families"])
     captured = capsys.readouterr()
@@ -679,17 +710,58 @@ def test_only_known_family_id_does_not_error(tmp_path: Path, monkeypatch, capsys
 
 
 # ---------------------------------------------------------------------------
-# Finding 11 -- machine-local subprocess timeout treated like any other
-# resolution failure
+# Finding 11 -- registry enumeration is an in-process TOML read, never a
+# `machine-local` CLI exec. The CLI entry point is an extensionless POSIX
+# shim; on Windows `subprocess.run` cannot exec it at all (WinError 193),
+# and the caller's degrade-on-failure contract turned that into "zero repo
+# families" -- every citation reported `no mapped family`, no file ever
+# rewritten, on the platform this fleet commits from. Pinned three ways:
+# the reader spawns nothing, it reads a real registry directory, and it
+# degrades to `[]` rather than raising when there is nothing to read.
 # ---------------------------------------------------------------------------
 
 
-def test_machine_local_call_timeout_returns_none(monkeypatch) -> None:
-    def _raise(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(cmd="machine-local", timeout=fix_mod._MACHINE_LOCAL_TIMEOUT_S)
+def test_default_registry_keys_never_spawns_a_subprocess(monkeypatch, tmp_path: Path) -> None:
+    import subprocess as _subprocess
 
-    monkeypatch.setattr(subprocess, "run", _raise)
-    assert _default_machine_local_call(["keys"]) is None
+    def _explode(*_args, **_kwargs):  # pragma: no cover -- the assertion is that this never runs
+        raise AssertionError("_default_registry_keys must not spawn a subprocess")
+
+    monkeypatch.setattr(_subprocess, "run", _explode)
+    monkeypatch.setattr(_subprocess, "Popen", _explode)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
+    assert _default_registry_keys() == []
+
+
+def test_default_registry_keys_reads_registry_toml(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "registry.toml").write_text(
+        '[repos]\nclaude_klabauter = "/some/where"\n\n'  # abs-path-ok: synthetic test fixture
+        '[publish.mirrors.claude_klabauter]\npath = "/else/where"\n',  # abs-path-ok: synthetic test fixture
+        encoding="utf-8",
+    )
+    (tmp_path / "registry.local.toml").write_text(
+        '[repos]\nexample_retrieval_repo = "/third/place"\n',  # abs-path-ok: synthetic test fixture
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
+    keys = _default_registry_keys()
+    assert "repos.claude_klabauter" in keys
+    assert "repos.example_retrieval_repo" in keys
+    assert "publish.mirrors.claude_klabauter.path" in keys
+    assert len(keys) == len(set(keys))
+
+    ids = {f.id for f in discover_families(keys=_default_registry_keys)}
+    assert "repo_claude_klabauter" in ids
+    assert "repo_example_retrieval_repo" in ids
+    assert "publish_mirror_claude_klabauter" in ids
+
+
+def test_default_registry_keys_degrades_to_empty_on_malformed_registry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    (tmp_path / "registry.toml").write_text("this is not = valid = toml [\n", encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
+    assert _default_registry_keys() == []
 
 
 # ---------------------------------------------------------------------------

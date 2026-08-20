@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
-from coordinator_core.ops.plan_status_transition import main
+from coordinator_core.ops.plan_status_transition import (
+    _read_and_normalize_status,
+    _resolve_worktree_root_and_check_containment,
+    main,
+)
 from coordinator_core.testing import symlink_capability
 
 # Golden-oracle cases pin `main`'s real HEAD-commit and porcelain-status reads
@@ -1268,3 +1272,396 @@ def test_unknown_verb_message_lists_stamp_reopened(capsys):
     rc = main(["bogus-verb"])
     assert rc == 1
     assert "stamp-reopened" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# stamp-review-verified — the C6a attest write (docs/plans/2026-08-20-
+# the-rungs-get-writers.md, AC13-14)
+# ---------------------------------------------------------------------------
+
+def test_stamp_review_verified_happy_path(tmp_path, capsys):
+    original = "---\ntitle: T\nstatus: implemented\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    findings = "state/review-trail/findings/2026-08-20-p-review.md"
+    rc = main(["stamp-review-verified", "--plan", str(p), "--findings", findings])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"review verified by" in out
+    assert f"findings: {findings}" in out
+    text = p.read_text(encoding="utf-8")
+    split = split_frontmatter(text)
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "review_verified_findings") == findings
+    assert read_fm_field_unquoted(split.fm_text, "review_verified_by")
+    assert read_fm_field_unquoted(split.fm_text, "review_verified_at")
+    # on-disk order: status -> review_verified_by -> review_verified_findings -> review_verified_at
+    by_idx = text.index("review_verified_by")
+    findings_idx = text.index("review_verified_findings")
+    at_idx = text.index("review_verified_at")
+    assert text.index("status:") < by_idx < findings_idx < at_idx
+
+
+def test_stamp_review_verified_rerun_same_findings_is_byte_identical_noop(tmp_path, capsys):
+    original = "---\nstatus: implemented\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    findings = "state/review-trail/findings/2026-08-20-p-review.md"
+    rc = main(["stamp-review-verified", "--plan", str(p), "--findings", findings])
+    assert rc == 0
+    capsys.readouterr()
+    first_text = p.read_text(encoding="utf-8")
+
+    rc = main(["stamp-review-verified", "--plan", str(p), "--findings", findings])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already carries review_verified_findings" in out
+    assert p.read_text(encoding="utf-8") == first_text
+
+
+def test_stamp_review_verified_second_review_new_findings_writes(tmp_path, capsys):
+    original = "---\nstatus: implemented\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    first_findings = "state/review-trail/findings/2026-08-20-p-review.md"
+    rc = main(["stamp-review-verified", "--plan", str(p), "--findings", first_findings])
+    assert rc == 0
+    capsys.readouterr()
+    first_text = p.read_text(encoding="utf-8")
+
+    second_findings = "state/review-trail/findings/2026-08-21-p-review-2.md"
+    rc = main(["stamp-review-verified", "--plan", str(p), "--findings", second_findings])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"findings: {second_findings}" in out
+    text = p.read_text(encoding="utf-8")
+    assert text != first_text
+    split = split_frontmatter(text)
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "review_verified_findings") == second_findings
+
+
+def test_stamp_review_verified_refuses_non_implemented_source(tmp_path, capsys):
+    original = "---\nstatus: draft\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-review-verified", "--plan", str(p), "--findings", "state/review-trail/findings/x.md"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert 'is at status "draft", not "implemented"' in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_review_verified_missing_findings_fails_loud(tmp_path, capsys):
+    original = "---\nstatus: implemented\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main(["stamp-review-verified", "--plan", str(p)])
+    assert rc == 1
+    assert "requires --findings" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_review_verified_missing_plan_fails_loud(capsys):
+    rc = main(["stamp-review-verified", "--findings", "state/review-trail/findings/x.md"])
+    assert rc == 1
+    assert "requires --plan" in capsys.readouterr().err
+
+
+def test_stamp_review_verified_rejects_by_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
+    rc = main(
+        ["stamp-review-verified", "--plan", str(p), "--findings", "x.md", "--by", "nope.md"]
+    )
+    assert rc == 1
+    assert "does not accept --by" in capsys.readouterr().err
+
+
+def test_stamp_review_verified_rejects_reason_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
+    rc = main(
+        ["stamp-review-verified", "--plan", str(p), "--findings", "x.md", "--reason", "nope"]
+    )
+    assert rc == 1
+    assert "does not accept --reason" in capsys.readouterr().err
+
+
+def test_stamp_review_verified_rejects_override_reason_flag(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
+    rc = main(
+        [
+            "stamp-review-verified", "--plan", str(p), "--findings", "x.md",
+            "--override-reason", "nope",
+        ]
+    )
+    assert rc == 1
+    assert "does not accept --override-reason" in capsys.readouterr().err
+
+
+def test_unknown_verb_message_lists_stamp_review_verified(capsys):
+    rc = main(["bogus-verb"])
+    assert rc == 1
+    assert "stamp-review-verified" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# C1 primitives -- direct unit coverage
+# (docs/plans/2026-08-20-the-rungs-get-writers.md)
+#
+# C1 extracted these two primitives but deliberately did NOT re-express the
+# three pre-existing verbs on them, so every characterization test above
+# exercises the OLD inline copies and reaches neither primitive. Without
+# these cases the extraction ships uncovered -- the precise failure mode C1's
+# own body names: adding an untested behaviour to a verb that lacks it reds
+# nothing, because nothing tests its absence.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("draft", "draft"),
+        ('"draft"', "draft"),
+        ("'draft'", "draft"),
+        ("executing  # authorized 2026-08-20", "executing"),
+    ],
+)
+def test_read_and_normalize_status_strips_and_unquotes(raw, expected):
+    fm = "title: T\nstatus: " + raw + "\nowner: x\n"
+    assert _read_and_normalize_status(fm, "p.md") == expected
+
+
+@pytest.mark.parametrize(
+    "fm",
+    [
+        "title: T\nowner: x\n",
+        "title: T\nstatus: #note\n",
+    ],
+)
+def test_read_and_normalize_status_absent_or_comment_only_aborts(fm):
+    from coordinator_core.locked_write import MutateAbort
+
+    with pytest.raises(MutateAbort) as exc:
+        _read_and_normalize_status(fm, "p.md")
+    assert 'no "status" field found' in exc.value.args[0]
+
+
+def test_read_and_normalize_status_quoted_plus_trailing_comment_fails_loud():
+    """The edge case the primitive exists to keep fail-loud rather than guess."""
+    from coordinator_core.locked_write import MutateAbort
+
+    fm = 'title: T\nstatus: "draft"  # note\n'
+    with pytest.raises(MutateAbort) as exc:
+        _read_and_normalize_status(fm, "p.md")
+    assert "quoted-scalar-plus-trailing-comment" in exc.value.args[0]
+
+
+def test_read_and_normalize_status_hash_inside_quotes_is_not_stripped():
+    assert _read_and_normalize_status('status: "a#b"\n', "p.md") == "a#b"
+
+
+def test_resolve_worktree_root_accepts_any_path_inside_the_worktree(tmp_path):
+    """Containment is against the WHOLE worktree, not `docs/plans/` specifically.
+
+    Deliberate, and documented at this module's own "Path containment" note: a
+    plan reachable outside `docs/plans/` is still inside the repo, so the guard
+    does not narrow to that directory. Pinned here so a later "tidy-up" that
+    narrows it has to argue with a test rather than with a comment.
+    """
+    _ensure_git_repo(tmp_path)
+    stray = tmp_path / "not-under-docs-plans.md"
+    stray.write_text("---\nstatus: draft\n---\n", encoding="utf-8")
+    root, _common, refusal = _resolve_worktree_root_and_check_containment(
+        stray, str(stray)
+    )
+    assert refusal is None
+    assert root is not None
+
+
+def test_resolve_worktree_root_returns_the_resolved_root_and_common_dir(tmp_path):
+    """The resolution half of the primitive: a real repo resolves to itself."""
+    _ensure_git_repo(tmp_path)
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    p = plans / "p.md"
+    p.write_text("---\nstatus: draft\n---\n", encoding="utf-8")
+    root, common, refusal = _resolve_worktree_root_and_check_containment(p, str(p))
+    assert refusal is None
+    assert root is not None
+    assert common is not None
+    assert (root / ".git").exists()
+
+
+# ---------------------------------------------------------------------------
+# C2 -- the three rung-advance verbs (AC1-AC7)
+# (docs/plans/2026-08-20-the-rungs-get-writers.md)
+# ---------------------------------------------------------------------------
+
+_RUNG_VERBS = [
+    ("stamp-reviewed", "reviewed"),
+    ("stamp-approved", "approved"),
+    ("stamp-executing", "executing"),
+]
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+def test_rung_verb_flips_draft_to_target(tmp_path, capsys, verb, target):
+    """AC1: each verb round-trips a plan through its flip."""
+    p = _write(
+        tmp_path, "p.md", "---\ntitle: T\nstatus: draft\nowner: x\n---\n\nBody.\n"
+    )
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 0
+    assert f'status "draft" → {target}' in capsys.readouterr().out
+    assert p.read_text(encoding="utf-8") == (
+        "---\ntitle: T\nstatus: " + target + "\nowner: x\n---\n\nBody.\n"
+    )
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+@pytest.mark.parametrize(
+    "frozen", ["implemented", "superseded", "abandoned", "deferred"]
+)
+def test_rung_verb_refuses_frozen_source(tmp_path, capsys, verb, target, frozen):
+    """AC2: a frozen source refuses non-zero, with the status named."""
+    original = "---\nstatus: " + frozen + "\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert frozen in err
+    assert "refuses" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+def test_rung_verb_rejects_override_reason(tmp_path, capsys, verb, target):
+    """AC3: none of the three assert completeness, so none may override one."""
+    original = "---\nstatus: draft\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p), "--override-reason", "because"])
+    assert rc == 1
+    assert "does not accept --override-reason" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "verb,target,source",
+    [
+        ("stamp-reviewed", "reviewed", "reviewed"),
+        ("stamp-reviewed", "reviewed", "approved"),
+        ("stamp-reviewed", "reviewed", "executing"),
+        ("stamp-approved", "approved", "approved"),
+        ("stamp-approved", "approved", "executing"),
+        ("stamp-executing", "executing", "executing"),
+    ],
+)
+def test_rung_verb_at_or_past_target_is_byte_identical_no_op(
+    tmp_path, capsys, verb, target, source
+):
+    """AC4: at-or-past the target rung is an rc-0 no-op that WRITES NOTHING.
+
+    Asserts byte-identity and an unchanged mtime, not merely the exit code --
+    an rc-0 that rewrote identical bytes would still be a write.
+    """
+    original = "---\nstatus: " + source + "\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    before_mtime = p.stat().st_mtime_ns
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 0
+    assert "already at or past" in capsys.readouterr().out
+    assert p.read_text(encoding="utf-8") == original
+    assert p.stat().st_mtime_ns == before_mtime
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+def test_rung_verb_outside_flippable_aborts(tmp_path, capsys, verb, target):
+    """AC5: a source outside _FLIPPABLE_STATUSES (and not frozen) aborts."""
+    original = "---\nstatus: banana\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "unexpected current status" in err
+    assert "banana" in err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_stamp_executing_accepts_landed_as_reentry(tmp_path, capsys):
+    """AC6: `landed` sits PAST `executing`, but is legitimate re-entry.
+
+    The generic at-or-past rule would make this a no-op; leaving the plan at
+    `landed` while executors run is the exact status lie this plan removes.
+    """
+    p = _write(tmp_path, "p.md", "---\nstatus: landed\n---\n\nBody.\n")
+    rc = main(["stamp-executing", "--plan", str(p)])
+    assert rc == 0
+    assert 'status "landed" → executing' in capsys.readouterr().out
+    assert "status: executing" in p.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("verb,target", [("stamp-reviewed", "reviewed"), ("stamp-approved", "approved")])
+def test_landed_is_not_reentry_for_the_other_two_verbs(tmp_path, capsys, verb, target):
+    """AC6 negative: only stamp-executing special-cases `landed`."""
+    original = "---\nstatus: landed\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 0
+    assert "already at or past" in capsys.readouterr().out
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_reopened_then_landed_then_executing_end_to_end(tmp_path, capsys, monkeypatch):
+    """AC6 end-to-end: the reopen re-park path re-enters at `executing`.
+
+    `stamp-reopened` refuses a plan whose spine has no open row, so this uses
+    the same open-spine fixture the reopen tests above do -- the realistic
+    shape, since a plan with nothing open is not one anybody reopens.
+    """
+    monkeypatch.setattr(
+        "coordinator_core.session.core.resolve_session_id", lambda: "reopen-sid"
+    )
+    body = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
+    p = _write(tmp_path, "p.md", body)
+    assert main(["stamp-reopened", "--plan", str(p), "--reason", "C1 still open"]) == 0
+    assert "status: landed" in p.read_text(encoding="utf-8")
+    capsys.readouterr()
+    assert main(["stamp-executing", "--plan", str(p)]) == 0
+    assert "status: executing" in p.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+@pytest.mark.parametrize(
+    "raw,flips",
+    [
+        ("draft", True),
+        ('"draft"', True),
+        ("'draft'", True),
+        ("draft  # authorized 2026-08-20", True),
+        ("#note", False),
+    ],
+)
+def test_rung_verb_status_parsing_edge_cases(
+    tmp_path, capsys, verb, target, raw, flips
+):
+    """AC7: all four status-parsing edge cases survive on EVERY new verb.
+
+    Parameterised across all three rather than spot-checked on one -- the
+    triplication these verbs replaced is exactly how an edge case survives in
+    one verb and is silently absent from another.
+    """
+    p = _write(tmp_path, "p.md", "---\nstatus: " + raw + "\n---\n\nBody.\n")
+    rc = main([verb, "--plan", str(p)])
+    if flips:
+        assert rc == 0
+        assert "status: " + target in p.read_text(encoding="utf-8")
+    else:
+        assert rc == 1
+        assert 'no "status" field found' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+def test_rung_verb_quoted_status_with_trailing_comment_fails_loud(
+    tmp_path, capsys, verb, target
+):
+    """AC7, fourth edge case: quoted scalar plus trailing comment, on each verb."""
+    original = '---\nstatus: "draft"  # note\n---\n\nBody.\n'
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 1
+    assert "quoted-scalar-plus-trailing-comment" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original

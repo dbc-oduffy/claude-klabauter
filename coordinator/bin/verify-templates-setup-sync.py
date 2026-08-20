@@ -29,7 +29,7 @@ from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import `run_op_main`.
+    """Resolve the engine root and import `run_op_main`.
 
     DR-276: the op is run through `coordinator_core.cli_entry.run_op_main`
     rather than by calling its `main` directly, so any path it declares via
@@ -93,7 +93,7 @@ def main() -> None:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
-        print(f"verify-templates-setup-sync.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"verify-templates-setup-sync.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(f"verify-templates-setup-sync.py: coordinator_core.cli_entry not importable: {exc}", file=sys.stderr)

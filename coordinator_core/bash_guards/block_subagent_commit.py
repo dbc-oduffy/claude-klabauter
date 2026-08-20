@@ -5643,6 +5643,102 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
         parent = next_parent
 
 
+#: A Windows drive-absolute pathspec element, in the forward-slash form
+#: every caller here has already normalized to (`X:/...`; the `X:\...`
+#: spelling reaches this pattern only after that normalization, never
+#: before). `posixpath.isabs` answers False for a drive path -- it tests a
+#: leading `/` only -- so without this the element reaches the ownership leg
+#: looking like an ordinary repo-relative one that simply never matches
+#: anything. Windows is first-class here, so absoluteness is decided by both
+#: forms rather than the POSIX one alone.
+_DRIVE_ABSOLUTE_PATHSPEC_RE = re.compile(r"^[A-Za-z]:/")
+
+
+def _pathspec_element_is_absolute(candidate_posix: str) -> bool:
+    """True if ``candidate_posix`` (already forward-slash-normalized) is an
+    absolute path in either the POSIX (`/repo/...`) or the Windows
+    drive-letter (`X:/...`) sense. UNC (`//host/share/...`) satisfies the
+    POSIX leg.
+    """
+    return bool(
+        posixpath.isabs(candidate_posix)
+        or _DRIVE_ABSOLUTE_PATHSPEC_RE.match(candidate_posix)
+    )
+
+
+def _drive_letter_case_key(path_posix: str) -> str:
+    """Comparison key that folds ONLY a leading drive letter's case.
+
+    A Windows drive letter is case-insensitive to the OS but not to string
+    equality, and `git_root` and a caller-supplied pathspec are resolved by
+    different producers. Nothing else is folded: the rest of the path stays
+    case-SENSITIVE, because treating it otherwise would let a differently-
+    cased element resolve against a `safe_paths` entry it does not literally
+    name, which is exactly the widening the ownership leg exists to refuse.
+    """
+    if _DRIVE_ABSOLUTE_PATHSPEC_RE.match(path_posix):
+        return path_posix[0].lower() + path_posix[1:]
+    return path_posix
+
+
+def _repo_relativize_pathspec(
+    paths: List[str], git_root: str
+) -> "Tuple[List[str], bool]":
+    """Rewrite every ABSOLUTE, in-repo pathspec element to the repo-relative
+    form the ownership leg can actually test, leaving relative elements
+    byte-identical. Returns ``(rewritten_paths, saw_out_of_repo_absolute)``.
+
+    Why this exists (cross-repo memo, example-retrieval-repo-ue-addon-em, 2026-08-20):
+    `assert_paths_in_session_scope`'s `safe_paths` is built from ordinary
+    REPO-RELATIVE dirty paths (`git diff --name-only` / `git ls-files
+    --others`) and membership is literal string equality, so an ABSOLUTE
+    element can never match however legitimately the calling session owns
+    and dirtied that file. The two legs disagreed about what an absolute
+    path means -- `_pathspec_element_is_sweeping` resolves one lexically and
+    passes it, then the ownership leg denies it and the message calls a
+    path-FORM failure a path-SCOPE failure, sending the agent to re-verify
+    the one thing that was correct. It is the same defect family this
+    module's docstring already records twice (the 2026-08-03 leg-3 spike,
+    the 2026-08-04 four-dispatch incident).
+
+    Grants nothing new: a rewritten element still goes through the SAME
+    strict allow-list membership test, so it passes only if this session
+    genuinely owns that path under its repo-relative name. The only
+    behaviour change is that a path the session owns stops being denied for
+    how it was spelled.
+
+    LEXICAL only (`posixpath`), never `realpath`/`readlink` -- the same
+    discipline, and the same accepted residual, that
+    `_pathspec_element_is_sweeping` documents at length: this runs on the
+    PreToolUse hot path, and filesystem resolution would add both a spawn-
+    free-but-real I/O cost and a TOCTOU window between the check and the
+    commit.
+
+    An absolute element that does NOT resolve inside ``git_root`` is not
+    relativizable at all, and no membership test can say anything useful
+    about it. That case returns ``(<empty>, True)`` so the caller denies at
+    `_LEG_ABSOLUTE_OUT_OF_REPO` and NAMES the form failure, rather than
+    letting it fall through to an ownership message that would describe it
+    wrongly for the third time.
+    """
+    root = posixpath.normpath(git_root.replace("\\", "/"))
+    root_prefix = _drive_letter_case_key(root)
+    if not root_prefix.endswith("/"):
+        root_prefix += "/"
+
+    rewritten: List[str] = []
+    for path in paths:
+        candidate_posix = path.replace("\\", "/")
+        if not _pathspec_element_is_absolute(candidate_posix):
+            rewritten.append(path)
+            continue
+        resolved = posixpath.normpath(candidate_posix)
+        if not _drive_letter_case_key(resolved).startswith(root_prefix):
+            return [], True
+        rewritten.append(resolved[len(root_prefix):])
+    return rewritten, False
+
+
 def _git_commit_agent_may_commit(
     cmd: str,
     git_root: Optional[str],
@@ -5753,6 +5849,14 @@ def _git_commit_agent_may_commit(
         # read the stock orphan message, which advertises the very
         # re-invocation this forbids, and loop on it.
         return False, _LEG_AGENT_ORPHAN_ADOPTION
+    # An in-repo ABSOLUTE element is rewritten to the repo-relative form the
+    # ownership leg's literal membership test is built from -- see
+    # `_repo_relativize_pathspec` for why this grants nothing new and why an
+    # out-of-repo absolute denies here instead of falling through to a
+    # message that would name the wrong cause.
+    paths, absolute_out_of_repo = _repo_relativize_pathspec(paths, git_root)
+    if absolute_out_of_repo:
+        return False, _LEG_ABSOLUTE_OUT_OF_REPO
     try:
         # `allow_orphans=False`, KEYWORD-form (keyword-only on
         # `assert_paths_in_session_scope`'s own signature, so a future
@@ -5868,6 +5972,7 @@ _LEG_COMPOUND_COMMAND = "leg:compound-command"
 _LEG_NO_PATHSPEC = "leg:no-pathspec"
 _LEG_SWEEPING_PATHSPEC = "leg:sweeping-pathspec"
 _LEG_AGENT_ORPHAN_ADOPTION = "leg:agent-orphan-adoption"
+_LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
@@ -5891,6 +5996,11 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "BLOCKED: git-commit-agent rejected a SWEEPING pathspec element -- "
         "`.`, `-A`, globs, and repo-root/ancestor paths are refused. Name "
         "each file explicitly; path scope was never checked."
+    ),
+    _LEG_ABSOLUTE_OUT_OF_REPO: (
+        "BLOCKED: git-commit-agent got an ABSOLUTE pathspec element that "
+        "resolves outside this repo -- no scope check can clear one. Name "
+        "each file relative to the repo root; path scope was never checked."
     ),
     _LEG_AGENT_ORPHAN_ADOPTION: (
         "BLOCKED: orphan adoption is an operator's answer, not an agent's. "

@@ -54,6 +54,8 @@ from coordinator_core.ops._registry_map import OP_MODULE_MAP
 from coordinator_core.ops.tracker.completion_policy import _handler
 from coordinator_core.tracker_entities import emit_item_created, mint_item_id
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(coro):
     return asyncio.run(coro)

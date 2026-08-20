@@ -1869,7 +1869,7 @@ def _completion_count_for_date(worktree: Path, date: str) -> int:
 
     NATIVE replacement for the oracle's `_completion_count` (workday-complete-
     backfill-inject-anchor.py): the oracle shells to a bash-lib bridge to
-    resolve CLAUDE_KLABAUTER_ROOT, then `command -v node`-gates a call to
+    resolve the engine root, then `command -v node`-gates a call to
     `query-completions.py` — that whole shape is retired here (naked-Python
     mandate; the query/read layer went fully native 2026-07-22, see this
     repo's CLAUDE.md § Runtime conventions).

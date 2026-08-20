@@ -10,7 +10,7 @@ invocation seam was a hand-composed JSON-RPC blob. Across 643 plan-tasks rows
 in 74 plan files, that unreachability produced 0 backlogged and 0 wont_do
 dispositions. This trampoline is the fix: it holds NO domain logic of its
 own (mirrors coordinator/bin/handoff-carry-gate's "the trampoline resolves
-CLAUDE_KLABAUTER_ROOT/repo_root and calls into coordinator_core" shape) — every gate
+the engine root/repo_root and calls into coordinator_core" shape) — every gate
 (pm_approved, grouping-approval digest, disposition_detail requirement, D5
 ordering, disposition_ref shape) is enforced by the op itself.
 
@@ -19,7 +19,7 @@ a bare extensionless polyglot entrypoint, invoked via its own
 coordinator/bin/plan-tasks-resolve.cmd Windows launcher (which resolves a
 Python interpreter and runs this file directly) or via an explicit
 python coordinator/bin/plan-tasks-resolve ... call on POSIX. Modeled on
-coordinator/bin/handoff-carry-gate's "trampoline resolves CLAUDE_KLABAUTER_ROOT/
+coordinator/bin/handoff-carry-gate's "trampoline resolves the engine root/
 repo_root and calls into coordinator_core" shape.
 
 The five exits after the 2026-08-05 DoE ruling
@@ -98,8 +98,8 @@ Exit codes:
       disposition_detail, D5 ordering violation, bad disposition_ref, ...) or
       plan/row not found.
   2 — usage error (bad args, more than one exit flag, missing
-      --disposition-detail on a gated exit) or transport failure (CLAUDE_KLABAUTER_ROOT
-      unresolvable, coordinator_core.invoke seam absent/broken).
+      --disposition-detail on a gated exit) or transport failure (the engine
+      root unresolvable, coordinator_core.invoke seam absent/broken).
 
 Spec backlink: coordinator_core/ops/plan_tasks_mutate.py (resolve verb)
 Spec backlink: pln-make-the-five-exit-plan-tasks-305b16 § C5
@@ -243,8 +243,8 @@ def _no_legacy() -> None:
     coordinator dependency; there is no legacy body to fall back to."""
     raise RuntimeError(
         "plan-tasks-resolve: coordinator_core.invoke seam absent — no legacy "
-        "path exists for plan.tasks.mutate. Verify CLAUDE_KLABAUTER_ROOT and the "
-        "claude-klabauter coordinator_core install."
+        "path exists for plan.tasks.mutate. Verify COORDINATOR_ENGINE_ROOT "
+        "(or CLAUDE_KLABAUTER_ROOT) and the claude-klabauter coordinator_core install."
     )
 
 
@@ -364,7 +364,7 @@ def _read_source_row(plan_path: str, task_id: str, repo_root: str) -> dict:
     second hand-rolled fence-locate implementation.
 
     Raises RuntimeError (never returns a partial/None) on any resolution
-    failure: CLAUDE_KLABAUTER_ROOT unresolvable, plan not found, spine malformed/
+    failure: the engine root unresolvable, plan not found, spine malformed/
     absent, or the id not present in the spine.
     """
     # Review: coordinator:code-reviewer — fail-loud site must stay fail-loud;

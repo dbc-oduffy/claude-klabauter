@@ -22,8 +22,8 @@ against the pre-port oracle on this machine: 5 passed, 9 failed). This port's sh
 real Python script, exercised via `sys.executable`, restoring full coverage.
 
 Test isolation: uses COORDINATOR_APPEND_GOAL_HELPER to inject a Python shim (recording
-each invocation's args to a log file, exit 0) so tests run without requiring CLAUDE_KLABAUTER_ROOT
-to be configured for the append-goal-event.py leg — CLAUDE_KLABAUTER_ROOT IS required for
+each invocation's args to a log file, exit 0) so tests run without requiring the engine root
+to be configured for the append-goal-event.py leg — the engine root IS required for
 read-frontmatter-field's in-process import (emit-goal-from-artifact.py's own frontmatter
 reads), which every assertion below implicitly exercises.
 

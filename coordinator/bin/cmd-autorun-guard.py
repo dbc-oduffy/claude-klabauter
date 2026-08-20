@@ -17,7 +17,7 @@ registry hive (`Software\\Microsoft\\Command Processor\\AutoRun`) — this is
 a deliberate, explicit act; this trampoline does not run either verb on its
 own on import or at install time.
 
-No CLAUDE_KLABAUTER_ROOT resolution is needed here beyond `cc_invoke`'s own helper —
+No engine-root resolution is needed here beyond `cc_invoke`'s own helper —
 mirrors this directory's other `install-*-wrapper.py` trampoline shape.
 
 DR-276: the op runs through `coordinator_core.cli_entry.run_op_main` rather

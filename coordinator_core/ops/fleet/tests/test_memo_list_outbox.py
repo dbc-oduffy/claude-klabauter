@@ -24,12 +24,16 @@ import subprocess
 import types
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.fleet.memo_draft import _memo_draft
 from coordinator_core.ops.fleet.memo_list_outbox import (
     _MODE,
     _memo_list_outbox,
     _validate_list_outbox_params,
 )
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(result):

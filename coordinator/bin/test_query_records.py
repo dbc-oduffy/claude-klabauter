@@ -5,7 +5,7 @@ into `--where`, `--where` operator-grammar pass-through parity, and the
 fail-loud contract for unported `.js` flags. Does NOT exercise the live
 `records.query` engine op (that's `coordinator_core/ops/tests/
 test_records_query.py`'s job) — `route_mutation` is monkeypatched here so
-these tests run with no CLAUDE_KLABAUTER_ROOT / repo dependency.
+these tests run with no engine-root / repo dependency.
 
 Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A2
 

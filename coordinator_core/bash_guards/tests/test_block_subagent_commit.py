@@ -2563,3 +2563,108 @@ class TestRealOwnershipScopeWiring:
         assert result is not None, "expected DENY: an agent may not adopt orphans"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "RELAY" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- In-repo ABSOLUTE pathspec elements: the ownership leg's path-FORM gap ---
+# Cross-repo memo, example-retrieval-repo-ue-addon-em, 2026-08-20: `assert_paths_in_
+# session_scope`'s `safe_paths` holds ordinary REPO-RELATIVE dirty paths and
+# tests membership by literal string equality, so an absolute element could
+# never match however legitimately the session owned that file -- and the
+# denial called that path-form failure a path-scope failure. Third instance
+# of this module's own "a guard whose message names the wrong cause is a
+# defect independent of whether the verdict is right", on a third leg.
+
+
+def test_repo_relativize_pathspec_rewrites_an_in_repo_absolute_element():
+    """A POSIX-absolute element inside the repo becomes the repo-relative
+    form the membership test is built from; a relative sibling in the same
+    pathspec is passed through byte-identical.
+    """
+    assert guard._repo_relativize_pathspec(
+        [_FAKE_REPO_ROOT + "/src/foo.py", "src/bar.py"], _FAKE_REPO_ROOT
+    ) == (["src/foo.py", "src/bar.py"], False)
+
+
+def test_repo_relativize_pathspec_handles_windows_drive_and_backslash_forms():
+    """Windows is first-class: a drive-absolute element -- in either slash
+    spelling -- relativizes the same way, and a differently-cased drive
+    letter still resolves (only the drive letter's case is folded).
+    Assembled from parts, not written as a literal drive path, to stay clear
+    of this repo's concrete-path-citation guard.
+    """
+    root = "".join(["Z", ":", "/", "repo"])
+    forward = root + "/src/foo.py"
+    backward = forward.replace("/", "\\")
+    other_case = forward[0].lower() + forward[1:]
+
+    assert guard._repo_relativize_pathspec([forward], root) == (["src/foo.py"], False)
+    assert guard._repo_relativize_pathspec([backward], root) == (["src/foo.py"], False)
+    assert guard._repo_relativize_pathspec([other_case], root) == (["src/foo.py"], False)
+
+
+def test_repo_relativize_pathspec_out_of_repo_absolute_signals_the_named_leg():
+    """An absolute element that does NOT resolve inside the repo is not
+    relativizable, and no ownership verdict about it would be meaningful --
+    the helper reports it so the caller can deny at
+    `_LEG_ABSOLUTE_OUT_OF_REPO` rather than through an ownership message
+    that would name the wrong cause.
+    """
+    assert guard._repo_relativize_pathspec(
+        ["/elsewhere/foo.py"], _FAKE_REPO_ROOT
+    ) == ([], True)
+
+
+def test_repo_relativize_pathspec_folds_no_case_beyond_the_drive_letter():
+    """Only the drive letter is case-folded. Folding the rest would let a
+    differently-cased element resolve against a `safe_paths` entry it does
+    not literally name -- the widening the ownership leg exists to refuse.
+    """
+    rewritten, out_of_repo = guard._repo_relativize_pathspec(
+        [_FAKE_REPO_ROOT + "/SRC/Foo.py"], _FAKE_REPO_ROOT
+    )
+    assert out_of_repo is False
+    assert rewritten == ["SRC/Foo.py"]
+
+
+def test_git_commit_agent_in_repo_absolute_pathspec_reaches_ownership_relativized(
+    monkeypatch,
+):
+    """End-to-end: the reported invocation shape. The ownership helper is
+    reached (it was, before this fix, too) but now receives the
+    REPO-RELATIVE path, so a session that owns the file is no longer denied
+    for how it spelled it. The recorded `paths` is the oracle -- an ALLOW
+    alone would also pass with the spy returning `(True, "")` for whatever
+    it was handed.
+    """
+    calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
+    result = guard.check(
+        _payload(
+            'scoped-git-commit -m "msg" -- %s/src/foo.py' % _FAKE_REPO_ROOT,
+            agent_type=_GIT_COMMIT_AGENT_TYPE,
+        )
+    )
+    assert result is None
+    assert [c["paths"] for c in calls] == [["src/foo.py"]]
+
+
+def test_git_commit_agent_out_of_repo_absolute_denies_before_the_ownership_leg(
+    monkeypatch,
+):
+    """An out-of-repo absolute element denies at its OWN leg, naming the
+    path form -- and never reaches the ownership helper (`calls == []`), so
+    the message cannot be the scope-shaped one that sent earlier agents to
+    re-verify a correct pathspec. Wired so the ownership mock would ALLOW if
+    it were reached.
+    """
+    calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
+    result = guard.check(
+        _payload(
+            'scoped-git-commit -m "msg" -- /elsewhere/foo.py',
+            agent_type=_GIT_COMMIT_AGENT_TYPE,
+        )
+    )
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == guard._GIT_COMMIT_AGENT_LEG_MESSAGES[guard._LEG_ABSOLUTE_OUT_OF_REPO]
+    assert "path scope was never checked" in reason
+    assert calls == []

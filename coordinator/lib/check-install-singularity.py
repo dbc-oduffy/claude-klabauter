@@ -25,11 +25,11 @@ doctor-sentinel P-18 probe.
 #   2 — the claude-klabauter module's OWN internal-error floor (an unhandled exception
 #       inside check_install_singularity.py's run()) — reserved exclusively
 #       for that case; never used by this trampoline.
-#   3 — this trampoline's OWN transport failure: CLAUDE_KLABAUTER_ROOT resolution
+#   3 — this trampoline's OWN transport failure: engine-root resolution
 #       failed, or the engine module could not be imported. Dedicated code
 #       (not 2) so a caller's exit-code branch can distinguish "the engine
 #       ran and hit an internal bug" (2, fix the ported check) from "the
-#       engine could never be reached at all" (3, fix CLAUDE_KLABAUTER_ROOT/venv
+#       engine could never be reached at all" (3, fix engine-root/venv
 #       resolution) — these have different remediation paths. Matches the
 #       pattern used by the sibling `gen-settings-hooks.py` trampoline in
 #       this same port wave, which also reserves a code distinct from its
@@ -56,9 +56,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

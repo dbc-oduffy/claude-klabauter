@@ -30,7 +30,7 @@ Exit codes (must match `main()`'s actual returns byte-for-byte — do not drift)
   4  Conflict-warn gate fired: consumer-modified or consumer-added files detected.
      (Printed with full three-way hunk detail; operator must re-run after review.)
   5  TRANSPORT failure (caller-side only, not returned by this
-     module's own `main()`): CLAUDE_KLABAUTER_ROOT resolution failed or this module was
+     module's own `main()`): engine-root resolution failed or this module was
      not importable — the caller's own `except RuntimeError`/`except
      ImportError` branches exit 5 before `main()` is ever called, distinct
      from all four business codes above. A caller checking rc==1 for "usage

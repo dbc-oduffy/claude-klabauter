@@ -101,7 +101,7 @@ def git_repo(tmp_path):
 
 def _patch_common(mod, repo_root, *, dead_session_id):
     """Wire main()'s resolver seams so it runs against the hermetic repo
-    without touching a real CLAUDE_KLABAUTER_ROOT or session-liveness engine."""
+    without touching a real engine root or session-liveness engine."""
     mod.resolve_checked_repo_root = lambda explicit_root=None: (
         str(repo_root),
         {"verdict": "EXPLICIT", "session_root": None, "resolved_root": str(repo_root), "sid": None, "message": ""},

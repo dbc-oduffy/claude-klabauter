@@ -41,7 +41,7 @@ canonical `coordinator_core.state_root` seam — not yet landed as of this
 port).
 
 Negative-spec:
-    - Does NOT fail loud when the meta-repo's CLAUDE_KLABAUTER_ROOT is unresolvable —
+    - Does NOT fail loud when the meta-repo's engine root is unresolvable —
       falls back to REPO_ROOT/state, mirroring the bash original's
       `[[ -n "$_SSLH_MR" ]] && _SSLH_STATE_ROOT=...` (a silent no-op
       reassignment on empty, not a `return 1`). This is a narrower posture
@@ -129,7 +129,7 @@ def _claude_klabauter_root() -> Optional[str]:
 def _resolve_state_root(repo_root: str) -> str:
     """Resolve the state/ directory for repo_root, routing a meta-repo root
     through the claude-klabauter state seam. Mirrors the bash original's graceful
-    (non-fail-loud) fallback when CLAUDE_KLABAUTER_ROOT is unresolvable.
+    (non-fail-loud) fallback when the engine root is unresolvable.
     """
     if _same_path(repo_root, _claude_home()):
         claude_klabauter_root = _claude_klabauter_root()

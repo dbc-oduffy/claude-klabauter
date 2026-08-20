@@ -41,7 +41,7 @@ Usage:
 Exit codes (fail-loud gate script — matches the retired bash oracle exactly):
   0  No unauthorized hits found (clean).
   1  One or more unauthorized hits found; offending file:line written to stderr.
-  2  Script invocation error (bad args, CLAUDE_KLABAUTER_ROOT resolution failure, ported
+  2  Script invocation error (bad args, engine-root resolution failure, ported
      module not importable, or no recognized search subdirs under root).
 
 Root-default resolution stays on THIS side (not the claude-klabauter module) — the
@@ -65,9 +65,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

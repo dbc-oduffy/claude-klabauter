@@ -15,7 +15,7 @@ Three required groups (docs/plans/2026-07-28-human-facing-doc-staleness-detector
        (coordinator/scripts/install-maximalist.py) and does NOT flag the
        correct-but-cross-repo citation present in the same tree
        (coordinator/lib/install-substrate.py, verified absent from DoE-claude
-       at that commit and present under the current CLAUDE_KLABAUTER_ROOT).
+       at that commit and present under the current engine root).
 """
 
 from __future__ import annotations
@@ -130,11 +130,11 @@ class TestNegativeSurface:
     @pytest.mark.real_home
     def test_known_good_cross_repo_citation_does_not_produce_finding(self):
         """coordinator/lib/install-substrate.py is absent from a sibling repo's
-        tree but present under CLAUDE_KLABAUTER_ROOT — the canonical case AC12 requires
+        tree but present under the engine root — the canonical case AC12 requires
         to resolve as `resolves-cross-repo`, never `absent`."""
         claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists(), (
-            "test fixture assumption: install-substrate.py must exist under CLAUDE_KLABAUTER_ROOT "
+            "test fixture assumption: install-substrate.py must exist under the engine root "
             "for this to be a meaningful negative-surface check"
         )
 
@@ -377,12 +377,12 @@ class TestAC13HistoricalReplay:
 
         The plan's C6b/AC13 text asserts `coordinator/scripts/install-maximalist.py`
         is "absent everywhere" at b644d5a9 — absent from DoE-claude AND absent
-        under CLAUDE_KLABAUTER_ROOT. The first half holds (verified below via
+        under the engine root. The first half holds (verified below via
         `git ls-tree`); the second half does not: `git log --follow --diff-filter=A`
         against claude-klabauter shows the file landed there at commit `8a28a6ca`,
         2026-07-22T16:28:43+01:00 — five minutes BEFORE b644d5a9 itself
         (2026-07-22T16:33:51+01:00) — and has existed there continuously since,
-        including at the current CLAUDE_KLABAUTER_ROOT checked by this test suite. So with
+        including at the current engine root checked by this test suite. So with
         a resolvable sibling root, this citation legitimately resolves
         `resolves-cross-repo`, exactly like `install-substrate.py` below — the
         mechanism cannot tell the two apart, because at the moment b644d5a9
@@ -391,16 +391,16 @@ class TestAC13HistoricalReplay:
 
         What actually made this a live defect on 2026-07-28 was that the
         README's cold-bootstrap section is explicitly for a machine with NO
-        CLAUDE_KLABAUTER_ROOT configured yet ("a genuinely fresh machine... `/coordinator:
+        engine root configured yet ("a genuinely fresh machine... `/coordinator:
         install` doesn't exist yet") — i.e. exactly the case where NO sibling
         root is resolvable at all, so cross-repo re-resolution has nothing to
         check against. That is the faithful replay: no sibling_checkers, matching
         a bare clone with no machine-local registry entry for claude-klabauter.
         Recorded in this plan's C8 wiki chunk as a v1 limitation, not silently
-        dropped: on a machine where CLAUDE_KLABAUTER_ROOT IS already configured, this
+        dropped: on a machine where the engine root IS already configured, this
         specific citation resolves cross-repo and is correctly NOT flagged —
         the doc-level distinction between "cold-bootstrap, must be standalone"
-        and "post-install, CLAUDE_KLABAUTER_ROOT expected" is a prose-context judgment,
+        and "post-install, engine root expected" is a prose-context judgment,
         explicitly out of v1's mechanical scope (see module docstring's
         anti-scope)."""
         doe_root = _doe_root()
@@ -426,7 +426,7 @@ class TestAC13HistoricalReplay:
         ) in {(f.token, f.reason) for f in findings}
 
     def test_install_maximalist_resolves_cross_repo_when_sibling_root_available(self):
-        """Companion to the test above: on a machine WITH CLAUDE_KLABAUTER_ROOT resolvable
+        """Companion to the test above: on a machine WITH the engine root resolvable
         (this test's own machine), the same citation legitimately resolves
         cross-repo and must NOT be reported as a finding — this is the disk
         fact that makes install-maximalist.py an imperfect AC13 exemplar (see
@@ -454,7 +454,7 @@ class TestAC13HistoricalReplay:
         assert not _git_ls_tree_exists(
             doe_root, _B644D5A9_SHA, "coordinator/lib/install-substrate.py"
         )
-        # ...but present under the current CLAUDE_KLABAUTER_ROOT — the correct-as-written
+        # ...but present under the current engine root — the correct-as-written
         # cross-repo citation this replay must not flag.
         claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists()

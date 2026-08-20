@@ -116,7 +116,7 @@ if _LIB_DIR not in sys.path:
 
 
 def _import_registry_get():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import the canonical settings-home registry
+    """Resolve the engine root and import the canonical settings-home registry
     reader. Returns None (not raises) on any resolution failure — this is an
     advisory fallback rung (see `_registry_live_path`), never a hard
     dependency."""

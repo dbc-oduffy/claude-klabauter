@@ -86,12 +86,29 @@ Negative-spec (hard-won):
       still written, just flagged as lower-confidence attribution — see
       ``repo_key_source`` below.
     - ``repo_key_source`` (``"envelope"`` or ``"cwd"``): every row carries
-      this field. ``"envelope"`` means ``repo_key`` came from the caller's
-      ``_origin_worktree``; ``"cwd"`` means the envelope carried none and the
-      sink was resolved from the process working directory instead — the
-      row is real, but the repo attribution is inferred, not asserted by the
-      caller. Analysis joining rows across repos should treat
-      ``cwd``-sourced rows as lower-confidence attribution.
+      this field. ``"envelope"`` means ``repo_key`` came from a repo_root the
+      caller of ``_write_entry`` supplied explicitly; ``"cwd"`` means no
+      repo_root was supplied at all and the sink was resolved from THIS
+      process's own working directory instead — the row is real, but the
+      repo attribution is inferred, not asserted by the caller. Analysis
+      joining rows across repos should treat ``cwd``-sourced rows as
+      lower-confidence attribution.
+
+      As of C7 (2026-08-20-a-refusal-cannot-exit-zero), "explicit" above
+      covers two upstream cases that both read as ``"envelope"`` here, by
+      design: the caller's own ``_origin_worktree`` (worktree-scoped ops), OR
+      ``coordinator_core.ipc.resolve_caller_cwd``'s ``_caller_cwd`` envelope
+      field (a "none"-scoped op, which never carries ``_origin_worktree`` —
+      see ``invoke.__main__.main``'s ``WORKTREE_SCOPED_OPS`` gate). Both are
+      the CALLER's own process cwd/worktree, asserted at the point the
+      request was built, never THIS (possibly warm-server) process's cwd —
+      the distinction this field exists to preserve is caller-asserted vs
+      locally-inferred, not which envelope field carried it. Without the
+      second case, a "none"-scoped op served warm fell through to this
+      module's own ``Path.cwd()`` fallback, which in a warm pool worker is
+      the SERVER's cwd (the klabauter clone) — attributing every such row to
+      the wrong repo while reading as ordinary ``"cwd"``-sourced telemetry,
+      corrupting the very denominator the warmth sweeps measure.
 
     - Pairing reader staleness (C2 / AC3): ``pairing_summary``'s
       ``staleness_cutoff_secs`` default (see that function) is derived from

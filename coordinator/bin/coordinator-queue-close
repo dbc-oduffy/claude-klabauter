@@ -113,7 +113,7 @@ def _no_legacy() -> None:
     implementation, so there is nothing to degrade to. A fail-OPEN legacy_fn
     here would be strictly worse than a loud break — it would report a
     closure that never stamped, never committed, and never archived. route()'s
-    State-1 path wraps this RuntimeError in the four-rung CLAUDE_KLABAUTER_ROOT
+    State-1 path wraps this RuntimeError in the four-rung engine-root
     remediation message, so the operator sees which rung to fix.
     """
     raise RuntimeError(

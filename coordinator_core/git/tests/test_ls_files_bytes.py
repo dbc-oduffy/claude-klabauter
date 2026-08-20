@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.git.ls_files import tracked_files
 from coordinator_core.git.ls_files_bytes import (
     _tracked_files_bytes_cached,

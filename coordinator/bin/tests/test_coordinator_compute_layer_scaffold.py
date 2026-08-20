@@ -8,7 +8,7 @@ veneer lives under `coordinator/bin/` and is not an importable package
 member — same load idiom as sibling bin/ unit tests (e.g.
 test_session_claim_cli.py's `_load_cli_module`). `cc_invoke_bare` is
 monkeypatched on the loaded module object so these tests never spawn the
-real `coordinator_core.invoke` subprocess or require CLAUDE_KLABAUTER_ROOT to
+real `coordinator_core.invoke` subprocess or require the engine root to
 resolve.
 
 Spec backlink: pln-the-compute-layer-scaffolder-e-90d036 § C4.

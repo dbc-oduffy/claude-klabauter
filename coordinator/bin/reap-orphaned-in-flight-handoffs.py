@@ -118,7 +118,7 @@ stamp-shipped-in.js deleted 2026-07-22 — claude-klabauter's parity suites froz
 goldens, dissolving the DEC-3 keep-as-oracle hold)
 
 Negative-spec: does NOT reimplement session-liveness logic — the orphan predicate calls
-coordinator_core.session.liveness.session_live() (in-process import via CLAUDE_KLABAUTER_ROOT, no
+coordinator_core.session.liveness.session_live() (in-process import via the engine root, no
 subprocess, no bash re-exec). Does NOT mutate frontmatter directly — every mutation is
 delegated to bin/archive-stamp-cli's stamp-shipped-in / ship-handoff / unconsume-handoff
 verbs (a Python trampoline into claude-klabauter coordinator_core.archive_stamp — no node spawn),
@@ -150,7 +150,7 @@ _QUERY_CLI_DEFAULT = os.path.join(_SCRIPT_DIR, "query-completions.py")
 
 
 def _resolve_session_live():
-    """Import coordinator_core.session.liveness.session_live via CLAUDE_KLABAUTER_ROOT.
+    """Import coordinator_core.session.liveness.session_live via the engine root.
 
     In-process import (no subprocess, no bash) — mirrors the direct-import
     trampoline shape used by aggregate-chain-loe.py / query-completions.py.
@@ -162,7 +162,7 @@ def _resolve_session_live():
 
 def _resolve_find_archived_twin_by_handoff_id():
     """Import coordinator_core.handoff_creation_guard.find_archived_twin_by_handoff_id
-    via CLAUDE_KLABAUTER_ROOT.
+    via the engine root.
 
     Same in-process import trampoline as ``_resolve_session_live`` above.
     Shares the archived-twin match predicate with the creation-side guard
@@ -179,7 +179,7 @@ def _resolve_find_archived_twin_by_handoff_id():
 
 def _resolve_claim_state():
     """Import coordinator_core.claim_state.resolve_claim_state via
-    CLAUDE_KLABAUTER_ROOT.
+    the engine root.
 
     Same in-process import trampoline as ``_resolve_session_live`` above.
     C1 (commit 1194eb3f4) landed this as the canonical ledger-first claim
@@ -195,7 +195,7 @@ def _resolve_claim_state():
 
 def _resolve_handoff_has_live_children():
     """Import coordinator_core.ops.handoff_children._handoff_has_live_children
-    and coordinator_core.git.repo_root.git_common_dir via CLAUDE_KLABAUTER_ROOT.
+    and coordinator_core.git.repo_root.git_common_dir via the engine root.
 
     Same in-process import trampoline as ``_resolve_session_live`` above.
     Amplification burn-down (state/ledgers/amp-wave4-worklist.md W2):
@@ -225,7 +225,7 @@ def _resolve_handoff_has_live_children():
 
 def _resolve_canonical_kind():
     """Import coordinator_core.frontmatter.baton_class.canonical_kind via
-    CLAUDE_KLABAUTER_ROOT.
+    the engine root.
 
     Same in-process import trampoline as ``_resolve_session_live`` above.
     De-aliases a still-live PRE-rename `kind` value (e.g. `spinoff-roadmap`)
@@ -671,7 +671,7 @@ def main(argv: Optional[list] = None) -> int:
         canonical_kind = _resolve_canonical_kind()
     except (RuntimeError, ImportError) as exc:
         # Review: code-reviewer (P2, Finding 3) — matches the guard already
-        # applied to _resolve_session_live() above (same CLAUDE_KLABAUTER_ROOT
+        # applied to _resolve_session_live() above (same engine-root
         # sys.path trampoline); a stale sibling checkout predating this
         # migration must fail loud with a clean message, not a raw
         # traceback. See _PRE_RENAME_ALIASES's module docstring: a

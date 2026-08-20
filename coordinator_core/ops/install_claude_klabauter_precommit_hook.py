@@ -37,7 +37,7 @@ diverges from the meta-repo installer's `_gate_block`): that module's gates
 run `"$_py" "$_gate_script" || exit $?`, propagating the gate script's raw
 exit code verbatim. That is safe for THAT registry's four scripts, which
 only ever exit 0 or 1. It is NOT safe here: `detect-staged-rollback.py`'s own
-documented exit contract is 0 (clean) / 1 (finding) / 2 (CLAUDE_KLABAUTER_ROOT
+documented exit contract is 0 (clean) / 1 (finding) / 2 (engine-root
 resolution or import failure — its own transport-layer failure, distinct
 from a business finding). A bare `|| exit $?` would let that 2 escape
 straight out of this hook. A pre-commit hook exiting 2 is read by the Claude

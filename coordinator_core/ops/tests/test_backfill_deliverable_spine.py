@@ -39,6 +39,8 @@ import io
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.locked_write import LockTimeout
 from coordinator_core.ops.backfill_deliverable_spine import (
     classify_artifact,
@@ -48,6 +50,8 @@ from coordinator_core.ops.backfill_deliverable_spine import (
     main as backfill_main,
     _stamp_yaml_document,
 )
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -61,6 +61,8 @@ from coordinator_core.install.substrate import (
     _write_bin_manifest,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 @pytest.fixture(autouse=True)
 def _allow_machine_mutation_in_tmp_path(monkeypatch):
     """This file's `_sweep_orphaned_agent_helpers`/`_prune_orphaned_static_bin_names`

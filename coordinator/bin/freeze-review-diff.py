@@ -81,12 +81,12 @@ itself, for which a real trail record would be fixture pollution the chain
 coverage gate later reads as truth. It is deliberately not a
 convenience — suppressing the record re-opens the silence AC1 exists to close.
 
-Exit 3 (record refused) is reserved for a caller that ASKED for the record
-path: a refused write on the default path leaves a successful freeze
-successful (exit 0 + stderr warning), because the write-side foreign-session
-guard legitimately refuses ranges a freeze may still validly want (e.g.
-commits carrying no attributable ``Session-Id:`` trailer), and turning those
-freezes into failures would break callers that pass today.
+Exit 3 (record write failed) is reserved for a caller that ASKED for the
+record path: a failed write on the default path leaves a successful freeze
+successful (exit 0 + stderr warning), because the record write can still fail
+for reasons a freeze does not care about (an unresolvable session_id, an
+absent native seam), and turning those freezes into failures would break
+callers that pass today.
 
 --slice-id is a filename component, not a path: a value containing a path
 separator or `..` is rejected (exit 1, nothing written) rather than silently
@@ -111,8 +111,8 @@ Exit codes (the full matrix — freeze outcome x record outcome x flags):
           * record written, path NOT printed (the default: one stdout line);
           * record written, path printed as stdout line 2
             (--print-trail-record);
-          * record write REFUSED and the caller did not ask for the path —
-            refusal reason on stderr as a warning, stdout still one line;
+          * record write FAILED and the caller did not ask for the path —
+            the reason on stderr as a warning, stdout still one line;
           * record suppressed by --no-trail-record.
     1 — the FREEZE failed: missing/empty --range, invalid --slice-id,
         unresolvable repo root, unresolvable HEAD, or `git diff` itself
@@ -126,8 +126,10 @@ Exit codes (the full matrix — freeze outcome x record outcome x flags):
         freeze the WRONG (over-broad) diff while still reporting exit 0, the
         exact silent-wrong-artifact failure this CLI exists to prevent.
     3 — the freeze SUCCEEDED (both files written, `.diff` path printed) but
-        the record write was refused (e.g. the foreign-session scope guard,
-        an unresolvable session_id, an absent native seam) AND
+        the record write failed (an unresolvable session_id, an absent native
+        seam, or any other op-side error — the foreign-session scope guard
+        that used to be the headline cause is gone, K-010, but this row stays
+        reachable through the rest) AND
         --print-trail-record was passed. Distinct from 1 so a caller can tell
         "no frozen diff" from "frozen diff, no open-loop record". Gated on the
         flag because a caller that asked for the record path and did not get
@@ -159,18 +161,14 @@ Negative-spec:
     - Does NOT add a stdout line for the record unless --print-trail-record
       is passed — see the stdout-slurping callers named above. The WRITE is
       not gated on any flag; only the printing is.
-    - Does NOT make the record write a precondition of the freeze. A refused
+    - Does NOT make the record write a precondition of the freeze. A failed
       record never unwrites the frozen diff and never fails the freeze on the
       default path.
-    - Does NOT weaken or bypass `review_trail_write._guard_foreign_session_range`
-      to make automatic emission succeed more often. A refused range is a
-      correct refusal; the CLI degrades to a warning rather than arguing with
-      it.
     - Does NOT open-code the record write or shell out to
       coordinator-write-review-trail.py — the native `review_trail.write` op
-      via cc_invoke.route_mutation() is the only path, so the write-side
-      foreign-session scope guard, symbolic-ref concretization, and
-      never-clobber filename reservation all still apply to a pending record.
+      via cc_invoke.route_mutation() is the only path, so symbolic-ref
+      concretization and never-clobber filename reservation both still apply
+      to a pending record.
     - Does NOT invent an open/closed record field. `verdict: pending` IS the
       open state (docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md
       § Anti-scope); a parallel `loop_state` key would be a second source of

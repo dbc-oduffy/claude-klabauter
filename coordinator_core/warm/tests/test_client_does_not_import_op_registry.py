@@ -30,12 +30,20 @@ NEGATIVE-SPEC:
     fact.
   - Does NOT cover the server's own startup path, which legitimately needs
     the registry.
+
+Spawn ratchet C2 disposition: TIER -- "importing X registers no ops" is
+meaningless once this process has already imported the tree; a clean
+interpreter is the property under test, not incidental.
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _COUNT_AFTER_CLIENT_IMPORT = (
     "import sys;"

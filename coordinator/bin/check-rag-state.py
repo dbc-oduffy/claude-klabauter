@@ -19,7 +19,7 @@ subprocess hop for no benefit, same rationale as coordinator-auto-push.
 
 Exit-code convention: this is a FAIL-LOUD gate-shaped script (its own bash
 oracle `exit 1`s on both "state is unknown" and "DoE-root/trust preflight
-failed") — the trampoline preserves that: sys.exit(1) on CLAUDE_KLABAUTER_ROOT
+failed") — the trampoline preserves that: sys.exit(1) on the engine root
 resolution failure or import failure, exactly like handoff-gate-aging, NOT
 the auto-push "never block" exit-0 shape.
 """

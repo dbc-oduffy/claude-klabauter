@@ -28,6 +28,8 @@ from coordinator_core.install.manifest_reader import (
     resolve_manifest_path,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 # ---------------------------------------------------------------------------
 # find_python

@@ -15,14 +15,14 @@ This file is the discoverable, always-on-PATH stand-in: it lives in
 picks it up automatically and emits a forwarder for it into the already-
 PATH'd settings-home `bin/` — no edit to substrate.py needed.
 
-This file is a thin trampoline: resolve CLAUDE_KLABAUTER_ROOT, import, hand off to
+This file is a thin trampoline: resolve the engine root, import, hand off to
 `coordinator_core.invoke.__main__.main` — matching coordinator-install.py's
 shape, its closest sibling in both naming and lifecycle. `main()` parses
 `sys.argv` itself and terminates the process via `os._exit()` on every path
 (success and error alike — see that module's own docstring, § Exit codes),
 so this trampoline never returns and never needs its own `sys.exit()` call.
 
-Fail-loud-on-ambiguity: if CLAUDE_KLABAUTER_ROOT cannot be resolved or the claude-klabauter
+Fail-loud-on-ambiguity: if the engine root cannot be resolved or the claude-klabauter
 module is not importable, exit 1 rather than 0 — a silent no-op here would
 be indistinguishable from "op declined", which is the exact ambiguity
 `coordinator-invoke`'s own pyproject.toml comment calls out as the reason
@@ -57,7 +57,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"coordinator-invoke.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"coordinator-invoke.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(

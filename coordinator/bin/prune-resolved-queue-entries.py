@@ -33,7 +33,7 @@ to improvement-queue.md and bug-backlog.md, invoked from /update-docs
 #   0 — file pruned and atomically replaced (or no changes needed)
 #   1 — usage error, disallowed basename, or file-not-found (business
 #       failure — fails loud with a stderr message, never skips silently)
-#   2 — claude-klabauter-link transport failure (CLAUDE_KLABAUTER_ROOT unresolvable, or
+#   2 — claude-klabauter-link transport failure (the engine root unresolvable, or
 #       coordinator_core.ops.prune_resolved_queue_entries not importable) —
 #       a DEDICATED code, distinct from both business codes above, so a
 #       caller (e.g. /update-docs) cannot mistake a claude-klabauter outage for a
@@ -61,9 +61,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the DR-276 runner.
+    """Resolve the engine root, put it on sys.path, and import the DR-276 runner.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

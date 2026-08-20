@@ -556,42 +556,6 @@ def test_write_review_trail_many_writes_one_record_per_qualifying_slice(tmp_path
     assert calls[1]["sha_range"] == "b1..b2"
 
 
-def test_write_review_trail_many_one_refused_slice_does_not_suppress_siblings(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-
-    from coordinator_core.ops.review_trail_write import ForeignSessionRangeRefused
-
-    slices = [
-        {
-            "sha_range": "foreign..range",
-            "reviewer": "code-reviewer",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 10,
-        },
-        {
-            "sha_range": "own..range",
-            "reviewer": "staff-eng",
-            "scope": "session",
-            "verdict": "warn",
-            "diff_loc": 20,
-        },
-    ]
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        if params["sha_range"] == "foreign..range":
-            raise ForeignSessionRangeRefused("refused: foreign session range")
-        return {"out_path": f"state/review-trail/{params['sha_range']}.json"}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
-
-    assert result["acted"] == [f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/own..range.json"]
-    assert result["failed"] == []
-    assert len(result["failed_critical"]) == 1
-    assert "foreign..range" in result["failed_critical"][0] or "refused" in result["failed_critical"][0]
-
-
 def test_write_review_trail_many_17_slices_run_concurrently_not_n_times_serial(tmp_path):
     """KPI regression (2026-08-15, docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-
     budget.md): measured on a real `/workstream-complete` pass, 17
@@ -599,8 +563,9 @@ def test_write_review_trail_many_17_slices_run_concurrently_not_n_times_serial(t
     to >30s (the global dispatch guard tripped twice) -- 17.8s of that was
     reproduced here in isolation, sequentially, on a tiny synthetic repo
     with no real contention, confirming the dominant cost was per-slice
-    SUBPROCESS-SPAWN latency (`review_trail_write._guard_foreign_session_
-    range` + `_own_session_touched_paths_and_untrailered_flag`, each
+    SUBPROCESS-SPAWN latency (measured against the then-live
+    `review_trail_write._guard_foreign_session_range`, since removed by
+    K-010, plus `_own_session_touched_paths_and_untrailered_flag`, each
     genuinely re-derived per slice since every slice names a DIFFERENT
     sha_range), not git's own walk cost over the tiny fixture data.
 

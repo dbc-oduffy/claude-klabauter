@@ -22,7 +22,7 @@
 #
 # Exit codes: 0 on a successful report (REGARDLESS of the N/M verdict --
 # this is a report, never a gate; see NEGATIVE SPEC below). 3
-# (_TRANSPORT_FAIL) when CLAUDE_KLABAUTER_ROOT cannot be resolved or the wrapped
+# (_TRANSPORT_FAIL) when the engine root cannot be resolved or the wrapped
 # coordinator_core.session modules are not importable -- "the engine could
 # not be reached," same convention as session-liveness-cli /
 # session-reachability-cli. A usage error (unknown subcommand) exits 2.

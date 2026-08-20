@@ -20,6 +20,8 @@ import sys
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "check-install-doc-payload.py")
 PYTHON = sys.executable

@@ -55,7 +55,7 @@ import cc_invoke as _mod  # noqa: E402  (import after path setup)
 # because the behaviour under test IS the spawn (a hermetic, no-ambient-state
 # child) — mirrors test_cc_invoke_self_location_rung.py's own declared
 # rationale (test_no_new_spawning_tests.py Rule 2).
-pytestmark = [pytest.mark.cadence]
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 # ---------------------------------------------------------------------------

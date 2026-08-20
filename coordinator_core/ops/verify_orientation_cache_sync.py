@@ -33,7 +33,7 @@ import — see docs/wiki/DOE-PORT template): the trampoline resolves
 REPO_ROOT / STATE_ROOT / CACHE_FILE (a 5-rule resolver,
 `coordinator-state-root.py`, deliberately NOT re-derived here — reused via
 subprocess exactly as `coordinator_core.ops` reuses
-`coordinator-claude-klabauter-root.sh` for CLAUDE_KLABAUTER_ROOT — re-deriving a 5-rule cross-repo
+`coordinator-claude-klabauter-root.sh` for the engine root — re-deriving a 5-rule cross-repo
 resolver in a second language is a duplicate-logic drift risk, not a
 simplification) and handles `--list` / missing-cache-file (both no-transport,
 no-schema-check outcomes). This module owns the schema-check logic only:

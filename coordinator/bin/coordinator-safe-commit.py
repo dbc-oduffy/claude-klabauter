@@ -174,7 +174,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import require_engine_on_path, resolve_engine_root  # noqa: E402
+from cc_invoke import _resolve_claude_klabauter_root, require_engine_on_path  # noqa: E402
 
 
 BLANKET_ALLOWED_COMMANDS = frozenset(
@@ -220,7 +220,7 @@ def _import_session():
     try:
         require_engine_on_path(__file__)
     except RuntimeError as exc:
-        print(f"coordinator-safe-commit: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"coordinator-safe-commit: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(3)
     try:
         from coordinator_core.session import claims as cs_claims
@@ -563,6 +563,29 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     the test file for which half is macOS-verified vs. reasoned-but-
     unverified on Windows.
 
+    2026-08-20 fix (A24, docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md
+    § C24): the emitted retry command was shaped wrong on two axes. (1)
+    Params rode positional argv (`... ceremony.scoped_git_commit '<params
+    json>' --repo ...`) — the exact shape `cc_invoke`'s own
+    `cc_invoke`/`cc_invoke_bare` moved OFF of, unconditionally, to escape
+    `FileNotFoundError: [WinError 206] The filename or extension is too
+    long` once `paths` holds enough dirty files (see cc_invoke.py's own
+    "Params transport" docstring note). Fixed: params are now written to a
+    tempfile at emit time and the suggestion references it via
+    `--params-file <path>`, matching cc_invoke's own unconditional
+    transport. (2) `PYTHONPATH` was resolved via `cc_invoke.
+    resolve_engine_root(__file__)` — the LOCATOR axis ("where is THIS
+    co-located script's own tree"), which answers with the SOURCE checkout
+    this script happens to sit in. This is a DISPATCH command (`python -m
+    coordinator_core.invoke ...`), which needs the DISPATCH axis instead —
+    "which engine executes" (see `cc_invoke._resolve_engine_root`'s own
+    "DISPATCH axis vs LOCATOR axis" docstring note) — so a dual-boot box
+    with a published mirror installed got a retry command pointed at the
+    live working tree rather than the engine `coordinator_core.invoke`
+    itself would actually dispatch to. Fixed by resolving via
+    `cc_invoke._resolve_claude_klabauter_root()` (module-level import, line ~159)
+    instead.
+
     `host_is_windows` (default `None` -> real `os.name == "nt"`) mirrors
     the override-parameter pattern `coordinator_core.bash_guards.
     _platform_verdict.platform_verdict` already establishes for this exact
@@ -583,13 +606,23 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     paths = dirty if dirty else ["<your-paths>"]
     params = json.dumps({"worktree_root": worktree_root, "paths": paths, "message": subject or "<subject>"})
     try:
-        claude_klabauter_root = resolve_engine_root(__file__)
+        params_fd, params_path = tempfile.mkstemp(prefix="coordinator-safe-commit-remediation-params-")
+        with os.fdopen(params_fd, "w", encoding="utf-8", newline="\n") as params_fh:
+            params_fh.write(params)
+    except OSError as exc:
+        return (
+            "  # params-file write failed (%s) — could not stage the retry command's\n"
+            "  # payload; run ceremony.scoped_git_commit directly instead."
+            % (exc,)
+        )
+    try:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
     except RuntimeError as exc:
         return (
             "  # claude-klabauter root resolution failed (%s) — run from claude-klabauter's own\n"
             "  # tree, or fix the engine-root resolution first, then:\n"
-            "  python3 -m coordinator_core.invoke ceremony.scoped_git_commit '%s' --repo %s --bare"
-            % (exc, params, worktree_root)
+            "  python3 -m coordinator_core.invoke ceremony.scoped_git_commit --params-file %s --repo %s --bare"
+            % (exc, params_path, worktree_root)
         )
 
     python_bin, python_args = _resolve_python_invocation()
@@ -599,7 +632,8 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
         "-m",
         "coordinator_core.invoke",
         "ceremony.scoped_git_commit",
-        params,
+        "--params-file",
+        params_path,
         "--repo",
         worktree_root,
         "--bare",

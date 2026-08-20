@@ -15,8 +15,12 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 import coordinator_core.pickup_assemble as pickup_assemble
 from coordinator_core.session_baton import store
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 # ---------------------------------------------------------------------------

@@ -65,7 +65,7 @@
 #       failed, ownership/pathspec refusal, or a reason this CLI does not
 #       yet recognize).
 #   2 — usage error.
-#   3 — transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / seam absent).
+#   3 — transport failure (the engine root is unresolvable / seam absent).
 #   4 — --stage-patch refusal: the patch did not apply (reason:
 #       "patch-did-not-apply").
 #   5 — --stage-patch refusal: a supplied blob's HEAD CAS check failed
@@ -559,7 +559,7 @@ def _worktree_root(explicit: str | None) -> str:
 def _legacy_absent() -> None:
     """State-1 (claude-klabauter seam absent) has no bash predecessor to fall back to —
     this CLI is native-only from birth. Raising here lets `route()` wrap the
-    failure in its own four-rung CLAUDE_KLABAUTER_ROOT remediation message rather than
+    failure in its own four-rung engine-root remediation message rather than
     this file re-deriving one."""
     raise RuntimeError(
         "scoped-git-commit has no legacy fallback: it is a thin trampoline over "
@@ -592,7 +592,7 @@ def _resolve_own_session_id() -> str:
     happens to run, survives that regardless of where execution lands.
 
     Convention: mirrors `coordinator-queue-append.py::_resolve_session_id`
-    — fail-soft to "" on any resolution or import failure (no CLAUDE_KLABAUTER_ROOT,
+    — fail-soft to "" on any resolution or import failure (no engine root,
     no engine on path, no ambient session), which the caller treats as
     "omit the param, let the op resolve it itself" — never a fabricated or
     empty-string override. A resolved value that is not UUID-shaped is

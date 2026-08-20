@@ -50,7 +50,7 @@ Exit-code contract (byte-parity with the bash oracle):
     1  business failure — coordinator-initiative missing/not-executable, mapping file
        not found, lock held by a live concurrent instance, or errors > 0 after
        processing all pairs (fail-loud, matches oracle's `exit 1` on `$errors -gt 0`).
-    (transport/import failure — CLAUDE_KLABAUTER_ROOT resolution or `coordinator_core` import
+    (transport/import failure — engine-root resolution or `coordinator_core` import
     failing before this module is even reached — is NOT a code this function can
     return; it is handled by the DoE trampoline itself, which uses a DEDICATED exit
     code 2 for that case per the porter addendum §3b fail-loud-gate-script rule,

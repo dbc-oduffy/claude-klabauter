@@ -45,9 +45,13 @@ _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _COORDINATOR_ROOT = os.path.dirname(os.path.dirname(_TESTS_DIR))  # bin/tests -> bin -> coordinator
 _LAUNCHER = os.path.join(_COORDINATOR_ROOT, "scripts", "install-maximalist.cmd")
 
-pytestmark = pytest.mark.skipif(
-    os.name != "nt", reason="install-maximalist.cmd is a Windows-only launcher"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.name != "nt", reason="install-maximalist.cmd is a Windows-only launcher"
+    ),
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
 
 # Known cmd.exe metacharacter-mangling signatures (F3). Any of these appearing
 # in the output of a clean `--help` invocation means prose (docstring text,

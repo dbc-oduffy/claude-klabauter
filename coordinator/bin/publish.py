@@ -304,7 +304,7 @@ def _import_claude_klabauter_percolate() -> ClaudeKlabauterPercolate:
     cc_invoke_path = _locate_cc_invoke()
     if cc_invoke_path is None:
         raise EngineUnavailableError(
-            "cc_invoke.py not found on any of the 3 search rungs — cannot resolve CLAUDE_KLABAUTER_ROOT"
+            "cc_invoke.py not found on any of the 3 search rungs — cannot resolve the engine root"
         )
 
     try:

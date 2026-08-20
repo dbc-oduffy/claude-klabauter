@@ -73,7 +73,7 @@ _USAGE = "usage: python3 sweep-consumed-handoffs.py [-h] [--dry-run] [<repo_root
 
 
 def _import_housekeeping_seam():
-    """Resolve CLAUDE_KLABAUTER_ROOT (self-location-first) and import
+    """Resolve the engine root (self-location-first) and import
     `housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`.
 
     Mirrors `sweep-boot.py::_import_housekeeping_seam` / the copies in the sibling

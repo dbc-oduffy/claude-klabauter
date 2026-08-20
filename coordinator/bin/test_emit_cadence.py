@@ -12,7 +12,7 @@ This port achieves the equivalent hermetic coverage by pre-populating
 `sys.modules["cc_invoke"]` with a fake module BEFORE importing the subject:
 emit-cadence.py does `from cc_invoke import RouteMutationError, route_mutation` after its
 own `sys.path.insert(0, lib_dir)`, but Python's import machinery checks sys.modules first
--- a pre-seeded entry short-circuits the file search entirely, so no live CLAUDE_KLABAUTER_ROOT /
+-- a pre-seeded entry short-circuits the file search entirely, so no live engine-root /
 coordinator_core.invoke subprocess is ever spawned and no real emission fires. Each test
 loads a FRESH copy of the subject module (importlib, a new module object per test) so the
 fake `route_mutation` can vary per test without cross-test leakage.
@@ -56,6 +56,10 @@ import pytest
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SUBJECT_PATH = os.path.join(SCRIPT_DIR, "emit-cadence.py")
 
+# Stand-in for the git-resolved repo root — see `_run_main`. Never touched on
+# disk: route_mutation is faked in every test that reaches it.
+_FAKE_REPO_ROOT = os.path.join(SCRIPT_DIR, "fake-repo-root")
+
 
 class _FakeRouteMutationError(RuntimeError):
     """Stand-in for cc_invoke.RouteMutationError — carries .result like the real one."""
@@ -79,7 +83,7 @@ def _install_fake_cc_invoke(route_mutation_fn):
     """Seed sys.modules["cc_invoke"] with a fake module exposing route_mutation
     and RouteMutationError. Must run BEFORE the subject module is imported —
     the subject's `from cc_invoke import ...` resolves against sys.modules
-    first, so this fully short-circuits any real file/CLAUDE_KLABAUTER_ROOT lookup and
+    first, so this fully short-circuits any real file/engine-root lookup and
     guarantees no live emission fires.
 
     Returns the prior sys.modules entry (or `_ABSENT`) — hand it to
@@ -129,6 +133,14 @@ def _run_main(route_mutation_fn, env_overrides: dict | None = None):
     prior = os.environ.get(env_key)
     try:
         subject = _load_subject_fresh()
+        # `_resolve_repo_root` reaches for `cc_invoke.ensure_engine_on_path`,
+        # a name the fake module above deliberately does not carry, and then
+        # spawns git via `show_toplevel`. Both are outside what this suite
+        # pins (the gate check and the except ladder around route_mutation),
+        # and the git spawn would put a fast-tier suite on the spawn ratchet.
+        # Stub the resolution to a fixed root: route_mutation is faked, so the
+        # value is inert everywhere except the assertions that read it back.
+        subject._resolve_repo_root = lambda: _FAKE_REPO_ROOT
         if env_overrides and env_key in env_overrides:
             os.environ[env_key] = env_overrides[env_key]
         elif env_key in os.environ:
@@ -234,7 +246,17 @@ _GATE_ON = {"COORDINATOR_EMISSION_CADENCE_LIVE": "1"}
 
 def test_legacy_path_seam_absent_propagates():
     def _route_mutation(op, params, repo_root, legacy_fn):
-        legacy_fn()  # mirrors route()'s State-1 branch: call and propagate
+        # Mirrors route()'s State-1 branch VERBATIM (cc_invoke.py :: route):
+        # it calls legacy_fn() inside a try and re-raises whatever comes out
+        # wrapped in a PLAIN RuntimeError chained `from exc` — it does not
+        # propagate the original type. An earlier revision of this fake
+        # propagated `_SeamAbsentError` raw, which no real transport does, and
+        # so pinned an `except _SeamAbsentError` arm in the subject that could
+        # never match in production.
+        try:
+            legacy_fn()
+        except Exception as exc:
+            raise RuntimeError("claude-klabauter control plane unavailable") from exc
 
     code, out, err = _run_main(_route_mutation, _GATE_ON)
     assert code == 1

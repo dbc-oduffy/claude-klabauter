@@ -52,7 +52,7 @@ Exit codes:
         D2) this whole op family preserves.
     1 -- cannot resolve git repo root from $PWD (not a git repo). Raised by
         changelog_ops.main() itself.
-    2 -- claude-klabauter-link failure: CLAUDE_KLABAUTER_ROOT unresolvable, or
+    2 -- claude-klabauter-link failure: the engine root unresolvable, or
         coordinator_core.ops.changelog_ops not importable at that root. This
         preserves the PRIOR cc_invoke veneer's own documented exit-2
         "post-spawn transport failure -- fail loud, no fallback" contract

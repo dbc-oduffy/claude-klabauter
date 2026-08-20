@@ -62,7 +62,7 @@ applied in the sibling ports gen_claude_doe_launcher.py / gen_doe_root_pointer.p
 Transport-failure exit code note (porter-brief addendum § 3b): this module's own
 exit codes are pure CLI-usage/business codes (0 success, 1 failure) — it has no
 notion of a "transport" failure itself (no subprocess, no claude-klabauter-internal call).
-The DoE-side trampoline's CLAUDE_KLABAUTER_ROOT-resolution / import-failure path (a distinct,
+The DoE-side trampoline's engine-root-resolution / import-failure path (a distinct,
 outer transport-failure class) maps to a DEDICATED exit code 2 — never a reused
 business rc — per addendum rule A3b, so `run_required`-style callers can tell
 "the install step's own business logic failed" (1) apart from "the claude-klabauter engine
@@ -158,7 +158,7 @@ Exit codes:
        --check-only pass)
   1 -- any failure: unknown argument, missing --template value, template not
        found, rc sentinel block hand-modified, rc file uncreatable, or (from the
-       DoE trampoline) CLAUDE_KLABAUTER_ROOT/import resolution failure
+       DoE trampoline) engine-root/import resolution failure
 """
 
 

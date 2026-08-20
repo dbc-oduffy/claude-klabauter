@@ -16,6 +16,13 @@ C20-anchored behaviors below deterministic and importable on non-Windows,
 per this module's own "must import on non-Windows" constraint.
 
 Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C30
+
+Spawn ratchet C2 disposition: TIER --
+`test_idle_demotion_survives_token_rotation_after_serving` runs the
+predecessor in a real subprocess because `idle.py`'s clock is
+process-global (module docstring), so two servers' idle state cannot be
+faithfully modelled in one process; a clean interpreter is load-bearing for
+that one test, and Rule 4 tiers at file granularity.
 """
 
 from __future__ import annotations
@@ -26,11 +33,14 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.session import declared_writes
 from coordinator_core.warm import breadcrumb, election, idle, lifecycle, server, skew, telemetry
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture(autouse=True)
@@ -373,6 +383,131 @@ def test_run_dispatch_opens_per_request_state(monkeypatch):
     assert result["result"] == "ok"
     assert captured["active_during"] == []
     assert declared_writes.active_declarations() is None
+
+
+def test_run_dispatch_captures_handler_stdout_into_stderr_field(monkeypatch):
+    """W9: a handler `print()` served warm must not be silently discarded --
+    `_run_dispatch` must capture it and fold it into the `_stderr` sibling
+    field `warm.client` already pops and relays, the same field the
+    pre-existing `diagnostics` mechanism uses."""
+
+    async def fake_dispatch_message(msg: dict) -> dict:
+        print("handler stdout line")
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": "ok"}
+
+    monkeypatch.setattr("coordinator_core.ipc.dispatch_message", fake_dispatch_message)
+
+    result = server._run_dispatch({"jsonrpc": "2.0", "id": 1, "method": "noop", "params": {}})
+
+    assert result["result"] == "ok"
+    assert "handler stdout line" in result["_stderr"]
+
+
+def test_pool_dispatch_worker_captures_handler_stdout_into_stderr_field(monkeypatch):
+    """Same contract as `_run_dispatch`, for the process-pool worker target
+    -- the worker binds stdout to `os.devnull`
+    (`_bind_null_std_streams`/`_suppress_pool_worker_consoles`), so this is
+    the ONLY point that can relay a handler's `print()` warm-served through
+    the pool."""
+
+    async def fake_dispatch_message(msg: dict) -> dict:
+        print("pool worker stdout line")
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": "ok"}
+
+    monkeypatch.setattr("coordinator_core.ipc.dispatch_message", fake_dispatch_message)
+
+    result = server._pool_dispatch_worker({"jsonrpc": "2.0", "id": 1, "method": "noop", "params": {}}, None)
+
+    assert result["result"] == "ok"
+    assert "pool worker stdout line" in result["_stderr"]
+
+
+# ---------------------------------------------------------------------------
+# C6 -- a warm-served refusal keeps its diagnostic. `emit_diagnostic`'s 3
+# call sites are bridged by `entry_seam`'s own sink already (see
+# test_setup_error_reaches_a_warm_caller.py); the other ~1512 sites write
+# straight to `sys.stderr`, which only a REAL stderr capture -- not the
+# sink -- can bridge. These pin that bridge, and tie it to
+# `cc_invoke.RouteMutationError.op_stderr`, the field root cause 1 names.
+# ---------------------------------------------------------------------------
+
+def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch):
+    """A REFUSING op's own diagnostic sentence, written directly to
+    `sys.stderr` (not via `emit_diagnostic`) -- the shape of the other 1512
+    call sites -- must still arrive in the `_stderr` sibling field warm
+    dispatch already relays."""
+
+    async def fake_dispatch_message(msg: dict) -> dict:
+        import sys as _sys
+
+        _sys.stderr.write("refusing op: scoped_to.sha does not resolve\n")
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"exit_code": 1}}
+
+    monkeypatch.setattr("coordinator_core.ipc.dispatch_message", fake_dispatch_message)
+
+    result = server._run_dispatch({"jsonrpc": "2.0", "id": 1, "method": "memo.send", "params": {}})
+
+    assert result["result"] == {"exit_code": 1}
+    assert "scoped_to.sha does not resolve" in result["_stderr"]
+
+
+def test_pool_dispatch_worker_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch):
+    """Same contract as `_run_dispatch`, for the process-pool worker target."""
+
+    async def fake_dispatch_message(msg: dict) -> dict:
+        import sys as _sys
+
+        _sys.stderr.write("pool worker refusal: receiver unresolvable\n")
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"exit_code": 1}}
+
+    monkeypatch.setattr("coordinator_core.ipc.dispatch_message", fake_dispatch_message)
+
+    result = server._pool_dispatch_worker(
+        {"jsonrpc": "2.0", "id": 1, "method": "memo.send", "params": {}}, None
+    )
+
+    assert result["result"] == {"exit_code": 1}
+    assert "receiver unresolvable" in result["_stderr"]
+
+
+def test_captured_stderr_sentence_reaches_route_mutation_error_op_stderr(monkeypatch):
+    """Ties the bridge to root cause 1: `cc_invoke.route_mutation` builds
+    `RouteMutationError.op_stderr` from the child's captured stderr text, and
+    a warm-served refusal's `_stderr` frame field is exactly that text once
+    `warm.client` relays it onto this process's own stderr (see
+    `test_client_pops_and_reemits_rather_than_passing_the_key_through` for
+    the relay pin). This drives the SAME sentence through `_run_dispatch`
+    and then through `RouteMutationError` construction the way
+    `route_mutation` does, proving the field -- not merely "a reader" --
+    carries it.
+    """
+    import sys as _cc_invoke_path_setup
+
+    lib_dir = str(
+        (Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "lib")
+    )
+    if lib_dir not in _cc_invoke_path_setup.path:
+        _cc_invoke_path_setup.path.insert(0, lib_dir)
+    import cc_invoke
+
+    async def fake_dispatch_message(msg: dict) -> dict:
+        import sys as _sys
+
+        _sys.stderr.write("fleet op setup error: the receiver is not registered\n")
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"exit_code": 1, "mode": "send"}}
+
+    monkeypatch.setattr("coordinator_core.ipc.dispatch_message", fake_dispatch_message)
+
+    response = server._run_dispatch({"jsonrpc": "2.0", "id": 1, "method": "memo.send", "params": {}})
+    relayed_stderr = response["_stderr"]
+    assert "the receiver is not registered" in relayed_stderr
+
+    message = cc_invoke.mutation_refusal_message(
+        "memo.send", response["result"], op_stderr=relayed_stderr
+    )
+    exc = cc_invoke.RouteMutationError(message, response["result"], op_stderr=relayed_stderr)
+
+    assert "the receiver is not registered" in exc.op_stderr
 
 
 # ---------------------------------------------------------------------------

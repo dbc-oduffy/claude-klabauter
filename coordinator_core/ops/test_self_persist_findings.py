@@ -30,6 +30,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Import guard — MUST precede any test so @register_op fires first.
 # ---------------------------------------------------------------------------
@@ -38,6 +40,8 @@ import coordinator_core.ops.self_persist_findings  # noqa: F401 — fires @regis
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.locked_write import LockTimeout
 from coordinator_core.ops.self_persist_findings import _handler
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _OP_NAME = "findings.self_persist_fallback"
 assert _OP_NAME in _REGISTRY, (

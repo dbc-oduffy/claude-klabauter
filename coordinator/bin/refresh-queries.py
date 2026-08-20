@@ -61,7 +61,7 @@ from __future__ import annotations
 #       the node bridge (query-records.js) was retired by the 2026-07-22
 #       de-node cutover, reads became an in-process call into
 #       coordinator_core.ops.ceremony.records_query, so this code no longer
-#       covers "node missing" — what remains is a CLAUDE_KLABAUTER_ROOT resolution or
+#       covers "node missing" — what remains is an engine-root resolution or
 #       import failure AT THIS trampoline layer (see below), still distinct
 #       from both CLI-usage (2) and business (1) failure.
 #

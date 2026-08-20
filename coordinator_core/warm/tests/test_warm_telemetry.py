@@ -163,3 +163,169 @@ def test_flush_never_raises_on_write_failure(tmp_path, monkeypatch):
 
     t = telemetry.ServerTelemetry()
     t.flush(engine_root=tmp_path)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# C1: client-side cold-fallback counter (AC4 first half).
+# ---------------------------------------------------------------------------
+
+
+def test_client_cold_count_is_zero_with_no_recorded_fallback(tmp_path):
+    assert telemetry.client_cold_count(tmp_path) == 0
+
+
+def test_record_client_cold_fallback_increments_the_counter(tmp_path):
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    assert telemetry.client_cold_count(tmp_path) == 2
+
+
+def test_client_cold_count_reachable_without_a_server_round_trip(tmp_path):
+    """The counter is a plain file read -- no warm pipe, no running
+    server, no `ServerTelemetry` instance involved at all."""
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    path = telemetry.client_cold_path(tmp_path)
+    assert path.exists()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert "ts" in record
+
+    assert telemetry.client_cold_count(tmp_path) == 1
+
+
+def test_record_client_cold_fallback_never_raises_on_write_failure(tmp_path, monkeypatch):
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(telemetry.Path, "mkdir", _boom)
+
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)  # must not raise
+
+
+def test_try_warm_dispatch_records_cold_fallback(tmp_path, monkeypatch):
+    """The actual client-side call site: `try_warm_dispatch` falling cold
+    (warmth disabled -- the simplest cold-fallback outcome) increments the
+    on-disk counter with no server involved."""
+    from coordinator_core.warm import client
+
+    monkeypatch.setattr(client, "is_warm_enabled", lambda: False)
+    monkeypatch.setattr(client, "_engine_clone_root", lambda: tmp_path)
+
+    assert telemetry.client_cold_count(tmp_path) == 0
+    result = client.try_warm_dispatch({"jsonrpc": "2.0", "method": "ping", "id": 1})
+
+    assert result is None
+    assert telemetry.client_cold_count(tmp_path) == 1
+
+
+def test_try_warm_dispatch_does_not_record_on_a_served_response(tmp_path, monkeypatch):
+    from coordinator_core.warm import client
+
+    monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
+    monkeypatch.setattr(client, "_engine_clone_root", lambda: tmp_path)
+    monkeypatch.setattr(client.election, "pipe_name", lambda token: "irrelevant")
+    monkeypatch.setattr(client, "engine_token", lambda: "tok")
+    monkeypatch.setattr(client, "_caller_session_id", lambda: "")
+
+    response_line = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}) + "\n"
+
+    class _FakeFh:
+        def write(self, data):
+            pass
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            return response_line.encode("utf-8")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakeFh())
+
+    result = client.try_warm_dispatch({"jsonrpc": "2.0", "method": "ping", "id": 1})
+
+    assert result == {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+    assert telemetry.client_cold_count(tmp_path) == 0
+
+
+# ---------------------------------------------------------------------------
+# C2: one-command warm rate (AC4 second half).
+# ---------------------------------------------------------------------------
+
+
+def test_warm_rate_is_none_with_no_recorded_outcomes(tmp_path):
+    status = telemetry.warm_rate(tmp_path)
+    assert status["warm_count"] == 0
+    assert status["cold_count"] == 0
+    assert status["total"] == 0
+    assert status["warm_rate"] is None
+
+
+def test_warm_rate_reflects_an_injected_mix_of_warm_and_cold(tmp_path):
+    server = telemetry.ServerTelemetry()
+    for _ in range(3):
+        server.record_invocation(warm=True)
+    server.flush(engine_root=tmp_path)
+
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    status = telemetry.warm_rate(tmp_path)
+    assert status["warm_count"] == 3
+    assert status["cold_count"] == 1
+    assert status["total"] == 4
+    assert status["warm_rate"] == pytest.approx(0.75)
+
+
+def test_warm_rate_changes_when_the_mix_changes(tmp_path):
+    """The reported rate must move with the underlying data, not read a
+    constant -- a second, differently-mixed sample must yield a
+    different rate."""
+    server = telemetry.ServerTelemetry()
+    server.record_invocation(warm=True)
+    server.flush(engine_root=tmp_path)
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    first = telemetry.warm_rate(tmp_path)
+    assert first["warm_rate"] == pytest.approx(0.25)
+
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    server2 = telemetry.ServerTelemetry()
+    for _ in range(9):
+        server2.record_invocation(warm=True)
+    server2.flush(engine_root=other_root)
+    telemetry.record_client_cold_fallback(engine_root=other_root)
+
+    second = telemetry.warm_rate(other_root)
+    assert second["warm_rate"] == pytest.approx(0.9)
+    assert second["warm_rate"] != first["warm_rate"]
+
+
+def test_warm_rate_sums_across_multiple_server_lives(tmp_path):
+    first = telemetry.ServerTelemetry()
+    first.record_invocation(warm=True)
+    first.record_invocation(warm=True)
+    first.flush(engine_root=tmp_path)
+
+    second = telemetry.ServerTelemetry()
+    second.record_invocation(warm=True)
+    second.flush(engine_root=tmp_path)
+
+    status = telemetry.warm_rate(tmp_path)
+    assert status["warm_count"] == 3
+    assert status["total"] == 3
+
+
+def test_warm_rate_reachable_without_a_server_round_trip(tmp_path):
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    status = telemetry.warm_rate(tmp_path)
+    assert status["cold_count"] == 1
+    assert status["warm_rate"] == pytest.approx(0.0)

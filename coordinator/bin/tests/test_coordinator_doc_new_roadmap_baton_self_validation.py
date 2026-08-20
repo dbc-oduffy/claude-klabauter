@@ -130,7 +130,14 @@ class RoadmapBatonNoFlagsFallbackTest(unittest.TestCase):
         fallback -- not just the internal scaffolder helper."""
         with _tmp_git_repo() as (repo, out_path):
             result = subprocess.run(
-                [sys.executable, str(_CLI_PATH), "--type", "roadmap-baton", "--out", str(out_path)],
+                # --no-sizing-object is not a "flag" in this test's sense: roadmap-baton
+                # is held to the same explicit-sizing-answer bar as --type plan, so it
+                # is a floor for every invocation. The slug fallback under test is the
+                # --roadmap-id/--stub-id absence, which is unchanged.
+                [
+                    sys.executable, str(_CLI_PATH), "--type", "roadmap-baton",
+                    "--no-sizing-object", "--out", str(out_path),
+                ],
                 cwd=str(repo),
                 capture_output=True,
                 text=True,
@@ -248,7 +255,7 @@ class RoadmapBatonMintsHandoffIdTest(unittest.TestCase):
                 [
                     sys.executable, str(_CLI_PATH), "--type", "roadmap-baton",
                     "--title", "AC13 roadmap baton", "--roadmap-id", "rm-ac13",
-                    "--stub-id", "rm-ac13-01", "--out", str(out_path),
+                    "--stub-id", "rm-ac13-01", "--no-sizing-object", "--out", str(out_path),
                 ],
                 cwd=str(repo),
                 capture_output=True,

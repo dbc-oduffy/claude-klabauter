@@ -2,12 +2,12 @@
 (AC6). Asserts the CLI's exit-code contract in isolation from any live claude-klabauter
 checkout: the imported `claims` module functions are stubbed via a monkeypatch
 of the CLI's own `_import_module` seam, so this suite never requires
-CLAUDE_KLABAUTER_ROOT to resolve or `coordinator_core` to be importable.
+the engine root to resolve or `coordinator_core` to be importable.
 
 Matrix asserted (per docs/plans/2026-07-21-claim-lock-trampoline-flip.md AC2):
     bool True  -> exit 0
     bool False -> exit 1
-    transport failure (unresolvable CLAUDE_KLABAUTER_ROOT / ImportError) -> exit 3
+    transport failure (unresolvable engine root / ImportError) -> exit 3
     usage error (missing/unknown subcommand, wrong arity) -> exit 2
 
 Loaded by file path (`importlib.util.spec_from_file_location`) since
@@ -444,12 +444,12 @@ def test_baton_repo_root_optional_arg_forwarded(stub_import_module):
 
 
 # ---------------------------------------------------------------------------
-# Transport failure (unresolvable CLAUDE_KLABAUTER_ROOT / ImportError) -> exit 3.
+# Transport failure (unresolvable engine root / ImportError) -> exit 3.
 # ---------------------------------------------------------------------------
 
 def test_runtime_error_from_claude_klabauter_root_resolution_exits_3(stub_import_module):
     def _raise_runtime_error():
-        raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable in test")
+        raise RuntimeError("engine root unresolvable in test")
 
     _cli._import_module = _raise_runtime_error
     rc = _cli.main(["claim-artifact", "handoff", "some-basename"])
@@ -469,7 +469,7 @@ def test_import_error_exits_3(stub_import_module):
 
 def test_transport_failure_precedes_subcommand_dispatch_for_claim_plan(stub_import_module):
     def _raise_runtime_error():
-        raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable in test")
+        raise RuntimeError("engine root unresolvable in test")
 
     _cli._import_module = _raise_runtime_error
     rc = _cli.main(["claim-plan", "some-slug"])
@@ -688,7 +688,7 @@ def test_cwd_arg_forwarded(stub_import_liveness_module):
 
 def test_is_session_live_transport_failure_exits_3(stub_import_liveness_module):
     def _raise_runtime_error():
-        raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable in test")
+        raise RuntimeError("engine root unresolvable in test")
 
     _cli._import_liveness_module = _raise_runtime_error
     rc = _cli.main(["is-session-live", "some-sid"])
@@ -855,7 +855,7 @@ def test_transport_failure_emits_no_liveness_basis_line(stub_import_liveness_mod
     no stdout at all, matching the pre-C3 baseline."""
 
     def _raise_runtime_error():
-        raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable in test")
+        raise RuntimeError("engine root unresolvable in test")
 
     _cli._import_liveness_module = _raise_runtime_error
     rc = _cli.main(["is-session-live", "some-sid"])

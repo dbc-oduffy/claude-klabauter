@@ -154,6 +154,11 @@ CLASSIFY_CASES = [
         "empty-stderr",
         "",
     ),
+    (
+        "timeout",
+        "fatal: push exceeded 120s and was killed "
+        "(Could not read from remote repository: timed out)\n",
+    ),
 ]
 
 
@@ -191,6 +196,25 @@ def test_classify_error_dead_ref_not_in_retryable_classes():
     # AC2: a dead local branch ref cannot self-heal by resending the same
     # push -- it must never be retried.
     assert "dead-ref" not in auto_push._RETRYABLE_CLASSES
+
+
+def test_classify_error_timeout_not_in_retryable_classes():
+    # Defect 3 (2026-08-20 dispatch): "timeout" is a NEW label carved out of
+    # what used to classify as "unknown" -- it must stay out of
+    # _RETRYABLE_CLASSES so the retry/timing decision is unchanged, only the
+    # banner-facing label improves.
+    assert "timeout" not in auto_push._RETRYABLE_CLASSES
+
+
+def test_push_once_timeout_message_classifies_as_timeout():
+    # The exact message push_once() synthesizes on subprocess.TimeoutExpired
+    # (GIT_PUSH_TIMEOUT_SECS-templated) must round-trip through classify_error
+    # as "timeout", not fall through to "unknown".
+    stderr_text = (
+        f"fatal: push exceeded {auto_push.GIT_PUSH_TIMEOUT_SECS}s and was killed "
+        "(Could not read from remote repository: timed out)"
+    )
+    assert auto_push.classify_error(stderr_text) == "timeout"
 
 
 # ---------------------------------------------------------------------------
@@ -1647,6 +1671,29 @@ def test_push_once_spawns_no_powershell_even_on_windows_ssh(monkeypatch, tmp_pat
     assert not any("powershell" in part or part == "pwsh" for part in lowered)
 
 
+# The real `_retraction_already_lost`, captured before the autouse fixture
+# below patches the module attribute -- tests that exercise the predicate
+# itself restore this via `monkeypatch.setattr`.
+_REAL_RETRACTION_ALREADY_LOST = auto_push._retraction_already_lost
+
+
+@pytest.fixture(autouse=True)
+def _default_retraction_not_lost(monkeypatch):
+    """Default `_retraction_already_lost` to False (retraction still
+    available) for every test below unless a test overrides it.
+
+    The many pre-existing `_shared_branch_live_count`-mocked hold tests
+    (coalescing, staleness takeover, loss-path, wire-path) exercise record
+    coalescing/staleness/draining, not the retraction predicate -- this
+    fixture pins the pre-predicate "hold fires" behavior as their default so
+    they keep asserting exactly what they did before, instead of every site
+    needing its own unrelated `_run_git` "log" + session_core mock. Tests
+    that DO exercise the predicate restore the real function via
+    `_REAL_RETRACTION_ALREADY_LOST`.
+    """
+    monkeypatch.setattr(auto_push, "_retraction_already_lost", lambda *a, **k: False)
+
+
 # ---------------------------------------------------------------------------
 # Durable pending-push record (AC14/AC14a/AC15, C7/C9) -- hold, drain,
 # coalesce, takeover, the loss path, and a real-subprocess wire-path test.
@@ -1747,6 +1794,158 @@ def test_hold_window_shared_predicate_writes_record_before_sleep_not_via_backoff
     # push actually landed.
     assert auto_push._read_pending_record(repo_root) is None
     assert push_calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# `_retraction_already_lost` -- the narrowing predicate. These restore the
+# real function (the fixture above defaults it to False for every other
+# test in this section) and drive it through `_run_git`'s "log" branch.
+# ---------------------------------------------------------------------------
+
+def test_busy_shared_branch_with_recent_foreign_commit_skips_hold_pushes_immediately(monkeypatch, tmp_path):
+    repo_root = str(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
+    monkeypatch.setattr(auto_push.session_core, "resolve_session_id", lambda cwd=None: "own-sid")
+
+    def _fake_run_git(root, args):
+        if args[0] == "log":
+            # A peer session's commit landed inside the window.
+            return "deadbeef\x1fother-sid"
+        return {
+            ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
+            ("rev-parse", "work/foo"): "abc123",
+        }.get(tuple(args))
+
+    monkeypatch.setattr(auto_push, "_run_git", _fake_run_git)
+    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
+
+    push_calls = {"n": 0}
+
+    def _fake_push_once(root, branch, windows_bash, ssh_remote):
+        push_calls["n"] += 1
+        return True, ""
+
+    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
+
+    def _boom_sleep(_seconds):
+        raise AssertionError("retraction already lost -- must not sleep")
+
+    monkeypatch.setattr(auto_push.time, "sleep", _boom_sleep)
+
+    auto_push.run_push_with_retry(repo_root, "work/foo")
+
+    assert push_calls["n"] == 1
+    assert auto_push._read_pending_record(repo_root) is None
+
+
+def test_shared_branch_no_recent_foreign_commit_hold_still_fires(monkeypatch, tmp_path):
+    repo_root = str(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
+    monkeypatch.setattr(auto_push.session_core, "resolve_session_id", lambda cwd=None: "own-sid")
+
+    def _fake_run_git(root, args):
+        if args[0] == "log":
+            # Only this same session's own commits are in the window.
+            return "abc123\x1fown-sid"
+        return {
+            ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
+            ("rev-parse", "work/foo"): "abc123",
+        }.get(tuple(args))
+
+    monkeypatch.setattr(auto_push, "_run_git", _fake_run_git)
+    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
+
+    push_calls = {"n": 0}
+
+    def _fake_push_once(root, branch, windows_bash, ssh_remote):
+        push_calls["n"] += 1
+        return True, ""
+
+    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
+
+    sleep_calls = []
+    monkeypatch.setattr(auto_push.time, "sleep", lambda s: sleep_calls.append(s))
+
+    auto_push.run_push_with_retry(repo_root, "work/foo")
+
+    assert sleep_calls == [auto_push._HOLD_WINDOW_SECONDS], "hold must still fire when no foreign commit is recent"
+    assert push_calls["n"] == 1
+
+
+def test_retraction_predicate_evaluation_failure_pushes_rather_than_holds(monkeypatch, tmp_path):
+    repo_root = str(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
+    # Own session IS resolvable, but the bounded git log call itself fails
+    # (mirrors a git spawn/timeout failure -- `_run_git` returns None).
+    monkeypatch.setattr(auto_push.session_core, "resolve_session_id", lambda cwd=None: "own-sid")
+
+    def _fake_run_git(root, args):
+        if args[0] == "log":
+            return None
+        return {
+            ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
+            ("rev-parse", "work/foo"): "abc123",
+        }.get(tuple(args))
+
+    monkeypatch.setattr(auto_push, "_run_git", _fake_run_git)
+    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
+
+    push_calls = {"n": 0}
+
+    def _fake_push_once(root, branch, windows_bash, ssh_remote):
+        push_calls["n"] += 1
+        return True, ""
+
+    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
+
+    def _boom_sleep(_seconds):
+        raise AssertionError("unresolvable predicate must fail toward pushing, not holding")
+
+    monkeypatch.setattr(auto_push.time, "sleep", _boom_sleep)
+
+    auto_push.run_push_with_retry(repo_root, "work/foo")
+
+    assert push_calls["n"] == 1
+    assert auto_push._read_pending_record(repo_root) is None
+
+
+def test_retraction_predicate_unresolvable_own_session_id_pushes_rather_than_holds(monkeypatch, tmp_path):
+    repo_root = str(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(auto_push, "_retraction_already_lost", _REAL_RETRACTION_ALREADY_LOST)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, branch: 2)
+    # Own session id unresolvable (e.g. no env var set) -- the predicate
+    # must not even need the git log call to fail toward pushing.
+    monkeypatch.setattr(auto_push.session_core, "resolve_session_id", lambda cwd=None: "")
+    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
+        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
+        ("rev-parse", "work/foo"): "abc123",
+    }.get(tuple(args)))
+    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
+
+    push_calls = {"n": 0}
+
+    def _fake_push_once(root, branch, windows_bash, ssh_remote):
+        push_calls["n"] += 1
+        return True, ""
+
+    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
+
+    def _boom_sleep(_seconds):
+        raise AssertionError("unresolvable own session id must fail toward pushing, not holding")
+
+    monkeypatch.setattr(auto_push.time, "sleep", _boom_sleep)
+
+    auto_push.run_push_with_retry(repo_root, "work/foo")
+
+    assert push_calls["n"] == 1
+    assert auto_push._read_pending_record(repo_root) is None
 
 
 def test_no_sleep_env_skips_backoff_but_not_the_hold_decision(monkeypatch, tmp_path):

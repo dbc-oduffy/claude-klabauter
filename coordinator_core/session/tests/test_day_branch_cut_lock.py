@@ -6,6 +6,10 @@ interpreter do not exercise it.
 
 Spec backlink: DoE-claude
 ``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md`` chunk C7.
+
+Spawn ratchet C2 disposition: TIER -- multi-process IS the property
+(``TestRealProcessRace``); a single interpreter cannot exercise filesystem
+mutex atomicity across real racing processes.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import day_branch_cut_lock as lock
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # The racer HOLDS after acquiring. A winner that exits immediately would be a
 # CONFIRMED-DEAD holder, and the next racer would correctly take the lock

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.ops import session_baton_promote as promote_mod
 from coordinator_core.session_baton import store
 

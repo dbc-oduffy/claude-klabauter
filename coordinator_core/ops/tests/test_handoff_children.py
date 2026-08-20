@@ -26,6 +26,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Import guard — fires @register_op("handoff.has_live_children") as a side-effect.
 # MUST precede any test function so the registry is populated before assertions.
@@ -34,6 +36,8 @@ import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_o
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_children import _handoff_has_live_children
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _OP_NAME = "handoff.has_live_children"
 assert _OP_NAME in _REGISTRY, (

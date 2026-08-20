@@ -242,7 +242,7 @@ def _resolve_session_id() -> str:
     ``CLAUDE_CODE_SESSION_ID``-only read to match the canonical reference —
     see that constant's own docstring for the prior break-class defect two
     disagreeing copies of this ladder caused. Returns "" when unresolved,
-    including on an import/CLAUDE_KLABAUTER_ROOT resolution failure (fail-soft,
+    including on an import/engine-root resolution failure (fail-soft,
     mirroring ``_resolve_live_session_ids``' own degrade contract just
     below) — degrading to "session unknown" is the pre-existing behaviour
     of this function's own env-var-only predecessor, never a hard failure.
@@ -267,7 +267,7 @@ def _resolve_live_session_ids() -> frozenset[str]:
     """Sanctioned liveness predicate — direct in-process import of
     coordinator_core.session.liveness.resolve_live_session_ids(), never a
     raw pid check (RAW-PID-LIVENESS). Fails softly to an empty set on any
-    CLAUDE_KLABAUTER_ROOT/import/runtime error — the bash oracle degraded the same way
+    engine-root/import/runtime error — the bash oracle degraded the same way
     (its `2>/dev/null || true` on the js_bridge_cli subprocess call), so an
     unresolvable liveness signal here means "reconcile only own-session
     entries," never a hard failure of the whole sweep.

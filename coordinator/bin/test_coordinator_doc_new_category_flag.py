@@ -33,10 +33,14 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 # One handoff-schema-family type per each of the six scaffolders' distinct
@@ -53,7 +57,12 @@ _TYPES_AND_DEFAULT_CATEGORY: dict[str, str] = {
 }
 
 _REQUIRED_ARGS: dict[str, list[str]] = {
-    "roadmap-baton": ["--roadmap-id", "smoke-rm", "--stub-id", "smoke-rm-1"],
+    # --no-sizing-object joins the required-arg shims: roadmap-baton is held to
+    # the same explicit-sizing-answer bar as --type plan. This suite tests the
+    # --category axis, so it declares absence rather than minting a sizing object.
+    "roadmap-baton": [
+        "--roadmap-id", "smoke-rm", "--stub-id", "smoke-rm-1", "--no-sizing-object",
+    ],
 }
 
 

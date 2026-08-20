@@ -432,7 +432,7 @@ def _validate_json_schema_node(
     Port of validateJsonSchemaNode from DoE-claude coordinator/bin/lib/schema.js.
 
     Supported keywords: $ref, anyOf, allOf, oneOf, type, enum, format
-    (date/date-time), pattern, minLength, maxLength, minItems, minimum, maximum,
+    (date/date-time), pattern, minLength, maxLength, minItems, uniqueItems, minimum, maximum,
     propertyNames, required (array form), properties, additionalProperties (both boolean
     false and schema-valued — a schema-valued additionalProperties recurses
     into every key not declared in this node's `properties`, same as
@@ -468,7 +468,7 @@ def _validate_json_schema_node(
     silently passing a schema this validator cannot actually check).
 
     minLength (string values only), maxLength (string values only),
-    minItems (array values only), and
+    minItems and uniqueItems (array values only), and
     minimum / maximum (numeric values only, `bool` excluded — JSON Schema's
     `number` type does not include booleans even though Python's `bool`
     subclasses `int`) are size/magnitude bound checks, each ignored for a value of
@@ -858,6 +858,28 @@ def _validate_json_schema_node(
                     'field': field,
                     'error': f'array length {len(value)} is less than minItems {min_items}',
                     'hint': f'Provide at least {min_items} item(s)',
+                })
+
+        # uniqueItems — array values only. Implemented rather than tolerated:
+        # an unimplemented keyword in a shipped schema validates as a silent
+        # no-op, which is the defect class test_schema_keyword_coverage
+        # exists to catch (the same one that shipped `pattern` as a
+        # fleet-shared MAJOR while unenforced). Items are compared by their
+        # canonical JSON form, so unhashable dict/list members compare by
+        # value rather than raising.
+        if schema.get('uniqueItems') is True:
+            _seen: list[str] = []
+            for item in value:
+                try:
+                    _key = json.dumps(item, sort_keys=True, default=str)
+                except (TypeError, ValueError):
+                    _key = repr(item)
+                _seen.append(_key)
+            if len(_seen) != len(set(_seen)):
+                errors.append({
+                    'field': field,
+                    'error': 'array contains duplicate items but uniqueItems is true',
+                    'hint': 'Remove the duplicate entries',
                 })
 
         if 'items' in schema:

@@ -61,11 +61,13 @@ this engine module should bake in as a literal Python constant (that would
 be exactly the "one operator's machine as if it were universal" defect the
 guard itself exists to catch, just moved into the remedy). `discover_families`
 builds the family list at call time from the machine-local registry
-(`repos.*`, `publish.mirrors.*.path`) via the `machine-local` CLI — so this
-tool is useful in any repo whose sibling set differs, with zero code change,
-the same design the guard's own fix-text already points operators at
-(`machine-local get repos.<key>`). Two universal config families
-(`${CLAUDE_HOME:-$HOME}/.claude`, the coordinator settings-home) are added
+(`repos.*`, `publish.mirrors.*.path`), read in-process straight off the
+registry TOML via `machine_resolver` rather than through the `machine-local`
+CLI (see `_default_registry_keys` for why the CLI shell-out is not an option
+on Windows) — so this tool is useful in any repo whose sibling set differs,
+with zero code change, the same design the guard's own fix-text already
+points operators at (`machine-local get repos.<key>`). Two universal config
+families (`${CLAUDE_HOME:-$HOME}/.claude`, the coordinator settings-home) are added
 unconditionally — they are OS/install conventions, not personal paths.
 
 Idempotency
@@ -144,7 +146,6 @@ MUTATES = [
 ]  # --apply rewrites any tracked file (_CODE_EXTENSIONS plus markdown) carrying a mapped concrete-path finding; data-dependent set
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -153,6 +154,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.session.guard_concrete_path_citations import (
     WIN_DRIVE_RE,
@@ -284,56 +286,59 @@ class Family:
     canonical: Optional[str] = None  # fixed replacement text, config families only
 
 
-def _machine_local_bin() -> str:
-    settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
-        os.path.expanduser("~"), ".coordinator-claude-settings"
-    )
-    return os.path.join(settings_home, "bin", "machine-local")
+_REGISTRY_FILES = ("registry.local.toml", "registry.toml")
 
 
-_MACHINE_LOCAL_TIMEOUT_S = 10
+def _default_registry_keys() -> List[str]:
+    """Every dotted key declared across the machine-local registry files, in
+    `_REGISTRY_FILES` precedence order, de-duplicated.
 
+    Reads the registry TOML directly via `coordinator_core.machine_resolver`
+    rather than shelling out to the `machine-local` CLI. That CLI's entry
+    point is an extensionless POSIX shim under the settings home; on Windows
+    `subprocess.run` cannot exec it at all (`OSError: [WinError 193]`), which
+    the caller's degrade-to-None contract then swallowed into "zero repo
+    families" -- every citation classified `no mapped family` and nothing
+    rewritten, on the platform this fleet actually commits from. The direct
+    read is also reset-survivable (the CLI's exec bits live under the
+    resettable `~/.claude`, the registry TOML does not) -- the same reasoning
+    that promoted `machine_resolver.registry_get` in DR-071.
 
-def _default_machine_local_call(args: List[str]) -> Optional[str]:
-    """Run `machine-local <args>`; return stdout on success, None on any
-    failure (missing binary, non-zero exit, OSError, or a hang past
-    `_MACHINE_LOCAL_TIMEOUT_S`) -- a registry read failure degrades this
-    tool to zero discovered repo families, never a crash or an
-    indefinitely hung CLI."""
+    Enumeration only reads the on-disk files: unlike `registry_get`, the
+    `MACHINE_LOCAL_<KEY>` env-override rung cannot participate, because
+    `MACHINE_LOCAL_REPOS_CLAUDE_KLABAUTER_REPO` does not invert to a unique dotted
+    key. Family discovery needs key NAMES, never values, so an env-pinned
+    value for an already-declared key is unaffected.
+
+    Degrades to `[]` on an unreachable or malformed registry (the underlying
+    loader is catch-all), never a crash -- see
+    `_warn_if_family_discovery_degraded` for how that surfaces.
+    """
     try:
-        result = subprocess.run(
-            [_machine_local_bin()] + args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=_MACHINE_LOCAL_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout
+        reg_dir = registry_dir()
+    except Exception:  # noqa: BLE001 -- settings-home resolution failure degrades like an absent registry
+        return []
+    seen: set = set()
+    keys: List[str] = []
+    for fname in _REGISTRY_FILES:
+        for key in load_flat_registry_file(reg_dir / fname):
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
 
 
 def discover_families(
-    call: Callable[[List[str]], Optional[str]] = _default_machine_local_call,
+    keys: Callable[[], List[str]] = _default_registry_keys,
 ) -> List[Family]:
     """Build the family list from the machine-local registry, plus the two
-    universal config families. `call` is injectable for tests -- it takes
-    the argv tail (e.g. `["keys"]`, `["get", "repos.doe_claude"]`) and
-    returns raw stdout or None, mirroring `machine-local`'s own contract."""
+    universal config families. `keys` is injectable for tests -- it returns
+    the registry's dotted key names, mirroring `_default_registry_keys`."""
     families: List[Family] = []
-    keys_out = call(["keys"]) or ""
-    repo_keys = [
-        line.strip()
-        for line in keys_out.splitlines()
-        if line.strip().startswith("repos.") and line.strip().count(".") == 1
-    ]
+    all_keys = [k.strip() for k in (keys() or [])]
+    repo_keys = [k for k in all_keys if k.startswith("repos.") and k.count(".") == 1]
     mirror_path_keys = [
-        line.strip()
-        for line in keys_out.splitlines()
-        if line.strip().startswith("publish.mirrors.") and line.strip().endswith(".path")
+        k for k in all_keys if k.startswith("publish.mirrors.") and k.endswith(".path")
     ]
 
     for key in repo_keys:
@@ -435,15 +440,21 @@ def _replacement_for(token: str, fam: Family, cut: Optional[int] = None) -> str:
     `cut` is the token offset right after the matched segment, as returned
     by `_locate_family`; re-derived here (against just `fam`) when the
     caller didn't already have it."""
-    if fam.category == "config":
-        assert fam.canonical is not None
-        return fam.canonical
-    # repo / publish_mirror: <short_name>:<trailing-subpath-after-repo-name>,
-    # or bare short_name with no trailing subpath. Per
-    # coordinator/docs/wiki/cross-repo-citation-conventions.md.
     if cut is None:
         located = _locate_family(token, [fam])
         cut = located[1] if located else len(token)
+    if fam.category == "config":
+        assert fam.canonical is not None
+        # The canonical text replaces the matched DIRECTORY, not the whole
+        # token -- `<home>/.claude/settings.json` must keep its
+        # `/settings.json`. Dropping the tail would silently retarget the
+        # citation at the directory under `--apply`, which is a content
+        # change dressed as a path fix.
+        tail = token[cut:].lstrip("/\\").replace("\\", "/")
+        return f"{fam.canonical}/{tail}" if tail else fam.canonical
+    # repo / publish_mirror: <short_name>:<trailing-subpath-after-repo-name>,
+    # or bare short_name with no trailing subpath. Per
+    # coordinator/docs/wiki/cross-repo-citation-conventions.md.
     rest = token[cut:]
     rest = rest.lstrip("/\\").replace("\\", "/")
     if rest:
@@ -726,19 +737,24 @@ def _print_report(
 
 
 def _warn_if_family_discovery_degraded(families: List[Family]) -> None:
-    """`discover_families` returns `None` uniformly for a missing
-    `machine-local` binary, a broken `COORDINATOR_SETTINGS_HOME`, or a
-    non-zero exit -- deliberately, so a registry read failure never
+    """`_default_registry_keys` returns `[]` uniformly for an absent
+    registry directory, a broken `COORDINATOR_SETTINGS_HOME`, or a
+    malformed TOML -- deliberately, so a registry read failure never
     crashes the tool. But that degrades silently to the two unconditional
     config families with zero repo/publish_mirror families, and the
     printed report ("no mapped family for this citation" on every hit) is
     indistinguishable from a corpus that is genuinely clean. Warn loudly
-    instead of letting "I could not look" render as "there is nothing"."""
+    instead of letting "I could not look" render as "there is nothing".
+
+    This warning is the only thing that surfaced the Windows CLI-exec
+    defect it now outlives: the tool shipped reporting zero families on
+    every Windows run, and the report read as a clean corpus."""
     if not any(f.category in ("repo", "publish_mirror") for f in families):
         print(
             "warning: fix-concrete-path-citations discovered zero repo/publish_mirror "
-            "families -- the machine-local registry may be unreachable (check "
-            "COORDINATOR_SETTINGS_HOME / machine-local). Every citation will report "
+            "families -- no repos.* / publish.mirrors.*.path keys were readable "
+            "from the machine-local registry (check MACHINE_LOCAL_REGISTRY_DIR / "
+            "COORDINATOR_SETTINGS_HOME). Every citation will report "
             "as 'no mapped family' rather than reflecting a genuinely clean corpus.",
             file=sys.stderr,
         )

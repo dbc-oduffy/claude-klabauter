@@ -30,6 +30,8 @@ from coordinator_core.ops.goal_append import (
 from coordinator_core.ops.emit._slug import machine_slug
 from coordinator_core.testing import symlink_capability
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Positive floor assertion: op must be registered before any test runs.
 _OP_NAME = "goal.append"
 assert _OP_NAME in _REGISTRY, (

@@ -25,6 +25,10 @@ from pathlib import Path
 from coordinator_core.ops import session_baton_promote as promote_mod
 from coordinator_core.session_baton import store
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SCAFFOLDER_PATH = (
     Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 )

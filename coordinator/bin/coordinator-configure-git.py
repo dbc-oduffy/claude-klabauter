@@ -39,7 +39,7 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the DR-276 in-process
+    """Resolve the engine root, put it on sys.path, and import the DR-276 in-process
     runner.
 
     DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than

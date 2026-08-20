@@ -411,8 +411,8 @@ class TestRunStalenessNative:
 
 class TestResolveCoordinatorStateRoot:
     """Locks ``_resolve_coordinator_state_root``'s four branches (Finding 3, sliceroutine-
-    signals-ac5-gate-slice2): meta-repo cwd routes to CLAUDE_KLABAUTER_ROOT/state, sibling-repo cwd
-    routes to <git-root>/state, not-a-git-repo returns None, and meta-repo-but-CLAUDE_KLABAUTER_ROOT-
+    signals-ac5-gate-slice2): meta-repo cwd routes to the engine root/state, sibling-repo cwd
+    routes to <git-root>/state, not-a-git-repo returns None, and meta-repo-but-engine-root-
     unresolvable returns None. Mirrors check_weekly_staleness's own
     test_resolve_state_root_* branch coverage, applied to the explicit-cwd variant."""
 

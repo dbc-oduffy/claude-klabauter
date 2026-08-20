@@ -30,7 +30,7 @@ when UE override drift is suspected; also referenced as coordinator-doctor P-9.
 
 Exit convention: this is a FAIL-LOUD verification script (not an always-0
 advisory like audit-enabled-plugins.py) — a missing/misconfigured registry or
-override is a real drift signal the caller needs to see. On CLAUDE_KLABAUTER_ROOT
+override is a real drift signal the caller needs to see. On engine-root
 resolution or import failure this trampoline therefore exits 1, not 0.
 
 Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
@@ -48,9 +48,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -66,7 +66,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"verify-ue-overrides.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"verify-ue-overrides.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(

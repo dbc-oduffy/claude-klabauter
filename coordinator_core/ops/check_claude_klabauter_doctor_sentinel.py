@@ -8,7 +8,7 @@ This is a READ-CONSUMER only — the sentinel is claude-klabauter-owned and writ
 `bin/claude-klabauter-doctor-probe.py` (on `--triage` and full runs); this module
 never writes it.
 
-Sentinel location: <CLAUDE_KLABAUTER_ROOT>/state/doctor-last-run.json
+Sentinel location: <engine-root>/state/doctor-last-run.json
 Sentinel schema (claude-klabauter-owned):
   { "verdict": "GREEN|AMBER|RED", "red_probes": ["<probe id>", ...],
     "hint": "<one-line remediation>", "ts": <epoch seconds>,
@@ -47,16 +47,16 @@ Negative-spec:
     with the same absent-key tolerance, never a strict key-membership
     assertion — a sentinel this module fails to parse degrades to the
     "sentinel unreadable" line, never a crash.
-  - Does NOT re-derive CLAUDE_KLABAUTER_ROOT via the shell resolution ladder — this
-    module IS running from inside the resolved claude-klabauter root (the DoE-side
-    trampoline already resolved it to reach this import), so CLAUDE_KLABAUTER_ROOT is
+  - Does NOT re-derive the engine root via the shell resolution ladder — this
+    module IS running from inside the resolved engine root (the DoE-side
+    trampoline already resolved it to reach this import), so the engine root is
     simply this file's own repo root, three parents up
-    (ops/ -> coordinator_core/ -> <claude_klabauter_root>).
+    (ops/ -> coordinator_core/ -> <engine-root>).
   - Does NOT shell out to a bootstrapped Python interpreter to parse the
     sentinel JSON (the original .sh had to locate a `python3`/`python`/`py`
     binary from bash to do this) — this module already runs under Python, so
     it uses the stdlib `json` module directly.
-  - A sentinel-unreadable CLAUDE_KLABAUTER_ROOT (resolution itself failing) is not this
+  - A sentinel-unreadable engine root (resolution itself failing) is not this
     module's concern — that failure mode is caught by the DoE-side trampoline
     before this module is ever imported, and degrades silently there (fail
     loud on stderr, exit 0), mirroring the original .sh's fully-silent
@@ -76,7 +76,7 @@ _DEFAULT_STALE_SEC = 604800  # 7 days
 
 
 def _claude_klabauter_root() -> Path:
-    """This module's own repo root: ops/ -> coordinator_core/ -> <claude_klabauter_root>."""
+    """This module's own repo root: ops/ -> coordinator_core/ -> <engine-root>."""
     return Path(__file__).resolve().parents[2]
 
 

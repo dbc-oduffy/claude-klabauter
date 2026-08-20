@@ -33,7 +33,7 @@ byte-for-byte):
         (environment problem)
 
 Transport-failure exit code (trampoline-only, NOT returned by main() here):
-    3 — reserved by the DoE-side trampoline for a CLAUDE_KLABAUTER_ROOT
+    3 — reserved by the DoE-side trampoline for an engine-root
         resolution / import failure (never collides with this module's own
         0/1/2 business codes).
 

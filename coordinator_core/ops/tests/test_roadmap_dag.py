@@ -42,6 +42,8 @@ import pytest
 from coordinator_core.dag import _parse_frontmatter
 from coordinator_core.ops.roadmap_dag import assemble_roadmap_dag
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 # ---------------------------------------------------------------------------
 # Fixture content helpers — production-shaped ---fenced Markdown files

@@ -49,6 +49,8 @@ import pytest
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.ceremony import completion_entry
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _make_git_repo(tmp_path: Path) -> Path:
     """Create a minimal git repo and return its worktree root.

@@ -38,6 +38,8 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _posix(p) -> str:
     """POSIX-slash string form of a path for embedding in a bash

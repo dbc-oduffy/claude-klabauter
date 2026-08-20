@@ -27,14 +27,14 @@ Exit codes:
         COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION set)
     1 — a staged-rollback finding crossed the breadth/depth threshold, and/or
         a mass-deletion finding crossed the ratio/floor threshold
-    2 — CLAUDE_KLABAUTER_ROOT resolution / import failure (this trampoline's own
+    2 — engine-root resolution / import failure (this trampoline's own
         transport failure) OR a usage error from the op (unknown option).
         Both mean "the check never ran"; the stderr message distinguishes
         them.
 
 Direct-import variant (mirrors coordinator/bin/check-registry-codename-leak.py
 and coordinator/bin/pickup-assemble): a plain in-process function call after
-resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop — this op is read-only and has no
+resolving the engine root, no cc_invoke/IPC hop — this op is read-only and has no
 IPC-scoped state to route through, so the direct-import shape fits over
 route_mutation.
 """
@@ -61,7 +61,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"detect-staged-rollback: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"detect-staged-rollback: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(2)
     except ImportError as exc:
         print(

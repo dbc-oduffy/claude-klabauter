@@ -138,11 +138,20 @@ def _no_stamp_message(root: Path) -> str:
         "Remediation: python3 {setup_script}"
     ).format(root=root, setup_script=setup_script)
 
-# Mirrors `coordinator_core.warm.client.ENGINE_SKEW`. Duplicated rather than
-# imported: `client.engine_token` (C15's placeholder seam) is meant to call
-# into THIS module, so importing `client` here would invert that edge into a
-# cycle. Pinned equal to `client.ENGINE_SKEW` by test.
-ENGINE_SKEW = -32001
+def __getattr__(name: str):
+    """PEP 562 lazy re-export of `client.ENGINE_SKEW`, the sole definition
+    (`coordinator_core.warm.client.ENGINE_SKEW`) -- `skew` no longer keeps a
+    duplicate literal. A module-scope `import` here would close
+    `engine_root -> skew -> client -> election -> engine_root` into a real
+    cycle (both `client` and `election` import `engine_root` at their own
+    module scope), so the re-export is deferred to first attribute access
+    instead, well past both modules' load time."""
+    if name == "ENGINE_SKEW":
+        from coordinator_core.warm.client import ENGINE_SKEW
+
+        return ENGINE_SKEW
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _REFRESH_INTERVAL_SECS = 2.0
 
@@ -546,10 +555,12 @@ class ServerVersionState:
 
 def build_skew_response(request_id, server_sha: Optional[str], client_token: str) -> dict:
     """JSON-RPC 2.0 error envelope for a detected skew -- `ENGINE_SKEW`
-    (-32001), naming both `server_sha` (the human-readable sha resolved
+    (-32002), naming both `server_sha` (the human-readable sha resolved
     once at boot; `None` if `resolve_engine_sha` could not resolve it --
     see that function's own `None` contract) and the `client_token` that
     triggered the mismatch, for operator diagnosis."""
+    from coordinator_core.warm.client import ENGINE_SKEW
+
     return {
         "jsonrpc": "2.0",
         "id": request_id,

@@ -44,7 +44,7 @@
 #         docstring negative-spec) -- this trampoline never raises that to
 #         a nonzero exit.
 #   2  -- usage error (missing/unknown subcommand, wrong arity).
-#   3  -- _TRANSPORT_FAIL: CLAUDE_KLABAUTER_ROOT could not be resolved, the
+#   3  -- _TRANSPORT_FAIL: the engine root could not be resolved, the
 #         coordinator_core.session.{reachability,peer_roster,artifact_owner}
 #         modules were not importable, OR the wrapped
 #         resolve_address/build_roster/resolve_artifact_owner call itself

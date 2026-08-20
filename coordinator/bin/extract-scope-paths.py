@@ -66,7 +66,7 @@ def main() -> None:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
-        print(f"extract-scope-paths: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"extract-scope-paths: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(f"extract-scope-paths: coordinator_core.cli_entry not importable: {exc}", file=sys.stderr)

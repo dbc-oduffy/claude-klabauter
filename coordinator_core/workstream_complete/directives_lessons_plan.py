@@ -31,6 +31,9 @@ Consumes manifest (orchestrates, reimplements none):
         -> d-claim-plan-execution-lock
     coordinator/bin/archive-stamp-cli.py stamp-plan-implemented
         -> d-stamp-plan-implemented
+    coordinator/bin/archive-stamp-cli.py stamp-review-verified
+        -> d-attest-review-verified (C8, only when decisions["review"] is
+           truthy this pass -- see `build_review_verified_directive`)
     coordinator/bin/coordinator-harvest-deferrals.py
         -> d-harvest-deferrals-<n> (one per governing plan in scope)
 
@@ -346,6 +349,64 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     ]
 
 
+def build_review_verified_directive(
+    governing_plan: Optional[GoverningPlan], decisions: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Step 2.4's sibling attest write (`d-attest-review-verified`, C8,
+    AC17 -- docs/plans/2026-08-20-the-rungs-get-writers.md). Emitted
+    alongside `d-stamp-plan-implemented` off the SAME `governing_plan_
+    predicate` gate, with the SAME `depends_on="d-claim-plan-execution-
+    lock"` edge (inert by itself, matching `build_plan_claim_and_stamp_
+    directives`'s own -- see that function's docstring for why the real
+    ordering enforcement lives in the trailing arg token, not this field)
+    and the SAME two `jp-open-spine-rows-block-stamp` / `jp-landed-
+    reconciliation-block-stamp` block conditions `__init__.py`'s assembly
+    layer wires onto `d-stamp-plan-implemented` by directive id -- this
+    module only emits the directive itself; the block-condition `depends_
+    on` edges are appended by that caller, matching every other judgment
+    point in this family's own division of labour (module computes/
+    emits, `__init__.py` decides which facts gate a directive).
+
+    Fires only when `decisions["review"]` is truthy -- the session's work
+    went through a code review this pass. Mirrors `__init__.py`'s
+    `build_write_trail_directives`'s own non-empty-`review` gate, but
+    does NOT re-derive that function's five-required-fields shape check:
+    a review that is present but shape-incomplete still attests here
+    (`d-write-trail` itself may simply not fire for it), because this
+    attest is a courtesy record of "a review happened", never a
+    completeness judgment of its own.
+
+    Writes `coordinator_core.ops.plan_status_transition.
+    _stamp_review_verified`'s three attest fields (C6a) via the SAME
+    already-admitted `archive-stamp-cli` CLI `d-stamp-plan-implemented`
+    uses, plan path positional first -- identical argv shape to that
+    sibling directive.
+
+    `--findings` carries the REVIEW-TRAIL PATH (C6a's own docstring: "a
+    count drifts from the record already on disk... and cannot
+    distinguish a P1 from a nitpick"), which is only known once
+    `d-write-trail` actually lands THIS pass -- so, exactly like
+    `d-stamp-plan-implemented`'s own `{d-claim-plan-execution-lock.
+    landed}` token, this threads a `{d-write-trail.entry_path}` inter-
+    directive token (`apply.py::_resolve_arg_tokens`) rather than
+    guessing the path at build time.
+    """
+    if not governing_plan_predicate(governing_plan):
+        return []
+    if not decisions.get("review"):
+        return []
+    assert governing_plan is not None  # narrows for the type checker; predicate already proved it
+    plan_rel = f"docs/plans/{governing_plan.slug}.md"
+    return [
+        _directive(
+            "d-attest-review-verified",
+            "archive-stamp-cli",
+            ["stamp-review-verified", plan_rel, "--findings", "{d-write-trail.entry_path}"],
+            depends_on="d-claim-plan-execution-lock",
+        ),
+    ]
+
+
 def build_deferral_harvest_directives(governing_plans: list[GoverningPlan]) -> list[dict[str, Any]]:
     """Step 2.4b's belt-and-suspenders deferral harvest sweep, run once
     per governing plan in scope (ordinarily one; a chain-terminal session
@@ -411,6 +472,7 @@ def build_governing_plan_directives(
         repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id
     )
     directives = build_plan_claim_and_stamp_directives(governing_plan)
+    directives += build_review_verified_directive(governing_plan, decisions)
 
     harvest_targets: list[GoverningPlan] = [governing_plan] if governing_plan else []
     for slug in decisions.get(_KEY_ADDITIONAL_GOVERNING_PLAN_SLUGS, []) or []:

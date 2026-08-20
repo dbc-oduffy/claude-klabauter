@@ -42,8 +42,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import shutil
-import subprocess
 import types
 from pathlib import Path
 from typing import Any, Optional
@@ -51,37 +49,18 @@ from typing import Any, Optional
 import pytest
 
 import coordinator_core.engine_root as engine_root_mod
-from coordinator_core.win_portability import no_console_creationflags
-
-_TIMEOUT_SECS = 5.0
+from coordinator_core.machine_resolver import registry_get
 
 
 def _machine_local_get(key: str) -> Optional[str]:
-    """Shell out to the ``machine-local`` CLI (PATH-resolved) for *key*.
-
-    Fail-open: a missing binary, a nonzero exit, or a timeout all resolve
-    to ``None`` (treated as "unregistered" by the caller) rather than
-    raising — this mirrors ``coordinator_core.engine_root``'s own Rung 2
-    disposition for the same CLI.
+    """Zero-spawn registry read (DR-071, 2026-07-22): the direct-tomllib
+    reader every DoE-root anchor consumer now binds ``repos.doe_claude``
+    reads to, in preference to the ``machine-local`` CLI. Kept as a thin
+    named wrapper (rather than calling ``registry_get`` inline at each call
+    site) so the module-scope ``_resolve_doe_root()`` call below stays
+    zero-spawn without a spawn-shaped call node anywhere in this file.
     """
-    ml_bin = shutil.which("machine-local")
-    if ml_bin is None:
-        return None
-    try:
-        result = subprocess.run(
-            [ml_bin, "get", key],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    value = result.stdout.strip()
-    return value or None
+    return registry_get(key)
 
 
 def _resolve_doe_root() -> Optional[Path]:

@@ -98,13 +98,13 @@ _USAGE = "usage: python sweep-boot.py [-h] [<repo_root>] [<state_common_dir>]"
 
 
 def _import_housekeeping_seam():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import the shared C17a/C17b housekeeping-failures +
+    """Resolve the engine root and import the shared C17a/C17b housekeeping-failures +
     liveness seam (`coordinator_core.ops.ceremony.detached_spawn.record_child_failure`,
     `coordinator_core.ops.ceremony.housekeeping_liveness.{stamp_liveness,ARCHIVE_SWEEPS}`).
 
     Mirrors `agent-worktree-sweep.py::_import_main`'s resolve-then-sys.path-insert shape —
     this trampoline's own `__file__` lives inside the claude-klabauter checkout, but the seam must be
-    imported via the resolved CLAUDE_KLABAUTER_ROOT (not a relative import) for the same reason every
+    imported via the resolved engine root (not a relative import) for the same reason every
     other in-process op import in this directory does: `repo_root` here is the CALLER's repo
     (may be a consumer repo), not necessarily where this file's coordinator_core sibling
     lives. Returns None on any resolution/import failure -- this seam is best-effort

@@ -19,7 +19,9 @@ Cascade (mirrors the bash oracle verbatim — see the original SKILL.md block):
   deliverable_id — 1. active plan's frontmatter `deliverable_id`
                    2. predecessor handoff's frontmatter `deliverable_id`
                    3. carry (mint(deliverable_id=...)) if either hit, else
-                      mint-from-slug (mint(slug="<YYYYMMDD>-<slug_suffix>"))
+                      mint-from-slug — mint(slug=<the caller's `work_slug`>),
+                      or mint(slug="<YYYYMMDD>-<slug_suffix>") when the caller
+                      supplies none
   initiative     — 1. active plan's frontmatter `initiative`
                    2. predecessor handoff's frontmatter `initiative` (fallback
                       only; continuation handoffs inherit the predecessor's
@@ -314,6 +316,7 @@ def resolve_deliverable_and_initiative(
     additional_predecessors: list[str] | None = None,
     equivalence_map: dict[str, str] | None = None,
     predecessor_is_plan_input: bool = False,
+    work_slug: str | None = None,
 ) -> tuple[str, str]:
     """Run the carry-or-mint cascade. Returns (deliverable_id, initiative_id).
 
@@ -376,6 +379,19 @@ def resolve_deliverable_and_initiative(
     plan dropped its join whether it arrived as `plan_file` or as `predecessor`,
     and the refusal must not depend on which door it came through. See the
     module docstring's "Dropped-join refusal, two arms" block.
+
+    `work_slug` (keyword-only, defaults `None` — every existing call site is
+    unaffected): the mint-from-slug basis for a chain-root artifact, supplied
+    by the caller as the WORK's own slug. When omitted the basis stays the
+    date-shaped `<YYYYMMDD>-<slug_suffix>` fallback, which names the day
+    rather than the work — two unrelated chain roots scaffolded in one session
+    then differ only in `mint_from_slug`'s random suffix, and neither id says
+    what it identifies. The CALLER owns deciding whether it has a real slug to
+    give: a placeholder title must never become a durable id (coordinator-doc-
+    new.py's `_is_placeholder_title`), so a caller with no author-written
+    title passes nothing and takes the date fallback. Legibility and
+    attribution only, never correctness — `mint_from_slug` derives its suffix
+    from `sha1(slug|time|pid|random)`, so neither basis can collide.
     """
     plan_active = bool(plan_file and os.path.isfile(plan_file))
     predecessor_active = bool(predecessor and os.path.isfile(predecessor))
@@ -454,8 +470,8 @@ def resolve_deliverable_and_initiative(
     if dlvr_id:
         result, path_label = mint(deliverable_id=dlvr_id)
     else:
-        today_slug = f"{datetime.date.today().strftime('%Y%m%d')}-{slug_suffix}"
-        result, path_label = mint(slug=today_slug)
+        mint_slug = work_slug or f"{datetime.date.today().strftime('%Y%m%d')}-{slug_suffix}"
+        result, path_label = mint(slug=mint_slug)
 
     label_text = {
         "carry": f"carry path — using existing id: {result}",

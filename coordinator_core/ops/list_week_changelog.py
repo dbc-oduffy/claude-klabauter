@@ -21,7 +21,7 @@ Negative-spec (do NOT "fix" mid-port — faithfully reproduced oracle quirks):
       directly — self-contains the DR-047/stop-the-rot Rule-5 default-branch
       resolution (bare `coordinator_state_root()`, no --central/--subject/
       --artifact): meta-repo cwd (git root == CLAUDE_HOME) routes to
-      CLAUDE_KLABAUTER_ROOT/state; any other (sibling-repo) cwd uses <git-root>/state
+      the engine root/state; any other (sibling-repo) cwd uses <git-root>/state
       directly. Mirrors the sibling pattern in
       ops/check_weekly_staleness.py::_resolve_state_root (same shape,
       independently duplicated per that module's own documented rationale —

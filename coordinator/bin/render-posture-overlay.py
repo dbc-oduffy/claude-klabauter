@@ -57,7 +57,7 @@ to DoE-claude in the 2026-07-22 executable-surface migration.
 # contract, see that module's docstring):
 #   0 — success (insert/swap performed, or --check-only report printed)
 #   1 — usage error / validation failure / collision
-#   2 — CLAUDE_KLABAUTER_ROOT resolution failure OR coordinator_core.ops.
+#   2 — engine-root resolution failure OR coordinator_core.ops.
 #       render_posture_overlay not importable (transport/claude-klabauter-link
 #       failure) — a DEDICATED code, distinct from both business codes
 #       above, per the porter-brief addendum §3b rule that a transport
@@ -81,9 +81,9 @@ from coordinator_data_root import data_root  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

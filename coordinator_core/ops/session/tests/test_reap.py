@@ -20,8 +20,12 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.session import reap
 from coordinator_core.session import core, liveness as session_liveness
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _make_archive_entry(archive_root: Path, name: str, *, age_seconds: float) -> Path:

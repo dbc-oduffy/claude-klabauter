@@ -27,6 +27,10 @@ if _LIB_DIR not in sys.path:
 
 import coordinator_registry as reg  # noqa: E402
 
+import pytest  # noqa: E402
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # ---------------------------------------------------------------------------
 # AC-1: KNOWN_TYPES — exact 31-type set
 #

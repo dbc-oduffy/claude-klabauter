@@ -1343,6 +1343,31 @@ def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool
                 pass
 
 
+def none_scoped_repo_refusal(prog: str, op: str) -> str:
+    """Shared refusal text for a caller CLI's own `--repo` flag on a
+    scope="none" op.
+
+    D2+D3+D4 (docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md § C16): a
+    scope="none" op is never repo-targeted at the wire — `_should_pass_repo`
+    above suppresses forwarding `--repo` on argv for it, and `cc_invoke_bare`
+    always spawns with `cwd=claude_klabauter_root`, so a caller-computed root is
+    discarded before the child process starts regardless of how it was
+    obtained. A caller-facing `--repo` flag on such an op must therefore
+    refuse loud (DR-279's shape, docs/decisions/DR-279-repo-on-a-none-scoped-
+    op-fails-loud.md) rather than accept/require/isdir-validate/git-resolve a
+    value that is never transmitted. `coordinator-compute-layer-scaffold.py`
+    is the reference implementation this message text mirrors verbatim
+    (same author, same op scope, this was its own inline refusal before
+    being promoted here).
+    """
+    return (
+        f"{prog}: --repo is meaningless for {op} (scope=\"none\"): this op "
+        "accesses no repo-specific state and never reads repo_root, so "
+        "--repo would silently no-op. Omit --repo. See "
+        "docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md."
+    )
+
+
 def _locator_axis_export() -> dict[str, str]:
     """C18: the LOCATOR-axis export, added alongside the dispatch variable.
 
@@ -1895,7 +1920,12 @@ def cc_invoke(
     # An already-resolved root is accepted from route() to avoid a double resolution
     # on the State-2 path.
     claude_klabauter_root = _claude_klabauter_root if _claude_klabauter_root is not None else _resolve_claude_klabauter_root()
-    params_json = json.dumps(params, separators=(",", ":"))
+    try:
+        params_json = json.dumps(params, separators=(",", ":"))
+    except TypeError as exc:
+        raise RuntimeError(
+            f"cc_invoke: params is not JSON-serializable (op={op}): {exc}"
+        ) from exc
 
     # Build subprocess env: pass through os.environ, set CLAUDE_KLABAUTER_ROOT, prepend PYTHONPATH.
     # Mirrors _cc_resolve_deps() PYTHONPATH idempotency check in the shell transport.
@@ -1921,7 +1951,14 @@ def cc_invoke(
     # cc_invoke_bare()'s identical --params-file handling below.
     _params_fd, _params_path = tempfile.mkstemp(prefix="cc-invoke-params-")
     try:
-        with os.fdopen(_params_fd, "w", encoding="utf-8", newline="\n") as _pf:
+        try:
+            _pf = os.fdopen(_params_fd, "w", encoding="utf-8", newline="\n")
+        except Exception:
+            # fdopen failed before taking ownership of the fd — close it
+            # directly or mkstemp's descriptor leaks for the process lifetime.
+            os.close(_params_fd)
+            raise
+        with _pf:
             _pf.write(params_json)
         argv = [
             sys.executable, "-m", "coordinator_core.invoke", op,
@@ -2044,7 +2081,12 @@ def cc_invoke_bare(
     NEVER returns legacy after a spawn.
     """
     claude_klabauter_root = _claude_klabauter_root if _claude_klabauter_root is not None else _resolve_claude_klabauter_root()
-    params_json = json.dumps(params, separators=(",", ":"))
+    try:
+        params_json = json.dumps(params, separators=(",", ":"))
+    except TypeError as exc:
+        raise RuntimeError(
+            f"cc_invoke: params is not JSON-serializable (op={op}): {exc}"
+        ) from exc
     env = _build_subprocess_env(claude_klabauter_root)
 
     # Per-op timeout ceiling (DEC-1..3) — may spawn the op-budget dump once per process.
@@ -2059,7 +2101,14 @@ def cc_invoke_bare(
     # passed by path, and unlinked in finally so a large payload never overflows argv.
     _params_fd, _params_path = tempfile.mkstemp(prefix="cc-invoke-params-")
     try:
-        with os.fdopen(_params_fd, "w", encoding="utf-8", newline="\n") as _pf:
+        try:
+            _pf = os.fdopen(_params_fd, "w", encoding="utf-8", newline="\n")
+        except Exception:
+            # fdopen failed before taking ownership of the fd — close it
+            # directly or mkstemp's descriptor leaks for the process lifetime.
+            os.close(_params_fd)
+            raise
+        with _pf:
             _pf.write(params_json)
         _argv = [
             sys.executable, "-m", "coordinator_core.invoke", op,
@@ -2276,6 +2325,71 @@ class RouteMutationError(RuntimeError):
         self.op_stderr = op_stderr
 
 
+def mutation_refusal_message(op: str, result: Any, *, op_stderr: str = "") -> str | None:
+    """Return route_mutation's refusal message for `result`, or None if `result`
+    carries no in-envelope refusal.
+
+    Extracted from route_mutation's own dict-inspection so a caller that reaches
+    the engine via bare `cc_invoke()`/`route()` (not `route_mutation()` — e.g. a
+    thin CLI door with no `legacy_fn` to route_mutation's own State-1 gate) can
+    still apply the SAME exit_code/failed/error inspection to its own already-
+    obtained result, without duplicating the shape-(1)/shape-(2) logic inline at
+    each call site (C12, docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md).
+    route_mutation() itself now calls this helper — see below — so the two never
+    drift apart.
+    """
+    if not isinstance(result, dict):
+        return None
+
+    exit_code = result.get("exit_code")
+    exit_code_int: int | None
+    # Negative-spec: a non-castable `exit_code` is NOT evidence of success. The
+    # retired bash oracle's `int()/except -> 0` fallback was bug-compatibility
+    # and is deliberately dropped — coercing it manufactured a false-positive
+    # success envelope for every caller of this shared transport at once. A
+    # genuine `"0"` string is unaffected (`int("0")` still casts); see
+    # `test_exit_code_noncastable_refuses` and its benign sibling
+    # `test_exit_code_string_zero_does_not_false_positive`.
+    exit_code_uncastable = False
+    if exit_code is None:
+        exit_code_int = None
+    else:
+        try:
+            exit_code_int = int(exit_code)
+        except (TypeError, ValueError):
+            exit_code_int = None
+            exit_code_uncastable = True
+
+    failed = result.get("failed")
+    failed_is_list = isinstance(failed, list)
+    failed_count = len(failed) if failed_is_list else 0
+    failed_truthy = bool(failed)
+
+    error_field = result.get("error")
+    error_text_available = isinstance(error_field, str) and len(error_field) > 0
+    error_field_present = exit_code_int in (None, 0) and error_text_available
+
+    if not (
+        (exit_code_int is not None and exit_code_int != 0)
+        or exit_code_uncastable
+        or failed_truthy
+        or error_field_present
+    ):
+        return None
+
+    detail_parts = [f"exit_code={exit_code!r}"]
+    if failed_is_list:
+        detail_parts.append(f"failed={failed_count}")
+    elif failed_truthy:
+        detail_parts.append(f"failed={failed!r} (non-list shape)")
+    if error_text_available:
+        detail_parts.append(f"error={error_field!r}")
+    message = f"route_mutation: op={op!r} refused ({', '.join(detail_parts)})"
+    if op_stderr:
+        message += f"\n  op stderr: {op_stderr}"
+    return message
+
+
 def route_mutation(
     op: str,
     params: dict[str, Any],
@@ -2326,57 +2440,9 @@ def route_mutation(
     _stderr_sink: list[str] = []
     result = route(op, params, repo_root, legacy_fn, _stderr_sink=_stderr_sink)
 
-    if isinstance(result, dict):
-        exit_code = result.get("exit_code")
-        # Coerce to int the same way the retired bash oracle did (its
-        # inline python3 parser wraps `ec` in int()/except, falling back to 0 on
-        # cast failure) — defends against a stringly-typed exit_code producing a
-        # Python cross-type false-positive ("0" != 0 is True).
-        exit_code_int: int | None
-        if exit_code is None:
-            exit_code_int = None
-        else:
-            try:
-                exit_code_int = int(exit_code)
-            except (TypeError, ValueError):
-                exit_code_int = 0
-
-        failed = result.get("failed")
-        # `failed` may not be list-shaped on a malformed/future-drifted payload (an
-        # int, a bool, ...) — guard with isinstance before len() so an unexpected
-        # shape still raises the intended RouteMutationError instead of crashing
-        # with an uncaught TypeError.
-        failed_is_list = isinstance(failed, list)
-        failed_count = len(failed) if failed_is_list else 0
-        failed_truthy = bool(failed)
-
-        # The completion_ops/plan_ops error-field refusal shape (see docstring
-        # above) only TRIGGERS a refusal when exit_code is absent/0, so it doesn't
-        # double-report a shape-(1) refusal as shape-(2) too. `error_text_available`
-        # is broader: whenever an 'error' string is present it's folded into the
-        # message regardless of which condition triggered the raise, so a shape-(1)
-        # refusal carrying an 'error' key alongside its non-zero exit_code doesn't
-        # discard that detail either.
-        error_field = result.get("error")
-        error_text_available = isinstance(error_field, str) and len(error_field) > 0
-        error_field_present = exit_code_int in (None, 0) and error_text_available
-
-        if (
-            (exit_code_int is not None and exit_code_int != 0)
-            or failed_truthy
-            or error_field_present
-        ):
-            detail_parts = [f"exit_code={exit_code!r}"]
-            if failed_is_list:
-                detail_parts.append(f"failed={failed_count}")
-            elif failed_truthy:
-                detail_parts.append(f"failed={failed!r} (non-list shape)")
-            if error_text_available:
-                detail_parts.append(f"error={error_field!r}")
-            op_stderr = "\n".join(s.strip() for s in _stderr_sink if s.strip())
-            message = f"route_mutation: op={op!r} refused ({', '.join(detail_parts)})"
-            if op_stderr:
-                message += f"\n  op stderr: {op_stderr}"
-            raise RouteMutationError(message, result, op_stderr=op_stderr)
+    op_stderr = "\n".join(s.strip() for s in _stderr_sink if s.strip())
+    message = mutation_refusal_message(op, result, op_stderr=op_stderr)
+    if message is not None:
+        raise RouteMutationError(message, cast(dict, result), op_stderr=op_stderr)
 
     return result

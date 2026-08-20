@@ -7,6 +7,14 @@ Starts from the old pin value, asserts the repoint, asserts the second run
 is a no-op, asserts the refusal path when the target interpreter lacks the
 package. Also covers the graceful-degradation (no CLI) and
 nothing-sane-to-repoint-onto refusal legs.
+
+Spawn ratchet C2 disposition: TIER. Every test here is mocked/in-process
+except `test_target_imports_whoami_true_for_this_interpreter_importing_sys`,
+which is a deliberate monkeypatch-free smoke test of `_target_imports_
+whoami`'s real subprocess mechanism (own docstring) -- a clean interpreter
+is the subject of that one assertion, not incidental to it, so faking it
+would stop proving the mechanism works. Rule 4 tiers at file granularity, so
+the whole file rides along.
 """
 
 from __future__ import annotations
@@ -14,7 +22,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.install.migrations import whoami_pin_migration as m
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _fake_ml(registry: dict, calls: list):

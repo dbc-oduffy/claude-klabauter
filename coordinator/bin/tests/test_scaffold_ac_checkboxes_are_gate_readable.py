@@ -70,6 +70,12 @@ pytestmark = [
 _HANDOFF_FAMILY_TYPES_WITH_AC = ["spinoff", "roadmap-baton", "goal-seed", "roadmap-seed"]
 
 
+#: roadmap-baton is held to the same explicit-sizing-answer bar as --type plan.
+#: This suite probes the AC-checkbox section, so it declares absence rather than
+#: minting a sizing object it would not otherwise need.
+_EXTRA_ARGS: dict[str, list[str]] = {"roadmap-baton": ["--no-sizing-object"]}
+
+
 def _scaffold(doc_type: str, out_path: Path) -> str:
     result = subprocess.run(
         [
@@ -81,6 +87,7 @@ def _scaffold(doc_type: str, out_path: Path) -> str:
             "probe",
             "--out",
             str(out_path),
+            *_EXTRA_ARGS.get(doc_type, []),
         ],
         cwd=str(_REPO_ROOT),
         capture_output=True,

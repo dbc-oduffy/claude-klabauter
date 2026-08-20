@@ -1485,3 +1485,134 @@ def test_atomic_replace_stat_permission_error_propagates(tmp_path, monkeypatch):
 
     with pytest.raises(PermissionError):
         mod._atomic_replace(cache_file, "new\n")
+
+
+# ---------------------------------------------------------------------------
+# ## Auto-push health -- hold-window awareness, failure-recency bounding, and
+# the "timeout" classification (2026-08-20 dispatch, three-defect fix). See
+# regenerate_cache.py's `emit_auto_push_health` docstring-adjacent comments
+# for the full rationale; these tests exercise the reporting surface only,
+# never auto_push.py's own timing (_HOLD_WINDOW_SECONDS is untouched).
+# ---------------------------------------------------------------------------
+
+import time as _time
+from datetime import datetime as _datetime, timezone as _timezone
+
+
+def _make_repo_with_upstream(tmp_path: Path, branch: str = "work/x", unpushed: int = 2) -> Path:
+    """A real repo + bare "origin" remote, `branch` pushed once then given
+    `unpushed` further local-only commits -- the shape emit_auto_push_health
+    needs to get past its "0 unpushed -> no section" early return."""
+    env = dict(
+        os.environ,
+        GIT_AUTHOR_NAME="test", GIT_AUTHOR_EMAIL="test@example.com",
+        GIT_COMMITTER_NAME="test", GIT_COMMITTER_EMAIL="test@example.com",
+    )
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env=env)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "checkout", "-q", "-b", branch], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=str(repo), check=True, env=env)
+    (repo / "base.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "push", "-q", "-u", "origin", branch], cwd=str(repo), check=True, env=env)
+    for i in range(unpushed):
+        (repo / f"file-{i}.txt").write_text(str(i), encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env)
+        subprocess.run(["git", "commit", "-q", "-m", f"unpushed {i}"], cwd=str(repo), check=True, env=env)
+    return repo
+
+
+def _write_pending_record(repo: Path, branch: str, hold_until: float, holder_pid: int | None = None) -> None:
+    record = {
+        "branch": branch,
+        "sha": "deadbeef",
+        "hold_until": hold_until,
+        "holder_pid": holder_pid if holder_pid is not None else os.getpid(),
+    }
+    (repo / ".git" / "coordinator-auto-push-pending.json").write_text(
+        _json.dumps(record), encoding="utf-8"
+    )
+
+
+def _write_failure_log_line(repo: Path, branch: str, err_class: str, when: _datetime) -> None:
+    stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"[{stamp}] PUSH FAILED on {branch} (direct push/{err_class} after 2) :: some detail :: stderr=<empty>\n"
+    logf = repo / ".git" / "push-failures.log"
+    with open(logf, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(line)
+
+
+def test_auto_push_health_live_hold_renders_as_holding_not_warning(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/hold")
+    _write_pending_record(repo, "work/hold", hold_until=_time.time() + 120)
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "⚠" not in result
+    assert "holding" in result
+    assert "2 unpushed commit(s)" in result
+
+
+def test_auto_push_health_stale_record_still_warns(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/stale")
+    # hold_until far enough in the past to clear _STALE_GRACE_SECONDS (60s)
+    # even though the recorded holder_pid (self) is genuinely alive.
+    _write_pending_record(repo, "work/stale", hold_until=_time.time() - 1000)
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "⚠" in result
+    assert "lagging" in result
+
+
+def test_auto_push_health_absent_record_still_warns(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/nohold")
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "⚠" in result
+    assert "lagging" in result
+
+
+def test_auto_push_health_old_failure_does_not_attach_to_fresh_count(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/oldfail")
+    old = _datetime.now(_timezone.utc) - _time_delta_seconds(mod._FAILURE_RECENCY_SECONDS + 60)
+    _write_failure_log_line(repo, "work/oldfail", "network", old)
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "⚠" in result
+    assert "last failure" not in result
+
+
+def test_auto_push_health_recent_failure_still_attaches(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/recentfail")
+    recent = _datetime.now(_timezone.utc) - _time_delta_seconds(30)
+    _write_failure_log_line(repo, "work/recentfail", "network", recent)
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "⚠" in result
+    assert "last failure: network;" in result
+    assert "transient — retry: git push" in result
+
+
+def test_auto_push_health_timeout_class_maps_to_its_own_action(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/timedout")
+    recent = _datetime.now(_timezone.utc) - _time_delta_seconds(30)
+    _write_failure_log_line(repo, "work/timedout", "timeout", recent)
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "last failure: timeout;" in result
+    assert result.rstrip().endswith(mod._ACTION_MAP["timeout"])
+
+
+def _time_delta_seconds(seconds: float):
+    from datetime import timedelta
+
+    return timedelta(seconds=seconds)

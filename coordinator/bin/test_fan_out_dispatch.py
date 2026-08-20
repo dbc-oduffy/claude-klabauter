@@ -36,6 +36,8 @@ import sys
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "fan-out-dispatch.py")
 PYTHON = sys.executable

@@ -3,7 +3,7 @@
 # that collapses /review's ordinal-narrated execution-authorization stamp
 # sequence into one named op). Direct-import variant (template-variant #1,
 # mirrors coordinator/bin/pickup-assemble and archive-stamp-cli): a plain
-# in-process function call after resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop.
+# in-process function call after resolving the engine root, no cc_invoke/IPC hop.
 #
 # Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
 # Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad,
@@ -37,7 +37,7 @@
 #   1 — business failure (plan unreadable/absent, no parseable frontmatter,
 #       lock timeout, mutate abort).
 #   2 — usage error (malformed arguments).
-#   3 — transport failure (CLAUDE_KLABAUTER_ROOT unresolvable, coordinator_core import
+#   3 — transport failure (the engine root unresolvable, coordinator_core import
 #       failure, or no enclosing git worktree).
 from __future__ import annotations
 """review-exec-auth-stamp — see the # comment block above for the RAG-bait

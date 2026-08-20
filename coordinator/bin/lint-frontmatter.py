@@ -10,7 +10,7 @@ Claude-klabauter commit c79e66cd (declared "zero live callers" — false; DoE ha
 callers: workweek-complete.md's Step 2.5 strict referential-integrity gate,
 update-docs.md's Phase 11d drift sweep, and handoff/SKILL.md's write-time
 gate). All CLI logic lives in coordinator_core.frontmatter.schema_validate.main
-— this file only resolves CLAUDE_KLABAUTER_ROOT, imports, and forwards argv/exit code.
+— this file only resolves the engine root, imports, and forwards argv/exit code.
 
 Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A1
 """

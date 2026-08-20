@@ -74,6 +74,82 @@ FOUR RULES
         site at all: a marker only tiers the test that declares it, so a
         spawn in a conftest is untierable by construction.
 
+THE ARGV0 TRI-STATE, STATED PLAINLY (so no reader misreads it)
+    `_classify_spawn` answers REAL / NOT_A_SPAWN / UNKNOWN. UNKNOWN has TWO
+    separate dispositions, at two different LAYERS, and they point in
+    OPPOSITE directions on purpose -- collapsing them into one reading is
+    wrong:
+      - ARGV0 LAYER (does this call's own argv0 evidence a real binary):
+        a `[<list-literal>] + <expr>` BinOp-concatenated argv now resolves
+        to the left operand's first element, same as a plain list literal --
+        this is the ONLY change to argv0-layer resolution in this file.
+      - ROUTE LAYER (does a module-level call REACH a spawn transitively,
+        Rule 1 only): a tracked spawn call, or a module-level call reaching
+        one, whose argv0 is UNKNOWN counts as a spawn for Rule 1 -- but ONLY
+        at module scope. At function scope, UNKNOWN remains UNKNOWN and
+        Rules 2/4 are unchanged (they keep reading `func_spawns` alone,
+        never the UNKNOWN buckets). `__main__`-guarded bodies never execute
+        on import and are excluded from this promotion. Route-layer UNKNOWN
+        elsewhere (e.g. a function-scope condition dominating an argv0, as
+        in `test_kind_axis.py`'s `_RUN_GIT_SPAWN_VERBS` guard) is explicitly
+        OUT OF SCOPE -- a documented limitation, not a fix; inter-procedural
+        constant propagation through a ~10k-line module inside a pytest
+        collection pass is not statically tractable, and a rule tuned until
+        exactly that one file passes would be the same per-file exemption
+        shape `test_no_grandfather_clause_is_reintroduced` exists to catch.
+        `test_kind_axis.py` stays red.
+
+MOCK-SEAM SUPPRESSION
+    A file that `patch.object`/`monkeypatch.setattr`s a module's own
+    `subprocess`/`os` attribute suppresses an indirect-spawn route into
+    THAT SAME module, narrowly (same file, same target module) -- otherwise
+    a test that mocks the only spawn in a helper it calls would still read
+    as spawning. Computed per-file in this module's own scanner (never in
+    `WrapperResolver`, whose `_wrapper_cache` is shared across the whole
+    collection run and would make the suppression collection-order-
+    dependent).
+
+WHAT THIS COLLECTOR RESOLVES AND DOES NOT RESOLVE, AFTER C6 (three named
+items -- do not compress into one "UNKNOWN is resolved now" sentence):
+    - MOCK-SEAM PATCHING is now handled (C6a, "MOCK-SEAM SUPPRESSION"
+      above): a file that patches its own target module's tracked
+      `subprocess`/`os` attribute no longer reads as reaching a spawn
+      through that route. Recorded, closed record of the prior gap this
+      plan absorbed rather than deferred: `state/bug-backlog/2026-08-20-
+      spawn-ratchet-collector-treats-a-binop-b-afe8334260b8.yaml`.
+    - ARGV0-LAYER UNKNOWN at FUNCTION scope is resolved for the BinOp
+      shape ONLY (C6c): `subprocess.run(["git"] + list(args), ...)` now
+      classifies REAL, same as a plain list literal. This is not general
+      ARGV0-layer resolution -- a `Name`/f-string/other unrecognised-
+      literal argv0 at function scope (e.g. `shutil.which()`'s return, the
+      shape both C14 files carried) remains UNKNOWN after this plan lands;
+      it is not silently implied fixed.
+    - MODULE-scope UNKNOWN now counts as a spawn for Rule 1 (C6d): a
+      tracked spawn call, or a module-level call reaching one, whose argv0
+      is UNKNOWN is promoted at module scope only, `__main__`-excluded.
+      Measured blast radius: 0 direct module-level spawn sites, 2 routed
+      (the two C14 files). Rules 2/4 are unaffected -- they still read
+      `func_spawns` alone.
+    - ROUTE-LAYER UNKNOWN (a function-scope condition dominating an argv0,
+      as in `test_kind_axis.py`'s `_RUN_GIT_SPAWN_VERBS` guard) is
+      explicitly NOT handled -- a documented limitation per staff-eng D3,
+      not a narrow per-file rule tuned to clear one named file (that shape
+      is the `_BASELINE`/`_ALLOWLIST` exemption
+      `test_no_grandfather_clause_is_reintroduced` exists to catch).
+      `test_kind_axis.py` stays red: a measured detector false positive
+      pending a resolver decision, not a regression.
+
+    Full union after C1-C14: 34 of 35 original arrears, plus 77 of 77
+    C7-C12 measured-hidden files, plus C13's 4 containment-check files,
+    plus C14's Rule 1 fixes, all clear; `test_kind_axis.py` is the one
+    named, recorded exception -- the ratchet does not exit 0 on all four
+    rules after this plan's chunks land.
+
+    A SEPARATE, out-of-scope known-gap: `spawn_policy.detect.
+    _is_python_source`'s extensionless-CLI blind spot is a different
+    detector, a different gate, and a PM-side register ruling this plan
+    does not take.
+
 THE GUARD ITSELF MUST NOT SPAWN
     Pure AST parse + filesystem walk. No `git ls-files`, no shelling out to
     find spawners -- that would be self-defeating for a guard whose entire
@@ -93,6 +169,11 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.spawn_policy.marker_check import (
+    decorator_names as _decorator_names,
+    has_marker_decorator as _has_spawns_process_marker,
+    has_module_level_pytestmark as _has_module_level_pytestmark,
+)
 from coordinator_core.spawn_policy.wrapper_resolution import WrapperResolver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -163,9 +244,14 @@ def _generic_call_target(node: ast.Call) -> tuple[str, str] | tuple[str, str, st
 def _first_argv_element(node: ast.Call) -> ast.expr | None:
     """Return the first element evidencing argv[0], for either a
     `subprocess.run([...])`-style call (first positional arg is a
-    list/tuple literal -- return its first element) or an `os.system("...")`
-    single-string call (return the string arg itself, so the string-literal
-    check below can look for a leading real-binary token)."""
+    list/tuple literal -- return its first element), a `[<literal>, ...] +
+    <expr>` BinOp-concatenated argv (return the LEFT operand's first element
+    -- concatenating a list never changes its own first element, mirroring
+    `coordinator_core/spawn_policy/detect.py::_resolve_argv0`'s identical
+    `isinstance(node.left, (ast.List, ast.Tuple))` BinOp/Add branch, the
+    source of this rule), or an `os.system("...")` single-string call
+    (return the string arg itself, so the string-literal check below can
+    look for a leading real-binary token)."""
     if not node.args:
         return None
     first = node.args[0]
@@ -173,6 +259,14 @@ def _first_argv_element(node: ast.Call) -> ast.expr | None:
         if not first.elts:
             return None
         return first.elts[0]
+    if (
+        isinstance(first, ast.BinOp)
+        and isinstance(first.op, ast.Add)
+        and isinstance(first.left, (ast.List, ast.Tuple))
+    ):
+        if not first.left.elts:
+            return None
+        return first.left.elts[0]
     return first
 
 
@@ -346,6 +440,14 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
         # top of this stack rather than a single module-wide map.
         self._alias_stack: list[dict[str, tuple[str, str]]] = [spawn_aliases]
         self.module_level_spawns: list[ast.Call] = []
+        # (d) MODULE-SCOPE UNKNOWN DISARMS RULE 1 -- a PARALLEL pair of
+        # buckets to module_level_spawns/func_spawns, holding calls whose
+        # target IS a tracked spawn entry point but whose argv0 classified
+        # UNKNOWN. Rules 2/4 keep reading func_spawns alone, untouched;
+        # `_analyze_file`'s Rule 1 walk reads the UNION for module scope
+        # only. See module docstring "(d)".
+        self.module_level_unknown_spawns: list[ast.Call] = []
+        self.func_unknown_spawns: dict[str, list[ast.Call]] = {}
         # enclosing function name -> spawns found directly in its body
         # (nested defs get their own entry; a spawn inside a nested helper
         # is NOT attributed to the outer test function).
@@ -372,6 +474,10 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
                 self.func_spawns.setdefault(fname, []).append(node)
         elif classification == "UNKNOWN":
             _UNKNOWN_ARGV0.add(f"{self.relpath}:{node.lineno}")
+            if fname is None:
+                self.module_level_unknown_spawns.append(node)
+            else:
+                self.func_unknown_spawns.setdefault(fname, []).append(node)
         target = _generic_call_target(node)
         if target is not None:
             if fname is None:
@@ -396,58 +502,12 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
         self._visit_def(node)
 
 
-def _decorator_names(decorators: list[ast.expr]) -> list[str]:
-    """Best-effort dotted-name rendering of a decorator list, e.g.
-    `pytest.mark.spawns_process` -> "pytest.mark.spawns_process"."""
-    names: list[str] = []
-    for dec in decorators:
-        node = dec
-        # `@pytest.mark.spawns_process` parses as an Attribute chain (no
-        # call); `@pytest.mark.spawns_process()` would parse as a Call
-        # wrapping the same Attribute chain -- unwrap it either way.
-        if isinstance(node, ast.Call):
-            node = node.func
-        parts: list[str] = []
-        while isinstance(node, ast.Attribute):
-            parts.append(node.attr)
-            node = node.value
-        if isinstance(node, ast.Name):
-            parts.append(node.id)
-        if parts:
-            names.append(".".join(reversed(parts)))
-    return names
-
-
-def _has_spawns_process_marker(decorators: list[ast.expr]) -> bool:
-    return "pytest.mark.spawns_process" in _decorator_names(decorators)
-
-
-def _has_module_level_pytestmark(
-    tree: ast.Module, marker: str = "pytest.mark.spawns_process"
-) -> bool:
-    """True if the module declares `pytestmark = <marker>` or
-    `pytestmark = [<marker>, ...]` at module level -- the file-wide
-    equivalent of decorating every test individually."""
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(
-            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
-        ):
-            continue
-        value = node.value
-        candidates = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
-        for candidate in candidates:
-            target = candidate.func if isinstance(candidate, ast.Call) else candidate
-            parts: list[str] = []
-            while isinstance(target, ast.Attribute):
-                parts.append(target.attr)
-                target = target.value
-            if isinstance(target, ast.Name):
-                parts.append(target.id)
-            if ".".join(reversed(parts)) == marker:
-                return True
-    return False
+# `_decorator_names` / `_has_spawns_process_marker` / `_has_module_level_pytestmark`
+# now live in `coordinator_core.spawn_policy.marker_check` (C4, staff-eng
+# F7) and are imported above under their original names -- lifted, not
+# duplicated, so this file and the new write-time nudge guard
+# (`coordinator_core.write_guards.nudge_unmarked_spawning_test`) share one
+# definition rather than two independently-maintained copies.
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +565,195 @@ def _func_reaches_spawn_indirectly(info, func_name: str) -> bool:
     return _WRAPPER_RESOLVER.func_reaches_spawn_indirectly(info, func_name)
 
 
+# ---------------------------------------------------------------------------
+# (a) MOCK-SEAM BLINDNESS -- a same-file-scoped suppression, sited in THIS
+# file (the caller), never in `WrapperResolver`: that resolver's
+# `_wrapper_cache` is one dict for the whole collection run, so a per-file
+# suppression computed inside `func_is_wrapper` would be first-file-wins
+# and nondeterministic under `-n auto`. See module docstring "(a)".
+# ---------------------------------------------------------------------------
+
+
+def _patch_target_module_expr(call: ast.Call) -> ast.expr | None:
+    """Return the target-module expr of a `patch.object(<mod>.subprocess,
+    "run", ...)` / `monkeypatch.setattr(<mod>.subprocess, ...)`-shaped call,
+    or None. Recognizes `mock.patch.object(...)`/`patch.object(...)` (any
+    dotted prefix ending in `.patch.object`) and `<name>.setattr(...)` where
+    `<name>` looks like a monkeypatch fixture parameter."""
+    if not call.args:
+        return None
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    first_arg = call.args[0]
+    if func.attr == "object":
+        base = func.value
+        base_name = base.id if isinstance(base, ast.Name) else (
+            base.attr if isinstance(base, ast.Attribute) else None
+        )
+        if base_name == "patch":
+            return first_arg
+        return None
+    if func.attr == "setattr":
+        base = func.value
+        if isinstance(base, ast.Name) and "monkeypatch" in base.id.lower():
+            return first_arg
+    return None
+
+
+def _collect_patched_module_aliases(tree: ast.Module) -> set[str]:
+    """Every local alias name `<alias>` this FILE patches the tracked
+    `subprocess`/`os` attribute of, anywhere in the file (a test body, a
+    module-level helper it calls, a fixture) -- `patch.object(<alias>.
+    subprocess, "run", ...)` / `monkeypatch.setattr(<alias>.subprocess,
+    ...)`. Whole-file, not module-scope-statement-only: real fixtures patch
+    inside test functions and helper functions, not at module level."""
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target_expr = _patch_target_module_expr(node)
+        if target_expr is None:
+            continue
+        if (
+            isinstance(target_expr, ast.Attribute)
+            and isinstance(target_expr.value, ast.Name)
+            and target_expr.attr in _SPAWN_ATTR_NAMES_BY_MODULE
+        ):
+            aliases.add(target_expr.value.id)
+    return aliases
+
+
+def _func_reaches_spawn_indirectly_excluding_patched(
+    info, func_name: str, patched_module_paths: set[Path]
+) -> bool:
+    """Same one-hop walk as `WrapperResolver.func_reaches_spawn_indirectly`,
+    except a route whose resolved target is a module-attribute access
+    (`("attr", obj_name, attr)`) into a module THIS FILE itself patches is
+    skipped entirely -- narrowly, same file + same target module, so an
+    unpatched spawn in a file that merely patches something unrelated is
+    not suppressed (the inverse false negative)."""
+    for target in info.scanner.generic_calls.get(func_name, []):
+        if target[0] == "attr":
+            obj_name = target[1]
+            binding = info.imports.get(obj_name)
+            if (
+                binding is not None
+                and binding.kind == "module"
+                and binding.module_path in patched_module_paths
+            ):
+                continue
+        if _target_reaches_spawn(info, target, frozenset()):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# (d) MODULE-SCOPE UNKNOWN DISARMS RULE 1 -- reimplemented here, not
+# threaded into `WrapperResolver` (out of this chunk's writes scope; see
+# D1/(a)). A SEPARATE cache, keyed the same as `WrapperResolver.
+# _wrapper_cache` but never sharing that dict, so a module-scope
+# (promote-unknown) answer for `(module_path, func_name)` can never leak
+# into a function-scope (Rules 2/4, unmodified `WrapperResolver`) query for
+# the identical pair -- the collision D2 named for (a), re-emerging here if
+# the caches were shared. See module docstring "(d)".
+# ---------------------------------------------------------------------------
+
+_MODULE_SCOPE_WRAPPER_CACHE: dict[tuple[Path, str], bool] = {}
+
+
+def _target_reaches_spawn_promoting_unknown(
+    info, target: tuple, visiting: frozenset
+) -> bool:
+    if target[0] == "name":
+        name = target[1]
+        if name in info.top_level_funcs:
+            return _func_is_wrapper_promoting_unknown(info.path, name, visiting)
+        binding = info.imports.get(name)
+        if binding is not None and binding.kind == "func":
+            return _func_is_wrapper_promoting_unknown(
+                binding.module_path, binding.orig_name, visiting
+            )
+    elif target[0] == "attr":
+        obj_name, attr = target[1], target[2]
+        binding = info.imports.get(obj_name)
+        if binding is not None and binding.kind == "module":
+            return _func_is_wrapper_promoting_unknown(binding.module_path, attr, visiting)
+    return False
+
+
+def _func_is_wrapper_promoting_unknown(
+    module_path: Path, func_name: str, visiting: frozenset = frozenset()
+) -> bool:
+    """Rule 1's module-scope widening: a module-level def counts as a
+    spawn-wrapper, transitively, if it directly contains a REAL spawn OR one
+    whose argv0 is UNKNOWN (`func_spawns` UNION `func_unknown_spawns`).
+    Cycle-safe via `visiting`, exactly like `WrapperResolver.func_is_wrapper`
+    -- reach is `_target_reaches_spawn`'s existing transitive walk, no new
+    bound. REACH IS ALREADY DEFINED -- ADD NO NEW BOUND."""
+    key = (module_path, func_name)
+    if key in _MODULE_SCOPE_WRAPPER_CACHE:
+        return _MODULE_SCOPE_WRAPPER_CACHE[key]
+    if key in visiting:
+        return False
+    info = _get_module_info(module_path)
+    if info is None or func_name not in info.top_level_funcs:
+        _MODULE_SCOPE_WRAPPER_CACHE[key] = False
+        return False
+    scanner = info.scanner
+    if scanner.func_spawns.get(func_name) or getattr(
+        scanner, "func_unknown_spawns", {}
+    ).get(func_name):
+        _MODULE_SCOPE_WRAPPER_CACHE[key] = True
+        return True
+    next_visiting = visiting | {key}
+    result = False
+    for target in scanner.generic_calls.get(func_name, []):
+        if _target_reaches_spawn_promoting_unknown(info, target, next_visiting):
+            result = True
+            break
+    _MODULE_SCOPE_WRAPPER_CACHE[key] = result
+    return result
+
+
+def _is_main_guard_test(test: ast.expr) -> bool:
+    """True for `__name__ == "__main__"` or `"__main__" == __name__`."""
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.Eq):
+        return False
+    left, right = test.left, test.comparators[0]
+
+    def _is_dunder_name(n: ast.expr) -> bool:
+        return isinstance(n, ast.Name) and n.id == "__name__"
+
+    def _is_main_str(n: ast.expr) -> bool:
+        return isinstance(n, ast.Constant) and n.value == "__main__"
+
+    return (_is_dunder_name(left) and _is_main_str(right)) or (
+        _is_main_str(left) and _is_dunder_name(right)
+    )
+
+
+def _main_guard_body_linenos(tree: ast.Module) -> set[int]:
+    """Every lineno belonging to the BODY (never the `orelse`) of an
+    `if __name__ == "__main__":` block anywhere in the module -- that code
+    never executes on import, so it MUST be excluded from (d)'s promotion.
+    Pre-pass over the whole tree rather than statement-context tracking in
+    `_FunctionSpawnScanner`, which has none. Scoped to the newly-promoted
+    UNKNOWN population only -- callers must NOT apply this to the existing
+    REAL-spawn routing, which stays unfiltered/unchanged."""
+    excluded: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and _is_main_guard_test(node.test):
+            for stmt in node.body:
+                for sub in ast.walk(stmt):
+                    lineno = getattr(sub, "lineno", None)
+                    if lineno is not None:
+                        excluded.add(lineno)
+    return excluded
+
+
 class FileSpawnReport:
     __slots__ = ("relpath", "module_level_linenos", "unmarked_spawning_funcs", "has_any_spawn")
 
@@ -536,7 +785,36 @@ def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
     for lineno, target in scanner.module_level_calls:
         if _target_reaches_spawn(info, target, frozenset()):
             module_level_linenos.append(lineno)
+
+    # (d) MODULE-SCOPE UNKNOWN DISARMS RULE 1: at module scope only, a
+    # tracked spawn call (or a module-level call reaching one) whose argv0
+    # is UNKNOWN also counts for Rule 1 -- Rules 2/4 below keep reading
+    # `func_spawns` alone, unchanged. `__main__`-guarded bodies never
+    # execute on import and are excluded from THIS promotion only; the
+    # REAL-spawn routing above stays untouched. See module docstring "(d)".
+    main_guard_linenos = _main_guard_body_linenos(tree_for_marker)
+    for node in scanner.module_level_unknown_spawns:
+        if node.lineno not in main_guard_linenos:
+            module_level_linenos.append(node.lineno)
+    for lineno, target in scanner.module_level_calls:
+        if lineno in main_guard_linenos:
+            continue
+        if _target_reaches_spawn_promoting_unknown(info, target, frozenset()):
+            module_level_linenos.append(lineno)
+
     module_level_linenos = sorted(set(module_level_linenos))
+
+    # (a) MOCK-SEAM BLINDNESS: this file's own module-scope patch targets
+    # (`patch.object(<mod>.subprocess, ...)` / `monkeypatch.setattr(<mod>.
+    # subprocess, ...)`), resolved to on-disk module paths via THIS file's
+    # own import bindings -- suppresses an indirect-spawn route into a
+    # module the file itself patches. See module docstring "(a)".
+    patched_aliases = _collect_patched_module_aliases(tree_for_marker)
+    patched_module_paths = {
+        info.imports[alias].module_path
+        for alias in patched_aliases
+        if alias in info.imports and info.imports[alias].kind == "module"
+    }
 
     file_wide_marker = _has_module_level_pytestmark(tree_for_marker)
     unmarked_funcs: list[str] = []
@@ -544,7 +822,9 @@ def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
     any_func_spawn = False
     for fname in spawning_func_names:
         direct = bool(scanner.func_spawns.get(fname))
-        indirect = _func_reaches_spawn_indirectly(info, fname)
+        indirect = _func_reaches_spawn_indirectly_excluding_patched(
+            info, fname, patched_module_paths
+        )
         if not (direct or indirect):
             continue
         any_func_spawn = True
@@ -895,4 +1175,213 @@ def test_module_level_os_alias_system_call_is_a_real_spawn() -> None:
     assert scanner.func_spawns.get("test_thing"), (
         "a module-level `import os as _os` must still bind `_os.system(...)` "
         "as a real spawn"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (c) BinOp-ARGV GAP regression -- state/bug-backlog/2026-08-20-spawn-ratchet-
+# collector-treats-a-binop-b-afe8334260b8.yaml. The probe shape is expressed
+# as a STRING SOURCE via `_scan_source`, never a live call node (D6): a real
+# `subprocess.run(["git", ...])` call in this file would itself be a Rule
+# 1/2 violation of the guard it is testing.
+# ---------------------------------------------------------------------------
+
+
+def test_binop_concatenated_argv_resolves_the_left_lists_first_element() -> None:
+    """The backlog's exact probe shape: `subprocess.run(["git"] + list(args),
+    cwd=r)` inside a helper. Before the fix this returned the raw `ast.BinOp`
+    node from `_first_argv_element`, which `_classify_spawn` cannot match,
+    landing the site in `_UNKNOWN_ARGV0` and the file reading has_any_spawn
+    without any func_spawns entry -- silently non-spawning."""
+    scanner = _scan_source(
+        "import subprocess\n"
+        "def _git(args, r):\n"
+        "    subprocess.run(['git'] + list(args), cwd=r)\n"
+    )
+    assert scanner.func_spawns.get("_git"), (
+        "a `[<list-literal>] + <expr>` BinOp-concatenated argv must resolve "
+        "the left operand's first element, same as a plain list literal"
+    )
+    assert not scanner.func_unknown_spawns.get("_git"), (
+        "this shape is now REAL, not UNKNOWN -- it must not double-count in "
+        "the honesty bucket"
+    )
+
+
+def test_binop_concatenated_argv_classifies_real_via_classify_spawn() -> None:
+    """Direct `_classify_spawn` check (not routed through the scanner) on
+    the identical BinOp shape, mirroring `test_unknown_argv0_honesty_bucket_
+    reports_variable_argv`'s direct-classify style."""
+    src = (
+        "import subprocess\n"
+        "def f(args, r):\n"
+        "    subprocess.run(['git'] + list(args), cwd=r)\n"
+    )
+    tree = ast.parse(src)
+    call_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    assert _classify_spawn(call_node, {}) == "REAL"
+
+
+def test_binop_argv_with_empty_left_list_is_unknown_not_a_crash() -> None:
+    """An empty left-list BinOp (`[] + extra`) has no first element to take
+    -- must classify UNKNOWN (honest "cannot resolve"), never raise."""
+    src = "import subprocess\ndef f(extra):\n    subprocess.run([] + extra)\n"
+    tree = ast.parse(src)
+    call_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    assert _classify_spawn(call_node, {}) == "UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# (a) MOCK-SEAM BLINDNESS regression -- AC10: the two oracle files that
+# patch a module's own spawn seam must report zero spawn sites, with no
+# `spawns_process` marker needed.
+# ---------------------------------------------------------------------------
+
+
+def test_mock_seam_oracle_files_report_zero_spawn_with_no_marker() -> None:
+    """`test_benchmark_fanin_spawn_count.py` and `test_dep_probe_varying_
+    program.py` (C3's spike, zero real spawns, both mock-patched) must clear
+    entirely after (a)'s suppression -- no module-level spawn, no unmarked
+    function-level spawn -- without either file carrying
+    `pytest.mark.spawns_process`."""
+    oracle_files = [
+        "coordinator_core/tests/oracles/test_benchmark_fanin_spawn_count.py",
+        "coordinator_core/tests/oracles/test_dep_probe_varying_program.py",
+    ]
+    bad = []
+    for relpath in oracle_files:
+        full_path = REPO_ROOT / relpath
+        assert full_path.is_file(), f"expected oracle file missing: {relpath}"
+        report = _analyze_file(full_path, relpath)
+        if report.module_level_linenos or report.unmarked_spawning_funcs:
+            bad.append((relpath, report.module_level_linenos, report.unmarked_spawning_funcs))
+    assert not bad, (
+        f"mock-seam suppression did not clear the oracle file(s): {bad} -- "
+        "a route into a module this same file patches must not read as a "
+        "real spawn"
+    )
+
+
+def test_mock_seam_suppression_does_not_hide_an_unpatched_spawn_in_same_file() -> None:
+    """The inverse false negative the plan names: a file that patches an
+    UNRELATED module's `subprocess` must NOT suppress a genuine spawn
+    reached through a DIFFERENT, unpatched module -- narrowly scoped to
+    same file + same target module, never a whole-file amnesty."""
+    aliases = _collect_patched_module_aliases(
+        ast.parse(
+            "from unittest.mock import patch\n"
+            "import some_other_module\n"
+            "def test_thing():\n"
+            "    with patch.object(some_other_module.subprocess, 'run'):\n"
+            "        pass\n"
+        )
+    )
+    assert aliases == {"some_other_module"}, (
+        "the alias collector must record exactly the module whose "
+        "subprocess/os attribute is patched, nothing broader"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (d) MODULE-SCOPE UNKNOWN DISARMS RULE 1 regression.
+# ---------------------------------------------------------------------------
+
+
+def test_module_scope_unknown_argv0_promotes_a_routed_wrapper_for_rule1() -> None:
+    """A module-level call to `_helper(...)`, where `_helper`'s only spawn
+    site has an UNKNOWN argv0 (a non-literal), must count as reaching a
+    spawn for Rule 1 -- the exact tz-file shape the plan traced
+    (`func_is_wrapper` -> `func_spawns` miss -> False would be a null fix if
+    only `func_spawns`, never `func_unknown_spawns`, were consulted)."""
+    from coordinator_core.spawn_policy.wrapper_resolution import ModuleInfo
+
+    src = (
+        "import subprocess\n"
+        "def _helper(argv):\n"
+        "    subprocess.run(argv)\n"
+        "_helper(['irrelevant'])\n"
+    )
+    tree = ast.parse(src)
+    scanner = _build_scanner("<fixture-d>", tree)
+    assert scanner.func_unknown_spawns.get("_helper"), (
+        "the helper's UNKNOWN-argv0 spawn must land in func_unknown_spawns"
+    )
+    assert not scanner.func_spawns.get("_helper"), (
+        "sanity: this fixture must not classify as REAL -- it exercises the "
+        "UNKNOWN promotion path, not the REAL path"
+    )
+    fake_path = Path("<fixture-d-module>")
+    info = ModuleInfo(fake_path, scanner, {}, {"_helper"})
+    resolved = fake_path.resolve()
+    _MODULE_SCOPE_WRAPPER_CACHE.clear()
+    prior = _WRAPPER_RESOLVER._module_info_cache.get(resolved, "<absent>")
+    _WRAPPER_RESOLVER._module_info_cache[resolved] = info
+    try:
+        assert _func_is_wrapper_promoting_unknown(fake_path, "_helper") is True, (
+            "a module-level UNKNOWN-argv0 spawn wrapper must be promoted for Rule 1"
+        )
+    finally:
+        if prior == "<absent>":
+            del _WRAPPER_RESOLVER._module_info_cache[resolved]
+        else:
+            _WRAPPER_RESOLVER._module_info_cache[resolved] = prior
+        _MODULE_SCOPE_WRAPPER_CACHE.clear()
+
+
+def test_module_scope_unknown_promotion_is_contained_to_module_scope() -> None:
+    """AC11 containment: the SAME helper shape, called from FUNCTION scope
+    (not module scope), must NOT be promoted -- `func_spawns` (what Rules
+    2/4 read) stays empty; only the honesty bucket (`func_unknown_spawns`)
+    sees it. The promotion machinery lives entirely outside `func_spawns`,
+    so Rules 2/4 cannot observe it regardless of call site -- this pins that
+    the UNION is Rule-1-exclusive by construction."""
+    scanner = _scan_source(
+        "import subprocess\n"
+        "def _helper(argv):\n"
+        "    subprocess.run(argv)\n"
+        "def test_thing():\n"
+        "    _helper(['irrelevant'])\n"
+    )
+    assert not scanner.func_spawns.get("test_thing"), (
+        "Rules 2/4 must never see a promoted UNKNOWN route -- func_spawns "
+        "stays empty regardless of module- or function-scope call site"
+    )
+
+
+def test_module_scope_unknown_promotion_excludes_main_guard_body() -> None:
+    """A call inside `if __name__ == '__main__':` never executes on import
+    and MUST be excluded from (d)'s promotion -- the verified
+    `test_harvest_idempotency_env_override.py` false-positive shape."""
+    src = (
+        "import sys, subprocess\n"
+        "def main(argv):\n"
+        "    subprocess.run(argv)\n"
+        "if __name__ == '__main__':\n"
+        "    sys.exit(main(['x']))\n"
+    )
+    tree = ast.parse(src)
+    guarded_linenos = _main_guard_body_linenos(tree)
+    call_lineno = next(
+        n.lineno
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "main"
+    )
+    assert call_lineno in guarded_linenos, (
+        "a call inside `if __name__ == '__main__':` must be recognised as "
+        "excluded from (d)'s promotion -- it never executes on import"
+    )
+
+
+def test_kind_axis_route_layer_unknown_stays_out_of_scope() -> None:
+    """(b) is a documented limitation, not a fix: `test_kind_axis.py` must
+    still be caught by the ratchet as an unmarked spawning file -- its one
+    spawn is behind a function-scope `_RUN_GIT_SPAWN_VERBS` condition this
+    chunk deliberately does not resolve. AC1/AC7/AC10."""
+    relpath = "coordinator_core/baton_assemble/tests/test_kind_axis.py"
+    full_path = REPO_ROOT / relpath
+    assert full_path.is_file(), f"expected file missing: {relpath}"
+    report = _analyze_file(full_path, relpath)
+    assert report.has_any_spawn, (
+        "test_kind_axis.py stays a documented, unfixed route-layer-UNKNOWN "
+        "limitation per (b) -- it must still register as spawning"
     )

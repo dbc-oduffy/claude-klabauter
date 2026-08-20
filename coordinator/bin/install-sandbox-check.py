@@ -51,7 +51,7 @@ and hands it to that module.
 # Exit codes (unchanged contract from the bash oracle, PLUS a new dedicated
 # transport code — addendum rule 3b): 0 all assertions passed/skipped;
 # 1 one or more assertions FAILed (business outcome); 3 TRANSPORT/
-# ORCHESTRATION failure — CLAUDE_KLABAUTER_ROOT unresolvable, the default
+# ORCHESTRATION failure — the engine root unresolvable, the default
 # COORDINATOR_ROOT unresolvable (doe_root() raised _DoeUnresolvable),
 # coordinator_core not importable, or an unhandled exception inside the
 # claude-klabauter module. The bash oracle had no dedicated transport code (an
@@ -59,7 +59,7 @@ and hands it to that module.
 # the failing builtin produced); this is a flagged behavioral improvement,
 # not a silent one — a caller can now tell "checks ran, some failed" (1)
 # apart from "checks could not run at all, e.g. cold machine with
-# CLAUDE_KLABAUTER_ROOT/DoE root unresolvable" (3).
+# the engine root/DoE root unresolvable" (3).
 from __future__ import annotations
 import os
 import sys

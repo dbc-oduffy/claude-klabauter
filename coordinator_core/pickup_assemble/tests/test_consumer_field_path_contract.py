@@ -21,6 +21,7 @@ Two tiers, deliberately not collapsed into one list:
     3. gates.branch.current_branch
     4. gates.liveness_signal
     5. preflight.completeness_batches[]
+    7. sizing_disposition.value
 
   SHAPE-CONDITIONAL (must NOT be asserted against an arbitrary brief — only
   present when the baton points at a stamped plan; legitimately ABSENT from
@@ -142,7 +143,7 @@ def _write_handoff(repo: Path, name: str, fm_extra: str = "") -> Path:
 
 
 def test_always_emitted_paths_resolve_on_plain_handoff_brief(tmp_path, monkeypatch):
-    """The five always-emitted paths must resolve on ANY plain-handoff
+    """The always-emitted paths must resolve on ANY plain-handoff
     `brief()` call — no stamped-plan shape required."""
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -171,6 +172,15 @@ def test_always_emitted_paths_resolve_on_plain_handoff_brief(tmp_path, monkeypat
     # 5. preflight.completeness_batches[]
     assert "completeness_batches" in do["preflight"]
     assert isinstance(do["preflight"]["completeness_batches"], list)
+
+    # 7. sizing_disposition.value — the axis `plan`'s carve-out keys on.
+    # Always emitted, including on the `unsized` arm this fixture lands on:
+    # an absent key is indistinguishable from "not computed" to the reader,
+    # and the whole point is that the EM is never left to look.
+    assert "sizing_disposition" in do
+    assert do["sizing_disposition"]["value"] in ("execution", "sized", "unsized")
+    assert "basis" in do["sizing_disposition"]
+    assert "warning" in do["sizing_disposition"]
 
 
 # ---------------------------------------------------------------------------

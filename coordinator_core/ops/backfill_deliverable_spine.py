@@ -83,7 +83,7 @@ Exit-code contract (byte-parity with the bash oracle):
     0 — clean (no ambiguities; write applied or dry-run report emitted)
     1 — fatal error (bad arguments, corpus root unreadable)
     2 — ambiguous groups detected (human review required before --write)
-    (transport/import failure — CLAUDE_KLABAUTER_ROOT resolution or `coordinator_core`
+    (transport/import failure — engine-root resolution or `coordinator_core`
     import failing before this module is even reached — is NOT a code this
     function can return; it is handled by the DoE trampoline itself, which
     uses a DEDICATED exit code 3 for that case per the porter addendum §3b
@@ -107,7 +107,7 @@ tested path):
       module calls that module's pure `mint()` function DIRECTLY (in-process,
       same package) rather than shelling out to the bash trampoline the
       oracle invoked via `bash "$MINT_HELPER" --slug ...`. This is strictly
-      cheaper (no subprocess hop, no CLAUDE_KLABAUTER_ROOT re-resolution) and produces
+      cheaper (no subprocess hop, no engine-root re-resolution) and produces
       byte-identical mint output, since `mint_deliverable_id.mint()` is
       itself a faithful port of the same bash logic `mint-deliverable-id.sh`
       used to shell out to. If `coordinator_core.ops.mint_deliverable_id`

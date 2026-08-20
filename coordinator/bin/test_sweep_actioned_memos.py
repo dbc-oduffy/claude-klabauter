@@ -45,22 +45,38 @@ def _load_module():
     return mod
 
 
-def _run_main_capturing(mod, argv, fake_route=None, fake_run=None):
+def _run_main_capturing(mod, argv, fake_route=None, fake_show_toplevel=None):
     """Run mod.main(argv) with stdout/stderr captured; optionally fake
-    cc_invoke.route and subprocess.run (the git-resolution call)."""
+    cc_invoke.route and the git-resolution call.
+
+    The subject resolves a bare invocation's repo root through
+    ``coordinator_core.git.repo_root.show_toplevel`` (imported inside
+    ``_resolve_repo_root``, after ``ensure_engine_on_path``), never by
+    spawning ``subprocess.run`` itself -- so that is the seam a caller fakes
+    here. An earlier revision of this harness patched ``mod.subprocess.run``,
+    a name the subject module has never bound; the patch raised AttributeError
+    before ``main()`` ran, in a suite marked ``cadence`` and therefore off the
+    fast tier that would have caught it.
+    """
     orig_route = mod.cc_invoke.route
-    orig_run = mod.subprocess.run
     if fake_route is not None:
         mod.cc_invoke.route = fake_route
-    if fake_run is not None:
-        mod.subprocess.run = fake_run
+    repo_root_mod = None
+    orig_show_toplevel = None
+    if fake_show_toplevel is not None:
+        mod.cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.git import repo_root as repo_root_mod
+
+        orig_show_toplevel = repo_root_mod.show_toplevel
+        repo_root_mod.show_toplevel = fake_show_toplevel
     out, err = io.StringIO(), io.StringIO()
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = mod.main(argv)
     finally:
         mod.cc_invoke.route = orig_route
-        mod.subprocess.run = orig_run
+        if repo_root_mod is not None:
+            repo_root_mod.show_toplevel = orig_show_toplevel
     return rc, out.getvalue(), err.getvalue()
 
 
@@ -108,11 +124,11 @@ def test_bare_positional_repo_root_resolves(tmp_path):
             return {"exit_code": 0, "candidates": []}
         return {"exit_code": 0, "acted": []}
 
-    def fake_run(*a, **kw):
-        raise AssertionError("git subprocess must not run when a positional repo_root is given")
+    def fake_show_toplevel(*a, **kw):
+        raise AssertionError("git resolution must not run when a positional repo_root is given")
 
     rc, out, _err = _run_main_capturing(
-        mod, [str(fake_repo)], fake_route=fake_route, fake_run=fake_run
+        mod, [str(fake_repo)], fake_route=fake_route, fake_show_toplevel=fake_show_toplevel
     )
 
     assert rc == 0
@@ -132,14 +148,12 @@ def test_noarg_resolves_via_git(tmp_path):
             return {"exit_code": 0, "candidates": []}
         return {"exit_code": 0, "acted": []}
 
-    class _FakeProc:
-        returncode = 0
-        stdout = str(resolved_repo) + "\n"
+    def fake_show_toplevel(*a, **kw):
+        return str(resolved_repo)
 
-    def fake_run(*a, **kw):
-        return _FakeProc()
-
-    rc, out, _err = _run_main_capturing(mod, [], fake_route=fake_route, fake_run=fake_run)
+    rc, out, _err = _run_main_capturing(
+        mod, [], fake_route=fake_route, fake_show_toplevel=fake_show_toplevel
+    )
 
     assert rc == 0
     assert out.strip() == "0"
@@ -182,7 +196,7 @@ def test_partial_sweep_names_the_failed_memo_and_its_reason(tmp_path):
 
     rc, out, err = _run_main_capturing(
         mod, [str(fake_repo)], fake_route=_partial_route(failed),
-        fake_run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
+        fake_show_toplevel=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
     )
 
     assert rc == 0
@@ -204,7 +218,7 @@ def test_partial_sweep_falls_back_to_skip_reasons_when_nothing_failed(tmp_path):
 
     rc, _out, err = _run_main_capturing(
         mod, [str(fake_repo)], fake_route=_partial_route([], skipped=skipped),
-        fake_run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
+        fake_show_toplevel=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
     )
 
     assert rc == 0
@@ -222,7 +236,7 @@ def test_partial_sweep_caps_reported_failures(tmp_path):
 
     rc, _out, err = _run_main_capturing(
         mod, [str(fake_repo)], fake_route=_partial_route(failed),
-        fake_run=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
+        fake_show_toplevel=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no git")),
     )
 
     assert rc == 0

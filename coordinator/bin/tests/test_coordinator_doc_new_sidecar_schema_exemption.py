@@ -20,10 +20,13 @@ Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
 module -- same load idiom as test_coordinator_doc_new_predecessor.py.
 
-CLI subprocess calls here are single, non-looped invocations (one per test
-method), the same shape already used by `CliTypeScopingTest` in
-test_coordinator_doc_new_summary_gated_open.py -- not the per-item
-amplification pattern the spawn-count gate polices.
+AC1's scaffold-and-validate assertion is exercised in-process, via
+`_scaffold_sidecar` + `_assert_scaffold_content_valid` directly (spawn
+ratchet C2 disposition: STUB -- the CLI's own subprocess argv/exit-code
+plumbing is incidental to what this test proves; the property under test is
+that sidecar-suffixed content validates clean, which `_assert_scaffold_
+content_valid` answers in-process with no clean-interpreter dependency,
+matching `PlanSchemaStillEnforcedTest` below).
 
 Run:
     pytest coordinator/bin/tests/test_coordinator_doc_new_sidecar_schema_exemption.py -v
@@ -32,12 +35,8 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
-import subprocess
-import sys
 import unittest
 from pathlib import Path
-
-from coordinator_core.win_portability import no_console_creationflags
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _CLI_PATH = _BIN_DIR / "coordinator-doc-new.py"
@@ -66,32 +65,21 @@ class SidecarTypesScaffoldSuccessfullyTest(unittest.TestCase):
     docs/plans/ must exit 0 and actually write its file -- this is the exact
     repro that failed before the fix (see the module docstring)."""
 
-    def _run(self, tmp_path: Path, doc_type: str) -> tuple[subprocess.CompletedProcess, Path]:
+    def _run(self, tmp_path: Path, doc_type: str) -> Path:
         out_path = tmp_path / f"2026-08-19-test-stem.{_cli._SIDECAR_SUFFIXES[doc_type]}.md"
-        proc = subprocess.run(
-            [
-                sys.executable, str(_CLI_PATH),
-                "--type", doc_type,
-                "--plan", "2026-08-19-test-stem",
-                "--out", str(out_path),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO_ROOT),
-            **no_console_creationflags(),
-        )
-        return proc, out_path
+        content = _cli._scaffold_sidecar(doc_type, "2026-08-19-test-stem")
+        # Mirrors main()'s own validate-then-write sequence -- a SystemExit
+        # here is the exact pre-fix failure this file regression-guards.
+        _cli._assert_scaffold_content_valid(content, str(out_path), str(_REPO_ROOT))
+        out_path.write_text(content, encoding="utf-8")
+        return out_path
 
     def test_each_sidecar_type_scaffolds_successfully(self):
         for doc_type in _SIDECAR_TYPES:
             with self.subTest(doc_type=doc_type):
                 import tempfile
                 with tempfile.TemporaryDirectory() as td:
-                    proc, out_path = self._run(Path(td), doc_type)
-                    self.assertEqual(
-                        proc.returncode, 0,
-                        f"{doc_type} scaffold failed: stdout={proc.stdout!r} stderr={proc.stderr!r}",
-                    )
+                    out_path = self._run(Path(td), doc_type)
                     self.assertTrue(
                         out_path.exists(),
                         f"{doc_type} scaffold reported success but wrote no file at {out_path}",

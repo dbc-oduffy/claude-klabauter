@@ -19,7 +19,7 @@ from __future__ import annotations
 #       negative-spec docstring)
 #   3 — schema_version present but unsupported (not 1 or 2)
 #   4 — DEDICATED transport-failure code (PORTER-BRIEF-ADDENDUM § 3b): the
-#       coordinator-root / CLAUDE_KLABAUTER_ROOT resolution failed, the DoE-claude repo
+#       coordinator-root / engine-root resolution failed, the DoE-claude repo
 #       root (which owns snippets/registry.toml) was unresolvable, or
 #       coordinator_core.snippet_sync.verify_registry_consistency was not
 #       importable. Distinct from business code 2 ("missing dep or file not
@@ -61,7 +61,7 @@ def _resolve_plugin_root() -> str:
     parity is exactly what caused the break once this file moved repos.
 
     Fails loud (sys.exit(_TRANSPORT_FAILURE_EXIT)) if doe_root() cannot
-    resolve, via the same transport-failure path as CLAUDE_KLABAUTER_ROOT resolution
+    resolve, via the same transport-failure path as engine-root resolution
     below — this is a gate script, not a never-block hook.
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -99,7 +99,7 @@ def main() -> None:
         op_main = _import_main()
     except RuntimeError as exc:
         print(
-            f"verify-snippet-registry-consistency: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"verify-snippet-registry-consistency: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(_TRANSPORT_FAILURE_EXIT)

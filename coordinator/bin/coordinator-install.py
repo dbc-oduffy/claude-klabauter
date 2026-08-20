@@ -10,11 +10,11 @@ module docstring in coordinator_core.install.coordinator_install_entry for
 the full why, what it dispatches, and why it reads the manifest instead of
 naming a path.
 
-This file is a thin trampoline: resolve CLAUDE_KLABAUTER_ROOT, import, forward argv,
+This file is a thin trampoline: resolve the engine root, import, forward argv,
 forward exit code — matching coordinator-uninstall.py's shape, its closest
 sibling in both naming and lifecycle.
 
-Fail-loud-on-ambiguity: if CLAUDE_KLABAUTER_ROOT cannot be resolved or the claude-klabauter
+Fail-loud-on-ambiguity: if the engine root cannot be resolved or the claude-klabauter
 module is not importable, exit 1 rather than 0 — a silent no-op here would
 leave an operator believing the chain was installed when nothing ran, which
 is the same wrong-answer failure the entry exists to prevent.
@@ -56,7 +56,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"coordinator-install.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"coordinator-install.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(

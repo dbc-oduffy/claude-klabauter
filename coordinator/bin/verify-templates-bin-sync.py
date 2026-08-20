@@ -128,7 +128,7 @@ def main() -> None:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
-        print(f"verify-templates-bin-sync.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"verify-templates-bin-sync.sh: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(

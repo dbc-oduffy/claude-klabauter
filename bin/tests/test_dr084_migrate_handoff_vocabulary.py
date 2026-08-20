@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
 _SCRIPT = _REPO_ROOT / "bin" / "dr084-migrate-handoff-vocabulary.py"
 

@@ -255,7 +255,7 @@ sys.exit(_main())
         in-process call to `coordinator_state_root(central=True)` rather than a
         shell-out to a fake `coordinator-state-root.sh` -- monkeypatch the
         call-site directly rather than driving the full native resolution chain
-        (CLAUDE_KLABAUTER_ROOT / machine-local registry) through env, matching the
+        (the engine root / machine-local registry) through env, matching the
         equivalent stand-in pattern in test_central_run_due.py."""
         claude_home = tmp_path / ".claude"
         claude_home.mkdir(parents=True)

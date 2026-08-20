@@ -18,7 +18,7 @@ bash) and has been renamed to its natural `.py` extension; a co-located
 Never-block contract (preserved from the bash oracle): almost every failure mode is
 a silent skip that exits 0 — this bridge is advisory best-effort registration
 during install, never a gate. If the claude-klabauter link itself cannot be resolved
-(CLAUDE_KLABAUTER_ROOT unresolvable, module not importable), this trampoline also exits 0
+(engine root unresolvable, module not importable), this trampoline also exits 0
 rather than blocking install — matching the oracle's "skip with a stderr note"
 shape for every other failure mode it already handles.
 """

@@ -95,7 +95,7 @@ failure). Faithfully carried over, not "fixed" mid-port:
         2026-07-25: an unrecognized token used to be silently skipped —
         see the CLI-parsing block below for why that was itself a defect).
     2 — everything else: unresolvable git repo root, OR any cc_invoke
-        transport/op failure (CLAUDE_KLABAUTER_ROOT unresolvable, coordinator_core.invoke
+        transport/op failure (the engine root unresolvable, coordinator_core.invoke
         unimportable, op-level ValueError such as missing/invalid --period,
         --period-value, or --text, timeout, malformed envelope).
 

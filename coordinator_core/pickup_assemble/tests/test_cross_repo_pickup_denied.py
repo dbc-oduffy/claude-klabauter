@@ -30,8 +30,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+import pytest
+
 import coordinator_core.pickup_assemble.apply as pa_apply
 from coordinator_core.pickup_assemble import BriefResult
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _make_repo(root: Path) -> None:

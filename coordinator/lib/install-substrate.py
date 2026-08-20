@@ -12,7 +12,7 @@ MUST be executed as a subprocess, never sourced (uses `sys.exit`, not `return`;
 sourcing semantics don't apply to a Python entrypoint either way). Idempotent:
 re-runs preserve operator-customized files, emit notices instead of overwriting.
 Fail-loud on missing templates (hard precondition for downstream skills) and on
-CLAUDE_KLABAUTER_ROOT / claude-klabauter-module resolution failure — this is an install/config-writer
+engine-root / claude-klabauter-module resolution failure — this is an install/config-writer
 script (fail-loud convention), not a never-block hook.
 
 RETIRED (2026-07-28): this trampoline used to also drive `bin/gen-launcher-shim.py
@@ -96,9 +96,9 @@ def _derive_plugin_root() -> str:
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

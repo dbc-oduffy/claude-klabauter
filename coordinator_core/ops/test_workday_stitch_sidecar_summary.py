@@ -46,6 +46,8 @@ from coordinator_core.ipc import _REGISTRY
 from coordinator_core.locked_write import LockTimeout
 from coordinator_core.ops.workday_stitch_sidecar_summary import _handler
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _OP_NAME = "workday.stitch_sidecar_into_summary"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

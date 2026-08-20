@@ -106,7 +106,7 @@ def _resolve_home_base() -> Tuple[str, Optional[str]]:
     for the life of the interpreter. Under pytest that leaked a per-test
     tmp-dir settings-home into every later test in the session (including
     subprocess env inherited by the changelog/completion bash-oracle parity
-    harnesses, which then failed CLAUDE_KLABAUTER_ROOT resolution). Mirrors the
+    harnesses, which then failed engine-root resolution). Mirrors the
     deliberate no-export choice documented in
     ``coordinator_core.engine_root``'s negative-spec.
     """

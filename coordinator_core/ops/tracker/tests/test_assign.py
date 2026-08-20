@@ -35,6 +35,8 @@ from coordinator_core.ops._registry_map import OP_MODULE_MAP
 from coordinator_core.ops.tracker.assign import _handler
 from coordinator_core.tracker_entities import TrackerEntityError
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Duplicated locally rather than imported — mirrors test_mint_person.py's
 # "avoid a third referencer" discipline.
 _EVENTS_DIR_RELPATH = "state/sovereign-tracker"

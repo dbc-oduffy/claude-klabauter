@@ -3,7 +3,7 @@
 Hermetic by construction: `sys.modules["cc_invoke"]` is pre-seeded with a fake
 module BEFORE the subject is imported, so the subject's
 `from cc_invoke import RouteMutationError, route_mutation` short-circuits on
-the cached entry and no live CLAUDE_KLABAUTER_ROOT resolution, no
+the cached entry and no live engine-root resolution, no
 `coordinator_core.invoke` subprocess, and no git spawn ever happens. Same
 mechanism (and the same never-leave-the-fake-installed discipline) as
 `test_close_origin_stub_on_ship.py`, which is this tree's convention for a

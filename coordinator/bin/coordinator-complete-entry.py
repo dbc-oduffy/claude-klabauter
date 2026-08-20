@@ -42,7 +42,7 @@ reconcile-completion-commits.py --append).
 #   0  — entry written, OR idempotent no-op (entry already exists for this chain slug)
 #   1  — argument error (missing required flag, invalid --nature enum value, etc.)
 #   2  — environment error (not inside a git repository)
-#   3  — CLAUDE-KLABAUTER transport failure (CLAUDE_KLABAUTER_ROOT resolution or module import failed).
+#   3  — CLAUDE-KLABAUTER transport failure (engine-root resolution or module import failed).
 #        DEDICATED code, distinct from the 0/1/2 business states above (this is a
 #        fail-loud ceremony tool — an outage here must not misclassify as a
 #        legitimate business outcome; see porter-brief addendum rule 3b).
@@ -68,9 +68,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the DR-276 op runner.
+    """Resolve the engine root, put it on sys.path, and import the DR-276 op runner.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

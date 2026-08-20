@@ -94,6 +94,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.subagent_zero_tool_use":          "common_dir",
     "hooks.subagent_zero_tool_use_surface":  "common_dir",
     "hooks.subagent_zero_tool_use_resolve":  "common_dir",
+    # hooks.subagent_review_mark — common_dir, same reason as
+    # subagent_zero_tool_use directly above (same SubagentStop event, same
+    # gitdir-internal store): repo_root resolves <git_common_dir>/
+    # coordinator-sessions/.commit-ledger/ for the review-mark append.
+    "hooks.subagent_review_mark":            "common_dir",
     # hooks.subagent_fabrication_check — common_dir: repo_root is used to
     # resolve the worktree root for a live `git status --porcelain` probe on
     # the agent's declared target path(s), same reason subagent_zero_tool_use_resolve

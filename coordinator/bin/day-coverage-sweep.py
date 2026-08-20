@@ -38,7 +38,7 @@ Exit codes:
   0 — swept successfully (regardless of how many commits are unclaimed —
       this is a diagnostic, not a pass/fail gate).
   1 — argument / validation error (missing or malformed day, wrong arg count).
-  2 — repo-root unresolvable, or CLAUDE_KLABAUTER_ROOT / completion_ops not importable.
+  2 — repo-root unresolvable, or the engine root / completion_ops not importable.
 
 NEVER writes anything — read-only diagnostic. See day_coverage_sweep's own
 docstring for the full negative-spec.
@@ -95,7 +95,7 @@ def main(argv: list[str]) -> int:
     try:
         sweep = _import_day_coverage_sweep()
     except RuntimeError as exc:
-        print(f"day-coverage-sweep.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"day-coverage-sweep.py: engine-root resolution failed: {exc}", file=sys.stderr)
         return 2
     except ImportError as exc:
         print(f"day-coverage-sweep.py: coordinator_core.ops.completion_ops not importable: {exc}", file=sys.stderr)

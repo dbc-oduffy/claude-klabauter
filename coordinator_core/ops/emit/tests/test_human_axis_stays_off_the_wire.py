@@ -81,11 +81,14 @@ import re
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.person_resolver import resolve_operating_person
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SECTIONS_DIR = _REPO_ROOT / "coordinator_core" / "ops" / "emit" / "sections"

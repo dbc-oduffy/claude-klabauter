@@ -24,7 +24,7 @@ coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
 this wiki does not live here).
 
 Exit convention: this is a read-only diagnostic, not a commit gate. On a
-CLAUDE_KLABAUTER_ROOT resolution or import failure, or an unexpected exception once
+engine-root resolution or import failure, or an unexpected exception once
 inside detect_unfilled_sidecar.main() itself, this prints a stderr note and
 exits 1 (fail-loud transport failure, since a silent 0 here would look
 identical to "nothing flagged" and defeat the tool's own purpose). Absent
@@ -47,9 +47,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported entrypoint.
+    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is

@@ -8,7 +8,7 @@ slicing, `--format json`'s bare-array shape (AC7's tested contract), and the
 test_record_history.py`'s job) — `cc_invoke.route` and `_resolve_repo_root`
 are monkeypatched on the already-imported subject module, mirroring
 `test_query_records.py`'s own pattern, so these tests run with no
-CLAUDE_KLABAUTER_ROOT / repo dependency and never spawn `coordinator_core.invoke`.
+engine-root / repo dependency and never spawn `coordinator_core.invoke`.
 
 Test coverage:
   T1  `--type` absent: exit 2, stderr names it's required

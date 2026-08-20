@@ -48,6 +48,8 @@ from coordinator_core.ops.handoff_stamp import (
     _repair_archived_deployment_state_handler,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Positive floor assertion: op must be registered before any test runs.
 _OP_NAME = "handoff.stamp"
 assert _OP_NAME in _REGISTRY, (

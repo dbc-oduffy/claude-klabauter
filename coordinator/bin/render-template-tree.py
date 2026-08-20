@@ -38,7 +38,7 @@ writes is an orphan at the `scoped_git_commit` sink.
 
 Fail-loud convention (unchanged from the bash oracle): usage errors, an
 unreadable src dir, a non-empty dst dir, a missing render-template.py, or any
-per-file render failure all exit non-zero. A claude-klabauter-link failure (CLAUDE_KLABAUTER_ROOT
+per-file render failure all exit non-zero. A claude-klabauter-link failure (the engine root
 unresolvable, or the op module not importable) is treated the same way —
 sys.exit(1), not a silent no-op — because callers (new-project-scaffold.py)
 depend on this script's exit code to gate scaffold success.

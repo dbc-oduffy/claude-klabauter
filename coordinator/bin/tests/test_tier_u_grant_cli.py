@@ -2,13 +2,13 @@
 Asserts the CLI's exit-code contract in isolation from any live claude-klabauter
 checkout: the imported `grant` module functions are stubbed via a
 monkeypatch of the CLI's own `_import_module` seam, so this suite never
-requires CLAUDE_KLABAUTER_ROOT to resolve or `coordinator_core` to be importable —
+requires the engine root to resolve or `coordinator_core` to be importable —
 same idiom as coordinator/bin/tests/test_session_claim_cli.py.
 
 Matrix asserted:
     bool True  -> exit 0  (grant, check)
     bool False -> exit 1  (grant, check)
-    transport failure (unresolvable CLAUDE_KLABAUTER_ROOT / ImportError) -> exit 3
+    transport failure (unresolvable engine root / ImportError) -> exit 3
     usage error (missing/unknown subcommand, wrong arity) -> exit 2
     a `grant` ValueError (bad enum / cross-field) -> exit 2
     `read` always exits 0, printing JSON when a record exists and nothing
@@ -273,7 +273,7 @@ def test_read_extra_args_exits_2(stub_import_module):
 
 def test_runtime_error_from_claude_klabauter_root_resolution_exits_3(stub_import_module):
     def _raise_runtime_error():
-        raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable in test")
+        raise RuntimeError("engine root unresolvable in test")
 
     _cli._import_module = _raise_runtime_error
     rc = _cli.main(["check"])

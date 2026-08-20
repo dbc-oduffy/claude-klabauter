@@ -41,16 +41,16 @@ dispatch prompts, one per slice. DoE owns the contract; claude-klabauter
 #   1 — content validation error (missing sidecar, file overlap, malformed row) — matches
 #       claude-klabauter op's own contract byte-for-byte, see coordinator_core/ops/fan_out_integrator.py
 #   2 — invocation error (usage, environment, missing spec file, DoE-side snippet resolution)
-#   3 — claude-klabauter-link failure: CLAUDE_KLABAUTER_ROOT resolution or coordinator_core.ops.fan_out_integrator
+#   3 — claude-klabauter-link failure: engine-root resolution or coordinator_core.ops.fan_out_integrator
 #       import failed. NEW failure mode vs. the original bash script (which had no cross-repo
 #       dependency) — a DEDICATED code, distinct from BOTH business codes above, so a caller
-#       cannot misclassify "claude-klabauter engine unreachable" (fix your CLAUDE_KLABAUTER_ROOT / install) as
+#       cannot misclassify "claude-klabauter engine unreachable" (fix your engine root / install) as
 #       either a content problem (1, fix your spec) or a usage problem (2, fix your invocation).
 #       Per docs/wiki addendum § 3b (fail-loud gate/validator posture — this script's rc encodes
 #       a real business pass/fail the EM ceremony branches on, so transport failure may not
 #       silently degrade to 0 the way a best-effort/never-block script would).
 #
-# Environment: none required beyond a resolvable CLAUDE_KLABAUTER_ROOT (see cc_invoke). Snippet paths
+# Environment: none required beyond a resolvable engine root (see cc_invoke). Snippet paths
 # resolve via coordinator_data_root.data_root("snippets") (co-located rung 1, DoE-resident
 # rung 2 — see that module's docstring), NOT a bare __file__-relative walk: this script now
 # lives in claude-klabauter while snippets/ stayed in DoE-claude (DR-047 split), so a naive
@@ -83,7 +83,7 @@ _PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(data_root("snippets")
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
     Also sets CLAUDE_PLUGIN_ROOT to this trampoline's own resolved plugin root —
     `data_root("snippets").parent` (co-located or DoE-resident per the split-repo
@@ -104,7 +104,7 @@ def main() -> None:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
-        print(f"fan-out-integrator.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"fan-out-integrator.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(3)
     except ImportError as exc:
         print(

@@ -67,7 +67,7 @@ the chunk, not a detail):
     BrokenPipeError mid-request      -- one re-open, then cold.
     well-formed JSON-RPC response,
     including an error envelope      -- server up; USE the response.
-    ENGINE_SKEW (-32001)             -- server up and stale: go cold.
+    ENGINE_SKEW (-32002)             -- server up and stale: go cold.
     read-deadline expiry             -- go cold.
     Backstop 1: ONE spawn attempt per client process, ever.
     Backstop 2: the cold path is a SUCCESS path -- nothing in this
@@ -180,12 +180,6 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.warm.engine_root import current_engine_clone
-
-if __name__ != "__main__":
-    from coordinator_core.warm import election
-    from coordinator_core.warm.settings import is_warm_enabled
-
 __all__ = [
     "ERROR_PIPE_BUSY",
     "ENGINE_SKEW",
@@ -196,7 +190,26 @@ __all__ = [
 ]
 
 ERROR_PIPE_BUSY = 231
-ENGINE_SKEW = -32001
+
+#: Distinct from `coordinator_core.ipc.STRUCTURAL_PIN_ERROR` (-32001) on
+#: purpose -- that code is a cross-repo surface (cc_invoke pins it, DoE reads
+#: rc=2 off it) and MUST NOT move. `ENGINE_SKEW` crosses only our own pipe, so
+#: it took the collision instead. Pinned distinct by
+#: `coordinator_core/warm/tests/test_client_fallback.py`.
+ENGINE_SKEW = -32002
+
+#: `engine_root.current_engine_clone` is imported lazily, at call time,
+#: inside `_engine_clone_root()` and `_cli_main` -- never at this module's
+#: top level. `engine_root` imports `skew`, and `skew` re-exports
+#: `ENGINE_SKEW` from THIS module via a lazy `__getattr__` (never a
+#: module-scope import of `client`), because `client` itself imports
+#: `election`, which imports `engine_root` -- a module-scope import in
+#: either direction here closes `engine_root -> skew -> client -> election
+#: -> engine_root` into a real cycle.
+if __name__ != "__main__":
+    from coordinator_core.warm import election
+    from coordinator_core.warm.settings import is_warm_enabled
+
 READ_DEADLINE_SECS = 2.0
 
 #: Read deadline for a MUTATING op whose request has already been DELIVERED to
@@ -244,12 +257,40 @@ SERVER_ENTRY_SCRIPT = "coordinator_core/warm/server.py"
 
 _spawned_this_process = False
 
+#: Set True the first time `engine_token()` observes `UnstampedEngineRootError`
+#: in THIS process -- i.e. this clone is a live working tree, not a published
+#: engine root. Gates `_spawn_once`: see `_log_live_tree_cold_once`'s
+#: docstring for why a spawn from here is doomed, never merely undesirable.
+_live_tree_cold = False
+
+#: DR-315 s2 (PM ruling 2026-08-16, restated in CLAUDE.md) settles that the
+#: warm server runs the published build, never the live working tree,
+#: box-wide -- corroborated by DR-326 ("the engine does not resolve via
+#: claude-klabauter") and DR-331 ("an engine root is a stamped build"), both accepted.
+#: LIVE-TREE-COLD IS CORRECT BEHAVIOUR: this message exists so the code that
+#: implements the ruling says so by name, instead of leaving a reader to
+#: independently conclude, as a staff reviewer once did, that the question
+#: is still open.
+_LIVE_TREE_COLD_MESSAGE = (
+    "warm engine: this clone carries no engine build stamp, so it is not a "
+    "warm-server host -- by ruling, not by defect (DR-315 s2; corroborated "
+    "by DR-326 and DR-331). Every call from this tree goes cold; no server "
+    "will be spawned for it."
+)
+
 
 def _engine_clone_root() -> Path:
     """This coordinator_core clone's own resolved root -- collapsed onto
     the single shared definition, `engine_root.current_engine_clone()`
     (plan 2026-08-19-an-engine-root-is-a-stamped-build § C3). Used as the
-    `repo_root` `spawn_detached` logs housekeeping failures under."""
+    `repo_root` `spawn_detached` logs housekeeping failures under.
+
+    Import is deferred to call time, not module scope: `engine_root`
+    imports `skew`, and `skew` imports `ENGINE_SKEW` back from this module
+    at ITS module scope, so a module-level import here would close
+    `client -> engine_root -> skew -> client` into a real cycle."""
+    from coordinator_core.warm.engine_root import current_engine_clone
+
     return current_engine_clone()
 
 
@@ -265,10 +306,11 @@ def engine_token() -> str:
     self-defeating. Server-side dirty detection is a separate axis and is
     NOT computed here.
 
-    Import direction is client -> skew, never the reverse: `skew` duplicates
-    `ENGINE_SKEW` rather than importing this module precisely to keep that
-    edge acyclic (`skew.test_engine_skew_constant_matches_client_module`
-    pins the two constants equal).
+    Import direction is client -> skew inside this function body only
+    (deferred past module-load time); `skew` imports `ENGINE_SKEW` back from
+    this module at its own module scope, which stays acyclic precisely
+    because this edge is deferred, not because the two modules avoid
+    importing each other.
 
     Falls back to the previous stable placeholder if the token cannot be
     computed. A token that raises would fail the preamble, and nothing in
@@ -276,15 +318,42 @@ def engine_token() -> str:
     constant token merely means skew eviction cannot fire, which degrades
     to today's behaviour rather than breaking the call.
 
+    `UnstampedEngineRootError` is handled separately from every other
+    failure here: it does not mean "token not yet known", it means this
+    clone is a live working tree, which cannot host a warm server by
+    ruling (see `_LIVE_TREE_COLD_MESSAGE`). Logged once per process and
+    remembered on `_live_tree_cold`, which `_spawn_once` consults so this
+    tree never wastes a spawn attempt on a server it can never boot.
+
     Spec backlink: plan 2026-08-16-one-engine-for-the-whole-box, C15 seam
-    filled by C16.
+    filled by C16. Live-tree-cold naming: plan
+    2026-08-20-a-refusal-cannot-exit-zero.md § C3.
     """
     try:
-        from coordinator_core.warm.skew import compute_client_token
-
-        return compute_client_token()
+        from coordinator_core.warm.skew import UnstampedEngineRootError, compute_client_token
     except Exception:
         return "unversioned"
+    try:
+        return compute_client_token()
+    except UnstampedEngineRootError:
+        _log_live_tree_cold_once()
+        return "unversioned"
+    except Exception:
+        return "unversioned"
+
+
+def _log_live_tree_cold_once() -> None:
+    """Emit `_LIVE_TREE_COLD_MESSAGE` on this process's stderr exactly once,
+    and remember the fact on `_live_tree_cold` for `_spawn_once` to consult.
+
+    ONCE, deliberately: this is the permanent condition of a whole process
+    population (every dispatch from an unstamped clone), not a per-call
+    fact -- a per-call diagnostic here would be pure noise on the hot path
+    this module sits on."""
+    global _live_tree_cold
+    if not _live_tree_cold:
+        print(f"[warm-client] {_LIVE_TREE_COLD_MESSAGE}", file=sys.stderr)
+    _live_tree_cold = True
 
 
 def _caller_session_id() -> str:
@@ -349,12 +418,42 @@ def _spawn_once() -> None:
     """Best-effort spawn on the FileNotFoundError trigger, gated to at most
     one attempt per client process (Backstop 1). See module docstring's
     "Server-spawn seam". Idempotent: safe to call from more than one call
-    site in this module without re-checking the guard at each site."""
+    site in this module without re-checking the guard at each site.
+
+    Also gated on `_live_tree_cold`: a clone `engine_token()` has already
+    identified as an unstamped live working tree cannot host a warm server
+    (DR-315 s2, corroborated by DR-326/DR-331) -- spawning one is not merely
+    wasted work, it is a doomed process every SessionStart would otherwise
+    repeat. `engine_token()` is always called before this function on every
+    reachable call path (`_try_warm_dispatch_inner` computes it before the
+    pipe-open loop that calls `_spawn_once`), so `_live_tree_cold` is
+    current by the time this check runs.
+
+    W13: also consults `breadcrumb.should_spawn` before spawning -- the
+    debounce check `warm_start.py` already wires into the SessionStart
+    spawn trigger, but this is the OTHER path that can spawn (every CLI
+    invocation whose pipe-open hits `FileNotFoundError`, one fresh process
+    per concurrent caller). Backstop 1 above is per-PROCESS only, so on its
+    own it does nothing to stop N concurrent clients from each winning
+    their own one-per-process spawn race after an eviction; `should_spawn`
+    is the cross-process debounce (a young, alive breadcrumb) that closes
+    that race here too. Imported lazily, matching this module's own
+    import-budget discipline (`spawn_detached`'s docstring) -- paid only on
+    the `FileNotFoundError` branch that was already about to import
+    `spawn_detached`'s own heavy `ops` chain, never on a warm hit or any
+    other cold-fallback outcome."""
     global _spawned_this_process
     if _spawned_this_process:
         return
+    if _live_tree_cold:
+        return
+    root = _engine_clone_root()
+    from coordinator_core.warm.breadcrumb import should_spawn
+
+    if not should_spawn(root):
+        return
     _spawned_this_process = True
-    spawn_detached(str(_engine_clone_root()), SERVER_ENTRY_SCRIPT)
+    spawn_detached(str(root), SERVER_ENTRY_SCRIPT)
 
 
 def _open_pipe(pipe: str):
@@ -501,7 +600,7 @@ def try_warm_dispatch(msg: dict) -> Optional[dict]:
 
     Returns the JSON-RPC response dict when the warm server served it --
     ANY well-formed response counts, including an error envelope, per the
-    anti-storm table, EXCEPT an ENGINE_SKEW (-32001) error, which means
+    anti-storm table, EXCEPT an ENGINE_SKEW (-32002) error, which means
     "server up and stale" and goes cold instead. Returns None for every
     other outcome (warmth disabled, no pipe, busy, someone else's pipe, a
     broken mid-request pipe after one re-open, a malformed response, or
@@ -515,13 +614,35 @@ def try_warm_dispatch(msg: dict) -> Optional[dict]:
     signal rather than propagated.
     """
     try:
-        return _try_warm_dispatch_inner(msg)
+        result = _try_warm_dispatch_inner(msg)
     except Exception as exc:  # noqa: BLE001 -- Backstop 2: never fail the op
         print(
             f"[warm-client] preamble failed, falling back to cold: {exc!r}",
             file=sys.stderr,
         )
-        return None
+        result = None
+    if result is None:
+        _record_cold_fallback()
+    return result
+
+
+def _record_cold_fallback() -> None:
+    """Record one cold fallback -- the instrument W6+W7 found dead: only
+    THIS process (the client) ever observes a cold fallback, so this is
+    the sole call site across the whole warm engine that can ever
+    increment it. Lazily imported, matching `_op_may_mutate`'s own
+    import-budget-guarded pattern: this module is on every invocation's
+    cold-start preamble, and every `try_warm_dispatch` call that returns a
+    served warm response must never pay this import. Never raises --
+    `record_client_cold_fallback` is itself best-effort, and an import
+    failure here is swallowed the same way (Backstop 2: nothing in the
+    preamble may fail in a way that fails the op)."""
+    try:
+        from coordinator_core.warm.telemetry import record_client_cold_fallback
+
+        record_client_cold_fallback(engine_root=_engine_clone_root())
+    except Exception:  # noqa: BLE001 -- Backstop 2, see docstring
+        return
 
 
 def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
@@ -866,7 +987,7 @@ def _cli_main(argv) -> int:
             print("null")
             return 0
 
-        repo_root = current_engine_clone()
+        repo_root = _engine_clone_root()
         pipe = _cli_pipe_name(repo_root)
         payload = json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
 

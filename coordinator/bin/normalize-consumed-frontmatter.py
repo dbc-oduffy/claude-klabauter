@@ -45,7 +45,7 @@ from __future__ import annotations
 #       per-file processing error occurred during the scan (scanning
 #       continues past a per-file error; exit 1 does not mean "nothing was
 #       written" — check stdout for the per-file summary).
-#   3 — TRANSPORT failure: CLAUDE_KLABAUTER_ROOT resolution or
+#   3 — TRANSPORT failure: engine-root resolution or
 #       coordinator_core.ops.normalize_claimed_frontmatter import failed.
 #
 # Spec backlink: DoE-claude:pln-de-polyglot-the-coordinator-mi-119303
@@ -64,7 +64,7 @@ from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import the runner.
+    """Resolve the engine root and import the runner.
 
     DR-276: the op is run through `coordinator_core.cli_entry.run_op_main`
     rather than by calling its `main` directly, so the paths it declares become

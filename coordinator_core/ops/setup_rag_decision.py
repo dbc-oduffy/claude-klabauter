@@ -35,7 +35,7 @@ Exit codes (parity-critical -- matches the bash oracle's contract exactly):
     0  Decision resolved and action taken (or dry-run completed).
     1  Usage error or unambiguous-detection failure (fail-loud).
     2  RESERVED for the DoE trampoline's own claude-klabauter-link/import failure
-       (CLAUDE_KLABAUTER_ROOT resolution / ImportError) -- never returned by this
+       (engine-root resolution / ImportError) -- never returned by this
        module's own main(); documented here so the two layers' exit-code
        tables stay disjoint (rule: transport-failure code must not collide
        with a business code -- see docs/plans/2026-07-16-bash-clean-slate-

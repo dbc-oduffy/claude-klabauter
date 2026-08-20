@@ -6,7 +6,7 @@ YAML entries into claude-klabauter/DoE-routed state directories and resolve thei
 from_repo identity from cwd git context). Extracts exactly four primitives:
 
   - machine_local_get / machine_local_repos_keys — `machine-local` CLI bridge
-  - claude_klabauter_root — CLAUDE_KLABAUTER_ROOT env-or-registry resolution (AC1/AC13)
+  - claude_klabauter_root — engine-root env-or-registry resolution (AC1/AC13)
   - resolve_from_repo — the cwd git-root -> machine-local reverse-lookup ->
     doe_claude -> unregistered-repo -> "unknown-sender-em" ladder (same
     convention as cross-repo-memo._sender_em_id)

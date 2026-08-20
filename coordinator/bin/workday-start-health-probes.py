@@ -15,7 +15,7 @@ concern, not this chunk's).
 
 Because this file lives co-located with its sibling probes under
 `coordinator/bin/`, it resolves them via `os.path.dirname(__file__)` rather
-than re-running the DoE-side CLAUDE_KLABAUTER_ROOT resolution ladder a second time —
+than re-running the DoE-side engine-root resolution ladder a second time —
 the DoE fence already did that resolution once to find *this* file.
 
 Subcommands (argv[1] selects):

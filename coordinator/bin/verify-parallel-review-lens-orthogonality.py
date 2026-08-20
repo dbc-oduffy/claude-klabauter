@@ -45,7 +45,7 @@ does not modify files, dispatch agents, or commit.
 #       skill file / chunk manifest was not found, OR the DoE-claude repo
 #       root could not be resolved cross-repo, OR a CLI usage error (unknown
 #       arg, missing --chunk-manifest value; these print to stderr).
-#   2 — claude-klabauter-link failure: CLAUDE_KLABAUTER_ROOT resolution failed, or
+#   2 — claude-klabauter-link failure: engine-root resolution failed, or
 #       coordinator_core.ops.verify_parallel_review_lens_orthogonality was
 #       not importable. Dedicated code — distinct from both business codes
 #       (0/1) above, per the fail-loud-gate transport-failure convention
@@ -78,9 +78,9 @@ _EXIT_TRANSPORT_FAILURE = 2  # dedicated — never collides with the op's busine
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported CLI entry.
+    """Resolve the engine root, put it on sys.path, and import the ported CLI entry.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -96,7 +96,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        print(f"{_PROG}: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"{_PROG}: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(_EXIT_TRANSPORT_FAILURE)
     except ImportError as exc:
         print(

@@ -27,12 +27,12 @@ Claude-klabauter module's own docstring.
 #        bad CLI usage (repo_root missing/non-existent, unknown flag).
 #   2  — nothing detected, OR keys already present and --force not passed.
 #   3  — coordinator.local.md missing or its frontmatter is malformed.
-#   4  — TRANSPORT FAILURE: CLAUDE_KLABAUTER_ROOT could not be resolved, or the claude-klabauter
+#   4  — TRANSPORT FAILURE: the engine root could not be resolved, or the claude-klabauter
 #        module was not importable. Dedicated code (does NOT reuse 0-3, all
 #        of which are business outcomes per the table above) so a caller can
 #        distinguish "claude-klabauter engine unreachable" from "detection ran and
 #        found nothing" (PORTER-BRIEF-ADDENDUM.md rule A3b). On a cold
-#        machine CLAUDE_KLABAUTER_ROOT may be genuinely unresolvable — this is a known
+#        machine the engine root may be genuinely unresolvable — this is a known
 #        systemic condition, not a bug in this trampoline; the printed
 #        remediation points at the resolver chain, not a specific fix.
 #

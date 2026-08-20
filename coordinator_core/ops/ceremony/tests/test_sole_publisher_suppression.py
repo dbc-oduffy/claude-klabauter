@@ -38,6 +38,8 @@ import os
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.hooks import auto_push
 from coordinator_core.ops.ceremony import commit_pipeline, git_native, wsc_tail
 

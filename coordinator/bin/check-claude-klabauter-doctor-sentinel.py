@@ -12,7 +12,7 @@ Check-claude-klabauter-doctor-sentinel.sh — CLI trampoline over claude-klabaut
 coordinator_core.ops.check_claude_klabauter_doctor_sentinel.
 
 Read-only consumer of claude-klabauter's health sentinel
-(<CLAUDE_KLABAUTER_ROOT>/state/doctor-last-run.json, claude-klabauter-owned schema). Surfaces the
+(<engine root>/state/doctor-last-run.json, claude-klabauter-owned schema). Surfaces the
 GREEN/AMBER/RED verdict during fleet `/workday-start`, mirroring how
 check-plugin-drift.py nudges on drift. This trampoline never writes the
 sentinel — claude-klabauter's `bin/claude-klabauter-doctor-probe.py` owns that.
@@ -30,11 +30,11 @@ here).
 
 Always exits 0 — advisory only, never gating (matches check-plugin-drift.py /
 scan-addon-health.py convention of "probe never fails the ceremony"). This
-mirrors the original bash script's own convention: CLAUDE_KLABAUTER_ROOT-unresolvable
+mirrors the original bash script's own convention: engine-root-unresolvable
 and sentinel-absent/malformed are all soft-skip states, not failures.
 
 Divergence from the original .sh (documented, not a parity break): the
-original silently discarded the CLAUDE_KLABAUTER_ROOT-resolution stderr
+original silently discarded the engine-root-resolution stderr
 (`coordinator_claude_klabauter_root 2>/dev/null || exit 0`); this trampoline follows the
 house convention of printing the resolution failure to stderr before the same
 exit-0 fallback (matches coordinator-auto-push/handoff-gate-aging). stdout and

@@ -1178,7 +1178,7 @@ def _read_scope_mode(plan_file: Path) -> str:
     return ""
 
 
-def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
+def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = False) -> bool:
     """Port of ``cs_claim_plan <basename>`` (980-1011).
 
     ONE-arg wrapper (the ``baton_repo_root`` arg is DELIBERATELY DROPPED —
@@ -1194,8 +1194,49 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
     return is already committed by the claim success. ``light|full`` sizing is
     a deferred read-time ceremony derivation, NOT stored here (plan F4 fix).
 
+    ``for_execution`` (C4, docs/plans/2026-08-20-the-rungs-get-writers.md):
+    when True, a successful claim additionally fires the plan's
+    ``draft``/``reviewed``/``approved``/``landed`` -> ``executing`` status
+    flip (``plan_status_transition.main(["stamp-executing", ...])``) — see
+    that module's ``_stamp_executing``/``_stamp_rung`` docstrings for the
+    transition's own contract (AC2-AC6). Set ONLY by ``session-claim-cli
+    claim-plan --for-execution``, which ``/execute-plan`` Step 0 alone
+    passes (a DoE ``SKILL.md`` line-edit, tracked cross-repo, not a claude-klabauter
+    change) — the plan's OTHER two production ``claim_plan`` callers
+    (``coordinator-doc-new.py`` at plan-authorship time,
+    ``wsc-coverage-gate-runner.py cmd_claim_plan`` at workstream-complete)
+    stay at the default and never flip status. Anchored on the claim
+    SUCCEEDING (never on the best-effort ``append-plan-session``/shape-write
+    below) because a flip that "must not be best-effort" needs a load-
+    bearing anchor, not an advisory one.
+
+    The flip is resolved OUTSIDE the ``sid``-gated shape-instrumentation
+    block below — deliberately, not an oversight: gating it on ``sid``
+    would silently skip the flip whenever the session id fails to resolve,
+    reintroducing exactly the best-effort posture ``for_execution`` exists
+    to avoid. It reuses the SAME ``rel``/``root``/``.is_file()`` resolution
+    the shape block below computes for its own purposes, computed
+    independently here.
+
+    FATAL for a ``for_execution`` claim: a failed stamp-executing (missing
+    plan file, non-zero ``plan_status_transition`` exit) makes this function
+    return False even though the underlying ``claim_artifact`` mkdir
+    succeeded — decided AFTER, and made possible only by, the
+    ``for_execution`` discriminator narrowing the caller set to
+    ``/execute-plan`` Step 0 alone (AC12): plan authorship and workstream-
+    close-out are confirmed OUT of this caller set, so a fatal flip here can
+    no longer block either of those. The asymmetry the chunk brief names cuts
+    the other way for this ONE caller — a silently-swallowed stamp failure
+    at Step 0 would leave the plan reading ``draft``/``approved`` while
+    execution proceeds, reintroducing the exact status lie this workstream
+    removes, and Step 0 is already a typed, retry-safe step (unlike the
+    session-shape write, which has no analogous retry story) — so failing
+    the claim here, loud, is the correct-by-construction choice, not the
+    established shape-write precedent.
+
     Returns the claim's success verdict (False if the underlying
-    ``claim_artifact`` failed — the shape write is skipped entirely then).
+    ``claim_artifact`` failed — the shape write and the ``for_execution``
+    flip are both skipped entirely then).
 
     ``slug`` MUST be a bare basename (e.g. ``2026-07-26-some-plan``), NEVER a
     path. A path-shaped arg (containing ``/`` or ``\\``, or ending in
@@ -1243,6 +1284,33 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
 
     if not claim_artifact("plan", slug, cwd=cwd):
         return False
+
+    # C4 — for_execution status flip. OUTSIDE the sid guard below by design
+    # (see docstring): a flip gated on sid resolution would silently no-op
+    # exactly when session id fails to resolve, reintroducing the
+    # best-effort posture for_execution exists to remove.
+    if for_execution:
+        rel = f"docs/plans/{slug}.md"
+        root = core.git_root(cwd)
+        if not root or not (Path(root) / rel).is_file():
+            print(
+                f"cs_claim_plan: for_execution stamp-executing requires a "
+                f"resolvable plan file for {slug!r} (looked for {rel} under "
+                f"{root or '<unresolved git root>'}) — claim refused",
+                file=sys.stderr,
+            )
+            return False
+        plan_path = str(Path(root) / rel)
+        from coordinator_core.ops import plan_status_transition
+
+        rc = plan_status_transition.main(["stamp-executing", "--plan", plan_path])
+        if rc != 0:
+            print(
+                f"cs_claim_plan: stamp-executing failed for {slug} (exit "
+                f"{rc}) — claim refused, not left half-applied",
+                file=sys.stderr,
+            )
+            return False
 
     # C3 — best-effort session-shape instrumentation (non-fatal).
     sid = core.resolve_session_id(cwd)

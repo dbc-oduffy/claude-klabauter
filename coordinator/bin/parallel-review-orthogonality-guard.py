@@ -51,7 +51,7 @@ Exit codes:
     snapshot — 0 (JSON printed) / 1 (freeze-review-diff.py failed; its own
                stderr is surfaced verbatim) / 2 (usage error).
 
-Negative-spec: does NOT resolve CLAUDE_KLABAUTER_ROOT, does NOT source the
+Negative-spec: does NOT resolve the engine root, does NOT source the
 _cc_trusted/_cc_root plugin-root-trust preamble, and does NOT walk the
 resolve-claude-klabauter-bin settings-home ladder — none of that applies here. This
 CLI and the two sibling CLIs it wraps (verify-parallel-review-lens-

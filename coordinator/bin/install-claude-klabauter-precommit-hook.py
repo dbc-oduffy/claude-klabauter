@@ -9,11 +9,11 @@ module's docstring for the gate registry, the fail-loud discipline, and the
 exit-code clamping that guarantees this hook body only ever exits 0 or 1.
 
 Exit convention: this is a config-writer/gate-installer, not a never-block
-hook. A claude-klabauter-link failure (CLAUDE_KLABAUTER_ROOT unresolvable, module not
+hook. A claude-klabauter-link failure (the engine root unresolvable, module not
 importable) means the installer literally could not run — silently exiting
 0 would read as "hook installed" to a caller (`scripts/setup.py`,
 `/coordinator:setup`) when it was not, so this trampoline exits 1 on
-CLAUDE_KLABAUTER_ROOT resolution or import failure. The op's own internal skip paths
+engine-root resolution or import failure. The op's own internal skip paths
 (not a git repo, not claude-klabauter, already installed) all still exit 0.
 
 Usage:
@@ -34,7 +34,7 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import the in-process runner.
+    """Resolve the engine root and import the in-process runner.
 
     DR-276: routes through `coordinator_core.cli_entry.run_op_main` rather
     than calling the op's `main` directly, so the pre-commit hook file this

@@ -58,6 +58,19 @@ hand-maintained copies given the hash is authorization-staleness-detection
 load-bearing; a one-sided drift between them would silently break that
 detection) -- this module no longer hand-rolls its own hashing.
 
+Rung side-effect (docs/plans/2026-08-20-the-rungs-get-writers.md, C3/C5):
+both CLI verbs (`stamp` and `authorize-invocation`) fire `stamp-approved`
+(`coordinator_core.ops.plan_status_transition`) as a SEPARATE lock and
+commit once this module's own four-field write has returned `EXIT_OK` --
+see `_fire_stamp_approved`. The `stamp` verb ALSO fires `stamp-reviewed`
+first, `stamp` ONLY -- see `_fire_stamp_reviewed` for why
+`authorize-invocation` must never fire it (a never-reviewed plan reaching
+`/execute-plan` would otherwise get stamped `reviewed`, a status lie). This
+is a CLI-verb-layer hook, not a mint-level one:
+`stamp_execution_authorization`/`stamp_invocation_authorization` themselves
+never flip plan status when called directly, in-process, by a caller other
+than `main()`/`_main_authorize_invocation`.
+
 Negative-spec:
   - Does NOT enforce the write-bar (has the PM actually named execution?).
     That judgment call stays the calling skill's, per
@@ -506,6 +519,89 @@ def stamp_invocation_authorization(
     return exit_code, result
 
 
+def _fire_stamp_reviewed(plan_path: str) -> None:
+    """Fire ``stamp-reviewed`` (``coordinator_core.ops.plan_status_transition``)
+    as a SEPARATE lock and commit, after this module's own exec-auth stamp
+    write has already returned `EXIT_OK` -- same shape as
+    `_fire_stamp_approved`, but hooked ONLY at the `stamp` CLI verb (the
+    `/review` cross-reference exit), never at `authorize-invocation`.
+
+    Placement is deliberate, not incidental (docs/plans/2026-08-20-the-
+    rungs-get-writers.md, C5): `authorize-invocation` is `/execute-plan`'s
+    PM-invocation mint and reaches this binary for a plan that may never
+    have been reviewed at all. Firing `stamp-reviewed` from there would
+    write `reviewed` onto a never-reviewed plan -- a new status lie. The
+    `stamp` verb, by construction, only runs once `/review`'s cross-
+    reference exit has actually happened, so it is the only call site
+    entitled to claim the plan was reviewed.
+
+    The flip is unconditional on integration having happened (the `stamp`
+    verb having been reached at all) -- NOT on the verdict. A BLOCKED
+    review that was never integrated never reaches the `stamp` verb, so
+    there is no verdict branch to write here.
+
+    A `stamp-reviewed` failure is reported to stderr but never turns this
+    op's own exit code non-zero -- same additive-side-effect contract as
+    `_fire_stamp_approved`.
+    """
+    import sys
+
+    from coordinator_core.ops import plan_status_transition
+
+    rc = plan_status_transition.main(["stamp-reviewed", "--plan", plan_path])
+    if rc != 0:
+        print(
+            f"review-exec-auth-stamp: stamp-reviewed rung advance failed for "
+            f"{plan_path} (exit {rc}) -- the exec-auth stamp itself still landed",
+            file=sys.stderr,
+        )
+
+
+def _fire_stamp_approved(plan_path: str) -> None:
+    """Fire ``stamp-approved`` (``coordinator_core.ops.plan_status_transition``)
+    as a SEPARATE lock and commit, after this module's own exec-auth stamp
+    write has already returned `EXIT_OK` (AC8/AC9) -- never composed into
+    the same `locked_rmw` transaction as the four-field write above. This
+    module's own negative-spec ("Does NOT git-commit. Frontmatter mutation
+    only, via `locked_rmw`") stays true of that write; `stamp-approved` owns
+    its own lock and its own commit end-to-end, via the completed native
+    port (`coordinator_core.ops.plan_status_transition.main`), the same
+    in-process call shape `cs_stamp_plan_implemented`
+    (`coordinator_core.archive_stamp`) already uses for its own rung verb.
+
+    Hooked at the CLI-verb layer -- `main()`'s `stamp` verb and
+    `_main_authorize_invocation` -- not inside the mint
+    (`stamp_execution_authorization`): the mint cannot discriminate which
+    caller reached it, so hooking there would reach BOTH auth paths with no
+    opt-out. The CLI-verb layer is a placement decision (docs/plans/2026-08-
+    20-the-rungs-get-writers.md, C3), not a free choice: `stamp-approved`
+    fires from BOTH `stamp` and `authorize-invocation`, on purpose --
+    `approved` already means "authorized to execute" to its only live
+    consumer (`_PLAN_ROUTABLE_STATUSES`, which sits behind the auth stamp),
+    so letting both paths reach it tells the truth about what the rung is
+    for. The accepted cost: a direct in-process caller of either mint
+    function (`stamp_execution_authorization` / `stamp_invocation_
+    authorization`) never flips the rung -- only the CLI verbs do,
+    matching this codebase's production call sites.
+
+    A `stamp-approved` failure is reported to stderr but never turns this
+    op's own exit code non-zero: the exec-auth stamp already landed and
+    returned `EXIT_OK`, and this rung-advance is an additive side effect of
+    that success, not a precondition for it.
+    """
+    import sys
+
+    from coordinator_core.ops import plan_status_transition
+
+    rc = plan_status_transition.main(["stamp-approved", "--plan", plan_path])
+    if rc != 0:
+        print(
+            f"review-exec-auth-stamp: stamp-approved rung advance failed for "
+            f"{plan_path} (exit {rc}) -- the exec-auth stamp itself still landed",
+            file=sys.stderr,
+        )
+
+
 USAGE = (
     "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
     "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]\n"
@@ -558,6 +654,8 @@ def _main_authorize_invocation(rest: list[str]) -> int:
     exit_code, result = stamp_invocation_authorization(
         plan_path, utterance, typed_command, at=at
     )
+    if exit_code == EXIT_OK:
+        _fire_stamp_approved(plan_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return exit_code
 
@@ -636,5 +734,8 @@ def main(argv: list[str]) -> int:
     exit_code, result = stamp_execution_authorization(
         plan_path, by, note_value, at=at, append_note=append_note
     )
+    if exit_code == EXIT_OK:
+        _fire_stamp_reviewed(plan_path)
+        _fire_stamp_approved(plan_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return exit_code

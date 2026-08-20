@@ -36,6 +36,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # ---- Import guard: fires @register_op side-effect for tracker.push_suggestion. ----
 import coordinator_core.ops.tracker.push_suggestion as push_suggestion
 

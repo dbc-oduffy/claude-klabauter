@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core import lifecycle
 from coordinator_core.warm import client, skew
 from coordinator_core.win_portability import no_console_creationflags
@@ -360,7 +362,7 @@ def test_build_skew_response_shape():
         "jsonrpc": "2.0",
         "id": 7,
         "error": {
-            "code": -32001,
+            "code": -32002,
             "message": "engine skew: this warm server is running stale source",
             "data": {"server_sha": "deadbeef", "client_token": "tok-abc"},
         },
@@ -368,4 +370,4 @@ def test_build_skew_response_shape():
 
 
 def test_engine_skew_constant_matches_client_module():
-    assert skew.ENGINE_SKEW == client.ENGINE_SKEW == -32001
+    assert skew.ENGINE_SKEW == client.ENGINE_SKEW == -32002

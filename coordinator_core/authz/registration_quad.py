@@ -70,7 +70,7 @@ side-effect-free) — the token is consumed entirely by the commit-tripwire call
 named here only so this module's docstring is the one place both consumers' contracts
 are recorded together, per AC13.
 
-`_KNOWN_UNCLASSIFIED_OPS_DEBT` freezes the 65 op-keys registered but missing an
+`_KNOWN_UNCLASSIFIED_OPS_DEBT` freezes the op-keys registered but missing an
 `OP_CLASSIFICATION` entry as measured at integration time (2026-07-25, full-walk
 discovery). It is generated once as a literal, not regenerated on demand — a
 self-refreshing baseline is not a baseline, it is a check that can never fail. Consumed
@@ -467,13 +467,8 @@ _KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset(
         "git_branch.detect_unpushed_commits",
         "git_branch.list_unmerged_work",
         "git_branch.verify_commit_in_review_window",
-        "install.clone_idempotent",
         "install.detect_python3_appx_stub",
-        "install.probe_skill_frontmatter_valid",
-        "install.probe_windows_terminal_presence",
-        "install.wrapper_onto_path",
         "install.write_identity_file",
-        "install.write_shell_rc_guard_block",
         "lessons.filter_undated_universal",
         "lessons.reject_orphan_strip_entries",
         "machine.hibernate",
@@ -481,7 +476,6 @@ _KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset(
         "merge.quiet_activity_gate",
         "percolate.check_inverse_drift",
         "percolate.list_files_newer_than_marker",
-        "percolate.run_ci_smoke_check",
         "percolate.run_pre_ci_hooks",
         "percolate.scan_content_leakage_tiers",
         "plan.list_stale_executing",

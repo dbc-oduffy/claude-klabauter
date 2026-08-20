@@ -52,7 +52,7 @@ Exit codes:
   0 — ran (an empty result is itself a valid "nothing to commit" outcome).
   1 — business failure (session id could not be resolved unambiguously).
   2 — usage error.
-  3 — transport failure (CLAUDE_KLABAUTER_ROOT unresolvable / seam absent).
+  3 — transport failure (the engine root unresolvable / seam absent).
 """
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def _install_sigterm_handler() -> None:
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the op's main().
+    """Resolve the engine root, put it on sys.path, and import the op's main().
 
     Plain in-process import, not an RPC invoke — this module registers no
     op, it is a direct-import function-and-main() module, same shape as

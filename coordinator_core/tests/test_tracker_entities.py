@@ -52,6 +52,8 @@ from coordinator_core.tracker_entities import (
     reject_reserved_project,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _ITEM_ID_RE = re.compile(r"^[a-z0-9-]+$")
 
 

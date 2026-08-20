@@ -56,7 +56,7 @@ from __future__ import annotations
 #       code for an unresolvable plugin root.
 #   2 — CLI-usage / environment error (unknown mode, `node` not on PATH, or
 #       the canonical snippet file is missing) — raised by the claude-klabauter module.
-#   3 — claude-klabauter-link failure: CLAUDE_KLABAUTER_ROOT resolution failed, or
+#   3 — claude-klabauter-link failure: engine-root resolution failed, or
 #       coordinator_core.ops.verify_subagent_sandbox_preamble_sync was not
 #       importable. Distinct from every code above so a caller can never
 #       mistake "claude-klabauter engine unreachable" for "sentinel drift found" (1)
@@ -156,7 +156,7 @@ def main() -> None:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(
-            f"verify-subagent-sandbox-preamble-sync.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"verify-subagent-sandbox-preamble-sync.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(3)

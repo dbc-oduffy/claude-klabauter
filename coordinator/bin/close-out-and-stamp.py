@@ -5,7 +5,7 @@
 # implemented` on the full-shipped path only, land one scoped commit --
 # into one named op). Direct-import variant (template-variant #1, mirrors
 # coordinator/bin/pickup-assemble, archive-stamp-cli, review-exec-auth-stamp):
-# a plain in-process function call after resolving CLAUDE_KLABAUTER_ROOT, no
+# a plain in-process function call after resolving the engine root, no
 # cc_invoke/IPC hop.
 #
 # Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
@@ -47,7 +47,7 @@
 #       failed live is a genuine verdict, not suppressed by --dry-run).
 #   2 — usage error (missing/unrecognized arguments; --dry-run is the only
 #       recognized flag, and does not itself constitute an "extra" argument).
-#   3 — transport failure (CLAUDE_KLABAUTER_ROOT unresolvable, coordinator_core import
+#   3 — transport failure (the engine root unresolvable, coordinator_core import
 #       failure, or no enclosing git worktree).
 from __future__ import annotations
 """close-out-and-stamp — see the # comment block above for the RAG-bait

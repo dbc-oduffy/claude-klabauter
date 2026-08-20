@@ -33,7 +33,7 @@ Exit codes (parity-critical — both callers branch on these):
   1 — one or more stale draft plans found (fail loud)
   2 — internal error (missing path, bad frontmatter, unparseable date,
       git-log failure, or unresolvable handoff-read failure)
-  3 — DoE trampoline transport failure (CLAUDE_KLABAUTER_ROOT resolution / import
+  3 — DoE trampoline transport failure (engine-root resolution / import
       failure) — NEVER returned by this module itself; allocated by
       coordinator/bin/draft-plan-aging.sh (DoE) as a dedicated code so
       transport failure can't collide with this module's own 0/1/2 business

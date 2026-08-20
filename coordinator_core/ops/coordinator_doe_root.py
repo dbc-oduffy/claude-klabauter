@@ -2,7 +2,7 @@
 coordinator_core.ops.coordinator_doe_root — Port of:
 coordinator-doe-root.sh (DoE 09e5e5f9, 2026-07-19, sourced-lib shape, DOE-PORT R2-R6 wave).
 
-Purpose: resolves the DoE-claude sibling-repo root, analogous to how CLAUDE_KLABAUTER_ROOT
+Purpose: resolves the DoE-claude sibling-repo root, analogous to how the engine root
 works for the claude-klabauter plane. The bash oracle exposes a single public shell function,
 `coordinator_doe_root`, meant to be `source`d by other bash scripts. This module
 provides the same resolution chain as a plain Python function so any coordinator_core

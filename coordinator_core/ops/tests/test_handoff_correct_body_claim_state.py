@@ -36,6 +36,8 @@ from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_correct_body import _handler
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _OP_NAME = "handoff.correct_body"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

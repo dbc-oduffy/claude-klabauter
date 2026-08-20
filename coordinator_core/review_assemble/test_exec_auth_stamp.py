@@ -15,6 +15,7 @@ from coordinator_core.review_assemble.exec_auth_stamp import (
     EXIT_BUSINESS_FAIL,
     EXIT_OK,
     EXIT_USAGE,
+    main,
     stamp_execution_authorization,
     stamp_invocation_authorization,
 )
@@ -703,3 +704,151 @@ def test_malformed_block_header_fails_clean_not_as_a_traceback(tmp_path: Path) -
 
     assert exit_code == EXIT_BUSINESS_FAIL
     assert "execution_authorized_note" in result["error"]
+
+
+def test_cli_stamp_verb_fires_stamp_approved_as_a_separate_commit(tmp_path: Path) -> None:
+    """C3 (docs/plans/2026-08-20-the-rungs-get-writers.md): the `stamp` CLI
+    verb fires `stamp-approved` after its own exec-auth write returns 0,
+    in a SEPARATE lock+commit -- flips `status: draft` -> `status: approved`
+    and lands a second commit on top of the exec-auth-stamp commit."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-cli-stamp-approved.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["stamp", str(plan_path), "--by", "PM", "--note", "make it so"])
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: approved" in written
+
+    log = _git(tmp_path, "log", "--oneline")
+    # exec-auth-stamp's own write is uncommitted (locked_rmw, no git-commit --
+    # see module negative-spec); stamp-approved's flip lands its own commit
+    # on top of the plan's initial commit.
+    assert "stamp status" in log.stdout
+
+
+def test_cli_stamp_verb_fires_stamp_reviewed_before_stamp_approved(tmp_path: Path) -> None:
+    """C5: the `stamp` CLI verb (the `/review` cross-reference exit) fires
+    `stamp-reviewed` FIRST, then `stamp-approved` -- two separate rung
+    commits land on top of the exec-auth-stamp write, `draft -> reviewed`
+    then `reviewed -> approved`."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-cli-stamp-reviewed.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["stamp", str(plan_path), "--by", "PM", "--note", "make it so"])
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: approved" in written
+
+    log = _git(tmp_path, "log", "--oneline", "-n", "10")
+    assert '"draft" -> reviewed' in log.stdout
+    assert '"reviewed" -> approved' in log.stdout
+
+
+def test_cli_authorize_invocation_never_fires_stamp_reviewed(tmp_path: Path) -> None:
+    """C5's premise correction: `authorize-invocation` reaches this binary
+    for a plan that may never have been reviewed at all, so it must NOT
+    fire `stamp-reviewed` -- only `stamp-approved`. Firing `stamp-reviewed`
+    generically from `main()` would stamp `reviewed` onto a never-reviewed
+    plan, a status lie this chunk exists to avoid."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-cli-authorize-invocation-no-reviewed.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(
+            ["authorize-invocation", str(plan_path), "--typed-command", "/execute-plan"]
+        )
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: approved" in written
+
+    log = _git(tmp_path, "log", "--oneline", "-n", "10")
+    assert "-> reviewed" not in log.stdout
+    assert '"draft" -> approved' in log.stdout
+
+
+def test_cli_authorize_invocation_fires_stamp_approved(tmp_path: Path) -> None:
+    """AC9's placement decision: `stamp-approved` fires from BOTH CLI verbs,
+    including `authorize-invocation` -- invocation-authorized plans reach
+    `approved` too, per the EM decision recorded in this chunk's brief."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-cli-authorize-invocation.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(
+            ["authorize-invocation", str(plan_path), "--typed-command", "/execute-plan"]
+        )
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: approved" in written
+
+
+def test_direct_in_process_mint_call_never_flips_status(tmp_path: Path) -> None:
+    """The accepted cost of hooking at the CLI-verb layer rather than inside
+    the mint (this chunk's placement decision): a caller that invokes
+    `stamp_execution_authorization` directly, in-process, bypassing
+    `main()`, never fires `stamp-approved` -- status stays whatever it was."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-direct-mint-call.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path), "PM", "make it so", at="2026-08-20", repo_root=tmp_path
+    )
+
+    assert exit_code == EXIT_OK
+    assert result["applied"] is True
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: draft" in written
+    assert "status: approved" not in written

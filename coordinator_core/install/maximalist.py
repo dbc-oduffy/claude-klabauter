@@ -19,7 +19,7 @@ the real precondition to reach ``main()`` here is: claude-klabauter cloned AND
 exported manually. Pre-port (all-bash), this script was genuinely
 self-contained and runnable as the very first command on a bare machine;
 post-port that property no longer holds — the trampoline must resolve
-CLAUDE_KLABAUTER_ROOT before it can even import ``main`` below. Once import succeeds,
+the engine root before it can even import ``main`` below. Once import succeeds,
 the trampoline does a plain **in-process import** of ``main`` here —
 template-variant #1 (like ``coordinator-auto-push``), NOT the IPC/
 ``cc_invoke`` op path. This orchestrator itself further shells out to a mix
@@ -30,7 +30,7 @@ is internal to ``run()``/``main()``, distinct from how the trampoline
 reaches this module.
 
 .. Review: code-reviewer — F1, "callable before any plugin is registered"
-   claim was false post-port (this module requires CLAUDE_KLABAUTER_ROOT resolution
+   claim was false post-port (this module requires engine-root resolution
    to even be imported); corrected framing to state the real precondition.
 
 FAMILY-I fresh-install surface: this is the maximalist installer

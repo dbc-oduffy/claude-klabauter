@@ -32,7 +32,11 @@ import subprocess
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from coordinator_core import coverage as cov
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:

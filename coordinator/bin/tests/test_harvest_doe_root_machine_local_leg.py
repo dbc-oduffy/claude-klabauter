@@ -89,6 +89,10 @@ import sys
 import tempfile
 from importlib.machinery import SourceFileLoader
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
 _COORDINATOR_DIR = os.path.dirname(_BIN_DIR)  # coordinator/

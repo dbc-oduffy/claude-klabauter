@@ -46,7 +46,6 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
-_REPO_ROOT = _BIN_DIR.parent.parent
 
 
 def _load_module():
@@ -185,8 +184,6 @@ def test_end_to_end_file_index_against_tmp_git_repo(tmp_path: Path) -> None:
             "file_index",
             "--target-root",
             str(repo),
-            "--repo",
-            str(_REPO_ROOT),
         ],
         capture_output=True,
         text=True,
@@ -210,8 +207,6 @@ def test_end_to_end_tree_against_tmp_git_repo(tmp_path: Path) -> None:
             "cartography.tree",
             "--target-root",
             str(repo),
-            "--repo",
-            str(_REPO_ROOT),
         ],
         capture_output=True,
         text=True,
@@ -234,8 +229,6 @@ def test_end_to_end_unknown_op_exits_1(tmp_path: Path) -> None:
             "not-a-real-op",
             "--target-root",
             str(repo),
-            "--repo",
-            str(_REPO_ROOT),
         ],
         capture_output=True,
         text=True,

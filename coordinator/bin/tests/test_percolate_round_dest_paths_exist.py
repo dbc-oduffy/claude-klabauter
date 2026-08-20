@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.cadence]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = {"creationflags": getattr(_subprocess, "CREATE_NO_WINDOW", 0)}

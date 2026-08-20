@@ -24,7 +24,7 @@ v1 positive surface (what gets extracted and checked):
 
 v1 negative surface — the acceptance bar, and it matters more than the positive
 surface. A naive "cited path absent from disk" predicate is not shippable: this
-repo's own doc citations resolve against sibling repos (`CLAUDE_KLABAUTER_ROOT`, the
+repo's own doc citations resolve against sibling repos (the engine root, the
 settings-home `bin/`) as often as against the local tree, and a plugin-root
 doc (e.g. `coordinator/README.md`) cites its own paths relative to ITS OWN
 directory, not the repo root — a bare absence check cannot separate a real
@@ -537,7 +537,7 @@ def build_findings_report_from_registry(repo_root: str | Path, **kwargs: Any) ->
 
 
 def _sibling_roots() -> List[Path]:
-    """Best-effort resolution of the declared sibling roots (CLAUDE_KLABAUTER_ROOT, settings-home bin).
+    """Best-effort resolution of the declared sibling roots (the engine root, settings-home bin).
 
     Never raises — an unresolvable sibling root just means cross-repo
     resolution against it is skipped; the CLI still runs and reports local

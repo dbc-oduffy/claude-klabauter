@@ -28,6 +28,10 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO_MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[3]
     / "dist"

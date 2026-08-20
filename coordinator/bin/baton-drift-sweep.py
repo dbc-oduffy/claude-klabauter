@@ -26,7 +26,7 @@ Exit codes:
   0 — swept successfully (regardless of the stranded count — this is a diagnostic,
       not a pass/fail gate; /workday-complete reports it, never fails on it).
   1 — argument error (this CLI takes no arguments).
-  2 — repo-root unresolvable, or CLAUDE_KLABAUTER_ROOT / baton_drift_sweep not importable.
+  2 — repo-root unresolvable, or engine root / baton_drift_sweep not importable.
 
 NEVER writes anything — read-only diagnostic.
 

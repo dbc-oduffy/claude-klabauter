@@ -15,7 +15,7 @@ full verb list appended to it.
 
 The `_import_module()` seam is NOT monkeypatched here — help must be
 answerable before the engine import, so these tests double as the assertion
-that no CLAUDE_KLABAUTER_ROOT resolution happens on a help path.
+that no engine-root resolution happens on a help path.
 
 Spec backlink: cross-repo memo
 cross-repo/inbox/2026-07-28-example-retrieval-repo-em-consumed-handoff-guard-scaffolds-on-close.md

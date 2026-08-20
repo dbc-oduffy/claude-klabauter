@@ -40,6 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.search.regex_translate import translate
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _HAS_GREP = shutil.which("grep") is not None
 
 #: Small fixed text corpus the differential harness runs every pattern

@@ -35,7 +35,7 @@ Exit codes (main()):
         repository and `COORDINATOR_ROOT` is not set. Both are pre-flight
         validation failures, distinct from any in-scan degrade.
 This module has no claude-klabauter-transport dependency of its own (it IS the claude-klabauter
-module) — the transport-failure code (import/CLAUDE_KLABAUTER_ROOT resolution) lives at
+module) — the transport-failure code (import/engine-root resolution) lives at
 the DoE trampoline layer, which treats that failure as best-effort/
 advisory (exit 0, loud stderr) since this scanner only ever feeds a nudge or
 an auto-backfill fan-out, never a hard ceremony gate. See the trampoline's own
@@ -238,7 +238,7 @@ def _git_root_of_cwd() -> Optional[str]:
 
 def _resolve_state_root_seam() -> Optional[str]:
     """Mirror `coordinator_state_root` Rule 5 (bare call, no --central/--subject/
-    --artifact) — meta-repo cwd routes to CLAUDE_KLABAUTER_ROOT/state; sibling-repo cwd uses
+    --artifact) — meta-repo cwd routes to the engine root/state; sibling-repo cwd uses
     <git-root>/state. Always resolves from the actual process cwd, never from any
     COORDINATOR_ROOT override (see module negative-spec)."""
     git_root = _git_root_of_cwd()

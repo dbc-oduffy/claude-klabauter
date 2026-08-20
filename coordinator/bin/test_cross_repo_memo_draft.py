@@ -24,7 +24,7 @@ Fixture shape mirrors test_cross_repo_memo.py:
 Real-op seam plumbing (2026-07-21 trampoline flip, harness repair): draft/send/list
 now dispatch through cc_invoke.route_mutation onto the engine repo's memo.draft/memo.send/
 memo.list_outbox ops — there is no local direct-write fallback. Tests exercising
-these verbs need a fixture-resolvable CLAUDE_KLABAUTER_ROOT (via `_resolve_test_claude_klabauter_root`,
+these verbs need a fixture-resolvable engine root (via `_resolve_test_claude_klabauter_root`,
 the same cc_invoke four-rung ladder test_cross_repo_memo.py's helper of the same
 name uses) and, for draft/send (whose engine ops classify/resolve the `to`
 receiver directly against `<COORDINATOR_SETTINGS_HOME>/machine-local/registry.toml`
@@ -32,7 +32,7 @@ via stdlib tomllib — a DISTINCT surface from the MACHINE_LOCAL_IMPL stub, whic
 satisfies this CLI's OWN pre-checks), an isolated registry.toml written via
 `_write_registry_toml` under a `COORDINATOR_SETTINGS_HOME` env var pointed at the
 same claude_home tmpdir tests already use for MACHINE_LOCAL_IMPL isolation.
-CLAUDE_KLABAUTER_ROOT-unresolvable machines SKIP (never silently degrade) via `skip_test`.
+engine-root-unresolvable machines SKIP (never silently degrade) via `skip_test`.
 
 Run with: python3 -m pytest coordinator/bin/test_cross_repo_memo_draft.py
 """
@@ -249,7 +249,7 @@ def _parse_frontmatter(content: str) -> dict[str, str]:
 def skip_test(name: str, reason: str) -> None:
     """Record a LOUD skip — printed and tallied separately from pass/fail, never
     silent. Used only when the real claude-klabauter op seam is genuinely unresolvable on
-    this machine (CLAUDE_KLABAUTER_ROOT unresolvable) — mirrors test_cross_repo_memo.py's
+    this machine (the engine root is unresolvable) — mirrors test_cross_repo_memo.py's
     skip_test (the Director of Engineering review, 2026-07-17): a real-op fixture site must SKIP loud
     rather than silently degrade. A skip does NOT count as a failure but IS
     visible in the run summary."""
@@ -261,7 +261,7 @@ def skip_test(name: str, reason: str) -> None:
 
 
 def _resolve_test_claude_klabauter_root() -> str | None:
-    """Resolve CLAUDE_KLABAUTER_ROOT for real-op (draft/send/list) subcommand tests.
+    """Resolve the engine root for real-op (draft/send/list) subcommand tests.
 
     Routes through the SAME cc_invoke._resolve_claude_klabauter_root() four-rung ladder
     test_cross_repo_memo.py's identically-named helper uses (env var -> pointer
@@ -393,7 +393,7 @@ def test_draft_creates_outbox_file() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.draft op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.draft op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -486,7 +486,7 @@ def test_draft_collision_exits_2() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.draft op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.draft op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -618,7 +618,7 @@ def test_draft_resolved_sibling_receiver_ok() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.draft op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.draft op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -753,7 +753,7 @@ def test_send_consumes_outbox() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -863,7 +863,7 @@ def test_send_open_status_normalizes_and_sends() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -946,7 +946,7 @@ def test_send_archive_relocates_touch_claim_onto_sent_copy() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op")
         return
 
     if claude_klabauter_root not in sys.path:
@@ -1286,7 +1286,7 @@ def test_send_engine_refusal_leaves_draft_in_place() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1361,7 +1361,7 @@ def test_send_already_sent_topic_reports_explicitly() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1433,7 +1433,7 @@ def test_send_preserves_supersedes() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.send op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.send op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1540,7 +1540,7 @@ def test_list_enumerates_with_age() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.list_outbox op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.list_outbox op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1638,7 +1638,7 @@ def test_list_empty_prints_no_drafts() -> None:
 
     claude_klabauter_root = _resolve_test_claude_klabauter_root()
     if claude_klabauter_root is None:
-        skip_test(name, "CLAUDE_KLABAUTER_ROOT unresolvable on this machine — cannot exercise the real memo.list_outbox op")
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.list_outbox op")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:

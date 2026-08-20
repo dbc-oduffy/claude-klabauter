@@ -128,7 +128,7 @@ _NON_SESSION_DIR_NAMES = {".git", "__pycache__"}
 
 
 def _resolve_session_live():
-    """Import coordinator_core.session.liveness.session_live via CLAUDE_KLABAUTER_ROOT.
+    """Import coordinator_core.session.liveness.session_live via the engine root.
 
     In-process import (no subprocess, no bash) — same trampoline shape as
     reap-orphaned-in-flight-handoffs.py's _resolve_session_live.

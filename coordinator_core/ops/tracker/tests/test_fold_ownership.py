@@ -54,6 +54,8 @@ from coordinator_core.tracker_entities import (
     mint_person_id,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(coro):
     return asyncio.run(coro)

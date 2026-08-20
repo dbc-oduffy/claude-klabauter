@@ -57,6 +57,8 @@ import textwrap
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _script_path() -> str:
     """Return the absolute path to coordinator-harvest-deferrals."""

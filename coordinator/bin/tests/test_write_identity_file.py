@@ -86,7 +86,7 @@ def test_op_error_exits_one_and_prints_error(monkeypatch, capsys):
 
 def test_claude_klabauter_root_unresolvable_exits_two(monkeypatch, capsys):
     def _raise_resolve():
-        raise RuntimeError("no CLAUDE_KLABAUTER_ROOT")
+        raise RuntimeError("no engine root")
 
     _install_fake_cc_invoke(monkeypatch, resolve_root=_raise_resolve)
 
@@ -94,7 +94,7 @@ def test_claude_klabauter_root_unresolvable_exits_two(monkeypatch, capsys):
 
     assert rc == 2
     captured = capsys.readouterr()
-    assert "CLAUDE_KLABAUTER_ROOT resolution failed" in captured.err
+    assert "engine-root resolution failed" in captured.err
 
 
 def test_both_fields_forwarded_in_one_call(monkeypatch, capsys):

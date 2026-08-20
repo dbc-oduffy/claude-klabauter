@@ -47,6 +47,11 @@ _WRITER_MODULES = (
     "coordinator_core/warm/tests/test_breadcrumb_and_spawn.py",
     "coordinator_core/warm/tests/test_warm_telemetry.py",
     "coordinator_core/warm/tests/test_supervisor.py",
+    # C30 (W22a) -- test_no_writer_symbol_used_outside_writer_modules below
+    # found this module calling breadcrumb.write_breadcrumb() without being
+    # listed here, which is exactly the escape the docstring above warns
+    # about: it ran outside this file's subprocess litter-guard.
+    "coordinator_core/warm/tests/test_server_loop.py",
 )
 
 
@@ -62,6 +67,66 @@ def _clone_key_dirs(base: Path) -> set[str]:
     if not base.is_dir():
         return set()
     return {entry.name for entry in base.iterdir() if entry.is_dir()}
+
+
+_WRITER_SYMBOLS = ("write_breadcrumb", "telemetry.flush", "write_discovery")
+
+_WARM_TESTS_DIR = _REPO_ROOT / "coordinator_core" / "warm" / "tests"
+
+_WRITER_MODULE_NAMES = {Path(p).name for p in _WRITER_MODULES}
+
+_SELF_MODULE_NAME = Path(__file__).name
+
+
+def _other_warm_test_files() -> list[Path]:
+    return sorted(
+        p
+        for p in _WARM_TESTS_DIR.glob("test_*.py")
+        if p.name not in _WRITER_MODULE_NAMES and p.name != _SELF_MODULE_NAME
+    )
+
+
+def test_no_writer_symbol_used_outside_writer_modules() -> None:
+    """C30 (W22a) -- the docstring above claims "every warm test that calls
+    `write_breadcrumb`, `telemetry.flush`, or `supervisor.write_discovery`
+    lives in one of these [`_WRITER_MODULES`]", but nothing mechanically
+    checked that a fourth warm test module hadn't started calling one of the
+    three writer symbols without also joining `_WRITER_MODULES` -- such a
+    module would litter the real runtime base (per this file's own defect)
+    while escaping the child-process guard above, since only `_WRITER_MODULES`
+    is spawned into the subprocess run."""
+    offenders: dict[str, list[str]] = {}
+    for path in _other_warm_test_files():
+        text = path.read_text(encoding="utf-8")
+        hits = [symbol for symbol in _WRITER_SYMBOLS if symbol in text]
+        if hits:
+            offenders[str(path.relative_to(_REPO_ROOT))] = hits
+
+    assert not offenders, (
+        "warm test module(s) outside _WRITER_MODULES call a writer symbol, "
+        f"so they litter the real runtime base without this file's subprocess "
+        f"guard covering them: {offenders}. Add the module to _WRITER_MODULES."
+    )
+
+
+def test_no_warm_test_module_opts_out_via_real_home_marker() -> None:
+    """C30 (W22b) -- this file's isolation rides `conftest.py`'s
+    `_quarantine_real_home` autouse fixture, and `@pytest.mark.real_home` is
+    the documented way to opt OUT of that fixture. No warm test uses that
+    marker today; nothing else stops one being added, which would silently
+    re-open the real-runtime-base litter this file exists to catch."""
+    offenders = [
+        str(path.relative_to(_REPO_ROOT))
+        for path in sorted(_WARM_TESTS_DIR.glob("test_*.py"))
+        if path.name != _SELF_MODULE_NAME
+        and "mark.real_home" in path.read_text(encoding="utf-8")
+    ]
+
+    assert not offenders, (
+        "warm test module(s) apply the real_home marker, which opts OUT "
+        f"of _quarantine_real_home and can re-open real-runtime-base litter: "
+        f"{offenders}"
+    )
 
 
 def test_a_warm_suite_run_creates_no_new_real_runtime_directories() -> None:

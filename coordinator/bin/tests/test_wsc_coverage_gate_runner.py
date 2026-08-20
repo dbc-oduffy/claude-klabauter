@@ -253,49 +253,6 @@ def test_write_trail_omits_reviewer_evidence_when_not_given(monkeypatch):
     assert "--reviewer-evidence" not in captured_argv["argv"]
 
 
-def test_write_trail_forwards_attestation_dispatch_id_when_given(monkeypatch):
-    """`--attestation-dispatch-id` is forwarded verbatim when supplied."""
-    captured_argv = {}
-
-    def _fake(argv):
-        captured_argv["argv"] = argv
-        return 0, "", ""
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "42",
-        "--attestation-dispatch-id", "dispatch-xyz",
-    ])
-    assert "--attestation-dispatch-id" in captured_argv["argv"]
-    assert "dispatch-xyz" in captured_argv["argv"]
-
-
-def test_write_trail_omits_attestation_dispatch_id_when_not_given(monkeypatch):
-    """`--attestation-dispatch-id` is omitted entirely from the forwarded
-    argv when not supplied — never forwarded as an empty string."""
-    captured_argv = {}
-
-    def _fake(argv):
-        captured_argv["argv"] = argv
-        return 0, "", ""
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "42",
-    ])
-    assert "--attestation-dispatch-id" not in captured_argv["argv"]
-
-
 def test_write_trail_propagates_failure(monkeypatch, capsys):
     def _fake(argv):
         return 2, "", "review_trail.write: op-level refusal\n"

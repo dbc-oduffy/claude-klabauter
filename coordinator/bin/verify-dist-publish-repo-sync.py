@@ -73,7 +73,7 @@ there is no --fix mode, since the correct fix is always
 # codes above; per porter-brief addendum § 3b, this is a fail-loud
 # gate/validator script, so claude-klabauter-link failure gets a dedicated code
 # rather than silently degrading to 0):
-#   3 — CLAUDE_KLABAUTER_ROOT resolution failed, or coordinator_core.ops.
+#   3 — engine-root resolution failed, or coordinator_core.ops.
 #       verify_dist_publish_repo_sync was not importable
 #
 # Spec backlink: docs/plans/2026-05-21-back-percolate-publish-repo-orphans.md § Chunk 4 and docs/plans/2026-06-30-registry-publish-vs-working-targets.md § C8
@@ -118,7 +118,7 @@ def _plugin_root() -> str:
     script, not a never-block hook, so an unresolvable DoE root must not
     degrade to an exit-0 no-op. Exit code 3 (not 1 or 2) keeps this failure
     distinct from the op's own 0/1/2 business codes, matching this
-    trampoline's existing CLAUDE_KLABAUTER_ROOT-resolution-failure convention below.
+    trampoline's existing engine-root-resolution-failure convention below.
     """
     env_val = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_val:
@@ -137,7 +137,7 @@ def _plugin_root() -> str:
 
 
 def _import_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import `run_op_main`.
+    """Resolve the engine root and import `run_op_main`.
 
     DR-276: the op is run through `coordinator_core.cli_entry.run_op_main`
     rather than by calling its `main` directly, so any path it declares via
@@ -156,7 +156,7 @@ def main() -> None:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(
-            f"verify-dist-publish-repo-sync.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"verify-dist-publish-repo-sync.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(3)

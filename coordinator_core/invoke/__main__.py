@@ -445,6 +445,17 @@ def main() -> None:
     if args.op in WORKTREE_SCOPED_OPS:
         msg["_origin_worktree"] = str(repo_root)
 
+    # Stamp the CALLER's actual process cwd unconditionally — including for
+    # "none"-scoped ops, which never get `_origin_worktree` above (C7,
+    # 2026-08-20-a-refusal-cannot-exit-zero). Telemetry-only: never read for
+    # authz/repo-scope resolution (that stays resolve_request_repo's job via
+    # `_origin_worktree`). Warm-served rows would otherwise fall back to
+    # `coordinator_core.telemetry.op_latency._write_entry`'s Path.cwd(),
+    # which in a warm pool worker is the SERVER's cwd (the klabauter clone),
+    # not this caller's — corrupting the very denominator the warmth sweeps
+    # measure. See `_CALLER_CWD_FIELD` in coordinator_core.ipc for the reader.
+    msg["_caller_cwd"] = os.getcwd()
+
     # 6a. Warm preamble (C15) — try the warm engine's pipe before paying a
     #     cold spawn-per-call. NO CLIENT EVER WAITS FOR A SERVER TO BOOT:
     #     `try_warm_dispatch` returns a JSON-RPC response only when a live
@@ -459,9 +470,34 @@ def main() -> None:
     #     — Backstop 2, "the cold path is a SUCCESS path". Everything below
     #     this point is the pre-existing cold dispatch path, unchanged: it
     #     only runs when `response` is not already set here.
-    from coordinator_core.warm.client import try_warm_dispatch
+    #
+    #     W11 (2026-08-20-a-refusal-cannot-exit-zero § C8): check
+    #     `settings.is_warm_enabled()` BEFORE importing `warm.client` at
+    #     all. `warm.client` unconditionally imports `warm.election` +
+    #     `warm.settings` at its own module level (its docstring's AC3/AC4
+    #     note explains why those two stay eager there), which transitively
+    #     pulls 19 coordinator_core modules — 29.2ms measured, against this
+    #     __main__'s own ~53ms floor — regardless of whether
+    #     `COORDINATOR_WARM=0` is set. `settings.py` imports only
+    #     `machine_resolver.registry_get`, so resolving the same
+    #     warm/cold answer through it first, and skipping the `warm.client`
+    #     import entirely when it says off, avoids paying that tax on the
+    #     COORDINATOR_WARM=0 path — the same defect class
+    #     claude-klabauter-44 fixed for `detached_spawn`, through a different
+    #     door. Behaviourally identical to before: `try_warm_dispatch`
+    #     itself would have returned None on this same disabled check, so
+    #     `response` still resolves to None either way; only the import
+    #     cost changes. `is_warm_enabled` is memoised per-process (W12,
+    #     this chunk's settings.py change), so this call is cheap even when
+    #     re-derived rather than cached across this single-shot CLI process.
+    from coordinator_core.warm.settings import is_warm_enabled
 
-    response = try_warm_dispatch(msg)
+    if is_warm_enabled():
+        from coordinator_core.warm.client import try_warm_dispatch
+
+        response = try_warm_dispatch(msg)
+    else:
+        response = None
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout

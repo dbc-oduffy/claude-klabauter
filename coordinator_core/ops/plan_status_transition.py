@@ -359,7 +359,7 @@ _FLIPPABLE_STATUSES = frozenset(_FLIPPABLE_STATUSES_ORDER)
 
 
 class _Opts:
-    __slots__ = ("verb", "plan", "by", "override_reason", "reason")
+    __slots__ = ("verb", "plan", "by", "override_reason", "reason", "findings")
 
     def __init__(
         self,
@@ -368,12 +368,14 @@ class _Opts:
         by: Optional[str] = None,
         override_reason: Optional[str] = None,
         reason: Optional[str] = None,
+        findings: Optional[str] = None,
     ) -> None:
         self.verb = verb
         self.plan = plan
         self.by = by
         self.override_reason = override_reason
         self.reason = reason
+        self.findings = findings
 
 
 class _CliError(Exception):
@@ -403,6 +405,13 @@ def _parse_args(argv: List[str]) -> _Opts:
     generic way, for the same reason -- `stamp-reopened` requires it
     (see `_stamp_reopened`), and `main()` rejects it out-of-verb, mirroring
     `--by`/`--override-reason` above.
+
+    ``--findings`` (C6a, `stamp-review-verified` only, docs/plans/2026-08-20-
+    the-rungs-get-writers.md) is parsed the same generic way, for the same
+    reason -- `stamp-review-verified` requires it (see
+    `_stamp_review_verified`; a review-trail PATH, not a bare count), and
+    `main()` rejects it out-of-verb, mirroring `--by`/`--override-reason`/
+    `--reason` above.
     """
     verb = argv[0] if argv else None
     opts = _Opts(verb=verb, plan=None)
@@ -429,6 +438,11 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.reason = argv[i]
+        elif a == "--findings":
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            opts.findings = argv[i]
         else:
             raise _CliError(f"unknown argument: {a}")
         i += 1
@@ -992,6 +1006,95 @@ def _ac_open_rows_warning(plan_path: str, plan_text: str) -> None:
         )
     except Exception:
         return
+
+
+def _read_and_normalize_status(fm_text: str, plan_display: str) -> str:
+    """Read the ``status`` field, comment-strip, and unquote it -- the
+    genuinely-identical status-parsing primitive (C1, docs/plans/2026-08-20-
+    the-rungs-get-writers.md) that opens ``_stamp_implemented``'s,
+    ``_stamp_superseded``'s, and ``_stamp_reopened``'s own ``mutate()``
+    closures verbatim, byte-for-byte (same four edge cases, same fail-loud
+    messages): a missing ``status:`` key, a comment-only value
+    (``status: #note``), a YAML-legal unquoted trailing inline comment
+    (``status: executing  # note``, see ``_strip_unquoted_trailing_comment``),
+    and a quoted scalar with a trailing inline comment
+    (``"draft"  # note`` -- detected and fail-louded, not silently mishandled
+    by ``unquote_yaml_scalar``). Raises ``coordinator_core.locked_write.
+    MutateAbort`` on any of the first three failure shapes; returns the
+    fully comment-stripped, unquoted status string otherwise.
+
+    ``plan_display`` is the caller's own ``opts.plan`` (or equivalent
+    display string) -- reproduced verbatim in every raised message, matching
+    each verb's own pre-extraction wording exactly.
+
+    Not wired into the three existing verbs -- they keep their own inline
+    copies verbatim (see this chunk's dispatch brief: "Do not re-express the
+    three EXISTING verbs on these primitives... leave _stamp_implemented,
+    _stamp_reopened, _stamp_superseded exactly as they are"). This exists
+    for C2's new verbs to build on.
+    """
+    from coordinator_core.locked_write import MutateAbort
+
+    status = read_fm_field(fm_text, "status")
+    if status is None:
+        raise MutateAbort(f"{_PROG}: no \"status\" field found in frontmatter of {plan_display}")
+    # A comment-only value (`status: #note`, no real value before the `#`) is,
+    # per YAML, an absent/null status -- see the identical inline comment on
+    # each pre-extraction verb's own copy of this check.
+    if status.startswith("#"):
+        raise MutateAbort(f"{_PROG}: no \"status\" field found in frontmatter of {plan_display}")
+    status = _strip_unquoted_trailing_comment(status)
+    if status and status[0] in ("'", '"') and not status.endswith(status[0]):
+        raise MutateAbort(
+            f"{_PROG}: status value appears to carry a quoted-scalar-plus-trailing-comment, "
+            f"which this CLI does not support -- remove the inline comment or the quotes "
+            f"({plan_display})"
+        )
+    unquoted = unquote_yaml_scalar(status)
+    # `unquote_yaml_scalar` is typed `str | None` for its own callers that pass
+    # a raw `read_fm_field` result; `status` is a non-empty `str` by here, so the
+    # None arm is unreachable -- kept explicit rather than annotated away.
+    return status if unquoted is None else unquoted
+
+
+def _resolve_worktree_root_and_check_containment(
+    plan_path: Path, plan_display: str
+) -> "tuple[Optional[Path], Optional[Path], Optional[str]]":
+    """Resolve the plan's git worktree root + common dir, and -- when a
+    worktree was resolved -- enforce path containment against it: the
+    genuinely-identical worktree-resolution-plus-containment primitive (C1,
+    docs/plans/2026-08-20-the-rungs-get-writers.md) that opens
+    ``_stamp_implemented``'s, ``_stamp_superseded``'s, and
+    ``_stamp_reopened``'s bodies verbatim (containment is scoped to the
+    whole resolved worktree, not ``docs/plans/`` specifically -- see the
+    module docstring's "Path containment" section for why a plan document
+    has no single conventional subdirectory this op can assume).
+
+    Returns ``(worktree_root, git_common_dir, refusal_message)``:
+    ``worktree_root``/``git_common_dir`` mirror ``_resolve_repo_root_for``'s
+    own contract (either may be ``None`` when no git repo was resolved for
+    ``plan_path``); a non-``None`` ``refusal_message`` means the caller must
+    print it to stderr and return exit code 1 without proceeding further --
+    mirrors each verb's own pre-extraction ``--plan escapes the resolved git
+    worktree`` fail-loud verbatim.
+
+    Not wired into the three existing verbs -- they keep their own inline
+    copies verbatim (see this chunk's dispatch brief). This exists for C2's
+    new verbs to build on.
+    """
+    from coordinator_core.archive_stamp import _resolve_repo_root_for
+
+    worktree_root, git_common_dir = _resolve_repo_root_for(plan_path)
+
+    if worktree_root is not None:
+        if contained_path(plan_path, [worktree_root]) is None:
+            return (
+                worktree_root,
+                git_common_dir,
+                f"{_PROG}: --plan escapes the resolved git worktree: {plan_display!r}",
+            )
+
+    return worktree_root, git_common_dir, None
 
 
 def _stamp_implemented(opts: _Opts) -> int:
@@ -1817,6 +1920,471 @@ def _stamp_reopened(opts: _Opts) -> int:
     return 0
 
 
+def _stamp_rung(
+    opts: _Opts, verb: str, target_status: str, allow_landed_reentry: bool = False
+) -> int:
+    """Shared body for the three rung-advance verbs (C2, docs/plans/2026-08-20-
+    the-rungs-get-writers.md): ``stamp-reviewed`` (target ``reviewed``),
+    ``stamp-approved`` (target ``approved``), and ``stamp-executing`` (target
+    ``executing``). Templated on ``_stamp_implemented``/``_stamp_superseded``'s
+    programmatic-caller and commit-ownership contract (path containment,
+    locked read-modify-write, writer-side commit ownership via
+    ``_commit_plan_flip``, exit-code conventions) -- see those functions'
+    docstrings for the shared machinery this one reuses verbatim. Uses the
+    genuinely-identical status-parsing (``_read_and_normalize_status``) and
+    worktree-resolution-plus-containment (``_resolve_worktree_root_and_check_
+    containment``) primitives C1 extracted specifically for these three new
+    verbs to build on (AC7's four edge cases survive by construction, not by
+    a fourth hand-copy).
+
+    Positively ceremony-reachable, unlike ``_stamp_superseded``/``_stamp_
+    reopened``'s negative-spec (never copy their "not reachable from any
+    sweep/cascade/ceremony tail" wording onto these three): ``stamp-reviewed``
+    fires from inside the ``review-exec-auth-stamp`` binary (AC10),
+    ``stamp-approved`` fires from inside the exec-auth stamp path (AC8), and
+    ``stamp-executing`` fires from inside ``session.claims.claim_plan(...,
+    for_execution=True)`` (AC11) -- each a genuine ceremony call site this
+    module gains, not merely a human-typed CLI line.
+
+    Uniform semantics (AC2-AC6), all keyed off ``target_status``'s own index
+    in ``_FLIPPABLE_STATUSES_ORDER``:
+      - a `_FROZEN_STATUSES` source refuses, non-zero, naming the status
+        (AC2) -- these three verbs assert no completeness, so a terminal
+        plan is never silently reinterpreted as "still climbing the rungs";
+      - a source outside `_FLIPPABLE_STATUSES` (and not frozen either)
+        aborts non-zero, naming the status and the expected set (AC5);
+      - a source already AT OR PAST `target_status`'s rung is an rc-0 no-op
+        that WRITES NOTHING (AC4) -- the same byte-identical-return shape
+        `_stamp_implemented`'s frozen branch and `_stamp_reopened`'s
+        already-implemented-only gate establish;
+      - ``allow_landed_reentry`` (``stamp-executing`` only, AC6): `landed`
+        sits PAST `executing` in `_FLIPPABLE_STATUSES_ORDER`, so the generic
+        at-or-past rule above would treat it as a no-op -- but `landed` is
+        exactly `stamp-reopened`'s own re-park target, and the re-execution
+        flow that follows a reopen re-enters the plan claim and fires
+        `stamp-executing` on that landed plan. Treating that as "already
+        past" leaves the plan reading `landed` while executors are actively
+        running it -- reintroducing the exact status lie this plan removes.
+        So `landed` is special-cased here as a legitimate re-entry source
+        that DOES flip, for this one target only.
+
+    Never fires the terminal-state cascade (`_run_cascade` is specific to
+    `stamp-implemented`'s `deliverable.cascade_terminal` semantics) and never
+    accepts `--by`/`--reason`/`--override-reason` -- `main()` rejects all
+    three per its existing argument-rejection idiom before this function is
+    ever called (AC3: none of these verbs assert completeness, so none may
+    claim to override a completeness verdict).
+    """
+    if not opts.plan:
+        print(f"{_PROG}: {verb} requires --plan <path>", file=sys.stderr)
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+    # Bound once after the guard above so the mutate closure carries a `str`
+    # rather than `opts.plan`'s declared `str | None`.
+    plan_display: str = opts.plan
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    worktree_root, git_common_dir, refusal = _resolve_worktree_root_and_check_containment(
+        plan_path, plan_display
+    )
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    target_index = _FLIPPABLE_STATUSES_ORDER.index(target_status)
+    _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = _read_and_normalize_status(split.fm_text, plan_display)
+        _state["deliverable_id"] = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+
+        if status in _FROZEN_STATUSES:
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at frozen status \"{status}\" -- {verb} refuses "
+                "a frozen source"
+            )
+
+        if status not in _FLIPPABLE_STATUSES:
+            expected = ", ".join(_FLIPPABLE_STATUSES_ORDER)
+            raise MutateAbort(
+                f"{_PROG}: unexpected current status \"{status}\" for {verb} — "
+                f"expected one of: {expected}"
+            )
+
+        status_index = _FLIPPABLE_STATUSES_ORDER.index(status)
+        is_reentry = allow_landed_reentry and status == "landed"
+
+        if not is_reentry and status_index >= target_index:
+            _state["flipped"] = False
+            _state["prior_status"] = status
+            return old_text  # byte-identical -> locked_rmw skips the write
+
+        fm_text = replace_fm_field(split.fm_text, "status", target_status)
+        _state["flipped"] = True
+        _state["prior_status"] = status
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        if new_text != old_text:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        written_text = new_text
+
+    if not _state["flipped"]:
+        print(
+            f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is already at or past "
+            f"\"{target_status}\" — no-op"
+        )
+        return 0
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
+                "disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> {target_status} "
+                f"on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                    f"{commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(
+        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → {target_status}"
+    )
+    return 0
+
+
+def _stamp_reviewed(opts: _Opts) -> int:
+    """Perform the stamp-reviewed verb (C2): flips ``draft -> reviewed``.
+
+    See ``_stamp_rung`` for the shared contract (AC2-AC5). Fires from inside
+    the ``review-exec-auth-stamp`` binary (AC10) -- ceremony-reachable by
+    design, not a human-typed CLI line (see ``_stamp_rung``'s own docstring
+    for why this positively diverges from ``_stamp_superseded``/``_stamp_
+    reopened``'s negative-spec).
+    """
+    return _stamp_rung(opts, "stamp-reviewed", "reviewed")
+
+
+def _stamp_approved(opts: _Opts) -> int:
+    """Perform the stamp-approved verb (C2): flips ``draft``/``reviewed`` ->
+    ``approved``.
+
+    See ``_stamp_rung`` for the shared contract (AC2-AC5). Fires from inside
+    the exec-auth stamp path, in a separate lock+commit after that path
+    returns 0 (AC8) -- ceremony-reachable by design, not a human-typed CLI
+    line (see ``_stamp_rung``'s own docstring for why this positively
+    diverges from ``_stamp_superseded``/``_stamp_reopened``'s negative-spec).
+    """
+    return _stamp_rung(opts, "stamp-approved", "approved")
+
+
+def _stamp_executing(opts: _Opts) -> int:
+    """Perform the stamp-executing verb (C2): flips ``draft``/``reviewed``/
+    ``approved`` -> ``executing``, and additionally accepts ``landed`` as a
+    legitimate re-entry source (AC6) -- see ``_stamp_rung``'s own docstring
+    for why ``landed``, which sits PAST ``executing`` in
+    ``_FLIPPABLE_STATUSES_ORDER``, must flip here rather than no-op.
+
+    See ``_stamp_rung`` for the shared contract (AC2-AC5). Fires from inside
+    ``session.claims.claim_plan(..., for_execution=True)``, anchored on
+    claim success (AC11) -- ceremony-reachable by design, not a human-typed
+    CLI line (see ``_stamp_rung``'s own docstring for why this positively
+    diverges from ``_stamp_superseded``/``_stamp_reopened``'s negative-spec).
+    """
+    return _stamp_rung(opts, "stamp-executing", "executing", allow_landed_reentry=True)
+
+
+def _stamp_review_verified(opts: _Opts) -> int:
+    """Perform the stamp-review-verified verb (C6a, docs/plans/2026-08-20-
+    the-rungs-get-writers.md); returns the exit code.
+
+    Writes ``review_verified_by`` / ``review_verified_at`` /
+    ``review_verified_findings`` alongside a plan already sitting at the
+    terminal ``implemented`` status -- mirrors ``_stamp_implemented``'s
+    existing ``status_override_{by,reason,at}`` write shape verbatim (same
+    ``insert_fm_field(..., after_key="status")`` idiom, same reversed
+    insertion order so the last-inserted field ends up first on disk,
+    giving on-disk order ``status -> review_verified_by ->
+    review_verified_findings -> review_verified_at``), in ONE
+    ``locked_rmw`` closure (AC14) -- the read-check-write sequence for the
+    attest fields cannot race a concurrent attest/flip on the same plan.
+
+    ``review_verified_findings`` carries the REVIEW-TRAIL **path**
+    (e.g. ``state/review-trail/findings/...``), never a bare count -- a
+    count drifts from the record already on disk and cannot distinguish a
+    P1 from a nitpick (dispatch brief, C6a).
+
+    IDEMPOTENCE (AC14) -- the named key is ``review_verified_findings``,
+    the review-trail path itself (stated explicitly per the dispatch
+    brief: "the sender asked which key we use and their tripwire will be
+    built against the answer"): re-running this verb with the SAME
+    ``--findings`` path already on disk is a byte-identical no-op
+    (``locked_rmw`` skips the write, AC14's "re-runs the same wrap -- no
+    second write"); a genuine SECOND review produces a NEW review-trail
+    record at a different path, so a different ``--findings`` value always
+    writes (AC14's "a second review -- writes"), overwriting the prior
+    attest's by/at/findings with the new review's -- this field means "the
+    most recently verified review", not "the first one ever recorded".
+
+    Refuses (non-zero, no write) unless the plan's on-disk ``status`` is
+    EXACTLY ``implemented`` -- this attest asserts a completed review OF a
+    terminal implementation; a plan not yet (or no longer) ``implemented``
+    has nothing for this verb to attest against. Deliberately narrower
+    than ``_FROZEN_STATUSES``: ``superseded``/``abandoned``/``deferred``
+    are refused too, same as any non-``implemented`` status, per the same
+    reasoning ``_read_and_validate_resume_content`` already applies (only
+    ``implemented`` is a state this attest can mean anything against).
+
+    Never flips ``status`` itself (that is ``stamp-implemented``'s job
+    alone, unchanged) and never fires the terminal-state cascade
+    (``_run_cascade`` is specific to ``stamp-implemented``'s own flip
+    semantics; an attest write has nothing new to cascade). A real
+    (non-no-op) write is committed by this function immediately after it
+    lands, scoped to exactly the plan path -- mirrors
+    ``_stamp_superseded``'s identical writer-side commit-ownership shape
+    (``_commit_plan_flip``), not a third invented commit path.
+
+    Negative-spec: does NOT accept ``--by``/``--reason``/
+    ``--override-reason`` -- ``main()`` rejects all three out-of-verb, the
+    same existing argument-rejection idiom every other verb already uses
+    (see the module's Anti-scope: "Do not add ``--by`` or ``--reason`` to
+    the new verbs").
+    """
+    if not opts.plan:
+        print(f"{_PROG}: stamp-review-verified requires --plan <path>", file=sys.stderr)
+        return 1
+    if not opts.findings:
+        print(
+            f"{_PROG}: stamp-review-verified requires --findings <review-trail-path> "
+            "(the record already on disk under state/review-trail/findings/ -- "
+            "not a bare count)",
+            file=sys.stderr,
+        )
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+
+    from coordinator_core.archive_stamp import _resolve_repo_root_for
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    worktree_root, git_common_dir = _resolve_repo_root_for(plan_path)
+
+    if worktree_root is not None:
+        if contained_path(plan_path, [worktree_root]) is None:
+            print(
+                f"{_PROG}: --plan escapes the resolved git worktree: {opts.plan!r}",
+                file=sys.stderr,
+            )
+            return 1
+
+    findings_value = opts.findings
+    _state: dict = {"flipped": False, "prior_status": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = read_fm_field(split.fm_text, "status")
+        if status is None:
+            raise MutateAbort(f"{_PROG}: no \"status\" field found in frontmatter of {opts.plan}")
+        if status.startswith("#"):
+            raise MutateAbort(f"{_PROG}: no \"status\" field found in frontmatter of {opts.plan}")
+        status = _strip_unquoted_trailing_comment(status)
+        if status and status[0] in ("'", '"') and not status.endswith(status[0]):
+            raise MutateAbort(
+                f"{_PROG}: status value appears to carry a quoted-scalar-plus-trailing-comment, "
+                f"which this CLI does not support -- remove the inline comment or the quotes "
+                f"({opts.plan})"
+            )
+        status = unquote_yaml_scalar(status)
+        _state["prior_status"] = status
+
+        if status != "implemented":
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at status \"{status}\", not \"implemented\" -- "
+                "stamp-review-verified only attests a plan already terminal at implemented"
+            )
+
+        existing_findings = read_fm_field_unquoted(split.fm_text, "review_verified_findings")
+        if existing_findings == findings_value:
+            _state["flipped"] = False
+            return old_text  # byte-identical -> locked_rmw skips the write; idempotent re-run
+
+        from datetime import datetime, timezone
+
+        from coordinator_core.session.core import resolve_session_id
+
+        verified_by = resolve_session_id() or "unknown-session"
+        verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        fm_text = split.fm_text
+        if read_fm_field(fm_text, "review_verified_by") is not None:
+            # A second review after fixes (a DIFFERENT findings path already
+            # established above) -- replace all three fields in place rather
+            # than re-inserting, leaving their existing on-disk position
+            # (immediately after `status:`) untouched.
+            fm_text = replace_fm_field(fm_text, "review_verified_by", verified_by)
+            fm_text = replace_fm_field(fm_text, "review_verified_findings", findings_value)
+            fm_text = replace_fm_field(fm_text, "review_verified_at", verified_at)
+        else:
+            # Inserted in reverse (`at`, then `findings`, then `by`) because
+            # `insert_fm_field(..., after_key="status")` anchors each new
+            # line immediately after `status:`, pushing the
+            # previously-inserted line down -- the last insertion ends up
+            # first, giving the on-disk order status -> by -> findings ->
+            # at. Mirrors `_stamp_implemented`'s identical
+            # `status_override_{by,reason,at}` insertion idiom verbatim.
+            fm_text = insert_fm_field(fm_text, "review_verified_at", verified_at, after_key="status")
+            fm_text = insert_fm_field(fm_text, "review_verified_findings", findings_value, after_key="status")
+            fm_text = insert_fm_field(fm_text, "review_verified_by", verified_by, after_key="status")
+
+        _state["flipped"] = True
+        _state["by"] = verified_by
+        _state["at"] = verified_at
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        if new_text != old_text:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        written_text = new_text
+
+    if not _state["flipped"]:
+        print(
+            f"{_PROG}: {opts.plan} already carries review_verified_findings={findings_value!r} — no-op"
+        )
+        return 0
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} review-verified attest succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- review-verified attest landed "
+                "on disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: attest review_verified (by {_state['by']}, findings "
+                f"{findings_value}) on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, None,
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} review-verified attest succeeded but committing it "
+                    f"failed: {commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(
+        f"{_PROG}: {opts.plan} review verified by {_state['by']} at {_state['at']} "
+        f"(findings: {findings_value})"
+    )
+    return 0
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: dispatch on the verb (``stamp-implemented`` / ``stamp-superseded``).
 
@@ -1904,9 +2472,60 @@ def main(argv: List[str]) -> int:
             return 1
         return _stamp_reopened(opts)
 
+    if opts.verb in ("stamp-reviewed", "stamp-approved", "stamp-executing"):
+        # AC3: none of the three rung-advance verbs assert completeness, so
+        # none may claim to override a completeness verdict -- symmetric
+        # rejection to `stamp-superseded`/`stamp-reopened` above, same
+        # existing argument-rejection idiom.
+        if opts.override_reason is not None:
+            print(
+                f"{_PROG}: {opts.verb} does not accept --override-reason "
+                "(it has no completeness verdict to override)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.verb == "stamp-reviewed":
+            return _stamp_reviewed(opts)
+        if opts.verb == "stamp-approved":
+            return _stamp_approved(opts)
+        return _stamp_executing(opts)
+
+    if opts.verb == "stamp-review-verified":
+        # Same existing argument-rejection idiom as every verb above: none
+        # of --by/--reason/--override-reason mean anything to this attest
+        # write (see module Anti-scope: "Do not add --by or --reason to
+        # the new verbs" -- this verb has no successor-plan judgment call,
+        # no reopening judgment call, and no completeness verdict to
+        # override).
+        if opts.by is not None:
+            print(
+                f"{_PROG}: stamp-review-verified does not accept --by "
+                "(it has no successor-plan judgment call to record)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.reason is not None:
+            print(
+                f"{_PROG}: stamp-review-verified does not accept --reason "
+                "(it has no reopening judgment call to record -- name the "
+                "review-trail path via --findings instead)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.override_reason is not None:
+            print(
+                f"{_PROG}: stamp-review-verified does not accept --override-reason "
+                "(it has no completeness verdict to override -- name the "
+                "review-trail path via --findings instead)",
+                file=sys.stderr,
+            )
+            return 1
+        return _stamp_review_verified(opts)
+
     print(
         f"{_PROG}: unknown verb: {opts.verb or '(none)'} — supported: stamp-implemented, "
-        "stamp-superseded, stamp-reopened",
+        "stamp-superseded, stamp-reopened, stamp-reviewed, stamp-approved, stamp-executing, "
+        "stamp-review-verified",
         file=sys.stderr,
     )
     return 1

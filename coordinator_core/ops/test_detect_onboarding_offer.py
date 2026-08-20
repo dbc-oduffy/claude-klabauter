@@ -60,7 +60,7 @@ def _make_fake_plugin_root(base, version):
     (proot / "coordinator-schema-version").write_text(f"{version}\n")
     # No bin/probe-onboarding-currency.py -- exercises the fallback branch
     # (direct coordinator_currency_probe call). The fallback branch's own
-    # currency_lib presence-gate resolves off CLAUDE_KLABAUTER_ROOT, not plugin_root
+    # currency_lib presence-gate resolves off the engine root, not plugin_root
     # (coordinator_currency.py migrated to claude-klabauter's own coordinator/lib/ --
     # see detect_onboarding_offer's fallback-branch comment) -- see the
     # _fake_claude_klabauter_root autouse fixture below for that file.

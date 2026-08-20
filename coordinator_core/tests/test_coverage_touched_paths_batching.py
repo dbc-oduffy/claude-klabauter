@@ -40,6 +40,8 @@ import pytest
 from coordinator_core import coverage as cov
 from coordinator_core import dag
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(

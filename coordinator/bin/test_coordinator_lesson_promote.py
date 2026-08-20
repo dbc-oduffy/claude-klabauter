@@ -43,12 +43,16 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
 try:
     import yaml as _yaml  # PyYAML — available on most coordinator installs
     _YAML_AVAILABLE = True
 except ImportError:
     _yaml = None  # type: ignore[assignment]
     _YAML_AVAILABLE = False
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 # ---------------------------------------------------------------------------
 # Test infrastructure

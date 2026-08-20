@@ -47,6 +47,8 @@ from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS as _SEND_SUM
 from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox, unique_nearest_receiver
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(result):
     if asyncio.iscoroutine(result):

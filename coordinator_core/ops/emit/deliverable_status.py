@@ -38,6 +38,14 @@ This has since been closed: `test_sedge03_deliverable_status_liveness.py`'s
 `TestShapeA`/`TestShapeB`/`TestAC6RemainingZombies` cover all five ids against fixtures
 transcribed from the live corpus (revert-proven, 2026-08-13).
 
+``plan_review_verified()`` (C7, pln-the-rungs-get-writers-2026-08-20): a
+separate, per-record derived predicate — NOT part of the deliverable_status
+cross-entity join above. It reads a single PlanSummary record's
+``review_verified_by`` attest field (C6a) and answers "has this plan been
+review-attested", an ordering claim layered on top of `status` without adding
+a new `PlanStatus` enum member (hard constraint 1). See its own docstring
+below for the presence-check rationale.
+
 AC9 (golden reconciliation): verified by inspection that this is a
 non-issue rather than an untested claim — `_handoff_phase` already mapped a `continued`
 handoff to `"in-progress"` before this change (it falls through the shipped/closed/
@@ -164,6 +172,32 @@ _SCORE_TO_PHASE: dict[int, str] = {
     1: "proposed",
     0: "proposed",  # fallback; all-abandoned gate fires before this branch
 }
+
+
+# --------------------------------------------------------------------------- review-verified predicate
+
+
+def plan_review_verified(plan: dict) -> bool:
+    """Derived predicate: has this PlanSummary record been review-attested?
+
+    True iff ``review_verified_by`` is present (non-null) on the record — the
+    attest write (C6a, ``plan_status_transition._stamp_review_verified``) sets
+    ``review_verified_by`` / ``review_verified_at`` / ``review_verified_findings``
+    together in ONE ``locked_rmw`` closure, so any one of the three is a sound
+    presence check; ``by`` is used here as the natural "who attested" anchor.
+
+    This does NOT add a new `PlanStatus` enum member (hard constraint 1,
+    pln-the-rungs-get-writers-2026-08-20 § C7) — it is an ordering predicate
+    layered on top of the existing `status` field, not a replacement for it. A
+    review-verified `implemented` plan and a merely-`implemented` plan carry
+    the same `status` value; this predicate is what distinguishes them for any
+    consumer that needs the ordering (e.g. `_deliverable_status`'s "shipped"
+    rung, which today buckets purely off `status` and cannot see this
+    distinction on its own).
+
+    Spec backlink: docs/plans/2026-08-20-the-rungs-get-writers.md § C7 (AC15).
+    """
+    return plan.get("review_verified_by") is not None
 
 
 # --------------------------------------------------------------------------- public API

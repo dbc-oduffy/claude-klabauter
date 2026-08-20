@@ -10,7 +10,7 @@ guard (a gate can be textually present but dead code after a stray trailing
 The highest-priority guard in this file is the exit-code-clamping suite:
 this hook must NEVER exit anything other than 0 or 1, even when the
 underlying gate script (`detect-staged-rollback.py`) exits 2 (its own
-documented CLAUDE_KLABAUTER_ROOT-resolution/transport-failure code) — see the module
+documented engine-root-resolution/transport-failure code) — see the module
 docstring's "Exit-code clamping" section for why exit 2 from a pre-commit
 hook is a bricking-class failure, not a cosmetic one.
 
@@ -269,7 +269,7 @@ def test_missing_gate_script_override_bypasses_the_block(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_gate_script_exit_2_is_clamped_to_1(tmp_path, monkeypatch):
-    """`detect-staged-rollback.py`'s own trampoline exits 2 on a CLAUDE_KLABAUTER_ROOT
+    """`detect-staged-rollback.py`'s own trampoline exits 2 on an engine-root
     resolution/import failure — a transport failure distinct from a finding.
     That 2 must never escape this hook: the wrapper clamps ANY nonzero gate
     exit code to exactly 1."""

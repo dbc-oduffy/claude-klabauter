@@ -34,7 +34,7 @@ Exit-code contract (matches the bash oracle's own documented table):
     1  Pre-flight failure (occupied dir, bad args, missing DoE-side siblings), a
        pnpm smoke-step failure, or a claude-klabauter-link resolution failure (machine-local
        registry lookup). A dedicated transport-failure code is NOT used here — this
-       module has no registered op / CLAUDE_KLABAUTER_ROOT-import seam of its own (it does not
+       module has no registered op / engine-root-import seam of its own (it does not
        shell back into claude-klabauter), and the ONE claude-klabauter-adjacent lookup it performs
        (machine-local, to locate the DoE clone) shares exit 1 with pre-flight failure,
        consistent with the established precedent in

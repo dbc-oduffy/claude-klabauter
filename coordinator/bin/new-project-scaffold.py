@@ -35,7 +35,7 @@ trampoline forwarding argv to it.
 # Fail-loud convention (unchanged from the bash oracle): pre-flight failures
 # (bad args, occupied target dir), a missing/unresolvable DoE-side template
 # sibling, or a pnpm smoke-step failure all exit 1. A claude-klabauter-link failure
-# (CLAUDE_KLABAUTER_ROOT unresolvable, or the op module not importable) is treated the
+# (the engine root unresolvable, or the op module not importable) is treated the
 # same way — sys.exit(1) — because callers (coordinator:new-project skill)
 # depend on this script's exit code to gate scaffold success, and there is no
 # OTHER distinct business failure mode on this path to collide with (same

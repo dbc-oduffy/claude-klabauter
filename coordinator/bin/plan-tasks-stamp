@@ -54,8 +54,8 @@ Exit codes:
       malformed/absent spine, schema-invalid resulting row, ...) or plan
       not found.
   2 — usage error (bad args, no --id, no --set, a reserved disposition
-      field named in --set) or transport failure (CLAUDE_KLABAUTER_ROOT unresolvable,
-      coordinator_core.invoke seam absent/broken).
+      field named in --set) or transport failure (the engine root
+      unresolvable, coordinator_core.invoke seam absent/broken).
 
 Spec backlink: coordinator_core/ops/plan_tasks_mutate.py (_stamp)
 """
@@ -185,8 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     def _no_legacy() -> None:
         raise RuntimeError(
             "plan-tasks-stamp: coordinator_core.invoke seam absent — no legacy "
-            "path exists for plan.tasks.mutate. Verify CLAUDE_KLABAUTER_ROOT and the "
-            "claude-klabauter coordinator_core install."
+            "path exists for plan.tasks.mutate. Verify COORDINATOR_ENGINE_ROOT "
+            "(or CLAUDE_KLABAUTER_ROOT) and the claude-klabauter coordinator_core install."
         )
 
     try:

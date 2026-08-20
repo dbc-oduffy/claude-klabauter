@@ -108,19 +108,14 @@ class TestDriftGuard:
             "leaving _REGISTRY empty and making drift assertions vacuously green."
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known debt: 65 ops registered but missing an OP_CLASSIFICATION entry, "
-            "frozen as coordinator_core.authz.registration_quad._KNOWN_UNCLASSIFIED_OPS_DEBT. "
-            "Owning debt-backlog entry: "
-            "state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-"
-            "52137f1ff6b9.yaml. PM-ratified amendment: DR-208 § 'Fail-closed runtime "
-            "semantic' (:134-150). This marker is a strict xfail, not a rewritten "
-            "assertion — the predicate below is untouched, so draining the 65 XPASSes "
-            "this test and forces removal of the marker."
-        ),
-    )
+    # The strict-xfail marker that stood here recorded 65 ops registered without an
+    # OP_CLASSIFICATION entry (debt-backlog
+    # state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-52137f1ff6b9.yaml,
+    # PM-ratified under DR-208 § "Fail-closed runtime semantic"). Its own exit
+    # condition was "draining the 65 XPASSes this test and forces removal of the
+    # marker" — C17 of docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md drained the
+    # last of them, so the marker is removed rather than left to XPASS-fail. The
+    # predicate below was never rewritten and is unchanged; it is now simply green.
     def test_all_registered_ops_are_classified(self) -> None:
         """Every op name in the live _REGISTRY has an entry in OP_CLASSIFICATION.
 

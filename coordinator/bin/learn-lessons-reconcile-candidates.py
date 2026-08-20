@@ -4,7 +4,7 @@
 # that already say something adjacent to the text a dispatch is about to
 # add). Direct-import variant (template-variant #1, mirrors coordinator/bin/
 # baton-assemble and pickup-assemble): a plain in-process function call
-# after resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop.
+# after resolving the engine root, no cc_invoke/IPC hop.
 #
 # Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
 # Registration seam: a new engine capability registers by shipping a thin
@@ -28,7 +28,7 @@
 # own § Exit-code contract):
 #   0 — OK, a decision object was computed and returned.
 #   2 — usage error (missing/malformed arguments, unreadable --text-file).
-#   3 — transport failure (CLAUDE_KLABAUTER_ROOT unresolvable, coordinator_core import
+#   3 — transport failure (the engine root unresolvable, coordinator_core import
 #       failure).
 from __future__ import annotations
 """learn-lessons-reconcile-candidates — see the # comment block above for

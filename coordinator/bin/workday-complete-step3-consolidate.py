@@ -42,7 +42,7 @@ Port of: workday-complete-step3-consolidate.sh (DoE 091c0f3e, 2026-07-19).
 cs_compute_machine / cs_parse_branch_span are natively imported from
 coordinator_core.machine_resolver / coordinator_core.daily_branch (de-bash campaign,
 unit "daily-branch" — Port of: coordinator-daily-branch.sh, DoE 2fbe0e77, 2026-07-19, see
-cc_invoke._resolve_claude_klabauter_root for the CLAUDE_KLABAUTER_ROOT ladder this import rides). sync-main.py
+cc_invoke._resolve_claude_klabauter_root for the engine-root ladder this import rides). sync-main.py
 is invoked as a subprocess.
 """
 from __future__ import annotations
@@ -162,7 +162,7 @@ def main(argv: list[str]) -> int:
         claude_klabauter_root = require_dispatch_engine_on_path()
         from coordinator_core.daily_day import local_day
     except RuntimeError as exc:
-        _err(f"[step3] ERROR: lib not found — CLAUDE_KLABAUTER_ROOT resolution failed: {exc}")
+        _err(f"[step3] ERROR: lib not found — engine-root resolution failed: {exc}")
         return 5
 
     from coordinator_core.win_portability import no_console_creationflags, run_forwarding

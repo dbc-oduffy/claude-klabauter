@@ -656,7 +656,7 @@ def em_id_for_root(root: str | None, repo_key_paths: dict[str, str]) -> str:
 # Shared state-root resolver — DoE doctrine central-state writes
 #
 # doe_root() is the canonical resolver for the DoE repo root, importable by all
-# doctrine-writing CLIs. The resolution chain mirrors the _claude_klabauter_root() shape
+# doctrine-writing CLIs. The resolution chain mirrors the engine root resolver's shape
 # in the CLIs but raises on failure rather than returning None — callers catch
 # _DoeUnresolvable and degrade gracefully (WARN + skip, exit 0).
 #
@@ -668,7 +668,7 @@ def em_id_for_root(root: str | None, repo_key_paths: dict[str, str]) -> str:
 # Spec backlink: DoE-claude:pln-gate-2-w2-3-live-caller-switch-3e51cf § C1
 # ---------------------------------------------------------------------------
 
-# Env var for DOE_ROOT override — mirrors CLAUDE_KLABAUTER_ROOT §4b idempotency gate form.
+# Env var for DOE_ROOT override — mirrors the engine root's §4b idempotency gate form.
 # Guard form: os.environ.get(_DOE_ROOT_ENV, "").strip() — non-empty string wins.
 _DOE_ROOT_ENV = "DOE_ROOT"
 
@@ -747,7 +747,7 @@ def doe_root() -> str:
     this exact ordering gap).
 
       1a. DOE_ROOT env var — if non-empty, trusted as-is (§4b idempotency parity
-          with CLAUDE_KLABAUTER_ROOT; guard form os.environ.get(..., "").strip()). Wins
+          with the engine root; guard form os.environ.get(..., "").strip()). Wins
           first when both DOE_ROOT and REPO_DOE_CLAUDE are set — a permanent
           legacy alias, preserved byte-for-byte for every existing test/consumer.
       1b. REPO_DOE_CLAUDE env var — the documented, ambient override name every

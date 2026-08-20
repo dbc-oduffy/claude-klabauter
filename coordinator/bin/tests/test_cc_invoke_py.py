@@ -547,6 +547,52 @@ class TestRouteState2Success(unittest.TestCase):
             f"PYTHONPATH idempotency fail: /fake/mr appears {parts.count('/fake/mr')}x in {pythonpath!r}",
         )
 
+    def test_unserialisable_params_raises_runtime_error_not_type_error(self) -> None:
+        """A17: json.dumps(params) on an unserialisable value must not escape the
+        module's documented "raises RuntimeError on ANY transport failure" contract
+        as a bare TypeError — no spawn should even be attempted."""
+        with (
+            unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
+            unittest.mock.patch.object(_mod, "_seam_present", return_value=True),
+            unittest.mock.patch("subprocess.run") as mock_run,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                _mod.cc_invoke("op", {"bad": object()}, "/repo")
+        self.assertNotIsInstance(ctx.exception, TypeError)
+        mock_run.assert_not_called()
+
+    def test_fdopen_failure_closes_params_fd(self) -> None:
+        """A16: os.fdopen(_params_fd, ...) raising must not leak the mkstemp fd —
+        the finally block unlinks the path but previously never closed the descriptor."""
+        closed_fds: list[int] = []
+        real_close = os.close
+
+        def _close_spy(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        def _boom_fdopen(fd: int, *args: Any, **kwargs: Any) -> Any:
+            # Simulate fdopen failing before it takes ownership of the fd.
+            raise OSError("simulated fdopen failure")
+
+        def _run(*args: Any, **kwargs: Any) -> Any:
+            cmd = args[0]
+            if "--dump-op-timeouts" in cmd:
+                return _dump_absent_proc()
+            raise AssertionError("op spawn must not be reached — fdopen fails first")
+
+        with (
+            unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
+            unittest.mock.patch.object(_mod, "_seam_present", return_value=True),
+            unittest.mock.patch("subprocess.run", side_effect=_run),
+            unittest.mock.patch("os.fdopen", side_effect=_boom_fdopen),
+            unittest.mock.patch("os.close", side_effect=_close_spy),
+        ):
+            with self.assertRaises(OSError):
+                _mod.cc_invoke("op", {"a": 1}, "/repo")
+
+        self.assertEqual(len(closed_fds), 1, "fdopen failure must close the leaked fd exactly once")
+
 
 # ---------------------------------------------------------------------------
 # AC1 — State-2 transport-fail: raises; legacy_fn NOT called
@@ -807,6 +853,20 @@ class TestRouteMutation(unittest.TestCase):
         """Finding 4 counterpart: a stringly-typed non-zero exit_code must still raise
         after coercion (e.g. "2" -> 2 != 0)."""
         envelope = {"exit_code": "2", "failed": []}
+
+        with unittest.mock.patch.object(_mod, "route", return_value=envelope):
+            with self.assertRaises(_mod.RouteMutationError) as ctx:
+                _mod.route_mutation("memo.send", {}, "/fake/repo", lambda: None)
+
+        self.assertIn("memo.send", str(ctx.exception))
+
+    def test_exit_code_noncastable_refuses(self) -> None:
+        """A15: a non-castable exit_code (e.g. "fail") must NOT coerce to 0-success —
+        the retired bash oracle's int()/except -> 0 fallback was bug-compatibility,
+        deliberately dropped. route_mutation must treat it as a refusal, mirroring
+        the benign "0" case pinned by test_exit_code_string_zero_does_not_false_positive.
+        """
+        envelope = {"exit_code": "fail", "acted": ["a"]}
 
         with unittest.mock.patch.object(_mod, "route", return_value=envelope):
             with self.assertRaises(_mod.RouteMutationError) as ctx:

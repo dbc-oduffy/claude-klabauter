@@ -525,13 +525,13 @@ def dep_probe(
     # "claude_klabauter_seam_resolvable": bypasses the sibling_dir_exists gate entirely.
     # Registry-resolved deps (claude-klabauter, declared as coordinator-claude's
     # W0.5 Option B+C hard dep) are NOT sibling-directory-colocated by
-    # contract -- CLAUDE_KLABAUTER_ROOT resolves via env var / settings-home pointer
+    # contract -- the engine root resolves via env var / settings-home pointer
     # file / machine-local registry (cc_invoke.py's four-rung
     # _resolve_claude_klabauter_root ladder), not a path literally adjacent to
     # repo_root.parent. Chicken-egg note: this very module
     # (coordinator_core.ops.setup_chain_walker) is authored INSIDE
     # claude-klabauter and only becomes importable AFTER setup.sh's trampoline
-    # (_import_main -> _resolve_claude_klabauter_root) has already resolved CLAUDE_KLABAUTER_ROOT
+    # (_import_main -> _resolve_claude_klabauter_root) has already resolved the engine root
     # and put coordinator_core on sys.path -- so by the time this probe runs,
     # the seam is proven present by construction (or the trampoline already
     # exited 95 with four-rung remediation before this module could even be

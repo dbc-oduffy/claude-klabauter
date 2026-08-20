@@ -19,6 +19,8 @@ import pytest
 from coordinator_core import tracker_entities, tracker_store, tracker_tier_a
 from coordinator_core.tracker_completion_policy import classify_code_complete_tier
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _MODULE_PATH = Path(tracker_tier_a.__file__)
 
 

@@ -38,6 +38,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 # Import guard — MUST precede any test so @register_op fires first (mirrors
 # test_handoff_stamp.py's own guard; this module reaches the same registry).
 import coordinator_core.ops.handoff_stamp  # noqa: F401 — fires @register_op
@@ -47,6 +49,8 @@ from coordinator_core.ops.handoff_stamp import (
     _repair_archived_deployment_state_handler,
     _repair_archived_shipped_in_handler,
 )
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(coro):

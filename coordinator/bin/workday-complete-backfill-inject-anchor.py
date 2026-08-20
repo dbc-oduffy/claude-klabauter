@@ -32,7 +32,7 @@ Port of: workday-complete-backfill-inject-anchor.sh (DoE 091c0f3e, 2026-07-19).
 The one incidental `python3 -c` JSON-length parse (with grep fallback) is now native json.
 Coordinator_claude_klabauter_root's bash-lib bridge call (workday_ceremony_lib.lib_func) is RETIRED
 (de-bash campaign, docs/2026-07-29-debash-residual-sites-spec.md § Group C) — `_completion_count()`
-now resolves CLAUDE_KLABAUTER_ROOT via `cc_invoke.ensure_engine_on_path()` (the same self-location-first
+now resolves the engine root via `cc_invoke.ensure_engine_on_path()` (the same self-location-first
 resolver `_derive_machine()` below already uses) and queries the completion-log directly in-process
 via `coordinator_core.ops.ceremony.records_query.query_records`, dropping the `command -v node`
 gate outright rather than porting it: query-completions.py (what the gate used to guard) is
@@ -40,7 +40,7 @@ itself already fully native and spawns no node subprocess (see
 coordinator_core/ops/query_completions.py's own "Node-subprocess retirement" note), so the gate
 could only ever produce a false negative. This also fixes a genuine pre-existing bug the old
 bridge call carried (coordinator/tests/test_workday_complete_backfill_inject_anchor.py's
-`test_case4_content_gap_guard` xfail): the old call queried CLAUDE_KLABAUTER_ROOT's own archive/completed/
+`test_case4_content_gap_guard` xfail): the old call queried the engine root's own archive/completed/
 instead of the target repo's — the native call below queries `root` (this function's own
 parameter), not claude_klabauter_root. cs_compute_machine is natively imported from
 coordinator_core.machine_resolver (de-bash campaign, unit "daily-branch" — Port of:
@@ -74,9 +74,9 @@ def _err(msg: str) -> None:
 
 
 def _ensure_claude_klabauter_on_path() -> None:
-    """Idempotently put CLAUDE_KLABAUTER_ROOT on sys.path, reusing `_derive_machine`'s /
+    """Idempotently put the engine root on sys.path, reusing `_derive_machine`'s /
     `_completion_count`'s own resolver (`cc_invoke.ensure_engine_on_path`,
-    self-location-first) so this file has exactly one CLAUDE_KLABAUTER_ROOT resolution
+    self-location-first) so this file has exactly one engine-root resolution
     path. Best-effort: a resolution failure here is caught by the caller,
     matching the existing try/except shape those two functions already use.
     """
@@ -212,11 +212,11 @@ def _completion_count(root: str, date: str) -> int:
     """Count completion-log entries for DATE, natively in-process.
 
     De-bash campaign, docs/2026-07-29-debash-residual-sites-spec.md § Group C: this used
-    to bridge to bash twice (once to source coordinator-claude-klabauter-root.sh for CLAUDE_KLABAUTER_ROOT,
+    to bridge to bash twice (once to source coordinator-claude-klabauter-root.sh for the engine root,
     once to gate `command -v node` before shelling out to query-completions.py). Both
-    bridges are retired — CLAUDE_KLABAUTER_ROOT resolves via `cc_invoke.ensure_engine_on_path()`
+    bridges are retired — the engine root resolves via `cc_invoke.ensure_engine_on_path()`
     (the same self-location-first resolver `_derive_machine()` above already uses, so
-    this file has exactly one CLAUDE_KLABAUTER_ROOT resolution path instead of two that could
+    this file has exactly one engine-root resolution path instead of two that could
     drift apart), and the completion-log query calls
     `coordinator_core.ops.ceremony.records_query.query_records` in-process — no `node`
     gate, because query-completions.py (what that gate used to guard) is itself already

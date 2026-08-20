@@ -404,14 +404,32 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     that seam's docstring for the full identity-attribution defect this
     closes. `None` (no identity carried) is a no-op bind, reproducing
     today's server-resolves-its-own-env behaviour exactly.
+
+    STDOUT CAPTURE (W9). A handler `print()` here is not the transport --
+    unlike `invoke.__main__`'s cold path, this process's stdout is never the
+    JSON-RPC channel (the pipe is). But left unredirected it either lands on
+    whatever this process's own stdout happens to be bound to (a resident
+    server normally has none, spawned detached) or, once
+    `_suppress_pool_worker_consoles`/`_bind_null_std_streams` are in play,
+    `os.devnull` -- silently discarded either way, the exact divergence from
+    cold (`invoke.__main__` relays captured stdout to stderr) this row
+    exists to close. `contextlib.redirect_stdout` captures it the same way
+    the cold path does and folds it into the SAME `_stderr` sibling field
+    `diagnostics` already rides -- `warm.client` pops and relays that field
+    unconditionally, so no second wire-shape change is needed.
     """
     import asyncio
+    import contextlib
+    import io as _io
 
     from coordinator_core.ipc import dispatch_message
 
     diagnostics: list = []
+    _handler_stdout = _io.StringIO()
+    _handler_stderr = _io.StringIO()
     with per_request_state(session_id=session_id, diagnostics=diagnostics):
-        response = asyncio.run(dispatch_message(msg))
+        with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
+            response = asyncio.run(dispatch_message(msg))
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
     # wire envelope is frozen (contract §2.1) and a setup error is defined to
@@ -420,9 +438,32 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     # nothing downstream of the client can observe a shape a cold spawn lacks.
     # Without this the reason dies on the SERVER's stderr and a warm-served
     # refusal is mute — see `entry_seam`'s DIAGNOSTIC-axis note for the report
-    # that found it.
-    if diagnostics and isinstance(response, dict):
-        response = {**response, "_stderr": "\n".join(diagnostics)}
+    # that found it. Captured stdout is appended after the existing
+    # diagnostics lines, same field, same relay -- see this function's own
+    # "STDOUT CAPTURE" note above.
+    #
+    # STDERR CAPTURE (C6, root cause 1). `emit_diagnostic`'s 3 call sites are
+    # not the only place a well-formed-but-refusing op writes its diagnostic
+    # sentence to `sys.stderr` -- 1512 other sites across the tree do the same
+    # thing directly, and none of them will ever be migrated (see this
+    # chunk's own body: bridging real stderr covers all 1512 without touching
+    # any of them). Without this capture those sentences land on THIS
+    # process's own stderr, which a resident, normally-detached warm server
+    # has no reader for, and `cc_invoke.route_mutation`'s `RouteMutationError.
+    # op_stderr` -- built from the child's captured stderr on the cold path --
+    # is silently empty on the warm path instead. Folded into the SAME
+    # `_stderr` sibling field as stdout and `diagnostics`, so `warm.client`'s
+    # existing unconditional pop-and-relay (line ~777) needs no second wire
+    # change to carry it through.
+    _captured = _handler_stdout.getvalue()
+    _captured_stderr = _handler_stderr.getvalue()
+    _stderr_lines = list(diagnostics)
+    if _captured:
+        _stderr_lines.append(_captured)
+    if _captured_stderr:
+        _stderr_lines.append(_captured_stderr)
+    if _stderr_lines and isinstance(response, dict):
+        response = {**response, "_stderr": "\n".join(_stderr_lines)}
     return response
 
 
@@ -443,17 +484,41 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     process's own connection thread was -- each worker process has entirely
     its own contextvar storage, with no cross-process sharing to guard
     against.
+
+    STDOUT CAPTURE (W9). This worker's own stdout is bound to `os.devnull`
+    by `_bind_null_std_streams` (`_worker_process_init`, `pythonw.exe` spawn)
+    -- a handler `print()` here is silently discarded, not merely
+    unobserved, unless captured before that binding matters. Same
+    `contextlib.redirect_stdout` capture as `_run_dispatch`'s own "STDOUT
+    CAPTURE" note, folded into the same `_stderr` sibling field.
     """
     import asyncio
+    import contextlib
+    import io as _io
 
     from coordinator_core.ipc import dispatch_message
 
     diagnostics: list = []
+    _handler_stdout = _io.StringIO()
+    _handler_stderr = _io.StringIO()
     with per_request_state(session_id=session_id, diagnostics=diagnostics):
-        response = asyncio.run(dispatch_message(msg))
+        with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
+            response = asyncio.run(dispatch_message(msg))
 
-    if diagnostics and isinstance(response, dict):
-        response = {**response, "_stderr": "\n".join(diagnostics)}
+    # STDERR CAPTURE (C6) -- same rationale as `_run_dispatch`'s own note:
+    # this worker's real `sys.stderr` (bound to `os.devnull` by
+    # `_bind_null_std_streams` under a `pythonw.exe` spawn) is where the
+    # other 1512 non-`emit_diagnostic` sites write, and it has no reader
+    # unless captured here.
+    _captured = _handler_stdout.getvalue()
+    _captured_stderr = _handler_stderr.getvalue()
+    _stderr_lines = list(diagnostics)
+    if _captured:
+        _stderr_lines.append(_captured)
+    if _captured_stderr:
+        _stderr_lines.append(_captured_stderr)
+    if _stderr_lines and isinstance(response, dict):
+        response = {**response, "_stderr": "\n".join(_stderr_lines)}
     return response
 
 
@@ -1119,24 +1184,15 @@ class _ServerContext:
         retirement of a healthy server.
 
         NEGATIVE SPEC -- unstamped (live working tree) `engine_root` is
-        deliberately IN SCOPE, not a bug: `skew.compute_client_token`
-        falls back to a `.git/HEAD` fingerprint there, which rotates on
-        this box's shared-branch cadence (~30-40s) independent of whether
-        engine code changed, so this predicate flips True that often and
-        the server retires within one watchdog poll. That is not a false
-        retirement in the sense that matters: the same token rotation
-        that trips this predicate already changed the pipe name every
-        client dials, so the old server is ALREADY unreachable by the
-        time it retires -- its residency was useless residency, and early
-        retirement costs zero warm hits. Gating `token_stale` on stamp
-        presence (i.e. only binding it when a stamp exists) was
-        considered and rejected: the unstamped population left unfixed by
-        that gate is the live/dev-clone shape, whose steady-state stranded
-        count is WORSE than the published-mirror case this predicate was
-        written for -- a ~30-40s rotation cadence against a 15-minute idle
-        deadline implies on the order of 25-30 resident generations, where
-        a publish cadence implies a handful. That arithmetic is derived
-        from the measured rotation cadence, not itself an observed count.
+        deliberately IN SCOPE, not a bug, but it never reaches the
+        mismatch comparison above: `skew.compute_client_token` raises
+        `UnstampedEngineRootError` for an unstamped root (no
+        `.git/HEAD`-based fallback -- that path was removed), which this
+        method's bare `except` catches and turns into `False` per the
+        "Never raises" note above. So an unstamped server's `token_stale`
+        verdict is always False, and its SUPERSEDED arm can never fire --
+        it can only retire via ordinary idle demotion, never early
+        retirement on a rotated token.
         """
         if self.boot_token is None:
             return False
@@ -1469,11 +1525,14 @@ def _preload_op_registry() -> None:
     ~3 ms**.
 
     A one-time cost per server GENERATION, not per server lifetime — and
-    generations are not rare. `skew.compute_client_token` keys on
-    `(.git/HEAD, its ref)`, so on a live working tree the token rotates at
-    the tree's commit cadence (measured ~2.6 min median on this box), and
-    each new generation re-presents that 703 ms to its first caller. A
-    server that is evicted early can spend most of its life having served
+    generations are not rare. `skew.compute_client_token` keys on the
+    published engine's build stamp (`coordinator_core/_engine_stamp`), so
+    the token rotates once per publish round, not per commit -- a live
+    (unstamped) working tree instead raises `UnstampedEngineRootError`
+    from `compute_client_token`, which `_token_is_stale`'s bare except
+    turns into "not stale" (see that method's docstring). Either way each
+    new generation re-presents that 703 ms to its first caller. A server
+    that is evicted early can spend most of its life having served
     warm-up.
 
     Moving it here puts it on a process nobody is waiting for, which is the

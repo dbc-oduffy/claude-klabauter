@@ -342,6 +342,39 @@ class TestPatternKeyword:
 # as a garbage `pattern` value used to).
 # ---------------------------------------------------------------------------
 
+class TestUniqueItemsKeyword:
+    """`uniqueItems` arrived with plan.schema.json 2.5.0 (`review_signals`).
+    It was implemented rather than allowlisted because an unimplemented
+    keyword in a shipped schema validates as a silent no-op — the same
+    decorative-keyword failure this whole section exists to close."""
+
+    def test_duplicate_items_reject(self):
+        schema = {'type': 'array', 'uniqueItems': True}
+        errors = _validate_json_schema_node(['a', 'b', 'a'], schema, schema, 'field')
+        assert errors != []
+        assert any('uniqueItems' in e['error'] for e in errors)
+
+    def test_distinct_items_accept(self):
+        schema = {'type': 'array', 'uniqueItems': True}
+        assert _validate_json_schema_node(['a', 'b'], schema, schema, 'field') == []
+
+    def test_unhashable_members_compare_by_value(self):
+        """Dict members must not raise on the set-based duplicate check —
+        they compare by canonical JSON form, and key ORDER is not identity."""
+        schema = {'type': 'array', 'uniqueItems': True}
+        dupes = [{'k': 1, 'j': 2}, {'j': 2, 'k': 1}]
+        assert _validate_json_schema_node(dupes, schema, schema, 'field') != []
+        assert _validate_json_schema_node([{'k': 1}, {'k': 2}], schema, schema, 'field') == []
+
+    def test_absent_or_false_keyword_is_inert(self):
+        for schema in ({'type': 'array'}, {'type': 'array', 'uniqueItems': False}):
+            assert _validate_json_schema_node(['a', 'a'], schema, schema, 'field') == []
+
+    def test_non_array_value_ignored(self):
+        schema = {'type': ['array', 'null'], 'uniqueItems': True}
+        assert _validate_json_schema_node(None, schema, schema, 'field') == []
+
+
 class TestMinLengthKeyword:
     def test_top_level_scalar_accept(self):
         fm = _valid_handoff(gate_evidence={

@@ -164,11 +164,10 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 # pre-imported here any more (K-001, state/kill-ledger.md): the close path no
 # longer calls this op in-process -- see the retired `run_coverage_gate`
 # below this module's own history. The op still exists as mint-only
-# plumbing reachable from `cmd_brightline_gate`
+# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
 # (coordinator/bin/wsc-coverage-gate-runner.py), which imports and registers
 # it in its own process.
 from coordinator_core.ops import review_trail_write as _review_trail_write_mod  # noqa: F401
-from coordinator_core.ops.review_trail_write import ForeignSessionRangeRefused
 
 _LOG = logging.getLogger(__name__)
 
@@ -595,7 +594,7 @@ def fire_tracker_and_roadmap_detached(
 # close, one git subprocess per chain commit. `coordinator_core.coverage.
 # run_coverage_gate`, the `coverage.gate` op handler, and
 # `coordinator/bin/review-coverage-gate.py` still exist as mint-only
-# plumbing reachable from `cmd_brightline_gate`
+# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
 # (coordinator/bin/wsc-coverage-gate-runner.py) -- see that op module's own
 # docstring for the live kill-candidate note.
 # ---------------------------------------------------------------------------
@@ -664,15 +663,12 @@ async def write_review_trail(
     caller (``ceremony.wsc_tail``) is expected to pass at most a coherent combination of the
     two, not to rely on this function to reconcile a contradiction between them.
 
-    A caller-supplied ``sha_range`` that trips the write-side foreign-session
-    scope guard (``review_trail_write._guard_foreign_session_range``) is
-    ANOTHER ``failed_critical[]`` case, distinct from the adjudication gate
-    above: ``review_trail_write.ForeignSessionRangeRefused`` is caught before
-    the blanket ``except Exception`` below and returned untruncated, so it is
-    both distinguishable from an ordinary write error and never clipped to
-    160 chars (docs/plans/2026-07-27-review-trail-scope-guard.md § AC9). Every
-    other exception from the handler keeps the existing truncated
-    ``failed[]`` treatment unchanged. This function's "never raises,
+    The adjudication gate is now the ONLY ``failed_critical[]`` case here.
+    The write-side foreign-session scope guard that supplied a second one
+    (``ForeignSessionRangeRefused``, docs/plans/2026-07-27-review-trail-scope-
+    guard.md § AC9) was removed with the rest of the refusal apparatus (K-007,
+    state/kill-ledger.md); every exception from the handler now takes the
+    truncated ``failed[]`` treatment. This function's "never raises,
     best-effort" contract is otherwise unchanged.
 
     Every returned dict also carries ``metadata_supplied`` (bool) -- whether
@@ -755,17 +751,6 @@ async def write_review_trail(
             "acted": [f"{OP_REVIEW_TRAIL}:{out_path}"], "skipped": [], "failed": [],
             "metadata_supplied": True,
         }
-    except ForeignSessionRangeRefused as exc:
-        # AC9: a caller-supplied sha_range that trips the write-side
-        # foreign-session scope guard MUST surface as a distinguishable,
-        # UNTRUNCATED failed_critical[] entry -- not a truncated failed[]
-        # message indistinguishable from an ordinary write error. Caught
-        # before the blanket except Exception below on purpose.
-        _LOG.warning("tail_ops: review_trail.write refused foreign-session range: %s", exc)
-        return {
-            "acted": [], "skipped": [], "failed": [], "failed_critical": [f"{OP_REVIEW_TRAIL}: {exc}"],
-            "metadata_supplied": True,
-        }
     except Exception as exc:  # noqa: BLE001 -- best-effort tail op, never raises
         _LOG.warning("tail_ops: review_trail.write raised %s: %s", type(exc).__name__, exc)
         result = _fail(OP_REVIEW_TRAIL, f"{type(exc).__name__} -- {str(exc)[:160]}")
@@ -794,9 +779,9 @@ async def write_review_trail_many(
     ``_execute_directives``'s per-directive halt contract independently), but
     reimplemented here as a plain sequential in-process loop: this call has
     no directive boundary to isolate at, and ``write_review_trail`` itself
-    already never raises (every failure mode -- missing handler, a caught
-    ``ForeignSessionRangeRefused``, any other exception -- collapses to a
-    returned ``failed``/``failed_critical`` entry, not a raise), so a loop
+    already never raises (every failure mode -- missing handler, any other
+    exception -- collapses to a returned ``failed``/``failed_critical``
+    entry, not a raise), so a loop
     with no per-iteration try/except still cannot let one slice's failure
     abort the rest.
 
@@ -853,13 +838,12 @@ async def write_review_trail_many(
     # 2026-07-22-wsc-tail-sub-2s-invoke-budget.md KPI regression): each
     # slice's own `write_review_trail` call is I/O-bound (a handful of
     # pathspec-scoped `git log`/`rev-parse` subprocess spawns per slice --
-    # see `review_trail_write._guard_foreign_session_range` and
-    # `_own_session_touched_paths_and_untrailered_flag`, each genuinely
-    # re-derived per slice since every slice names a DIFFERENT sha_range and
-    # the guard's per-call caches buy nothing across distinct ranges), and
-    # `write_review_trail` itself already NEVER raises (every failure mode --
-    # missing handler, a caught `ForeignSessionRangeRefused`, any other
-    # exception -- collapses to a returned `failed`/`failed_critical` entry,
+    # see `review_trail_write._own_session_touched_paths_and_untrailered_flag`,
+    # genuinely re-derived per slice since every slice names a DIFFERENT
+    # sha_range and its per-call caches buy nothing across distinct ranges),
+    # and `write_review_trail` itself already NEVER raises (every failure mode
+    # -- missing handler, any other exception -- collapses to a returned
+    # `failed`/`failed_critical` entry,
     # not a raise; see that function's own docstring), so `asyncio.gather`
     # with its default `return_exceptions=False` cannot let one slice's
     # failure suppress a sibling's -- the per-slice isolation property this

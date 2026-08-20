@@ -30,8 +30,12 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 import coordinator_core.claim_state as claim_state_mod
 from coordinator_core.ops.commit_anchors import _resolve_anchor
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _LIVE_CLAIMANT_SESSION_ID = "22222222-2222-2222-2222-222222222222"
 

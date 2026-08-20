@@ -3841,10 +3841,6 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "compute_readjudication_report",
         "_full_range_shas",
     ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
-    ("coordinator_core/ops/review_trail_write.py", "_own_frozen_diff_shas", "_git_runner"): (
-        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
-        "cadence",
-    ),
     # --- the spawn FLOOR is a measured constant, not a per-item cost (cadence tier) ---
     #: `archive_and_commit`'s loop issues one `git mv` per move because git mv takes one src/dst
     #: pair, and the surrounding ceremony contributes a fixed constant on top. Prose could assert
@@ -4022,15 +4018,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   IDENTICAL across every range here, so the block's differing-base-narrows defect
         #   does not apply; the real blocker (per-branch attribution) is unstated and untested
         ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits'),
-        #   `review_trail_write.py::_resolve_reviewer_attestation` -> `_resolve_range_shas`:
-        #   stated reason (per-entry attributability) is not what blocks batching here; the
-        #   actual blocker is the rev-list global-exclusion narrowing pinned by a test for the
-        #   SIBLING _own_frozen_diff_shas, and nothing measures it at this site
-        (
-            'coordinator_core/ops/review_trail_write.py',
-            '_resolve_reviewer_attestation',
-            '_resolve_range_shas',
-        ),
         # MISCLASSIFIED (10) -- COLLECTOR FALSE POSITIVES, parked here deliberately rather than
         # routed to `_EXEMPT_SITES`. An exemption asserts the SITE is unbatchable; these sites
         # have nothing to batch at all, so exempting them would file a collector defect under a

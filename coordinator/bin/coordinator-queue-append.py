@@ -178,7 +178,7 @@ def _schema_cli_no_legacy(schema_name: str, op: str) -> Any:
 
     schema-cli.js (the former Node bridge) was deleted in 480ad8f8; there is no
     legacy implementation left to fall back to. route()'s State-1 path wraps this
-    RuntimeError in the four-rung CLAUDE_KLABAUTER_ROOT remediation message (cc_invoke.py
+    RuntimeError in the four-rung engine-root remediation message (cc_invoke.py
     _state1_remediation_message), so the operator sees exactly which rung to fix.
     """
     raise RuntimeError(
@@ -250,6 +250,13 @@ def _schema_cli_validate(schema_name: str, fields: dict) -> tuple[bool, list[str
     except RuntimeError as exc:
         print(
             f"error: schema validation failed for '{schema_name}': {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not isinstance(result, dict):
+        print(
+            f"error: schema validation malformed result for '{schema_name}': not a dict ({result!r})",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -330,7 +337,7 @@ _CLAUDE_KLABAUTER_ROOT_ENV = cli_shared.CLAUDE_KLABAUTER_ROOT_ENV
 
 
 class _ClaudeKlabauterUnresolvable(RuntimeError):
-    """Raised when CLAUDE_KLABAUTER_ROOT cannot be resolved via env var or machine-local registry.
+    """Raised when the engine root cannot be resolved via env var or machine-local registry.
 
     Callers in the per-project (meta-repo cwd) write loop catch this and degrade
     gracefully (WARN + skip, exit 0) per AC13. The low-level shell primitive
@@ -394,7 +401,7 @@ def _resolve_session_id() -> str:
     ``CLAUDE_CODE_SESSION_ID``-only read to match the canonical reference —
     see that constant's own docstring for the prior break-class defect two
     disagreeing copies of this ladder caused. Returns "" if unresolved,
-    including on an import/CLAUDE_KLABAUTER_ROOT resolution failure (fail-soft — an
+    including on an import/engine-root resolution failure (fail-soft — an
     unresolved id here correctly degrades provenance_completeness to
     "unknown" below, the pre-existing contract of this function's
     env-var-only predecessor).
@@ -557,7 +564,7 @@ def _output_path(
       1. QUEUE_APPEND_OUTPUT_ROOT env override wins (test isolation).
       2. Else if queue_scope == "central": central state routes to claude-klabauter
          unconditionally, via the same seam the meta-repo per-project branch below
-         uses. Raises _ClaudeKlabauterUnresolvable if CLAUDE_KLABAUTER_ROOT cannot be resolved — caller
+         uses. Raises _ClaudeKlabauterUnresolvable if the engine root cannot be resolved — caller
          must catch and degrade gracefully (WARN + skip, exit 0).
       3. Else (project scope): routes via the seam (L7 fix — git root, not bare cwd).
          Meta-repo cwd routes to claude-klabauter; sibling-repo cwd routes to its own state/.
@@ -617,7 +624,7 @@ def _output_path(
         # AC1/AC2 are `pending`, and its own C3 is HELD with recorded disk proof
         # the flip never took effect on the production path.)
         # _claude_klabauter_root() raises _ClaudeKlabauterUnresolvable when repos.claude_klabauter is
-        # unregistered and CLAUDE_KLABAUTER_ROOT env var is not set — legacy_fn() catches and
+        # unregistered and the engine-root env var is not set — legacy_fn() catches and
         # degrades gracefully (WARN + skip, exit 0) per the graceful-degradation
         # contract, mirroring the meta-repo per-project branch below.
         claude_klabauter_root = _claude_klabauter_root()
@@ -1985,7 +1992,7 @@ def main() -> None:
     # ── Routing gate: queue.append via native cc_invoke when seam present ──────────────────
     # Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2
     #
-    # State-1 (coordinator_core.invoke disk-absent via CLAUDE_KLABAUTER_ROOT) → legacy_fn() is called.
+    # State-1 (coordinator_core.invoke disk-absent via the engine root) → legacy_fn() is called.
     # State-2 (seam present) → cc_invoke → queue.append native op.
     # Transport failure on State-2 is a hard error; never falls back to legacy_fn.
     # Negative-spec: do NOT add a liveness probe, do NOT add try/except→legacy after native.
@@ -2025,7 +2032,7 @@ def main() -> None:
                 filename_override=filename_override,
             )
         except _ClaudeKlabauterUnresolvable as exc:
-            # AC2-analog (central): degrade gracefully on unresolvable CLAUDE_KLABAUTER_ROOT for
+            # AC2-analog (central): degrade gracefully on unresolvable engine root for
             # central-scope writes (queue_scope == "central"). A coordinator install
             # without repos.claude_klabauter registered WARNs and skips rather than
             # hard-erroring. Central-scope is guarded (main()) to only ever apply to
@@ -2034,7 +2041,7 @@ def main() -> None:
             # Spec backlink: docs/wiki/state-placement-law.md § Taxonomy "Central/global state"
             if queue_scope == "central":
                 print(
-                    f"warn: coordinator-queue-append: CLAUDE_KLABAUTER_ROOT unresolvable — "
+                    f"warn: coordinator-queue-append: the engine root unresolvable — "
                     f"skipping central write: {exc}",
                     file=sys.stderr,
                 )
@@ -2045,7 +2052,7 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 return  # exits 0 via normal return from legacy_fn()
-            # AC13: degrade gracefully on unresolvable CLAUDE_KLABAUTER_ROOT for meta-repo per-project
+            # AC13: degrade gracefully on unresolvable engine root for meta-repo per-project
             # cwd writes (else-branch of _output_path). Unchanged from pre-flip behaviour
             # for all pre-existing schemas.
             # Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
@@ -2060,7 +2067,7 @@ def main() -> None:
             # Spec backlink: docs/plans/2026-07-08-project-tracker-render-from-queue.md § Substrate
             if schema_name in _WORKSTREAM_STORE_SCHEMAS:
                 print(
-                    f"error: coordinator-queue-append: CLAUDE_KLABAUTER_ROOT unresolvable — "
+                    f"error: coordinator-queue-append: the engine root unresolvable — "
                     f"cannot write workstream-store record (schema={schema_name}): {exc}",
                     file=sys.stderr,
                 )
@@ -2072,7 +2079,7 @@ def main() -> None:
                 )
                 sys.exit(1)
             print(
-                f"warn: coordinator-queue-append: CLAUDE_KLABAUTER_ROOT unresolvable — "
+                f"warn: coordinator-queue-append: the engine root unresolvable — "
                 f"skipping meta-repo per-project write: {exc}",
                 file=sys.stderr,
             )
@@ -2218,7 +2225,7 @@ def main() -> None:
     if _native_result.get("skipped"):
         # Contract pt 5 (AC12): map skipped:true → legacy WARN + exit 0 (no path printed).
         # Parity with the legacy path's _ClaudeKlabauterUnresolvable WARN messages — both routes
-        # degrade on unresolvable CLAUDE_KLABAUTER_ROOT, not DOE_ROOT (see docs/wiki/state-placement-law.md
+        # degrade on unresolvable engine root, not DOE_ROOT (see docs/wiki/state-placement-law.md
         # § Taxonomy "Central/global state"). The native op's _output_path (coordinator_core/ops/
         # queue_append.py) raises _ClaudeKlabauterUnresolvable on THREE branches — central-scope,
         # meta-repo-cwd, and the caller_worktree-is-None fallback — not central-scope alone, so
@@ -2226,7 +2233,7 @@ def main() -> None:
         # non-central skip (Review: code-reviewer — Finding 2).
         _skip_kind = "central" if queue_scope == "central" else "meta-repo per-project"
         print(
-            f"warn: coordinator-queue-append: CLAUDE_KLABAUTER_ROOT unresolvable — "
+            f"warn: coordinator-queue-append: the engine root unresolvable — "
             f"skipping {_skip_kind} write: {_native_result.get('reason', 'claude-klabauter root unresolvable')}",
             file=sys.stderr,
         )

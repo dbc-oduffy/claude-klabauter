@@ -25,7 +25,7 @@
 #       routing verdict, not an error. Read gates.entry_test.verdict.
 #   2 — usage error (malformed arguments).
 #   3 — transport failure (no enclosing git worktree, unresolvable session id,
-#       CLAUDE_KLABAUTER_ROOT unresolvable, or coordinator_core import failure).
+#       the engine root unresolvable, or coordinator_core import failure).
 
 # --- routing half: this file is a thin shim over entry_point_shim.run_target ---
 from __future__ import annotations

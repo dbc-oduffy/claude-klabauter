@@ -25,7 +25,7 @@ from __future__ import annotations
 # owns contract/generator, claude-klabauter owns engine).
 #
 # Exit convention: this is a fail-loud gate script (SSOT drift check), NOT a
-# never-block auto-push shape — it exits 1 both on CLAUDE_KLABAUTER_ROOT/import
+# never-block auto-push shape — it exits 1 both on engine-root/import
 # resolution failure AND on the ported check's own FAIL verdict, mirroring
 # the pre-port .sh's own ERROR/FAIL exit-1 conventions (it never silently
 # skipped).
@@ -68,9 +68,9 @@ def _resolve_plugin_root() -> str:
 
 
 def _resolve_run_op_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
+    """Resolve the engine root, put it on sys.path, and import `run_op_main`.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -92,7 +92,7 @@ def main() -> None:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
         print(
-            f"verify-schema-registry-sync: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"verify-schema-registry-sync: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(1)

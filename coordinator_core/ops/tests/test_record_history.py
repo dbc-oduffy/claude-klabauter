@@ -45,6 +45,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.ops import records_query
 from coordinator_core.ops.record_history import (
     UnsupportedRecordTypeError,

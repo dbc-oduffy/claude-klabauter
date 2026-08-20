@@ -53,6 +53,8 @@ from coordinator_core.ops.tracker.render_status import _handler
 from coordinator_core.tracker_entities import emit_item_created, mint_item_id
 from coordinator_core import tracker_transitions as tt
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(coro):
     return asyncio.run(coro)

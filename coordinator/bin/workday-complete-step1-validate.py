@@ -90,7 +90,7 @@ from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 try:
     _REPO_ROOT = require_colocated_engine_on_path(__file__)
 except RuntimeError as _exc:
-    print(f"{os.path.basename(__file__)}: CLAUDE_KLABAUTER_ROOT resolution failed: {_exc}", file=sys.stderr)
+    print(f"{os.path.basename(__file__)}: engine-root resolution failed: {_exc}", file=sys.stderr)
     sys.exit(1)
 
 from coordinator_core.diff_scoped_tests import (  # noqa: E402

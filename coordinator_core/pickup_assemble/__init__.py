@@ -157,6 +157,10 @@ from coordinator_core.session.work_state import (
     _resolve_send_message_addresses,
     _scan_handoff_dir,
 )
+from coordinator_core.sizing_disposition import (
+    compute_sizing_disposition,
+    unsized_next_move_prefix,
+)
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id
 
@@ -9202,7 +9206,10 @@ def brief(
         if successor["candidates"]:
             gates_obj["successor"] = successor
 
+        sizing_disposition = compute_sizing_disposition(root, fm)
+
         narration, next_move = _ready_summary(classification, directives, judgment_points)
+        next_move = unsized_next_move_prefix(sizing_disposition) + next_move
         if claim_grant.get("held_by_self"):
             # 2026-07-29 self-claim narration fix — an EM re-briefing an
             # artifact it claimed itself must be told plainly it already
@@ -9218,6 +9225,7 @@ def brief(
             {
                 "artifact": artifact,
                 "preflight": preflight,
+                "sizing_disposition": sizing_disposition,
                 "gates": gates_obj,
                 "directives": directives,
                 "judgment_points": judgment_points,

@@ -426,11 +426,11 @@ def main(argv: list[str]) -> int:
         return 0
 
     # Native-module availability guard (daily_branch, machine_resolver, daily_day all
-    # resolve via the same CLAUDE_KLABAUTER_ROOT ladder).
+    # resolve via the same engine-root ladder).
     try:
         _ensure_claude_klabauter_on_path()
     except RuntimeError as exc:
-        _err(f"ERROR: daily-branch native module unreachable — CLAUDE_KLABAUTER_ROOT resolution failed: {exc}")
+        _err(f"ERROR: daily-branch native module unreachable — engine-root resolution failed: {exc}")
         return 1
     from coordinator_core.daily_branch import parse_branch_span, rename_target, should_prompt_rename
     from coordinator_core.daily_day import local_day

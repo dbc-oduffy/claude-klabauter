@@ -14,7 +14,7 @@ Hermeticity follows `test_close_origin_stub_on_ship.py`'s established
 pattern: `cutover-cli` does `sys.path.insert(0, lib_dir); import cc_invoke`
 before anything else, so pre-seeding `sys.modules["cc_invoke"]` with a fake
 `route` short-circuits Python's import machinery before any real
-CLAUDE_KLABAUTER_ROOT / coordinator_core.invoke subprocess is ever spawned. Each test
+engine-root / coordinator_core.invoke subprocess is ever spawned. Each test
 loads a fresh copy of the subject module so per-test fakes never leak.
 """
 from __future__ import annotations

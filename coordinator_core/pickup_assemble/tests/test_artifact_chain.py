@@ -18,8 +18,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import coordinator_core.pickup_assemble as pa
 from coordinator_core import dag
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _write(path: Path, frontmatter: str, body: str = "body\n") -> None:

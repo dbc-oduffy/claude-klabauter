@@ -59,7 +59,7 @@ exactly; see that module's docstring for the full contract):
   1 — business failure: the schema registry is empty, or an injected sub-shape name
       (e.g. ProvenanceEnvelope) collides with a registered schema name.
   2 — DEDICATED transport/config-failure code, distinct from both business codes above:
-      CLAUDE_KLABAUTER_ROOT resolution failed, coordinator_core.ops.emit_artifact_shape_contract
+      engine-root resolution failed, coordinator_core.ops.emit_artifact_shape_contract
       not importable, or (raised inside the claude-klabauter module) the coordinator root's
       schemas/ directory could not be found.
 
@@ -95,7 +95,7 @@ def _resolve_coordinator_root() -> str:
     stayed in DoE-claude.
 
     Fails loud (sys.exit(2), the same DEDICATED transport/config-failure code used for
-    CLAUDE_KLABAUTER_ROOT resolution failures below) if doe_root() cannot resolve.
+    engine-root resolution failures below) if doe_root() cannot resolve.
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
@@ -114,9 +114,9 @@ def _resolve_coordinator_root() -> str:
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the DR-276 op runner.
+    """Resolve the engine root, put it on sys.path, and import the DR-276 op runner.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is deliberately
@@ -138,7 +138,7 @@ def main() -> None:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
-        print(f"emit-artifact-shape-contract: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"emit-artifact-shape-contract: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(2)
     except ImportError as exc:
         print(

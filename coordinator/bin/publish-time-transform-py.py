@@ -45,9 +45,9 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_main():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported CLI entry.
+    """Resolve the engine root, put it on sys.path, and import the ported CLI entry.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -63,7 +63,7 @@ def main() -> None:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
-        # Review: code-reviewer P2 — CLAUDE_KLABAUTER_ROOT resolution failure is an
+        # Review: code-reviewer P2 — engine-root resolution failure is an
         # environment/install fault, not a CLI usage mistake; the docstring
         # (line 39) reserves exit 3 for exactly this class, distinct from
         # the exit-2 usage-error tier. Was sys.exit(2), misclassifying it.

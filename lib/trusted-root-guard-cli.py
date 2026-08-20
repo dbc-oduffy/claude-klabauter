@@ -29,7 +29,7 @@ Exit codes (parity with the former bash sourced-lib function's contract):
       bash function's no-nameref contract).
       Also used for a missing/invalid --mode or --root (the module's
       documented "--mode is REQUIRED" message is printed verbatim).
-  2 — transport failure: CLAUDE_KLABAUTER_ROOT could not be resolved, or
+  2 — transport failure: the engine root could not be resolved, or
       coordinator_core.trusted_root_guard is not importable. Distinct from
       the business-rejection code above (porter addendum §3/3b) — a
       claude-klabauter-link failure must not read as "untrusted root".
@@ -48,7 +48,7 @@ import sys
 
 
 def _resolve_claude_klabauter_root() -> str:
-    """Delegate to cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder
+    """Delegate to cc_invoke's battle-tested engine-root resolution ladder
     (env var -> settings-home pointer file -> coordinator-claude-klabauter-root.sh)
     rather than re-deriving it — mirrors migrate-state-to-claude-klabauter.sh's
     _import_main().

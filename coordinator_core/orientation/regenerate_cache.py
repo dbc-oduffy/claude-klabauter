@@ -202,6 +202,10 @@ from typing import Dict, List, Optional
 from coordinator_core._settings_home import settings_home
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
+from coordinator_core.hooks.auto_push import (
+    _read_pending_record as _ap_read_pending_record,
+    _record_is_stale as _ap_record_is_stale,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
@@ -874,7 +878,34 @@ _ACTION_MAP = {
     "gh-push-protection": "secret blocked — scrub, then push",
     "gh-size-limit": "see .git/push-failures.log; resolve, then push",
     "gh-lfs-quota": "see .git/push-failures.log; resolve, then push",
+    "timeout": "push timed out — retry: git push (see .git/push-failures.log if it recurs)",
 }
+
+# Recency bound for attributing a push-failures.log entry to the CURRENT
+# unpushed count (Defect 2, 2026-08-20 dispatch): a bare "last matching line"
+# scrape has no time check, so a failure from weeks ago was being presented
+# next to today's count as if it explained it. Bound chosen longer than one
+# full hold-plus-stale cycle in auto_push.py (_HOLD_WINDOW_SECONDS 300 +
+# _STALE_GRACE_SECONDS 60 = 360s) so a failure still inside an active
+# retry/hold cycle stays attributed, short enough that a failure carried over
+# from an earlier session does not read as causing a fresh count.
+_FAILURE_RECENCY_SECONDS = 900
+
+_LOG_TS_RE = re.compile(r"^\[([^\]]+)\]")
+
+
+def _parse_log_timestamp(line: str) -> Optional[datetime]:
+    """Parse the leading ``[<ISO-8601 UTC timestamp>]`` off one
+    push-failures.log line. Returns None on any parse failure -- the caller
+    treats an unparseable timestamp as NOT recent (fails safe toward "no
+    causal claim"), never as freshly recent."""
+    m = _LOG_TS_RE.match(line)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def emit_auto_push_health(repo_root: Path) -> str:
@@ -889,15 +920,33 @@ def emit_auto_push_health(repo_root: Path) -> str:
     if unpushed == 0:
         return ""
 
+    # Defect 1 (2026-08-20 dispatch): auto_push.py deliberately HOLDS a push
+    # back on a shared branch for up to _HOLD_WINDOW_SECONDS -- one holder
+    # writes coordinator-auto-push-pending.json, sleeps, then pushes; every
+    # other attempt in that window reads the live record and returns without
+    # pushing, BY DESIGN. A non-zero unpushed count during an active hold is
+    # normal, not lag. Reuse auto_push's own record-read/staleness primitives
+    # (rather than re-deriving the record path or the staleness check here a
+    # second time) to tell the two states apart.
+    now = time.time()
+    record = _ap_read_pending_record(str(repo_root))
+    if record is not None and record.get("branch") == branch and not _ap_record_is_stale(record, now):
+        hold_until = record.get("hold_until")
+        remaining = int(max(0.0, hold_until - now)) if isinstance(hold_until, (int, float)) else 0
+        return f"- {unpushed} unpushed commit(s) on `{branch}` — auto-push holding ({remaining}s remaining)"
+
     lastclass = ""
     logf = resolve_git_common_dir(repo_root) / "push-failures.log"
     if logf.is_file() and logf.stat().st_size > 0:
         lines = _read_text_or_empty(logf).splitlines()
         matches = [line for line in lines if f"on {branch} (" in line]
         if matches:
-            m = _LASTCLASS_RE.search(matches[-1])
-            if m:
-                lastclass = m.group(2)
+            last_line = matches[-1]
+            ts = _parse_log_timestamp(last_line)
+            if ts is not None and (now - ts.timestamp()) <= _FAILURE_RECENCY_SECONDS:
+                m = _LASTCLASS_RE.search(last_line)
+                if m:
+                    lastclass = m.group(2)
 
     action = _ACTION_MAP.get(lastclass, f"run: git push origin {branch} (see .git/push-failures.log)")
     cls_label = f" last failure: {lastclass};" if lastclass else ""

@@ -27,14 +27,35 @@ import pytest
 
 from coordinator_core.warm import client
 
+#: Captured at collection time, before any test's `_warm_on` fixture stubs
+#: `client.engine_token` -- the one test that needs the REAL function
+#: (`test_live_tree_cold_names_the_ruling_once_and_never_spawns`) restores
+#: it from here rather than from `client.engine_token`, which by the time
+#: any test body runs is already the stub.
+_REAL_ENGINE_TOKEN = client.engine_token
+
 
 @pytest.fixture(autouse=True)
 def _warm_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every test in this module opts warmth on and pins the pipe name and
-    engine token, so a test body only has to control `_open_pipe`."""
+    engine token, so a test body only has to control `_open_pipe`.
+
+    `engine_token` is stubbed to a fixed value rather than left to compute
+    for real: the real path (`skew.compute_client_token`) raises
+    `UnstampedEngineRootError` against THIS repo's own live working tree
+    (no `_engine_stamp`), which is exactly the condition
+    `test_live_tree_cold_*` below exercises deliberately -- every other
+    test in this module is about the pipe-open/spawn table, not that path,
+    and stubbing it here keeps `_live_tree_cold` false (a "stamped clone")
+    for them."""
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
+    monkeypatch.setattr(client, "engine_token", lambda: "faketoken")
     monkeypatch.setattr(client.election, "pipe_name", lambda token: r"\\.\pipe\fake")
     monkeypatch.setattr(client, "_spawned_this_process", False)
+    monkeypatch.setattr(client, "_live_tree_cold", False)
+    from coordinator_core.warm import breadcrumb
+
+    monkeypatch.setattr(breadcrumb, "should_spawn", lambda engine_root=None, **kw: True)
 
 
 class _FakePipe:
@@ -89,6 +110,38 @@ def test_file_not_found_spawns_once_and_goes_cold(monkeypatch: pytest.MonkeyPatc
     assert spawns[0][1] == client.SERVER_ENTRY_SCRIPT
 
 
+def test_spawn_once_consults_should_spawn_and_skips_when_debounced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """W13 (plan 2026-08-20-a-refusal-cannot-exit-zero.md § C29):
+    `_spawn_once` is not the only path C18's breadcrumb debounce is meant
+    to gate -- `warm_start.py`'s SessionStart trigger already consults it,
+    but every concurrent CLI client that hits `FileNotFoundError` on the
+    same eviction races through its OWN one-per-process `_spawn_once`.
+    Backstop 1 alone does nothing to stop that: it only debounces a single
+    process against itself. `should_spawn` returning False (a young, alive
+    breadcrumb already vouches for an in-flight spawn) must suppress the
+    spawn here too."""
+    from coordinator_core.warm import breadcrumb
+
+    calls = []
+    monkeypatch.setattr(
+        breadcrumb, "should_spawn", lambda engine_root=None, **kw: calls.append(engine_root) or False
+    )
+
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append((repo_root, script)) or True
+    )
+    assert client.try_warm_dispatch(_MSG) is None
+    assert spawns == [], "should_spawn=False must suppress the spawn"
+    assert len(calls) == 1
+
+
 def test_backstop_one_spawn_attempt_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise_enoent(pipe):
         raise FileNotFoundError(2, "no such pipe")
@@ -124,6 +177,46 @@ def test_error_pipe_busy_231_as_plain_oserror_never_spawns(monkeypatch: pytest.M
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert spawns == []
+
+
+def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """C3 (plan 2026-08-20-a-refusal-cannot-exit-zero): an unstamped clone
+    (a live working tree) is not a warm-server host, by DR-315 s2 (PM
+    ruling), corroborated by DR-326/DR-331. The failure site must NAME
+    those DRs, must say so only ONCE across repeated dispatches (not a
+    per-call diagnostic), and must never attempt a spawn for a tree that
+    cannot host a server."""
+    from coordinator_core.warm import skew
+
+    def _raise_unstamped(repo_root=None):
+        raise skew.UnstampedEngineRootError("no stamp")
+
+    monkeypatch.setattr(skew, "compute_client_token", _raise_unstamped)
+
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+    )
+    # Undo the module-wide `engine_token` stub for THIS test only, so the
+    # real `engine_token()` runs and reaches the (now stubbed)
+    # `skew.compute_client_token` above.
+    monkeypatch.setattr(client, "engine_token", _REAL_ENGINE_TOKEN)
+
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client.try_warm_dispatch(_MSG) is None
+
+    assert spawns == [], "an unstamped clone must never spawn a server it cannot host"
+
+    err = capsys.readouterr().err
+    assert err.count("DR-315") == 1, "the ruling must be named exactly once, not per dispatch"
+    assert "DR-326" in err and "DR-331" in err
 
 
 def test_einval_without_231_never_spawns_and_never_prints(
@@ -530,3 +623,19 @@ def test_request_payload_omits_session_id_when_unresolvable(monkeypatch: pytest.
 def test_caller_session_id_resolves_via_session_core(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     assert client._caller_session_id() == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def test_engine_skew_distinct_from_structural_pin_error() -> None:
+    """`client.ENGINE_SKEW` and `ipc.STRUCTURAL_PIN_ERROR` collided at
+    -32001 (both are `-32001` by hand-coincidence, never a shared
+    definition) -- the client's skew-first check masked it, at the cost of
+    a wasted cold spawn per structural-pin op and `diagnostics_probes`'s
+    `always_structural_pin` silently measuring the cold path instead of the
+    warm one. `ENGINE_SKEW` is the one that moves: it crosses only this
+    repo's own pipe, while `STRUCTURAL_PIN_ERROR` is a cross-repo surface
+    (cc_invoke pins it; DoE reads rc=2 off it) that must never renumber.
+    """
+    from coordinator_core import ipc
+
+    assert client.ENGINE_SKEW != ipc.STRUCTURAL_PIN_ERROR
+    assert ipc.STRUCTURAL_PIN_ERROR == -32001

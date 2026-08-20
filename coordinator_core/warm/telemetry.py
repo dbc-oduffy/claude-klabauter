@@ -109,6 +109,11 @@ __all__ = [
     "TELEMETRY_FILENAME",
     "telemetry_path",
     "ServerTelemetry",
+    "CLIENT_COLD_FILENAME",
+    "client_cold_path",
+    "record_client_cold_fallback",
+    "client_cold_count",
+    "warm_rate",
 ]
 
 EXIT_REASON_SKEW = "skew"
@@ -135,6 +140,118 @@ def telemetry_path(engine_root: Optional[Path] = None) -> Path:
     directory `warm.breadcrumb.svc_dir` resolves, see module docstring's
     "ON-DISK SHAPE"."""
     return svc_dir(engine_root) / TELEMETRY_FILENAME
+
+
+CLIENT_COLD_FILENAME = "client-cold.jsonl"
+
+
+def client_cold_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/client-cold.jsonl` -- the client-side counterpart to
+    `telemetry_path()` above, deliberately a SEPARATE file rather than a
+    row appended to `TELEMETRY_FILENAME`: that file is one row per SERVER
+    life, flushed by the server on its own shutdown path, and a cold
+    fallback is, by construction, the one outcome no server process ever
+    observes (module docstring's "THE CLIENT IS THE ONLY PROCESS THAT CAN
+    OBSERVE A COLD FALLBACK", `warm/client.py`). Follows `svc_dir` for the
+    same reason `telemetry_path` does -- one resident-engine on-disk home,
+    not a second convention.
+    """
+    return svc_dir(engine_root) / CLIENT_COLD_FILENAME
+
+
+def record_client_cold_fallback(*, engine_root: Optional[Path] = None) -> None:
+    """Append one line recording a cold fallback observed by a CLIENT
+    process -- the instrument `warm/client.py`'s `try_warm_dispatch` calls
+    on every outcome that sends its caller down the cold dispatch path.
+
+    An APPEND log, matching `ServerTelemetry.flush()`'s own shape and for
+    the same reason: many short-lived client processes each contribute at
+    most a few rows, and what is worth reading back is the COUNT across
+    all of them, not a single process's latest value -- a per-process
+    in-memory counter would answer "did the client I am now" and nothing
+    a separate reporting process (C2) could ever see.
+
+    Best-effort: never raises, mirroring `ServerTelemetry.flush()`'s own
+    contract -- a telemetry write must never be the reason the cold
+    fallback itself fails (`warm/client.py`'s Backstop 2: nothing in the
+    warm preamble may fail in a way that fails the op).
+    """
+    record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    path = client_cold_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.client_cold"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def client_cold_count(engine_root: Optional[Path] = None) -> int:
+    """The number of client-side cold fallbacks recorded by
+    `record_client_cold_fallback` -- reachable by a plain file read, with
+    NO warm-pipe round trip and no running server required (the counter
+    this chunk exists to make reachable: AC4's first half). Absent file
+    (no cold fallback has ever been recorded, or `svc_dir` has never been
+    created) reads as zero, not an error.
+    """
+    path = client_cold_path(engine_root)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def warm_rate(engine_root: Optional[Path] = None) -> dict:
+    """The one-command answer to "is warmth serving on this box right
+    now" -- AC4's second half. Deliberately not an alerting system: this
+    is a plain read-and-compute over the two on-disk logs this module
+    already owns, not a new push/pull signal or a new file.
+
+    Server-side `ServerTelemetry.flush()` rows only ever carry `warm_count`
+    (each recorded invocation reached a running server, so it is warm by
+    construction -- `_serve_line` has no cold path to record, see
+    `warm/client.py`'s C1 fix for why cold can only be observed
+    client-side) plus whatever `cold_count` any given row happens to
+    carry. `client_cold_count()` (C1) is the population no server row can
+    ever see: a client that fell cold never contacted a server at all.
+    Both are summed here so the reported rate reflects every observed
+    outcome across BOTH populations, not just the server's partial view.
+
+    Returns a dict with `warm_count`, `cold_count`, `total`, and
+    `warm_rate` (a 0..1 float, or `None` when `total` is zero -- no
+    outcomes recorded yet is a distinct answer from "0% warm", not an
+    error).
+    """
+    warm_count = 0
+    cold_count = 0
+
+    path = telemetry_path(engine_root)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                warm_count += record.get("warm_count", 0) or 0
+                cold_count += record.get("cold_count", 0) or 0
+    except OSError:
+        pass
+
+    cold_count += client_cold_count(engine_root)
+
+    total = warm_count + cold_count
+    return {
+        "warm_count": warm_count,
+        "cold_count": cold_count,
+        "total": total,
+        "warm_rate": (warm_count / total) if total else None,
+    }
 
 
 class ServerTelemetry:

@@ -599,7 +599,7 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
 
     Lazily reaches into ``coordinator_core`` — deliberately NOT imported at
     module scope, so a hit on step 4/4a (the common case) never pays this
-    import's cost on the commit hot path. Resolves CLAUDE_KLABAUTER_ROOT via the
+    import's cost on the commit hot path. Resolves the engine root via the
     self-location-first ``require_colocated_engine_on_path()`` (which wraps
     ``resolve_colocated_claude_klabauter_root()``; this script
     lives inside the claude-klabauter checkout at ``coordinator/bin/``, so
@@ -615,7 +615,7 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
     rather than re-deriving either — see that module's own negative-spec on
     the ``plan_claim_dir`` import-cycle trap before touching this function.
 
-    Omit-rather-than-guess throughout: an unresolvable CLAUDE_KLABAUTER_ROOT, an
+    Omit-rather-than-guess throughout: an unresolvable engine root, an
     unresolvable plan, a missing/unreadable file, or a missing/blank field
     all return ``""`` — never fabricates a value, never raises (any
     exception anywhere in this chain is swallowed and treated as "no

@@ -269,7 +269,7 @@ def _fake_stamp_shipped_in(path, sha):
 
 def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=None):
     """Wire the module's resolver-trampoline functions to fakes so main()
-    runs without touching CLAUDE_KLABAUTER_ROOT or spawning any non-git subprocess.
+    runs without touching the engine root or spawning any non-git subprocess.
 
     `resolve_checked_repo_root` (module-scope import from repo_identity,
     wired in by bc0d2bde5 "C3: sweep and reap scripts ride the checked

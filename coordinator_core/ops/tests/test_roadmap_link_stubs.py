@@ -54,6 +54,8 @@ from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.roadmap_link_stubs import _SCHEMA_PATH, _handler, _run_link_stubs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _OP_NAME = "roadmap.link_stubs"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

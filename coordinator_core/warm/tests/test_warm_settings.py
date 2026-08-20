@@ -21,6 +21,14 @@ from coordinator_core.warm import settings
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(settings.ENV_VAR, raising=False)
+    # W12 (2026-08-20-a-refusal-cannot-exit-zero § C8): is_warm_enabled()
+    # now memoises its registry-rung result process-wide. Without this
+    # reset, whichever test in this module runs first would freeze
+    # _cached_result for every test that runs after it in the same pytest
+    # process, silently defeating each test's own registry_get monkeypatch.
+    settings._reset_for_test()
+    yield
+    settings._reset_for_test()
 
 
 def test_off_when_neither_env_nor_registry_set(monkeypatch: pytest.MonkeyPatch) -> None:

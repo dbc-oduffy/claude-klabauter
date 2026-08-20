@@ -47,7 +47,7 @@
 #
 # Exit codes: the mapped bool-returning function maps True->0, False->1
 # (matches session-liveness-cli's / session-claim-cli's convention). A
-# missing/unresolvable CLAUDE_KLABAUTER_ROOT or an ImportError (this trampoline's own
+# a missing/unresolvable engine root or an ImportError (this trampoline's own
 # transport failure) exits 3 (_TRANSPORT_FAIL — "the claude-klabauter engine could not
 # be reached," never silently degraded to 0/1). A usage error (missing/
 # unknown subcommand, wrong arity, an invalid `grant` enum/cross-field value
@@ -95,7 +95,7 @@ def _grant_directive_module():
     """`coordinator_core.session.grant_directive` — the one owner of the
     `grant`/`revoke` argv grammar, shared with the ceremony assemblers that
     dispatch these same directives in-process. Resolved through the same
-    CLAUDE_KLABAUTER_ROOT trampoline as `_import_module`, so a missing engine still
+    engine-root trampoline as `_import_module`, so a missing engine still
     exits `_TRANSPORT_FAIL` rather than ImportError-ing here."""
     try:
         import coordinator_core.session.grant_directive as _mod
@@ -103,7 +103,7 @@ def _grant_directive_module():
         # Cold shell call: coordinator_core is not on the path yet. The
         # in-process callers (workweek_complete.apply loads this file as a
         # module and calls main()) already have it imported, so they never
-        # pay the CLAUDE_KLABAUTER_ROOT resolution below.
+        # pay the engine-root resolution below.
         claude_klabauter_root = require_dispatch_engine_on_path()
         import coordinator_core.session.grant_directive as _mod
 
@@ -122,7 +122,7 @@ def main(argv: list[str]) -> int:
     try:
         mod = _import_module()
     except RuntimeError as exc:
-        print(f"tier-u-grant-cli: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"tier-u-grant-cli: engine-root resolution failed: {exc}", file=sys.stderr)
         return _TRANSPORT_FAIL
     except ImportError as exc:
         print(f"tier-u-grant-cli: coordinator_core.session.grant not importable: {exc}", file=sys.stderr)

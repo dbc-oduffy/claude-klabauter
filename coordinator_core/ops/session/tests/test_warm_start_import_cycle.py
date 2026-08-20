@@ -21,10 +21,18 @@ failing order was the only one that shipped.
 These tests run the import in a SUBPROCESS because import cycles are
 order-dependent and a module already resident in the parent's `sys.modules`
 cannot reproduce one.
+
+Spawn ratchet C2 disposition: TIER -- a clean interpreter IS the property
+under test (an already-imported module cannot reproduce an import-order
+cycle), matching this chunk's brief example verbatim.
 """
 
 import subprocess
 import sys
+
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(code: str) -> subprocess.CompletedProcess:

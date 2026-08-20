@@ -35,7 +35,7 @@ Exit convention: this is a config-writer/gate-installer, not a never-block hook
 (unlike coordinator-auto-push). A claude-klabauter-link failure means the installer
 literally could not run — silently exiting 0 would read as "hook installed"
 to callers (`/coordinator:install`, `/repo-setup`) when it was not, so this
-trampoline exits 1 (fail-loud) on CLAUDE_KLABAUTER_ROOT resolution or import failure.
+trampoline exits 1 (fail-loud) on engine-root resolution or import failure.
 The op's own internal skip paths (not a git repo, not the meta-repo, already
 installed) all still exit 0, exactly as the bash oracle did.
 

@@ -2273,6 +2273,7 @@ def _scaffold_roadmap_baton(
     category: str | None = None,
     handoff_id: str | None = None,
     gate_dependency: str | None = None,
+    sizing_object: str | None = None,
 ) -> str:
     """Generate validator-clean roadmap-baton frontmatter + canonical section skeleton.
 
@@ -2297,6 +2298,15 @@ def _scaffold_roadmap_baton(
 
     deliverable_id is auto-minted from stub_id when not supplied (D1: roadmap stubs
     reuse stub identity → dlv-<stub_id>). initiative is D9 present-as-null.
+
+    sizing_object is emitted as a real frontmatter key, mirroring the `plan` arm.
+    A roadmap arrives THROUGH the sizing lobby and every stub is assigned its own
+    `loe:` at mint, so a roadmap baton IS sized work — the FK simply went
+    unwritten, which left PM-ratified stubs reading `unsized` to
+    `coordinator_core.sizing_disposition` and would have bounced them back to the
+    lobby to re-make a size that already existed. The literal string "null" (from
+    --no-sizing-object) emits an explicit `sizing_object: null` — the checkable
+    declaration of absence, never a silent omission.
 
     handoff_id (lvv-01/C1) is the new durable-link stable ID (hnd-<slug>-<6hex>) —
     roadmap-baton was excluded from the handoff-id-minting doc_type tuple at C1
@@ -2347,6 +2357,11 @@ def _scaffold_roadmap_baton(
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
     ]
+    if sizing_object:
+        if sizing_object == "null":
+            lines.append("sizing_object: null")
+        else:
+            lines.append(f"sizing_object: {_yaml_quote(sizing_object)}")
     # awaiting_gate requires at least one of gate_dependency (deprecated),
     # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
     # --gate-dependency writes the deprecated field as before; otherwise the
@@ -4601,7 +4616,8 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         default=None,
         metavar="PATH",
         help=(
-            "(plan) Path to the state/sizings/<id>.yaml this plan was sized against. "
+            "(plan, roadmap-baton) Path to the state/sizings/<id>.yaml this record was "
+            "sized against. "
             "When supplied, must resolve on disk (relative to the repo root) — the "
             "scaffolder fails loud and writes no file otherwise. When omitted, the "
             "commented-optional-key skeleton is unchanged. Route a missing sizing "
@@ -4614,10 +4630,12 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         dest="no_sizing_object",
         action="store_true",
         help=(
-            "(plan) The sanctioned declaration that this plan has no sizing object — "
+            "(plan, roadmap-baton) The sanctioned declaration that this record has no "
+            "sizing object — "
             "not a bypass. Emits an explicit sizing_object: null frontmatter key. "
             "Exactly one of --sizing-object / --no-sizing-object is required for "
-            "--type plan; a missing sizing object is produced via coordinator:sizing, "
+            "--type plan and --type roadmap-baton; a missing sizing object is "
+            "produced via coordinator:sizing, "
             "never invented. "
             "Spec: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md, chunk C1"
         ),
@@ -5166,7 +5184,13 @@ def main() -> None:
     # here, at write time, rather than left for the sweep to catch after the fact.
     # Spec: docs/plans/2026-08-06-plan-sizing-citation-gate.md § AC3
     # Spec: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md, chunk C1
-    if doc_type == "plan":
+    # roadmap-baton is held to the SAME bar as plan, and for the same reason:
+    # a roadmap arrives through the sizing lobby with a per-stub `loe:`, so the
+    # sizing answer always exists at mint — depending on a skill step to
+    # remember the flag is exactly the "the operator remembers" discharge this
+    # repo does not accept. Cross-repo ask: cross-repo/inbox/2026-08-20-doe-
+    # claude-em-pickup-brief-should-emit-the-sizing-disposition.md (follow-on).
+    if doc_type in ("plan", "roadmap-baton"):
         if args.sizing_object and args.no_sizing_object:
             print(
                 "error: --sizing-object and --no-sizing-object are mutually "
@@ -5177,11 +5201,11 @@ def main() -> None:
             sys.exit(1)
         if not args.sizing_object and not args.no_sizing_object:
             print(
-                "error: --type plan requires an explicit sizing answer — neither "
-                "--sizing-object nor --no-sizing-object was supplied. Produce the "
-                "sizing object first via coordinator:sizing, then re-run with the "
-                "resolved path, or pass --no-sizing-object if this plan genuinely "
-                "has none.",
+                f"error: --type {doc_type} requires an explicit sizing answer — "
+                "neither --sizing-object nor --no-sizing-object was supplied. "
+                "Produce the sizing object first via coordinator:sizing, then "
+                "re-run with the resolved path, or pass --no-sizing-object if "
+                "this record genuinely has none.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -5427,6 +5451,18 @@ def main() -> None:
                     )
                 return _mint_deliverable_id(slug=slug), "mint-from-slug"
 
+            # Chain-root legibility: when no rung carries an id, the cascade
+            # mints from a slug, and its own fallback basis is the DATE
+            # (`<YYYYMMDD>-handoff`) — an id naming the day, not the work, so
+            # two unrelated chain roots scaffolded in one session both read as
+            # `dlv-<today>-handoff-<hex>`. Hand it this handoff's own title
+            # slug instead, matching the shape the degradation fallback below
+            # already mints (`_mint_deliverable_id_from_title`). A placeholder
+            # title yields nothing, so the date fallback still stands rather
+            # than baking a placeholder into a durable id — same refusal
+            # `_mint_deliverable_id_from_title` makes, same reason.
+            _hnd_work_slug = None if _is_placeholder_title(title) else _slug_from_title(title)
+
             try:
                 _resolved_deliverable_id, _hnd_carried_initiative = (
                     resolve_deliverable_and_initiative(
@@ -5435,6 +5471,7 @@ def main() -> None:
                         _claimed_plan_path,
                         _predecessor_path,
                         slug_suffix="handoff",
+                        work_slug=_hnd_work_slug,
                     )
                 )
             except (DroppedDeliverableJoinError, DivergentDeliverableIdError) as _hnd_carry_exc:
@@ -5641,6 +5678,7 @@ def main() -> None:
             category=args.category,
             handoff_id=_resolved_handoff_id,
             gate_dependency=args.gate_dependency,
+            sizing_object=("null" if args.no_sizing_object else args.sizing_object),
         )
     elif doc_type == "goal-seed":
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None

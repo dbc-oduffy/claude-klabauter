@@ -1437,7 +1437,6 @@ def _record_membership_shas(
     chain_dag_sha_set: set[str],
     chain_code_sha_set: set[str],
     narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
-    attested_shas: Optional[Callable[[Mapping[str, Any]], Any]] = None,
     chain_planning_sha_set: Optional[set[str]] = None,
     chain_window: Optional[ChainAttributionWindow] = None,
 ) -> Optional[set[str]]:
@@ -1505,38 +1504,14 @@ def _record_membership_shas(
     (the default) skips this narrowing — every existing caller that omits it
     sees byte-identical behavior to before this parameter existed.
 
-    `attested_shas`, optional, is `(record) -> iterable-of-shas` — RECORD-
-    keyed, not session-keyed (2026-08-18, docs/plans/2026-08-18-chain-
-    review-records-and-credits-predecessors.md § C3, eng-director F5). It
-    is invoked with THIS record and returns the SHA set C1/C2 already
-    resolved and persisted onto this record's own `reviewer_attestation`
-    key at write time (the single read-side access point is
-    `coordinator_core.ops.review_trail_write._parse_reviewer_attestation`;
-    the caller wiring this parameter is expected to source it from there).
-    A sha this callable names is subtracted OUT of the foreign-strip set
-    BEFORE it is removed from `raw` — i.e. a foreign-attributed commit this
-    record's own persisted attestation names is NOT narrowed away. Any
-    failure resolving the attested set (the callable raises) is treated as
-    "no attestation" — fail-safe toward narrowing, never toward silently
-    manufacturing coverage.
-
-    This replaces a prior session-keyed shape
-    (`vouched_shas: (session_id) -> iterable-of-shas`, sourced from a
-    gate-minted chain-ancestry waiver store) that this plan's Anti-scope
-    forbids reproducing under a new name: a bare session id cannot answer
-    "what did THIS record attest" without globbing every sidecar under
-    that session and unioning their ranges — a per-session store consulted
-    by both writer and reader, wider than any one record's own attestation,
-    and uncountable for AC11's admission ratchet. The chain-ancestry-waiver
-    mechanism itself is retired (K-005, 2026-08-16); this parameter carries
-    the new, per-record DR-156 attestation instead.
-
-    AC1b residual, restated here: what this admits proves a real dispatch
-    happened and that the attestation stayed inside the session's own
-    frozen review range (C2) — it does NOT prove the cited sidecar was that
-    dispatch's OUTPUT, nor that its content was written by the subagent
-    rather than the EM (DR-156 Condition 3). Frozen-range containment is
-    the load-bearing anti-forgery bound; state the limit, do not overclaim.
+    No admission path re-credits a narrowed commit. A `reviewer_attestation`
+    parameter briefly did (`attested_shas`, DR-321); it admitted nothing in
+    ~761 records and was removed with the refusal apparatus it depended on
+    (K-010, state/kill-ledger.md). The chain-ancestry-waiver mechanism it
+    replaced is retired too (K-005, 2026-08-16). This plan's Anti-scope
+    forbids reproducing either under a new name: a per-session store
+    consulted by both writer and reader is wider than any one record's own
+    evidence and uncountable for an admission ratchet.
 
     `chain_planning_sha_set`, optional, is the PLANNING-classified subset of
     `chain_code_sha_set` (2026-08-07 correction — see `_NON_CODE_SCOPE_KINDS`'s
@@ -1646,32 +1621,6 @@ def _record_membership_shas(
                 foreign = {str(s).lower() for s in narrow_foreign_shas(sha_range, session_id)}
             except Exception:  # noqa: BLE001 - a broken narrowing must reject, never crash
                 return None
-        if attested_shas is not None and foreign:
-            # C3 (docs/plans/2026-08-18-chain-review-records-and-credits-
-            # predecessors.md § C3, eng-director F5): `attested_shas` is
-            # RECORD-keyed, not session-keyed — it receives THIS record and
-            # returns the SHA set C1/C2 already resolved and persisted onto
-            # THIS record's own `reviewer_attestation` key at write time
-            # (`review_trail_write._parse_reviewer_attestation`). A
-            # session-keyed callable would force this call site to recover
-            # "what did this record attest" by globbing every sidecar under
-            # a session id and unioning their ranges — the per-session store
-            # both this plan's Anti-scope and K-005 forbid, wider than any
-            # one record's own attestation and uncountable for AC11's
-            # ratchet. Residual (AC1b): this SHA set proves a real dispatch
-            # happened and that the attestation stayed inside the session's
-            # own frozen review range (C2) — it does NOT prove the cited
-            # sidecar was that dispatch's OUTPUT (the sidecar filename
-            # carries a random nonce, not the dispatch id, and no artifact
-            # links the two), nor that the sidecar's content was written by
-            # the subagent rather than the EM (DR-156 Condition 3). Frozen-
-            # range containment is the load-bearing anti-forgery bound; do
-            # not overclaim beyond it.
-            try:
-                attested = {str(s).lower() for s in attested_shas(record)}
-            except Exception:  # noqa: BLE001 - a broken attestation lookup must narrow, never crash
-                attested = set()
-            foreign = foreign - attested
         raw = raw - foreign
         if not (raw & chain_dag_sha_set):
             return None

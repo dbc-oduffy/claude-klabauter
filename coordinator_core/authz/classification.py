@@ -248,6 +248,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.agent_completion_log": OpClass.MUTATING,
     "hooks.track_dispatched_agents": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
+    # hooks.subagent_review_mark — MUTATING, same session-runtime write class as
+    # hooks.subagent_zero_tool_use directly above (same SubagentStop event, same
+    # shim-engine-durable-write shape): it appends a review mark to the commit
+    # ledger under <git_common_dir>/coordinator-sessions/.commit-ledger/, an
+    # on-disk write read across process boundaries.
+    "hooks.subagent_review_mark": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use_surface": OpClass.COMPUTE_ONLY,
     "hooks.subagent_zero_tool_use_resolve": OpClass.COMPUTE_ONLY,
     "hooks.subagent_arrival_check": OpClass.COMPUTE_ONLY,
@@ -4071,6 +4077,67 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # answered Yes for the mutate=true path.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C3, C5
     "eol.repair": OpClass.MUTATING,
+    # C17 (docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md) — the 14
+    # registered-but-unclassified ops closing the OP_CLASSIFICATION gap
+    # against ipc._REGISTRY (measure after `import coordinator_core.ops`,
+    # never on a bare import — see coordinator_core/tests/
+    # test_registration_quad_complete.py).
+    #   app_session.census — ops/app_session.py `_census`: reads persisted
+    #     launch-handle JSON files only (`_read_handle`/`_list_handles`);
+    #     re-validates PID liveness in-memory, never writes.
+    #   app_session.launch — ops/app_session.py `_launch`: spawns a process
+    #     via `subprocess.Popen` and writes a persisted handle JSON file
+    #     (`_write_handle`).
+    #   app_session.teardown — ops/app_session.py `_teardown`: signals
+    #     (terminates) a spawned process and deletes its persisted handle
+    #     file (`_remove_handle`).
+    #   fleet.backfill_reference_edges — ops/backfill_reference_edges.py:
+    #     stamps a `references:` frontmatter field via `locked_rmw` on every
+    #     live handoff/plan match (dry_run defaults True, but `dry_run: false`
+    #     performs real writes — the op CAN write).
+    #   install.clone_idempotent — install/clone_sibling_repo.py
+    #     `clone_idempotent`: `target.parent.mkdir(...)` + `git clone` land a
+    #     fresh repo tree on disk when not already present.
+    #   install.probe_skill_frontmatter_valid — install/prereq_probe.py
+    #     `_check_skill_frontmatter_valid`: reads a skill file and parses its
+    #     frontmatter; never opens for write.
+    #   install.probe_windows_terminal_presence — install/prereq_probe.py
+    #     `_check_windows_terminal_presence`: `shutil.which` + a read-only
+    #     `winget list` query; never writes.
+    #   install.wrapper_onto_path — install/wrapper_onto_path.py: copies a
+    #     wrapper executable into the operator's per-user bin dir
+    #     (`shutil.copyfile`) and sets its exec bit.
+    #   install.write_shell_rc_guard_block — install/shell_rc_guard.py:
+    #     appends a sentinel-delimited block to POSIX shell rc file(s) on disk.
+    #   percolate.run_ci_smoke_check — ops/percolate_ci_smoke_check.py
+    #     `run_ci_smoke_check`: spawns a consumer-owned CI script and reports
+    #     its exit code; the op itself opens nothing for write and persists no
+    #     state of its own — same read-only-wrapper shape already affirmed
+    #     COMPUTE_ONLY for percolate.run_pre_ci_hooks above.
+    #   session.commits — ops/session_commits.py: one read-only `git log`
+    #     invocation, parsed and returned; never writes.
+    #   session.warm_start — ops/session/warm_start.py `_handler`: spawns a
+    #     detached warm-engine server process (`spawn_detached`) and writes a
+    #     debounce breadcrumb when the debounce check allows it.
+    #   session_baton.mint — ops/session_baton_mint.py: read-modify-writes the
+    #     session's lazy baton record file via `session_baton.store.merge_baton`.
+    #   session_baton.promote — ops/session_baton_promote.py: scaffolds and
+    #     writes a real handoff artifact under state/handoffs/ via the
+    #     `coordinator-doc-new` seam, plus a body edit.
+    "app_session.census": OpClass.COMPUTE_ONLY,
+    "app_session.launch": OpClass.MUTATING,
+    "app_session.teardown": OpClass.MUTATING,
+    "fleet.backfill_reference_edges": OpClass.MUTATING,
+    "install.clone_idempotent": OpClass.MUTATING,
+    "install.probe_skill_frontmatter_valid": OpClass.COMPUTE_ONLY,
+    "install.probe_windows_terminal_presence": OpClass.COMPUTE_ONLY,
+    "install.wrapper_onto_path": OpClass.MUTATING,
+    "install.write_shell_rc_guard_block": OpClass.MUTATING,
+    "percolate.run_ci_smoke_check": OpClass.COMPUTE_ONLY,
+    "session.commits": OpClass.COMPUTE_ONLY,
+    "session.warm_start": OpClass.MUTATING,
+    "session_baton.mint": OpClass.MUTATING,
+    "session_baton.promote": OpClass.MUTATING,
 })
 
 

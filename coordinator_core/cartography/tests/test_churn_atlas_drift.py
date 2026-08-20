@@ -25,8 +25,12 @@ import asyncio
 import subprocess
 from pathlib import Path
 
+import pytest
+
 import coordinator_core.ops.cartography_churn  # noqa: F401 — fires @register_op
 from coordinator_core.ops.cartography_churn import _cartography_churn
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(coro):

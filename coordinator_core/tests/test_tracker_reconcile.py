@@ -28,6 +28,8 @@ import json
 import subprocess
 
 import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 from pathlib import Path
 
 from coordinator_core import tracker_reconcile as tr

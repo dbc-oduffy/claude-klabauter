@@ -5,11 +5,18 @@ Spec backlink: plan `2026-08-11-three-trampolines-and-the-bare-repo-producer.md`
 § C0.
 
 Pins, per C0's body: `run()` returns 0 and prints the routed result as JSON
-on a successful `cc_invoke.route` (stubbed); returns 1 and prints a
-diagnostic naming `op_name` on a `RuntimeError` from `route`;
+on a successful `cc_invoke.route_mutation` (stubbed); returns 1 and prints a
+diagnostic naming `op_name` on a `RuntimeError` from `route_mutation`;
 `resolve_repo_root_or_exit()` returns 1 with a diagnostic naming the cwd
 when `resolve_checked_repo_root` returns `(None, ...)`; a MISMATCH verdict
 is warned to stderr and the resolved root used anyway (DR-277).
+
+C26 (plan `2026-08-20-a-refusal-cannot-exit-zero.md`): `run()` routes through
+`cc_invoke.route_mutation`, not the bare `route` -- an in-envelope refusal
+(`{"exit_code": N, ...}` or `{"failed": [...]}` or a nested `{"error": ...}`
+with exit_code absent/0) raises `RouteMutationError` inside `route_mutation`
+itself, which `run()` must catch and turn into exit code 1, never printing
+the refusal payload as if it were a success and returning 0.
 
 `resolve_claude_klabauter_root_or_exit(cli_name)` -- the third module-level helper,
 extracted from `query-file-attribution.py` and `query-routine-signals.py`'s
@@ -143,7 +150,7 @@ class TestRun(unittest.TestCase):
             "resolve_checked_repo_root",
             return_value=("/repo/match", _verdict("MATCH", "/repo/match")),
         ), mock.patch.object(
-            op_trampoline.cc_invoke, "route", return_value={"ok": True, "n": 3}
+            op_trampoline.cc_invoke, "route_mutation", return_value={"ok": True, "n": 3}
         ) as route_mock:
             stdout = io.StringIO()
             with redirect_stdout(stdout):
@@ -165,7 +172,9 @@ class TestRun(unittest.TestCase):
             "resolve_checked_repo_root",
             return_value=("/repo/match", _verdict("MATCH", "/repo/match")),
         ), mock.patch.object(
-            op_trampoline.cc_invoke, "route", side_effect=RuntimeError("transport down")
+            op_trampoline.cc_invoke,
+            "route_mutation",
+            side_effect=RuntimeError("transport down"),
         ):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
@@ -175,12 +184,38 @@ class TestRun(unittest.TestCase):
         self.assertIn("fake.op", stderr.getvalue())
         self.assertIn("transport down", stderr.getvalue())
 
+    def test_route_mutation_refusal_returns_1_not_0(self):
+        """C26: an in-envelope refusal (exit_code!=0 inside a successfully-
+        transported result) must not be printed and exited 0 as if it were a
+        success payload. Red against pre-plan HEAD, where `run()` called the
+        bare `route()` and never inspected the envelope at all."""
+        refusal_result = {"exit_code": 1, "error": "op-level refusal"}
+        with mock.patch.object(
+            op_trampoline,
+            "resolve_checked_repo_root",
+            return_value=("/repo/match", _verdict("MATCH", "/repo/match")),
+        ), mock.patch.object(
+            op_trampoline.cc_invoke,
+            "route_mutation",
+            side_effect=op_trampoline.cc_invoke.RouteMutationError(
+                "fake.op refused (exit_code=1)", refusal_result
+            ),
+        ):
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = op_trampoline.run("fake.op", self._params_builder, argv=[])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("fake.op", stderr.getvalue())
+
     def test_unresolvable_root_short_circuits_to_1_without_calling_route(self):
         with mock.patch.object(
             op_trampoline,
             "resolve_checked_repo_root",
             return_value=(None, _verdict("UNRESOLVED", None, sid=None)),
-        ), mock.patch.object(op_trampoline.cc_invoke, "route") as route_mock:
+        ), mock.patch.object(op_trampoline.cc_invoke, "route_mutation") as route_mock:
             stderr = io.StringIO()
             with redirect_stderr(stderr):
                 exit_code = op_trampoline.run("fake.op", self._params_builder, argv=[])
@@ -193,7 +228,7 @@ class TestRun(unittest.TestCase):
         with mock.patch.object(
             op_trampoline, "resolve_checked_repo_root", return_value=("/repo/mismatch", v)
         ), mock.patch.object(
-            op_trampoline.cc_invoke, "route", return_value={"ok": True}
+            op_trampoline.cc_invoke, "route_mutation", return_value={"ok": True}
         ):
             stdout = io.StringIO()
             stderr = io.StringIO()

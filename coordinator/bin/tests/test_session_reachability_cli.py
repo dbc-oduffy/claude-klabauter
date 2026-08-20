@@ -4,7 +4,7 @@ coordinator_core.session.reachability / peer_roster / artifact_owner.
 
 Fixture-based via a stub of the CLI's own `_import_modules` seam -- this
 suite never depends on this machine's real live peer list, and never
-requires CLAUDE_KLABAUTER_ROOT to resolve. Uses `types.SimpleNamespace` fixtures
+requires the engine root to resolve. Uses `types.SimpleNamespace` fixtures
 rather than the real dataclasses, so this suite pins the CLI's OWN
 attribute-access contract (session_id/name/ref/address/... ) independently
 of coordinator_core.session's internal dataclass shapes -- same
@@ -426,7 +426,7 @@ def test_help_flag_exits_0_without_importing():
 
 def test_transport_failure_maps_to_exit_3(stub_import_modules, monkeypatch):
     def _raise():
-        raise RuntimeError("CLAUDE_KLABAUTER_ROOT not found")
+        raise RuntimeError("engine root not found")
 
     monkeypatch.setattr(_cli, "_import_modules", _raise)
     rc = _cli.main(["resolve-address", "some-sid"])

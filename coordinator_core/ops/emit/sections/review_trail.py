@@ -84,7 +84,7 @@ def _list_review_trail_paths(ctx: EmitContext) -> list[str]:
 
     Scoping: always passes ``ctx.subprocess_root`` (frozen-fixture test isolation) when
     set, else ``ctx.central_state_root`` — the state root ``resolve_context()`` already
-    resolved for THIS emission (repo_root/state for a per-repo emission, CLAUDE_KLABAUTER_ROOT/state
+    resolved for THIS emission (repo_root/state for a per-repo emission, the engine root/state
     or the CLAUDE_HOME fallback for the legacy meta-repo path) — as
     ``list_paths``'s ``state_root_override`` param, never through an
     ``os.environ["COORDINATOR_ROOT"]`` write. A resident warm server serves many

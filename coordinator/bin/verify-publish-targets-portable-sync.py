@@ -309,7 +309,7 @@ def _resolve_live_targets_path() -> Optional[Path]:
     of whether a DoE clone pointer is configured.
 
     Returns None when the claude-klabauter checkout itself is unresolvable (no
-    CLAUDE_KLABAUTER_ROOT rung matched — e.g. `claude-klabauter` isn't registered on this
+    engine-root rung matched — e.g. `claude-klabauter` isn't registered on this
     machine), OR when the shared-install root's setup/publish-targets.portable
     does not exist (e.g. a fresh machine with no ~/.claude install). Both are
     the same "not applicable on this machine" outcome from this check's
@@ -672,7 +672,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     except RuntimeError as exc:
         print(
-            "verify-publish-targets-portable-sync.py: CLAUDE_KLABAUTER_ROOT resolution "
+            "verify-publish-targets-portable-sync.py: engine-root resolution "
             f"failed: {exc}",
             file=sys.stderr,
         )

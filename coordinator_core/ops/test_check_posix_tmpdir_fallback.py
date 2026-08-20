@@ -13,12 +13,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.ops.check_posix_tmpdir_fallback import (  # noqa: E402
     scan,
     scan_source,
 )
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

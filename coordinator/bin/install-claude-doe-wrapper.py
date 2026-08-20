@@ -11,7 +11,7 @@ full design rationale and negative-spec.
 
 `--wrapper-src` defaults to this trampoline's own sibling `claude-doe.py` file
 (this script and the wrapper it installs both live under
-`<claude_klabauter_root>/coordinator/bin/`) — no CLAUDE_KLABAUTER_ROOT resolution is needed for
+`<engine_root>/coordinator/bin/`) — no engine-root resolution is needed for
 that default, since it is always co-located.
 
 Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9

@@ -2298,6 +2298,28 @@ def _wg_shell_shaped_spawn_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Di
     }
 
 
+def _wg_unmarked_spawning_test_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """A spawning test function carrying neither `spawns_process` nor a
+    module-level `pytestmark`. The `test_`-prefixed basename is
+    load-bearing twice over: it is what `_is_test_tree_path` gates on, and
+    it is the same filename test the ratchet's own `_iter_test_files` uses
+    to decide membership -- so `_wg_benign`'s `.txt` write stays a valid
+    non-firing control here for the path reason as well as the suffix one."""
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": "test_thing.py",
+            "content": (
+                "import subprocess\n"
+                "\n"
+                "\n"
+                "def test_thing():\n"
+                '    subprocess.run(["git", "status"], check=True)\n'
+            ),
+        },
+    }
+
+
 def _wg_outbox_draft_frontmatter_shape_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -2517,6 +2539,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("nudge_tasks_state_folder_split", "control", False, _wg_benign),
     WriteGuardRow("nudge_shell_shaped_spawn", "fire", True, _wg_shell_shaped_spawn_fire),
     WriteGuardRow("nudge_shell_shaped_spawn", "control", False, _wg_benign),
+    WriteGuardRow(
+        "nudge_unmarked_spawning_test", "fire", True, _wg_unmarked_spawning_test_fire
+    ),
+    WriteGuardRow("nudge_unmarked_spawning_test", "control", False, _wg_benign),
     WriteGuardRow("nudge_terminal_artifact_edit", "fire", True, _wg_terminal_artifact_edit_fire),
     WriteGuardRow("nudge_terminal_artifact_edit", "control", False, _wg_benign),
     WriteGuardRow(

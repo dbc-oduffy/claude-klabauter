@@ -925,6 +925,71 @@ class TestClaimPlan:
         assert claims.claim_plan("2026-07-26-a-fine-slug", cwd=str(repo)) is True
         assert _claim_dir(repo, "plan", "2026-07-26-a-fine-slug").is_dir()
 
+    def test_claim_plan_for_execution_flips_status_to_executing(self, tmp_path, monkeypatch):
+        # C4 (docs/plans/2026-08-20-the-rungs-get-writers.md): for_execution=True
+        # fires stamp-executing on a successful claim.
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        plan = repo / "docs" / "plans" / "exec-plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("---\nstatus: draft\n---\n# Exec Plan\n", encoding="utf-8")
+        assert claims.claim_plan("exec-plan", cwd=str(repo), for_execution=True) is True
+        assert "status: executing" in plan.read_text(encoding="utf-8")
+
+    def test_claim_plan_default_does_not_flip_status(self, tmp_path, monkeypatch):
+        # Default (for_execution=False, every non-execute-plan caller) must
+        # never touch status -- the flip is strictly opt-in.
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        plan = repo / "docs" / "plans" / "no-flip-plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("---\nstatus: draft\n---\n# No Flip Plan\n", encoding="utf-8")
+        assert claims.claim_plan("no-flip-plan", cwd=str(repo)) is True
+        assert "status: draft" in plan.read_text(encoding="utf-8")
+
+    def test_claim_plan_for_execution_fatal_on_missing_plan_file(self, tmp_path, monkeypatch, capsys):
+        # No plan file on disk -> the flip cannot be attempted -> the whole
+        # claim is refused (fatal, not the shape-write's non-fatal precedent).
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        assert claims.claim_plan("ghost-exec-plan", cwd=str(repo), for_execution=True) is False
+        err = capsys.readouterr().err
+        assert "ghost-exec-plan" in err
+
+    def test_claim_plan_for_execution_fires_before_shape_sid_resolution(
+        self, tmp_path, monkeypatch
+    ):
+        # The flip is hooked OUTSIDE the sid-gated shape-instrumentation
+        # block (module docstring / claim_plan docstring): make the shape
+        # block's own core.resolve_session_id call raise, and assert the
+        # flip still landed -- it must not depend on that later call
+        # succeeding, or even running at all.
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        plan = repo / "docs" / "plans" / "flip-first-plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("---\nstatus: draft\n---\n# Flip First Plan\n", encoding="utf-8")
+
+        import coordinator_core.session.claims as claims_mod
+
+        real_resolve = core.resolve_session_id
+        calls = {"n": 0}
+
+        def _flaky_resolve(cwd=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # First call is claim_artifact's own sid resolution -- must
+                # succeed so the claim itself proceeds.
+                return real_resolve(cwd)
+            # Every subsequent call (the shape block's) raises -- the flip
+            # must already be independently resolved by then.
+            raise RuntimeError("simulated sid-resolution failure")
+
+        monkeypatch.setattr(claims_mod.core, "resolve_session_id", _flaky_resolve)
+        with pytest.raises(RuntimeError):
+            claims.claim_plan("flip-first-plan", cwd=str(repo), for_execution=True)
+        assert "status: executing" in plan.read_text(encoding="utf-8")
+
     def test_claim_artifact_mkdir_failure_after_stale_takeover_is_loud_and_false(
         self, tmp_path, monkeypatch
     ):

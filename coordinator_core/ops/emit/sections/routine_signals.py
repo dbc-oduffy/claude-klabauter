@@ -68,7 +68,7 @@ def _resolve_coordinator_state_root(coordinator_root: Path) -> Optional[str]:
     Mirrors ``check_weekly_staleness._resolve_state_root()`` /
     ``check_arch_audit_staleness._resolve_state_root()``'s identical Rule-5 (bare, no
     --central/--subject/--artifact) resolution logic — meta-repo root (git root ==
-    CLAUDE_HOME) routes to CLAUDE_KLABAUTER_ROOT/state; any other (sibling-repo) git root uses
+    CLAUDE_HOME) routes to the engine root/state; any other (sibling-repo) git root uses
     ``<git-root>/state`` directly — but pins the git invocation to *coordinator_root*
     explicitly via ``_git_root(cwd=...)`` instead of the process-global cwd the ``_chdir``
     bridge used to mutate (AC-5 no-implicit-cwd).
@@ -77,7 +77,7 @@ def _resolve_coordinator_state_root(coordinator_root: Path) -> Optional[str]:
     ``_claude_home``/``_claude_klabauter_root``; this reuses ``check_weekly_staleness``'s copies
     (the two modules' copies are identical) rather than adding a third duplicate here.
     Returns None if the coordinator root isn't a git repo, or (meta-repo case) if
-    CLAUDE_KLABAUTER_ROOT can't be resolved — the caller degrades to "unknown" on None.
+    the engine root can't be resolved — the caller degrades to "unknown" on None.
     """
     git_root = _cws_git_root(cwd=str(coordinator_root))
     if git_root is None:
@@ -105,7 +105,7 @@ def _run_staleness_native(main_fn, state_root: Optional[str]) -> str:
     process-cwd bridge with an explicit argv-threaded root (no process-global mutation).
 
     When *state_root* is ``None`` (the coordinator root isn't a git repo, or the
-    meta-repo/CLAUDE_KLABAUTER_ROOT branch can't resolve), this short-circuits to "unknown"
+    meta-repo/engine-root branch can't resolve), this short-circuits to "unknown"
     WITHOUT calling ``main_fn`` — calling it with an empty argv would let the staleness
     module fall through to its own cwd-based ``_resolve_state_root()``, silently
     reintroducing the exact implicit-cwd dependency this fix exists to eliminate. A

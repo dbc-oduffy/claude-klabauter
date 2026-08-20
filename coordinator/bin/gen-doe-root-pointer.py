@@ -26,7 +26,7 @@ from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import the in-process runner.
+    """Resolve the engine root and import the in-process runner.
 
     DR-276: routes through `coordinator_core.cli_entry.run_op_main` rather
     than calling the op's `main` directly, so the pointer file this op
@@ -42,7 +42,7 @@ def main() -> None:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
-        print(f"gen-doe-root-pointer.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+        print(f"gen-doe-root-pointer.py: engine-root resolution failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except ImportError as exc:
         print(

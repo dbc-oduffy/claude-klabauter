@@ -37,7 +37,7 @@ so resolved variables land directly in the caller's current shell — mirrors
 handoff-deliverable-carry.py's convention (same "must share one shell process"
 constraint the bash oracle called out for the handoff surface's analogous cascade).
 
-Exit codes: 0 on success. A missing/unresolvable CLAUDE_KLABAUTER_ROOT (this trampoline's own
+Exit codes: 0 on success. A missing/unresolvable engine root (this trampoline's own
 transport failure) exits 3 — distinct from any business-logic exit. A fail-loud
 business-logic guard (missing/empty scope block on commit-scope) exits 1, matching
 the bash oracle's own `exit 1` on the same guard.
@@ -67,9 +67,9 @@ _TRANSPORT_FAIL = 3
 
 
 def _import_ops():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the composed ops.
+    """Resolve the engine root, put it on sys.path, and import the composed ops.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it — this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is deliberately

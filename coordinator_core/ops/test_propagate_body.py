@@ -61,6 +61,8 @@ from coordinator_core.ops.propagate_body import (
     _handler,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _OP_NAME = "handoff.propagate"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

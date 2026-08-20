@@ -387,7 +387,7 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     except RuntimeError as exc:
         print(f"[post-toolchain] WARNING: cannot resolve CLAUDE_KLABAUTER_ROOT to locate machine-local: {exc}", file=sys.stderr)
         print("  Register repos manually later: machine-local set repos.<name> <path>")
-        # Discovery precondition (CLAUDE_KLABAUTER_ROOT) unresolvable — resolved to
+        # Discovery precondition (the engine root) unresolvable — resolved to
         # nothing this run, not "we never got there".
         _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, ())
         return
@@ -521,7 +521,7 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
     Idempotent: a already-stamped destination is a no-op past the registry
     write. Safe to call from both `first_run.py`'s own post-toolchain
     sequence (the coordinator-claude bootstrap, which may run before
-    claude-klabauter is even cloned -- see the claude-klabauter-root resolution guard
+    claude-klabauter is even cloned -- see the engine-root resolution guard
     below) and `scripts/setup.py`'s `register_claude_klabauter_root` (claude-klabauter's
     own AUTHORITATIVE registration surface, which is where this reliably has
     a resolved `claude_klabauter_root` to work with).
@@ -649,7 +649,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # <coordinator-tree-root>, lib_dir = <coordinator-tree-root>/scripts/lib,
     # SCRIPT_DIR-relative not repo_root-relative -- see that file's header)
     # must resolve off coordinator_claude_klabauter_root(), never plugin_root. Unlike
-    # site 3 below, an unresolvable CLAUDE_KLABAUTER_ROOT here is fail-loud: this is
+    # site 3 below, an unresolvable engine root here is fail-loud: this is
     # install-path code and a broken/absent claude-klabauter checkout at this point
     # means the rest of Steps 4a-4c (which import coordinator_core modules
     # that live in THIS SAME checkout) cannot possibly succeed either --
@@ -659,7 +659,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
         claude_klabauter_root_for_preflight_str, _resolution_class = coordinator_engine_root_with_class()
         claude_klabauter_root_for_preflight = Path(claude_klabauter_root_for_preflight_str)
     except RuntimeError as exc:
-        print(f"[post-toolchain] ERROR: cannot resolve CLAUDE_KLABAUTER_ROOT for setup preflight: {exc}", file=sys.stderr)
+        print(f"[post-toolchain] ERROR: cannot resolve the engine root for setup preflight: {exc}", file=sys.stderr)
         return EXIT_FAIL
 
     coordinator_tree_root = claude_klabauter_root_for_preflight / "coordinator"
@@ -683,7 +683,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     else:
         print(
             f"[post-toolchain] setup preflight skipped: {coordinator_tree_root} not found "
-            f"(resolved CLAUDE_KLABAUTER_ROOT={claude_klabauter_root_for_preflight}).",
+            f"(resolved engine root={claude_klabauter_root_for_preflight}).",
             file=sys.stderr,
         )
 
@@ -693,7 +693,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # Step 3b: provision a stamped engine root (docs/plans/2026-08-19-an-
     # engine-root-is-a-stamped-build.md C1), best-effort. On a genuinely
     # fresh box this usually no-ops here (claude-klabauter is not yet cloned,
-    # so CLAUDE_KLABAUTER_ROOT is unresolvable) -- `scripts/setup.py`'s own
+    # so the engine root is unresolvable) -- `scripts/setup.py`'s own
     # `register_claude_klabauter_root` is the AUTHORITATIVE call site for that case
     # and calls the same function once claude-klabauter's own installer runs.
     # This call site exists for the re-run/already-registered case.
@@ -702,7 +702,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
         provision_stamped_engine(Path(claude_klabauter_root_for_engine_str))
     except RuntimeError:
         print(
-            "[post-toolchain] Skipping stamped-engine provisioning: CLAUDE_KLABAUTER_ROOT not yet "
+            "[post-toolchain] Skipping stamped-engine provisioning: the engine root not yet "
             "resolvable (claude-klabauter not cloned yet). scripts/setup.py provisions it "
             "once claude-klabauter is installed.",
         )

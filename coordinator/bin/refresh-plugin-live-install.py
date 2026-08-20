@@ -74,9 +74,9 @@ GENERATES = []  # writes live_path (a registered plugin's live checkout under th
 
 
 def _no_console_kwargs() -> dict:
-    """Deferred coordinator_core import — matches this file's CLAUDE_KLABAUTER_ROOT
+    """Deferred coordinator_core import — matches this file's engine-root
     bootstrap posture (see ``_import_registry_deps``) so ``--help``/usage
-    paths never pay a CLAUDE_KLABAUTER_ROOT resolution cost. On any CLAUDE_KLABAUTER_ROOT
+    paths never pay an engine-root resolution cost. On any engine-root
     resolution/import failure, falls back to the same suppression kwargs
     computed inline (zero imports beyond ``subprocess``) rather than
     silently dropping console suppression -- a resolution failure must
@@ -130,9 +130,9 @@ def eprint(*args, **kwargs) -> None:
 
 
 # ---------------------------------------------------------------------------
-# coordinator_core import bootstrap (CLAUDE_KLABAUTER_ROOT resolution) — deferred, not
+# coordinator_core import bootstrap (engine-root resolution) — deferred, not
 # module-level, matching this tree's coordinator/bin/*.py convention (see e.g.
-# check-em-environment.py) so `--help`/usage paths never pay a CLAUDE_KLABAUTER_ROOT
+# check-em-environment.py) so `--help`/usage paths never pay an engine-root
 # resolution cost.
 # ---------------------------------------------------------------------------
 
@@ -144,7 +144,7 @@ from win_argv import win_safe_shlex_split  # noqa: E402
 
 
 def _import_registry_deps():
-    """Resolve CLAUDE_KLABAUTER_ROOT and import ``coordinator_core.machine_resolver`` —
+    """Resolve the engine root and import ``coordinator_core.machine_resolver`` —
     the canonical registry reader (``registry_get``) and the sole
     registry-directory ladder (``registry_dir``).
 
@@ -157,9 +157,9 @@ def _import_registry_deps():
     ``machine_local_dir()``. That second resolver is what created the
     split-brain documented in ``_read_registry`` — do not reintroduce it here.
     """
-    from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+    from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
-    claude_klabauter_root = require_dispatch_engine_on_path()
+    require_dispatch_engine_on_path()
     from coordinator_core import machine_resolver
 
     return machine_resolver

@@ -27,7 +27,7 @@ Usage:
 
 Exit codes: 0 on success (including the non-Windows no-op skip); 1 on any failure
 (unknown argument, missing/invalid --template-dir, template not found, or a
-CLAUDE_KLABAUTER_ROOT/import resolution failure) -- this is an install-step gate
+engine-root/import resolution failure) -- this is an install-step gate
 (install-maximalist.py wraps it in `run_required`), so failures must block the
 install rather than being swallowed, unlike the never-block auto-push shape.
 
@@ -61,10 +61,10 @@ def _default_template_dir() -> str:
 
 
 def _import_runner():
-    """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the shared
+    """Resolve the engine root, put it on sys.path, and import the shared
     in-process runner.
 
-    Reuses cc_invoke's battle-tested CLAUDE_KLABAUTER_ROOT resolution ladder (env var ->
+    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
     settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
     re-deriving it -- this is a plain in-process import, not an RPC invoke, so
     cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
@@ -87,7 +87,7 @@ def main() -> None:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(
-            f"gen-claude-doe-launcher.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+            f"gen-claude-doe-launcher.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
         sys.exit(1)

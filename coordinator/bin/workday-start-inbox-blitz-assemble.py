@@ -45,7 +45,7 @@ Test seam (test-only): COORDINATOR_INBOX_BLITZ_JSON, when set and non-empty,
 supplies the memo.blitz_buckets envelope directly (a `result` key is
 unwrapped, an `error` key renders the skipped state, malformed JSON likewise)
 -- the real cc_invoke() call is skipped entirely, and the seam is checked
-BEFORE CLAUDE_KLABAUTER_ROOT resolution so a test needs no live checkout.
+BEFORE engine-root resolution so a test needs no live checkout.
 
 Spec backlink: DoE state/handoffs/2026-07-28-fold-inbox-blitz-into-workday-start-as-a.md;
   DoE cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz-proven-pattern.md;
@@ -435,9 +435,9 @@ def _resolve_repo_root() -> str:
     if env:
         return env
     try:
-        from cc_invoke import _resolve_claude_klabauter_root
+        from cc_invoke import require_dispatch_engine_on_path
 
-        claude_klabauter_root = require_dispatch_engine_on_path()
+        require_dispatch_engine_on_path()
         from coordinator_core.git.repo_root import show_toplevel
 
         # `show_toplevel`'s own spawn fallback bounds its wait at 2s (see

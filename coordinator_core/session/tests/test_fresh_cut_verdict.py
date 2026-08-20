@@ -19,6 +19,8 @@ from coordinator_core.session.tests.test_worktree_safety import (  # noqa: F401
     _write_session,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _HAZARDOUS = (
     worktree_safety.CHECKOUT_EXISTING,
     worktree_safety.RENAME_WITH_REMOTE_DELETE,
