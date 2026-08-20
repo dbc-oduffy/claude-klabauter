@@ -10370,11 +10370,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 file=sys.stderr,
             )
         # Percolate-push next-step nudge (real incident, 2026-08-20) — a
-        # round commits to the mirror but never pushes it: `coordinator-
-        # auto-push` (coordinator_core/hooks/auto_push.py) declines any
-        # non-`work/*` branch by doctrine, and a mirror publish lands on
-        # `candidate`, so the round itself is the last place that still
-        # knows the target name. Only on a clean round (no failures) — a
+        # round commits its dest(s) locally but never pushes them:
+        # `coordinator-auto-push` (coordinator_core/hooks/auto_push.py)
+        # declines any non-`work/*` branch by doctrine, and a publish lands
+        # on `candidate` regardless of whether the dest is a mirror or a
+        # plain `repo:`-sigil row, so the round itself is the last place
+        # that still knows the target name. Only on a clean round (no
+        # failures) — a
         # PARTIAL round's push-or-not is an EM judgment call, not a default
         # this line should nudge, so the PARTIAL branch above stays silent
         # on it.
@@ -10409,7 +10411,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ]
             for _push_target in _push_targets:
                 print(
-                    f"Next step: this round is committed to the mirror, not pushed. "
+                    f"Next step: this round is committed locally, not pushed. "
                     f"Run `percolate-push {_push_target}` to push it."
                 )
         # C14 (docs/plans/2026-08-15-klabauter-release-channels.md) —

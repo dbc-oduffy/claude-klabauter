@@ -3368,10 +3368,20 @@ def _extract_allowlist_from_entry_point_shim() -> tuple:
     source = _ENTRY_POINT_SHIM_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     main_fn = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_backlog_grind_assemble_entry"
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_backlog_grind_assemble_entry"
+        ),
+        None,
     )
+    if main_fn is None:
+        raise AssertionError(
+            "could not find a `_backlog_grind_assemble_entry` FunctionDef in "
+            "entry_point_shim.py -- it was likely renamed; update "
+            "_extract_allowlist_from_entry_point_shim to match the current "
+            "function name before trusting this test"
+        )
     for node in ast.walk(main_fn):
         if not isinstance(node, ast.If):
             continue
@@ -3476,6 +3486,7 @@ class TestTrampolineDispatchRouting:
         def _make_spy(name):
             def _spy(argv):
                 seen["callee"] = name
+                seen["argv"] = list(argv)
                 return 0
 
             return _spy
@@ -3484,10 +3495,18 @@ class TestTrampolineDispatchRouting:
         monkeypatch.setattr(bga_apply, "main_apply", _make_spy("apply.main_apply"))
         monkeypatch.setattr(bga_apply, "main_drop", _make_spy("apply.main_drop"))
 
-        exit_code = shim._backlog_grind_assemble_entry([subcommand, "mise-en-place"])
+        full_argv = [subcommand, "mise-en-place"]
+        exit_code = shim._backlog_grind_assemble_entry(full_argv)
 
         assert exit_code == 0
         assert seen["callee"] == expected_callee
+        # Routing correctness is "right callee AND right argv shape":
+        # brief/mint-run-id are handed the full argv (subcommand included),
+        # apply/drop are handed `rest` (subcommand stripped) -- a future verb
+        # could reach the right callee with the wrong argv shape and this is
+        # what catches it.
+        expected_argv = full_argv if subcommand in ("brief", "mint-run-id") else full_argv[1:]
+        assert seen["argv"] == expected_argv
 
     def test_non_allowlisted_subcommand_is_still_a_usage_error(self, capsys):
         shim = _load_entry_point_shim()

@@ -167,7 +167,7 @@ def test_clean_round_names_percolate_push_with_resolved_target(monkeypatch, tmp_
     combined = captured.out + captured.err
 
     assert rc == 0
-    assert "Next step: this round is committed to the mirror, not pushed." in combined
+    assert "Next step: this round is committed locally, not pushed." in combined
     assert "percolate-push" in combined
 
 

@@ -2998,7 +2998,18 @@ def _accumulate_code_loc_numstat(text: str) -> int:
     it — the two numbers disagreeing in one brief is the bug, and the fix is
     to make this one mean what it is called. Prose still reaches `gross_loc`
     unfiltered, and the doc-fragile gate (`compute_doc_fragile_gate`) is a
-    separate arm that this exclusion does not touch."""
+    separate arm that this exclusion does not touch.
+
+    `_is_prose_bearing_path` is extension-only (its own docstring documents
+    this as a deliberate JUDGMENT CALL, 2026-08-12 dispatch brief) — an
+    executable `.yaml`/`.yml` under a code directory (CI workflow, a
+    fixture a test loads at runtime) is excluded the same as narrative
+    prose. That was already true of the predicate's other call site; this
+    is the first call site where the effect can resolve `code_loc` to a
+    genuine zero, which (see the 2026-08-20 note above `_decide_review_
+    scale_core`'s `code_loc_resolved_zero`) also suppresses the row-4
+    commit/surface brightline arms. Narrowing the predicate is out of this
+    function's scope — it is shared with `review_brightline_gate`."""
     total = 0
     for line in text.splitlines():
         match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
