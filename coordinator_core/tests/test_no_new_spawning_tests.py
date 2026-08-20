@@ -1472,3 +1472,163 @@ def test_kind_axis_route_layer_unknown_stays_out_of_scope() -> None:
         "test_kind_axis.py stays a documented, unfixed route-layer-UNKNOWN "
         "limitation per (b) -- it must still register as spawning"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC12 -- the two live Rule 1 evasions C14 fixed must stay fixed, and the
+# mechanism that fixes them (module-scope UNKNOWN promotion, C6d) must stay
+# correctly contained to module scope regardless of query order.
+# ---------------------------------------------------------------------------
+
+
+def test_c14_fixed_files_report_clean_for_rule1() -> None:
+    """AC12(i): the two files C14 fixed for Rule 1 -- both routed a
+    module-level call into a helper whose only spawn site has a non-literal
+    (`shutil.which()`-shaped) argv0, the exact shape module-scope UNKNOWN
+    promotion (C6d) exists to catch -- must report CLEAN (no module-level
+    linenos, no unmarked spawning funcs) after the fix. Modelled on
+    `test_mock_seam_oracle_files_report_zero_spawn_with_no_marker`. Nothing
+    else in this module pins that these two stay fixed; without this test a
+    regression here is a silent Rule 1 reopening."""
+    fixed_files = [
+        "coordinator_core/tests/test_engine_root_conformance.py",
+        "coordinator/tests/test_workday_evening_tz_coherence.py",
+    ]
+    bad = []
+    for relpath in fixed_files:
+        full_path = REPO_ROOT / relpath
+        assert full_path.is_file(), f"expected C14-fixed file missing: {relpath}"
+        report = _analyze_file(full_path, relpath)
+        if report.module_level_linenos or report.unmarked_spawning_funcs:
+            bad.append((relpath, report.module_level_linenos, report.unmarked_spawning_funcs))
+    assert not bad, (
+        f"a C14 Rule 1 fix regressed: {bad} -- these two files must report "
+        "CLEAN (module-scope UNKNOWN promotion must still resolve their "
+        "routed helper call)"
+    )
+
+
+def test_module_scope_unknown_promotion_reports_the_negative_direction(
+    tmp_path: Path,
+) -> None:
+    """AC12(ii): the negative-direction counterpart to
+    `test_c14_fixed_files_report_clean_for_rule1` -- a REAL file, not a
+    `_scan_source` string, reproducing the pre-fix shape (a module-level call
+    routed to a helper whose only spawn site has an UNKNOWN argv0) must be
+    CAUGHT by Rule 1, proving the detector still fires rather than having
+    been loosened into blanket silence. A `_scan_source`-only version would
+    never touch `_get_module_info`/`_analyze_file`'s Path-based resolution
+    path and would pass without exercising the mechanism at all -- worthless
+    coverage. Hand-reverting either live C14 file is out of bounds (peer-
+    hostile on a shared tree); this synthetic module is the only route."""
+    module = tmp_path / "pre_fix_shape.py"
+    module.write_text(
+        "import subprocess\n"
+        "def _helper(argv):\n"
+        "    subprocess.run(argv)\n"
+        "_helper(['irrelevant'])\n",
+        encoding="utf-8",
+    )
+    # `_analyze_file` -> `_get_module_info` reads the module-level
+    # `_WRAPPER_RESOLVER` singleton, which is pinned to `REPO_ROOT` -- a
+    # `tmp_path` file is never a subpath of that root, so `get_module_info`
+    # would raise on the `.relative_to(repo_root)` call. Swap in a resolver
+    # rooted at `tmp_path` for the duration of this call only (targeted
+    # save/restore, same discipline as the cache-key pops elsewhere in this
+    # file), rather than duplicating `_analyze_file`'s logic against a
+    # differently-scoped resolver.
+    prior_resolver = globals()["_WRAPPER_RESOLVER"]
+    try:
+        globals()["_WRAPPER_RESOLVER"] = WrapperResolver(tmp_path, _build_scanner)
+        report = _analyze_file(module, "pre_fix_shape.py")
+    finally:
+        globals()["_WRAPPER_RESOLVER"] = prior_resolver
+    assert report.module_level_linenos, (
+        "a module-level call routed to a helper with an UNKNOWN-argv0 spawn "
+        "site must be reported by Rule 1 -- if this is empty, module-scope "
+        "UNKNOWN promotion (C6d) has stopped firing"
+    )
+
+
+def test_function_scope_unknown_spawn_is_contained_regardless_of_query_order(
+    tmp_path: Path,
+) -> None:
+    """AC12(iii): containment property, both call orders. A file whose ONLY
+    UNKNOWN-argv0 spawn site sits at FUNCTION scope must never be reported
+    by Rules 2/4 (`func_spawns` stays empty), and that answer must be
+    unaffected by whether a module-scope (promote-UNKNOWN) query for the
+    same `(module, func)` pair ran first.
+
+    AC12(iii)'s written mechanism -- an extended `_wrapper_cache` key -- does
+    not exist: the chunk that would have built it had a `writes:` scope that
+    contradicted its own instruction, so the executor correctly built a
+    SEPARATE cache instead (`_promote_unknown_wrapper_cache`, an instance
+    dict on `WrapperResolver`, exercised via `_func_is_wrapper_promoting_
+    unknown`) rather than extending the shared `_wrapper_cache` that
+    `WrapperResolver.func_is_wrapper` (Rules 2/4's path) reads. This test
+    pins the PROPERTY -- the two recursions stay disjoint and share only the
+    deterministic module-info cache -- not the AC's stated (and unbuilt)
+    mechanism. Modelled on `test_wrapper_resolver_agrees_on_a_cycle_
+    regardless_of_query_order`'s fresh-resolver, both-orders shape."""
+    module = tmp_path / "func_scope_only_unknown.py"
+    module.write_text(
+        "import subprocess\n"
+        "def _helper(argv):\n"
+        "    subprocess.run(argv)\n"
+        "def test_thing():\n"
+        "    _helper(['irrelevant'])\n",
+        encoding="utf-8",
+    )
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    scanner = _build_scanner("<fixture-iii>", tree)
+    assert scanner.func_unknown_spawns.get("_helper"), (
+        "sanity: this fixture must actually produce a function-scope "
+        "UNKNOWN spawn site inside _helper, or the containment assertions "
+        "below are vacuous"
+    )
+    assert not scanner.func_spawns.get("test_thing"), (
+        "sanity: test_thing must reach no REAL spawn directly -- only the "
+        "routed UNKNOWN one, via _helper"
+    )
+
+    # `_func_is_wrapper_promoting_unknown` (module-scope, promote-UNKNOWN)
+    # reads the module-level `_WRAPPER_RESOLVER` singleton, which is pinned
+    # to `REPO_ROOT` and would raise on a `tmp_path` file (see
+    # `test_module_scope_unknown_promotion_reports_the_negative_direction`).
+    # A fresh `WrapperResolver(tmp_path, ...)` is swapped into that global
+    # ONCE PER ORDER and reused across both halves of that order: the
+    # contamination this AC guards against is one query's cache write
+    # changing a LATER query's answer, which only a shared instance can
+    # exhibit. A fresh resolver per half would empty both caches between
+    # the two calls and make the assertions below vacuously true.
+    prior_resolver = globals()["_WRAPPER_RESOLVER"]
+    try:
+        # Order A: module-scope (promote-UNKNOWN) query first, then the
+        # function-scope (Rules 2/4) query, same resolver.
+        globals()["_WRAPPER_RESOLVER"] = WrapperResolver(tmp_path, _build_scanner)
+        module_first_promote = _func_is_wrapper_promoting_unknown(module, "test_thing")
+        module_first_rules24 = globals()["_WRAPPER_RESOLVER"].func_is_wrapper(
+            module, "test_thing"
+        )
+
+        # Order B: function-scope query first, then module-scope, same
+        # resolver.
+        globals()["_WRAPPER_RESOLVER"] = WrapperResolver(tmp_path, _build_scanner)
+        func_first_rules24 = globals()["_WRAPPER_RESOLVER"].func_is_wrapper(
+            module, "test_thing"
+        )
+        func_first_promote = _func_is_wrapper_promoting_unknown(module, "test_thing")
+    finally:
+        globals()["_WRAPPER_RESOLVER"] = prior_resolver
+
+    assert module_first_rules24 is False and func_first_rules24 is False, (
+        "Rules 2/4 must never count a function-scope-only UNKNOWN spawn as a "
+        "real wrapper, in either query order -- got "
+        f"module-first={module_first_rules24}, func-first={func_first_rules24}"
+    )
+    assert module_first_promote is True and func_first_promote is True, (
+        "the module-scope promote-UNKNOWN answer must also agree across "
+        "both query orders (test_thing is itself a top-level def reaching "
+        "an UNKNOWN spawn through _helper) -- got "
+        f"module-first={module_first_promote}, func-first={func_first_promote}"
+    )

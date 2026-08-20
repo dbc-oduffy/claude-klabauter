@@ -424,3 +424,92 @@ def test_held_out_row_never_stamps_disposition_or_mutates_input_rows():
     snapshot = list(rows)
     build_waves(rows)
     assert rows == snapshot
+
+
+def test_declared_edge_outranks_opposing_derived_read_after_write(caplog):
+    # The reproducing case (example-retrieval-repo-em cross-repo memo, 2026-08-20):
+    # C11 is a spike that reads subsystem.py AT HEAD and writes only a
+    # verdict doc; C12 implements the verdict into subsystem.py and gates
+    # epistemic-premise on C11. Unioning the declared edge with the derived
+    # read-after-write edge refused a correctly-filled spine. The declared
+    # edge wins; the derived one is dropped with a warning.
+    rows = [
+        _row("C11", ["docs/research/spike-verdicts/coupling.md"], reads=["tools/subsystem.py"]),
+        _row(
+            "C12",
+            ["tools/subsystem.py", "tools/other.py"],
+            depends_on=[{"chunk": "C11", "gate_kind": "epistemic-premise"}],
+        ),
+    ]
+    with caplog.at_level("WARNING", logger=wave_map.__name__):
+        waves = build_waves(rows)
+
+    wave_by_id = {w.id: i for i, wave in enumerate(waves) for w in wave}
+    assert wave_by_id["C11"] < wave_by_id["C12"], "declared order must survive"
+    assert "dropped derived edge C11 -> C12" in caplog.text
+    assert "tools/subsystem.py" in caplog.text
+
+
+def test_derived_edge_survives_when_no_declared_edge_opposes_it():
+    # The declared-beats-derived resolution must not disarm the derived rule
+    # in the case it exists for: two writers, no declared edge either way.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row("C2", ["b.py"], reads=["a.py"]),
+    ]
+    waves = build_waves(rows)
+    wave_by_id = {w.id: i for i, wave in enumerate(waves) for w in wave}
+    assert wave_by_id["C1"] < wave_by_id["C2"]
+
+
+def test_genuinely_circular_depends_on_still_refuses():
+    # Declared-beats-derived resolves declared-vs-derived disagreement only.
+    # A cycle made of declared edges alone survives it and still raises.
+    rows = [
+        _row("C1", ["a.py"], depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}]),
+        _row("C2", ["b.py"], depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}]),
+    ]
+    with pytest.raises(WaveCycleError):
+        build_waves(rows)
+
+
+def test_cycle_message_names_each_legs_provenance():
+    # A cycle of two derived edges: the message must say each leg was
+    # derived and name the colliding path, not just the row ids.
+    rows = [
+        _row("C1", ["a.py"], reads=["b.py"]),
+        _row("C2", ["b.py"], reads=["a.py"]),
+    ]
+    with pytest.raises(WaveCycleError) as excinfo:
+        build_waves(rows)
+    message = str(excinfo.value)
+    assert "derived:" in message
+    assert "a.py" in message and "b.py" in message
+
+
+def test_cycle_message_distinguishes_declared_from_derived_legs():
+    # Three rows: C1 -> C2 declared, C2 -> C3 declared, C3 -> C1 derived.
+    # No pair carries opposing declared+derived edges, so nothing is
+    # dropped and the cycle is real — the message must attribute each leg.
+    rows = [
+        _row("C1", ["a.py"], depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}]),
+        _row("C2", ["b.py"], depends_on=[{"chunk": "C3", "gate_kind": "output-consumption-runtime"}]),
+        _row("C3", ["c.py"], reads=["a.py"]),
+    ]
+    with pytest.raises(WaveCycleError) as excinfo:
+        build_waves(rows)
+    message = str(excinfo.value)
+    assert "declared: depends_on, gate_kind=epistemic-premise" in message
+    assert "declared: depends_on, gate_kind=output-consumption-runtime" in message
+    assert "derived: C3 reads a.py, written by C1" in message
+
+
+def test_self_edge_message_carries_provenance():
+    rows = [
+        _row("C1", ["a.py"], depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}]),
+    ]
+    with pytest.raises(WaveCycleError) as excinfo:
+        build_waves(rows)
+    message = str(excinfo.value)
+    assert "C1" in message
+    assert "declared: depends_on, gate_kind=epistemic-premise" in message

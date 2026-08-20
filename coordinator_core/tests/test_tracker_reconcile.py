@@ -29,12 +29,13 @@ import subprocess
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 from pathlib import Path
 
 from coordinator_core import tracker_reconcile as tr
 from coordinator_core import tracker_store
 from coordinator_core import tracker_transitions as tt
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _make_git_repo(root):

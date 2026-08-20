@@ -3294,45 +3294,47 @@ class TestBriefContractUnchangedAC6:
 
 
 # ---------------------------------------------------------------------------
-# (l) `coordinator/bin/backlog-grind-assemble.py` trampoline dispatch routing --
-# regression net for the mint-run-id fallthrough bug
+# (l) `coordinator/bin/lib/entry_point_shim.py::_backlog_grind_assemble_entry`
+# dispatch routing -- regression net for the mint-run-id fallthrough bug
 # (docs/plans/2026-08-04-engine-minted-mise-run-identity.md, AC8): the
-# trampoline's `main()` carries an allowlist (`if subcommand not in (...)`)
-# AND a SEPARATE dispatch chain ending in a bare
-# `return apply_mod.main_drop(rest)` tail. Adding `mint-run-id` to the
-# allowlist alone let it fall through to `main_drop` -- an exit-0 response
-# with drop's own JSON payload, silently invoking the WRONG callee. Exercised
-# here through the trampoline's own `main()` (never the coordinator_core
-# layer a second time -- that is TestCliSmoke/TestBriefContractUnchangedAC6
-# above), and never a subprocess round-trip.
+# entry function carries an allowlist (`if subcommand not in (...)`) AND a
+# SEPARATE dispatch chain ending in a bare `return apply_mod.main_drop(rest)`
+# tail. Adding `mint-run-id` to the allowlist alone let it fall through to
+# `main_drop` -- an exit-0 response with drop's own JSON payload, silently
+# invoking the WRONG callee. Exercised here through the entry-point shim's
+# own `_backlog_grind_assemble_entry()` (never the coordinator_core layer a
+# second time -- that is TestCliSmoke/TestBriefContractUnchangedAC6 above),
+# and never a subprocess round-trip. `coordinator/bin/backlog-grind-
+# assemble.py` itself is now a 5-line shim that delegates here; the routing
+# logic under test lives in `entry_point_shim.py` post entry-point
+# unification.
 # ---------------------------------------------------------------------------
 
-_TRAMPOLINE_PATH = _REPO_ROOT / "coordinator" / "bin" / "backlog-grind-assemble.py"
+_ENTRY_POINT_SHIM_PATH = _REPO_ROOT / "coordinator" / "bin" / "lib" / "entry_point_shim.py"
 
 
-def _load_trampoline():
-    """Import `coordinator/bin/backlog-grind-assemble.py` as a module.
+def _load_entry_point_shim():
+    """Import `coordinator/bin/lib/entry_point_shim.py` as a module.
 
-    SourceFileLoader dance because the filename is hyphenated and carries no
-    importable extension -- same idiom as
+    Ordinary importable filename (no hyphen), so this is a plain
+    `sys.path.insert` + `importlib.import_module` rather than the
+    SourceFileLoader dance the old hyphenated-trampoline idiom needed (see
     `test_archive_stamp.py::TestArchiveStampCliCorrectHandoffBodyDispatch.
-    _load_cli_module` and `test_bin_launcher_parity.py::_load_gen_launcher_shim`.
-    Not registered into `sys.modules`: each test loads its own fresh module
-    object, so monkeypatches on `bga`/`bga_apply` (the same cached
-    `coordinator_core.backlog_grind_assemble[.apply]` objects the
-    trampoline's own `_import_modules()` re-imports from `sys.modules`) are
-    the only cross-module state in play.
+    _load_cli_module` and `test_bin_launcher_parity.py::
+    _load_gen_launcher_shim` for that older pattern, still in use elsewhere).
+    Not cached across tests: each call re-imports a fresh module object, so
+    monkeypatches on `bga`/`bga_apply` (the same cached
+    `coordinator_core.backlog_grind_assemble[.apply]` objects
+    `_backlog_grind_assemble_entry` re-imports from `sys.modules` on every
+    call) are the only cross-module state in play.
     """
-    import importlib.util
-    from importlib.machinery import SourceFileLoader
+    import importlib
 
-    loader = SourceFileLoader(
-        "backlog_grind_assemble_trampoline_under_test", str(_TRAMPOLINE_PATH)
-    )
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+    lib_dir = str(_ENTRY_POINT_SHIM_PATH.parent)
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    sys.modules.pop("entry_point_shim", None)
+    return importlib.import_module("entry_point_shim")
 
 
 # Review: cli-and-tests reviewer (Finding 1) -- single source of truth for
@@ -3350,20 +3352,25 @@ _EXPECTED_CALLEE_BY_SUBCOMMAND = {
 }
 
 
-def _extract_allowlist_from_trampoline_main() -> tuple:
-    """AST-derive the subcommand allowlist tuple from the trampoline's own
-    `if subcommand not in (...)` guard in `main()` -- same structural-
-    introspection idiom as
+def _extract_allowlist_from_entry_point_shim() -> tuple:
+    """AST-derive the subcommand allowlist tuple from
+    `_backlog_grind_assemble_entry`'s own `if subcommand not in (...)` guard
+    in `entry_point_shim.py` -- same structural-introspection idiom as
     `TestTheSeamNeverBranchesOnTheRunIdOrCadence`/`test_the_seam_never_
     branches_on_the_run_id_or_on_a_cadence_name` and the env-carrier guard
     around line 2301, rather than a fourth hand-copied list of subcommand
-    names living in this test file."""
-    source = _TRAMPOLINE_PATH.read_text(encoding="utf-8")
+    names living in this test file.
+
+    Scoped to the `_backlog_grind_assemble_entry` FunctionDef specifically --
+    `entry_point_shim.py` hosts many other entry functions and tuples, and
+    an unscoped `ast.walk` over the whole module could match the wrong
+    node's allowlist-shaped guard."""
+    source = _ENTRY_POINT_SHIM_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     main_fn = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "main"
+        if isinstance(node, ast.FunctionDef) and node.name == "_backlog_grind_assemble_entry"
     )
     for node in ast.walk(main_fn):
         if not isinstance(node, ast.If):
@@ -3385,45 +3392,53 @@ def _extract_allowlist_from_trampoline_main() -> tuple:
         )
     raise AssertionError(
         "could not find an `if subcommand not in (...)` allowlist guard in "
-        "the trampoline's main() -- update _extract_allowlist_from_trampoline_"
-        "main to match the current dispatch shape before trusting this test"
+        "entry_point_shim.py's _backlog_grind_assemble_entry -- update "
+        "_extract_allowlist_from_entry_point_shim to match the current "
+        "dispatch shape before trusting this test"
     )
 
 
 class TestTrampolineDispatchRouting:
-    """AC8: the trampoline's allowlist and dispatch chain must agree on
-    every subcommand -- the bug this class locks down is a subcommand that
-    passes the allowlist but falls through the dispatch chain's bare
-    `main_drop` tail instead of reaching its intended callee."""
+    """AC8: `_backlog_grind_assemble_entry`'s allowlist and dispatch chain
+    must agree on every subcommand -- the bug this class locks down is a
+    subcommand that passes the allowlist but falls through the dispatch
+    chain's bare `main_drop` tail instead of reaching its intended callee.
+
+    Class name retained from the pre-unification `coordinator/bin/backlog-
+    grind-assemble.py` trampoline this class originally exercised; the
+    routing logic under test now lives in `entry_point_shim.py::
+    _backlog_grind_assemble_entry`, which that file delegates to."""
 
     def test_every_allowlisted_subcommand_has_an_expected_callee_mapped(self):
         # The structural guard for the NEXT verb: reads the allowlist tuple
-        # straight out of the trampoline's own source (never hand-copied)
-        # and fails loudly, naming the unmapped verb, if it has no row in
-        # _EXPECTED_CALLEE_BY_SUBCOMMAND -- the exact mint-run-id incident
-        # this class exists to prevent, except this time the missing verb
-        # never even gets collected as a parametrize case below, so THIS
-        # test is what makes that failure loud instead of silent.
-        allowlist = _extract_allowlist_from_trampoline_main()
+        # straight out of entry_point_shim.py's own source (never hand-
+        # copied) and fails loudly, naming the unmapped verb, if it has no
+        # row in _EXPECTED_CALLEE_BY_SUBCOMMAND -- the exact mint-run-id
+        # incident this class exists to prevent, except this time the
+        # missing verb never even gets collected as a parametrize case
+        # below, so THIS test is what makes that failure loud instead of
+        # silent.
+        allowlist = _extract_allowlist_from_entry_point_shim()
         unmapped = [
             subcommand
             for subcommand in allowlist
             if subcommand not in _EXPECTED_CALLEE_BY_SUBCOMMAND
         ]
         assert not unmapped, (
-            f"{unmapped} was added to the trampoline's allowlist tuple in "
-            "main() but has no entry in _EXPECTED_CALLEE_BY_SUBCOMMAND above "
-            "-- add BOTH a dispatch branch in coordinator/bin/backlog-grind-"
-            "assemble's main() AND a row here ('<subcommand>': "
-            "'<module>.<callee>') before this test will pass."
+            f"{unmapped} was added to _backlog_grind_assemble_entry's "
+            "allowlist tuple but has no entry in "
+            "_EXPECTED_CALLEE_BY_SUBCOMMAND above -- add BOTH a dispatch "
+            "branch in entry_point_shim.py's _backlog_grind_assemble_entry "
+            "AND a row here ('<subcommand>': '<module>.<callee>') before "
+            "this test will pass."
         )
 
     def test_mint_run_id_routes_to_brief_module_main_not_main_drop(self, monkeypatch):
-        # CLAUDE_KLABAUTER_ROOT set explicitly: the trampoline's own `_import_modules()`
-        # re-runs its full resolution ladder on every call and this test box
-        # has no machine-local registry entry for it.
+        # CLAUDE_KLABAUTER_ROOT set explicitly: _backlog_grind_assemble_entry re-runs
+        # its full resolution ladder on every call and this test box has no
+        # machine-local registry entry for it.
         monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
-        trampoline = _load_trampoline()
+        shim = _load_entry_point_shim()
         brief_calls: list = []
         drop_calls: list = []
 
@@ -3438,7 +3453,7 @@ class TestTrampolineDispatchRouting:
         monkeypatch.setattr(bga, "main", _fake_brief_main)
         monkeypatch.setattr(bga_apply, "main_drop", _fake_main_drop)
 
-        exit_code = trampoline.main(["mint-run-id", "mise-en-place"])
+        exit_code = shim._backlog_grind_assemble_entry(["mint-run-id", "mise-en-place"])
 
         assert exit_code == 0
         assert brief_calls == [["mint-run-id", "mise-en-place"]]
@@ -3455,7 +3470,7 @@ class TestTrampolineDispatchRouting:
         # loudly (wrong callee recorded) rather than silently landing in the
         # `main_drop` fallthrough the way `mint-run-id` did.
         monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
-        trampoline = _load_trampoline()
+        shim = _load_entry_point_shim()
         seen: dict = {}
 
         def _make_spy(name):
@@ -3469,14 +3484,14 @@ class TestTrampolineDispatchRouting:
         monkeypatch.setattr(bga_apply, "main_apply", _make_spy("apply.main_apply"))
         monkeypatch.setattr(bga_apply, "main_drop", _make_spy("apply.main_drop"))
 
-        exit_code = trampoline.main([subcommand, "mise-en-place"])
+        exit_code = shim._backlog_grind_assemble_entry([subcommand, "mise-en-place"])
 
         assert exit_code == 0
         assert seen["callee"] == expected_callee
 
     def test_non_allowlisted_subcommand_is_still_a_usage_error(self, capsys):
-        trampoline = _load_trampoline()
-        exit_code = trampoline.main(["bogus-verb", "mise-en-place"])
+        shim = _load_entry_point_shim()
+        exit_code = shim._backlog_grind_assemble_entry(["bogus-verb", "mise-en-place"])
         assert exit_code == 2
         err = capsys.readouterr().err
         assert "usage" in err

@@ -1655,6 +1655,31 @@ def test_rung_verb_status_parsing_edge_cases(
 
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
+def test_rung_verb_absent_status_key_aborts(tmp_path, capsys, verb, target):
+    """AC7's fourth edge case -- frontmatter with NO ``status:`` key at
+    all -- exercised per-verb through ``main()``.
+
+    Deliberately its own test rather than another ``raw`` row on
+    ``test_rung_verb_status_parsing_edge_cases``: that test substitutes
+    ``raw`` into a template that always emits a ``status:`` line, so it can
+    express an empty or comment-only VALUE but can never omit the key.
+
+    Reviewer finding (2026-08-20): without this, AC7's "all four ... on
+    EVERY new verb" claim rested on three cases per-verb plus a single
+    primitive-level check of the fourth. ``_read_and_normalize_status``
+    reaches absent-key and comment-only through two distinct branches whose
+    abort text is only incidentally identical, so an edit to one and not the
+    other would go uncaught per-verb.
+    """
+    original = "---\ntitle: T\nowner: x\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 1
+    assert 'no "status" field found' in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("verb,target", _RUNG_VERBS)
 def test_rung_verb_quoted_status_with_trailing_comment_fails_loud(
     tmp_path, capsys, verb, target
 ):

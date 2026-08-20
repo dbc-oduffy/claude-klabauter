@@ -87,6 +87,8 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
 
+from coordinator_core.workstream_complete import session_identity
+
 
 # ---------------------------------------------------------------------------
 # gates.governing_plan — Step 2 (locate) / Step 2.4 + 2.4b (predicate)
@@ -143,12 +145,13 @@ def resolve_governing_plan(
     decisions: dict[str, Any],
     handoff_governing_plan_field: Optional[Any] = None,
     consumed_handoff_deliverable_id: Optional[Any] = None,
+    session_id: Optional[str] = None,
 ) -> Optional[GoverningPlan]:
     """Step 2 — locate the governing plan doc (`d-locate-governing-plan`).
     Thin wrapper over `resolve_governing_plan_with_source` for callers that
     only need the resolved plan, not which source resolved it."""
     return resolve_governing_plan_with_source(
-        repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id
+        repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id, session_id
     )[0]
 
 
@@ -157,6 +160,7 @@ def resolve_governing_plan_with_source(
     decisions: dict[str, Any],
     handoff_governing_plan_field: Optional[Any] = None,
     consumed_handoff_deliverable_id: Optional[Any] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[Optional[GoverningPlan], str]:
     """Step 2 — locate the governing plan doc (`d-locate-governing-plan`),
     also returning which source resolved it (or why none did) so a caller
@@ -171,6 +175,23 @@ def resolve_governing_plan_with_source(
          the primary signal, not a guess.
       2. Caller-supplied `decisions["governing_plan_path"]` (used
          verbatim, resolved against `repo_root` if relative).
+      2.5. THE SESSION'S OWN commit-trailer `deliverable_id`s (C6, AC4 —
+         docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md
+         item 3), read via `session_identity.session_deliverable_ids` (C1)
+         off the caller-supplied `session_id`, joined against
+         `docs/plans/*.md` the same way leg 3.5 below joins — reusing
+         `_resolve_session_handoff_plan_by_deliverable_id` directly rather
+         than re-deriving the join. Placed ABOVE legs 3 and 3.5 on purpose:
+         those two read the CONSUMED HANDOFF's provenance, which is exactly
+         the mis-attributable input this plan's item 1 (Detector C) exists
+         to correct — a session's own commits are never mis-attributed to
+         a stranger the way a consumed handoff can be. Like leg 3.5, this
+         is non-terminal: a session with no `session_id` supplied, no
+         resolvable trailer, or CONFLICTING trailer values (more than one
+         distinct `deliverable_id` across its own commits) falls through to
+         leg 3 rather than guessing — there is no explicit plan name here
+         to have gotten wrong, so an unresolved join is simply silent,
+         exactly like leg 3.5's own contract.
       3. The chain-terminal session's own consumed handoff's
          `governing_plan:` frontmatter field, pre-extracted and passed in
          as `handoff_governing_plan_field` by `__init__.py` (this module
@@ -206,18 +227,18 @@ def resolve_governing_plan_with_source(
          never fabricates a plan.
       4. The fixed `tasks/todo.md` / `tasks/plan.md` candidates.
 
-    Each of 1-3.5 is a terminal override once present: if the caller (or
-    the handoff) names a plan and it does not exist on disk, this returns
-    `None` immediately rather than falling through to a lower-precedence
-    source or a fixed fallback — Step 2.4's own text: "Do NOT invent a
-    plan to reconcile against," and an explicit-but-wrong override should
-    not silently resolve to some other plan the caller didn't name. Leg
-    3.5 is the one exception to "terminal once present": an unresolved
-    join (no `deliverable_id`, or one matching zero/more-than-one plan)
-    falls through rather than terminating, because — unlike legs 1-3 —
-    there is no explicit plan name here to have gotten wrong; the absence
-    of a join is simply silent, exactly like the absence of any signal at
-    all.
+    Each of legs 1-3 is a terminal override once present: if the caller
+    (or the handoff) names a plan and it does not exist on disk, this
+    returns `None` immediately rather than falling through to a
+    lower-precedence source or a fixed fallback — Step 2.4's own text: "Do
+    NOT invent a plan to reconcile against," and an explicit-but-wrong
+    override should not silently resolve to some other plan the caller
+    didn't name. Legs 2.5 and 3.5 are the exception to "terminal once
+    present": an unresolved join (no `deliverable_id`, or one matching
+    zero/more-than-one plan) falls through rather than terminating,
+    because — unlike legs 1-3 — there is no explicit plan name here to
+    have gotten wrong; the absence of a join is simply silent, exactly
+    like the absence of any signal at all.
     """
     slug = decisions.get(_KEY_GOVERNING_PLAN_SLUG)
     if slug:
@@ -235,6 +256,27 @@ def resolve_governing_plan_with_source(
         if candidate.is_file():
             return GoverningPlan(slug=candidate.stem, path=candidate), "decisions_path"
         return None, "decisions_path_not_found"
+
+    if session_id:
+        identity = session_identity.session_deliverable_ids(repo_root, session_id)
+        if identity.ok and len(identity.deliverable_ids) == 1:
+            (own_deliverable_id,) = identity.deliverable_ids
+            # Function-local import: see the identical import below (leg
+            # 3.5) for why this cannot be a module-scope import.
+            from coordinator_core.workstream_complete import (
+                _resolve_session_handoff_plan_by_deliverable_id,
+            )
+
+            joined_plan_path = _resolve_session_handoff_plan_by_deliverable_id(
+                repo_root, own_deliverable_id
+            )
+            if joined_plan_path is not None:
+                return (
+                    GoverningPlan(slug=joined_plan_path.stem, path=joined_plan_path),
+                    "session_commit_trailer_join",
+                )
+        # Zero/ambiguous trailers, or an unresolved join, falls through —
+        # see leg 2.5's docstring paragraph above.
 
     handoff_value = _normalize_handoff_governing_plan_field(handoff_governing_plan_field)
     if handoff_value:
@@ -453,6 +495,7 @@ def build_governing_plan_directives(
     decisions: dict[str, Any],
     handoff_governing_plan_field: Optional[Any] = None,
     consumed_handoff_deliverable_id: Optional[Any] = None,
+    session_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Composes Step 2.4's claim+stamp pair with Step 2.4b's harvest sweep
     off one resolved governing-plan gate — the single entry point C3
@@ -463,13 +506,14 @@ def build_governing_plan_directives(
     harvest sweep beyond the single claim+stamp target — Step 2.4's
     claim/stamp guard is deliberately single-plan (`docs/plans/2026-06-26-
     cs-claim-plan-execution-lock.md` § C4 names one lock per session), so
-    only Step 2.4b's harvest fans out. `handoff_governing_plan_field` and
-    `consumed_handoff_deliverable_id` forward unchanged to
-    `resolve_governing_plan` — see that function's docstring for the
-    precedence they slot into.
+    only Step 2.4b's harvest fans out. `handoff_governing_plan_field`,
+    `consumed_handoff_deliverable_id`, and `session_id` forward unchanged
+    to `resolve_governing_plan` — see that function's docstring for the
+    precedence they slot into (C6, AC4: `session_id` feeds the new leg-2.5
+    commit-trailer join, above legs 3 and 3.5).
     """
     governing_plan = resolve_governing_plan(
-        repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id
+        repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id, session_id
     )
     directives = build_plan_claim_and_stamp_directives(governing_plan)
     directives += build_review_verified_directive(governing_plan, decisions)

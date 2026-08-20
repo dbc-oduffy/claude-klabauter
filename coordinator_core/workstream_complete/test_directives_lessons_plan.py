@@ -1,6 +1,7 @@
 """test_directives_lessons_plan — direct unit coverage of
 `coordinator_core.workstream_complete.directives_lessons_plan.
-resolve_governing_plan_with_source`'s new deliverable_id-join leg (3.5).
+resolve_governing_plan_with_source`'s new deliverable_id-join leg (3.5),
+plus (C6, AC4) the commit-trailer leg (2.5) that sits above it.
 
 Cross-repo/inbox baton-lifecycle investigation: leg 3 (the consumed
 handoff's `governing_plan:` frontmatter) was found dead fleet-wide — 0 of
@@ -23,9 +24,14 @@ split).
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
+import pytest
+
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete.directives_lessons_plan import (
+    build_governing_plan_directives,
     build_plan_claim_and_stamp_directives,
     resolve_governing_plan_with_source,
 )
@@ -76,6 +82,115 @@ def test_deliverable_id_join_emits_claim_and_stamp_directives():
     ids = {d["id"] for d in directives}
     assert "d-claim-plan-execution-lock" in ids
     assert "d-stamp-plan-implemented" in ids
+
+
+# ---------------------------------------------------------------------------
+# C6, AC4: the new leg-2.5 commit-trailer rung, sourced from the SESSION'S
+# OWN commits via `session_identity` (C1) rather than the consumed handoff's
+# provenance (legs 3 / 3.5) -- a session whose own commits carry a plan's
+# `deliverable_id` but which did NOT author the plan.
+# ---------------------------------------------------------------------------
+
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
+
+def _git(*args: str, cwd, input: str | None = None) -> subprocess.CompletedProcess:  # noqa: A002 - shadow ok, local helper
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+        input=input,
+        **no_console_creationflags(),
+    )
+
+
+def _init_repo(path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    _git("init", "-q", cwd=path)
+    _git("config", "user.email", "test@example.com", cwd=path)
+    _git("config", "user.name", "Test", cwd=path)
+
+
+def _commit_with_message(path, filename: str, content: str, message: str) -> str:
+    (path / filename).write_text(content, encoding="utf-8")
+    _git("add", filename, cwd=path)
+    proc = _git("commit", "-q", "-F", "-", cwd=path, input=message)
+    if proc.returncode != 0:
+        pytest.skip(f"git unavailable/failed committing fixture: {proc.stderr}")
+    return _git("rev-parse", "HEAD", cwd=path).stdout.strip()
+
+
+def test_session_commit_trailer_join_resolves_plan_the_session_did_not_author(tmp_path):
+    _init_repo(tmp_path)
+    sha = _commit_with_message(tmp_path, "seed.txt", "seed\n", "seed\n")
+    if not sha:
+        pytest.skip("git unavailable — cannot build a fixture repo with history")
+
+    slug = "2026-08-04-some-other-authors-plan"
+    _write_plan(tmp_path, slug, deliverable_id="dlv-not-mine")
+    _git("add", "docs/plans", cwd=tmp_path)
+    _git("commit", "-q", "-m", "add plan\n", cwd=tmp_path)
+
+    _commit_with_message(
+        tmp_path,
+        "work.txt",
+        "work\n",
+        "did the work\n\nSession-Id: sid-successor\nDeliverable-Id: dlv-not-mine\n",
+    )
+
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path,
+        decisions={},
+        handoff_governing_plan_field=None,
+        consumed_handoff_deliverable_id=None,
+        session_id="sid-successor",
+    )
+
+    assert source == "session_commit_trailer_join"
+    assert resolved is not None
+    assert resolved.slug == slug
+
+    directives = build_governing_plan_directives(tmp_path, decisions={}, session_id="sid-successor")
+    ids = {d["id"] for d in directives}
+    assert "d-stamp-plan-implemented" in ids
+
+
+def test_session_commit_trailer_join_falls_through_on_conflicting_trailers(tmp_path):
+    _init_repo(tmp_path)
+    sha = _commit_with_message(tmp_path, "seed.txt", "seed\n", "seed\n")
+    if not sha:
+        pytest.skip("git unavailable — cannot build a fixture repo with history")
+
+    slug = "2026-08-04-some-other-authors-plan"
+    _write_plan(tmp_path, slug, deliverable_id="dlv-one")
+    _git("add", "docs/plans", cwd=tmp_path)
+    _git("commit", "-q", "-m", "add plan\n", cwd=tmp_path)
+
+    _commit_with_message(
+        tmp_path,
+        "work1.txt",
+        "work1\n",
+        "did some work\n\nSession-Id: sid-conflicted\nDeliverable-Id: dlv-one\n",
+    )
+    _commit_with_message(
+        tmp_path,
+        "work2.txt",
+        "work2\n",
+        "did more work\n\nSession-Id: sid-conflicted\nDeliverable-Id: dlv-two\n",
+    )
+
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path,
+        decisions={},
+        handoff_governing_plan_field=None,
+        consumed_handoff_deliverable_id=None,
+        session_id="sid-conflicted",
+    )
+
+    assert source != "session_commit_trailer_join"
+    assert resolved is None
 
 
 def test_stamp_directive_depends_on_the_claim_landing():

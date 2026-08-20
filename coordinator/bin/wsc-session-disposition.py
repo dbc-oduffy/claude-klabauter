@@ -7,9 +7,12 @@
 # sibling `session-claim-cli` entrypoint for Detector C's liveness
 # enumeration, and (as of the ledger-first authoritative-read plan, chunk C7)
 # one `coordinator_core.claim_state.resolve_claim_state` import for the
-# claim-holder reads below — the sole coordinator_core dependency this file
-# carries; every other helper here stays self-contained by the same
-# discipline the rest of this module's comments still describe.
+# claim-holder reads below, plus (2026-08-20, `docs/plans/2026-08-20-wsc-
+# identity-gates-key-on-the-deliverable.md` C1) `coordinator_core.
+# workstream_complete.session_identity.session_deliverable_ids` — a pure,
+# stdlib-only leaf module, the fourth sanctioned coordinator_core import; every
+# other helper here stays self-contained by the same discipline the rest of
+# this module's comments still describe.
 #
 # Ported under docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
 # (M3 chunk WSC-1) — moves the 5-way session-id resolution + 3-detector
@@ -118,6 +121,9 @@ cc_invoke.ensure_engine_on_path(__file__)
 from coordinator_core.claim_state import resolve_claim_state  # noqa: E402
 from coordinator_core.git.repo_root import show_toplevel  # noqa: E402
 from coordinator_core.wire_paths import rel_id  # noqa: E402
+from coordinator_core.workstream_complete.session_identity import (  # noqa: E402
+    session_deliverable_ids,
+)
 
 _TRANSPORT_FAIL = 3
 _SESSION_ID_UNRESOLVED = 4
@@ -796,6 +802,80 @@ def _resolve_crash_recovery(
     return CrashRecoveryOutcome(None, None, None)
 
 
+def _resolve_deliverable_id_join(
+    repo_root: Path,
+    sid: str,
+    stale_entries: list[tuple[str, str]],
+    diagnostics: list[str],
+) -> "CrashRecoveryOutcome | None":
+    """Session-shape attribution's PREFERRED leg (C5, 2026-08-20
+    `wsc-identity-gates-key-on-the-deliverable.md`, item 1 AC2): join this
+    session's own commit-trailer `deliverable_id` values (C1's
+    `session_deliverable_ids` reader, already imported at module scope)
+    against the candidate stale batons' `deliverable_id` frontmatter,
+    preferring an exact unambiguous join over `_resolve_crash_recovery`'s
+    scope-path heuristic below. Called from `detector_c` BEFORE the
+    scope-path leg runs; scope-path matching is the fallback for when this
+    returns `None`, not the primary any longer.
+
+    Ambiguity is not a match, on either side of the join: a session whose
+    commits carry more than one distinct `deliverable_id`, or more than one
+    candidate baton carrying the SAME id, both fall through to the
+    scope-path fallback rather than picking — each case is reported via a
+    diagnostic, not silently swallowed.
+
+    Returns `None` (never a status of its own) to signal "fall through to
+    scope-path matching" for every non-match shape (no trailer resolved,
+    ambiguous session-side, ambiguous baton-side, no baton carries a
+    matching id) — the diagnostics list is where those shapes are told
+    apart, not the return value. Returns a populated `CrashRecoveryOutcome`
+    (status "crash-recovery") only on the single unambiguous match."""
+    result = session_deliverable_ids(repo_root, sid)
+    if not result.ok or not result.deliverable_ids:
+        return None
+    if len(result.deliverable_ids) != 1:
+        diagnostics.append(
+            f"NOTE: deliverable_id join skipped — this session's own commits carry "
+            f"{len(result.deliverable_ids)} conflicting Deliverable-Id trailer values "
+            f"({', '.join(sorted(result.deliverable_ids))}); falling back to Detector C's "
+            f"scope-path matching."
+        )
+        return None
+    session_deliverable_id = next(iter(result.deliverable_ids))
+
+    matches: list[tuple[str, str]] = []
+    for path, dead_sid in stale_entries:
+        baton_deliverable_id = _read_fm_field_local(Path(path), "deliverable_id")
+        if baton_deliverable_id and baton_deliverable_id == session_deliverable_id:
+            matches.append((path, dead_sid))
+
+    if not matches:
+        return None
+    if len(matches) > 1:
+        diagnostics.append(
+            f"NOTE: deliverable_id join found {len(matches)} stale batons carrying the same "
+            f"Deliverable-Id ({session_deliverable_id}) as this session's own commits — "
+            f"ambiguous, falling back to Detector C's scope-path matching:"
+        )
+        for path, dead_sid in matches:
+            diagnostics.append(f"  {path}\t{dead_sid}")
+        return None
+
+    path, dead_sid = matches[0]
+    rel_path = path
+    repo_root_str = str(repo_root)
+    if path.startswith(repo_root_str + os.sep):
+        # POSIX separators — same wire-id reasoning as the primary scan's
+        # own return above (primary_consumed_handoff_paths).
+        rel_path = Path(path).relative_to(repo_root).as_posix()
+    diagnostics.append(
+        f"NOTE: chain-terminal resolved by the deliverable_id join (preferred over Detector "
+        f"C's scope-path heuristic): this session's commits carry Deliverable-Id="
+        f"{session_deliverable_id}, matching {rel_path} (claimer {dead_sid}, not live)."
+    )
+    return CrashRecoveryOutcome(rel_path, "crash-recovery", {"deliverable_id_join": True})
+
+
 def detector_c(
     repo_root: Path,
     sid: str,
@@ -835,6 +915,10 @@ def detector_c(
 
     if not stale:
         return CrashRecoveryOutcome(None, None, None)  # true negative — no stale batons at all
+
+    join_outcome = _resolve_deliverable_id_join(repo_root, sid, stale, diagnostics)
+    if join_outcome is not None:
+        return join_outcome
 
     committed = all_committed_paths(repo_root, sid, ship_base)
     return _resolve_crash_recovery(stale, committed, repo_root, diagnostics)
@@ -1264,6 +1348,31 @@ def is_coincidence_prone_detection(match_facts: dict[str, Any]) -> bool:
     )
 
 
+def _note_session_deliverable_ids(repo_root: Path, sid: str, diagnostics: list[str]) -> None:
+    """Consumes C1's shared leaf reader
+    (`coordinator_core.workstream_complete.session_identity
+    .session_deliverable_ids`) and appends a diagnostic NOTE naming the
+    `Deliverable-Id` value(s), if any, this session's own commit trailers
+    carry — DIAGNOSTIC ONLY, never a control signal here. C3 (this plan's own
+    later chunk) is where a `deliverable_id` join actually gates a rung of
+    disposition resolution; this call proves the plain import is wired and
+    live ahead of that, without changing `resolve_disposition`'s own
+    returned disposition."""
+    result = session_deliverable_ids(repo_root, sid)
+    if not result.ok:
+        diagnostics.append(
+            f"NOTE: could not resolve this session's own commit-trailer Deliverable-Id(s): "
+            f"{result.reason}"
+        )
+        return
+    if not result.deliverable_ids:
+        return
+    ids = ", ".join(sorted(result.deliverable_ids))
+    diagnostics.append(
+        f"NOTE: this session's own commits carry Deliverable-Id trailer value(s): {ids}"
+    )
+
+
 def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
     """Returns (disposition, consumed_handoff, diagnostics, consumed_handoff_paths)
     where disposition is one of "predecessor-consumed", "memo-predecessor",
@@ -1286,9 +1395,30 @@ def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
       - Clean + not coincidence-prone -> "predecessor-consumed", deciding_leg
         "detector-c" (memo loses; unchanged from before this leg existed).
       - Clean + coincidence-prone -> "memo-predecessor" if a memo matched
-        (memo wins), else unchanged "predecessor-consumed"/"detector-c".
+        (memo wins); otherwise (2026-08-20, wsc-identity-gates-key-on-the-
+        deliverable C4) NOT adopted as "predecessor-consumed" -- falls
+        through to the shared "single-session" return below.
+        `deciding_leg` on that return stays "detector-c" (not "none") and
+        still carries `detector_c_status`/the match facts, so a
+        coincidence-prone crash-recovery attribution with no memo to
+        corroborate it is a distinguishable single-session shape, not a
+        silent discard of Detector C's own verdict -- see AMENDMENT
+        BREADCRUMB below and this function's single-session return.
       - indeterminate/ambiguous, or nothing found via any detector -> "memo-
         predecessor" if a memo matched, else today's behaviour (unchanged).
+
+      AMENDMENT BREADCRUMB (2026-08-20, wsc-identity-gates-key-on-the-
+      deliverable C4, amending the ratified 2026-08-05-memo-predecessor-
+      representable-outcome.md AC3 precedence contract above): this chunk
+      edits the CALLER'S ADOPTION of Detector C's verdict here in
+      `resolve_disposition` -- the fall-through that used to keep a
+      coincidence-prone, memo-less crash-recovery match as
+      "predecessor-consumed" regardless. It does NOT touch Detector C's own
+      matching logic (`is_coincidence_prone_detection`,
+      `_resolve_crash_recovery`, `detector_c` are unchanged) -- so do not
+      score this against the 2026-08-05 plan's own anti-scope line ("do not
+      fix Detector C again... if you find yourself editing `detector_c`'s
+      matching logic, stop"); that line does not apply to this edit.
       - No memo matched at all -> every return path is byte-identical to
         pre-memo-leg HEAD, trailing WARNs included.
       - Detector A/B ("archive" leg) always wins over the memo leg
@@ -1326,6 +1456,7 @@ def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
     free-text `diagnostics` below, which stay prose for a human reader and
     are never a control signal (see `DispositionResolution`)."""
     diagnostics: list[str] = []
+    _note_session_deliverable_ids(repo_root, sid, diagnostics)
 
     override = os.environ.get("WSC_DISPOSITION", "").strip()
     override_norm = override.lower()
@@ -1443,22 +1574,47 @@ def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
                     f"CONTRACT on resolve_disposition."
                 )
                 return _memo_predecessor_result(diagnostics, c_status, c_match_facts, memo_path)
-        else:
-            diagnostics.append(
-                f"NOTE: chain-terminal resolved from archive (shipped/archived without a live "
-                f"consume): {arch}"
+            if coincidence_prone:
+                # AMENDMENT BREADCRUMB (2026-08-20, wsc-identity-gates-key-on-the-
+                # deliverable C4): this is the caller's ADOPTION of Detector C's
+                # verdict giving way here, not a change to Detector C's own
+                # matching logic (is_coincidence_prone_detection/detector_c/
+                # _resolve_crash_recovery are untouched) — see THE PRECEDENCE
+                # CONTRACT above. With no memo to corroborate a weak match, do
+                # NOT set `arch` — let control fall through to the shared
+                # single-session return below, which keeps `deciding_leg`
+                # "detector-c" (not "none") and carries `detector_c_status` plus
+                # the match facts on `.detection`, so this coincidence-prone
+                # crash-recovery shape stays distinguishable from a genuine
+                # "nothing found" single-session close rather than silently
+                # discarding Detector C's own verdict.
+                diagnostics.append(
+                    f"NOTE: Detector C's crash-recovery match ({arch}: {matched_count} of "
+                    f"{scope_size} scope entries matched, single_match_kind={single_match_kind!r}) "
+                    f"is coincidence-prone and no memo-predecessor corroborated it — NOT adopted "
+                    f"as predecessor-consumed. Falling through to single-session; "
+                    f"detection.deciding_leg stays 'detector-c' with the match facts intact, "
+                    f"not discarded."
+                )
+                arch = None
+                arch_via = None
+        if arch:
+            if arch_via != "crash-recovery":
+                diagnostics.append(
+                    f"NOTE: chain-terminal resolved from archive (shipped/archived without a live "
+                    f"consume): {arch}"
+                )
+            return DispositionResolution(
+                "predecessor-consumed",
+                arch,
+                diagnostics,
+                [arch],
+                _detection(
+                    "detector-c" if arch_via == "crash-recovery" else "archive",
+                    c_status if arch_via == "crash-recovery" else None,
+                    c_match_facts if arch_via == "crash-recovery" else None,
+                ),
             )
-        return DispositionResolution(
-            "predecessor-consumed",
-            arch,
-            diagnostics,
-            [arch],
-            _detection(
-                "detector-c" if arch_via == "crash-recovery" else "archive",
-                c_status if arch_via == "crash-recovery" else None,
-                c_match_facts if arch_via == "crash-recovery" else None,
-            ),
-        )
 
     if memo_path:
         diagnostics.append(
@@ -1505,7 +1661,24 @@ def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
             "(chain-terminal legacy alias also accepted) and "
             "WSC_CONSUMED_HANDOFF=<the one you are continuing> before continuing."
         )
-    return DispositionResolution("single-session", "", diagnostics, [], _detection("none", c_status))
+    # `c_status == "crash-recovery"` reaching this final fallback happens
+    # ONLY via the coincidence-prone-with-no-memo reroute above (every other
+    # path that produces a "crash-recovery" status either adopts it as
+    # predecessor-consumed or is preempted by a memo and returns earlier) —
+    # keep `deciding_leg` "detector-c" (not "none") and carry the match
+    # facts forward in that one case, so this shape stays distinguishable
+    # from a genuine "nothing found" single-session close on `.detection`.
+    return DispositionResolution(
+        "single-session",
+        "",
+        diagnostics,
+        [],
+        _detection(
+            "detector-c" if c_status == "crash-recovery" else "none",
+            c_status,
+            c_match_facts if c_status == "crash-recovery" else None,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

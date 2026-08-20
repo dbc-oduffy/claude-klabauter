@@ -5461,7 +5461,9 @@ def close_out_and_stamp(
         else:
             message = (
                 f"{plan_path_rel}: {len(missing)} chunk(s) still uncommitted, "
-                "committed partial state"
+                "committed partial state -- if delivered via a consolidated "
+                "commit, run `plan-tasks-resolve --coded <sha>` per row, then "
+                "re-run close-out-and-stamp"
             )
         if deliverable_id_mismatch:
             # Register-matched, unscoped-search NOTE (2026-08-14,

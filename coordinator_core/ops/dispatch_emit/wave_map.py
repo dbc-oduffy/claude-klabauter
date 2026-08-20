@@ -28,9 +28,35 @@ three constraints that are COMPUTED here, never read off the spine:
      spine is the reproducing case: spine_read.py, wave_map.py, pathspec.py
      and emit.py write disjoint files but each imports the previous one).
 
+## Declared-beats-derived (break-class fix, 2026-08-20)
+
+The two edge sources are not co-equal in authority. A ``depends_on`` edge is
+an explicit authoring statement of order; a read-after-write edge is
+INFERRED from path sets. When they disagree — the pair carries a declared
+edge one way and a derived edge the other — the derived edge is DROPPED and
+a ``logging.warning`` names the drop. Only cycles that survive that
+resolution raise: a genuinely circular ``depends_on`` set is still an
+authoring bug worth refusing on.
+
+The reproducing case (example-retrieval-repo-em cross-repo memo, 2026-08-20) is a spike
+row that reads a file AT HEAD to reach a verdict, and a later row that
+implements the verdict into that same file and gates ``epistemic-premise``
+on the spike. Both legs are correct authoring; unioning them refused a
+correctly-filled spine. The derived rule exists to stop two WRITERS that
+import each other co-scheduling (point 3 above) — it has no standing to
+overturn an author who already said which way round the order goes.
+
+Note what this does NOT do: it does not exempt a row from derived edges
+because its ``writes`` are disjoint from every other row's. The engine
+cannot tell a reference-read at HEAD from a read that wants the writer's
+output, and a reader with disjoint writes can legitimately need either. The
+author distinguishes them by declaring the edge — which this resolution now
+honours.
+
 A cycle in the combined depends_on + read-after-write predecessor graph
 (including a self-edge) is detected and raises ``WaveCycleError`` fail-loud,
-naming the cycle's members — it is never silently ordered or hung on. This
+naming the cycle's members and EACH LEG'S PROVENANCE (declared vs derived,
+and for a derived leg the colliding path) — it is never silently ordered or hung on. This
 check runs against the FULL predecessor graph, before the epistemic-premise
 holdout below removes any row, so a cycle made up entirely of held-out rows
 is still caught rather than reported as two indistinguishable ordinary
@@ -176,32 +202,83 @@ def _writes_overlap(a: EmitterRow, b: EmitterRow) -> bool:
     return any(_paths_overlap(x, y) for x in a.writes for y in b.writes)
 
 
-def _predecessors(rows: list[EmitterRow]) -> dict[str, set[str]]:
+def _predecessors(
+    rows: list[EmitterRow],
+    provenance: dict[tuple[str, str], str] | None = None,
+) -> dict[str, set[str]]:
     """Row id -> set of row ids that must land in a strictly earlier wave.
 
     Combines two computed edge sources: declared ``depends_on`` edges, and
     read-after-write edges (a row's ``reads`` intersecting another row's
     declared ``writes``). Both are COMPUTED here, never hand-declared.
+
+    Declared outranks derived (§ Declared-beats-derived in the module
+    docstring): a derived read-after-write edge is DROPPED, with a
+    ``logging.warning``, when the pair already carries a declared
+    ``depends_on`` edge pointing the other way.
+
+    ``provenance``, when supplied, is filled in place with
+    ``(row_id, predecessor_id) -> label`` for every edge kept, so a caller
+    can name each leg's origin (``_detect_cycle``'s message). A declared
+    label wins over a derived one for a pair edged both ways round the same
+    direction — the author's statement is the one worth reporting.
     """
     row_ids = {row.id for row in rows}
     preds: dict[str, set[str]] = {row.id: set() for row in rows}
+    declared: dict[str, set[str]] = {row.id: set() for row in rows}
 
     for row in rows:
         for edge in row.depends_on:
             chunk = edge.get("chunk") if isinstance(edge, dict) else None
             if chunk in row_ids:
                 preds[row.id].add(chunk)
+                declared[row.id].add(chunk)
+                if provenance is not None:
+                    gate_kind = (
+                        edge.get("gate_kind") if isinstance(edge, dict) else None
+                    ) or "unspecified"
+                    provenance[(row.id, chunk)] = (
+                        f"declared: depends_on, gate_kind={gate_kind}"
+                    )
 
     for writer in rows:
         if writer.writes is UNDECLARED or not isinstance(writer.writes, list):
             continue
-        write_set = {_normalize_path(p) for p in writer.writes}
+        write_paths = {_normalize_path(path): path for path in writer.writes}
         for reader in rows:
             if reader.id == writer.id:
                 continue
-            read_set = {_normalize_path(p) for p in reader.reads}
-            if write_set & read_set:
-                preds[reader.id].add(writer.id)
+            collisions = [
+                (read_path, write_paths[normalized])
+                for read_path, normalized in (
+                    (path, _normalize_path(path)) for path in reader.reads
+                )
+                if normalized in write_paths
+            ]
+            if not collisions:
+                continue
+            if reader.id in declared[writer.id]:
+                read_path, write_path = collisions[0]
+                _logger.warning(
+                    "wave_map: dropped derived edge %s -> %s (%s reads %s, "
+                    "written by %s); %s declares depends_on %s and a declared "
+                    "edge outranks a derived one",
+                    reader.id,
+                    writer.id,
+                    reader.id,
+                    read_path,
+                    writer.id,
+                    writer.id,
+                    reader.id,
+                )
+                continue
+            preds[reader.id].add(writer.id)
+            if provenance is not None and (reader.id, writer.id) not in provenance:
+                read_path, write_path = collisions[0]
+                provenance[(reader.id, writer.id)] = (
+                    f"derived: {reader.id} reads {read_path}, "
+                    f"written by {writer.id}"
+                )
 
     return preds
 
@@ -279,8 +356,35 @@ def _report_held_out(held: dict[str, str]) -> None:
         )
 
 
-def _detect_cycle(preds: dict[str, set[str]]) -> None:
-    """Raise ``WaveCycleError`` if ``preds`` contains a cycle or self-edge."""
+def _cycle_message(
+    members: list[str], provenance: dict[tuple[str, str], str] | None
+) -> str:
+    """The ``WaveCycleError`` body for cycle path ``members``.
+
+    Each hop is annotated with the provenance of the edge that produced it,
+    so an EM can see which leg was authored and which was inferred without
+    re-deriving the graph by hand (example-retrieval-repo-em cross-repo memo,
+    2026-08-20: "the error names neither leg's provenance").
+    """
+    head = "cycle detected among rows: " + " -> ".join(members)
+    if not provenance:
+        return head
+    lines = [head, "  each hop reads 'must land in a later wave than':"]
+    for node, pred in zip(members, members[1:]):
+        origin = provenance.get((node, pred), "provenance unavailable")
+        lines.append(f"    {node} -> {pred}  ({origin})")
+    return "\n".join(lines)
+
+
+def _detect_cycle(
+    preds: dict[str, set[str]],
+    provenance: dict[tuple[str, str], str] | None = None,
+) -> None:
+    """Raise ``WaveCycleError`` if ``preds`` contains a cycle or self-edge.
+
+    ``provenance`` (``_predecessors``' out-param) annotates each leg of the
+    reported cycle with the edge source that minted it.
+    """
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {node: WHITE for node in preds}
     path: list[str] = []
@@ -297,13 +401,15 @@ def _detect_cycle(preds: dict[str, set[str]]) -> None:
         # Review: coordinator:code-reviewer (wsc-A, ecb99d36).
         for pred in sorted(preds[node]):
             if pred == node:
-                raise WaveCycleError(f"cycle detected: row {node!r} depends on itself")
+                raise WaveCycleError(
+                    _cycle_message([node, node], provenance)
+                    if provenance
+                    else f"cycle detected: row {node!r} depends on itself"
+                )
             if color.get(pred) == GRAY:
                 start = path.index(pred)
                 members = path[start:] + [pred]
-                raise WaveCycleError(
-                    "cycle detected among rows: " + " -> ".join(members)
-                )
+                raise WaveCycleError(_cycle_message(members, provenance))
             if color.get(pred) == WHITE:
                 visit(pred)
         path.pop()
@@ -375,8 +481,9 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
     nodes (and their edges) from an already-acyclic graph cannot introduce a
     cycle, so no second cycle check against the filtered graph is needed.
     """
-    full_preds = _predecessors(rows)
-    _detect_cycle(full_preds)
+    provenance: dict[tuple[str, str], str] = {}
+    full_preds = _predecessors(rows, provenance)
+    _detect_cycle(full_preds, provenance)
     held = _compute_held_out(rows, full_preds)
     if held:
         _report_held_out(held)

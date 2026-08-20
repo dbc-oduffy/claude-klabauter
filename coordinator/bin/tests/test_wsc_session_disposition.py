@@ -1981,5 +1981,326 @@ class SessionClaimCliArgvTests(unittest.TestCase):
         self.assertTrue(argv[1].endswith("session-claim-cli"))
 
 
+class TestSessionIdentityImport(unittest.TestCase):
+    """C1 (docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md):
+    the plain `coordinator_core.workstream_complete.session_identity` import
+    resolves off this bin script, and `resolve_disposition` actually calls
+    into it (via `_note_session_deliverable_ids`) rather than the import
+    sitting dead."""
+
+    def test_import_resolves_to_the_engine_leaf_module(self):
+        self.assertIs(
+            wsc.session_deliverable_ids,
+            __import__(
+                "coordinator_core.workstream_complete.session_identity",
+                fromlist=["session_deliverable_ids"],
+            ).session_deliverable_ids,
+        )
+
+    def test_disposition_diagnostics_surface_a_resolved_deliverable_id(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _git(
+                repo,
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "chunk work\n\nSession-Id: sid-dlv\nDeliverable-Id: dlv-c1-probe",
+            )
+            result = wsc.resolve_disposition(repo, "sid-dlv")
+        self.assertTrue(
+            any("dlv-c1-probe" in line for line in result.diagnostics),
+            f"expected a Deliverable-Id NOTE in diagnostics, got: {result.diagnostics!r}",
+        )
+
+    def test_disposition_diagnostics_silent_when_no_deliverable_id_trailer(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _commit_with_session_trailer(repo, "sid-no-dlv", "chunk work, no deliverable id")
+            result = wsc.resolve_disposition(repo, "sid-no-dlv")
+        self.assertFalse(
+            any("Deliverable-Id" in line for line in result.diagnostics),
+            f"expected no Deliverable-Id NOTE, got: {result.diagnostics!r}",
+        )
+
+
+class TestCoincidenceProneCrashRecoveryIsNotAdopted(unittest.TestCase):
+    """C4 (2026-08-20-wsc-identity-gates-key-on-the-deliverable, item 1
+    AC1): `resolve_disposition` no longer adopts a coincidence-prone
+    Detector C crash-recovery match as "predecessor-consumed" when no
+    memo-predecessor corroborates it — it falls through to the shared
+    "single-session" return instead. Drives the observed shape verbatim:
+    `matched_scope_entry_count: 1`, `scope_size: 9`, `single_match_kind:
+    "exact"` (so `exact_match_count == 1` and `scope_size >= 2` —
+    coincidence-prone per `is_coincidence_prone_detection`), no memo.
+
+    Does NOT touch `is_coincidence_prone_detection` or `detector_c`'s
+    matching logic — see the AMENDMENT BREADCRUMB on `resolve_disposition`
+    for why this is the caller's adoption, not Detector C's matching."""
+
+    def setUp(self):
+        import os
+
+        self._backup = {
+            k: os.environ.pop(k, None) for k in ("WSC_DISPOSITION", "WSC_CONSUMED_HANDOFF")
+        }
+
+    def tearDown(self):
+        import os
+
+        for k, v in self._backup.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _build_repo_with_coincidence_prone_match(self, tmp: str) -> Path:
+        repo = _init_repo_with_history(Path(tmp))
+        touched = repo / "coordinator" / "bin" / "widget.py"
+        touched.parent.mkdir(parents=True)
+        touched.write_text("# widget\n")
+        _git(repo, "add", "coordinator/bin/widget.py")
+        _commit_with_session_trailer(repo, "sid-coincidence", "touch widget")
+
+        # 9-entry scope: exactly one entry ("coordinator/bin/widget.py")
+        # exactly matches this session's committed path; the other 8 are
+        # unrelated paths this session never touched, driving scope_size=9,
+        # matched_scope_entry_count=1, single_match_kind="exact" -- the
+        # observed shape (exact_match_count=1, scope_size>=2 -> coincidence-
+        # prone per `is_coincidence_prone_detection`).
+        stale_handoff = repo / "state" / "handoffs" / "2026-07-01_dead.md"
+        stale_handoff.parent.mkdir(parents=True, exist_ok=True)
+        scope_lines = "\n".join(f"  - unrelated/path-{i}.py" for i in range(8))
+        stale_handoff.write_text(
+            "predecessor: none\nscope:\n"
+            "  - coordinator/bin/widget.py\n" + scope_lines + "\n"
+        )
+        return repo, stale_handoff
+
+    def test_coincidence_prone_match_does_not_resolve_predecessor_consumed(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, stale_handoff = self._build_repo_with_coincidence_prone_match(tmp)
+            fake_cli = repo / "fake-session-claim-cli"
+            fake_cli.write_text("#!/bin/sh\nexit 0\n")
+
+            with unittest.mock.patch.object(
+                wsc, "find_session_claim_cli", return_value=fake_cli
+            ), unittest.mock.patch.object(
+                wsc,
+                "list_stale_claim_handoffs",
+                return_value=([(str(stale_handoff), "dead-sid")], 0),
+            ):
+                result = wsc.resolve_disposition(repo, "sid-coincidence")
+
+            self.assertEqual(result.detection.get("matched_scope_entry_count"), 1)
+            self.assertEqual(result.detection.get("scope_size"), 9)
+            self.assertEqual(result.detection.get("single_match_kind"), "exact")
+            self.assertNotEqual(result.disposition, "predecessor-consumed")
+            self.assertEqual(result.disposition, "single-session")
+            self.assertEqual(result.consumed_handoff, "")
+
+    def test_downgrade_path_still_flags_chain_end_as_uncertain(self):
+        """The fail-open this reroute would otherwise cause: emptying
+        `consumed_handoff` must not also erase the evidence that this
+        session's own chain end is uncertain. `deciding_leg` stays
+        "detector-c" (not "none") with `detector_c_status`/match facts
+        intact, so `coordinator_core.workstream_complete.
+        _session_shape_is_uncertain` — the consumer-side predicate that
+        raises `jp-session-shape` for a human to resolve — still fires True
+        for this shape, rather than reading a `deciding_leg: "none"` and
+        treating it identically to a genuine "nothing found" single-session
+        close. A test that only asserted `!= "predecessor-consumed"` would
+        pass while this signal silently went missing."""
+        import tempfile
+
+        from coordinator_core.workstream_complete import _session_shape_is_uncertain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, stale_handoff = self._build_repo_with_coincidence_prone_match(tmp)
+            fake_cli = repo / "fake-session-claim-cli"
+            fake_cli.write_text("#!/bin/sh\nexit 0\n")
+
+            with unittest.mock.patch.object(
+                wsc, "find_session_claim_cli", return_value=fake_cli
+            ), unittest.mock.patch.object(
+                wsc,
+                "list_stale_claim_handoffs",
+                return_value=([(str(stale_handoff), "dead-sid")], 0),
+            ):
+                result = wsc.resolve_disposition(repo, "sid-coincidence")
+
+            self.assertEqual(result.disposition, "single-session")
+            self.assertEqual(result.detection.get("deciding_leg"), "detector-c")
+            self.assertEqual(result.detection.get("detector_c_status"), "crash-recovery")
+            self.assertTrue(
+                _session_shape_is_uncertain(result.detection),
+                f"expected the downgraded single-session shape to still read as uncertain "
+                f"(chain-end coverage must not be silently skipped), got detection: "
+                f"{result.detection!r}",
+            )
+
+
+class TestDeliverableIdJoinPreferredOverScopePath(unittest.TestCase):
+    """C5 (2026-08-20-wsc-identity-gates-key-on-the-deliverable, item 1
+    AC2): session-shape attribution prefers an exact, unambiguous
+    `deliverable_id` join between the session's own commit trailers and a
+    candidate stale baton's frontmatter over `_resolve_crash_recovery`'s
+    scope-path heuristic. Scope-path matching is exercised as the fallback
+    only — when the join is ambiguous on either side, or no baton carries a
+    matching id."""
+
+    def test_ac2_real_baton_with_matching_id_wins_over_scope_sharing_stranger(self):
+        """The observed pair, verbatim from the baton: the real predecessor
+        carries the session's own Deliverable-Id in its frontmatter; the
+        stranger shares one high-fanout scope path with what this session
+        committed but carries no deliverable_id at all. The join must pick
+        the real predecessor, not the scope-path-sharing stranger."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            touched = repo / "coordinator_core" / "authz" / "classification.py"
+            touched.parent.mkdir(parents=True)
+            touched.write_text("# classification\n")
+            _git(repo, "add", "coordinator_core/authz/classification.py")
+            _git(
+                repo,
+                "commit",
+                "-q",
+                "-m",
+                "chunk work\n\nSession-Id: sid-c5\nDeliverable-Id: "
+                "dlv-one-warm-attempt-for-every-cli-not-one-p-bd161b",
+            )
+
+            real_predecessor = repo / "state" / "handoffs" / "2026-08-20_102353_a-refusal-cannot-exit-zero.md"
+            real_predecessor.parent.mkdir(parents=True, exist_ok=True)
+            real_predecessor.write_text(
+                "---\n"
+                "predecessor: none\n"
+                "deliverable_id: \"dlv-one-warm-attempt-for-every-cli-not-one-p-bd161b\"\n"
+                "scope:\n"
+                "  - coordinator_core/authz/some_other_file.py\n"
+                "---\n"
+            )
+
+            stranger = repo / "state" / "handoffs" / "2026-08-20-sat-06-cockpit-consumption-seam.md"
+            stranger.write_text(
+                "---\n"
+                "predecessor: none\n"
+                "scope:\n"
+                "  - coordinator_core/authz/classification.py\n"
+                "---\n"
+            )
+
+            fake_cli = repo / "fake-session-claim-cli"
+            fake_cli.write_text("#!/bin/sh\nexit 0\n")
+
+            with unittest.mock.patch.object(
+                wsc, "find_session_claim_cli", return_value=fake_cli
+            ), unittest.mock.patch.object(
+                wsc,
+                "list_stale_claim_handoffs",
+                return_value=(
+                    [(str(real_predecessor), "dead-real"), (str(stranger), "dead-stranger")],
+                    0,
+                ),
+            ):
+                result = wsc.resolve_disposition(repo, "sid-c5")
+
+            self.assertEqual(result.disposition, "predecessor-consumed")
+            self.assertEqual(
+                result.consumed_handoff,
+                "state/handoffs/2026-08-20_102353_a-refusal-cannot-exit-zero.md",
+            )
+            self.assertNotIn(
+                "state/handoffs/2026-08-20-sat-06-cockpit-consumption-seam.md",
+                result.consumed_handoff,
+            )
+            self.assertEqual(result.detection["deciding_leg"], "detector-c")
+            self.assertTrue(
+                any("deliverable_id join" in line for line in result.diagnostics),
+                f"expected a deliverable_id-join NOTE, got: {result.diagnostics!r}",
+            )
+
+    def test_ambiguous_session_side_falls_back_to_scope_path(self):
+        """The session's own commits carry two CONFLICTING Deliverable-Id
+        trailer values — the join must not pick either baton; it reports
+        and falls through to `None`, letting `detector_c` run the scope-path
+        leg instead."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _git(repo, "commit", "-q", "--allow-empty", "-m", "w1\n\nSession-Id: sid-ambig\nDeliverable-Id: dlv-a")
+            _git(repo, "commit", "-q", "--allow-empty", "-m", "w2\n\nSession-Id: sid-ambig\nDeliverable-Id: dlv-b")
+
+            baton = repo / "state" / "handoffs" / "baton-a.md"
+            baton.parent.mkdir(parents=True, exist_ok=True)
+            baton.write_text('---\ndeliverable_id: "dlv-a"\n---\n')
+
+            diagnostics: list[str] = []
+            outcome = wsc._resolve_deliverable_id_join(
+                repo, "sid-ambig", [(str(baton), "dead-sid")], diagnostics
+            )
+            self.assertIsNone(outcome)
+            self.assertTrue(
+                any("conflicting Deliverable-Id" in line for line in diagnostics),
+                f"expected an ambiguity NOTE, got: {diagnostics!r}",
+            )
+
+    def test_ambiguous_baton_side_falls_back_to_scope_path(self):
+        """Two candidate batons carry the SAME Deliverable-Id as the
+        session's own commits — ambiguous, not a match; falls through to
+        `None` with a diagnostic naming both candidates."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _git(repo, "commit", "-q", "--allow-empty", "-m", "w1\n\nSession-Id: sid-dupe\nDeliverable-Id: dlv-shared")
+
+            baton1 = repo / "state" / "handoffs" / "baton-1.md"
+            baton2 = repo / "state" / "handoffs" / "baton-2.md"
+            baton1.parent.mkdir(parents=True, exist_ok=True)
+            baton1.write_text('---\ndeliverable_id: "dlv-shared"\n---\n')
+            baton2.write_text('---\ndeliverable_id: "dlv-shared"\n---\n')
+
+            diagnostics: list[str] = []
+            outcome = wsc._resolve_deliverable_id_join(
+                repo, "sid-dupe", [(str(baton1), "dead-1"), (str(baton2), "dead-2")], diagnostics
+            )
+            self.assertIsNone(outcome)
+            self.assertTrue(
+                any("2 stale batons" in line for line in diagnostics),
+                f"expected an ambiguous-baton NOTE, got: {diagnostics!r}",
+            )
+
+    def test_no_trailer_resolves_falls_back_to_scope_path(self):
+        """No Deliverable-Id trailer at all on the session's own commits —
+        the join has nothing to key on and must fall through silently
+        (no ambiguity diagnostic; there is nothing to be ambiguous about)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _commit_with_session_trailer(repo, "sid-no-dlv-join", "plain commit")
+
+            baton = repo / "state" / "handoffs" / "baton.md"
+            baton.parent.mkdir(parents=True, exist_ok=True)
+            baton.write_text('---\ndeliverable_id: "dlv-whatever"\n---\n')
+
+            diagnostics: list[str] = []
+            outcome = wsc._resolve_deliverable_id_join(
+                repo, "sid-no-dlv-join", [(str(baton), "dead-sid")], diagnostics
+            )
+            self.assertIsNone(outcome)
+
+
 if __name__ == "__main__":
     unittest.main()

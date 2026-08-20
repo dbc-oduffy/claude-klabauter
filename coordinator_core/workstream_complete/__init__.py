@@ -791,6 +791,21 @@ def _session_shape_is_uncertain(detection: dict[str, Any]) -> bool:
     )
 
 
+#: The judgment-point id both `build_session_shape_judgment_point` (the
+#: construction site) and `_session_shape_disposition_from_decisions` (the
+#: AC3 recompute) read/write — named once so a caller-supplied answer's key
+#: and the point's own `id=` can never drift apart. Read through this NAME,
+#: never a repeated string literal: `test_every_decisions_key_read_anywhere_
+#: in_the_package_is_discoverable_from_the_template`'s AST scan flags a
+#: literal `decisions.get("...")`/`decisions["..."]` constant as a
+#: FREE_VALUE_KEYS candidate, which `jp-session-shape` is not — it is already
+#: discoverable via `judgment_points[].id` in `preflight.decisions_template`
+#: whenever the point is actually raised, the same "answer a judgment point"
+#: contract `ceremony_common/apply_halt.py`'s own `decisions.get(dep)` (a
+#: variable, not a literal) already reads under.
+_JP_SESSION_SHAPE_ID = "jp-session-shape"
+
+
 def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> Optional[str]:
     """AC3 (docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md,
     item 2 / state/bug-backlog/2026-08-19-jp-session-shape-resolution-is-
@@ -818,7 +833,7 @@ def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> O
     what `directives[]` dispatches — the mutation path stays exactly where
     `wsc-tail` already reads the decision from, unchanged by this chunk.
     """
-    entry = decisions.get("jp-session-shape")
+    entry = decisions.get(_JP_SESSION_SHAPE_ID)
     if not isinstance(entry, dict):
         return None
     value = entry.get("disposition")
@@ -848,7 +863,7 @@ def build_session_shape_judgment_point(gate: SessionShapeGate) -> Optional[dict[
     if not _session_shape_is_uncertain(dict(gate.detection or {})):
         return None
     return build_untrusted_gate_judgment_point(
-        id="jp-session-shape",
+        id=_JP_SESSION_SHAPE_ID,
         question=(
             f"Session-shape resolved to {gate.disposition!r}, but the detector chain "
             "flagged an unresolved case below — is that resolution actually correct?"

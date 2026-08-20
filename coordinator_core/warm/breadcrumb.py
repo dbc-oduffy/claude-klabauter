@@ -160,7 +160,7 @@ RUNTIME_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
 
 
 def _runtime_base() -> Path:
-    """User-local, non-synced base for warm runtime state.
+    r"""User-local, non-synced base for warm runtime state.
 
     `%LOCALAPPDATA%` on Windows (the warm engine is Windows-only --
     `server.main` refuses to start elsewhere), falling back to
