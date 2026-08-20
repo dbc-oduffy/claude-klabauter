@@ -484,8 +484,26 @@ _INSTALLED_SHIM_PATH = _resolve_installed_shim_path()
 # ---------------------------------------------------------------------------
 
 
-def _make_published_engine_fixture(root: Path) -> None:
+def _make_published_engine_fixture(root: Path, stamped: bool = True) -> None:
+    """A published engine root as ``_resolve_published_engine`` defines one.
+
+    C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md) added the
+    build stamp to that definition — "an engine root is a stamped build. No
+    stamp, no engine." A directory shaped like an engine but carrying no
+    ``coordinator_core/_engine_stamp`` is denied outright, so a fixture that
+    writes only the directory is no longer a published engine and every
+    divert case built on it silently collapses to the live-tree leg — which
+    is what happened between C5 landing and this helper being updated.
+
+    *stamped* exists so the denial itself is testable: pass ``False`` for the
+    unstamped-root case (``test_unstamped_published_root_is_denied``), never
+    to work around a failing assertion.
+    """
     (root / "coordinator_core").mkdir(parents=True)
+    if stamped:
+        (root / "coordinator_core" / "_engine_stamp").write_text(
+            "fixture-engine-stamp\n", encoding="utf-8"
+        )
 
 
 def test_live_tree_wins_when_session_is_the_source_tree(tmp_path: Path, monkeypatch):
@@ -660,6 +678,33 @@ def test_klabauter_only_resolves_published_engine(tmp_path: Path, monkeypatch):
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
     assert root == str(published_root)
     assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
+
+
+def test_unstamped_published_root_is_denied(tmp_path: Path, monkeypatch):
+    """C5's fail-closed rule, previously unguarded in this file: a published
+    root that is shaped like an engine but carries no build stamp is not
+    "usable" at all, so it can neither win the divert nor answer the
+    klabauter-only case.
+
+    The falsifier for `_make_published_engine_fixture`'s stamp write too — a
+    helper that stamped nothing would make every divert case below pass for
+    the wrong reason (live tree answering because the published rung was
+    denied), which is exactly the failure this pair of tests was added to
+    end. Here the live tree is deliberately absent, so a denial has nowhere
+    to silently fall through to and surfaces as the raise."""
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    published_root = tmp_path / "published-klabauter"
+    _make_published_engine_fixture(published_root, stamped=False)
+
+    (ml_dir / "registry.local.toml").write_text(
+        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    assert resolve_claude_klabauter._resolve_published_engine(ml_dir) is None
+    with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="cannot resolve claude-klabauter"):
+        resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
 
 
 def test_installed_settings_home_shim_importable_standalone_via_subprocess(tmp_path: Path):

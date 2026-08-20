@@ -2123,3 +2123,77 @@ class TestBlockScalarAppendEdgeCases:
         result = append_fm_block_scalar_line(fm, 'note', 'appended')
         assert '\n  appended\n' in result
         assert yaml.safe_load(result)['note'] == 'two\nappended\n'
+
+    def test_under_indented_continuation_ends_the_block_not_sliced(self):
+        """Review: code-reviewer P2 — a line indented LESS than the pad
+        established by the first body line used to be kept (only tested
+        `startswith((' ', '\\t'))`) and then sliced by `ln[len(pad):]`,
+        silently dropping its leading characters (`'  two'[4:]` == `'o'`).
+        The collector now BREAKS on a line that does not start with the
+        established pad, so the under-indented line is excluded from the
+        block entirely rather than corrupted."""
+        fm = 'note: |\n    one\n  two\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block.lines == ['one']
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        # `  two` sits outside the block (per YAML, an under-indented line
+        # ends the scalar), so the append lands right after `one` and `  two`
+        # is left untouched below it — the document is already invalid YAML
+        # independent of this fix (a conforming reader would refuse the
+        # under-indented continuation too), so this asserts the exact bytes
+        # this primitive produced rather than a YAML round-trip.
+        assert result == 'note: |\n    one\n    appended\n  two\nstatus: open\n'
+        assert '  two' in result  # untouched, not sliced into 'o' etc.
+
+    def test_mixed_tab_and_space_indentation_ends_the_block_not_sliced(self):
+        """Review: code-reviewer P2 — a body mixing space- and tab-indented
+        lines used to slice the tab-indented line by the space pad's
+        character count (`'\\ttwo'[2:]` == `'o'`), dropping real content
+        instead of raising or stopping. The pad established by the first
+        line is now matched by prefix, not counted, so the mismatched line
+        ends the block."""
+        fm = 'note: |\n  one\n\ttwo\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block.lines == ['one']
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        # `\ttwo` does not carry the space pad established by `one`, so it
+        # sits outside the block and the append lands right after `one` —
+        # the tab-indented remainder is left untouched below it, not sliced
+        # into `'o'`/`'ne'`-shaped garbage.
+        assert result == 'note: |\n  one\n  appended\n\ttwo\nstatus: open\n'
+        assert '\ttwo' in result
+
+    def test_explicit_indicator_over_tab_indented_body_ends_the_block_not_sliced(self):
+        """Review: code-reviewer P2 — the explicit-indent path (`|2`) built
+        `pad = '  '` from the count alone and sliced a tab-indented body by
+        that count (`'\\tone'[2:]` == `'ne'`), dropping the first two
+        characters of real content. The explicit pad is now matched by
+        prefix too, so a body line that does not carry it never enters the
+        block."""
+        fm = 'note: |2\n\tone\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block.lines == []
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        # The tab-indented `\tone` line is excluded from the block (as
+        # established above) and left untouched in the document — the
+        # document as a whole is already invalid YAML (tabs cannot start a
+        # block-scalar indentation token) independent of this fix, so the
+        # assertion is on the exact bytes this primitive produced, not a
+        # round-trip through a YAML loader.
+        assert result == 'note: |2\n  appended\n\tone\nstatus: open\n'
+
+    def test_over_indented_continuation_is_kept_and_deindented_by_pad_only(self):
+        """Review: code-reviewer P3 — three tests above pin the BREAK path (a
+        line that does not carry the established pad ends the block). Nothing
+        pinned the KEEP path: a line indented MORE than pad is legitimate
+        literal-block content, must be retained, and must be de-indented by
+        exactly `len(pad)` so its extra indentation survives as part of the
+        value. An edit to the `startswith(pad)` / `ln[len(pad):]` pair could
+        silently break this with the suite still green."""
+        fm = 'note: |\n  one\n    deeper\n  three\nstatus: open\n'
+        block = read_fm_block_scalar(fm, 'note')
+        assert block.lines == ['one', '  deeper', 'three']
+        result = append_fm_block_scalar_line(fm, 'note', 'appended')
+        assert '\n  appended\n' in result
+        assert yaml.safe_load(result)['note'] == 'one\n  deeper\nthree\nappended\n'
+        assert yaml.safe_load(result)['status'] == 'open'

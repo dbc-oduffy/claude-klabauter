@@ -301,22 +301,28 @@ def stamp_execution_authorization(
         for field in fields:
             value = final_values[field]
             numeric_quoting = field == "execution_authorized_sha"
+            field_exists = read_fm_field_unquoted(fm, field) is not None
+            # The frontmatter primitives raise ValueError for exactly one
+            # class of thing: a value shape a single-line write would
+            # corrupt. That is a MutateAbort condition here, not a crash --
+            # letting it escape puts a raw traceback in front of an operator,
+            # which is the failure this whole surface exists to stop.
+            # Reached in particular by a MALFORMED block scalar (`|abc`,
+            # `|0`): `read_fm_block_scalar` reads it as "not a block scalar"
+            # and skips the append branch above, while `replace_fm_field`'s
+            # looser one-character guard still refuses it (Review:
+            # code-reviewer, discriminator mismatch). Narrowed to wrap only
+            # the write call itself -- not the `read_fm_field_unquoted`
+            # existence check above -- so a future field's unrelated
+            # ValueError, if one is ever introduced elsewhere in this loop,
+            # cannot get silently mislabelled as this shape refusal (Review:
+            # code-reviewer).
             try:
-                if read_fm_field_unquoted(fm, field) is not None:
+                if field_exists:
                     fm = replace_fm_field(fm, field, value, numeric_quoting=numeric_quoting)
                 else:
                     fm = insert_fm_field(fm, field, value, numeric_quoting=numeric_quoting)
             except ValueError as exc:
-                # The frontmatter primitives raise ValueError for exactly one
-                # class of thing: a value shape a single-line write would
-                # corrupt. That is a MutateAbort condition here, not a crash
-                # -- letting it escape puts a raw traceback in front of an
-                # operator, which is the failure this whole surface exists to
-                # stop. Reached in particular by a MALFORMED block scalar
-                # (`|abc`, `|0`): `read_fm_block_scalar` reads it as "not a
-                # block scalar" and skips the append branch above, while
-                # `replace_fm_field`'s looser one-character guard still
-                # refuses it (Review: code-reviewer, discriminator mismatch).
                 raise MutateAbort(f"{plan_path}: cannot write {field} -- {exc}") from exc
 
         state["applied"] = True

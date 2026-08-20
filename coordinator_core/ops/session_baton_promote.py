@@ -213,11 +213,13 @@ def _write_first_prompt_into_body(
 def _write_intent_into_body(handoff_path: Path, intent: Optional[str]) -> None:
     """Post-scaffold body edit for the "## What I Learned" section — same
     seam as ``_write_first_prompt_into_body``. Never touches frontmatter. A
-    no-op when ``intent`` is falsy (AC4: no intent leaves the placeholder in
-    place, unfilled, as the nudge itself) or the placeholder comment is
-    absent (upstream template drift) — degrade silently rather than risk
-    corrupting the freshly-scaffolded file."""
-    if not intent:
+    no-op when ``intent`` is falsy OR whitespace-only (AC4: no intent leaves
+    the placeholder in place, unfilled, as the nudge itself — and a
+    whitespace-only value would otherwise strip to empty, replacing the
+    prompt with silence, which defeats the same AC it appears to satisfy) or
+    the placeholder comment is absent (upstream template drift) — degrade
+    silently rather than risk corrupting the freshly-scaffolded file."""
+    if not intent or not intent.strip():
         return
     try:
         text = handoff_path.read_text(encoding="utf-8")

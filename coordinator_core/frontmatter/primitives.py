@@ -607,16 +607,30 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
         rest = rest[1:]
     body_start = len(fm) - len(rest)
 
+    # The indentation PREFIX, not a width — and the collector matches on it
+    # rather than slicing by its length. De-indenting with `ln[len(pad):]`
+    # against a line that does NOT carry that exact prefix eats real content
+    # silently: an under-indented continuation (`    one` then `  two`) read
+    # back as `'o'`, and a `|2` header over a tab-indented body read `\tone`
+    # back as `'ne'`. A line whose indentation does not match is where the
+    # block ENDS, which is also what a conforming YAML reader does with it.
+    pad: Optional[str] = ' ' * int(explicit) if explicit is not None else None
     kept: list[str] = []
     for line in rest.splitlines(keepends=True):
-        if line.strip() and not line.startswith((' ', '\t')):
+        body = line.rstrip('\r\n')
+        if not body.strip():
+            kept.append(line)
+            continue
+        if not body.startswith((' ', '\t')):
+            break
+        if pad is None:
+            pad = body[:len(body) - len(body.lstrip())]
+        if not body.startswith(pad):
             break
         kept.append(line)
+    if pad is None:
+        pad = '  '
 
-    # Trailing blank lines after the block belong to the DOCUMENT, not to the
-    # block, unless a `+` chomping indicator claims them. Either way they must
-    # not be counted into `end_offset`, or an append would land past them and
-    # be separated from the block it is appending to.
     # Under a `+` (keep) chomping indicator trailing blank lines ARE part of
     # the scalar's value, so the block ends after them and they belong in
     # `lines`. Under `-`/none they are document filler between this field and
@@ -629,19 +643,12 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     consumed = sum(len(line) for line in kept)
     raw = [line.rstrip('\r\n') for line in kept]
 
-    # The indentation PREFIX, not a width. A count plus `' ' * count` writes
-    # spaces into a tab-indented block, mixing both inside one scalar.
-    first = next((ln for ln in raw if ln.strip()), None)
-    if explicit is not None:
-        pad = ' ' * int(explicit)
-    elif first is not None:
-        pad = first[:len(first) - len(first.lstrip())]
-    else:
-        pad = '  '
-
     # The terminator of the BLOCK's own lines. Scanning the whole document
     # prefix instead would let one earlier CRLF field dictate the ending
-    # appended into an otherwise LF-consistent block.
+    # appended into an otherwise LF-consistent block. Policy on a block with
+    # mixed internal endings: ANY CRLF line wins. Deliberately asymmetric —
+    # appending LF into a CRLF-majority block reads as a new defect, while
+    # appending CRLF into a mixed block only matches what is already there.
     newline = '\r\n' if any(ln.endswith('\r\n') for ln in kept) else '\n'
 
     return BlockScalar(

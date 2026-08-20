@@ -90,6 +90,24 @@ _spec.loader.exec_module(resolve_claude_klabauter)
 
 _FIXTURE_TARGET_NAME = "fixture-cli"
 
+#: The remediation `exec_cli` emits on its two 127 paths. Asserted by name so
+#: the three call sites cannot drift apart from each other — they did drift
+#: from the SHIPPED text, which is the defect this constant closes: they went
+#: on asserting the retired "re-run coordinator:install" long after the string
+#: became "run python3 <engine-clone>/scripts/setup.py", and neither red was
+#: visible on the fast tier because this whole module is `cadence`-marked.
+#:
+#: The code is the correct side of that drift, not the tests. A forwarder that
+#: cannot resolve its target fails before any session exists — the operator is
+#: at a cold terminal, and a slash command names a remedy that cannot run.
+#: That is claude-klabauter's cold-path rule (CLAUDE.md § Runtime conventions); the
+#: mechanical guard for it, `coordinator/tests/test_cold_path_remediation_is_runnable.py`,
+#: enumerates its subjects in `COLD_PATH_MODULES` — and `_resolve_claude_klabauter.py`
+#: was NOT one of them while this drift happened. It is now, enrolled in the
+#: same change, so the rule holds the module directly instead of resting on
+#: assertions here that had themselves gone stale.
+_REMEDIATION_TEXT = "run python3 <engine-clone>/scripts/setup.py"
+
 
 class _OSNameProxy:
     """Substitutes for ``resolve_claude_klabauter``'s module-level ``os`` name so a
@@ -382,7 +400,7 @@ def test_posix_forwarder_execs_unreadable_target_via_real_subprocess(tmp_path):
 
     assert result.returncode == 127
     assert "is missing" in result.stderr
-    assert "re-run coordinator:install" in result.stderr
+    assert _REMEDIATION_TEXT in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +460,7 @@ def test_missing_target_exits_127_with_remediation_message(os_name, tmp_path, mo
     result = _invoke(os_name, tmp_path, monkeypatch, capsys, target_body=None)
     assert result.returncode == 127
     assert "is missing" in result.stderr
-    assert "re-run coordinator:install" in result.stderr
+    assert _REMEDIATION_TEXT in result.stderr
 
 
 @pytest.mark.parametrize("os_name", ["posix", "nt"])
@@ -593,4 +611,4 @@ def test_posix_branch_execv_oserror_of_any_cause_still_exits_127(tmp_path, monke
     assert excinfo.value.code == 127
     err = capsys.readouterr().err
     assert "is missing or not executable" in err
-    assert "re-run coordinator:install" in err
+    assert _REMEDIATION_TEXT in err

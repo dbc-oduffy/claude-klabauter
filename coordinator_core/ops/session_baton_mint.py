@@ -105,10 +105,16 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
                     into ``merge_baton`` only when supplied; an omitted
                     ``title`` leaves any existing stored value untouched.
                     Unlike ``prompt``/``first_prompt``, overwritable on every
-                    call — no capture-once guard.
+                    call — no capture-once guard. NOTE: JSON-RPC cannot
+                    distinguish an omitted ``title`` from an explicit
+                    ``title: null`` on the wire — both decode to Python
+                    ``None`` and both no-op here. There is no way to clear a
+                    stored title through this op; that capability, if ever
+                    needed, would require a distinct sentinel param.
         intent      (str, optional) — EM-supplied session intent. Same
                     omitted-means-untouched, always-overwritable contract as
-                    ``title``.
+                    ``title`` — including the same JSON ``null``-vs-omitted
+                    caveat above.
 
     Returns:
         exit_code    int        0=ok, 1=setup-error (bad params /

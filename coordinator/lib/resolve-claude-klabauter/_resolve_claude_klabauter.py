@@ -252,6 +252,55 @@ RESOLUTION_LIVE_WORKING_TREE = "live-working-tree"
 RESOLUTION_UNRESOLVED = "unresolved"
 
 
+# --- publisher-only targets: never resolvable from the published engine ----
+#
+# ``resolve_claude_klabauter_root_with_class()``'s divert (C5) sends any session whose
+# own repo root is not the live claude-klabauter checkout to the published engine
+# mirror. For nearly every forwarded target that is correct — the mirror
+# carries a complete, stamped engine build. For the percolate publish
+# family it is not, and cannot be made so: the mirror is the PUBLISH
+# DESTINATION, and the modules these targets dispatch against
+# (``coordinator_core.percolate.*``, ``coordinator_core.ops.percolate_run``)
+# are publisher-side only and deliberately absent from it — see
+# ``state/bug-backlog/2026-08-11-klabauter-mirror-ships-the-ops-registry-287f6526da3a.yaml``.
+# Their FILENAMES are published (C13 closed the per-name gap so a missing
+# target means a broken install rather than a known hole), so the divert
+# resolves, the sentinel probe passes, the target file exists — and the run
+# then dies on an import that can never succeed there. ``--dry-run`` returns
+# before that import, so it reports clean and reads as clearance.
+#
+# These targets therefore resolve LIVE-TREE-ONLY, via ``_resolve_claude_klabauter_root``
+# (the single-tier ladder ``resolve_claude_klabauter_bin_dir`` uses), and fail loud
+# naming the publisher when it misses. Publishing FROM the published copy is
+# not a thing that can work, so there is no second root to try.
+#
+# Hand-maintained here because this module is installed standalone into a
+# bare ``bin/`` with only the stdlib importable (see the module docstring) —
+# it cannot import the engine to derive the set. Drift is caught instead by
+# ``coordinator_core/install/test_resolve_claude_klabauter_publisher_only.py``, which
+# re-derives the set from ``coordinator/bin/``'s actual imports and fails
+# when the two disagree.
+PUBLISHER_ONLY_TARGETS = frozenset({
+    "publish.py",
+    "coordinator-publish.py",
+    "percolate-gate.py",
+    "percolate-round.py",
+    "verify-publish-targets-portable-sync.py",
+})
+
+
+def _is_publisher_only_target(target: str) -> bool:
+    """True iff *target* names a member of ``PUBLISHER_ONLY_TARGETS``.
+
+    Accepts the bare and ``.py``-suffixed spellings alike: the installed
+    forwarders name one or the other depending on when they were generated
+    (see ``exec_cli``'s ``.py``-suffix probe and the POSIX-exec drain that
+    made both spellings live at once), and a resolution rule that fired for
+    only one of them would be a coin flip on install vintage."""
+    base = target.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return base in PUBLISHER_ONLY_TARGETS or (base + ".py") in PUBLISHER_ONLY_TARGETS
+
+
 # --- C5: engine/edit skew advisory -----------------------------------------
 #
 # PM-ruled 2026-08-07 (option (b), verbatim: "that's fine, skew detection").
@@ -933,6 +982,34 @@ def _run_target_in_process(target_path: str, argv: List[str], claude_klabauter_r
     return 0
 
 
+def _resolve_publisher_root() -> str:
+    """The live working checkout, for a ``PUBLISHER_ONLY_TARGETS`` member.
+
+    Single-tier on purpose — ``_resolve_claude_klabauter_root``'s registry-then-sentinel
+    ladder only, never ``resolve_claude_klabauter_root_with_class``'s published-engine
+    rung. See ``PUBLISHER_ONLY_TARGETS`` for why the published engine is not a
+    legitimate answer for these targets at all: it is the publish
+    DESTINATION, and the percolate engine these drivers dispatch against is
+    publisher-side only, so a divert there produces a target that exists,
+    passes every structural check, and then dies on an unsatisfiable import.
+
+    Re-raises ``_resolve_claude_klabauter_root``'s miss with publisher-specific
+    remediation. The generic message names ``repos.claude_klabauter`` as a
+    third way to satisfy the resolution — true for every other target, and
+    exactly the wrong advice here."""
+    ml_dir = _ml_dir()
+    try:
+        return _resolve_claude_klabauter_root(ml_dir)
+    except ClaudeKlabauterResolutionError as exc:
+        raise ClaudeKlabauterResolutionError(
+            str(exc).rstrip("\n")
+            + "\n  NOTE: this is a publisher-only CLI — it runs the percolate engine, "
+            "which ships only in the live claude-klabauter checkout. The published "
+            "engine mirror (repos.claude_klabauter) is the publish DESTINATION and "
+            "cannot satisfy it; set repos.claude_klabauter.\n"
+        ) from exc
+
+
 def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
     """Resolve ``<claude-klabauter-root>/coordinator/bin/<target>`` and run it,
     forwarding *argv* (defaults to ``sys.argv[1:]``).
@@ -1012,12 +1089,27 @@ def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
     missing *target* under EITHER resolution class now fails loud (127)
     naming only the ONE root actually tried — there is no second root to
     silently reach into any more.
+
+    PUBLISHER-ONLY CARVE-OUT. A *target* in ``PUBLISHER_ONLY_TARGETS`` skips
+    the class-aware ladder entirely and resolves live-tree-only, via
+    ``_resolve_publisher_root``. This is not an exemption from C13's
+    fail-loud rule — it is upstream of it: for these targets the published
+    engine is the publish DESTINATION, so it is never a legitimate root, and
+    diverting there yields a target that exists and then dies on an import
+    that cannot succeed. Everything else is unchanged, byte-for-byte, on
+    both legs. Negative-spec: do NOT "generalize" this into a fallback that
+    tries the published engine when the live tree misses — a publish round
+    run from the published copy is not a degraded round, it is not a round.
     """
     if argv is None:
         argv = sys.argv[1:]
 
     try:
-        claude_klabauter_root, resolution_class = resolve_claude_klabauter_root_with_class()
+        if _is_publisher_only_target(target):
+            claude_klabauter_root = _resolve_publisher_root()
+            resolution_class = RESOLUTION_LIVE_WORKING_TREE
+        else:
+            claude_klabauter_root, resolution_class = resolve_claude_klabauter_root_with_class()
         bin_dir = _validate_bin_dir(claude_klabauter_root)
     except ClaudeKlabauterResolutionError as exc:
         sys.stderr.write(str(exc))

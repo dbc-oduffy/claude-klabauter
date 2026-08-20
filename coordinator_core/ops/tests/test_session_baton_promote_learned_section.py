@@ -161,3 +161,34 @@ def test_promote_without_intent_leaves_learned_placeholder(tmp_path, monkeypatch
     )
     assert placeholder in handoff_text
     assert "## What I Learned" in handoff_text
+
+
+def test_promote_with_whitespace_intent_leaves_learned_placeholder(tmp_path, monkeypatch):
+    """AC4, whitespace arm (slice-A review finding 2, integrated 2026-08-20).
+
+    A whitespace-only ``intent`` is truthy, so a bare ``if not intent`` guard admits it
+    and then ``.strip()`` replaces the placeholder with an empty string — leaving the
+    "## What I Learned" heading standing over silence. That defeats the very AC it
+    appears to satisfy: AC4 exists so the unfilled PROMPT survives as the nudge.
+    """
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-wslearned")
+
+    placeholder = _extract_scaffolder_learned_placeholder()
+    store.merge_baton("sid-wslearned", cwd=str(repo), intent="   \n\t  ")
+    monkeypatch.setattr(
+        promote_mod,
+        "_scaffold_via_doc_new",
+        _fake_scaffold("state/handoffs/2026-08-20-wslearned.md", placeholder),
+    )
+
+    result = _promote(session_id="sid-wslearned", cwd=str(repo))
+    assert result["exit_code"] == 0
+
+    handoff_text = (repo / "state/handoffs/2026-08-20-wslearned.md").read_text(
+        encoding="utf-8"
+    )
+    assert placeholder in handoff_text, (
+        "a whitespace-only intent must leave the placeholder intact, not strip it to empty"
+    )
+    assert "## What I Learned" in handoff_text
