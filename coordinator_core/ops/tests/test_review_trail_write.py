@@ -66,6 +66,7 @@ from coordinator_core.ops.review_trail_write import (  # noqa: E402
     _classify_attestation_sidecar_binding,
     _build_json_record,
     _compute_timestamp,
+    _DELEGATE_REVIEWERS,
     _diagnose_zero_chain_terminal_credit,
     _dispatch_id_resolvable,
     _extract_frontmatter_list,
@@ -75,6 +76,7 @@ from coordinator_core.ops.review_trail_write import (  # noqa: E402
     _REVIEWER_ATTESTATION_KEY,
     _serialize_reviewer_attestation,
     _validate_reviewer_attestation,
+    _VALID_REVIEWERS,
     _walk_range_commit_session_trailers,
     _ZERO_CREDIT_KEY,
     write_review_trail_entry,
@@ -2799,6 +2801,110 @@ class TestReviewerEvidenceGate:
                 tmp_path, monkeypatch,
                 reviewer="waived", verdict="pending", reviewer_evidence=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests: the four routing-table persona reviewers (eng-director/senior-front-end/
+# staff-ux/staff-data-sci — the Director of Engineering/the Front-End Reviewer/the UX Reviewer/the Data Science Reviewer) added to _VALID_REVIEWERS and
+# _DELEGATE_REVIEWERS alongside code-reviewer/staff-eng. Roster:
+# DoE-claude's coordinator/routing.md.
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaReviewersRegistered:
+    """Each of the four newly-registered persona reviewers is (a) a valid
+    enum value and (b) DELEGATE-class — evidence-required like code-reviewer/
+    staff-eng, never exempt and never justification-based."""
+
+    _PERSONA_REVIEWERS = (
+        "eng-director",
+        "senior-front-end",
+        "staff-ux",
+        "staff-data-sci",
+    )
+
+    def _sidecar(self, caller_worktree: Path) -> str:
+        rel = "state/subagent-share/sess-1/review.md"
+        path = caller_worktree / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("## Findings\n\nlgtm\n", encoding="utf-8")
+        return rel
+
+    @pytest.mark.parametrize("reviewer", _PERSONA_REVIEWERS)
+    def test_registered_as_delegate_class(self, reviewer):
+        assert reviewer in _VALID_REVIEWERS
+        assert reviewer in _DELEGATE_REVIEWERS
+
+    @pytest.mark.parametrize("reviewer", _PERSONA_REVIEWERS)
+    def test_accepted_with_evidence(self, reviewer, tmp_path, monkeypatch):
+        """A persona reviewer with a resolvable sidecar writes cleanly, both
+        advisory (default) and enforcing."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path / "trail"))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        rel = self._sidecar(tmp_path)
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer=reviewer,
+            scope="chain",
+            verdict="ok",
+            diff_loc=0,
+            session_id=_TEST_SESSION,
+            reviewer_evidence=rel,
+            caller_worktree=tmp_path,
+        )
+        assert result["out_path"]
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk["reviewer"] == reviewer
+
+    @pytest.mark.parametrize("reviewer", _PERSONA_REVIEWERS)
+    def test_unevidenced_write_refuses_when_enforcing(self, reviewer, tmp_path, monkeypatch):
+        """Same as code-reviewer/staff-eng: an unevidenced persona-reviewer
+        write raises under enforcement — not exempt, not justification-based."""
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.setenv("COORDINATOR_REVIEW_TRAIL_EVIDENCE_ENFORCE", "1")
+        with pytest.raises(ValueError, match="reviewer-evidence"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer=reviewer,
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+                reviewer_evidence=None,
+            )
+
+
+class TestCliUsageTextPinnedToValidReviewers:
+    """Guard (durable half of this defect): `coordinator-write-review-trail.py`'s
+    module-docstring `--reviewer` usage line must list exactly
+    `_VALID_REVIEWERS` — no more, no less — so a rename/addition to the
+    validator's enum without updating the advertised usage text (the drift
+    this defect was filed for: `the Staff Engineer`/`code-reviewer+the Staff Engineer` advertised,
+    `staff-eng`/`code-reviewer+staff-eng` actually accepted) fails loud
+    instead of silently shipping a `-32602` trap for the next caller."""
+
+    def test_reviewer_usage_line_matches_valid_reviewers_exactly(self):
+        facade_path = (
+            Path(__file__).resolve().parents[3] / "coordinator" / "bin"
+            / "coordinator-write-review-trail.py"
+        )
+        source = facade_path.read_text(encoding="utf-8")
+        match = re.search(r"--reviewer ([^\s\\]+) \\\\", source)
+        assert match, "could not locate the '--reviewer <vocab> \\\\' usage line"
+        advertised = frozenset(match.group(1).split("|"))
+        assert advertised == _VALID_REVIEWERS, (
+            f"usage text advertises {sorted(advertised)} but _VALID_REVIEWERS "
+            f"is {sorted(_VALID_REVIEWERS)} — update the docstring in "
+            f"coordinator-write-review-trail.py to match"
+        )
 
 
 # ---------------------------------------------------------------------------

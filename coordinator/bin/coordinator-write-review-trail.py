@@ -15,10 +15,13 @@ Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 (s
 Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T2 (AC4)
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave 1b, shape-(b))
 
-Usage (unchanged from the bash facade — zero caller-contract drift):
+Usage (flag shape unchanged from the bash facade; the `--reviewer` vocabulary has
+drifted since — see `_VALID_REVIEWERS` in coordinator_core/ops/review_trail_write.py
+for the current authority, mirrored here so `--help`/docstring readers don't hit a
+-32602 refusal from a value this text used to advertise):
     python coordinator-write-review-trail.py \\
         --sha-range A..B \\
-        --reviewer code-reviewer|the Staff Engineer|code-reviewer+the Staff Engineer|waived|ubt-compile|wsc-auto-adjudication \\
+        --reviewer code-reviewer|staff-eng|code-reviewer+staff-eng|eng-director|senior-front-end|staff-ux|staff-data-sci|waived|ubt-compile|wsc-auto-adjudication|em-verified \\
         --scope chain|session|workstream-close-auto \\
         --verdict ok|warn|blocked|waived|pending \\
         --diff-loc <integer> \\

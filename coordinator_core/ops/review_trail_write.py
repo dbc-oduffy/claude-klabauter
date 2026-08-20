@@ -183,11 +183,23 @@ _COORDINATOR_REVIEW_WORKSTREAM_ENV = "COORDINATOR_REVIEW_WORKSTREAM"
 # (module retired 2026-07-29, kill-list op removal) — distinct from human/CI
 # reviewer names, but still validated so any already-written auto-sourced
 # records round-trip.
+#
+# "eng-director"/"senior-front-end"/"staff-ux"/"staff-data-sci" are the four
+# dispatched-persona reviewers (the Director of Engineering/the Front-End Reviewer/the UX Reviewer/the Data Science Reviewer) the coordinator routing
+# table registers alongside "staff-eng" (the Staff Engineer) — roster source is
+# DoE-claude's coordinator/routing.md, spelled per each persona's agent-file
+# stem (matching the "staff-eng" convention already in use here), never the
+# human name. Nothing syncs this frozenset to that routing table automatically
+# — a new registered persona needs its own manual addition here.
 _VALID_REVIEWERS = frozenset(
     {
         "code-reviewer",
         "staff-eng",
         "code-reviewer+staff-eng",
+        "eng-director",
+        "senior-front-end",
+        "staff-ux",
+        "staff-data-sci",
         "waived",
         "ubt-compile",
         "wsc-auto-adjudication",
@@ -211,6 +223,7 @@ _VALID_REVIEWERS = frozenset(
 # Reviewer values split into three evidence classes:
 #
 #   DELEGATE  ({code-reviewer, staff-eng, code-reviewer+staff-eng,
+#              eng-director, senior-front-end, staff-ux, staff-data-sci,
 #              ubt-compile}) -- a real reviewer actually ran. Evidence MUST be
 #              one of:
 #                (a) a sidecar path that exists on disk at write time
@@ -283,7 +296,16 @@ _VALID_REVIEWERS = frozenset(
 # nothing from that now-deleted mechanism.
 
 _DELEGATE_REVIEWERS = frozenset(
-    {"code-reviewer", "staff-eng", "code-reviewer+staff-eng", "ubt-compile"}
+    {
+        "code-reviewer",
+        "staff-eng",
+        "code-reviewer+staff-eng",
+        "eng-director",
+        "senior-front-end",
+        "staff-ux",
+        "staff-data-sci",
+        "ubt-compile",
+    }
 )
 _JUSTIFICATION_REVIEWERS = frozenset({"waived", "em-verified"})
 _EVIDENCE_EXEMPT_REVIEWERS = frozenset({"wsc-auto-adjudication"})
@@ -663,7 +685,7 @@ def _bare_reviewer_hint(reviewer: str) -> str:
     `_VALID_REVIEWERS` holds BARE names; the value nearest to hand at a
     ceremony seam is the id the EM just dispatched, which differs from the
     accepted value only by a namespace prefix. Naming the intended value beats
-    making the caller diff their string against a seven-item allow-list.
+    making the caller diff their string against the full allow-list.
     """
     _prefix, sep, bare = reviewer.rpartition(":")
     if sep and bare in _VALID_REVIEWERS:
@@ -3754,8 +3776,9 @@ def write_review_trail_entry(
 
     Parameters:
         sha_range   — e.g. ``abc1234..def5678``; required for scope_kind ``diff``.
-        reviewer    — one of: code-reviewer, staff-eng, code-reviewer+staff-eng, waived,
-                      ubt-compile, wsc-auto-adjudication.
+        reviewer    — one of: code-reviewer, staff-eng, code-reviewer+staff-eng, eng-director,
+                      senior-front-end, staff-ux, staff-data-sci, waived, ubt-compile,
+                      wsc-auto-adjudication, em-verified.
         scope       — one of: chain, session, workstream-close-auto.
         verdict     — one of: ok, warn, blocked, waived, pending.
         diff_loc    — non-negative integer LOC count.
@@ -4172,8 +4195,9 @@ async def _review_trail_write_handler(
 
     Required params:
         sha_range  (str)  — e.g. ``abc1234..def5678``.
-        reviewer   (str)  — one of: code-reviewer, staff-eng, code-reviewer+staff-eng, waived,
-                      ubt-compile, wsc-auto-adjudication.
+        reviewer   (str)  — one of: code-reviewer, staff-eng, code-reviewer+staff-eng, eng-director,
+                      senior-front-end, staff-ux, staff-data-sci, waived, ubt-compile,
+                      wsc-auto-adjudication, em-verified.
         scope      (str)  — one of: chain, session, workstream-close-auto.
         verdict    (str)  — one of: ok, warn, blocked, waived, pending.
         diff_loc   (int)  — non-negative LOC count (also accepted as str, cast to int).

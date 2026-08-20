@@ -51,10 +51,12 @@ Negative-spec:
     - Does NOT write anything outside ``.git/coordinator-sessions/<sid>/`` —
       inherits C1's store's own hard constraint verbatim; this op has no
       write path of its own beyond delegating to store.
-    - Does NOT accept ``title``/``intent`` — those are the EM-supplied fields
-      ``store.merge_baton`` already exposes, but this op's own contract (per
-      its stub) is session_id + first-prompt capture only. A later chunk may
-      expose them through their own op/param.
+    - ``title``/``intent`` ARE accepted (this chunk takes the escape clause
+      below) — but only ever threaded into ``merge_baton`` when the caller
+      actually supplies them; an omitted param must never reach the call
+      (``store``'s ``_UNSET`` sentinel means an explicit ``None`` would
+      overwrite). Unlike ``first_prompt``, neither has a capture-once guard:
+      a later call with a new value replaces the stored one by design.
     - Does NOT promote a baton into a real handoff artifact — that is C3
       (``ops/session_baton_promote.py``); this op has no knowledge of
       promotion and never reads/writes ``promoted_to``.
@@ -99,6 +101,14 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
                     session hub from; threaded verbatim into store's own
                     ``cwd`` kwarg. Defaults to the current process cwd
                     (store's own default) when omitted.
+        title       (str, optional) — EM-supplied session title. Threaded
+                    into ``merge_baton`` only when supplied; an omitted
+                    ``title`` leaves any existing stored value untouched.
+                    Unlike ``prompt``/``first_prompt``, overwritable on every
+                    call — no capture-once guard.
+        intent      (str, optional) — EM-supplied session intent. Same
+                    omitted-means-untouched, always-overwritable contract as
+                    ``title``.
 
     Returns:
         exit_code    int        0=ok, 1=setup-error (bad params /
@@ -107,7 +117,9 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
         session_id   str|None
         baton_path   str|None   absolute path to the written baton.json
         created      bool       True iff this call minted the record for the
-                                 first time (no prior created_at on disk)
+                                 first time (no prior created_at on disk) —
+                                 unaffected by whether this call also carried
+                                 a title/intent
         first_prompt str|None   the record's first_prompt AFTER this call
     """
     session_id = params.get("session_id")
@@ -123,12 +135,24 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     if cwd is not None and not isinstance(cwd, str):
         return _err("session_baton.mint: cwd must be a string when supplied")
 
+    title = params.get("title")
+    if title is not None and not isinstance(title, str):
+        return _err("session_baton.mint: title must be a string when supplied")
+
+    intent = params.get("intent")
+    if intent is not None and not isinstance(intent, str):
+        return _err("session_baton.mint: intent must be a string when supplied")
+
     existing = store.read_baton(session_id, cwd)
     created = existing.get("created_at") is None
 
     merge_kwargs = {}
     if prompt is not None and existing.get("first_prompt") is None:
         merge_kwargs["first_prompt"] = prompt
+    if title is not None:
+        merge_kwargs["title"] = title
+    if intent is not None:
+        merge_kwargs["intent"] = intent
 
     merged = store.merge_baton(session_id, cwd, **merge_kwargs)
     if merged is None:

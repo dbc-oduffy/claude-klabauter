@@ -220,6 +220,26 @@ def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
     # some guards carry this seam. Sibling stubs in each guard's own test file
     # (`test_block_subagent_plan_body_bash_write.py::_stub`) do the same.
     monkeypatch.setattr(module, "_write_block_log", lambda *a, **kw: None, raising=False)
+    # `block-reviewer-bash-outside-allowlist` sits early in CONFINEMENT_DENY and
+    # reads the SAME payload identity every caller of this helper supplies, so
+    # in a quarantined test home it answers for guards it is not being asked
+    # about. In production it does not confine `coordinator:executor` at all:
+    # DR-125 removed that type from `_helpers._CONFINED_FINDINGS_AGENTS`, no
+    # `bash_policy:` key confines it, and leg 3
+    # (`is_confined_by_roster_absence`) excludes it because the dispatch-seam
+    # roster enumerates it. Under the suite's home quarantine that roster is
+    # UNRESOLVABLE -- `resolve_roster()` finds no DoE-root pointer -- and leg 3
+    # then fails CLOSED by design, denying every executor command regardless of
+    # what the cell under test is probing. That turns an advisory cell red and,
+    # worse, can hand a deny-asserting cell a green from the wrong guard.
+    # Restoring leg 3's production answer keeps each cell attributable to its
+    # own guard; it changes no guard's shipped behaviour. Same seam and
+    # rationale as `test_block_reviewer_bash_outside_allowlist.py`'s own
+    # `_stub_roster_absence_leg` fixture. Types the roster genuinely confines
+    # (`coordinator:code-reviewer`) are unaffected -- leg 2 still confines them.
+    monkeypatch.setattr(
+        reviewer_guard, "is_confined_by_roster_absence", lambda effective_type: False
+    )
 
 
 def _wrap_variants(cmd: str) -> Dict[str, str]:
