@@ -513,3 +513,20 @@ def test_self_edge_message_carries_provenance():
     message = str(excinfo.value)
     assert "C1" in message
     assert "declared: depends_on, gate_kind=epistemic-premise" in message
+
+
+def test_dropped_derived_edge_warns_once_per_build(caplog):
+    # build_waves calls _predecessors twice, and downstream emit/pathspec call
+    # build_waves again — an unguarded warning repeated one dropped edge four
+    # times per emit, reading as four dropped edges. One fact, stated once.
+    rows = [
+        _row("C11", ["docs/verdict.md"], reads=["tools/subsystem.py"]),
+        _row(
+            "C12",
+            ["tools/subsystem.py"],
+            depends_on=[{"chunk": "C11", "gate_kind": "epistemic-premise"}],
+        ),
+    ]
+    with caplog.at_level("WARNING", logger=wave_map.__name__):
+        build_waves(rows)
+    assert caplog.text.count("dropped derived edge C11 -> C12") == 1

@@ -2993,7 +2993,9 @@ class TestDeliverableIdMismatchDiagnostic:
         assert result["deliverable_id_mismatch"] == []
         assert result["message"] == (
             f"plan.md: {len(result['missing_chunk_ids'])} chunk(s) still "
-            "uncommitted, committed partial state"
+            "uncommitted, committed partial state -- if delivered via a "
+            "consolidated commit, run `plan-tasks-resolve --coded <sha>` per "
+            "row, then re-run close-out-and-stamp"
         )
         assert "NOTE" not in result["message"]
 
@@ -5469,9 +5471,16 @@ class TestHyphenRangeSubjectDiagnostic:
         assert result["shipped"] is False
         assert sorted(result["missing_chunk_ids"]) == ["C2a", "C2b"]
         assert result["hyphen_range_subjects"] == []
+        # Amended 2026-08-20 (C9, docs/plans/2026-08-20-wsc-identity-gates-
+        # key-on-the-deliverable.md, AC7): the genuinely-uncommitted message
+        # now names its remedy. This test's subject is the ABSENCE of the
+        # hyphen-range clause, not the message's exact prose, so it tracks
+        # the new text rather than pinning the old.
         assert result["message"] == (
             f"plan.md: {len(result['missing_chunk_ids'])} chunk(s) still "
-            "uncommitted, committed partial state"
+            "uncommitted, committed partial state -- if delivered via a "
+            "consolidated commit, run `plan-tasks-resolve --coded <sha>` per "
+            "row, then re-run close-out-and-stamp"
         )
 
     def test_happy_path_full_shipped_unaffected_no_diagnostic_call(

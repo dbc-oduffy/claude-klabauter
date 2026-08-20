@@ -615,16 +615,16 @@ def test_doe_root_rung2_registry_beats_codename_free_rungs(monkeypatch):
     assert result == "A"
 
 
-def test_doe_root_rung2_backslash_form_passes_through_normalized(tmp_path, monkeypatch):
+def test_doe_root_rung2_backslash_form_passes_through_unchanged(tmp_path, monkeypatch):
     """AC4b: with registry.local.toml storing repos.doe_claude in
     backslash-drive form, doe_root() returns exactly what
     machine_local_impl_resolve.registry_get() itself computes for that same
     stored value — the value-level normalization is owned by registry_get
     (C1), and doe_root()/_registry_machine_local_get() must pass it through
     unchanged rather than re-deriving or re-splitting it. This is a
-    pass-through equivalence check, not a hardcoded forward-slash literal —
-    registry_get's own normalization contract (native-drive-form preserving,
-    MSYS-mount-form repairing) is pinned by
+    pass-through equivalence check (doe_root() doesn't re-derive or mangle
+    registry_get's output), NOT a proof of normalization-parity with the
+    real CLI — that equivalence is pinned separately by
     test_machine_local_registry_reader_parity.py, not re-pinned here.
     """
     _clear_doe_env(monkeypatch)

@@ -714,7 +714,7 @@ def _func_is_wrapper_promoting_unknown_ex(
 ) -> tuple[bool, bool]:
     """`_func_is_wrapper_promoting_unknown`'s real body, plus a `truncated`
     bool: True if this answer passed through a `key in visiting` cycle
-    guard anywhere on the path (staff-eng F3, mirroring
+    guard anywhere on the path (mirroring
     `WrapperResolver._func_is_wrapper_ex`, which this was copied from
     verbatim including the flaw). A cycle-truncated `False` is a
     placeholder to break the recursion, not a proven fact about `key`, and
@@ -742,11 +742,16 @@ def _func_is_wrapper_promoting_unknown_ex(
         target_result, target_truncated = _target_reaches_spawn_promoting_unknown_ex(
             info, target, next_visiting
         )
+        if target_result:
+            # A True result is never truncation-tainted, regardless of what
+            # earlier sibling targets in this loop hit the cycle guard --
+            # discard any truncation accumulated so far so the cache write
+            # below is unconditional for this case.
+            result = True
+            truncated = False
+            break
         if target_truncated:
             truncated = True
-        if target_result:
-            result = True
-            break
     if not truncated:
         cache[key] = result
     return result, truncated
@@ -1350,7 +1355,7 @@ def test_module_scope_unknown_argv0_promotes_a_routed_wrapper_for_rule1() -> Non
     info = ModuleInfo(fake_path, scanner, {}, {"_helper"})
     resolved = fake_path.resolve()
     cache_key = (fake_path, "_helper")
-    # Instance-dict cache (staff-eng F4): pop only this fixture's own key,
+    # Instance-dict cache: pop only this fixture's own key,
     # not a wholesale `.clear()` -- the prior module-global shape discarded
     # every legitimately-computed entry process-wide on every test run;
     # this mirrors the targeted save/restore already used for
@@ -1393,7 +1398,7 @@ def test_module_scope_unknown_promotion_is_contained_to_module_scope() -> None:
 def test_wrapper_resolver_agrees_on_a_cycle_regardless_of_query_order(
     tmp_path: Path,
 ) -> None:
-    """staff-eng F3: mutually-recursive module-level wrappers `a`/`b`, where
+    """Mutually-recursive module-level wrappers `a`/`b`, where
     `a` reaches a real spawn (via `helper`) and `b` reaches a spawn ONLY
     through `a`, must resolve `b` to `True` regardless of which of `a`/`b`
     is queried first. Before the fix, querying `a` first cached `b: False`:
@@ -1433,6 +1438,15 @@ def test_wrapper_resolver_agrees_on_a_cycle_regardless_of_query_order(
         "querying b-then-a must agree with a-then-b -- b reaches a spawn "
         "through a's cycle regardless of query order"
     )
+    # A True result must be cached unconditionally, not just returned --
+    # the assertions above only check the returned values, which stayed
+    # correct even when an earlier bug discarded the cache write for both
+    # `a` and `b` in both orders (an earlier sibling target hit the cycle
+    # guard before the target proving True was reached, in both orders).
+    assert resolver_a_first._wrapper_cache.get((module, "a")) is True
+    assert resolver_a_first._wrapper_cache.get((module, "b")) is True
+    assert resolver_b_first._wrapper_cache.get((module, "a")) is True
+    assert resolver_b_first._wrapper_cache.get((module, "b")) is True
 
 
 def test_module_scope_unknown_promotion_excludes_main_guard_body() -> None:
@@ -1535,8 +1549,7 @@ def test_module_scope_unknown_promotion_reports_the_negative_direction(
     # would raise on the `.relative_to(repo_root)` call. Swap in a resolver
     # rooted at `tmp_path` for the duration of this call only (targeted
     # save/restore, same discipline as the cache-key pops elsewhere in this
-    # file), rather than duplicating `_analyze_file`'s logic against a
-    # differently-scoped resolver.
+    # file).
     prior_resolver = globals()["_WRAPPER_RESOLVER"]
     try:
         globals()["_WRAPPER_RESOLVER"] = WrapperResolver(tmp_path, _build_scanner)

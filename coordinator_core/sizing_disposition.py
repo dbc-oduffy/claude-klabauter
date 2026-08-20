@@ -53,11 +53,33 @@ def _plan_frontmatter_head(candidate: Path) -> Optional[str]:
         return None
 
 
-def _resolve_plan_by(root: Path, pattern_re: "re.Pattern[str]", wanted: str) -> Optional[str]:
+def _resolve_plan_by(
+    root: Path,
+    pattern_re: "re.Pattern[str]",
+    wanted: str,
+    self_path: Optional[Path] = None,
+) -> Optional[str]:
     """Repo-relative path of the first plan record whose `pattern_re` capture
-    equals `wanted`, or `None`."""
+    equals `wanted`, or `None`.
+
+    `self_path` excludes the inbound artifact from its own resolution. A
+    record is never its own upstream plan — see `compute_sizing_disposition`'s
+    `self_path` parameter for why that is a correctness property and not a
+    caller's convenience."""
+    resolved_self = None
+    if self_path is not None:
+        try:
+            resolved_self = Path(self_path).resolve()
+        except OSError:
+            resolved_self = None
     for pattern in PLAN_ID_SEARCH_GLOBS:
         for candidate in sorted(root.glob(pattern)):
+            if resolved_self is not None:
+                try:
+                    if candidate.resolve() == resolved_self:
+                        continue
+                except OSError:
+                    pass
             head = _plan_frontmatter_head(candidate)
             if head is None:
                 continue
@@ -84,7 +106,9 @@ def resolve_plan_id(root: Path, plan_id: str) -> Optional[str]:
     return _resolve_plan_by(root, _PLAN_ID_RE, plan_id)
 
 
-def resolve_plan_by_deliverable(root: Path, deliverable_id: str) -> Optional[str]:
+def resolve_plan_by_deliverable(
+    root: Path, deliverable_id: str, self_path: Optional[Path] = None
+) -> Optional[str]:
     """Repo-relative path of a plan record carrying the SAME
     `deliverable_id`, or `None`.
 
@@ -106,7 +130,7 @@ def resolve_plan_by_deliverable(root: Path, deliverable_id: str) -> Optional[str
     discriminant — a self-minted id matches no plan and correctly stays
     uncited.
     """
-    return _resolve_plan_by(root, _PLAN_DELIVERABLE_RE, deliverable_id)
+    return _resolve_plan_by(root, _PLAN_DELIVERABLE_RE, deliverable_id, self_path=self_path)
 
 
 def cited_plan_fks(fm: dict[str, Any]) -> list[tuple[str, str]]:
@@ -126,7 +150,9 @@ def cited_plan_fks(fm: dict[str, Any]) -> list[tuple[str, str]]:
     return cited
 
 
-def compute_sizing_disposition(root: Path, fm: dict[str, Any]) -> dict[str, Any]:
+def compute_sizing_disposition(
+    root: Path, fm: dict[str, Any], self_path: Optional[Path] = None
+) -> dict[str, Any]:
     """`{"value", "basis", "warning"}` for one baton's frontmatter.
 
     Three values, precedence plan-FK-then-`sizing_object`:
@@ -149,6 +175,15 @@ def compute_sizing_disposition(root: Path, fm: dict[str, Any]) -> dict[str, Any]
     dangling citation — "we looked, and this is what did not resolve" is the
     diagnostic a reader needs; silently passing to `execution` on an id that
     nothing on disk declares is the bug.
+
+    `self_path` is the inbound artifact's own path, excluded from the
+    inheritance scan. A record is never its own upstream plan, and omitting
+    this is not cosmetic: a PLAN carries a `deliverable_id` and lives in the
+    scanned globs, so it matches ITSELF and reads `execution` — "already
+    planned", citing itself as the evidence. That silently waves through the
+    exact wall condition `plan` exists to catch, an unsized plan. Batons do
+    not live in the scanned globs, so a caller passing one may omit it; a
+    caller passing a plan must not.
 
     A `deliverable_id` that matches NO plan is not a citation and does not
     reach the `warning` arm: a spinoff minting its own fresh key is the
@@ -180,7 +215,7 @@ def compute_sizing_disposition(root: Path, fm: dict[str, Any]) -> dict[str, Any]
         else None
     )
     if deliverable_id:
-        inherited = resolve_plan_by_deliverable(root, deliverable_id)
+        inherited = resolve_plan_by_deliverable(root, deliverable_id, self_path=self_path)
         if inherited:
             return {
                 "value": "execution",

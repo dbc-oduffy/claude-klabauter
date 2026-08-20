@@ -450,6 +450,65 @@ def _apply_one_edit(
     return content.replace(old_string, new_string, 1)
 
 
+def _extract_content_ex(
+    tool_name: str, tool_input: Dict[str, Any], file_path: str
+) -> tuple[str, bool]:
+    """Like ``_extract_content``, plus a ``used_fallback`` bool: True iff the
+    returned content is the edit-fragment fallback rather than a true whole
+    file. ``Write`` and a successful ``Edit``/``MultiEdit`` reconstruction
+    both return False here; only a read failure, oversized file, or
+    unresolvable ``old_string`` returns True.
+
+    Exists because a caller that needs to know WHICH branch this function
+    took (e.g. ``nudge_unmarked_spawning_test.py``, which must stay silent
+    only when reconstruction genuinely failed) cannot recover that reliably
+    by comparing the returned content against ``_extract_fragment``'s own
+    output — value-equality is not a sound proxy for "took the fallback
+    branch": a whole-file rewrite via ``Edit`` where ``old_string`` is the
+    entire prior file makes the reconstructed whole file byte-identical to
+    the bare fragment even though reconstruction fully succeeded.
+    """
+    if tool_name == "Write":
+        return tool_input.get("content") or "", False
+
+    fragment = _extract_fragment(tool_name, tool_input)
+
+    if tool_name == "Edit":
+        current = _read_file_safely(file_path)
+        if current is None:
+            return fragment, True
+        result = _apply_one_edit(
+            current,
+            tool_input.get("old_string"),
+            tool_input.get("new_string"),
+            tool_input.get("replace_all"),
+        )
+        return (result, False) if result is not None else (fragment, True)
+
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list) or not edits:
+            return fragment, True
+        current = _read_file_safely(file_path)
+        if current is None:
+            return fragment, True
+        for edit in edits:
+            if not isinstance(edit, dict):
+                return fragment, True
+            result = _apply_one_edit(
+                current,
+                edit.get("old_string"),
+                edit.get("new_string"),
+                edit.get("replace_all"),
+            )
+            if result is None:
+                return fragment, True
+            current = result
+        return current, False
+
+    return "", False
+
+
 def _extract_content(tool_name: str, tool_input: Dict[str, Any], file_path: str) -> str:
     """Whole-file content extraction (DR-077 part 1).
 
@@ -463,46 +522,13 @@ def _extract_content(tool_name: str, tool_input: Dict[str, Any], file_path: str)
     (``_extract_fragment``) rather than raising or denying — this function
     must never be the reason a write is (or isn't) denied due to an I/O
     problem unrelated to the content itself.
+
+    Thin wrapper over ``_extract_content_ex`` — kept as a separate function
+    (rather than changing every caller to unpack a pair) since this content
+    string alone is all every OTHER caller in this repo needs.
     """
-    if tool_name == "Write":
-        return tool_input.get("content") or ""
-
-    fragment = _extract_fragment(tool_name, tool_input)
-
-    if tool_name == "Edit":
-        current = _read_file_safely(file_path)
-        if current is None:
-            return fragment
-        result = _apply_one_edit(
-            current,
-            tool_input.get("old_string"),
-            tool_input.get("new_string"),
-            tool_input.get("replace_all"),
-        )
-        return result if result is not None else fragment
-
-    if tool_name == "MultiEdit":
-        edits = tool_input.get("edits")
-        if not isinstance(edits, list) or not edits:
-            return fragment
-        current = _read_file_safely(file_path)
-        if current is None:
-            return fragment
-        for edit in edits:
-            if not isinstance(edit, dict):
-                return fragment
-            result = _apply_one_edit(
-                current,
-                edit.get("old_string"),
-                edit.get("new_string"),
-                edit.get("replace_all"),
-            )
-            if result is None:
-                return fragment
-            current = result
-        return current
-
-    return ""
+    content, _used_fallback = _extract_content_ex(tool_name, tool_input, file_path)
+    return content
 
 
 def _should_deny_sh_or_py(file_path: str, content: str) -> bool:

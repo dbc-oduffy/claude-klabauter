@@ -181,7 +181,7 @@ class WrapperResolver:
         # A second, disjoint instance cache (never `_wrapper_cache`) for a
         # differently-scoped "does this reach a spawn" question over the
         # SAME (module, func) key shape -- e.g. the ratchet's own
-        # module-scope UNKNOWN-argv0 promotion (staff-eng F4,
+        # module-scope UNKNOWN-argv0 promotion (see
         # docs/plans/2026-08-20-the-spawn-ratchet-stops-accumulating-
         # arrears.md § C6). Siting it here, rather than as a caller-owned
         # module-level global, keeps it owned by the same resolver whose
@@ -221,7 +221,7 @@ class WrapperResolver:
     ) -> tuple[bool, bool]:
         """Like `target_reaches_spawn`, plus a second `truncated` bool: True
         if this answer passed through a `key in visiting` cycle guard
-        anywhere on the path, meaning it must NOT be cached (staff-eng F3).
+        anywhere on the path, meaning it must NOT be cached.
         See `_func_is_wrapper_ex` for the invariant this maintains."""
         if target[0] == "name":
             name = target[1]
@@ -257,7 +257,7 @@ class WrapperResolver:
         resolved recurses back into `key` before `key` itself has a real
         answer. That `False` is a placeholder to break the recursion, not a
         proven fact about `key`, so it must never be written into
-        `_wrapper_cache` (staff-eng F3): caching it would let the answer for
+        `_wrapper_cache`: caching it would let the answer for
         a mutually-recursive function permanently depend on which function
         in the cycle was resolved first. A `True` result is never
         truncation-tainted -- once any route proves a real spawn, that
@@ -283,11 +283,16 @@ class WrapperResolver:
             target_result, target_truncated = self._target_reaches_spawn_ex(
                 info, target, next_visiting
             )
+            if target_result:
+                # A True result is never truncation-tainted, regardless of
+                # what earlier sibling targets in this loop hit the cycle
+                # guard -- discard any truncation accumulated so far so the
+                # cache write below is unconditional for this case.
+                result = True
+                truncated = False
+                break
             if target_truncated:
                 truncated = True
-            if target_result:
-                result = True
-                break
         if not truncated:
             self._wrapper_cache[key] = result
         return result, truncated

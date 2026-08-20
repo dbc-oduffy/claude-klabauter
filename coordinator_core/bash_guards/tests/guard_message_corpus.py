@@ -2301,7 +2301,7 @@ def _wg_shell_shaped_spawn_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Di
 def _wg_unmarked_spawning_test_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     """A spawning test file carrying TWO unmarked functions, neither
     `spawns_process` nor a module-level `pytestmark`, at a realistic
-    ABSOLUTE path -- staff-eng F1: the guard's real `file_path` always
+    ABSOLUTE path -- the guard's real `file_path` always
     comes from the tool payload, which is always absolute, and a real
     firing routinely names more than one function; a bare relative
     `"test_thing.py"` with zero names was the smallest shape the guard can

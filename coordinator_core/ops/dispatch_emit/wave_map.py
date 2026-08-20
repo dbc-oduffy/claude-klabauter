@@ -259,18 +259,27 @@ def _predecessors(
                 continue
             if reader.id in declared[writer.id]:
                 read_path, write_path = collisions[0]
-                _logger.warning(
-                    "wave_map: dropped derived edge %s -> %s (%s reads %s, "
-                    "written by %s); %s declares depends_on %s and a declared "
-                    "edge outranks a derived one",
-                    reader.id,
-                    writer.id,
-                    reader.id,
-                    read_path,
-                    writer.id,
-                    writer.id,
-                    reader.id,
-                )
+                # Reported once per FULL-graph derivation pass, not per call:
+                # build_waves calls _predecessors twice (once for the cycle
+                # check, once over the post-holdout row set) and downstream
+                # emit/pathspec call build_waves again, so an unguarded
+                # warning repeated one dropped edge four times per emit. The
+                # provenance out-param is supplied only by the authoritative
+                # full-graph pass, which makes it the right gate — one fact,
+                # stated once (docs/wiki/guard-messaging.md § Register).
+                if provenance is not None:
+                    _logger.warning(
+                        "wave_map: dropped derived edge %s -> %s (%s reads %s, "
+                        "written by %s); %s declares depends_on %s and a declared "
+                        "edge outranks a derived one",
+                        reader.id,
+                        writer.id,
+                        reader.id,
+                        read_path,
+                        writer.id,
+                        writer.id,
+                        reader.id,
+                    )
                 continue
             preds[reader.id].add(writer.id)
             if provenance is not None and (reader.id, writer.id) not in provenance:

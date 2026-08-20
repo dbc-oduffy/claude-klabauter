@@ -199,6 +199,7 @@ ADVISORY_NAMES = [
     "nudge_shell_shaped_spawn",
     "nudge_tasks_state_folder_split",
     "nudge_terminal_artifact_edit",
+    "nudge_unmarked_spawning_test",
     "nudge_windows_subprocess_popup",
     "validate_frontmatter_schema_advisory",
 ]

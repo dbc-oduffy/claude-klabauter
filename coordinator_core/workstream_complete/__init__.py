@@ -3695,8 +3695,13 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         raise TransportFailure(repo_identity_gate["message"])
     handoff_governing_plan_field = _governing_plan_field_from_consumed_handoff(root, gate)
     handoff_deliverable_id = _deliverable_id_from_consumed_handoff(root, gate)
+    # `session_id` feeds precedence leg 2.5, the session's own commit-trailer
+    # `Deliverable-Id` join. Without it the leg is unreachable in production:
+    # it defaults to `None` and short-circuits, so the rung passes its unit
+    # tests and never fires in the real ceremony — the inert-mechanism shape
+    # AC4 exists to close, not to reproduce.
     governing_plan, governing_plan_source = directives_lessons_plan.resolve_governing_plan_with_source(
-        root, decisions, handoff_governing_plan_field, handoff_deliverable_id
+        root, decisions, handoff_governing_plan_field, handoff_deliverable_id, gate.sid
     )
     # Resolved once, here, and threaded into BOTH `build_directives` (the
     # mid-chain review-brightline-gate floor, 2026-08-08) and

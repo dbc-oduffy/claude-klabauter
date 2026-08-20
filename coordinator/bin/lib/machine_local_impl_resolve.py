@@ -64,28 +64,43 @@ pair, alongside ``claude_home``/``settings_home`` above: they are a
 spawn-free, direct-``tomllib`` port of
 ``coordinator_core.machine_resolver.registry_dir``/``registry_get``, pinned
 to that oracle by this module's own ``test_machine_local_registry_reader_
-parity.py``. Two divergences from ``_settings_home.settings_home()`` are
-ACCEPTED and do not fall under that parity obligation (both inherited from
-this module's pre-existing ``settings_home()`` above, not introduced by
-these two functions):
+parity.py`` for every case EXCEPT the divergences enumerated below — this is
+NOT a blanket byte-for-byte parity claim. Three divergences are ACCEPTED and
+do not fall under that parity obligation:
   1. Fallback base is ``CLAUDE_HOME or HOME or USERPROFILE or
      expanduser("~")`` here, vs. ``CLAUDE_HOME`` else ``Path.home()`` there —
-     under MSYS, ``HOME`` and ``USERPROFILE`` can differ.
+     under MSYS, ``HOME`` and ``USERPROFILE`` can differ. (Inherited from
+     this module's pre-existing ``settings_home()`` above, not introduced by
+     ``registry_dir``/``registry_get``.)
   2. ``_settings_home`` raises ``ValueError`` (via ``_require_rooted``) on a
      cwd-relative ``COORDINATOR_SETTINGS_HOME``/``CLAUDE_HOME`` override;
-     this module accepts one silently.
-
-``registry_get`` additionally repairs an MSYS/Cygwin mount-form return value
-(``/x/...`` -> ``X:/...``) byte-equivalently to
-``coordinator_core._settings_home.native_path_form`` — this module cannot
-import that seam (see HARD CONSTRAINT below), so the repair is inlined here,
-following the same by-hand-parity precedent as ``claude_home``/
-``settings_home``. Precedent for wrapping a registry-read return value in
-this repair: ``coordinator_core.ops.gen_doe_root_pointer._resolve_doe_root``
-wraps both of its rungs (env override, registry read) in
-``native_path_form(...)`` before returning — the collector's own
-2026-08-16 "REPOS.* LADDER-LOSS FIX" note documents why a stored backslash
-form is a real, live value on this box that must not be silently dropped.
+     this module accepts one silently. (Same inheritance as #1.)
+  3. ``registry_get`` repairs an MSYS/Cygwin mount-form return value
+     (``/x/...`` -> ``X:/...``) on BOTH the env-override rung and the
+     file-read rung, byte-equivalently to
+     ``coordinator_core._settings_home.native_path_form``; the oracle
+     ``machine_resolver.registry_get`` does no normalization anywhere in its
+     body and returns such a value raw — normalization is a caller
+     responsibility there. This is a DELIBERATE divergence, not an oversight:
+     this module's callers are `coordinator/bin/` CLIs whose CLI-spawn
+     fallback rung already returned normalized values, so normalizing here
+     removes a latent inconsistency at that seam rather than introducing one.
+     This module cannot import ``coordinator_core._settings_home`` (see HARD
+     CONSTRAINT below), so the repair is inlined here, following the same
+     by-hand-parity precedent as ``claude_home``/``settings_home``. Precedent
+     for wrapping a registry-read return value in this repair:
+     ``coordinator_core.ops.gen_doe_root_pointer._resolve_doe_root`` wraps
+     both of its rungs (env override, registry read) in
+     ``native_path_form(...)`` before returning — the collector's own
+     2026-08-16 "REPOS.* LADDER-LOSS FIX" note documents why a stored
+     backslash form is a real, live value on this box that must not be
+     silently dropped. Pinned (not merely documented) by
+     ``test_registry_get_repairs_msys_mount_form_for_repos_key``, which
+     asserts both ``mlir.registry_get`` returns the repaired native form AND
+     ``machine_resolver.registry_get`` returns the raw stored value —
+     i.e. it asserts ``mine != theirs`` for this exact case, so the
+     divergence cannot silently drift back into unintended parity or
+     unintended non-parity.
 
 HARD CONSTRAINT: this module MUST NOT import ``coordinator_core``, directly
 or under a ``try/except ImportError`` guard — a guarded import makes
@@ -308,12 +323,17 @@ def registry_get(key: str) -> "str | None":
     dotted keys. Empty string is NOT-FOUND (falls through to the next rung).
     A list value joins with ``"\\n"``. A malformed or absent file degrades to
     ``{}``, never raises. Mirrors
-    ``coordinator_core.machine_resolver.registry_get``, pinned by this
-    module's own ``test_machine_local_registry_reader_parity.py``.
+    ``coordinator_core.machine_resolver.registry_get`` for every case EXCEPT
+    the NORMALIZATION divergence below — NOT a blanket byte-for-byte parity
+    claim — pinned by this module's own
+    ``test_machine_local_registry_reader_parity.py``.
 
-    NORMALIZATION: for a ``repos.*``-shaped key whose stored value carries an
-    MSYS/Cygwin mount form, the return value is repaired to native drive form
-    via ``_native_path_form`` before returning — see module docstring."""
+    NORMALIZATION (deliberate divergence from the oracle — see module
+    docstring's "Three divergences ... ACCEPTED" list, item 3): for a
+    ``repos.*``-shaped key whose stored value carries an MSYS/Cygwin mount
+    form, the return value is repaired to native drive form via
+    ``_native_path_form`` before returning, on both the env-override rung and
+    the file-read rung. The oracle does not do this."""
     env_override = os.environ.get(_env_override_key(key))
     if env_override:
         return _native_path_form(env_override)

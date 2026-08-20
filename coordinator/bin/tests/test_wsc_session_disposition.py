@@ -1383,7 +1383,20 @@ class TestResolveDispositionDetectorCLegWiring(unittest.TestCase):
             ):
                 result = wsc.resolve_disposition(repo, "sid-crashy")
 
-            self.assertEqual(result.disposition, "predecessor-consumed")
+            # Amended 2026-08-20 (C4, docs/plans/2026-08-20-wsc-identity-
+            # gates-key-on-the-deliverable.md): this fixture's evidence is a
+            # bare directory-prefix hit on a one-entry scope, which is
+            # coincidence-prone, so the caller no longer ADOPTS it -- it falls
+            # through to `single-session`. The assertion below used to read
+            # `predecessor-consumed` and was pinning the fall-through C4
+            # removed, not this test's own subject.
+            #
+            # The subject is unchanged and is what the remaining assertions
+            # cover: the detection record still carries the detector-C leg and
+            # its match facts THROUGH the downgrade. That is the property C4
+            # depends on -- lose it and the downgrade becomes indistinguishable
+            # from a genuine "nothing found" close.
+            self.assertEqual(result.disposition, "single-session")
             self.assertEqual(result.detection["deciding_leg"], "detector-c")
             self.assertEqual(result.detection["detector_c_status"], "crash-recovery")
             self.assertEqual(result.detection["matched_scope_entry_count"], 1)

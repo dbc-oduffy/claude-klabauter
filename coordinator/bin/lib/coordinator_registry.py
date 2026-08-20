@@ -130,6 +130,26 @@ def _registry_machine_local_get(key: str) -> str | None:
     probing needed; safe on macOS, Linux, and Windows. CREATE_NO_WINDOW guard
     suppresses the Windows console popup (portable: getattr resolves to 0 on
     non-Windows).
+
+    Documented hazard (review F1, 2026-08-20): for `repos.*` keys, this
+    in-process rung's source-file ladder is `registry.local.toml` then
+    `registry.toml` (machine_local_impl_resolve.registry_get()) — but the
+    real `machine-local get repos.<slug>` CLI routes `repos.*` through a
+    4-rung ladder (REPO_<SLUG> env → marker autodiscovery →
+    path-exceptions.toml → registry.local.toml) that NEVER consults
+    registry.toml for this key class. registry.toml is install-mutable
+    (seeded from a template, then mutated in place by
+    _register_hardware_concern and cockpit-key notices), so a stale non-empty
+    `repos.*` row there can short-circuit this rung and return a value the
+    CLI's ladder would never have produced — not merely a reordering that is
+    "precedence-preserving at the value level," since the CLI's ladder does
+    not have a registry.toml rung to be equivalent to. Inherited from the
+    shared oracle reader and already ratified at 5 other repos.* call sites
+    (gen_claude_doe_shim.py, gen_doe_root_pointer.py, new_project_scaffold.py,
+    render_template_tree.py, repo_bootstrap.py) — not invented here. Do NOT
+    fix by skipping registry.toml for repos.* keys in this function; that is
+    a separate, deliberately deferred cross-site change (all 6 sites
+    together), not a local patch.
     """
     _in_process = _mlir_registry_get(key)
     if _in_process:

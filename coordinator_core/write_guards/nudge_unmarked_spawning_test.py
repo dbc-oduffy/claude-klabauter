@@ -11,7 +11,7 @@ round-trip — modelled directly on the shipped sibling
 posture, same reuse of a pinned text-in/sites-out API rather than
 importing test-collection internals as a production dependency).
 
-RE-SITED FROM A PRE-COMMIT GATE (staff-eng F4/F5, DR-223 point 2): an AST
+RE-SITED FROM A PRE-COMMIT GATE (DR-223 point 2): an AST
 scan of staged test files for pytest markers is a pure function of
 committed tree state — it does not need to run before the commit object
 exists, and it is not un-CI-able, so DR-223 sends it to CI, not a local
@@ -30,7 +30,7 @@ DETECTION reuses `coordinator_core.spawn_policy.sites_in_source` (the
 same pinned text-in/sites-out API `nudge_shell_shaped_spawn` uses) for
 "does this file's post-edit content contain a spawn site", and the
 LIFTED marker-check module `coordinator_core.spawn_policy.marker_check`
-(staff-eng F7 — hoisted out of the ratchet test itself, not re-derived
+(hoisted out of the ratchet test itself, not re-derived
 here and not imported from the pytest module, which would make a module
 with `import pytest` and `_WRAPPER_RESOLVER` construction a production
 dependency of every matching write on this box) for "is that spawn
@@ -38,12 +38,17 @@ covered by a marker."
 
 WHOLE-FILE RECONSTRUCTION is REUSED, not re-derived, from
 `nudge_windows_subprocess_popup` — identical fidelity requirement to
-`nudge_shell_shaped_spawn`'s own reuse of the same helpers. `_extract_content`
+`nudge_shell_shaped_spawn`'s own reuse of the same helpers. `_extract_content_ex`
 is itself fail-open to an EDIT FRAGMENT (unreadable/oversized file, or an
-unresolvable `old_string`) — `has_module_level_pytestmark` is a whole-file
-property that always reads False on a fragment, so this guard's `check`
-detects that fallback (staff-eng F6) and stays silent rather than risk a
-false-positive nudge on a file the fragment cannot prove is unmarked.
+unresolvable `old_string`) and reports that via its own `used_fallback`
+bool — `has_module_level_pytestmark` is a whole-file property that always
+reads False on a fragment, so this guard's `check` reads that flag directly
+(never re-derives it by comparing content against the fragment, which is
+not a sound proxy: a whole-file `Edit` rewrite where `old_string` is the
+entire prior file makes the reconstructed whole file byte-identical to the
+bare fragment even though reconstruction fully succeeded) and stays silent
+rather than risk a false-positive nudge on a file the fragment cannot prove
+is unmarked.
 
 SCOPE is the TEST TREE ONLY (`test_*.py` / `conftest.py`), matching the
 ratchet's own `_iter_test_files` target set — a non-test `.py` write
@@ -89,9 +94,8 @@ from coordinator_core.spawn_policy.marker_check import (
 )
 from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
     _MAX_WHOLE_FILE_BYTES,
-    _extract_content,
+    _extract_content_ex,
     _extract_file_path,
-    _extract_fragment,
 )
 
 CLASS = "advisory"
@@ -169,7 +173,7 @@ def _cap_basename(basename: str, max_bytes: int) -> str:
 
 def _fit_unmarked_names(names: list[str], budget_bytes: int) -> str:
     """Greedily render as many of `names` (already sorted) as fit, UTF-8
-    measured, within `budget_bytes` -- staff-eng F1: the prior
+    measured, within `budget_bytes` -- the prior
     `", ".join(sorted(unmarked_enclosings))` had no cap at all, and an
     absolute `file_path` plus two-or-more real function names routinely
     clears `MESSAGE_PROSE_CAP_BYTES`. Budget-based rather than a fixed
@@ -231,26 +235,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(tool_input, dict):
             return None
 
-        content = _extract_content(tool_name, tool_input, file_path)
+        content, used_fallback = _extract_content_ex(tool_name, tool_input, file_path)
         if not content:
             return None
 
-        if tool_name in ("Edit", "MultiEdit") and content == _extract_fragment(
-            tool_name, tool_input
-        ):
-            # Whole-file reconstruction fell back to the edit fragment
-            # (staff-eng F6) -- has_module_level_pytestmark is a whole-file
-            # property and always reads False on a fragment, which would
-            # false-positive-nudge a file that already carries a covering
-            # pytestmark elsewhere. Stay silent rather than risk a wrong
-            # nudge; `Write` always supplies the true whole file and never
-            # takes this branch.
+        if used_fallback:
+            # Whole-file reconstruction fell back to the edit fragment --
+            # has_module_level_pytestmark is a whole-file property and
+            # always reads False on a fragment, which would false-positive-
+            # nudge a file that already carries a covering pytestmark
+            # elsewhere. Stay silent rather than risk a wrong nudge; `Write`
+            # always supplies the true whole file and never takes this
+            # branch.
             return None
 
         if len(content.encode("utf-8", errors="replace")) > _MAX_WHOLE_FILE_BYTES:
             return None
 
-        # Cheapest, whole-file veto first (staff-eng F5): a single
+        # Cheapest, whole-file veto first: a single
         # `ast.parse` plus a module-level-statements-only walk, before the
         # more expensive `sites_in_source` site collection -- a correctly
         # `pytestmark`-covered file returns here after one parse instead of

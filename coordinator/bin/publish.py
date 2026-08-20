@@ -10331,6 +10331,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"({len(succeeded_row_names)} row(s) landed, {len(failed_row_names)} did not).",
                 file=sys.stderr,
             )
+        # Percolate-push next-step nudge (real incident, 2026-08-20) — a
+        # round commits to the mirror but never pushes it: `coordinator-
+        # auto-push` (coordinator_core/hooks/auto_push.py) declines any
+        # non-`work/*` branch by doctrine, and a mirror publish lands on
+        # `candidate`, so the round itself is the last place that still
+        # knows the target name. Only on a clean round (no failures) — a
+        # PARTIAL round's push-or-not is an EM judgment call, not a default
+        # this line should nudge, so the PARTIAL branch above stays silent
+        # on it.
+        if not args.dry_run and succeeded_row_names and not failed_row_names:
+            _push_targets = (
+                [mirror_expansion[0]] if mirror_expansion is not None else list(succeeded_row_names)
+            )
+            for _push_target in _push_targets:
+                print(
+                    f"Next step: this round is committed to the mirror, not pushed. "
+                    f"Run `percolate-push {_push_target}` to push it."
+                )
         # C14 (docs/plans/2026-08-15-klabauter-release-channels.md) —
         # candidate-to-main divergence report, after the round lands. Skipped
         # under --dry-run: nothing landed to report on, and this run's own

@@ -135,8 +135,8 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator_core/resolve_coordinator_clone.py:143",
         # 2026-08-20 C3 (resolver-call-indirection widening) -- this file's own
         # two sites, see "2026-08-20 C3 WIDENING" note below.
-        "coordinator/bin/lib/coordinator_registry.py:140",
-        "coordinator/bin/lib/coordinator_registry.py:411",
+        "coordinator/bin/lib/coordinator_registry.py:160",
+        "coordinator/bin/lib/coordinator_registry.py:431",
         # 2026-08-20 C3 widening also surfaced the pre-existing `_machine_local_get`
         # helper family below -- same shape, previously invisible. See note below.
         "coordinator/bin/coordinator-doc-new.py:481",
@@ -385,9 +385,9 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # `_spawn_func_name`). This surfaced 22 new sites (line numbers per this
 # census; no conversion performed, all writes-scoped to this file only):
 #
-# `coordinator/bin/lib/coordinator_registry.py:140` (`_registry_machine_local_get`,
+# `coordinator/bin/lib/coordinator_registry.py:160` (`_registry_machine_local_get`,
 # the `cmd = [sys.executable, impl, "get", key]` -> `subprocess.run(cmd)` shape)
-# and `coordinator/bin/lib/coordinator_registry.py:411` (the module-scope
+# and `coordinator/bin/lib/coordinator_registry.py:431` (the module-scope
 # `for _ml_cand in _mlir_machine_local_bin_candidates(): ... subprocess.run(
 # [_ml_cand, "get", "repos.doe_claude"])` bootstrap loop) are this dispatch's
 # own two named targets (this plan's § Problem). Both already try
@@ -526,7 +526,17 @@ def _collect_scope_bindings(
     bindings found in `stmts`, flattening control-flow blocks (`if`/`for`/
     `while`/`try`/`with`) but never descending into a nested function or
     class body -- that is a different scope, handled separately by the
-    caller."""
+    caller.
+
+    ORDER-INSENSITIVE BY DESIGN, NOT JUST IN EFFECT: this pass builds the
+    whole binding map before `_scan_scope` walks any statement, so "single
+    assignment" here means "exactly one assignment site anywhere in scope,"
+    not "exactly one assignment site preceding the call." A call that
+    source-precedes its resolved name's sole assignment would still resolve.
+    This is deliberately not tightened to an execution-order check: real
+    forward-reference use of a local name is a `NameError` at runtime (dead
+    code), so there is no realistic false-positive path through this
+    asymmetry -- see review-findings-s3.md minor note 1."""
     for stmt in stmts:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue

@@ -280,3 +280,50 @@ def test_dangling_plan_fk_still_warns_even_with_inheritance_absent(tmp_path: Pat
     assert verdict["value"] == "unsized"
     assert verdict["basis"] == "origin_plan_id=pln-nope"
     assert verdict["warning"] is not None
+
+
+# ---------------------------------------------------------------------------
+# self_path — a record is never its own upstream plan.
+#
+# A PLAN carries a deliverable_id and lives in the scanned globs, so without
+# this it matches ITSELF and reads `execution` — "already planned", citing
+# itself. That waves through the exact wall condition `plan` exists to catch.
+# Found by running the real brief() over an unsized plan, not by reading it.
+# ---------------------------------------------------------------------------
+
+
+def test_a_plan_does_not_satisfy_its_own_deliverable_citation(tmp_path: Path) -> None:
+    _write_plan_with_deliverable(tmp_path, "docs/plans/2026-08-20-m.md", "dlv-only-mine-abc123")
+    own = tmp_path / "docs/plans/2026-08-20-m.md"
+
+    verdict = compute_sizing_disposition(
+        tmp_path, {"deliverable_id": "dlv-only-mine-abc123"}, self_path=own
+    )
+
+    assert verdict["value"] == "unsized"
+    assert verdict["basis"] is None
+
+
+def test_self_path_does_not_suppress_a_genuine_upstream_plan(tmp_path: Path) -> None:
+    """Negative control: excluding self must not exclude a DIFFERENT plan
+    carrying the same key — that is the inheritance leg working."""
+    _write_plan_with_deliverable(tmp_path, "docs/plans/2026-08-19-upstream.md", "dlv-shared-xyz789")
+    _write_plan_with_deliverable(tmp_path, "docs/plans/2026-08-20-downstream.md", "dlv-shared-xyz789")
+    own = tmp_path / "docs/plans/2026-08-20-downstream.md"
+
+    verdict = compute_sizing_disposition(
+        tmp_path, {"deliverable_id": "dlv-shared-xyz789"}, self_path=own
+    )
+
+    assert verdict["value"] == "execution"
+    assert "2026-08-19-upstream.md" in verdict["basis"]
+
+
+def test_self_path_omitted_keeps_the_baton_behaviour(tmp_path: Path) -> None:
+    """A baton does not live in the scanned globs, so a caller passing one
+    may omit `self_path` — the default must stay the pickup seam's behaviour."""
+    _write_plan_with_deliverable(tmp_path, "docs/plans/2026-08-20-n.md", "dlv-shared-abc123")
+
+    verdict = compute_sizing_disposition(tmp_path, {"deliverable_id": "dlv-shared-abc123"})
+
+    assert verdict["value"] == "execution"
