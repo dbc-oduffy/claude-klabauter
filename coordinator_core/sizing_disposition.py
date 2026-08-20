@@ -39,8 +39,32 @@ _PLAN_ID_SCAN_BYTES = 4096
 
 _PLAN_ID_RE = re.compile(r"""^plan_id:\s*["']?([^"'\s]+)""", re.M)
 
+_PLAN_DELIVERABLE_RE = re.compile(r"""^deliverable_id:\s*["']?([^"'\s]+)""", re.M)
+
 #: The three values of the axis, in precedence order.
 SIZING_DISPOSITION_VALUES: tuple[str, ...] = ("execution", "sized", "unsized")
+
+
+def _plan_frontmatter_head(candidate: Path) -> Optional[str]:
+    """The leading bytes of a plan record, or `None` if unreadable."""
+    try:
+        return candidate.read_text(encoding="utf-8", errors="replace")[:_PLAN_ID_SCAN_BYTES]
+    except OSError:
+        return None
+
+
+def _resolve_plan_by(root: Path, pattern_re: "re.Pattern[str]", wanted: str) -> Optional[str]:
+    """Repo-relative path of the first plan record whose `pattern_re` capture
+    equals `wanted`, or `None`."""
+    for pattern in PLAN_ID_SEARCH_GLOBS:
+        for candidate in sorted(root.glob(pattern)):
+            head = _plan_frontmatter_head(candidate)
+            if head is None:
+                continue
+            match = pattern_re.search(head)
+            if match and match.group(1) == wanted:
+                return candidate.relative_to(root).as_posix()
+    return None
 
 
 def resolve_plan_id(root: Path, plan_id: str) -> Optional[str]:
@@ -49,9 +73,7 @@ def resolve_plan_id(root: Path, plan_id: str) -> Optional[str]:
 
     A `pln-`-prefixed id is a cross-entity ref, not a path (see
     `handoff.schema.json :: origin_plan_id`), so resolution is a frontmatter
-    hunt rather than a stat. Only ever reached when a baton actually cites a
-    plan FK — which is exactly the population the scan buys an `execution`
-    verdict for. A baton citing nothing pays nothing.
+    hunt rather than a stat.
 
     Negative-spec: resolves the FK and stops. Does not read the plan's
     `status`, does not judge whether it is live, abandoned, or superseded,
@@ -59,16 +81,32 @@ def resolve_plan_id(root: Path, plan_id: str) -> Optional[str]:
     was planned upstream, which is the only question this axis asks — plan
     liveness is a separate read with a separate owner.
     """
-    for pattern in PLAN_ID_SEARCH_GLOBS:
-        for candidate in sorted(root.glob(pattern)):
-            try:
-                head = candidate.read_text(encoding="utf-8", errors="replace")[:_PLAN_ID_SCAN_BYTES]
-            except OSError:
-                continue
-            match = _PLAN_ID_RE.search(head)
-            if match and match.group(1) == plan_id:
-                return candidate.relative_to(root).as_posix()
-    return None
+    return _resolve_plan_by(root, _PLAN_ID_RE, plan_id)
+
+
+def resolve_plan_by_deliverable(root: Path, deliverable_id: str) -> Optional[str]:
+    """Repo-relative path of a plan record carrying the SAME
+    `deliverable_id`, or `None`.
+
+    This is the execution leg that matters in practice, and the one an
+    FK-name reading misses. `origin_plan_id` is **fork-spawn** provenance —
+    its own schema description says "the plan under execution when this fork
+    was spawned" — so an ordinary `/handoff` fired mid-`execute-plan` is not
+    a fork and carries neither plan FK. Measured on this corpus at the time
+    this landed: 1 of 150 live batons carried a plan FK; 36 more inherit a
+    plan's `deliverable_id`. Without this leg every one of those 36 computes
+    `unsized` and the EM is sent to the sizing lobby for work planned days
+    earlier — the precise failure the axis exists to prevent, arriving
+    through the field meant to prevent it.
+
+    Why INHERITANCE and not mere presence: `deliverable_id` is minted once
+    at the earliest artifact and carried verbatim downstream, but a
+    `spinoff` mints its OWN fresh `dlv-<slug>-<6hex>`, so a baton having the
+    key proves nothing. A plan on disk carrying the SAME key is the
+    discriminant — a self-minted id matches no plan and correctly stays
+    uncited.
+    """
+    return _resolve_plan_by(root, _PLAN_DELIVERABLE_RE, deliverable_id)
 
 
 def cited_plan_fks(fm: dict[str, Any]) -> list[tuple[str, str]]:
@@ -93,8 +131,12 @@ def compute_sizing_disposition(root: Path, fm: dict[str, Any]) -> dict[str, Any]
 
     Three values, precedence plan-FK-then-`sizing_object`:
 
-      `execution` — a plan FK resolves. Sized AND planned upstream; the EM
-                    resumes and re-litigates neither.
+      `execution` — a plan FK resolves, OR the baton inherits a plan's
+                    `deliverable_id`. Sized AND planned upstream; the EM
+                    resumes and re-litigates neither. The inheritance leg is
+                    the one that carries in practice — see
+                    `resolve_plan_by_deliverable` for why an FK-name reading
+                    misses the ordinary mid-execution continuation.
       `sized`     — a `sizing_object` resolves and no plan FK does. `basis`
                     carries the object's path so the sizing lobby conforms
                     it without a lookup.
@@ -107,6 +149,12 @@ def compute_sizing_disposition(root: Path, fm: dict[str, Any]) -> dict[str, Any]
     dangling citation — "we looked, and this is what did not resolve" is the
     diagnostic a reader needs; silently passing to `execution` on an id that
     nothing on disk declares is the bug.
+
+    A `deliverable_id` that matches NO plan is not a citation and does not
+    reach the `warning` arm: a spinoff minting its own fresh key is the
+    ordinary case, not a dangling pointer. Only `origin_plan_id`/`plan_ids`/
+    `sizing_object` — fields whose whole purpose is to point elsewhere — earn
+    a warning when they fail to resolve.
 
     Negative-spec: this emits a FACT, never a gate. It contributes no
     judgment point, blocks no directive, and never enters `gates.coast` —
@@ -122,6 +170,21 @@ def compute_sizing_disposition(root: Path, fm: dict[str, Any]) -> dict[str, Any]
             return {
                 "value": "execution",
                 "basis": f"{field}={plan_id} -> {resolved}",
+                "warning": None,
+            }
+
+    deliverable_raw = fm.get("deliverable_id")
+    deliverable_id = (
+        deliverable_raw.strip()
+        if isinstance(deliverable_raw, str) and deliverable_raw.strip()
+        else None
+    )
+    if deliverable_id:
+        inherited = resolve_plan_by_deliverable(root, deliverable_id)
+        if inherited:
+            return {
+                "value": "execution",
+                "basis": f"deliverable_id={deliverable_id} -> {inherited} (inherited)",
                 "warning": None,
             }
 
