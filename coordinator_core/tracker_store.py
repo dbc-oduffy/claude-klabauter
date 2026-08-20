@@ -682,6 +682,7 @@ def rotate_month(*, repo_root: Path, month: str, machine: str | None = None) -> 
         rotated_path.write_text(
             existing_text + "".join(line + "\n" for line in new_lines),
             encoding="utf-8",
+            newline="\n",
         )
 
     def _mutate(old_text: str) -> str:

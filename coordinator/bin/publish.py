@@ -7866,19 +7866,13 @@ def _fleet_env_unstaged_names(dest_dir: Path) -> frozenset:
     """The top-level names of `dest_dir` that `_create_publish_staging_dir`
     will NOT stage — empty for any row it stages in full.
 
-    THE single source for that answer, deliberately, because two consumers
-    must agree on it exactly and a previous split between them shipped a
-    defect. `_create_publish_staging_dir` uses it to skip the copy;
-    `_report_published_diff` uses it to keep the same names out of its
-    `dest_dir` walk. Disagreement in either direction produces a change report
-    that contradicts reality BY CONSTRUCTION: a name staged but excluded from
-    the report reads as a phantom `NEW:` on every run, and a name excluded
-    from staging but present in the report reads as a phantom `REMOVE:` —
-    which is not cosmetic, since `percolate-round.py::_extract_change_lines`
-    builds a commit pathspec out of those lines.
+    `_create_publish_staging_dir` is the ONLY caller, deliberately.
+    `_report_published_diff` needs the same answer but derives it by looking
+    at what is actually in `staging_dir` (§ its `_went_unstaged`) rather than
+    calling this — an observation cannot drift from, or race, the decision it
+    observes, and two earlier attempts to share a derivation here did both.
 
-    Both conditions below are load-bearing, and both were originally missing
-    from the report side (review: code-reviewer on c5e5bcf81):
+    Both conditions below are load-bearing:
 
       * root-dest rows only. A `dest_subdir` row's swap renames staging ONTO
         the destination, so declining to stage a name there would destroy it
@@ -8561,36 +8555,68 @@ def _report_published_diff(
     `_create_publish_staging_dir`), and `dest_dir`'s copy is publish
     machinery, never payload this row's report should count.
 
-    The fleet-env family (§ `_FLEET_ENV_STAGING_SKIP_RE`) is excluded from
-    the `dest_dir` side for the SAME structural reason, and the exclusion is
-    NOT optional bookkeeping — it is the other half of
-    `_create_publish_staging_dir`'s skip. Anything that function declines to
+    The fleet-env family (§ `_FLEET_ENV_STAGING_SKIP_RE`) is excluded from the
+    `dest_dir` side for the SAME structural reason, and the exclusion is NOT
+    optional bookkeeping. Anything `_create_publish_staging_dir` declines to
     stage is, by construction, present in `dest_dir` and absent from
-    `staging_dir`, so this function's `set(dest_files) - set(staged_files)`
-    would report every one of its files as a REMOVE. Measured on a live
-    toplevel row: 95,256 phantom REMOVE lines, a ~9MB log, and a
-    `totals.deleted` inflated by the same amount, for a tree the swap never
-    touches (`_swap_publish_staging_into_dest_root` removes top-level FILES
-    only, never directories).
+    `staging_dir`, so `set(dest_files) - set(staged_files)` would report every
+    one of its files as a REMOVE. Measured on a live toplevel row: 95,256
+    phantom REMOVE lines, a ~9MB log, and `totals.deleted` inflated by the
+    same, for a tree the swap never touches
+    (`_swap_publish_staging_into_dest_root` removes top-level FILES only).
 
-    That is not merely a cosmetic report defect, which is why it is pinned by
-    a test rather than left to the reader: `percolate-round.py::
-    _extract_change_lines` parses these exact `NEW:`/`UPDATE:`/`REMOVE:`
-    lines to build the pathspec it hands `scoped-git-commit` (§ that module's
-    docstring). An unexcluded fleet-env would put ~95k paths into a commit
-    pathspec, asking git to record the deletion of a multi-GB provisioned
-    environment that is gitignored and that nothing deleted.
+    Not a cosmetic report defect, which is why it is pinned by tests rather
+    than left to the reader: `percolate-round.py::_extract_change_lines`
+    parses these exact `NEW:`/`UPDATE:`/`REMOVE:` lines to build the pathspec
+    it hands `scoped-git-commit`. An unexcluded fleet-env puts ~95k paths into
+    a commit pathspec, asking git to record the deletion of a gitignored
+    multi-GB environment that nothing deleted.
 
-    Keep the two exclusions in lockstep. A name added to the staging skip
-    without being added here re-opens exactly this defect, silently, and only
-    on a row whose dest actually carries such a directory.
+    `_went_unstaged` OBSERVES that outcome rather than recomputing it: a
+    top-level name is excluded iff it matches the family pattern AND is
+    absent from `staging_dir`. Two earlier attempts re-derived the answer
+    from `dest_dir` instead, and both were wrong in a way this shape cannot
+    be:
+
+      * The first dropped `_create_publish_staging_dir`'s root-dest and
+        directories-only conditions, so a `dest_subdir` row (which stages the
+        family in full) and a top-level FILE (which is staged deliberately,
+        since the swap unlinks top-level files absent from staging) both read
+        as phantom `NEW:`. Presence in `staging_dir` answers both without
+        restating either condition.
+      * The second restored those conditions but scanned `dest_dir` a second
+        time, minutes after the copy, opening a TOCTOU window (review:
+        code-reviewer on 97f0a5830): this machine runs 50-70 concurrent
+        sessions, one of which provisioning a fresh `.fleet-env.gen-<pid>-
+        <hex>` in that gap yields a directory staged in full but excluded
+        from the dest walk — phantom `NEW:` again. A directory that appears
+        after the copy is simply absent from staging and is excluded; one
+        that was staged is present and is reported. No window.
+
+    The rule to preserve is therefore "the report reflects what staging did",
+    never "the report re-derives what staging should have done".
+
+    That rule has a residual requirement `_went_unstaged` does not enforce on
+    its own: it hard-codes `_FLEET_ENV_STAGING_SKIP_RE` as one leg of its AND,
+    and today that agrees with `_create_publish_staging_dir`'s `_ignore`
+    closure only because `_ignore` derives its exclusion set from the same
+    regex (§ `_fleet_env_unstaged_names`). Any future copy-side exclusion
+    added to `_ignore` that does not also match `_FLEET_ENV_STAGING_SKIP_RE`
+    — a hardcoded literal, say — would be excluded from staging while
+    `_went_unstaged` still returned `False` for it, reopening the phantom-
+    `REMOVE:` defect this function exists to close.
     """
     staged_files: dict[str, Path] = {
         p.relative_to(staging_dir).as_posix(): p
         for p in staging_dir.rglob("*")
         if p.is_file()
     }
-    unstaged = _fleet_env_unstaged_names(dest_dir)
+
+    def _went_unstaged(top_level_name: str) -> bool:
+        return _FLEET_ENV_STAGING_SKIP_RE.match(top_level_name) is not None and not (
+            staging_dir / top_level_name
+        ).exists()
+
     dest_files: dict[str, Path] = {}
     if dest_dir.is_dir():
         for p in dest_dir.rglob("*"):
@@ -8599,7 +8625,7 @@ def _report_published_diff(
             rel = p.relative_to(dest_dir).as_posix()
             if rel == ".git" or rel.startswith(".git/"):
                 continue
-            if rel.split("/", 1)[0] in unstaged:
+            if _went_unstaged(rel.split("/", 1)[0]):
                 continue
             dest_files[rel] = p
 

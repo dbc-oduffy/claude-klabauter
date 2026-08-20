@@ -873,6 +873,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # repo_root arrives as None (unused) for this op.
     # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
     "fleet.work_state":                       "none",
+    # fleet.record_history — fleet-generic aggregation of records.history's own
+    # cross-repo derivation (C2), fanned out across every registered ACTIVE
+    # sibling the same way fleet.work_state does. Follows fleet.work_state's
+    # own registration triple verbatim → "none".
+    # Spec: state/dispatch-briefs/2026-08-20-a-counted-fleet-answer-for-record-history/C2.md.
+    "fleet.record_history":                   "none",
     # session.artifact_owner — read-only "who's on this?" read, keyed on an
     # artifact path rather than a UUID or a repo. Its own file read is the
     # caller-supplied artifact_path param, never repo_root-prefixed, and its

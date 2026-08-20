@@ -636,6 +636,115 @@ def coordinator_engine_root_env_exports(value: str) -> dict:
     return {_ENGINE_ROOT_NEW_VAR: value, _ENGINE_ROOT_OLD_VAR: value}
 
 
+# --- C18: the two axes get two variables ----------------------------------
+#
+# Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C18.
+# Canonical axis definition: docs/decisions/DR-326.
+#
+# THE DEFECT THIS ADDRESSES. One variable has been answering two questions:
+#
+#   DISPATCH  "which engine executes?"        -> COORDINATOR_ENGINE_ROOT
+#   LOCATOR   "where is the source checkout?" -> COORDINATOR_ENGINE_SOURCE_ROOT
+#
+# They coincide only on a box whose engine IS the live tree. On a stamped-mirror
+# box -- the direction this workstream is moving -- they differ, and a locator
+# consumer reading the dispatch answer is handed a build output where it wanted
+# a working tree. DR-326's 2026-08-19 refinement is explicit that the old name
+# survives on the LOCATOR axis and dies on the DISPATCH axis.
+#
+# NEGATIVE SPEC -- THE INVARIANT THAT MAKES THIS LANDABLE:
+# **THE EXISTING VARIABLE NEVER CHANGES MEANING. THE LOCATOR EXPORT IS PURELY
+# ADDITIVE.** C10's window is a RENAME window: old and new names carry the SAME
+# value, so a fallback read is always correct. C18 is a SEMANTIC SPLIT: afterwards
+# there are two facts, and a fallback read is correct for only one of them. If
+# this changed what the existing variable means, an unrouted locator consumer in
+# the published mirror, the deployed settings home, or DoE-claude would silently
+# start getting a different answer -- four parties x two MEANINGS, which is not
+# landable in one plan or in ten. Additive-only makes it four parties x two
+# VARIABLES: a consumer that ignores the new one behaves exactly as it does today.
+#
+# DO NOT collapse the two axes "because they are usually the same path". That
+# they are usually equal is what makes the divergence dangerous, not what makes
+# it safe.
+#
+# NAME RATIONALE, held to the same discipline as C10's:
+#   COORDINATOR_ENGINE_SOURCE_ROOT
+#     - No repo token, so the publish depersonalization transform is a no-op on
+#       it and both trees ship one spelling -- the property that made
+#       `engine_root.py` and `COORDINATOR_ENGINE_ROOT` correct.
+#     - Shares the `COORDINATOR_ENGINE_` stem with the dispatch variable, so the
+#       pair reads as two facts about one thing rather than two unrelated knobs.
+#     - `SOURCE` is the discriminator that carries the axis: a source checkout
+#       versus a built engine.
+#   Rejected: `COORDINATOR_SOURCE_ROOT` (ambiguous with the CONSUMING project's
+#   source, which is what most callers mean by "source root");
+#   `COORDINATOR_CHECKOUT_ROOT` (same ambiguity, and "checkout" names a git
+#   operation rather than the thing); `CLAUDE_KLABAUTER_ROOT` retained as the locator name
+#   (carries the repo token the PM ruling removes, and the transform rewrites it).
+_ENGINE_SOURCE_ROOT_VAR = "COORDINATOR_ENGINE_SOURCE_ROOT"
+
+#: Once-per-process, per-site memo for the locator-axis misread advisory.
+#: C18's exit evidence is "no consumer read the dispatch variable on the locator
+#: axis in N days" -- the same observability shape as C10's AC24, one axis over,
+#: and it needs its OWN window because C10's closes on a rename converging while
+#: this one closes on consumers being routed.
+_LOCATOR_MISREAD_EMITTED: "set[str]" = set()
+
+
+def _reset_locator_axis_advisories() -> None:
+    """Test-only helper: clear the locator-misread memo."""
+    _LOCATOR_MISREAD_EMITTED.clear()
+
+
+def coordinator_engine_source_root_env(site: str) -> Optional[str]:
+    """Read accessor for the LOCATOR axis -- where the source checkout is.
+
+    Returns `COORDINATOR_ENGINE_SOURCE_ROOT` when set. Falls back to the
+    dispatch variable ONLY so an unrouted caller keeps working during the
+    transition, and emits once per `site` when it does -- because that fallback
+    is exactly the misread C18 exists to retire, and C18's exit condition is
+    evidence that it stopped happening rather than an assertion that it did.
+
+    Returns None when neither is set: this accessor does not invent a checkout.
+    """
+    own = os.environ.get(_ENGINE_SOURCE_ROOT_VAR, "")
+    if own:
+        return own
+    shared = os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR, "")
+    if not shared:
+        return None
+    _maybe_emit_locator_misread(site)
+    return shared
+
+
+def _maybe_emit_locator_misread(site: str) -> None:
+    """Emit the locator-axis misread advisory (stderr, once per `site`)."""
+    if site in _LOCATOR_MISREAD_EMITTED:
+        return
+    _LOCATOR_MISREAD_EMITTED.add(site)
+    print(
+        f"coordinator_engine_source_root_env[{site}]: no "
+        f"{_ENGINE_SOURCE_ROOT_VAR}; answered from the DISPATCH variable, which "
+        "names the executing engine and may be a published mirror rather than a "
+        "source checkout.",
+        file=sys.stderr,
+    )
+
+
+def coordinator_engine_source_root_exports(source_root: Optional[str]) -> dict:
+    """Write helper: the locator-axis export, or `{}` when unresolvable.
+
+    ADDITIVE BY CONSTRUCTION -- this returns only the locator key and never the
+    dispatch keys, so a caller merging it into an env cannot alter what the
+    dispatch variable means. Returning `{}` rather than raising is deliberate: a
+    box with no registered source checkout must keep spawning children exactly as
+    it does today.
+    """
+    if not source_root:
+        return {}
+    return {_ENGINE_SOURCE_ROOT_VAR: source_root}
+
+
 def published_engine_mirror_path() -> Optional[str]:
     """Return the registered `repos.claude_klabauter` published-engine-mirror
     path, or ``None`` if it is not registered/usable — the SAME

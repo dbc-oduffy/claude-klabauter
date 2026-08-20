@@ -1151,6 +1151,50 @@ def require_colocated_engine_on_path(script_file: str) -> str:
     return _front_insert_on_path(root)
 
 
+def require_dispatch_engine_on_path() -> str:
+    """Resolve the DISPATCH engine root and put it on ``sys.path``, fail-loud.
+
+    The collapse target for the inline bootstrap preamble that ~200 CLIs under
+    ``coordinator/bin`` carry verbatim::
+
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+
+    NOTE THE MISSING PARAMETER, because it is the whole point. Every other
+    ``*_on_path`` wrapper in this module takes ``script_file`` and resolves on the
+    LOCATOR axis — "where is the source checkout", answered by walking up from the
+    calling file. This one takes nothing, because the DISPATCH answer — "which
+    engine executes" — is a property of the box, not of the caller's location. A
+    signature that cannot accept a script path cannot silently be handed one.
+
+    WHY NOT REUSE ``require_engine_on_path``. It is the same shape one axis over
+    and adopting it here looks like the obvious collapse, but on a conformant box
+    with both env vars unset the two ladders return DIFFERENT ROOTS:
+    ``_resolve_claude_klabauter_root()`` reaches the published mirror through the
+    pointer-file/registry rung, while ``resolve_engine_root()`` reaches the live
+    working tree through its self-location rung. Routing the inline copies onto the
+    locator seam therefore repoints every one of them from the published engine to
+    the working tree — a fleet-wide behaviour change wearing a collapse commit's
+    label. Measured and reverted once already; see the plan's delivery notes.
+
+    So this is a SECOND seam on a DIFFERENT axis, not a duplicate of the first. The
+    duplication C16 forbids is two seams answering the same question.
+
+    Catches NOTHING, matching the inline body it replaces: a ``RuntimeError`` from
+    ``_resolve_claude_klabauter_root()`` (every rung missed) propagates to the caller, whose
+    own ``except RuntimeError`` remediation path is usually the reason it is there.
+
+    Returns the resolved dispatch root, so a caller that also needs to hand it to
+    ``cc_invoke`` can end on ``root = require_dispatch_engine_on_path()``.
+
+    Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md
+    (C16), and docs/reference/engine-root-env-var-routing.md for which call sites
+    are on which axis.
+    """
+    return _front_insert_on_path(_resolve_claude_klabauter_root())
+
+
 # ---------------------------------------------------------------------------
 # Seam gate — disk-presence check via find_spec. Note: find_spec on a dotted name
 # imports the parent package (coordinator_core) as a side-effect — sys.path is
@@ -1289,6 +1333,43 @@ def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool
                 pass
 
 
+def _locator_axis_export() -> dict[str, str]:
+    """C18: the LOCATOR-axis export, added alongside the dispatch variable.
+
+    Spec: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C18.
+    Axis definition: docs/decisions/DR-326.
+
+    `CLAUDE_KLABAUTER_ROOT` in the child env carries the DISPATCH answer -- which engine
+    executes -- because that is what `_resolve_claude_klabauter_root()` returns and what
+    this process is about to run. A grandchild asking the LOCATOR question
+    ("where is the source checkout?") reads the same variable and is handed a
+    published mirror. Two facts, one variable.
+
+    NEGATIVE SPEC -- ADDITIVE ONLY. This returns ONLY the locator key. It never
+    touches `CLAUDE_KLABAUTER_ROOT`, `COORDINATOR_ENGINE_ROOT`, or `PYTHONPATH`, so the
+    dispatch variable's meaning and value are byte-identical to before this
+    landed and a child that ignores the new key behaves exactly as it does
+    today. That property is what makes a semantic split landable across four
+    version-skewed parties (live tree, published mirror, deployed settings home,
+    sibling repos) -- it turns "four parties x two meanings" into "four parties
+    x two variables".
+
+    Resolves through `_machine_local_get`, NOT through `_resolve_claude_klabauter_root()`:
+    the registry's `repos.claude_klabauter` IS the locator answer, whereas the
+    ladder deliberately prefers the published engine. Returns `{}` when the key
+    is unset or the lookup fails -- a box with no registered checkout must keep
+    spawning children exactly as it does now, so this is best-effort by design
+    and never raises into the spawn path.
+    """
+    try:
+        source_root = _machine_local_get("repos.claude_klabauter")
+    except Exception:
+        return {}
+    if not source_root:
+        return {}
+    return {"COORDINATOR_ENGINE_SOURCE_ROOT": source_root}
+
+
 def _build_subprocess_env(claude_klabauter_root: str) -> dict[str, str]:
     """Build the subprocess env for a coordinator_core.invoke spawn.
 
@@ -1305,6 +1386,7 @@ def _build_subprocess_env(claude_klabauter_root: str) -> dict[str, str]:
     env: dict[str, str] = _settings_home_env(
         {**os.environ, "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root}, claude_klabauter_root
     )
+    env.update(_locator_axis_export())
     existing_pp = env.get("PYTHONPATH", "")
     _sep = os.pathsep
     if f"{_sep}{claude_klabauter_root}{_sep}" not in f"{_sep}{existing_pp}{_sep}":

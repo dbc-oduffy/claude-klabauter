@@ -45,9 +45,12 @@ docstrings, and D8 in
 mechanism and the two-cycle probe that shows why a live re-derivation
 silently reintroduces the bug C3 fixes.
 
-`applied_at` semantics (settled): `applied_at = observed_at` at creation for
-auto and direct-human events; `applied_at` is `null` ONLY for `tier:
-"suggest"`. A null-`applied_at` event is invisible to
+`applied_at` semantics (settled): `applied_at` is null for `suggest` and
+`deferred` tier, stamped (`= observed_at`) for `auto` and `direct`.
+`emit_snapshot_event` stamps `applied_at = observed_at` unconditionally, by
+design — a snapshot event is never suggest-tier (or deferred-tier) — and is
+a third, deliberately untouched call site, not a missed one. A
+null-`applied_at` event is invisible to
 `tracker_store.read_events` BY CONSTRUCTION — that function already filters
 to `applied_at`-populated events (see its own docstring). That IS the
 mechanism by which suggest-tier transition events do not participate in
@@ -144,7 +147,23 @@ TRANSITION_AXES: frozenset[str] = frozenset(
 ride in a transition event's `axis` field for this plan."""
 
 _SUGGEST_TIER = "suggest"
+_QUEUED_TIER = "deferred"
 _EVENT_ID_DIGEST_LEN = 12
+
+TRANSITION_TIERS: frozenset[str] = frozenset(
+    {"auto", "suggest", "direct", _QUEUED_TIER}
+)
+"""The closed set of transition tiers this plan introduces. `deferred` is
+the queued value (director review, B1/F1) — spelling taken from cockpit's
+own vocabulary; see this chunk's docstring/dispatch brief for the
+collision-check and memo-routing rule if that spelling is ever contested.
+Nothing else may ride in a transition event's `tier` field for this plan."""
+
+_NULL_APPLIED_AT_TIERS: frozenset[str] = frozenset({_SUGGEST_TIER, _QUEUED_TIER})
+"""Tiers whose `_emit`/`_emit_batch`-stamped event carries a null
+`applied_at` — see the module docstring's `applied_at` semantics
+paragraph. `auto` and `direct` both stamp; `emit_snapshot_event` is a
+third, deliberately untouched call site (see that function's docstring)."""
 
 
 class TrackerTransitionError(Exception):
@@ -155,6 +174,8 @@ class TrackerTransitionError(Exception):
     Actual raise sites:
       - `reject_invalid_axis` — a payload naming an `axis` outside the
         closed `TRANSITION_AXES` enum.
+      - `reject_invalid_tier` — a payload naming a `tier` outside the
+        closed `TRANSITION_TIERS` enum.
     """
 
 
@@ -170,6 +191,21 @@ def reject_invalid_axis(axis: str, *, action: str = "construct") -> None:
         raise TrackerTransitionError(
             f"cannot {action} transition event with axis {axis!r} — axis "
             f"must be one of {sorted(TRANSITION_AXES)!r}"
+        )
+
+
+def reject_invalid_tier(tier: str, *, action: str = "construct") -> None:
+    """Guard shared by every transition-event payload constructor, mirroring
+    `reject_invalid_axis` one field over.
+
+    Raises `TrackerTransitionError` unless *tier* is one of the closed
+    `TRANSITION_TIERS` enum values (`auto` / `suggest` / `direct` /
+    `deferred`). Nothing else may ride in a `tier` field for this plan.
+    """
+    if tier not in TRANSITION_TIERS:
+        raise TrackerTransitionError(
+            f"cannot {action} transition event with tier {tier!r} — tier "
+            f"must be one of {sorted(TRANSITION_TIERS)!r}"
         )
 
 
@@ -190,7 +226,8 @@ def transition_event(
     its C2-shaped `_emit` writer).
 
     Raises `TrackerTransitionError` if *axis* is outside the closed
-    `TRANSITION_AXES` enum.
+    `TRANSITION_AXES` enum, or if *tier* is outside the closed
+    `TRANSITION_TIERS` enum.
 
     `from_state` is `null` on an axis's first event. AC7: a `manual_close`
     event with `to_state == "reopened"` and `from_state is None` is LEGAL —
@@ -203,6 +240,7 @@ def transition_event(
     `tier`, `source_observation_id`.
     """
     reject_invalid_axis(axis, action="construct")
+    reject_invalid_tier(tier, action="construct")
     return {
         "item_id": item_id,
         "axis": axis,
@@ -568,7 +606,7 @@ def _emit(payload: dict, *, repo_root: Path) -> dict:
             return existing
 
     observed_at = _stamp_applied_at()
-    applied_at = None if payload.get("tier") == _SUGGEST_TIER else observed_at
+    applied_at = None if payload.get("tier") in _NULL_APPLIED_AT_TIERS else observed_at
 
     event = dict(payload)
     event["observed_at"] = observed_at
@@ -752,7 +790,11 @@ def _emit_batch(payloads: list[dict], *, repo_root: Path) -> list[dict]:
             prepared.append((False, existing))
         else:
             observed_at = _stamp_applied_at()
-            applied_at = None if payload.get("tier") == _SUGGEST_TIER else observed_at
+            applied_at = (
+                None
+                if payload.get("tier") in _NULL_APPLIED_AT_TIERS
+                else observed_at
+            )
             event = dict(payload)
             event["observed_at"] = observed_at
             event["applied_at"] = applied_at

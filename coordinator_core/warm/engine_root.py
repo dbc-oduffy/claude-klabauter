@@ -30,6 +30,16 @@ predicate, nothing wired to a caller yet. C3 collapses the seven sites onto
 this module; C4 is the chunk that adds the fail-closed raise for dispatch.
 Landing the raise here would make C3's pure collapse an accidental
 behaviour change, which its own body forbids.
+
+NOT TO BE CONFUSED WITH `coordinator_core.engine_root` -- same basename,
+different package, different question. This module (`coordinator_core.warm.
+engine_root`) is the STAMP PREDICATE: "is this directory a valid engine
+build?", answered from the stamp file alone, no env/registry/pointer
+lookups. `coordinator_core.engine_root` (top-level) is the RESOLUTION
+LADDER: "which directory should THIS caller treat as its engine root?",
+walking the env var -> pointer file -> machine-local registry ->
+published-mirror precedence chain. Neither imports the other.
+Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C1
 """
 
 from __future__ import annotations

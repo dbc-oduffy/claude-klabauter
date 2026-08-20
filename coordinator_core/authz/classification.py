@@ -2229,6 +2229,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"repos": {...}, "errors": [...]} only.
     # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
     "fleet.work_state": OpClass.COMPUTE_ONLY,
+    # fleet.record_history — COMPUTE_ONLY: fans records.history's own
+    # derive_type_history() out across every registered active sibling (read
+    # via _memo_resolver.read_registry_repos(), itself read-only) and returns
+    # the aggregated answer verbatim, the same shape as fleet.work_state above.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Every per-repo call is derive_type_history() (pure `git log -p -U0`
+    #      reader, see records.history's own affirmation above).
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"repos": {...}, "errors": [...]} only.
+    # Spec: state/dispatch-briefs/2026-08-20-a-counted-fleet-answer-for-record-history/C2.md.
+    "fleet.record_history": OpClass.COMPUTE_ONLY,
     # session.artifact_owner — COMPUTE_ONLY: opens the caller-supplied
     # artifact_path for READ ONLY, extracts owner id(s) via frontmatter
     # primitives, and resolves each through reachability.resolve_address()

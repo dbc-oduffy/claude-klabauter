@@ -91,6 +91,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.archive_completed_plans":          "coordinator_core.ops.fleet.archive_plans",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",
     "fleet.work_state":                       "coordinator_core.ops.fleet.work_state",
+    "fleet.record_history":                   "coordinator_core.ops.fleet.record_history",
     "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_handoffs",
     "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
     "fleet.aggregate_capability_index":       "coordinator_core.ops.fleet.capability_index",

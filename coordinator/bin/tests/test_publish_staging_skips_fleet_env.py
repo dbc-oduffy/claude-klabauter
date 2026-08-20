@@ -59,7 +59,14 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 
-def _seed_dest(root: Path, *, with_git: bool) -> Path:
+def _seed_dest(root: Path, *, with_git: bool, prior_as_file: bool = False) -> Path:
+    """`prior_as_file` swaps `.fleet-env.prior` from its usual directory shape
+    for a top-level FILE of the same, regex-matching name. It exists as an
+    opt-in rather than a blanket change to every caller because the
+    directory shape is what most of this file's tests need to pin the
+    top-level/nested and root-dest/subdir gates; only the FILE-vs-directory
+    tests below need the file shape, and on the same basename so the regex
+    match is not itself in question."""
     dest = root / "dest"
     (dest / "coordinator_core").mkdir(parents=True)
     (dest / "coordinator_core" / "real.py").write_text("payload\n", encoding="utf-8")
@@ -67,6 +74,9 @@ def _seed_dest(root: Path, *, with_git: bool) -> Path:
         (dest / ".git").mkdir()
         (dest / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     for name in (".fleet-env", ".fleet-env.prior", ".fleet-env.gen-72332-47c78a42"):
+        if name == ".fleet-env.prior" and prior_as_file:
+            (dest / name).write_text("prior-file-v1\n", encoding="utf-8")
+            continue
         env = dest / name / "Lib" / "site-packages"
         env.mkdir(parents=True)
         (env / "vendored.py").write_text("# not ours\n", encoding="utf-8")
@@ -177,38 +187,122 @@ def test_published_diff_reports_a_subdir_row_in_full(tmp_path):
     assert totals.synced == 0 and totals.deleted == 0, report
 
 
-def test_published_diff_reports_a_top_level_fleet_env_FILE(tmp_path):
-    """Directory-only, on both sides. A top-level FILE carrying one of these
-    names IS staged (the root-dest swap unlinks top-level files absent from
-    staging), so it must also be reported — otherwise it reads as a phantom
-    `NEW:` forever. `.fleet-env.lock` is the real instance."""
-    dest = _seed_dest(tmp_path, with_git=True)
-    (dest / ".fleet-env.lock").write_text("", encoding="utf-8")
-    (dest / ".fleet-env.prior-notes").write_text("x\n", encoding="utf-8")
+def test_published_diff_reports_a_top_level_fleet_env_FILE_that_changed(tmp_path):
+    """Directory-only, on both sides — proven by a FILE that positively
+    matches `_FLEET_ENV_STAGING_SKIP_RE` (`.fleet-env.prior`, via
+    `prior_as_file=True`), not one that merely happens to start with the same
+    prefix. A top-level FILE carrying this name IS staged (the root-dest swap
+    unlinks top-level files absent from staging), so it must also be
+    reported — otherwise it reads as a phantom `UPDATE:` forever, or worse,
+    silently drops a real change.
+
+    This is the byte-differs half: staging is mutated after copy so the two
+    sides genuinely disagree, and the assertions require the name to be
+    present under BOTH `staging_dir` and `dest_dir` (not merely absent from
+    both diff lists, which would pass just as well if the name were dropped
+    from staging entirely — the vacuity `.fleet-env.lock` used to hide,
+    since that name never matches the regex in the first place). If
+    `entry.is_dir()` were dropped from `_fleet_env_unstaged_names`, this file
+    would be swept into `unstaged` (it matches the regex) and never staged at
+    all, so `(staging / ...).is_file()` below would fail first."""
+    dest = _seed_dest(tmp_path, with_git=True, prior_as_file=True)
 
     staging = publish._create_publish_staging_dir(dest)
 
-    assert (staging / ".fleet-env.lock").is_file()
+    assert (staging / ".fleet-env.prior").is_file()
+    assert (dest / ".fleet-env.prior").is_file()
+    (staging / ".fleet-env.prior").write_text("prior-file-v2\n", encoding="utf-8")
+
     buf = io.StringIO()
     totals = publish.RunTotals()
     publish._report_published_diff(staging, dest, totals, out=buf)
+    report = buf.getvalue()
 
-    # Staged and unchanged on both sides, so it appears in neither list.
-    assert totals.synced == 0 and totals.deleted == 0, buf.getvalue()
+    assert any(
+        line.strip().startswith("UPDATE:") and ".fleet-env.prior" in line
+        for line in report.splitlines()
+    ), report
+    assert totals.synced == 1 and totals.deleted == 0, report
 
 
-def test_fleet_env_unstaged_names_is_the_shared_answer(tmp_path):
-    """Both consumers read this one helper, so the drift the paired docstrings
-    warn about cannot happen by editing one call site."""
-    root_dest = _seed_dest(tmp_path / "a", with_git=True)
-    (root_dest / ".fleet-env.lock").write_text("", encoding="utf-8")
+def test_published_diff_reports_a_top_level_fleet_env_FILE_that_matches(tmp_path):
+    """The other half of the pairing above: same FILE, unchanged between
+    staging and dest, must appear in NEITHER the `NEW:`/`UPDATE:` list nor the
+    `REMOVE:` list — the only way to prove `totals.synced == 0 and
+    totals.deleted == 0` reflects "present and identical on both sides"
+    rather than "absent from both", which the single-assertion version of
+    this test could not distinguish."""
+    dest = _seed_dest(tmp_path, with_git=True, prior_as_file=True)
+
+    staging = publish._create_publish_staging_dir(dest)
+
+    assert (staging / ".fleet-env.prior").is_file()
+    assert (dest / ".fleet-env.prior").is_file()
+    assert (staging / ".fleet-env.prior").read_text(encoding="utf-8") == (
+        dest / ".fleet-env.prior"
+    ).read_text(encoding="utf-8")
+
+    buf = io.StringIO()
+    totals = publish.RunTotals()
+    publish._report_published_diff(staging, dest, totals, out=buf)
+    report = buf.getvalue()
+
+    assert ".fleet-env.prior" not in report, report
+    assert totals.synced == 0 and totals.deleted == 0, report
+
+
+def test_report_excludes_a_generation_dir_created_after_the_staging_copy(tmp_path):
+    """Pins the TOCTOU closure commit `08f4dc693` introduced: `_went_unstaged`
+    (§ `_report_published_diff`) observes what `staging_dir` actually holds
+    instead of re-scanning `dest_dir` a second time.
+
+    This machine runs 50-70 concurrent sessions (`docs/wiki/machine-load-norm.md`);
+    a fresh `.fleet-env.gen-<pid>-<hex>` can be provisioned by another one in
+    the window between `_create_publish_staging_dir`'s copy and
+    `_report_published_diff`'s walk. This test pins the observable behaviour:
+    a `.fleet-env.gen-*` directory appearing in `dest_dir` after the staging
+    copy must produce no `REMOVE:`/`NEW:` line and must not inflate `totals`,
+    because those lines feed `percolate-round.py::_extract_change_lines`'s
+    commit pathspec.
+
+    It does NOT discriminate `_went_unstaged` from the prior `dest_dir`-re-
+    deriving shape — that shape happens to reach the same answer for this
+    input too. The reason to prefer `_went_unstaged` is the absence of a
+    second `dest_dir` scan, and therefore of a window at all, which is a
+    structural property no black-box test over this function can observe."""
+    dest = _seed_dest(tmp_path, with_git=True)
+
+    staging = publish._create_publish_staging_dir(dest)
+
+    late_gen = dest / ".fleet-env.gen-99999-deadbeefcafe" / "Lib" / "site-packages"
+    late_gen.mkdir(parents=True)
+    (late_gen / "vendored.py").write_text("# arrived after the copy\n", encoding="utf-8")
+
+    buf = io.StringIO()
+    totals = publish.RunTotals()
+    publish._report_published_diff(staging, dest, totals, out=buf)
+    report = buf.getvalue()
+
+    assert not [line for line in report.splitlines() if ".fleet-env" in line], report
+    assert totals.deleted == 0, report
+    assert totals.synced == 0, report
+
+
+def test_fleet_env_unstaged_names_root_dest_directories_only(tmp_path):
+    """`_fleet_env_unstaged_names` has exactly one caller —
+    `_create_publish_staging_dir` — after commit `08f4dc693` split the
+    report side onto its own `_went_unstaged` closure over `staging_dir`
+    (§ `_report_published_diff`'s docstring, "two earlier attempts to share a
+    derivation here did both [fail]"). This test pins this helper's own two
+    gates directly, not as a stand-in for the report side's behaviour."""
+    root_dest = _seed_dest(tmp_path / "a", with_git=True, prior_as_file=True)
     subdir_dest = _seed_dest(tmp_path / "b", with_git=False)
 
     assert publish._fleet_env_unstaged_names(root_dest) == frozenset(
-        {".fleet-env", ".fleet-env.prior", ".fleet-env.gen-72332-47c78a42"}
+        {".fleet-env", ".fleet-env.gen-72332-47c78a42"}
     )
-    # A file, not a directory — never unstaged.
-    assert ".fleet-env.lock" not in publish._fleet_env_unstaged_names(root_dest)
+    # A file, not a directory — never unstaged, even though its name matches.
+    assert ".fleet-env.prior" not in publish._fleet_env_unstaged_names(root_dest)
     # Not a root-dest row — nothing is unstaged at all.
     assert publish._fleet_env_unstaged_names(subdir_dest) == frozenset()
     assert publish._fleet_env_unstaged_names(tmp_path / "absent") == frozenset()
@@ -233,13 +327,27 @@ def test_skip_pattern_is_anchored_to_the_family(name, skipped):
 
 
 def test_a_fleet_env_FILE_at_top_level_is_still_copied(tmp_path):
-    """`.fleet-env.lock` is a FILE, and the root-dest swap DOES delete a
-    top-level file that is absent from staging (only directories are exempt).
-    Skipping it from the copy would therefore delete a lock another session may
-    be holding — so the skip is directory-gated, and this pins that."""
-    dest = _seed_dest(tmp_path, with_git=True)
-    (dest / ".fleet-env.lock").write_text("", encoding="utf-8")
+    """`.fleet-env.prior` here is seeded as a FILE (`prior_as_file=True`), not
+    a directory — it therefore DOES match `_FLEET_ENV_STAGING_SKIP_RE`, unlike
+    `.fleet-env.lock`/`.fleet-env.prior-notes` used previously, which never
+    matched the pattern at all and so could not distinguish the `is_dir()`
+    gate from "doesn't match the regex in the first place": mutating
+    `entry.is_dir()` out of `_fleet_env_unstaged_names` would have left both
+    of those tests green.
+
+    With the regex genuinely matching, only `entry.is_dir()` keeps this name
+    out of `unstaged` and therefore out of `_ignore`'s exclusion set. Delete
+    that condition and this file's basename joins `unstaged`, `_ignore`
+    starts returning it from `_create_publish_staging_dir`'s `copytree`
+    callback, and the assertion below goes red — proving the condition is
+    load-bearing rather than merely present.
+
+    The root-dest swap DOES delete a top-level file that is absent from
+    staging (only directories are exempt), so skipping the copy would delete
+    a file another session may be holding — the reason the skip is
+    directory-gated at all."""
+    dest = _seed_dest(tmp_path, with_git=True, prior_as_file=True)
 
     staging = publish._create_publish_staging_dir(dest)
 
-    assert (staging / ".fleet-env.lock").is_file()
+    assert (staging / ".fleet-env.prior").is_file()

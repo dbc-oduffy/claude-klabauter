@@ -683,7 +683,7 @@ def _bind_null_std_streams() -> None:
     """
     for name in ("stdout", "stderr"):
         if getattr(sys, name, None) is None:
-            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8", newline="\n"))
 
 
 def _worker_process_init() -> None:

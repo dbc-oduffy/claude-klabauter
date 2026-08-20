@@ -418,6 +418,68 @@ def test_applied_at_null_only_for_suggest_tier(repo_root):
 
 
 # ---------------------------------------------------------------------------
+# C1 — closed tier vocabulary (TRANSITION_TIERS), and the queued (`deferred`)
+# value's applied_at/AC3 four-row table.
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_tier_rejected_with_typed_error():
+    with pytest.raises(tt.TrackerTransitionError):
+        tt.transition_event(
+            "item-tier-1",
+            "manual_close",
+            "closed",
+            actor="human",
+            evidence=None,
+            tier="not_a_real_tier",
+            source_observation_id=None,
+        )
+
+
+def test_ac3_four_row_tier_table_through_emit_transition(repo_root):
+    """AC3's regression lock (director review, F8): each tier's event is
+    emitted through `emit_transition`, not `_emit` directly, so the row
+    proves the constructor's tier gate actually runs on this path."""
+    rows = {}
+    for index, tier in enumerate(sorted(tt.TRANSITION_TIERS)):
+        rows[tier] = tt.emit_transition(
+            f"item-tier-row-{index}",
+            "manual_close",
+            "closed",
+            actor="human" if tier in ("direct", "deferred") else "auto",
+            evidence=None,
+            tier=tier,
+            source_observation_id=None if tier == "direct" else f"obs-{tier}",
+            repo_root=repo_root,
+        )
+
+    assert set(rows) == {"auto", "suggest", "direct", "deferred"}
+    assert rows["auto"]["applied_at"] == rows["auto"]["observed_at"]
+    assert rows["direct"]["applied_at"] == rows["direct"]["observed_at"]
+    assert rows["suggest"]["applied_at"] is None
+    assert rows["deferred"]["applied_at"] is None
+
+
+def test_ac2_direct_tier_reopen_cascade_still_stamps_applied_at(repo_root):
+    """AC2 regression this chunk exists to avoid introducing: a `direct`-tier
+    reopen-cascade event (`_build_reopen_cascade`/`_REOPEN_TIER`) must still
+    stamp `applied_at`, not fall into the newly widened null set."""
+    payloads = tt._build_reopen_cascade(
+        "item-tier-reopen",
+        {"code_complete": "asserted", "qa_verified": "verified"},
+        actor="human",
+    )
+    assert all(payload["tier"] == "direct" for payload in payloads)
+
+    stored = tt._emit_batch(payloads, repo_root=repo_root)
+    assert stored
+    for event in stored:
+        assert event["tier"] == "direct"
+        assert event["applied_at"] == event["observed_at"]
+        assert event["applied_at"] is not None
+
+
+# ---------------------------------------------------------------------------
 # Review: coordinator:code-reviewer, P1 — `_find_existing_by_address` scans
 # the SAME shared shard `tracker_entities.py` writes into (and this
 # module's own `kind: "snapshot"` events land in), and neither shape
