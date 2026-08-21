@@ -108,9 +108,16 @@ WHAT "ESTABLISH" MEANS, MECHANICALLY -- `_boot_isolated_server()` below:
   6. Teardown (always, via `finally`): terminate the spawned server
      (`psutil`, mirroring `warm-engine-stop.py`'s direct-signal fallback --
      no graceful ask needed, this server has exactly one client, this
-     fixture) and remove the isolated directory. Hardlinks share the
-     source clone's file DATA, never its directory entries -- deleting the
-     isolated tree's entries does not touch the source clone's files.
+     fixture), remove the breadcrumb's OWN directory
+     (`breadcrumb.svc_dir(engine_root=isolated_root)` --
+     `%LOCALAPPDATA%/coordinator/warm/<clone_hash>/`, machine-global and
+     OUTSIDE the isolated clone -- found missing in revision 1 by code
+     review: the temp-clone rmtree below never touched it, so every run
+     left a permanent stray directory naming a dead pid in the same store
+     a human or agent reads to answer "is there a warm engine, and
+     whose"), then remove the isolated directory itself. Hardlinks share
+     the source clone's file DATA, never its directory entries -- deleting
+     the isolated tree's entries does not touch the source clone's files.
 
 REPRESENTATIVE OF WHAT, PRECISELY -- the source clone's `coordinator_core`
 bytes AS OF THE HARDLINK (a point-in-time snapshot immune to a concurrent
@@ -296,6 +303,18 @@ def warm_engine_root() -> Iterator[Path]:
                 proc.terminate()
             except OSError:
                 pass
+        # The breadcrumb does NOT live inside `isolated_root` -- `svc_dir`
+        # resolves it under the machine-global, per-clone-hash runtime base
+        # (`%LOCALAPPDATA%/coordinator/warm/<clone_hash>/`, see
+        # `breadcrumb.svc_dir`'s own docstring), so rmtree-ing the temp
+        # clone alone leaves that directory behind forever -- a permanent,
+        # ever-growing stray naming a server that will never exist again.
+        # Safe to remove UNCONDITIONALLY here (never `unlink_breadcrumb`'s
+        # ownership-checked partial case): `isolated_root` is a freshly
+        # `mkdtemp`'d path unique to THIS run, so its derived clone hash can
+        # by construction never collide with a real clone's, and this run
+        # is the only possible writer of anything under it.
+        shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         shutil.rmtree(tmp_parent, ignore_errors=True)
 
 

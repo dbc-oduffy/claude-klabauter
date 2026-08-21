@@ -10,6 +10,17 @@ different target script; this module factors it into ONE call so the Windows-vs-
 selection, stdio redirection, and interpreter-resolution fallback are get-right-once, not
 hand-copied per call site and independently drift-prone.
 
+GAP CLOSED 2026-08-21 (state/handoffs/2026-08-21_103635_reaching-the-warm-engine.md): the
+precedent above carries TWO more properties this module had not copied -- `script_path`
+resolved against a fixed anchor rather than the calling process's own `os.getcwd()` (auto_push
+uses `__file__`, itself immune to caller cwd; this module now uses `repo_root`, its own
+explicit parameter, for the same reason), and the child's `PYTHONPATH` carrying that anchor's
+directory so `import coordinator_core` inside the child resolves the INTENDED tree rather than
+whatever this box's ambient editable install happens to be pinned to. Missing either one
+produced a detached child that either could not find its own script or booted against the
+wrong engine root -- both silently, both indistinguishable from success at this call site's own
+`True`/`False` return. See `spawn_detached`'s and `_child_env`'s own docstrings.
+
 Contract: `spawn_detached(script_path, args)` NEVER raises into its caller. Any failure to
 resolve an interpreter, or any exception raised by `subprocess.Popen` itself, is caught and
 appended to the shared housekeeping-failures log (below) — the spawn is fire-and-forget
@@ -175,6 +186,35 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
         pass
 
 
+def _child_env(repo_root: str) -> dict:
+    """Build the detached child's environment: `PYTHONPATH` with `repo_root` PREPENDED
+    ahead of anything already there, everything else inherited from this process's own
+    `os.environ`.
+
+    Mirrors `auto_push._respawn_env`'s `_claude_klabauter_package_root()` injection -- the SAME
+    defect class, the SAME proven fix. That precedent's own docstring names it exactly:
+    "Both respawn call sites launch the child by resolved ABSOLUTE SCRIPT PATH, never
+    `-m` ... Running the script directly puts only `<pkg>/hooks/` on `sys.path[0]`, so
+    `coordinator_core` itself isn't importable regardless of cwd" -- fixed there by
+    prepending the package's own containing directory to `PYTHONPATH`, not by switching
+    to `-m`. This module's own prior form respawned by absolute script path but never
+    carried this half of the precedent, which is exactly the gap this function closes:
+    without it, `import coordinator_core` inside the child resolves via whichever
+    finder in `sys.meta_path` answers first once `sys.path[0]` (the SCRIPT's own
+    directory, not `repo_root`) comes up empty -- on this box, this box's editable
+    install's own finder, unconditionally pointing at wherever `pip install -e` last
+    ran, regardless of which `repo_root` this call meant to serve. `PathFinder` is
+    checked before any editable-install finder in `sys.meta_path` (verified live,
+    2026-08-21), so a `repo_root` reachable via `PYTHONPATH` wins the resolution before
+    that finder is ever consulted -- deterministically, regardless of both the calling
+    process's cwd and this box's ambient editable-install pin.
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = repo_root + (os.pathsep + existing if existing else "")
+    return env
+
+
 def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None = None) -> bool:
     """Spawn `script_path` as a detached child process, fully disowned from the parent's
     stdio, on both POSIX and Windows -- the shared shape C17's other chunks (C2/C5/C14)
@@ -185,11 +225,37 @@ def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None 
     depending on the caller's cwd, and a detached child's failure is invisible, so the
     respawn form itself must not be the thing that breaks.
 
+    THE FIX THIS ROW CARRIES (found 2026-08-21, state/handoffs/2026-08-21_103635_
+    reaching-the-warm-engine.md): `script_path` is now resolved against `repo_root`
+    (`Path(repo_root) / script_path` when relative; unchanged when already absolute --
+    `Path.__truediv__` discards the left operand for an absolute right one, so this is a
+    no-op for a caller that already passes an absolute path), NEVER against this
+    process's own `os.getcwd()`. A relative `script_path` resolved via bare
+    `os.path.abspath` depends on whichever cwd the CALLING process happens to have --
+    for `warm.client._spawn_once` and `ops.session.warm_start.warm_start`, that is
+    whichever of ~20 fleet repos the session issuing the call happens to be in, almost
+    never `repo_root` itself. Confirmed live: from an unrelated cwd, the prior form
+    resolved to a nonexistent path and the spawned interpreter exited(2) "can't open
+    file" before a single line of this repo's code ran -- silently, because a detached
+    child's stdio is DEVNULL'd by design and its exit code is never read (see this
+    docstring's own "NEVER raises" paragraph). `cwd=repo_root` is now also passed to
+    `Popen` explicitly, so the child's OWN relative-path assumptions (state/ writes,
+    breadcrumbs) are anchored the same deterministic way, never to whatever cwd this
+    process inherited. See `_child_env`'s own docstring for the second half of this
+    fix (the `PYTHONPATH` injection) -- resolving the script path alone is not enough;
+    even a correctly-found script still imported the WRONG `coordinator_core` without it
+    (confirmed live: the resolved-path fix in isolation still fell through to this box's
+    ambient editable-install pin and raised `UnstampedEngineRootError`).
+
     NEVER raises. Returns True if `Popen` was invoked without raising (the child's own
     eventual exit code is NOT observed here -- this call only asserts the spawn itself
-    didn't fail), False if interpreter resolution or `Popen` itself failed; both a resolution
-    failure and a `Popen` exception are appended to the shared housekeeping-failures log
-    before returning False.
+    didn't fail), False if interpreter resolution, the resolved script's own existence, or
+    `Popen` itself failed; every one of those three is appended to the shared
+    housekeeping-failures log before returning False -- the script-existence check is new
+    with this row (a single `Path.exists()` stat, paid once per spawn attempt, never on
+    the warm dispatch hot path this function is not called from) and exists because the
+    prior code had no way to distinguish "found the file, spawned it" from "resolved to
+    nothing, spawned a doomed interpreter anyway" -- both returned `True`.
 
     Deliberate isolation boundary -- MUST NOT be converted to an in-process
     call, ever, under any future refactor of this arm. Mechanism: detached
@@ -203,11 +269,18 @@ def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None 
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
     """
     args = list(args) if args is not None else []
-    script_path = os.path.abspath(script_path)
+    resolved_path = Path(repo_root) / script_path
+    script_path = str(resolved_path)
     python_exe = _resolve_python_exe()
     if not python_exe:
         _log_spawn_failure(
             repo_root, script_path, args, RuntimeError("no python interpreter resolvable")
+        )
+        return False
+    if not resolved_path.is_file():
+        _log_spawn_failure(
+            repo_root, script_path, args,
+            FileNotFoundError(f"resolved script does not exist: {resolved_path}"),
         )
         return False
 
@@ -222,6 +295,8 @@ def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None 
     try:
         subprocess.Popen(
             [python_exe, script_path, *args],
+            cwd=repo_root,
+            env=_child_env(repo_root),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
