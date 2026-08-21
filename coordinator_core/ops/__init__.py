@@ -117,6 +117,7 @@ _logger = _logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ping", 'registers "ping"'),
+    ("coordinator_core.ops.invoke_from_argv", 'registers "invoke.from_argv"'),
     ("coordinator_core.ops.cutover_gate", 'registers "cutover.gate"'),
     ("coordinator_core.ops.cutover_advance", 'registers "cutover.advance"'),
     (

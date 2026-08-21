@@ -4159,6 +4159,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "session.warm_start": OpClass.MUTATING,
     "session_baton.mint": OpClass.MUTATING,
     "session_baton.promote": OpClass.MUTATING,
+    # emission.publish — MUTATING, DR-208's fail-closed AMBIGUITY DEFAULT (NOT an
+    # extension of DR-208 §2's criterion, which is coordinator-substrate-scoped: state/
+    # files, queues, git objects/refs, on-disk records). This op's only effect is an
+    # outbound HTTP POST to a third-party sink (cockpit's fleet-emissions collection) --
+    # it writes nothing to coordinator substrate and nothing to rag's relational store.
+    # An outbound external side-effect does not obviously fall inside or outside that
+    # substrate criterion either way, so the classification rests on DR-208's own
+    # documented default for ambiguous cases (new ops classify MUTATING until a reviewer
+    # explicitly affirms COMPUTE_ONLY), invoking no new authority beyond that default.
+    #
+    # Enforces nothing on the in-process path TODAY: coordinator_core/authz/contract.py
+    # is vacated (DR-215/C8 retired Scope, is_authorized, and
+    # requires_single_writer_queue) and dispatch_message does not call classify().
+    # MUTATING here is correct retained metadata -- what the drift guard expects and what
+    # a future re-introduced transport shim (DR-215 § 6) would read -- not an active
+    # safety gate. Do not read this entry as evidence the op is currently authz-gated.
+    # Spec: docs/plans/2026-08-21-emission-publish-producer.md § C4 (AC14)
+    "emission.publish": OpClass.MUTATING,
 })
 
 

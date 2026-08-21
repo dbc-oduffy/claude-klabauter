@@ -1,17 +1,12 @@
 """
-Tests for `coordinator_core.engine_root_census` -- the durable sink that
-makes C14's item 4 ("no site has read the fallback in N days") answerable
-at all.
+Tests for `coordinator_core.engine_root_census` -- the durable stale-pin
+regression detector for the retired `CLAUDE_KLABAUTER_ROOT` fallback.
 
 Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md
-               chunk C14 item 4 / AC24 clause 2.
-
-The load-bearing test in this file is
-`test_fresh_series_does_not_evidence_absence`: every other property here is
-ordinary bookkeeping, but a census that reports a day-old empty sink as
-"zero reads for 7 days" would licence closing the dual-read window on
-evidence that does not exist -- the exact defect the sink was built to
-remove, one layer down.
+               chunk C14 item 4 / AC24 clause 2 -- SUPERSEDED by C23's
+               three-leg ratchet at `02ef8ae9de77`; this module reports
+               observations only, never a verdict. See the module
+               docstring.
 """
 
 from __future__ import annotations
@@ -36,60 +31,20 @@ def _census(sink, **kw):
     return engine_root_census.census(sink_root=sink, **kw)
 
 
-# --- the absence verdict --------------------------------------------------
+# --- observation counters --------------------------------------------------
 
 
-def test_missing_series_does_not_evidence_absence(sink):
-    """No prior sink data reads as "we started watching just now", never
-    "nothing happened". C24: calling `census()` at all starts the watch
-    clock (the sentinel), so `series_present` flips True on the FIRST call
-    even with zero reads ever recorded -- but the window has not elapsed
-    yet, so the verdict still cannot clear."""
+def test_missing_series_reports_no_observations(sink):
+    """No prior sink data reads as "never observed", not an error."""
     report = _census(sink)
-    assert report["series_present"] is True
-    assert report["watch_start_ts"] == pytest.approx(_NOW)
-    assert report["observed_days"] == pytest.approx(0.0)
-    assert report["evidences_absence"] is False
+    assert report["series_present"] is False
     assert report["total_reads"] == 0
     assert report["days_since_last"] is None
 
 
-def test_fresh_series_does_not_evidence_absence(sink):
-    """A series younger than the window CANNOT evidence absence over that
-    window, however quiet it is.
-
-    This is the whole point of the module. The sink here has one read a day
-    old, so the 7-day window is empty of reads for its last ~6 days -- and
-    the verdict must still be False, because the series was not watching
-    for the other six.
-    """
-    engine_root_census.record_fallback_read(
-        "some.site", sink_root=sink, now=_NOW - (1 * _DAY)
-    )
-    report = _census(sink, window_days=7)
-
-    assert report["series_present"] is True
-    assert report["observed_days"] == pytest.approx(1.0)
-    assert report["evidences_absence"] is False
-
-
-def test_quiet_mature_series_evidences_absence(sink):
-    """Observing for longer than the window with zero reads inside it is
-    the one shape that clears."""
-    engine_root_census.record_fallback_read(
-        "some.site", sink_root=sink, now=_NOW - (30 * _DAY)
-    )
-    report = _census(sink, window_days=7)
-
-    assert report["observed_days"] == pytest.approx(30.0)
-    assert report["reads_in_window"] == 0
-    assert report["total_reads"] == 1
-    assert report["days_since_last"] == pytest.approx(30.0)
-    assert report["evidences_absence"] is True
-
-
-def test_a_read_inside_the_window_denies_absence(sink):
-    """A mature series still fails the verdict while anything reads."""
+def test_a_read_inside_the_window_is_counted(sink):
+    """A read inside the window is reflected in `reads_in_window` -- the
+    stale-pin regression signal this module now exists to carry."""
     engine_root_census.record_fallback_read(
         "old.site", sink_root=sink, now=_NOW - (30 * _DAY)
     )
@@ -99,7 +54,7 @@ def test_a_read_inside_the_window_denies_absence(sink):
     report = _census(sink, window_days=7)
 
     assert report["reads_in_window"] == 1
-    assert report["evidences_absence"] is False
+    assert report["total_reads"] == 2
 
 
 def test_window_days_is_echoed_back(sink):
@@ -107,91 +62,24 @@ def test_window_days_is_echoed_back(sink):
     assert _census(sink, window_days=14)["window_days"] == 14
 
 
-# --- C24: watch-start sentinel ---------------------------------------------
-#
-# RAISED BY CODE REVIEW 2026-08-20 (session 8211c764): before this fix,
-# `observed_days` was measured from `series_first_ts` -- the first RECORDED
-# READ -- so a box that never had a stale pin never created the series, and
-# `evidences_absence` could NEVER become True. The verdict was reachable
-# only on a box that once had the defect. `test_clean_box_reaches_evidences_absence_after_window_elapses`
-# is the load-bearing test in this section: it is the exact shape a
-# cleanly-converged box takes, and it must clear.
+def test_no_verdict_field_in_report(sink):
+    """Regression test: `census()` must never re-grow a verdict field.
 
+    C14 item 4 was discharged elsewhere (C23's three-leg ratchet, a proven
+    property of the code); a returned `evidences_absence`-shaped key here
+    would invite a future reader to close that item a second time by
+    waiting for a field that measures operator shell hygiene, not code --
+    the exact close-by-waiting trap the field's removal exists to forbid.
 
-def test_clean_box_reaches_evidences_absence_after_window_elapses(sink):
-    """THE BUG THIS CHUNK FIXES. Zero calls to `record_fallback_read` ever
-    -- the series file never gets created -- and the verdict must still be
-    able to clear once the watch itself has run long enough."""
-    first = _census(sink, window_days=7, now=_NOW)
-    assert first["series_present"] is True
-    assert first["total_reads"] == 0
-    assert first["evidences_absence"] is False, (
-        "the watch just started -- not enough elapsed time yet"
-    )
-
-    later = _census(sink, window_days=7, now=_NOW + (8 * _DAY))
-    assert later["series_present"] is True
-    assert later["total_reads"] == 0
-    assert later["observed_days"] == pytest.approx(8.0)
-    assert later["evidences_absence"] is True
-
-
-def test_window_not_elapsed_since_watch_start_denies_absence(sink):
-    """A watch started 3 days ago cannot clear a 7-day window, even with
-    zero reads -- the series-age guard, one layer down from the reads
-    themselves."""
-    _census(sink, window_days=7, now=_NOW)  # starts the clock
-    report = _census(sink, window_days=7, now=_NOW + (3 * _DAY))
-
-    assert report["observed_days"] == pytest.approx(3.0)
-    assert report["evidences_absence"] is False
-
-
-def test_sentinel_is_not_counted_as_a_read(sink):
-    """The watch-start sentinel must never inflate the read counters --
-    inverting this would mean the sink NEVER evidences absence, since every
-    census would see at least one "read"."""
-    engine_root_census.ensure_watch_start(sink_root=sink, now=_NOW - (30 * _DAY))
-    report = _census(sink, window_days=7)
-
-    assert report["total_reads"] == 0
-    assert report["reads_in_window"] == 0
-    assert report["sites"] == {}
-    assert report["series_first_ts"] is None
-
-
-def test_sentinel_never_lands_in_corruption_buckets(sink):
-    """The sentinel lives in a separate file from the jsonl series, so the
-    series-parsing loop -- and its corruption guard -- never sees it."""
-    engine_root_census.ensure_watch_start(sink_root=sink, now=_NOW - (30 * _DAY))
-    report = _census(sink, window_days=7)
-
-    assert report["unparsable_rows"] == 0
-    assert report["undatable_rows"] == 0
-    assert report["evidences_absence"] is True
-
-
-def test_ensure_watch_start_is_idempotent_and_race_safe(sink):
-    """Concurrent/repeated initialization keeps the EARLIEST timestamp --
-    this machine races 50-70 concurrent sessions, and none of them should
-    be able to reset another's clock."""
-    first = engine_root_census.ensure_watch_start(sink_root=sink, now=_NOW - _DAY)
-    second = engine_root_census.ensure_watch_start(sink_root=sink, now=_NOW)
-
-    assert first == pytest.approx(_NOW - _DAY)
-    assert second == pytest.approx(_NOW - _DAY)
-
-
-def test_record_fallback_read_starts_the_clock_at_its_own_timestamp(sink):
-    """A box that DOES see a stale pin keeps `observed_days` measured from
-    that earliest read, not reset to whenever a report is later pulled."""
-    engine_root_census.record_fallback_read(
-        "some.site", sink_root=sink, now=_NOW - (30 * _DAY)
-    )
-    report = _census(sink, window_days=7)
-
-    assert report["watch_start_ts"] == pytest.approx(_NOW - (30 * _DAY))
-    assert report["observed_days"] == pytest.approx(30.0)
+    This is an absence assertion, so its reachable case is checked too:
+    the rest of the report must still be populated (`reads_in_window` and
+    `total_reads` present), proving the report was actually computed and
+    not merely empty.
+    """
+    report = _census(sink)
+    assert "evidences_absence" not in report
+    assert "reads_in_window" in report
+    assert "total_reads" in report
 
 
 # --- the record side ------------------------------------------------------
@@ -252,18 +140,11 @@ def test_census_never_raises_on_a_corrupt_series(sink):
     assert report["total_reads"] == 1
     assert report["sites"]["ok.site"]["count"] == 1
 
-    # THIS ASSERTION WAS INVERTED ON 2026-08-20, and the inversion is the
-    # point of the test rather than a relaxation of it. It previously
-    # asserted `evidences_absence is True` — i.e. a file containing a torn
-    # line and an undatable row was allowed to CLEAR C14's exit condition —
-    # under a docstring promising "critically NOT to a false clear". The
-    # docstring was right and the assertion was wrong: skipping a bad row
-    # lowers `reads_in_window` without lowering `observed_days`, so a single
-    # torn line that happened to be the only in-window read manufactures a
-    # clear. Unreadable rows now block the verdict in both directions.
+    # A torn line and an undatable row are counted, never silently dropped
+    # -- see the in-loop comment in `census()` for why an undatable row
+    # cannot be treated as merely absent.
     assert report["unparsable_rows"] == 1
     assert report["undatable_rows"] == 1
-    assert report["evidences_absence"] is False
 
 
 def test_sites_are_reported_per_site(sink):

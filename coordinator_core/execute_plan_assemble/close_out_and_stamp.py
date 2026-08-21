@@ -5429,6 +5429,16 @@ def close_out_and_stamp(
             # above, which never reaches `key_mismatch` (see that
             # assignment's own comment), so this is never a live `None`
             # dereference on this branch.
+            #
+            # The `plan-tasks-resolve --coded` remedy hangs on THIS override
+            # only, never on the static `key_mismatch` reason: it is sound
+            # advice only once a trailer-matched commit is known to exist.
+            # On a genuine value mismatch the sole commits in range carry a
+            # FOREIGN Deliverable-Id (a peer's landed work on this shared
+            # worktree), and naming a per-row resolve there would invite the
+            # operator to stamp a stranger's sha into this plan's spine --
+            # the same misattribution `deliverable_id_mismatch`'s own NOTE
+            # below refuses to make.
             join_reason = _JOIN_PROVENANCE_REASON[join_provenance]
             if (
                 join_provenance == JOIN_PROVENANCE_KEY_MISMATCH
@@ -5440,7 +5450,9 @@ def close_out_and_stamp(
                     "range carry a Deliverable-Id trailer equal to this plan's own "
                     "frontmatter value, but their subject registered no chunk-id "
                     "(see _extract_chunk_ids's own docstring for what counts) -- "
-                    "inspect the commit subject, not the trailer"
+                    "inspect the commit subject, not the trailer; if those "
+                    "commits are this plan's delivery, run `plan-tasks-resolve "
+                    "--coded <sha>` per row, then re-run close-out-and-stamp"
                 )
             message = (
                 f"{plan_path_rel}: {len(missing)} chunk(s) could not be "

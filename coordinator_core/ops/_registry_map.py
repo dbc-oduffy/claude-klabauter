@@ -34,6 +34,7 @@ from typing import Dict
 # __init__.py for the order-dependent drift-guard failure that shape produces.
 OP_MODULE_MAP: Dict[str, str] = {
     "ping":                                   "coordinator_core.ops.ping",
+    "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",
     "cutover.gate":                           "coordinator_core.ops.cutover_gate",
     "cutover.advance":                        "coordinator_core.ops.cutover_advance",
     "handoff.has_live_children":              "coordinator_core.ops.handoff_children",

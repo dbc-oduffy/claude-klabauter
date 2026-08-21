@@ -67,6 +67,10 @@ from coordinator_core.warm.skew import read_engine_stamp_sha
 _HEAD_SCAN_BOUND = 4096
 
 _WHITESPACE = b" \t\r\n"
+#: Same set as `_WHITESPACE`, as ints, for index-based scanning of a multi-ten-MB
+#: buffer -- `raw[i]` yields an int, and membership against a frozenset avoids the
+#: full-size copy every `bytes.strip()` call would allocate.
+_WHITESPACE_BYTES = frozenset(_WHITESPACE)
 
 # JSON structural bytes tracked by the bounded nesting-depth scan.
 _QUOTE = 0x22
@@ -166,22 +170,31 @@ def splice_publish_envelope(
     ``schema_version`` or ``emitted_at`` key inside the bounded head-scan, or a
     ``schema_version`` disagreeing with the vendored cockpit-contract pin.
     """
-    lstripped_len = len(raw) - len(raw.lstrip(_WHITESPACE))
-    stripped = raw.strip(_WHITESPACE)
-    if not stripped:
+    # Bound the document by INDEX, never by slicing. `raw` is tens of MB; `raw.strip()`
+    # and friends each materialise a second full-size copy, and the memory floor this
+    # module is held to (plan § Trigger model: "must avoid doubling the buffer") is a
+    # per-invocation transient on a box sized for 50-70 concurrent sessions.
+    start = 0
+    end = len(raw)
+    while start < end and raw[start] in _WHITESPACE_BYTES:
+        start += 1
+    while end > start and raw[end - 1] in _WHITESPACE_BYTES:
+        end -= 1
+
+    if start == end:
         raise PublishEnvelopeError("emission artifact is empty")
-    if stripped.startswith(b"\xef\xbb\xbf"):
+    if raw[start : start + 3] == b"\xef\xbb\xbf":
         raise PublishEnvelopeError(
             "emission artifact carries a UTF-8 BOM -- refusing to splice a BOM-prefixed "
             "document (rejected by strict parsers on the far side)"
         )
-    if stripped[0:1] != b"{":
+    if raw[start : start + 1] != b"{":
         raise PublishEnvelopeError(
-            f"emission artifact's first non-whitespace byte is {stripped[0:1]!r}, not b'{{'"
+            f"emission artifact's first non-whitespace byte is {raw[start:start + 1]!r}, not b'{{'"
         )
-    if stripped[-1:] != b"}":
+    if raw[end - 1 : end] != b"}":
         raise PublishEnvelopeError(
-            f"emission artifact's last non-whitespace byte is {stripped[-1:]!r}, not b'}}'"
+            f"emission artifact's last non-whitespace byte is {raw[end - 1:end]!r}, not b'}}'"
         )
 
     schema_version = _bounded_head_scan_key(raw, "schema_version", _HEAD_SCAN_BOUND)
@@ -198,14 +211,28 @@ def splice_publish_envelope(
     stamp = _resolve_producer_stamp(engine_root)
     producer = f"{repo}@{stamp}"
 
-    brace_idx = lstripped_len
-    inner = stripped[1:-1].strip(_WHITESPACE)
+    brace_idx = start
+    # Is the object non-empty? Answer it by scanning, not by materialising `inner`:
+    # `stripped[1:-1].strip()` allocated a THIRD full-size copy purely to be tested
+    # for truthiness.
+    probe = start + 1
+    last = end - 1
+    while probe < last and raw[probe] in _WHITESPACE_BYTES:
+        probe += 1
+    has_inner = probe < last
 
     envelope_fields = (
         f'"repo_slug": {json.dumps(slug)}, '
         f'"published_at": {json.dumps(emitted_at)}, '
         f'"producer": {json.dumps(producer)}'
     ).encode("utf-8")
-    separator = b", " if inner else b""
+    separator = b", " if has_inner else b""
 
-    return raw[: brace_idx + 1] + envelope_fields + separator + raw[brace_idx + 1 :]
+    # Assemble through memoryview slices: `bytes.join` sizes the result once and copies
+    # each piece straight in, where `raw[:i] + fields + raw[i:]` would materialise the
+    # tail slice AND a left-to-right intermediate before the result. Views, not copies,
+    # so the only full-size allocation here is the returned document itself.
+    view = memoryview(raw)
+    return b"".join(
+        (view[: brace_idx + 1], envelope_fields, separator, view[brace_idx + 1 :])
+    )

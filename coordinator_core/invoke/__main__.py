@@ -94,7 +94,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +209,15 @@ def _dump_op_timeouts() -> dict:
 # Repo-root resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_repo_root(repo_arg: Optional[str]) -> Path:
+def _resolve_repo_root(repo_arg: Optional[str], cwd: str) -> Path:
     """Resolve repo_root from --repo arg or git rev-parse --show-toplevel.
+
+    `cwd` is the CALLER's cwd (see `_dispatch_argv`'s docstring) — a relative
+    `--repo` value is joined against it (`Path(cwd, repo_arg)`, which for an
+    already-absolute `repo_arg` is equivalent to using `repo_arg` alone), and
+    `find_repo_root(cwd)` resolves `git rev-parse --show-toplevel` against it
+    explicitly, never against this process's own `os.getcwd()` — served warm,
+    those two cwds are different processes' cwds entirely.
 
     Negative-spec: implicit os.getcwd() fallback is PROHIBITED (AC-5 migration).
     If repo_root cannot be resolved, emits a JSON error envelope to stderr and
@@ -220,18 +227,18 @@ def _resolve_repo_root(repo_arg: Optional[str]) -> Path:
         Path — canonical, resolved repo root.
     """
     if repo_arg is not None:
-        return Path(repo_arg).resolve()
+        return Path(cwd, repo_arg).resolve()
 
-    # Explicit find_repo_root() over the process cwd — NOT a raw os.getcwd() use.
+    # Explicit find_repo_root(cwd) — NOT a raw os.getcwd() use.
     from coordinator_core.lifecycle import find_repo_root  # deferred: no side effects at import time
     try:
-        return find_repo_root()
+        return find_repo_root(cwd)
     except RuntimeError as exc:
         _fatal_stderr(
             f"repo_root unresolvable: not inside a git working tree and --repo was not "
             f"provided. Run from a git repo or pass --repo <path>. Detail: {exc}"
         )
-        raise SystemExit(1)  # unreachable — _fatal_stderr exits; satisfies static checkers
+        raise AssertionError("unreachable — _fatal_stderr always raises")
 
 
 # ---------------------------------------------------------------------------
@@ -239,11 +246,21 @@ def _resolve_repo_root(repo_arg: Optional[str]) -> Path:
 # ---------------------------------------------------------------------------
 
 def _fatal_stderr(message: str) -> None:
-    """Emit a JSON-RPC 2.0 error envelope to stderr and exit non-zero.
+    """Emit a JSON-RPC 2.0 error envelope to stderr and raise SystemExit(1).
 
     Used for pre-dispatch failures (bad args, unresolvable repo_root) so that
     callers can distinguish infrastructure errors (stderr, exit 1) from op-level
     errors (stdout, exit 1 with a JSON-RPC error response).
+
+    Raises SystemExit(1) rather than calling os._exit(1) directly: this
+    function runs under `_dispatch_argv`'s stdout/stderr redirect (both on
+    the real CLI path via `main()` and on the served path via
+    `coordinator_core.ops.invoke_from_argv`), so `print(..., file=sys.stderr)`
+    above already writes into that capture. `_dispatch_argv` is the sole
+    place that turns a SystemExit into a real process exit (only when it IS
+    the real process, i.e. from `main()`) or into a returned exit_code
+    (when served). Calling os._exit() here would kill the long-lived warm
+    server process outright on any served pre-dispatch failure.
     """
     payload = json.dumps(
         {
@@ -255,7 +272,7 @@ def _fatal_stderr(message: str) -> None:
     )
     print(payload, file=sys.stderr)
     sys.stderr.flush()
-    os._exit(1)
+    raise SystemExit(1)
 
 
 def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> int:
@@ -279,34 +296,80 @@ def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> i
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Reusable core — argv in, (stdout, stderr, exit_code) out
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    """Parse args, build JSON-RPC request, dispatch in-process, print result."""
-    # Lazy op registration (F6 / claude-klabauter-windows-portability § C4): tell
-    # coordinator_core.ops to SKIP its eager 55-module import list at package-
-    # init time. This process is a one-shot command-type CLI dispatch (DR-215)
-    # — nothing else in it depends on the full-eager side-effect — so only the
-    # single dispatched op's owning module gets imported (via ipc.py's
-    # registry-miss lazy-import path), instead of all ~55. Must be set before
-    # anything imports coordinator_core.ops (directly or transitively).
-    #
-    # On `sys`, not in `os.environ` (2026-07-28): this signal is for THIS
-    # process only, and an os.environ write is inherited by every child spawned
-    # without an explicit `env=` — including the pytest runs three op modules
-    # spawn (cutover_gate, copy_plugin_template, whoami_run_tests), whose
-    # collection then fails against the 59 modules that assert the op registry
-    # at import time. A `sys` attribute crosses no process boundary.
-    # Scoping study: docs/research/2026-07-28-lazy-ops-import-side-effect-scope.md § 6 (c).
-    # COORDINATOR_CORE_LAZY_OPS in the environment stays the operator override
-    # and, per coordinator_core/ops/__init__.py, outranks this line — so an
-    # operator who exports it as "0" gets an eager dispatch process, where this
-    # write was previously unconditional.
-    setattr(sys, "_coordinator_core_lazy_ops", True)
+def _dispatch_argv(argv: list, cwd: str, *, allow_warm: bool = True) -> Tuple[str, str, int]:
+    """Parse `argv`, dispatch the named op in-process, return (stdout, stderr, exit_code).
 
+    The served-callable core behind BOTH `main()` (real CLI process,
+    `python -m coordinator_core.invoke <argv...>`) and the warm server's
+    `invoke.from_argv` op (`coordinator_core/ops/invoke_from_argv.py`) — the
+    native door's server-side entrypoint (docs/reference — see that op
+    module's docstring). Extracted so the door relays raw argv to the
+    server and the server does the SAME argv-parsing/dispatch/response-
+    render this CLI has always done, rather than a second parser silently
+    diverging from this one.
+
+    Never touches `sys.argv`, never calls `os.getcwd()` (uses `cwd`
+    EXPLICITLY everywhere a cwd is needed — repo_root resolution, a
+    relative `--repo`/`--params-file` value, the `_caller_cwd` telemetry
+    stamp), never writes to the real stdout/stderr, and never calls
+    `os._exit()` or terminates the process. This matters beyond testability:
+    served from inside the long-lived warm server process, "the caller's
+    cwd" is the DOOR's cwd (the `cwd` argument), never this function's own
+    process cwd — getting that wrong corrupts repo-scope resolution and the
+    op-latency telemetry denominator for every other request that process
+    ever serves. See the `_caller_cwd`/`_origin_worktree` comments below.
+
+    `allow_warm=False` (used by `invoke.from_argv`) skips the warm-pipe
+    preamble entirely and goes straight to cold in-process dispatch — a
+    request already being served BY the warm server has no business
+    dialing a pipe back into itself. This is a divergence in INTERNAL PATH
+    only: the warm preamble's own contract is "transparent to the response"
+    (any live server serves the identical dispatch_message() result a cold
+    call would), so output stays byte-identical either way; `allow_warm`
+    exists purely to avoid a pointless (and, single-threaded-accept-loop
+    dependent, possibly self-blocking) extra IPC hop. `main()` always calls
+    this with the default `allow_warm=True`, preserving the CLI's existing
+    warm-then-cold behavior unchanged.
+
+    Every early-exit point below (`_fatal_stderr`, `parser.error`,
+    `--dump-op-timeouts`, the final success/error print) raises
+    `SystemExit` — argparse's own error paths already do, so catching
+    `SystemExit` once here, at this function's boundary, uniformly converts
+    every process-exit intent (ours and argparse's) into a returned
+    `exit_code` instead of actually exiting.
+    """
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+        try:
+            _dispatch_argv_body(argv, cwd, allow_warm=allow_warm)
+        except SystemExit as exc:
+            code = exc.code
+            if code is None:
+                code = 0
+            elif not isinstance(code, int):
+                # argparse's own error() passes a message string here on some
+                # paths; treat anything non-int as a generic failure exit,
+                # matching the process-level `python` interpreter's own
+                # coercion of a non-int SystemExit.code to exit status 1.
+                code = 1
+            return stdout_buf.getvalue(), stderr_buf.getvalue(), code
+    raise AssertionError("_dispatch_argv_body must always raise SystemExit")
+
+
+def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
+    """Parse args, build JSON-RPC request, dispatch in-process, print result.
+
+    Always exits via `raise SystemExit(<code>)` — never returns normally.
+    Runs under `_dispatch_argv`'s stdout/stderr redirect; every `print()`
+    and `sys.stderr.write()` below lands in that capture, not the real
+    streams.
+    """
     parser = _build_arg_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # 0. --dump-op-timeouts short-circuit -- read-only, no op dispatch, no
     #    repo_root resolution, no params parsing. Runs BEFORE the op-required
@@ -319,10 +382,9 @@ def main() -> None:
             payload = _dump_op_timeouts()
         except Exception as exc:
             _fatal_stderr(f"--dump-op-timeouts failed: {exc}")
-            return  # unreachable after _fatal_stderr; pacifies type checkers
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         sys.stdout.flush()
-        os._exit(0)
+        raise SystemExit(0)
 
     if args.op is None:
         parser.error("the following arguments are required: op (unless --dump-op-timeouts is passed)")
@@ -335,7 +397,6 @@ def main() -> None:
         _fatal_stderr(
             "--params-file and positional params_json are mutually exclusive"
         )
-        return  # unreachable after _fatal_stderr; pacifies type checkers
 
     if args.params_file is not None:
         # `-` reads stdin: the quoting-immune transport. A params payload
@@ -364,13 +425,13 @@ def main() -> None:
                 params_json_str = sys.stdin.buffer.read().decode("utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 _fatal_stderr(f"Cannot read params JSON from stdin: {exc}")
-                return  # unreachable after _fatal_stderr; pacifies type checkers
         else:
+            # Relative to `cwd` (the caller's cwd) — NOT this process's own
+            # os.getcwd(), which is meaningless when served warm.
             try:
-                params_json_str = Path(args.params_file).read_text(encoding="utf-8")
+                params_json_str = Path(cwd, args.params_file).read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 _fatal_stderr(f"Cannot read --params-file {args.params_file!r}: {exc}")
-                return  # unreachable after _fatal_stderr; pacifies type checkers
     elif args.params_json is not None:
         params_json_str = args.params_json
     else:
@@ -381,13 +442,11 @@ def main() -> None:
         params = json.loads(params_json_str)
     except json.JSONDecodeError as exc:
         _fatal_stderr(f"Invalid params_json: {exc}")
-        return  # unreachable after _fatal_stderr; pacifies type checkers
 
     if not isinstance(params, dict):
         _fatal_stderr(
             f"params_json must be a JSON object (dict); got {type(params).__name__}"
         )
-        return
 
     # 3. Determine op scope before resolving repo_root — none/central-scoped ops
     #    (e.g. ping, advisory hooks) must work outside any git working tree, so
@@ -413,12 +472,11 @@ def main() -> None:
             f"would silently no-op. Omit --repo for this op. See "
             f"docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md."
         )
-        return  # unreachable after _fatal_stderr; pacifies type checkers
 
     # 4. Resolve repo_root — ONLY for worktree-scoped ops; fail-loud if unresolvable (AC-5).
     #    For all other scopes (none, central) repo_root stays None — git is never invoked.
     if args.op in WORKTREE_SCOPED_OPS:
-        repo_root: Optional[Path] = _resolve_repo_root(args.repo)
+        repo_root: Optional[Path] = _resolve_repo_root(args.repo, cwd)
     else:
         repo_root = None
 
@@ -444,16 +502,17 @@ def main() -> None:
     if args.op in WORKTREE_SCOPED_OPS:
         msg["_origin_worktree"] = str(repo_root)
 
-    # Stamp the CALLER's actual process cwd unconditionally — including for
-    # "none"-scoped ops, which never get `_origin_worktree` above (C7,
+    # Stamp the CALLER's cwd unconditionally — including for "none"-scoped
+    # ops, which never get `_origin_worktree` above (C7,
     # 2026-08-20-a-refusal-cannot-exit-zero). Telemetry-only: never read for
     # authz/repo-scope resolution (that stays resolve_request_repo's job via
-    # `_origin_worktree`). Warm-served rows would otherwise fall back to
+    # `_origin_worktree`). This is `cwd` (the argument), NOT os.getcwd():
+    # warm-served rows would otherwise fall back to
     # `coordinator_core.telemetry.op_latency._write_entry`'s Path.cwd(),
     # which in a warm pool worker is the SERVER's cwd (the klabauter clone),
     # not this caller's — corrupting the very denominator the warmth sweeps
     # measure. See `_CALLER_CWD_FIELD` in coordinator_core.ipc for the reader.
-    msg["_caller_cwd"] = os.getcwd()
+    msg["_caller_cwd"] = cwd
 
     # 6a. Warm preamble (C15) — try the warm engine's pipe before paying a
     #     cold spawn-per-call. NO CLIENT EVER WAITS FOR A SERVER TO BOOT:
@@ -469,6 +528,10 @@ def main() -> None:
     #     — Backstop 2, "the cold path is a SUCCESS path". Everything below
     #     this point is the pre-existing cold dispatch path, unchanged: it
     #     only runs when `response` is not already set here.
+    #
+    #     `allow_warm=False` (invoke.from_argv, served FROM the warm server)
+    #     skips this block outright — see this function's caller's docstring
+    #     for why dialing back into the same server would be pointless.
     #
     #     W11 (2026-08-20-a-refusal-cannot-exit-zero § C8): check
     #     `settings.is_warm_enabled()` BEFORE importing `warm.client` at
@@ -489,21 +552,21 @@ def main() -> None:
     #     cost changes. `is_warm_enabled` is memoised per-process (W12,
     #     this chunk's settings.py change), so this call is cheap even when
     #     re-derived rather than cached across this single-shot CLI process.
-    from coordinator_core.warm.settings import is_warm_enabled
+    response = None
+    if allow_warm:
+        from coordinator_core.warm.settings import is_warm_enabled
 
-    if is_warm_enabled():
-        from coordinator_core.warm.client import try_warm_dispatch
+        if is_warm_enabled():
+            from coordinator_core.warm.client import try_warm_dispatch
 
-        response = try_warm_dispatch(msg)
-    else:
-        response = None
+            response = try_warm_dispatch(msg)
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
     #    path (P1#5): asyncio.run() calls loop.shutdown_default_executor() which joins
     #    any live threads — a handler that asyncio.to_thread'd and then timed out leaves
     #    a live executor thread that would cause asyncio.run() to block indefinitely.
-    #    os._exit() below terminates the process before that join happens.
+    #    Deliberately not closed below (see the comment there) so no such join happens.
     #
     #    Gated on `response is None` (C15): the warm preamble above already
     #    supplied a served response, so this whole cold-dispatch block —
@@ -539,7 +602,10 @@ def main() -> None:
         # captured here and relayed to stderr (never discarded — it is a genuine
         # diagnostic, just on the wrong stream) so the transport cannot be
         # corrupted by a stray write in handler code the dispatch loop does not
-        # control.
+        # control. Nested inside THIS function's own outer redirect_stdout (in
+        # `_dispatch_argv`): this inner redirect_stdout still captures correctly
+        # — contextlib.redirect_stdout always rebinds relative to whatever
+        # `sys.stdout` currently is, so nesting composes rather than fighting.
         #
         # Negative-spec — two known bypass classes, neither observed at a live
         # call site today:
@@ -551,13 +617,68 @@ def main() -> None:
         #     module-level `_stdout = sys.stdout` bound at import time) writes to
         #     the real stream — redirect_stdout only rebinds the *name*
         #     `sys.stdout`, not references already taken from it.
+        # Loop lifecycle (rewritten 2026-08-21 — the prior comment here was
+        # wrong for one of this function's two callers; read this in full
+        # before touching it again):
+        #
+        # `main()` (the CLI) reaches this branch inside a single-shot process
+        # that os._exit()s right after `_dispatch_argv` returns — a leaked
+        # loop there was always cosmetic, reclaimed by process teardown
+        # regardless of what this function did.
+        #
+        # `invoke.from_argv` (coordinator_core/ops/invoke_from_argv.py) also
+        # reaches this branch (via `allow_warm=False`, so it ALWAYS takes the
+        # cold path) — but it runs INSIDE the resident warm server, on a
+        # worker thread from that server's own event loop's default
+        # ThreadPoolExecutor (ipc.py's `_dispatch_message_impl` offloads this
+        # op's sync handler via `asyncio.to_thread`, i.e.
+        # `loop.run_in_executor(None, ...)` on the SERVER's running loop —
+        # that pool is persistent and REUSED across calls, so the same OS
+        # thread services many `invoke.from_argv` requests over the server's
+        # lifetime, one after another). Every request that reaches this
+        # branch created a brand-new loop and NEVER closed it — leaking the
+        # loop's own OS-level resources (selector/epoll/kqueue fd, or an
+        # IOCP handle on Windows) once per call, for as long as the server
+        # stays up and is shared by every session on this box.
+        #
+        # The fix is `loop.close()` — NOT `asyncio.run()`'s
+        # `shutdown_default_executor()`, which are different operations
+        # (verified against the installed interpreter's own
+        # asyncio.base_events.BaseEventLoop.close source, not assumed):
+        # `close()` releases the loop's own resources and, if this loop ever
+        # lazily created a default executor of its OWN (only possible if
+        # something dispatched THROUGH this loop also called
+        # `asyncio.to_thread`/`run_in_executor` on it), shuts that down with
+        # `executor.shutdown(wait=False)` — signal-only, never blocks, never
+        # joins a live thread. `shutdown_default_executor()` instead awaits
+        # `executor.shutdown(wait=True)`, which DOES join every thread in the
+        # pool — exactly the P1#5 hang this function has always needed to
+        # avoid (a handler that asyncio.to_thread'd and then timed out still
+        # has a live thread running when dispatch returns). `loop.close()`
+        # carries none of that blocking risk while still releasing the
+        # per-call resources the leak was actually made of.
+        #
+        # `asyncio.set_event_loop(None)` afterward matters specifically
+        # because the SERVED path's worker threads are reused: without it, a
+        # thread's "current loop" thread-local would keep pointing at a
+        # CLOSED loop object between calls — harmless in practice (this
+        # function always installs a fresh loop via `set_event_loop` before
+        # ever reading "the current loop" again), but leaving stale state
+        # findable by some future addition to this function is not free
+        # either, and `asyncio.run()` clears it in its own `finally` for the
+        # same reason.
+        #
+        # try/finally (not the previous bare statement): close/reset must run
+        # even if `dispatch_message` itself raised past its own documented
+        # exception-to-JSON-RPC-error contract — the leak this fixes does not
+        # get a pass just because that path is not expected to be reachable.
         _handler_stdout = io.StringIO()
-        with contextlib.redirect_stdout(_handler_stdout):
-            response = loop.run_until_complete(dispatch_message(msg))
-        # Deliberately DO NOT call loop.close() / shutdown_default_executor() here:
-        # a handler that internally asyncio.to_thread'd and then timed out leaves a
-        # live executor thread the graceful drain would block on (P1#5). os._exit below
-        # terminates the process without that join.
+        try:
+            with contextlib.redirect_stdout(_handler_stdout):
+                response = loop.run_until_complete(dispatch_message(msg))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
         _captured = _handler_stdout.getvalue()
         if _captured:
             # Best-effort: the envelope below is the thing that must survive.
@@ -572,9 +693,10 @@ def main() -> None:
     # 8. Print result as indented JSON to stdout.
     #    Review: code-reviewer (nit) — an unguarded json.dumps that raises TypeError/ValueError
     #    (e.g. handler returns a Path, datetime, or other non-serializable object) would crash
-    #    BEFORE sys.stdout.flush() + os._exit(), bypassing the flush-then-exit contract that the
-    #    rest of main() establishes. Wrap in a try/except and route failures through _fatal_stderr
-    #    (which flushes stderr and os._exit(1)s cleanly), avoiding silent partial-output corruption.
+    #    BEFORE sys.stdout.flush() + SystemExit, bypassing the flush-then-exit contract that the
+    #    rest of this function establishes. Wrap in a try/except and route failures through
+    #    _fatal_stderr (which flushes stderr and raises SystemExit(1) cleanly), avoiding silent
+    #    partial-output corruption.
     # --bare (success path only): print just response["result"] with no
     # jsonrpc/id envelope and no indentation — the single-spawn transport
     # contract for callers like cc_invoke. The error path is intentionally
@@ -590,16 +712,76 @@ def main() -> None:
             output = json.dumps(response, indent=2, ensure_ascii=False)
     except (TypeError, ValueError) as exc:
         _fatal_stderr(f"Handler returned non-serializable result: {exc}")
-        return  # unreachable after _fatal_stderr; pacifies type checkers
     print(output)
 
     # 9. Exit 0 on success result, 2 on a structural contract-pin error, 1 on any
     #    other JSON-RPC error result — see module docstring's "Exit codes" section
     #    and _exit_code_for_response's docstring.
-    #    os._exit bypasses atexit/finalizers and avoids any residual executor drain.
-    #    Explicit flush before os._exit is mandatory — os._exit does not flush stdio.
+    #    Explicit flush before SystemExit is mandatory — the real process boundary
+    #    (main(), below) uses os._exit(), which does not flush stdio on its own.
     sys.stdout.flush()
-    os._exit(_exit_code_for_response(response, STRUCTURAL_PIN_ERROR))
+    raise SystemExit(_exit_code_for_response(response, STRUCTURAL_PIN_ERROR))
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Real-process wrapper: supply sys.argv/os.getcwd(), print, os._exit().
+
+    Thin by design — all argv-parsing/dispatch/response-render logic lives in
+    `_dispatch_argv` (and its `allow_warm=False` reuse by the warm server's
+    `invoke.from_argv` op), so there is exactly one place that can diverge
+    from the plain `python -m coordinator_core.invoke` CLI contract.
+    """
+    # Lazy op registration (F6 / claude-klabauter-windows-portability § C4): tell
+    # coordinator_core.ops to SKIP its eager 55-module import list at package-
+    # init time. This process is a one-shot command-type CLI dispatch (DR-215)
+    # — nothing else in it depends on the full-eager side-effect — so only the
+    # single dispatched op's owning module gets imported (via ipc.py's
+    # registry-miss lazy-import path), instead of all ~55. Must be set before
+    # anything imports coordinator_core.ops (directly or transitively).
+    #
+    # On `sys`, not in `os.environ` (2026-07-28): this signal is for THIS
+    # process only, and an os.environ write is inherited by every child spawned
+    # without an explicit `env=` — including the pytest runs three op modules
+    # spawn (cutover_gate, copy_plugin_template, whoami_run_tests), whose
+    # collection then fails against the 59 modules that assert the op registry
+    # at import time. A `sys` attribute crosses no process boundary.
+    # Scoping study: docs/research/2026-07-28-lazy-ops-import-side-effect-scope.md § 6 (c).
+    # COORDINATOR_CORE_LAZY_OPS in the environment stays the operator override
+    # and, per coordinator_core/ops/__init__.py, outranks this line — so an
+    # operator who exports it as "0" gets an eager dispatch process, where this
+    # write was previously unconditional.
+    #
+    # NOT set on the served (`invoke.from_argv`) path: that op runs inside the
+    # long-lived warm server, whose own boot already imported
+    # coordinator_core.ops eagerly (see that op module's docstring) — setting
+    # this attribute there would be a pointless-by-then global-interpreter-
+    # state mutation on a process this function does not own.
+    setattr(sys, "_coordinator_core_lazy_ops", True)
+
+    stdout, stderr, exit_code = _dispatch_argv(sys.argv[1:], os.getcwd())
+
+    if stdout:
+        sys.stdout.write(stdout)
+    sys.stdout.flush()
+    if stderr:
+        # Best-effort, matching _dispatch_argv_body's own handler-stdout-relay
+        # contract: the stdout envelope above is the thing that must survive.
+        # A caller that closed/broke its stderr pipe (test coverage:
+        # test_handler_stdout_relay_raising_still_yields_envelope_on_stdout)
+        # must not prevent the already-written stdout envelope, or exit_code,
+        # from completing this function.
+        try:
+            sys.stderr.write(stderr)
+            sys.stderr.flush()
+        except OSError:
+            pass
+    # os._exit bypasses atexit/finalizers and avoids any residual executor drain
+    # (see _dispatch_argv_body step 7's comment on the deliberately-unclosed loop).
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":

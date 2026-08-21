@@ -79,6 +79,10 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from coordinator_core.engine_root import (
+    engine_source_root,
+    is_published_engine_mirror,
+)
 from coordinator_core.git.repo_root import show_toplevel
 
 
@@ -121,9 +125,26 @@ def record_invocation(
 
 
 def _resolve_repo_root() -> Optional[Path]:
+    """Resolve the repo whose series this invocation belongs to.
+
+    Normally cwd's git toplevel: a shim used inside a sibling repo is that
+    repo's usage, and its series belongs there. The exception is the published
+    engine mirror. A shim invoked with cwd inside it appended to
+    `<mirror>/state/shim-usage-census.jsonl`, which is gitignored there and
+    tracked nowhere -- the series was being written to a sink no reader can
+    open, and `census()` reading from any real repo could never see those rows.
+    A mirror is a build artifact, not a repo whose shim usage anyone asked
+    about, so those invocations are redirected to the engine source tree where
+    the rest of the series already lives.
+
+    Backlink: state/audits/2026-08-21-transform-resolved-writer-inventory.md
+    """
     toplevel = show_toplevel()
     if toplevel is None:
         return None
+    if is_published_engine_mirror(toplevel):
+        source_root = engine_source_root()
+        return Path(source_root) if source_root else None
     return Path(toplevel)
 
 

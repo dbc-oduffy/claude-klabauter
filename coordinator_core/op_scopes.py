@@ -134,6 +134,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.transition":                       "show_top",   # worktree-scoped per caller (memo may be in any registered git repo's cross-repo/ — containment governs reachability)
     # No repo state accessed — _origin_worktree not required
     "ping":                                  "none",
+    # invoke.from_argv — the served warm-door entrypoint (coordinator_core.
+    # ops.invoke_from_argv). Its own params carry an explicit `cwd`; any
+    # repo_root resolution the dispatched argv itself needs happens INSIDE
+    # its own re-entrant call to _dispatch_argv, from that explicit `cwd`,
+    # never from this op's repo_root (always None) or from _origin_worktree.
+    "invoke.from_argv":                      "none",
     "hooks.suggest_sonnet_research":         "none",
     # hooks.subagent_arrival_check — no repo state accessed: derives and reads
     # ONLY the subagent transcript path built from the caller-supplied

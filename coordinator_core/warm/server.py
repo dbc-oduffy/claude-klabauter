@@ -197,8 +197,17 @@ __all__ = [
     "PENDING_LISTENER_POOL_SIZE",
     "WORKER_POOL_SIZE",
     "DISPATCH_PROCESS_POOL_SIZE",
+    "UNTRUSTED_CALLER_ERROR",
     "main",
 ]
+
+# UNTRUSTED CALLER ERROR -- a request carrying no `_engine_token` at all.
+# Distinct from `skew.ENGINE_SKEW` (-32002, a PRESENT token that disagrees
+# with this server's live one) and from `ipc.STRUCTURAL_PIN_ERROR` (-32001):
+# neither fires here, because there is no token to compare. Next free slot
+# in the app-defined range JSON-RPC 2.0 §5.1 reserves (`ipc.py`'s own
+# comment); `WARM_DISPATCH_INDETERMINATE` already claimed -32004.
+UNTRUSTED_CALLER_ERROR = -32003
 
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
@@ -771,6 +780,51 @@ def _worker_process_init() -> None:
     _preload_op_registry()
 
 
+def _untrusted_caller_response(request_id) -> dict:
+    """JSON-RPC 2.0 error envelope for a request that carried no
+    `_engine_token` field at all.
+
+    THE GAP THIS CLOSES. `_engine_token is not None and version_state.
+    is_skewed(...)` (`_serve_line`, below) skipped the skew check entirely
+    for a tokenless request -- served by whatever generation happened to be
+    listening, however stale, with no comparison ever attempted. Found
+    empirically 2026-08-21: a hand-written client that omitted the field
+    was served a `ping` without complaint. Every in-tree caller
+    (`warm.client.engine_token`) always stamps a token -- it falls back to
+    the literal string `"unversioned"` rather than omitting the field on
+    any failure to compute one -- so this was unreachable from any traffic
+    this box has ever sent itself; it stops being latent the moment a
+    caller outside this module's own client (e.g. a non-Python door) speaks
+    the wire protocol without stamping one. Ruling this responds to is the
+    same one `skew.UnstampedEngineRootError` already enforces one layer up
+    ("an engine root is a stamped build; no stamp, no engine"): a request
+    with no way to prove its generation gets no default trust.
+
+    NOT `skew.evict_on_skew`. A tokenless request is evidence about the
+    CALLER, not about this server's own generation -- treating it as
+    skew would run `close_listener` + `drain`, tearing down the resident
+    server this whole shared box depends on, on the word of any single
+    anonymous request. That turns a missing field into a one-line remote
+    kill switch for every session sharing this pipe. This returns a refusal
+    over the SAME connection and nothing more: the listener stays open, no
+    other connection is affected, matching module docstring's "NEVER FAIL A
+    CALLER" for this caller specifically, while still never dispatching to
+    `coordinator_core.ipc.dispatch_message` on its behalf.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": UNTRUSTED_CALLER_ERROR,
+            "message": (
+                "warm dispatch refused: request carried no _engine_token. "
+                "Dispatch through coordinator_core.warm.client, or stamp "
+                "skew.compute_client_token() yourself before sending."
+            ),
+        },
+    }
+
+
 def _serve_line(
     raw_line: bytes,
     *,
@@ -790,6 +844,14 @@ def _serve_line(
     own `respond` callable on a detected skew), then release this request's
     in-flight slot. Never raises -- see module docstring's "NEVER FAIL A
     CALLER".
+
+    A frame with no `_engine_token` at all is refused via
+    `_untrusted_caller_response` BEFORE `version_state.is_skewed` is ever
+    consulted -- a fail-CLOSED default distinct from the skew path itself:
+    this does not close the listener or drain, it only refuses this one
+    connection, so an untrusted caller cannot use its own missing token to
+    evict a server every other session on the box is relying on. See
+    `_untrusted_caller_response`'s own docstring for the full defect.
 
     `release_in_flight` is idempotency-guarded here (not by the caller) so
     it is safe to call it once inline (right after the response is written,
@@ -836,7 +898,11 @@ def _serve_line(
     client_token = msg.pop("_engine_token", None)
     caller_session_id = msg.pop("_session_id", None)
 
-    if client_token is not None and version_state.is_skewed(client_token):
+    if client_token is None:
+        _write_and_release(_untrusted_caller_response(request_id))
+        return
+
+    if version_state.is_skewed(client_token):
         record_exit(telemetry.EXIT_REASON_SKEW)
         skew.evict_on_skew(
             respond=_write_and_release,

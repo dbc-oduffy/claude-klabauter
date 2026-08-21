@@ -1835,6 +1835,26 @@ class TestTrailerMatchedNoChunkIdMessaging:
         assert "inspect the commit subject, not the trailer" in result["message"]
         assert "never one equal to this plan's own frontmatter value" not in result["message"]
 
+    def test_message_names_the_runnable_remedy(self, tmp_path, monkeypatch):
+        """The diagnosis alone left the operator with nothing to run -- the
+        gap AC7 of docs/plans/2026-08-20-wsc-identity-gates-key-on-the-
+        deliverable.md names. The trailer-matched branch carries the same
+        `plan-tasks-resolve --coded` remedy the genuinely-uncommitted branch
+        already names."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_with_subject(
+            root, "plan.md", "docs: author more of the plan document",
+            deliverable_id=_DLV_VALID_SPINE,
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert "plan-tasks-resolve --coded" in result["message"]
+        assert "re-run close-out-and-stamp" in result["message"]
+
     def test_genuine_value_mismatch_keeps_the_static_reason(
         self, tmp_path, monkeypatch
     ):
@@ -1855,6 +1875,10 @@ class TestTrailerMatchedNoChunkIdMessaging:
         assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
         assert "never one equal to this plan's own frontmatter value" in result["message"]
         assert "registered no chunk-id" not in result["message"]
+        # The remedy is scoped to the trailer-matched override: the only
+        # commits in range here carry a FOREIGN Deliverable-Id, so a
+        # per-row `--coded <sha>` would stamp a stranger's work.
+        assert "plan-tasks-resolve --coded" not in result["message"]
 
 
 # ===========================================================================

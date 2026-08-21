@@ -149,6 +149,7 @@ from coordinator_registry import (  # noqa: E402 (late import after sys.path man
 import cc_invoke  # noqa: E402 (late import after sys.path manipulation)
 from machine_local_impl_resolve import (  # noqa: E402 (late import after sys.path manipulation)
     machine_local_impl_path as _mlir_machine_local_impl_path,
+    registry_get as _mlir_registry_get,
 )
 from raw_cmdline_recovery import (  # noqa: E402
     RAW_CMDLINE_FILE_ENV,
@@ -181,8 +182,38 @@ _LAUNCHER_CMD_NAME = "cross-repo-memo.cmd"
 # helpers -- duplicated rather than imported because both files' writes are
 # scoped independently and `raw_cmdline_recovery.py` (the one module already
 # shared between them) is out of scope for this chunk.
+def _raw_cmdline_ledger_root() -> str:
+    """Root the shared transport ledger at the live engine SOURCE tree.
+
+    Was `dirname(dirname(dirname(__file__)))` -- the tree this FILE sits in.
+    That is correct for the only copy on a consumer install and wrong on this
+    box, where a published mirror carries a second copy of this CLI: running
+    that copy appended every row into the mirror's own `state/`, which is
+    gitignored there and in no git history. 99 rows from two entrypoints were
+    sitting in it, unreadable by the sessions that wrote them and by the
+    follow-up chunk whose flip-condition this ledger exists to answer.
+
+    `engine.source_root` carries no repo token, so the publish transform
+    leaves it intact and the mirror's copy reaches the live tree through it.
+    Unregistered on a consumer install -> falls back to the file-relative root,
+    which is right there. Read via `registry_get`, which is spawn-free and
+    needs no `coordinator_core` import (this module's HARD CONSTRAINT).
+
+    Backlink: state/audits/2026-08-21-transform-resolved-writer-inventory.md
+    """
+    try:
+        source_root = (_mlir_registry_get("engine.source_root") or "").strip()
+    except Exception:
+        source_root = ""
+    if source_root and os.path.isdir(source_root):
+        return source_root
+    return os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+
+
 _RAW_CMDLINE_LEDGER_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    _raw_cmdline_ledger_root(),
     "state",
     "raw-cmdline-transport-ledger.jsonl",
 )
